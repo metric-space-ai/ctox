@@ -147,6 +147,10 @@ const TUI_SYSTEMD_CACHE_TTL: Duration = Duration::from_secs(30);
 /// Lifecycle alerts spawn a full `ps` process scan; recompute them on this
 /// cadence instead of every status poll.
 const LIFECYCLE_ALERT_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+/// Full Business OS diagnostics scan the RxDB collection tables. Keep that
+/// off the sub-second loop status cadence and refresh it separately.
+const BUSINESS_OS_STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+const BUSINESS_OS_STATUS_REFRESH_INTERVAL_ACTIVE: Duration = Duration::from_secs(5);
 /// Heartbeat for header recomputation on the settings page while no
 /// settings value changes (keeps the boost countdown and telemetry drift
 /// visible without re-running the planner every tick).
@@ -810,6 +814,7 @@ struct App {
     last_communication_refresh_at: Option<Instant>,
     last_skill_catalog_refresh_at: Option<Instant>,
     last_lifecycle_alert_refresh_at: Option<Instant>,
+    last_business_os_status_refresh_at: Option<Instant>,
     last_choice_inputs_fingerprint: Option<u64>,
     last_choice_refresh_at: Option<Instant>,
     last_header_inputs_fingerprint: Option<u64>,
@@ -1037,6 +1042,17 @@ pub fn run_tui(root: &Path) -> Result<()> {
 pub fn run_tui_smoke(root: &Path, page_name: &str, width: u16, height: u16) -> Result<()> {
     use ratatui::backend::TestBackend;
 
+    // A ":live" suffix forces a full inline refresh so the status-dependent
+    // panels (queue sidebar, Business OS data plane, chat sidebar,
+    // request_in_flight) render against a running daemon instead of the
+    // default offline state. With no daemon reachable the refresh degrades
+    // to offline status, so the default (suffix-less) output stays
+    // deterministic for CI snapshots.
+    let (page_name, force_live) = match page_name.strip_suffix(":live") {
+        Some(base) => (base, true),
+        None => (page_name, false),
+    };
+
     let db_path = crate::persistence::sqlite_path(root);
     let mut app = App::new(root.to_path_buf(), db_path);
     let mut skip_initial_refresh = true;
@@ -1071,7 +1087,10 @@ pub fn run_tui_smoke(root: &Path, page_name: &str, width: u16, height: u16) -> R
             )
         }
     }
-    if !skip_initial_refresh {
+    if force_live || !skip_initial_refresh {
+        // No worker in smoke mode, so refresh runs the collectors inline:
+        // a real status IPC to the daemon plus the harness flow / business-os
+        // snapshot for the live-data render.
         app.refresh()?;
     }
 
@@ -1223,6 +1242,7 @@ impl App {
             last_communication_refresh_at: None,
             last_skill_catalog_refresh_at: None,
             last_lifecycle_alert_refresh_at: None,
+            last_business_os_status_refresh_at: None,
             last_choice_inputs_fingerprint: None,
             last_choice_refresh_at: None,
             last_header_inputs_fingerprint: None,
@@ -2236,11 +2256,22 @@ impl App {
             &mut self.last_lifecycle_alert_refresh_at,
             LIFECYCLE_ALERT_REFRESH_INTERVAL,
         );
+        let business_os_interval =
+            if self.page == Page::Work && self.work_view == WorkView::BusinessOs {
+                BUSINESS_OS_STATUS_REFRESH_INTERVAL_ACTIVE
+            } else {
+                BUSINESS_OS_STATUS_REFRESH_INTERVAL
+            };
+        let business_os_due = refresh_due(
+            &mut self.last_business_os_status_refresh_at,
+            business_os_interval,
+        );
         let probe = service::StatusProbeOptions {
             reconcile_runtime_switch: false,
             systemd_cache_ttl: Some(TUI_SYSTEMD_CACHE_TTL),
             status_ipc_timeout: Some(TUI_STATUS_IPC_TIMEOUT),
             lifecycle_alerts: lifecycle_due,
+            include_business_os: business_os_due,
         };
         if self.worker.is_some() {
             let job = PollJob::ServiceStatus { probe };
@@ -2306,6 +2337,9 @@ impl App {
             next.last_agent_outcome = previous.last_agent_outcome.clone();
             next.worker_active_count = previous.worker_active_count;
             next.worker_phase = previous.worker_phase.clone();
+            next.business_os = previous.business_os.clone();
+        }
+        if next.business_os.is_none() {
             next.business_os = previous.business_os.clone();
         }
         self.service_status = next;

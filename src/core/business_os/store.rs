@@ -511,21 +511,22 @@ fn rxdb_data_plane_status(root: &Path) -> Value {
             .as_deref()
             .map(|table| rxdb_table_exists(&conn, table).unwrap_or(false))
             .unwrap_or(false);
-        let row_count = if table_exists {
+        let row_count = if table_exists && rxdb_collection_tracks_row_count(collection) {
             table
                 .as_deref()
                 .and_then(|table| rxdb_table_row_count(&conn, table).ok())
         } else {
             None
         };
-        let latest_updated_at_ms = if table_exists {
-            table
-                .as_deref()
-                .and_then(|table| rxdb_table_latest_updated_at_ms(&conn, table).ok())
-                .flatten()
-        } else {
-            None
-        };
+        let latest_updated_at_ms =
+            if table_exists && rxdb_collection_tracks_updated_at_ms(collection) {
+                table
+                    .as_deref()
+                    .and_then(|table| rxdb_table_latest_updated_at_ms(&conn, table).ok())
+                    .flatten()
+            } else {
+                None
+            };
         let collection_ok =
             table_exists && (!required_for_shell || row_count.unwrap_or_default() > 0);
         if *required_for_shell && !collection_ok {
@@ -568,6 +569,14 @@ fn rxdb_table_row_count(conn: &Connection, table: &str) -> anyhow::Result<i64> {
         row.get::<_, i64>(0)
     })
     .with_context(|| format!("count rows in {table}"))
+}
+
+fn rxdb_collection_tracks_row_count(collection: &str) -> bool {
+    !matches!(collection, "desktop_file_chunks")
+}
+
+fn rxdb_collection_tracks_updated_at_ms(collection: &str) -> bool {
+    !matches!(collection, "desktop_file_chunks")
 }
 
 fn rxdb_table_latest_updated_at_ms(conn: &Connection, table: &str) -> anyhow::Result<Option<i64>> {
@@ -19074,6 +19083,14 @@ mod tests {
                 .pointer("/collections/ctox_runtime_settings/latest_updated_at_ms")
                 .and_then(Value::as_i64),
             Some(1100)
+        );
+        assert_eq!(
+            status.pointer("/collections/desktop_file_chunks/latest_updated_at_ms"),
+            Some(&Value::Null)
+        );
+        assert_eq!(
+            status.pointer("/collections/desktop_file_chunks/row_count"),
+            Some(&Value::Null)
         );
         assert_eq!(
             status

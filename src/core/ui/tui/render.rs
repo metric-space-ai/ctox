@@ -1349,15 +1349,15 @@ fn render_work_business_os(frame: &mut Frame, app: &App, area: ratatui::layout::
 }
 
 /// Live data-plane panel from the daemon's Business OS health snapshot.
-/// The snapshot rides every status poll (ServiceStatus.business_os) and was
-/// previously fetched but never rendered anywhere in the TUI.
+/// The snapshot is refreshed on a slower cadence than the cheap loop status
+/// because it scans RxDB collection diagnostics.
 fn business_os_status_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     let Some(value) = app.service_status.business_os.as_ref() else {
         return vec![
             Line::from("No Business OS status received yet."),
             Line::from(String::new()),
             Line::from(Span::styled(
-                "The daemon reports the data plane with every status poll; start the CTOX loop to populate this panel.",
+                "The data-plane snapshot refreshes on a slower diagnostics cadence; start the CTOX loop to populate this panel.",
                 Style::default().fg(Color::DarkGray),
             )),
         ];
@@ -1391,7 +1391,7 @@ fn business_os_status_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         .get("sync")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
-    let mut push_kv = |lines: &mut Vec<Line<'static>>, label: &str, text: String, color: Color| {
+    let push_kv = |lines: &mut Vec<Line<'static>>, label: &str, text: String, color: Color| {
         lines.push(Line::from(Span::styled(
             truncate_line(&format!("{label:<10} {text}"), width),
             Style::default().fg(color),

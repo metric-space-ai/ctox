@@ -206,7 +206,7 @@ struct ServiceStatusWire {
 }
 
 impl ServiceStatus {
-    fn stopped(root: &Path) -> Self {
+    fn stopped_with_business_os(root: &Path, include_business_os: bool) -> Self {
         let systemd = systemd_unit_status(root).ok().flatten();
         let mut status = Self {
             running: false,
@@ -236,7 +236,7 @@ impl ServiceStatus {
             last_agent_outcome: None,
             worker_active_count: 0,
             worker_phase: None,
-            business_os: Some(business_os_health_snapshot(root)),
+            business_os: include_business_os.then(|| business_os_health_snapshot(root)),
             work_hours: crate::service::working_hours::snapshot(root),
             degraded_probe: false,
         };
@@ -1849,6 +1849,10 @@ pub struct StatusProbeOptions {
     /// Compute lifecycle alerts (spawns `ps` for a duplicate-process scan).
     /// Callers that skip this keep their previously observed alerts.
     pub lifecycle_alerts: bool,
+    /// Attach the full Business OS health snapshot. This opens the RxDB store
+    /// and scans critical collection tables, so high-cadence pollers should
+    /// leave it off unless they are refreshing the Business OS panel.
+    pub include_business_os: bool,
 }
 
 impl Default for StatusProbeOptions {
@@ -1858,6 +1862,7 @@ impl Default for StatusProbeOptions {
             systemd_cache_ttl: None,
             status_ipc_timeout: None,
             lifecycle_alerts: true,
+            include_business_os: true,
         }
     }
 }
@@ -1886,7 +1891,11 @@ pub fn service_status_snapshot_with(
     };
     let live = live_service_status_snapshot(root, probe.status_ipc_timeout);
     if let LiveStatusProbe::Status(mut status) = live {
-        status.business_os = Some(business_os_health_snapshot(root));
+        if probe.include_business_os {
+            status.business_os = Some(business_os_health_snapshot(root));
+        } else {
+            status.business_os = None;
+        }
         if let Some(systemd) = systemd {
             status.autostart_enabled = systemd.enabled;
             if systemd.active {
@@ -1909,7 +1918,7 @@ pub fn service_status_snapshot_with(
     // observed state for those.
     let degraded = matches!(live, LiveStatusProbe::Slow);
     if let Some(systemd) = systemd {
-        let mut status = ServiceStatus::stopped(root);
+        let mut status = ServiceStatus::stopped_with_business_os(root, probe.include_business_os);
         status.running = systemd.active || degraded;
         status.pid = systemd.pid.or(status.pid);
         if !status.running && status.pid.is_some_and(process_is_running) {
@@ -1923,7 +1932,7 @@ pub fn service_status_snapshot_with(
     }
     #[cfg(unix)]
     {
-        let mut status = ServiceStatus::stopped(root);
+        let mut status = ServiceStatus::stopped_with_business_os(root, probe.include_business_os);
         if degraded || status.pid.is_some_and(process_is_running) {
             status.running = true;
             status.monitor_alerts = lifecycle_alerts(status.pid, true)?;
@@ -1933,7 +1942,7 @@ pub fn service_status_snapshot_with(
     }
     #[cfg(not(unix))]
     {
-        let mut status = ServiceStatus::stopped(root);
+        let mut status = ServiceStatus::stopped_with_business_os(root, probe.include_business_os);
         status.degraded_probe = degraded;
         Ok(status)
     }
@@ -18408,6 +18417,72 @@ mod tests {
             .recent_events
             .iter()
             .any(|event| event.contains("system-onboarding")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn service_status_probe_can_skip_business_os_health() {
+        let root = std::path::PathBuf::from(format!(
+            "/tmp/ctox-svc-cheap-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("runtime")).unwrap();
+        let socket_path = service_socket_path(&root);
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let response = serde_json::to_string(&ServiceIpcResponse::Status(ServiceStatus {
+            running: true,
+            busy: false,
+            pid: Some(6161),
+            listen_addr: service_listen_addr(&root),
+            autostart_enabled: false,
+            manager: "process".to_string(),
+            pending_count: 0,
+            pending_previews: Vec::new(),
+            blocked_count: 0,
+            blocked_previews: Vec::new(),
+            current_goal_preview: None,
+            active_source_label: None,
+            recent_events: Vec::new(),
+            last_error: None,
+            last_completed_at: None,
+            last_reply_chars: None,
+            monitor_last_check_at: None,
+            monitor_alerts: Vec::new(),
+            monitor_last_error: None,
+            last_agent_outcome: None,
+            worker_active_count: 0,
+            worker_phase: None,
+            business_os: Some(serde_json::json!({"unexpected": true})),
+            work_hours: crate::service::working_hours::snapshot(&root),
+            degraded_probe: false,
+        }))
+        .unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = String::new();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            reader.read_line(&mut request).unwrap();
+            stream.write_all(response.as_bytes()).unwrap();
+            stream.write_all(b"\n").unwrap();
+            stream.flush().unwrap();
+        });
+
+        let status = service_status_snapshot_with(
+            &root,
+            &StatusProbeOptions {
+                include_business_os: false,
+                ..StatusProbeOptions::default()
+            },
+        )
+        .unwrap();
+        handle.join().unwrap();
+
+        assert!(status.running);
+        assert_eq!(status.pid, Some(6161));
+        assert!(status.business_os.is_none());
     }
 
     #[test]

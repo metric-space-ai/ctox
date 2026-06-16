@@ -1457,8 +1457,15 @@ fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
     let mut final_status = None;
     if wait {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+        let wait_probe = service::StatusProbeOptions {
+            reconcile_runtime_switch: false,
+            systemd_cache_ttl: Some(std::time::Duration::from_secs(5)),
+            status_ipc_timeout: Some(std::time::Duration::from_secs(1)),
+            lifecycle_alerts: false,
+            include_business_os: false,
+        };
         loop {
-            let status = service::service_status_snapshot(root)?;
+            let status = service::service_status_snapshot_with(root, &wait_probe)?;
             if !status.running {
                 anyhow::bail!("CTOX service stopped before the chat request completed");
             }
@@ -1486,7 +1493,7 @@ fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
                     timeout_secs
                 );
             }
-            std::thread::sleep(std::time::Duration::from_millis(250));
+            std::thread::sleep(std::time::Duration::from_secs(1));
         }
         let completed_after_submit = final_status
             .as_ref()
