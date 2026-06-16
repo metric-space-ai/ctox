@@ -194,18 +194,18 @@ PATH and whether the installation looks healthy. Do not pass installer flags
 unless this machine needs an explicit backend override.
 ```
 
-If you want a coding agent to install the CTOX Business OS deploy skill from
-GitHub, copy this prompt into your coding agent:
+If you want a coding agent to install the CTOX agent skill from GitHub, copy
+this prompt into your coding agent:
 
 ```text
-Install the CTOX Business OS deploy skill from GitHub so this agent can set up,
-connect, and verify CTOX Business OS remote-control deployments.
+Install the CTOX agent skill from GitHub so this agent can set up, connect,
+and verify CTOX Business OS remote-control deployments.
 
-https://github.com/metric-space-ai/ctox-business-os-deploy-skill/tree/main/ctox-business-os-deploy
+https://github.com/metric-space-ai/ctox-business-os-deploy-skill/tree/main/ctox
 
 Use your runtime's native skill-installation mechanism. If your runtime does
 not have one, clone or download the repository and install only the
-`ctox-business-os-deploy/` folder as a skill named `ctox-business-os-deploy`.
+`ctox/` folder as a skill named `ctox`.
 
 After installation, verify that the skill's `SKILL.md` and `references/`
 folder are available to you. Restart or reload your agent runtime if required.
