@@ -243,6 +243,17 @@ prepare_cargo_target_cache() {
     "$C_BOLD" "$C_GREY" "$link_path" "$C_RESET" >&2
 }
 
+remove_tree_with_retry() {
+  local path="$1"
+  local attempt
+  for attempt in 1 2 3; do
+    rm -rf "$path" 2>/dev/null || true
+    [[ ! -e "$path" ]] && return 0
+    sleep "$attempt"
+  done
+  rm -rf "$path"
+}
+
 cleanup_source_build_artifacts() {
   local source_root="$1"
   local path
@@ -253,7 +264,7 @@ cleanup_source_build_artifacts() {
   do
     [[ -d "$path" && ! -L "$path" ]] || continue
     printf '  %b%bremoving legacy build artifact %s%b\n' "$C_BOLD" "$C_GREY" "$path" "$C_RESET" >&2
-    rm -rf "$path"
+    remove_tree_with_retry "$path"
   done
 }
 
