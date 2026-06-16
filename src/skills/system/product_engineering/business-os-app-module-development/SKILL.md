@@ -35,6 +35,7 @@ you are about to mention forbidden package-manager, bundler, or dependency names
 you are about to use IndexedDB directly, localStorage, sessionStorage, Postgres, SQLite from browser code, ctox.db, ctx.db.raw, HTTP data APIs, /rxdb/pull, /commands, or any fallback data path
 you are about to use legacy module patterns as implementation authority instead of translating them to the current contract; examples to reject for new App Creator apps include ctx.db.raw, ctx.collections, manual business_commands inserts/upserts, pending_sync command fallbacks, window.dispatchEvent('ctox-business-os-chat-submit'), esbuild/fake-DOM tests, JSON-module schema wrappers, and default layout.right panes
 you are about to request complete file dumps, delegate a broad subagent sweep, or spend more than a short targeted pass on existing modules before writing the first runnable module files
+you are about to run broad discovery commands over `$HOME`, `/Users`, the whole install root, the whole repo, or validator/checker names; use exact known paths, `MODULE_DIR`, and at most the three selected few-shot modules
 you are about to write app files outside the resolved module directory, such as root-level module.json, root-level collections.schema.json, root-level <id>/, src/skills/, or any skill-named path
 you are about to create or update a runtime-installed App Creator module whose module.json lacks a SemVer version in x.y.z form without a v prefix
 you are about to expose, advertise, or call a module public/user-ready while its app version is below 1.0.0
@@ -46,10 +47,12 @@ you are about to test the guard by creating, moving, touching, symlinking, hardl
 you are about to probe shell aliases, tool wrappers, guard behavior, or temporary root write behavior instead of implementing the app in the allowed module directory
 the module has a visible button/action with no real handler, persistence change, automation command when relevant, and test or smoke assertion
 the module's automation uses window.dispatchEvent, a shell chat CustomEvent, a direct business_commands write fallback, or any other compatibility path instead of ctx.commandBus.dispatch for a standard CTOX work/chat/ticket item
+the module's tests, comments, helper names, or assertions describe a business_commands fallback as valid behavior; tests must prove commandBus.dispatch-only automation with type and command_type business_os.chat.task plus record_snapshot
 the module declares collections in module.json but not in schema.js and collections.schema.json
 the module-owned data model is unclear: central object, collection names, states, commands, and automation payload are not named
 the app has a decorative third pane, layout.right by default, right-column resizers by default, decorative controls, fake AI buttons, fake status-only actions, or UI that is not needed for the workflow
 module.json embeds `layout.icon_svg` instead of using the required separate `icon.svg`
+module.json embeds inline SVG in any field such as `icon_svg`, `iconSvg`, `layout.icon`, or `layout.icon_svg`; generated apps must keep all SVG markup only in icon.svg
 index.css defines shell/base tokens such as `--surface` or creates self-referential local tokens such as `--<id>-bg: var(--<id>-bg)`
 module.json or collections.schema.json would be exposed in an invalid or incomplete state after any edit
 any required module file is still missing: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales/de.json, locales/en.json, or tests/*.test.mjs
@@ -60,6 +63,7 @@ you are about to make a failing test match broken behavior instead of fixing the
 you are about to import browser entry files such as `index.js` or `schema.js` directly from Node tests, or through `data:text/javascript`, base64, `Buffer.from(source)`, or any generated data URL, instead of testing local `.mjs` helpers and JSON/text parity
 you are spending extra turns reading validator/static-checker implementation internals before the required module file set exists; do not open `validate-app-module.mjs`, `module_static_check.mjs`, `assert-module-conformance.mjs`, or `assert-rxdb-only.mjs` before the required files exist and a validation command reports a concrete failure
 you are trying to satisfy or avoid scanner keywords by mentally reconstructing the checker instead of writing the smallest valid Business OS module and then repairing actual validator bullets
+you are about to write tests that contain forbidden legacy strings as negative-proof literals; generated tests must avoid the forbidden literals entirely and assert positive current-contract behavior instead
 tests and Business OS guards were not run after the last code change
 ```
 
@@ -88,7 +92,7 @@ Never say "done", "ready", "production-ready", or "runs" while any hard stop is 
 Requested domain object -> existing module object pattern
 Requested primary list/workbench -> existing module surface pattern
 Requested detail/edit flow -> modal/drawer/pane pattern
-Requested automation -> existing business_commands pattern
+Requested automation -> command object dispatched through ctx.commandBus.dispatch
 Collections to own -> schema.js and collections.schema.json names
 What not to implement because it would be slop
 How to keep this app small enough to build and verify in one pass
@@ -110,6 +114,14 @@ unjustified right/third pane, then rerun validation
 Do not use queue IDs or open-work context as a target selector. The App
 Creator/CTOX service will complete queue and command state after the app
 validator is green.
+
+Keep shell inspection bounded. Allowed discovery is limited to exact files in
+`MODULE_DIR`, the exact three few-shot module directories you chose, and the
+commands printed in this skill. Do not run `find`, `rg`, `grep`, or `ls` over
+`$HOME`, `/Users`, `/`, the entire installed release root, or the whole source
+repo to discover validators, scripts, examples, or guard internals. If you need
+the validator, run `ctox business-os app validate <id> --installed|--source`;
+do not search for validator filenames.
 
 After the required reading and tiny analogue map, write the first runnable
 slice immediately. The first write action after the three-module summary must
@@ -141,14 +153,14 @@ Use this mapping when your instincts suggest a familiar web stack:
 ```text
 Next.js route/page -> Business OS module index.html plus index.js mount(ctx)
 React component tree -> direct browser ESM DOM rendering or existing local module pattern
-API route/server action -> business_commands document dispatched through ctx.commandBus
+API route/server action -> command object dispatched through ctx.commandBus.dispatch
 Postgres table/migration -> module-owned collection declared in schema.js and collections.schema.json
 Prisma/Drizzle model -> JSON schema collection with version and migrationStrategies
 IndexedDB/localStorage/sessionStorage app store -> CTOX DB collection supplied by ctx.db, or transient in-memory state for non-persistent UI state
 HTTP fetch to backend -> not allowed for Business OS data; use RxDB/WebRTC and command bus
 npm dependency -> not allowed; use browser APIs, shipped vendor ESM, or local ESM modules
-background job -> CTOX queue task created through business_commands
-ticket/chat automation -> business_commands with outbound_channel/response_channel business_os_chat
+background job -> CTOX queue task requested through ctx.commandBus.dispatch
+ticket/chat automation -> business_os.chat.task command object with outbound_channel/response_channel business_os_chat
 ```
 
 CTOX DB is CTOX-owned and RxDB-derived. It is not npm `rxdb`, not `ctox.db`, and not a generic IndexedDB wrapper. Business data persists through the Business OS shell context and replicates WebRTC-only to the CTOX native peer. Do not add HTTP fallbacks.
@@ -277,7 +289,8 @@ This is also a negative example: do not add `"right": "Details"`,
 for a persistent third pane and you also add `layout.third_pane_justification`.
 The default Business OS app surface is one or two panes plus a modal/drawer.
 Do not embed SVG in `module.json.layout.icon_svg`; keep the icon in the
-required separate `icon.svg` file.
+required separate `icon.svg` file. Do not put inline SVG markup in any manifest
+field, including `icon_svg`, `iconSvg`, `layout.icon`, or `layout.icon_svg`.
 
 ## App Versioning Contract
 
@@ -387,6 +400,14 @@ Use JSON/text parity checks for `module.json`, `collections.schema.json`,
 and import it as a `data:text/javascript;base64,...` URL. That breaks relative
 imports and is not how the Business OS shell loads apps.
 
+Tests must prove the positive current contract, not prove absence of legacy
+contracts by embedding forbidden strings. Do not put strings such as
+`ctx.db.raw`, `db.raw`, `window.dispatchEvent`,
+`ctox-business-os-chat-submit`, `pending_sync`, `layout.right`,
+`right-resizer`, or `business_commands fallback` in generated tests, comments,
+or helper names. If you need a negative assertion, assemble the searched token
+from harmless fragments or prefer a positive assertion for the allowed API.
+
 `module.json` must list every collection the module reads/writes. Shell collections such as `business_commands`, `ctox_queue_tasks`, `business_module_catalog`, and `ctox_runtime_settings` may be listed when used, but module-owned collections must be declared in both `schema.js` and `collections.schema.json`.
 
 `schema.js` and `collections.schema.json` must export only module-owned collections. Do not export shell collections such as `business_commands`, `ctox_queue_tasks`, `business_module_catalog`, or `ctox_runtime_settings` from module schema files.
@@ -457,7 +478,7 @@ phase 3 manifest: module.json parses, id/entry/install_scope are correct, collec
 phase 4 versioning: new/runtime-installed module.json uses SemVer x.y.z without v prefix; 0.1.0 is the normal initial data-app version; <1.0.0 remains developer/founder/admin-only in shell/App Store; public/user-visible release requires >=1.0.0; 2.0.0+ is a new module id/icon line
 phase 5 schema: collections.schema.json has schema_format ctox-business-os-module-collections-v1, contains only module-owned collections, and matches schema.js
 phase 6 persistence: all durable records use ctx.db facade collections; no ctox.db, db.raw, Web Storage, HTTP data route, table creation, or manual database file
-phase 7 automation: at least one visible action dispatches a real business_commands/commandBus work-chat-ticket flow and has a testable payload builder
+phase 7 automation: at least one visible action dispatches a real `business_os.chat.task` command through ctx.commandBus.dispatch and has a testable payload builder
 phase 8 UI layout: default is one/two panes plus modal or drawer; no layout.right, right rail, right-column CSS, right resizer, or three-column grid unless explicitly justified by workflow
 phase 9 UI controls: every visible button, filter, tab, menu, and form action has a real handler and state/persistence/dispatch effect
 phase 10 CSS: module CSS is scoped under the module root; no :root token definitions, shell token redefinitions, self-referential custom properties, decorative resize handles, or layout affordances copied from unrelated modules
@@ -514,7 +535,13 @@ For new module-owned data:
 
 ## Automation Pattern
 
-Every new app should include at least one real automation action that creates a normal CTOX work/chat/ticket item. The action writes a `business_commands` document through `ctx.commandBus` or the existing module command helper.
+Every new app should include at least one real automation action that creates a normal CTOX work/chat/ticket item. The action builds a command object and dispatches it through `ctx.commandBus.dispatch`.
+
+For new App Creator/runtime-installed apps, this means `ctx.commandBus.dispatch`
+only. Do not write, insert, upsert, or fallback directly to the
+`business_commands` collection. Do not call `ctx.db.collection('business_commands')`
+from app runtime code. Local tests must not describe direct `business_commands`
+writes or fallbacks as valid behavior.
 
 Command shape:
 

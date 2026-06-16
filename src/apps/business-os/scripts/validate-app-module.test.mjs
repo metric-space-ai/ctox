@@ -429,6 +429,41 @@ function writeSourceModule(root, moduleId, overrides = {}) {
 
 {
   const root = makeWorkspace();
+  writeInstalledModule(root, 'inlineiconmanifest', {
+    manifest: {
+      layout: {
+        shell: 'full-workspace',
+        left: 'List',
+        center: 'Details',
+        icon_svg: '<svg viewBox="0 0 24 24"></svg>',
+      },
+    },
+  });
+  const run = runValidator(root, 'inlineiconmanifest', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /layout\.icon_svg is forbidden/);
+  assert.match(run.stderr, /must not embed inline SVG markup/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'fallbacktestliteral', {
+    testJs: [
+      "import assert from 'node:assert/strict';",
+      "import { buildFollowUpCommand } from '../core/automation.mjs';",
+      "const command = buildFollowUpCommand({ id: 'demo', title: 'Demo' });",
+      "assert.equal(command.type, 'business_os.chat.task');",
+      "assert.ok('with business_commands fallback');",
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'fallbacktestliteral', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /forbidden direct command fallback literal/);
+}
+
+{
+  const root = makeWorkspace();
   writeInstalledModule(root, 'noautomation', {
     automationJs: [
       'export function buildFollowUpCommand(record = {}) {',

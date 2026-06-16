@@ -238,6 +238,19 @@ if (manifest) {
   if (manifest.layout?.icon_svg) {
     fail('module.json layout.icon_svg is forbidden; keep icons in icon.svg instead of embedding SVG in the manifest');
   }
+  if (manifest.icon_svg || manifest.iconSvg) {
+    fail('module.json inline icon fields are forbidden; keep icons in icon.svg instead of embedding SVG in the manifest');
+  }
+  const inlineManifestIcons = [
+    manifest.layout?.icon,
+    manifest.layout?.icon_svg,
+    manifest.icon,
+    manifest.icon_svg,
+    manifest.iconSvg,
+  ].filter((value) => typeof value === 'string');
+  if (inlineManifestIcons.some((value) => /<\s*svg\b/i.test(value))) {
+    fail('module.json must not embed inline SVG markup; keep SVG markup only in icon.svg');
+  }
 }
 
 if (schemaDoc) {
@@ -439,6 +452,7 @@ const broadRules = [
   ['forbidden raw DB negative-proof literal', /ctx\.db\.raw|\bdb\.raw\b/],
   ['forbidden legacy shell chat event literal', /ctox-business-os-chat-submit|window\.dispatchEvent\s*\(/],
   ['forbidden command state literal pending_sync', /\bpending_sync\b/],
+  ['forbidden direct command fallback literal', /business_commands\s+fallback|fallback\s+to\s+business_commands|falls?\s+back\s+to\s+business_commands|with\s+business_commands\s+fallback/i],
 ];
 
 for (const path of broadScanFiles) {

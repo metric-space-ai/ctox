@@ -16329,6 +16329,7 @@ Business OS app build target:
 - few-shot rule: inspect exactly three existing Business OS modules as short targeted pattern references. Do not request complete file dumps, do not delegate a broad module-reading sweep to a subagent, and do not keep reading examples after the three-module summary.
 - legacy anti-pattern rule: existing modules can contain old compatibility code. For this generated app, reject ctx.db.raw, db.raw, ctx.collections, window.dispatchEvent, ctox-business-os-chat-submit, manual business_commands insert/upsert fallbacks, pending_sync local state, JSON-module schema wrappers, bundler/fake-DOM tests, and default layout.right/right-resizer patterns.
 - current-contract rule: if an existing module conflicts with the required skill, this prompt, `ctox business-os app validate`, or `module_static_check.mjs`, the current contract wins and the existing pattern is an anti-pattern.
+- bounded-shell rule: do not run find/rg/grep/ls over $HOME, /Users, /, the whole install root, or the whole repo to discover validators, scripts, examples, or guard internals. Inspect only exact files in {module_dir}/ and the exact three chosen few-shot module directories. Use `ctox business-os app validate {module_id} {mode_flag}`; do not search for validator filenames.
 - sequencing rule: after reading the required skill and inspecting three existing modules, create {module_dir}/ and write the required file inventory before reading validator/checker source files. Do not open validate-app-module.mjs, module_static_check.mjs, assert-module-conformance.mjs, or assert-rxdb-only.mjs until the required files exist and a validation command has reported a concrete failure.
 - validator rule: validators and static checkers are black-box gates. Run `ctox business-os app validate {module_id} {mode_flag}` after the first file pass; repair its output bullets. Do not reconstruct scanner regexes or plan around checker internals before writing the app.
 - cwd warning: shell tools run from the install root, not from the module directory; never use bare redirects like > module.json, > collections.schema.json, > {module_id}/index.js, or mkdir {module_id}.
@@ -16336,19 +16337,19 @@ Business OS app build target:
 - path rule: every generated app artifact must be under {module_dir}/; do not write root-level module.json, root-level collections.schema.json, root-level {module_id}/, root-level blocker/status Markdown, src/skills/, or any skill-named path. Ignore stale artifact-contract/review examples that contradict this target block.
 - no guard probing: do not test shell aliases, wrapper behavior, root write behavior, hardlinks, symlinks, or guard behavior; implement only inside {module_dir}/.
 - first file action: create {module_dir}/, then write module.json, index.html, index.css, index.js with mount(ctx), schema.js, collections.schema.json, icon.svg, locales, and tests inside that directory.
-- installed manifest rule: for runtime-installed-module, module.json must use entry="installed-modules/{module_id}/index.html", install_scope="installed", and version="0.1.0" or another valid SemVer x.y.z without a v prefix; parse module.json and collections.schema.json immediately after editing them.
+- installed manifest rule: for runtime-installed-module, module.json must use entry="installed-modules/{module_id}/index.html", install_scope="installed", and version="0.1.0" or another valid SemVer x.y.z without a v prefix; parse module.json and collections.schema.json immediately after editing them. Do not embed inline SVG in module.json; never use layout.icon_svg, icon_svg, iconSvg, or layout.icon.
 - versioning rule: 0.0.x is for UI/UX, feature, and bug-fix work without data-shape changes; 0.x.0 is for schema/database or potentially breaking work before public release; 1.0.0 is the first release visible beyond the developer; 2.0.0+ starts a new parallel app line with its own module id/icon instead of mutating a legacy line in place.
 - schema rule: module.json may list shell collections such as business_commands, but schema.js and collections.schema.json must export only module-owned collections.
 - repair order: fix target path, complete required file inventory, valid JSON, manifest mode/version, schema ownership, UI layout, dependency/data-plane patterns, ESM syntax, tests, then shell smoke; do not patch tests to hide earlier failures.
 - persistence: use the Business OS RxDB/WebRTC data plane exposed by the shell context; do not create IndexedDB/Postgres/SQLite/HTTP fallbacks or dependency-managed builds.
 - dependencies: browser-safe ESM only; no package manager, no bundled node_modules, no CommonJS require, no npx, no esbuild/Vite/Rollup/Webpack proof, and no bundler imports in tests; these forbidden names may appear in this prompt but must not appear in generated app files, comments, or tests.
-- tests: put reusable schemas, command builders, reducers, and calculations in local .mjs helpers imported by index.js/schema.js and by tests; Node tests must not import ../index.js or ../schema.js directly and must not data-url/base64 transform browser entry files.
+- tests: put reusable schemas, command builders, reducers, and calculations in local .mjs helpers imported by index.js/schema.js and by tests; Node tests must not import ../index.js or ../schema.js directly and must not data-url/base64 transform browser entry files. Tests must prove allowed behavior and must not contain forbidden legacy literals such as ctx.db.raw, db.raw, window.dispatchEvent, ctox-business-os-chat-submit, pending_sync, layout.right, right-resizer, or business_commands fallback.
 - UI: default to one/two panes plus modals/drawers; do not create layout.right, right-column resizers, or three-column grids unless the user explicitly requested a persistent third pane and you can justify it in a code comment.
 - finalization checklist: mark target, few-shots, scope, manifest, versioning, schema, persistence, automation, UI layout, controls, CSS, dependencies, tests, validation, and cleanup as done/rework/blocked before claiming success; repair every rework item first.
 - scope: build the smallest useful one-pass app; avoid broad decorative status/filter/export/settings surfaces unless all handlers and tests are implemented.
 - tool-call safety: do not generate mammoth single here-doc/tool-call writes; keep files concise or split large writes into bounded chunks, then run syntax checks.
 - repair hygiene: do not leave .bak/.orig/.rej/.tmp/bundle/probe files; do not line-number sed-patch large generated JavaScript when a bounded helper/file rewrite is safer.
-- automation: include at least one real automation through ctx.commandBus.dispatch with type and command_type set to business_os.chat.task, plus a record_snapshot in the payload; do not use shell chat CustomEvents or direct business_commands write fallbacks.
+- automation: include at least one real automation through ctx.commandBus.dispatch only, with type and command_type set to business_os.chat.task, plus a record_snapshot in the payload. Do not call ctx.db.collection('business_commands'), do not insert/upsert business_commands directly, do not implement a business_commands fallback, and do not describe such a fallback as valid in tests.
 - stop condition: before claiming success, run module tests and `ctox business-os app validate {module_id} {mode_flag}`; a green custom test does not count while app validation is red.
 "#
     )
@@ -17331,6 +17332,7 @@ mod tests {
         assert!(prompt.contains("before reading validator/checker source files"));
         assert!(prompt.contains("validators and static checkers are black-box gates"));
         assert!(prompt.contains("cwd warning: shell tools run from the install root"));
+        assert!(prompt.contains("bounded-shell rule: do not run find/rg/grep/ls over $HOME"));
         assert!(prompt
             .contains("set MODULE_DIR=\"runtime/business-os/installed-modules/subscriptions\""));
         assert!(prompt.contains(
@@ -17340,7 +17342,12 @@ mod tests {
         assert!(prompt.contains("Node tests must not import ../index.js or ../schema.js directly"));
         assert!(prompt.contains("finalization checklist: mark target, few-shots, scope"));
         assert!(prompt.contains("include at least one real automation through ctx.commandBus.dispatch"));
-        assert!(prompt.contains("do not use shell chat CustomEvents or direct business_commands write fallbacks"));
+        assert!(prompt.contains("Do not call ctx.db.collection('business_commands')"));
+        assert!(prompt.contains("must not contain forbidden legacy literals"));
+        assert!(prompt.contains("never use layout.icon_svg"));
+        assert!(prompt.contains(
+            "do not implement a business_commands fallback"
+        ));
         assert!(
             prompt.contains("not documentation, plans, trace files, blocker notes, or skill files")
         );
@@ -17377,6 +17384,8 @@ mod tests {
         ));
         assert!(prompt.contains("Do not call ctox queue ack/complete/release/fail/block"));
         assert!(prompt.contains("Do not request complete file dumps"));
+        assert!(prompt.contains("do not search for validator filenames"));
+        assert!(prompt.contains("business_commands fallback"));
         assert!(prompt.contains("Do not reconstruct scanner regexes"));
         assert!(prompt.contains("window.dispatchEvent"));
         assert!(prompt.contains("Node tests must not import ../index.js or ../schema.js directly"));
