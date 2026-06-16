@@ -252,16 +252,15 @@ Current CTOX implementation facts to respect:
 business_module_versions exists and records whole-bundle restore points for install, edit, manual_release, rollback, and creator_deploy origins
 business_module_releases exists but uses an integer release counter, not SemVer
 legacy packaged modules may still have module.json version values such as v1; do not copy that pattern into new apps
-the App Store/shell catalog is not yet a complete SemVer audience gate for "non-developers only see >= 1.0.0"
-until that gate exists, report public-release readiness as blocked instead of pretending a <1.0.0 app is safely hidden from normal users
+the shell and App Store hide runtime-installed work versions below 1.0.0 from normal users; chef/admin and assigned founders can still see them
+this is a client/catalog audience gate, not a SemVer-aware publish workflow
 ```
 
 Missing CTOX hardening work before broad public app distribution:
 
 ```text
 add a SemVer-aware release/publish command that records the public app version, validates migration evidence, and rejects invalid bumps
-project SemVer release state into business_module_catalog so the shell can distinguish developer, founder, and normal-user visibility
-hide or disable modules below 1.0.0 for non-developer/non-founder users
+project SemVer release state into business_module_catalog from the release command instead of relying only on module.json
 replace or bridge the integer business_module_releases version with SemVer metadata
 add a major-line rule so 2.0.0+ requires a new module id/icon and can coexist with legacy 1.x modules
 provide a CLI such as ctox business-os app release <module> --version <x.y.z> after validation is green
@@ -392,7 +391,7 @@ phase 0 target: resolved module directory is correct; runtime-installed apps use
 phase 1 few-shots: inspected at least 3 existing modules and copied only concrete proven patterns
 phase 2 scope: app has one focused workbench, one create/edit/detail flow, one automation; no decorative views or fake future controls
 phase 3 manifest: module.json parses, id/entry/install_scope are correct, collections lists every read/write dependency
-phase 4 versioning: new/runtime-installed module.json uses SemVer x.y.z without v prefix; 0.1.0 is the normal initial data-app version; public visibility remains blocked until >=1.0.0 is enforced; 2.0.0+ is a new module id/icon line
+phase 4 versioning: new/runtime-installed module.json uses SemVer x.y.z without v prefix; 0.1.0 is the normal initial data-app version; <1.0.0 remains developer/founder/admin-only in shell/App Store; public/user-visible release requires >=1.0.0; 2.0.0+ is a new module id/icon line
 phase 5 schema: collections.schema.json has schema_format ctox-business-os-module-collections-v1, contains only module-owned collections, and matches schema.js
 phase 6 persistence: all durable records use ctx.db facade collections; no ctox.db, db.raw, Web Storage, HTTP data route, table creation, or manual database file
 phase 7 automation: at least one visible action dispatches a real business_commands/commandBus work-chat-ticket flow and has a testable payload builder

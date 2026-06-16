@@ -165,12 +165,13 @@ Existing CTOX versioning pieces:
 business_module_versions stores whole-bundle restore points with origin, seq, bundle hash, sealed flag, and files_json
 ctox.module.list_versions and ctox.module.rollback_version operate on those bundle restore points
 business_module_releases stores a separate integer release counter and rollback manifest snapshots
-the current catalog projection exposes version_states, but it is not yet a full SemVer visibility gate
+the shell and App Store hide runtime-installed work versions below 1.0.0 from normal users, while chef/admin and assigned founders can still see them
+the current catalog projection exposes version_states, but public SemVer publish state is not yet driven by a dedicated release command
 ```
 
-Until CTOX has a SemVer-aware release command and catalog visibility policy,
-mark public distribution as blocked for modules below `1.0.0`; do not solve it
-with UI copy or by hiding controls inside a module.
+Until CTOX has a SemVer-aware release command, mark broad public distribution as
+blocked for modules below `1.0.0`; do not solve it with UI copy or by hiding
+controls inside a module.
 
 For new modules, prefer shipping `icon.svg` and omitting `layout.icon_svg`
 unless the inline SVG was copied from an already valid manifest or generated

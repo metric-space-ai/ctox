@@ -3297,6 +3297,7 @@ function moduleAppearsInSwitcher(mod) {
     && mod.id !== 'desktop'
     && mod.id !== 'notizen'
     && mod.install_scope !== 'internal'
+    && canSeeModuleForAppVersion(mod)
     && !moduleLaunchesAsDesktopApp(mod);
 }
 
@@ -5030,13 +5031,13 @@ function roleCanAdmin(role) {
   return ['chef', 'admin'].includes(normalizeRole(role));
 }
 
-function canModifyModule(mod) {
+function canModifyModule(mod, governance = state.governance) {
   if (!mod?.id) return false;
   const role = normalizeRole(state.session?.user?.role || (state.session?.user?.is_admin ? 'admin' : 'user'));
   if (['chef', 'admin'].includes(role)) return true;
   if (role !== 'founder') return false;
   const userId = state.session?.user?.id || '';
-  const assignments = state.governance?.founders?.[mod.id] || [];
+  const assignments = governance?.founders?.[mod.id] || [];
   return assignments.some((item) => item.user_id === userId && item.active !== false);
 }
 
@@ -5597,11 +5598,15 @@ async function loadModules(options = {}) {
   // and `module_allowlist` into the injected launch config (instant at startup,
   // so there is no flash of disallowed apps before the catalog syncs). Empty/unset
   // means no restriction — every packaged module is surfaced.
-  const modules = applyModuleAllowlist(merged, catalog.allowed_module_ids);
+  const governance = catalog.governance || state.governance || null;
+  const modules = filterModulesForAppVersionVisibility(
+    applyModuleAllowlist(merged, catalog.allowed_module_ids),
+    governance,
+  );
   return {
     ok: catalog.ok !== false,
     modules,
-    governance: catalog.governance || null,
+    governance,
     catalogFingerprint: moduleCatalogFingerprint({ ...catalog, modules }),
   };
 }
@@ -5626,6 +5631,39 @@ function applyModuleAllowlist(modules, catalogAllowlist) {
   if (allow.size === 0) return modules; // no restriction configured
   return normalizeModuleList(modules)
     .filter((mod) => allow.has(String(mod?.id || '').trim()));
+}
+
+function filterModulesForAppVersionVisibility(modules, governance = state.governance) {
+  return normalizeModuleList(modules)
+    .filter((mod) => canSeeModuleForAppVersion(mod, governance));
+}
+
+function canSeeModuleForAppVersion(mod, governance = state.governance) {
+  if (!isRuntimeInstalledModule(mod)) return true;
+  if (hasPublicAppVersion(mod)) return true;
+  return canModifyModule(mod, governance);
+}
+
+function isRuntimeInstalledModule(mod) {
+  const entry = String(mod?.entry || '').trim();
+  return mod?.source === 'installed'
+    || mod?.install_scope === 'installed'
+    || entry.startsWith('installed-modules/');
+}
+
+function hasPublicAppVersion(mod) {
+  const parsed = parseBusinessAppSemver(mod?.version);
+  return Boolean(parsed && parsed.major >= 1);
+}
+
+function parseBusinessAppSemver(version) {
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(String(version || '').trim());
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+  };
 }
 
 function allowsPackagedModuleCatalogSeed() {

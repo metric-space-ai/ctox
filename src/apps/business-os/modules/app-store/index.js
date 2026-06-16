@@ -345,6 +345,7 @@ function rawCatalogItems() {
     ...templates.map((item) => normalizeItem(item, 'template')),
     ...modules
       .filter(isLaunchableModule)
+      .filter(canSeeModuleForAppVersion)
       .map((item) => normalizeItem(item, moduleKind(item))),
     ...desktopApps
       .filter((item) => item?.id && !moduleIds.has(item.id))
@@ -355,6 +356,34 @@ function rawCatalogItems() {
 
 function isLaunchableModule(item) {
   return item?.id && item.id !== 'desktop' && item.id !== 'notizen' && item.install_scope !== 'internal';
+}
+
+function canSeeModuleForAppVersion(item) {
+  if (!isRuntimeInstalledModule(item)) return true;
+  if (hasPublicAppVersion(item)) return true;
+  return canModifyAppStoreAppForModule(state, item);
+}
+
+function isRuntimeInstalledModule(item) {
+  const entry = String(item?.entry || '').trim();
+  return item?.source === 'installed'
+    || item?.install_scope === 'installed'
+    || entry.startsWith('installed-modules/');
+}
+
+function hasPublicAppVersion(item) {
+  const parsed = parseBusinessAppSemver(item?.version);
+  return Boolean(parsed && parsed.major >= 1);
+}
+
+function parseBusinessAppSemver(version) {
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(String(version || '').trim());
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+  };
 }
 
 function moduleKind(item) {
@@ -1451,8 +1480,26 @@ function hideAppStoreContextMenu(state) {
 function canModifyAppStoreApp(state) {
   if (typeof state.ctx.canModifyModule === 'function' && state.ctx.canModifyModule()) return true;
   const user = state.ctx.session?.user || {};
-  const role = String(user.role || (user.is_admin ? 'admin' : 'user')).trim().toLowerCase().replace(/^business_os_/, '');
+  const role = normalizeBusinessOsRole(user.role || (user.is_admin ? 'admin' : 'user'));
   return ['admin', 'chef'].includes(role);
+}
+
+function canModifyAppStoreAppForModule(state, item) {
+  const user = state.ctx?.session?.user || {};
+  const role = normalizeBusinessOsRole(user.role || (user.is_admin ? 'admin' : 'user'));
+  if (['admin', 'chef'].includes(role)) return true;
+  if (role !== 'founder') return false;
+  const userId = String(user.id || '').trim();
+  if (!userId || !item?.id) return false;
+  const assignments = state.catalog?.governance?.founders?.[item.id] || [];
+  return assignments.some((assignment) => assignment?.user_id === userId && assignment.active !== false);
+}
+
+function normalizeBusinessOsRole(role) {
+  const value = String(role || '').trim().toLowerCase().replace(/^business_os_/, '');
+  if (value === 'owner') return 'chef';
+  if (['chef', 'admin', 'founder', 'user'].includes(value)) return value;
+  return 'user';
 }
 
 function appStoreCommandContextFromElement(state, target) {

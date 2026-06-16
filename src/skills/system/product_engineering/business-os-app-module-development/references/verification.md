@@ -456,7 +456,7 @@ native handler trusts browser-only validation for required fields or money/accou
 native handler writes fields downstream schemas do not read
 posted/locked records can be changed through generic edit paths
 README or phase tracker says done while browser proof or native gates are absent
-phase tracker says public/released/user-visible while CTOX still lacks SemVer-aware catalog gating for non-developer users
+phase tracker says public/released/user-visible below 1.0.0 or without a real shell/App Store visibility gate
 phase tracker marks required files, handlers, tests, or shell proof done before those files or evidence exist
 README, module.json, or App Store copy advertises handlers/features that are stubs, deferred, or unproven
 duplicate stale todo rows in phase tracker
