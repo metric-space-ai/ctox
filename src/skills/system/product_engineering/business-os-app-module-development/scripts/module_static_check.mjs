@@ -54,6 +54,10 @@ const shellTokenPattern = new RegExp(
 );
 const semverPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function fail(message) {
   failures.push(message);
 }
@@ -392,6 +396,14 @@ for (const path of files) {
       if (shellTokenPattern.test(body)) {
         const token = body.match(shellTokenPattern)?.[0]?.replace(/\s*:$/, '');
         fail(`${rel(path)} redefines shell/base design token ${token}; use a module-local token name`);
+      }
+      for (const declaration of body.matchAll(/(--[\w-]+)\s*:\s*([^;{}]+);?/g)) {
+        const token = declaration[1];
+        const value = declaration[2];
+        const selfReferencePattern = new RegExp(String.raw`\bvar\(\s*${escapeRegExp(token)}(?:\s*[,)]|\s*$)`);
+        if (selfReferencePattern.test(value)) {
+          fail(`${rel(path)} defines self-referential CSS custom property ${token}; use a shell-token fallback or literal module value`);
+        }
       }
     }
   }

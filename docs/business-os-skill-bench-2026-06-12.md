@@ -1064,3 +1064,30 @@ The remaining bench blocker is Claude Code CLI reliability on one prompt/run plu
 The skill now treats validators/static checkers as black-box gates before the required module file set exists. Agents must inspect contracts and three modules, write the minimal app files, run validation, and repair concrete validator bullets instead of reconstructing scanner rules up front.
 Because the skill-only version did not prevent the Claude Code analysis loop, the Business OS app-target prompt now also carries a sequencing rule: do not open validator/checker implementation files before the required module files exist and a validation command has produced a concrete failure.
 ```
+
+## R2 Inventory Retry 7 False-Green
+
+Recorded: 2026-06-16 CEST
+
+Prompt hardening in `src/core/business_os/store.rs` changed the inventory
+failure mode: the agent still spent several minutes inspecting examples, but it
+eventually wrote the required module files under
+`runtime/business-os/installed-modules/bench_inventory` and ran the validator.
+
+Observed outcome:
+
+```text
+bench_inventory retry 7: validate-app-module reported ok:true; module_static_check OK; 16/16 local tests passed.
+The run repaired concrete validator bullets for third/right-pane wording in tests, shell-token redefinitions, and missing ctx.commandBus.dispatch usage.
+Independent CSS review found a validator blind spot: index.css contained self-referential aliases such as --inv-bg: var(--inv-bg), --inv-bg2: var(--inv-bg2), --inv-fg: var(--inv-fg), --inv-muted: var(--inv-muted), and --inv-border: var(--inv-border).
+This is not production-ready because the values do not resolve to shell tokens or literal fallbacks in the browser.
+```
+
+Hardening taken from this retry:
+
+```text
+module_static_check.mjs now rejects self-referential CSS custom properties.
+assert-module-conformance.mjs now rejects the same issue for source modules.
+validate-app-module.test.mjs now has a regression fixture for --token: var(--token).
+SKILL.md, references/verification.md, and references/module-contract.md now explain the exact CSS alias pattern and warn against broad token search/replace repairs.
+```

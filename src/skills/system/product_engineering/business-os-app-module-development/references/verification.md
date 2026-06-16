@@ -147,6 +147,28 @@ must not redefine shell/base tokens such as `--bg`, `--surface`, `--text`,
 `--accent`, `--line`, or `--panel-radius`. Scope module-local CSS variables
 under the module root and only read shell tokens with `var(...)`.
 
+Use real local token aliases:
+
+```css
+.inventory-module {
+  --inventory-bg: var(--surface, #fff);
+  --inventory-border: var(--line, #e5e7eb);
+}
+```
+
+Do not create self-referential aliases:
+
+```css
+.inventory-module {
+  --inventory-bg: var(--inventory-bg);
+}
+```
+
+When repairing a shell-token failure, edit the exact declarations. Do not use a
+broad replace that rewrites the fallback inside a local alias and turns
+`--inventory-bg: var(--surface, #fff)` into
+`--inventory-bg: var(--inventory-bg)`.
+
 If a coding-agent runtime creates its own tool directory such as `.opencode/`,
 do not count that as an app dependency unless the module, its tests, or its
 instructions reference it. Package artifacts inside the module tree or created

@@ -267,6 +267,24 @@ not fine to assign those token names in module CSS. The final static checker
 and `assert-module-conformance.mjs` both reject `:root` custom properties and
 shell-token redefinitions.
 
+Module-local aliases must resolve to shell tokens or literal fallbacks, not to
+themselves:
+
+```css
+[data-inventory-root] {
+  --inventory-bg: var(--surface, #fff);
+  --inventory-line: var(--line, #e5e7eb);
+}
+```
+
+Do not write or leave aliases like this after a repair:
+
+```css
+[data-inventory-root] {
+  --inventory-bg: var(--inventory-bg);
+}
+```
+
 ## Collection Schema Contract
 
 `collections.schema.json` is the native-readable runtime contract:

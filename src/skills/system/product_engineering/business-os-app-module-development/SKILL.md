@@ -39,6 +39,7 @@ the module declares collections in module.json but not in schema.js and collecti
 the module-owned data model is unclear: central object, collection names, states, commands, and automation payload are not named
 the app has a decorative third pane, layout.right by default, right-column resizers by default, decorative controls, fake AI buttons, fake status-only actions, or UI that is not needed for the workflow
 module.json embeds `layout.icon_svg` instead of using the required separate `icon.svg`
+index.css defines shell/base tokens such as `--surface` or creates self-referential local tokens such as `--<id>-bg: var(--<id>-bg)`
 module.json or collections.schema.json would be exposed in an invalid or incomplete state after any edit
 any required module file is still missing: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales/de.json, locales/en.json, or tests/*.test.mjs
 the validator reports missing files, right/third-pane layout, schema, manifest, dependency, syntax, or test failures and you are about to finish instead of repairing the exact bullets
@@ -404,7 +405,9 @@ export function mount(ctx) {
 - Use a third pane only when the user explicitly asked for one or when the workflow has a persistent separate context stream that must remain visible while editing. If you use one, add a short code comment in the module explaining that workflow need. Otherwise use a modal or drawer.
 - Do not add visible controls unless they work end to end.
 - Do not add AI buttons, export buttons, filters, batch actions, or settings that only change local text.
-- Prefer existing shell/base classes and local module CSS. Do not redefine shell tokens on `:root`.
+- Prefer existing shell/base classes and local module CSS. Do not redefine shell tokens on `:root`, `html`, `body`, or the module root.
+- Scope module CSS variables under the module root with module-local names and real fallback values, for example `--inventory-bg: var(--surface, #fff)`. Never write a self-referential alias such as `--inventory-bg: var(--inventory-bg)`.
+- When fixing a design-token validation failure, edit the exact token declarations. Do not run broad search/replace that turns `--inventory-bg: var(--surface, #fff)` into `--inventory-bg: var(--inventory-bg)`.
 - Use modals/drawers for focused create/edit flows when a third column would be decorative.
 - Keep text and controls compact enough for the Business OS workspace, not a marketing page.
 
@@ -441,7 +444,7 @@ phase 6 persistence: all durable records use ctx.db facade collections; no ctox.
 phase 7 automation: at least one visible action dispatches a real business_commands/commandBus work-chat-ticket flow and has a testable payload builder
 phase 8 UI layout: default is one/two panes plus modal or drawer; no layout.right, right rail, right-column CSS, right resizer, or three-column grid unless explicitly justified by workflow
 phase 9 UI controls: every visible button, filter, tab, menu, and form action has a real handler and state/persistence/dispatch effect
-phase 10 CSS: module CSS is scoped under the module root; no :root token definitions, shell token redefinitions, decorative resize handles, or layout affordances copied from unrelated modules
+phase 10 CSS: module CSS is scoped under the module root; no :root token definitions, shell token redefinitions, self-referential custom properties, decorative resize handles, or layout affordances copied from unrelated modules
 phase 11 dependencies: browser runtime uses only vanilla HTML/CSS/browser ESM and local relative ESM imports; no UI framework, JSX/TSX, package manager, bare package import, remote import, CommonJS, bundler, transpiler, or generated bundle
 phase 12 tests: tests import only local `.mjs` helpers and JSON/text files; they do not import `index.js`/`schema.js` directly, do not use data: URLs, and cover schema parity, core command builders, and at least one CRUD/automation path
 phase 13 validation: node --check, `ctox business-os app validate <id> --installed|--source`, forbidden-pattern scan, and any available shell/browser smoke proof are green
@@ -455,6 +458,7 @@ module.json has layout.right without layout.third_pane_justification
 module.json embeds layout.icon_svg instead of using icon.svg
 index.html/index.css contains data-*-right, right-pane, right-column, right-resizer, or a three-column grid copied from another app without a real workflow need
 collections.schema.json starts directly with collections and omits schema_format
+index.css contains self-referential custom properties such as `--module-bg: var(--module-bg)`, or broad token replacement has removed shell-token fallbacks
 module.json for a new/runtime-installed app has no SemVer version, uses legacy v1, uses 0.0.0, or claims public release below 1.0.0
 version 2.0.0 or later is used without a new module id/icon for a parallel major app line
 runtime-installed App Creator app uses React/Vue/Svelte/Angular/Solid/Preact/Lit, JSX/TSX, framework config, or any compile/transpile artifact

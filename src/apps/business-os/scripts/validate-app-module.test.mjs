@@ -383,6 +383,16 @@ function writeSourceModule(root, moduleId, overrides = {}) {
 
 {
   const root = makeWorkspace();
+  writeInstalledModule(root, 'selfrefcss', {
+    indexCss: '.good-module { --good-bg: var(--good-bg); color: var(--good-bg); }\n',
+  });
+  const run = runValidator(root, 'selfrefcss', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /self-referential CSS custom property --good-bg/);
+}
+
+{
+  const root = makeWorkspace();
   writeInstalledModule(root, 'noautomation', {
     automationJs: [
       'export function buildFollowUpCommand(record = {}) {',

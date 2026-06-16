@@ -33,6 +33,9 @@
 //                              tokens (--bg, --surface, --accent, ...); derive
 //                              module-local names from them instead (see
 //                              modules/customers/index.css).
+//   css-no-self-referential-token
+//                              module CSS custom properties must not assign
+//                              themselves through var(--same-token).
 //   css-no-cdn-import          no @import of remote stylesheets/fonts in the
 //                              no-build runtime.
 //   locales                    module ships locales/de.json + locales/en.json.
@@ -74,6 +77,10 @@ const SHELL_TOKEN_NAMES = [
 const shellTokenPattern = new RegExp(
   `--(?:${SHELL_TOKEN_NAMES.join('|')})(?![\\w-])\\s*:`,
 );
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 // Frozen pre-existing violations. Remove entries as modules are fixed.
 // Currently EMPTY — keep it that way: fix the module instead of adding here.
@@ -174,6 +181,14 @@ for (const id of moduleDirs) {
       if (shellTokenPattern.test(body)) {
         const token = body.match(shellTokenPattern)?.[0]?.replace(/\s*:$/, '');
         offend('css-no-shell-token-redefinition', `"${selector}" redefines ${token}`);
+      }
+      for (const declaration of body.matchAll(/(--[\w-]+)\s*:\s*([^;{}]+);?/g)) {
+        const token = declaration[1];
+        const value = declaration[2];
+        const selfReferencePattern = new RegExp(String.raw`\bvar\(\s*${escapeRegExp(token)}(?:\s*[,)]|\s*$)`);
+        if (selfReferencePattern.test(value)) {
+          offend('css-no-self-referential-token', `"${selector}" defines ${token} using itself`);
+        }
       }
     }
     if (/@import\s+url\(\s*['"]?https?:/.test(cssNoComments)) {
