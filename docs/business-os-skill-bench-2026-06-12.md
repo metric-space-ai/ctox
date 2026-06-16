@@ -1012,3 +1012,51 @@ module_static_check.mjs now requires installed App Creator/runtime modules to in
 validate-app-module.test.mjs now has regression fixtures for embedded icon_svg, missing command_type, and missing record_snapshot.
 SKILL.md and references/verification.md now state the same requirements explicitly.
 ```
+
+## Claude Code CLI Runtime-Installed R2 Findings
+
+Recorded: 2026-06-16 CEST
+
+Workspace: `/tmp/ctox-bos-claude-bench-r2-20260616-142349`
+
+Runtime:
+
+```text
+agent runner: Claude Code CLI 2.1.163
+model alias: sonnet
+execution path: isolated /tmp release-like workspace with runtime/business-os/installed-modules/<id>
+skill/checker: includes R1 hardening for layout.icon_svg, command_type, record_snapshot, vanilla runtime, and installed MODULE_DIR rules
+```
+
+Completed app outcomes:
+
+```text
+bench_subscriptions: green; 15/15 tests; static check OK; validate-app-module OK
+bench_projects: green; 16/16 tests; static check OK; validate-app-module OK
+bench_contracts: green; 20/20 tests; static check OK; validate-app-module OK
+bench_quality: green; 9/9 tests; static check OK; validate-app-module OK
+```
+
+Isolation proof:
+
+```text
+diff against the base copy showed only runtime/ directories for the four completed apps.
+No completed app wrote source modules, skill files, root manifests, package files, or probe artifacts.
+```
+
+Inventory outcome:
+
+```text
+bench_inventory did not produce a completed R2 app outcome.
+The first inventory run hit a Claude Code API socket close after writing only partial module scaffolding.
+Two fresh inventory retries hung for several minutes without writing any module files and were manually terminated.
+This is recorded as runner/infrastructure failure, not a green or red app result.
+```
+
+R2 takeaways:
+
+```text
+The R1 hardening worked for the completed apps: command_type and record_snapshot were present, layout.icon_svg did not recur, and all four completed modules stayed in the runtime-installed target.
+The negative-proof string scanner still matters: projects briefly had layout/right wording in tests, then self-corrected after validation.
+The remaining bench blocker is Claude Code CLI reliability on one prompt/run, not an observed Business OS architecture failure in completed modules.
+```
