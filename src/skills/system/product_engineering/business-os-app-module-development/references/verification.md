@@ -141,6 +141,12 @@ through CTOX or an explicitly pinned release-tag GitHub fallback. Do not claim
 production readiness from source-only checks when the target was an installed
 release module.
 
+This is the primary proof path. External CLI-agent benches are useful for
+hardening the skill, but they are secondary. If CTOX App Creator cannot create,
+validate, and mount the runtime-installed app through the normal command flow,
+the app creation path is not production-ready even if a source-checkout bench is
+green.
+
 The static checker also mirrors the critical CSS conformance rule: module
 styles must not define custom properties on `:root`, `html`, or `body`, and
 must not redefine shell/base tokens such as `--bg`, `--surface`, `--text`,
@@ -210,6 +216,11 @@ Greenfield automation proof must use `ctx.commandBus.dispatch`. Do not prove a
 standard CTOX follow-up by inserting a `pending_sync` document into
 `business_commands`; if commandBus is absent, the action is unavailable or the
 real-shell proof is blocked.
+
+Do not use shell chat events as a fallback. A generated app that triggers
+`window.dispatchEvent(...)`, `ctox-business-os-chat-submit`, or another legacy
+CustomEvent instead of `ctx.commandBus.dispatch(...)` fails the automation
+contract.
 
 Do not use `pending_sync` as a module-local status enum, CSS class, UI label,
 README explanation, or fallback commandBus result. Use neutral module-local
@@ -471,6 +482,7 @@ source SQL/ORM migration assumptions were copied instead of collections.schema.j
 module expects ctx.collections instead of ctx.db
 module invents ctox.db or uses a global database handle
 module reads ctx.db.raw instead of live facade collections
+module uses window.dispatchEvent or ctox-business-os-chat-submit for automation
 missing collection.$ subscriptions
 source store module missing `src/apps/business-os/modules/registry.json` catalog entry
 runtime-installed module edits packaged registry unnecessarily

@@ -99,6 +99,13 @@ arrives through CTOX/Business OS, use the embedded system skill by id and the
 runtime module-save/source-save flow unless the prompt explicitly says this is
 source development in a repository checkout.
 
+The CTOX-native App Creator path is the primary target. A generated user app in
+a normal installation belongs under `installed-modules/<module>/`, materialized
+from `$CTOX_STATE_ROOT/business-os/installed-modules/<module>/` or
+`runtime/business-os/installed-modules/<module>/` in an isolated app-build
+root. Source modules under `src/apps/business-os/modules/<module>/` are
+packaged store/template source, not the default target for user-created apps.
+
 If an external coding agent needs the skill text outside a source checkout,
 give it a release-matched GitHub URL as fallback, not a maintainer-local path:
 
@@ -130,6 +137,25 @@ context. An App Creator agent must not call queue lifecycle commands or select
 a different queue row from that context. The authoritative target is the app
 build block: `module_id`, `install_target`, and
 `only_allowed_app_artifact_directory`.
+
+Do not confuse existing module source with current architecture authority.
+Existing modules can show mount shape, schema shape, layout density, and command
+payload examples, but older compatibility code must be translated:
+
+```text
+ctx.db.raw / db.raw -> ctx.db facade collection lookup
+ctx.collections -> ctx.db
+window.dispatchEvent('ctox-business-os-chat-submit') -> ctx.commandBus.dispatch(...)
+manual business_commands insert/upsert fallback -> commandBus only, or disabled action if unavailable
+pending_sync local state -> submitted/queued/unavailable/failed UI state
+bundled/fake-DOM tests -> direct local .mjs helper tests
+JSON import schema.js wrapper -> browser-safe JS/ESM schema objects
+decorative right pane -> modal/drawer or two-pane layout
+```
+
+If a few-shot module conflicts with this guide, the current skill and validator
+win. Do not add "temporary" fallbacks to preserve a legacy pattern in a new App
+Creator app.
 
 ## Lifecycle Of A Module
 

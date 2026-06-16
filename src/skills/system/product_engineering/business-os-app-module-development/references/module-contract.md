@@ -35,6 +35,11 @@ those files under `installed-modules/<module>/` in the app root and loads
 may target `src/apps/business-os/modules/<module>/`; release/runtime prompts
 must not mention developer-local paths such as `/Users/.../ctox.nosync`.
 
+CTOX-native App Creator proof is the primary target for generated user apps.
+External agents should build the same contract, but their output is not
+production evidence until the CTOX App Creator or command flow can materialize,
+validate, and mount the runtime-installed module from the installed app root.
+
 `module.json` must list every collection read or written, including
 dependencies such as `business_commands`, `customer_accounts`, `desktop_files`,
 or adjacent module collections.
@@ -129,6 +134,23 @@ Do not edit `modules/registry.json` for a runtime-installed App Creator/App
 Store module unless the task explicitly changes the packaged app catalog.
 Runtime-installed modules are discovered by scanning
 `installed-modules/<module>/module.json`.
+
+When existing source modules show a different pattern, do not treat that as a
+fallback. For new/runtime App Creator apps, these legacy patterns are forbidden
+implementation choices:
+
+```text
+ctx.db.raw, db.raw, or ctx.collections
+window.dispatchEvent or ctox-business-os-chat-submit for automation
+manual insert/upsert into business_commands when commandBus is unavailable
+pending_sync as local status, test fixture, CSS class, or README explanation
+schema.js importing collections.schema.json as a JSON module
+bundler/fake-DOM tests or dependency-managed proof commands
+layout.right without third_pane_justification
+```
+
+Translate them to the current module contract instead of adding compatibility
+branches.
 
 ## App Version Contract
 
@@ -433,6 +455,10 @@ documents into `business_commands` as a fallback. If `ctx.commandBus` is
 unavailable, render the action as unavailable and keep the phase proof blocked.
 Special legacy dispatchers such as Tickets/Outbound are not default patterns for
 new app modules.
+
+Do not use shell chat CustomEvents or `window.dispatchEvent` as an automation
+fallback. New App Creator apps must dispatch the command through
+`ctx.commandBus.dispatch(...)`.
 
 Do not create module-owned statuses named `pending_sync`. Treat raw command
 states as commandBus/native details. Module UI, CSS, helper constants, README

@@ -21,6 +21,22 @@ avoid overfitting the skill to a single run.
 - Every app must include one small automation component that triggers normal
   CTOX work, chat, or ticket flow.
 
+## Current Priority Correction
+
+As of 2026-06-16, the acceptance order is:
+
+```text
+P1: CTOX itself builds the five test apps through the native Business OS App Creator / command flow as runtime-installed modules.
+P2: external agents can use the same skill to build equivalent apps.
+```
+
+A source-checkout or external CLI bench can harden the skill, but it is not the
+production-readiness proof. "Green" now means CTOX App Creator with MiniMax-M3
+creates the five runtime-installed apps under
+`runtime/business-os/installed-modules/<id>/`, each app validates without a
+build step, mounts in Business OS, persists through CTOX DB/WebRTC, and uses
+`ctx.commandBus.dispatch(...)` for its automation.
+
 ## Prompt 1: Subscriptions
 
 ```text

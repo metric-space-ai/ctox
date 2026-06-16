@@ -51,6 +51,29 @@ rg -n "export function mount|commandBus|business_commands|upsert|find\\(|subscri
 find src/apps/business-os/modules/<id> -maxdepth 3 -type f | sort
 ```
 
+Keep this inspection bounded. Existing modules are few-shot pattern sources,
+not a contract override. Read targeted files and line ranges, record the
+pattern you are borrowing, then write the new module. Do not ask for complete
+module dumps and do not delegate a broad "read all files" sweep to a subagent.
+
+Some packaged modules still carry older compatibility patterns. Reject these
+for new App Creator apps even if a module contains them:
+
+```text
+ctx.db.raw or db.raw access -> use ctx.db.collection(), ctx.db.collections[name], or ctx.db[name]
+ctx.collections -> use ctx.db
+window.dispatchEvent('ctox-business-os-chat-submit') -> use ctx.commandBus.dispatch(...)
+manual business_commands insert/upsert fallback -> use ctx.commandBus.dispatch(...) or mark the action unavailable
+pending_sync module-local status -> use submitted, queued, unavailable, or failed
+esbuild/fake-DOM/bundled tests -> test local browser-safe .mjs helpers directly
+schema.js importing collections.schema.json -> mirror schemas in JS/ESM objects or a local schemas.mjs helper
+default layout.right/right resizer/three-column grid -> use one/two panes plus modal/drawer unless the workflow truly needs persistent side context
+```
+
+If a few-shot conflicts with this reference, `SKILL.md`,
+`ctox business-os app validate`, or `module_static_check.mjs`, the current
+contract wins and the older pattern is an anti-pattern.
+
 ## Translation From Familiar Frameworks
 
 | Familiar pattern | Business OS app equivalent |
@@ -172,6 +195,11 @@ Each new app should include at least one automation action that creates a normal
 The payload must include enough record facts for the receiving CTOX flow to act without scraping the UI.
 
 Use `business_os.chat.task` for chat/work items unless there is a specific existing `ctox.ticket.*` or module command pattern to follow.
+
+Do not use shell chat CustomEvents or `window.dispatchEvent` as a compatibility
+fallback for generated apps. The standard App Creator automation path is
+`ctx.commandBus.dispatch(...)` with both `type` and `command_type` set to
+`business_os.chat.task`, plus a `record_snapshot`.
 
 ## Validation Strategy
 

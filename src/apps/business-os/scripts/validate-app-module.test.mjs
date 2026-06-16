@@ -393,6 +393,42 @@ function writeSourceModule(root, moduleId, overrides = {}) {
 
 {
   const root = makeWorkspace();
+  writeInstalledModule(root, 'legacychatevent', {
+    indexJs: [
+      'export async function mount(ctx) {',
+      "  window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', { detail: { prompt: 'legacy' } }));",
+      "  ctx.host.textContent = 'Ready';",
+      '  return () => { ctx.host.textContent = ""; };',
+      '}',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'legacychatevent', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /legacy shell event dispatch/);
+  assert.match(run.stderr, /forbidden legacy shell chat event literal/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'directcommandwrite', {
+    indexJs: [
+      'export async function mount(ctx) {',
+      "  const commands = ctx.db.collection('business_commands');",
+      "  await commands.upsert({ id: 'cmd_direct', status: 'submitted' });",
+      "  ctx.host.textContent = 'Ready';",
+      '  return () => { ctx.host.textContent = ""; };',
+      '}',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'directcommandwrite', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /direct business_commands write fallback/);
+}
+
+{
+  const root = makeWorkspace();
   writeInstalledModule(root, 'noautomation', {
     automationJs: [
       'export function buildFollowUpCommand(record = {}) {',

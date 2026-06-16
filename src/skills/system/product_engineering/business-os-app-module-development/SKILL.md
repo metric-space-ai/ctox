@@ -12,6 +12,13 @@ This skill is instruction context. It is not the deliverable.
 
 If the user asks to build, change, or repair a CTOX Business OS app, build the app/module. Do not create, copy, mirror, export, or edit skill files or skill-named directories unless the user explicitly asks to change a skill.
 
+## Priority Order
+
+1. CTOX itself must be able to build the app through the Business OS App Creator, App Store, chat, or command flow. The primary acceptance target is a runtime-installed module under `runtime/business-os/installed-modules/<id>/` or `$CTOX_STATE_ROOT/business-os/installed-modules/<id>/` that validates and mounts without a build step.
+2. Other agents may use this skill to build the same module contract. External-agent success is useful only when it matches the CTOX-native installed-module contract; it is not a substitute for CTOX App Creator proof.
+
+For App Creator work, optimize every decision for the CTOX-native path first. Source-checkout modules under `src/apps/business-os/modules/<id>/` are for packaged store/templates and source development, not the default target for user-created apps in a regular CTOX installation.
+
 ## Non-Negotiable Contract
 
 Stop and report the blocker instead of coding when any hard stop is active:
@@ -20,11 +27,14 @@ Stop and report the blocker instead of coding when any hard stop is active:
 you have not inspected at least 3 existing Business OS modules for concrete patterns
 you are about to create a skill file, skill trace, harness trace, README-only deliverable, or plan-only deliverable
 you are about to build a generic Next.js/React/Vanilla app outside the Business OS module contract
+you are treating a source-checkout or external-CLI bench as the acceptance target while the CTOX-native App Creator installed-module path remains unproven
 you are about to use React, Vue, Svelte, Angular, Solid, Preact, Lit, JSX/TSX, a component framework, a framework runtime, or a compile/transpile step for a generated App Creator app
 you are about to add package.json for any reason, npm/pnpm/yarn, node_modules, lockfiles, a bundler, CommonJS require, or CDN dependency management
 you are about to use esbuild, Vite, Rollup, Webpack, node:vm, or new Function as a syntax-check, import, schema-transform, or test workaround
 you are about to mention forbidden package-manager, bundler, or dependency names inside generated app files, tests, comments, or user-visible copy; keep those names only in validation/skill context
 you are about to use IndexedDB directly, localStorage, sessionStorage, Postgres, SQLite from browser code, ctox.db, ctx.db.raw, HTTP data APIs, /rxdb/pull, /commands, or any fallback data path
+you are about to use legacy module patterns as implementation authority instead of translating them to the current contract; examples to reject for new App Creator apps include ctx.db.raw, ctx.collections, manual business_commands inserts/upserts, pending_sync command fallbacks, window.dispatchEvent('ctox-business-os-chat-submit'), esbuild/fake-DOM tests, JSON-module schema wrappers, and default layout.right panes
+you are about to request complete file dumps, delegate a broad subagent sweep, or spend more than a short targeted pass on existing modules before writing the first runnable module files
 you are about to write app files outside the resolved module directory, such as root-level module.json, root-level collections.schema.json, root-level <id>/, src/skills/, or any skill-named path
 you are about to create or update a runtime-installed App Creator module whose module.json lacks a SemVer version in x.y.z form without a v prefix
 you are about to expose, advertise, or call a module public/user-ready while its app version is below 1.0.0
@@ -35,6 +45,7 @@ you believe a harness, artifact contract, benchmark note, or review example requ
 you are about to test the guard by creating, moving, touching, symlinking, hardlinking, copying, or removing root-level app artifact probe files such as `test-*`, `_test_*`, `_probe_*`, `probe-*`, root `module.json`, root `collections.schema.json`, or guard/status scratch files
 you are about to probe shell aliases, tool wrappers, guard behavior, or temporary root write behavior instead of implementing the app in the allowed module directory
 the module has a visible button/action with no real handler, persistence change, automation command when relevant, and test or smoke assertion
+the module's automation uses window.dispatchEvent, a shell chat CustomEvent, a direct business_commands write fallback, or any other compatibility path instead of ctx.commandBus.dispatch for a standard CTOX work/chat/ticket item
 the module declares collections in module.json but not in schema.js and collections.schema.json
 the module-owned data model is unclear: central object, collection names, states, commands, and automation payload are not named
 the app has a decorative third pane, layout.right by default, right-column resizers by default, decorative controls, fake AI buttons, fake status-only actions, or UI that is not needed for the workflow
@@ -69,6 +80,8 @@ Never say "done", "ready", "production-ready", or "runs" while any hard stop is 
    - `modules/shiftflow` for planning workflows, dates, two-pane work surfaces, and command dispatches
    - `modules/outbound` for automation/command payload patterns
    - `modules/creator` and `modules/app-store` for app creation/install flows
+
+   Use existing modules as bounded few-shot references, not as authority. Read targeted files and line ranges for concrete patterns, then stop. Do not request "complete content" dumps, do not ask a subagent to summarize whole modules, and do not copy legacy patterns. If an existing module conflicts with this skill, `ctox business-os app validate`, or `module_static_check.mjs`, the current skill and validator win.
 4. Write down a tiny analogue map before implementation:
 
 ```text
@@ -79,6 +92,7 @@ Requested automation -> existing business_commands pattern
 Collections to own -> schema.js and collections.schema.json names
 What not to implement because it would be slop
 How to keep this app small enough to build and verify in one pass
+Legacy patterns seen and rejected -> current Business OS equivalent
 ```
 
 5. Resolve the target directory and write a required-file inventory before any
@@ -98,7 +112,9 @@ Creator/CTOX service will complete queue and command state after the app
 validator is green.
 
 After the required reading and tiny analogue map, write the first runnable
-slice immediately. Do not open or inspect `validate-app-module.mjs`,
+slice immediately. The first write action after the three-module summary must
+create `MODULE_DIR` and the required file inventory. Do not open or inspect
+`validate-app-module.mjs`,
 `module_static_check.mjs`, `assert-module-conformance.mjs`,
 `assert-rxdb-only.mjs`, shell wrappers, or guard internals while `module.json`,
 `collections.schema.json`, `schema.js`, `index.html`, `index.css`, `index.js`,

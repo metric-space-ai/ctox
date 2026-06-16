@@ -365,6 +365,8 @@ const runtimeRules = [
   ['ctox.db global handle', /ctox\.db/],
   ['localStorage/sessionStorage persistence', /\b(?:localStorage|sessionStorage)\b/],
   ['Business OS HTTP record API', /fetch\(\s*['"]\/api\/business-os/],
+  ['legacy shell event dispatch', /window\.dispatchEvent\s*\(|ctox-business-os-chat-submit/],
+  ['direct business_commands write fallback', /collection\s*\(\s*['"]business_commands['"]\s*\)|business_commands[\s\S]{0,120}\b(?:insert|upsert)\s*\(/],
   ['JSON module import', /\bimport\s+(?:[^'"]+\s+from\s+)?['"][^'"]+\.json['"]/],
   ['upstream rxdb import', /from\s+['"]rxdb['"]/],
   ['Node runtime import', /from\s+['"]node:/],
@@ -435,6 +437,7 @@ const broadRules = [
   ['forbidden schema test transform node:vm', /from\s+['"]node:vm['"]|from\s+['"]vm['"]/],
   ['forbidden schema test dynamic evaluator', /\bnew\s+Function\s*\(/],
   ['forbidden raw DB negative-proof literal', /ctx\.db\.raw|\bdb\.raw\b/],
+  ['forbidden legacy shell chat event literal', /ctox-business-os-chat-submit|window\.dispatchEvent\s*\(/],
   ['forbidden command state literal pending_sync', /\bpending_sync\b/],
 ];
 
