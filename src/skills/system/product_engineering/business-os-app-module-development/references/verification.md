@@ -11,13 +11,14 @@ not work on lower layers until the higher layer is green:
 1. target path and off-target artifacts
 2. valid module.json / collections.schema.json JSON
 3. source vs installed manifest fields
-4. required file set
-5. collection ownership and schema parity
-6. UI layout contract
-7. runtime import/dependency/data-plane contract
-8. index.js syntax
-9. no-dependency tests
-10. real-shell smoke
+4. app SemVer and release visibility status
+5. required file set
+6. collection ownership and schema parity
+7. UI layout contract
+8. runtime import/dependency/data-plane contract
+9. index.js syntax
+10. no-dependency tests
+11. real-shell smoke
 ```
 
 Do not modify tests to match a broken module contract. A passing custom test is
@@ -32,6 +33,7 @@ Run the narrow checks that match the touched files:
 ctox business-os app validate <module> --source
 ctox business-os app validate <module> --installed
 node -e "const fs=require('fs'); for (const f of ['src/apps/business-os/modules/<module>/module.json','src/apps/business-os/modules/<module>/collections.schema.json']) JSON.parse(fs.readFileSync(f,'utf8')); console.log('module JSON OK')"
+node -e "const fs=require('fs'); const m=JSON.parse(fs.readFileSync('runtime/business-os/installed-modules/<module>/module.json','utf8')); if (!/^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$/.test(m.version || '')) throw new Error('module.json version must be SemVer x.y.z'); if (m.version === '0.0.0') throw new Error('0.0.0 is not a valid app work version'); console.log('module SemVer OK')"
 node -e "const fs=require('fs'); const f='src/apps/business-os/modules/registry.json'; if (fs.existsSync(f)) JSON.parse(fs.readFileSync(f,'utf8')); console.log('registry JSON OK')"
 node --check src/apps/business-os/modules/<module>/index.js
 node --test src/apps/business-os/modules/<module>/tests/*.test.mjs
@@ -433,6 +435,8 @@ collections.schema.json missing or out of sync
 schema.js and collections.schema.json drift
 module.json or collections.schema.json is invalid JSON, often caused by unescaped inline SVG
 module.json contains layout.icon_svg copied by hand instead of using icon.svg or validated manifest JSON
+module.json for a new/runtime-installed module omits SemVer, uses legacy v1, uses 0.0.0, or claims public/user-ready status below 1.0.0
+module version 2.0.0 or later reuses the same module id/icon instead of creating a parallel major app line
 module.json contains layout.right without an explicit layout.third_pane_justification
 index.html or index.css contains right-pane/right-column/right-resizer/data-*-right/three-column layout copied from another module without a real persistent-context workflow
 index.css defines `:root` custom properties or redefines shell/base design tokens instead of scoping module-local variables under the module root
@@ -452,6 +456,7 @@ native handler trusts browser-only validation for required fields or money/accou
 native handler writes fields downstream schemas do not read
 posted/locked records can be changed through generic edit paths
 README or phase tracker says done while browser proof or native gates are absent
+phase tracker says public/released/user-visible while CTOX still lacks SemVer-aware catalog gating for non-developer users
 phase tracker marks required files, handlers, tests, or shell proof done before those files or evidence exist
 README, module.json, or App Store copy advertises handlers/features that are stubs, deferred, or unproven
 duplicate stale todo rows in phase tracker
@@ -471,6 +476,8 @@ commanded actions:
 native handlers:
 tests:
 browser proof:
+app version:
+release visibility:
 blocked or deferred items:
 ```
 

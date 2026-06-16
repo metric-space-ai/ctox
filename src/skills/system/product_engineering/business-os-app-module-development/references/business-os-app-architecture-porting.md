@@ -68,6 +68,25 @@ find src/apps/business-os/modules/<id> -maxdepth 3 -type f | sort
 | global CSS theme | shell tokens and module-local CSS only |
 | queue/task ack | CTOX service validator and lifecycle code, never module/app code |
 
+## Versioning Translation
+
+Do not copy generic package-version instincts or legacy `v1` module examples
+into generated Business OS apps.
+
+```text
+generic 0.1.0 package draft -> Business OS 0.1.0 data-app work version
+generic patch release -> Business OS 0.0.x or current-major .0.x when no data shape changes
+generic breaking database migration -> Business OS 0.x.0 before public release, with migrationStrategies
+generic 1.0.0 public release -> Business OS 1.0.0 first version visible beyond the developer
+generic 2.0.0 breaking major -> Business OS 2.0.0 new parallel module id/icon, not an in-place overwrite
+```
+
+Use `module.json.version` in strict `x.y.z` form without a `v` prefix. Use safe
+collection suffixes such as `v0_1_0` instead of putting dots in collection ids.
+CTOX already records bundle restore points in `business_module_versions`, but
+normal-user visibility for `>=1.0.0` is still product/core enforcement work; do
+not claim a `<1.0.0` app is public-release ready.
+
 ## Data Plane
 
 Business OS uses CTOX DB:

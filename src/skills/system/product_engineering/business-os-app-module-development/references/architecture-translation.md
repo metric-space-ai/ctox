@@ -76,6 +76,24 @@ regular CTOX release / App Creator / App Store
   -> installed entry installed-modules/<module>/index.html
 ```
 
+Business OS app versioning is not the same as generic web-app package
+versioning:
+
+```text
+0.0.x -> non-breaking UI/UX, feature, and bug-fix changes before public release
+0.x.0 -> schema/database or potentially breaking changes before public release
+1.0.0 -> first app line visible beyond the developer/founder
+2.0.0 -> new parallel app line with a new module id/icon
+x.0.0 -> every later major line is also a separate app id/icon
+```
+
+Do not use legacy `v1` manifest examples for generated apps. New installed
+apps normally start at `0.1.0` when they create durable collections. If a
+collection name needs a version suffix, translate `0.1.0` to a safe suffix
+such as `v0_1_0`; never put SemVer dots in collection ids. The existing
+`business_module_versions` timeline is a bundle rollback system, not a
+complete SemVer public-release gate.
+
 Do not assume a regular installation has a local CTOX source tree. If the work
 arrives through CTOX/Business OS, use the embedded system skill by id and the
 runtime module-save/source-save flow unless the prompt explicitly says this is

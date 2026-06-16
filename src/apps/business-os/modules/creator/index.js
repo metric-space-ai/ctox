@@ -918,8 +918,11 @@ function generateAllFiles() {
   const appLayout = state.appLayout || 'full-workspace';
   const collections = state.appCollections.length > 0 ? state.appCollections : ['items'];
   const primaryColl = collections[0];
-  const appVersion = state.appVersion || 'v1';
-  const versionedCollections = collections.map(coll => `${coll}_${appVersion}`);
+  const appVersion = /^\d+\.\d+\.\d+$/.test(String(state.appVersion || '').trim())
+    ? String(state.appVersion).trim()
+    : '0.1.0';
+  const appCollectionVersion = `v${appVersion.replace(/\./g, '_')}`;
+  const versionedCollections = collections.map(coll => `${coll}_${appCollectionVersion}`);
 
   const iconSvg = generateSvgLogo(appId, appCategory);
   state.generatedFiles['icon.svg'] = iconSvg;
@@ -1106,10 +1109,11 @@ const labels = {
 
 const APP_METADATA = {
   version: '${appVersion}',
+  collectionVersion: '${appCollectionVersion}',
   collections: ${JSON.stringify(collections)}
 };
 
-const PRIMARY_COLL = \`${primaryColl}_\${APP_METADATA.version}\`;
+const PRIMARY_COLL = \`${primaryColl}_\${APP_METADATA.collectionVersion}\`;
 
 const state = {
   ctx: null,
@@ -1433,6 +1437,7 @@ async function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
         id: appId,
         title: appTitle,
         description: appDesc,
+        version: appVersion,
         entry: `installed-modules/${appId}/index.html`,
         collections: versionedCollections,
         layout: {

@@ -52,6 +52,7 @@ const shellTokenNames = [
 const shellTokenPattern = new RegExp(
   `--(?:${shellTokenNames.join('|')})(?![\\w-])\\s*:`,
 );
+const semverPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
 function fail(message) {
   failures.push(message);
@@ -68,6 +69,17 @@ function readJson(path) {
     fail(`${rel(path)} is not valid JSON: ${error.message}`);
     return null;
   }
+}
+
+function parseSemver(value) {
+  if (typeof value !== 'string') return null;
+  const match = semverPattern.exec(value.trim());
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+  };
 }
 
 function walk(dir, out = []) {
@@ -204,6 +216,14 @@ if (manifest) {
   }
   if (manifest.install_scope !== expectedInstallScope) {
     fail(`module.json install_scope must be ${expectedInstallScope}`);
+  }
+  if (installedMode) {
+    const parsedVersion = parseSemver(manifest.version);
+    if (!parsedVersion) {
+      fail('module.json version must be SemVer x.y.z without a v prefix for installed App Creator modules');
+    } else if (parsedVersion.major === 0 && parsedVersion.minor === 0 && parsedVersion.patch === 0) {
+      fail('module.json version 0.0.0 is not a valid Business OS app work version');
+    }
   }
   if (!Array.isArray(manifest.collections)) {
     fail('module.json collections must be an array');

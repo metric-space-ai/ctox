@@ -34,6 +34,7 @@ function writeInstalledModule(root, moduleId, overrides = {}) {
   writeJson(join(dir, 'module.json'), {
     id: moduleId,
     title: moduleId,
+    version: '0.1.0',
     entry: `installed-modules/${moduleId}/index.html`,
     install_scope: 'installed',
     collections: ['business_commands', `${moduleId}_records`],
@@ -284,6 +285,36 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   assert.match(run.stderr, /module\.json install_scope must be installed/);
   assert.match(run.stderr, /layout\.right requires layout\.third_pane_justification/);
   assert.match(run.stderr, /schema\.js exports shell-registered collection key business_commands/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'missingversion', {
+    manifest: { version: undefined },
+  });
+  const run = runValidator(root, 'missingversion', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /module\.json version must be SemVer x\.y\.z without a v prefix/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'legacyversion', {
+    manifest: { version: 'v1' },
+  });
+  const run = runValidator(root, 'legacyversion', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /module\.json version must be SemVer x\.y\.z without a v prefix/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'zeroversion', {
+    manifest: { version: '0.0.0' },
+  });
+  const run = runValidator(root, 'zeroversion', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /module\.json version 0\.0\.0 is not a valid Business OS app work version/);
 }
 
 {

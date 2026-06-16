@@ -118,6 +118,7 @@ Default runtime-installed module manifest:
 ```json
 {
   "id": "<module>",
+  "version": "0.1.0",
   "entry": "installed-modules/<module>/index.html",
   "collections": ["business_commands", "<module_records>"],
   "install_scope": "installed"
@@ -128,6 +129,48 @@ Do not edit `modules/registry.json` for a runtime-installed App Creator/App
 Store module unless the task explicitly changes the packaged app catalog.
 Runtime-installed modules are discovered by scanning
 `installed-modules/<module>/module.json`.
+
+## App Version Contract
+
+New and runtime-installed Business OS apps use SemVer in `module.json.version`.
+The legacy `v1` style still exists in some packaged modules and is not a
+template for new app output.
+
+Version meaning:
+
+```text
+0.0.x -> UI/UX, non-breaking features, and bug fixes without data-shape changes
+0.x.0 -> schema/database or potentially breaking changes before public release
+1.0.0 -> first release visible to users beyond the developer/founder
+2.0.0 -> new parallel app line with its own module id and icon
+x.0.0 -> every later major line is a separate app icon/module id
+```
+
+Rules for generated apps:
+
+```text
+use x.y.z without a v prefix
+never use 0.0.0
+start normal generated data apps at 0.1.0
+start UI-only prototypes with no durable collection at 0.0.1
+do not put SemVer dots in collection names; use safe suffixes such as v0_1_0
+when schema.js or collections.schema.json changes shape, bump the minor field and add migrationStrategies
+do not claim public/user-ready release until version is >= 1.0.0 and the shell/core audience gate enforces that visibility
+when major reaches 2.0.0 or later, create a new module id/icon so the previous major line can continue as legacy
+```
+
+Existing CTOX versioning pieces:
+
+```text
+business_module_versions stores whole-bundle restore points with origin, seq, bundle hash, sealed flag, and files_json
+ctox.module.list_versions and ctox.module.rollback_version operate on those bundle restore points
+business_module_releases stores a separate integer release counter and rollback manifest snapshots
+the current catalog projection exposes version_states, but it is not yet a full SemVer visibility gate
+```
+
+Until CTOX has a SemVer-aware release command and catalog visibility policy,
+mark public distribution as blocked for modules below `1.0.0`; do not solve it
+with UI copy or by hiding controls inside a module.
 
 For new modules, prefer shipping `icon.svg` and omitting `layout.icon_svg`
 unless the inline SVG was copied from an already valid manifest or generated

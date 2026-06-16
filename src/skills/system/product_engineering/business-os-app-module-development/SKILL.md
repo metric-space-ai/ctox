@@ -25,6 +25,9 @@ you are about to use esbuild, Vite, Rollup, Webpack, node:vm, or new Function as
 you are about to mention forbidden package-manager, bundler, or dependency names inside generated app files, tests, comments, or user-visible copy; keep those names only in validation/skill context
 you are about to use IndexedDB directly, localStorage, sessionStorage, Postgres, SQLite from browser code, ctox.db, ctx.db.raw, HTTP data APIs, /rxdb/pull, /commands, or any fallback data path
 you are about to write app files outside the resolved module directory, such as root-level module.json, root-level collections.schema.json, root-level <id>/, src/skills/, or any skill-named path
+you are about to create or update a runtime-installed App Creator module whose module.json lacks a SemVer version in x.y.z form without a v prefix
+you are about to expose, advertise, or call a module public/user-ready while its app version is below 1.0.0
+you are about to use 2.0.0 or any later x.0.0 as an in-place update of the same app id/icon instead of a new parallel app line
 you are about to call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, `ctox queue block`, or edit queue/command/runtime-status rows directly; CTOX service owns lifecycle completion
 you are about to let `current_queue_item_id`, an open-work block, or an unrelated queue row redirect the app build away from the authoritative module_id and only_allowed_app_artifact_directory
 you believe a harness, artifact contract, benchmark note, or review example requires root-level module.json, root-level collections.schema.json, root-level harness-module.json, root-level harness-collections.schema.json, root-level artifact/status/blocker Markdown, or any other root alias for an app deliverable
@@ -205,6 +208,7 @@ Minimum installed-module manifest fields:
 ```json
 {
   "id": "<id>",
+  "version": "0.1.0",
   "entry": "installed-modules/<id>/index.html",
   "install_scope": "installed",
   "collections": ["business_commands", "<id>_records"],
@@ -216,6 +220,52 @@ This is also a negative example: do not add `"right": "Details"`,
 `"right": "Inspector"`, or any `layout.right` unless the user explicitly asked
 for a persistent third pane and you also add `layout.third_pane_justification`.
 The default Business OS app surface is one or two panes plus a modal/drawer.
+
+## App Versioning Contract
+
+Use strict SemVer in `module.json.version` for new and runtime-installed apps.
+Do not copy legacy `"v1"` from older built-in modules into a generated app.
+
+```text
+0.0.x -> UI/UX changes, non-breaking features, and bug fixes without data-shape changes
+0.x.0 -> database/schema changes, migration changes, or other potentially breaking changes before public release
+1.0.0 -> first release visible to users beyond the developer/founder
+2.0.0 -> second independent app line that can run in parallel with 1.x legacy
+x.0.0 -> every later major line is a separate app icon/module id, not an in-place overwrite
+```
+
+Practical rules:
+
+```text
+new generated app with a module-owned collection starts at 0.1.0
+new generated UI-only shell with no durable schema may start at 0.0.1
+never use 0.0.0
+do not put dots in collection names; if a collection needs a version suffix, use a safe suffix such as v0_1_0
+any schema version increase in schema.js or collections.schema.json requires a matching 0.x.0 or later minor bump and migrationStrategies
+only call an app public/released/user-visible when module.json.version is >= 1.0.0 and the shell/product gate enforces that audience rule
+when creating 2.0.0, choose a new module id and icon so 1.x can keep running and receiving legacy fixes
+```
+
+Current CTOX implementation facts to respect:
+
+```text
+business_module_versions exists and records whole-bundle restore points for install, edit, manual_release, rollback, and creator_deploy origins
+business_module_releases exists but uses an integer release counter, not SemVer
+legacy packaged modules may still have module.json version values such as v1; do not copy that pattern into new apps
+the App Store/shell catalog is not yet a complete SemVer audience gate for "non-developers only see >= 1.0.0"
+until that gate exists, report public-release readiness as blocked instead of pretending a <1.0.0 app is safely hidden from normal users
+```
+
+Missing CTOX hardening work before broad public app distribution:
+
+```text
+add a SemVer-aware release/publish command that records the public app version, validates migration evidence, and rejects invalid bumps
+project SemVer release state into business_module_catalog so the shell can distinguish developer, founder, and normal-user visibility
+hide or disable modules below 1.0.0 for non-developer/non-founder users
+replace or bridge the integer business_module_releases version with SemVer metadata
+add a major-line rule so 2.0.0+ requires a new module id/icon and can coexist with legacy 1.x modules
+provide a CLI such as ctox business-os app release <module> --version <x.y.z> after validation is green
+```
 
 Minimum collection schema wrapper:
 
@@ -342,16 +392,17 @@ phase 0 target: resolved module directory is correct; runtime-installed apps use
 phase 1 few-shots: inspected at least 3 existing modules and copied only concrete proven patterns
 phase 2 scope: app has one focused workbench, one create/edit/detail flow, one automation; no decorative views or fake future controls
 phase 3 manifest: module.json parses, id/entry/install_scope are correct, collections lists every read/write dependency
-phase 4 schema: collections.schema.json has schema_format ctox-business-os-module-collections-v1, contains only module-owned collections, and matches schema.js
-phase 5 persistence: all durable records use ctx.db facade collections; no ctox.db, db.raw, Web Storage, HTTP data route, table creation, or manual database file
-phase 6 automation: at least one visible action dispatches a real business_commands/commandBus work-chat-ticket flow and has a testable payload builder
-phase 7 UI layout: default is one/two panes plus modal or drawer; no layout.right, right rail, right-column CSS, right resizer, or three-column grid unless explicitly justified by workflow
-phase 8 UI controls: every visible button, filter, tab, menu, and form action has a real handler and state/persistence/dispatch effect
-phase 9 CSS: module CSS is scoped under the module root; no :root token definitions, shell token redefinitions, decorative resize handles, or layout affordances copied from unrelated modules
-phase 10 dependencies: browser runtime uses only local relative ESM imports; no package manager, bare package import, remote import, CommonJS, bundler, or generated bundle
-phase 11 tests: tests import only local `.mjs` helpers and JSON/text files; they do not import `index.js`/`schema.js` directly, do not use data: URLs, and cover schema parity, core command builders, and at least one CRUD/automation path
-phase 12 validation: node --check, `ctox business-os app validate <id> --installed|--source`, forbidden-pattern scan, and any available shell/browser smoke proof are green
-phase 13 cleanup: no root-level artifacts, source-installed app artifacts, probe files, blocker notes, generated bundles, package files, or stale phase rows remain
+phase 4 versioning: new/runtime-installed module.json uses SemVer x.y.z without v prefix; 0.1.0 is the normal initial data-app version; public visibility remains blocked until >=1.0.0 is enforced; 2.0.0+ is a new module id/icon line
+phase 5 schema: collections.schema.json has schema_format ctox-business-os-module-collections-v1, contains only module-owned collections, and matches schema.js
+phase 6 persistence: all durable records use ctx.db facade collections; no ctox.db, db.raw, Web Storage, HTTP data route, table creation, or manual database file
+phase 7 automation: at least one visible action dispatches a real business_commands/commandBus work-chat-ticket flow and has a testable payload builder
+phase 8 UI layout: default is one/two panes plus modal or drawer; no layout.right, right rail, right-column CSS, right resizer, or three-column grid unless explicitly justified by workflow
+phase 9 UI controls: every visible button, filter, tab, menu, and form action has a real handler and state/persistence/dispatch effect
+phase 10 CSS: module CSS is scoped under the module root; no :root token definitions, shell token redefinitions, decorative resize handles, or layout affordances copied from unrelated modules
+phase 11 dependencies: browser runtime uses only local relative ESM imports; no package manager, bare package import, remote import, CommonJS, bundler, or generated bundle
+phase 12 tests: tests import only local `.mjs` helpers and JSON/text files; they do not import `index.js`/`schema.js` directly, do not use data: URLs, and cover schema parity, core command builders, and at least one CRUD/automation path
+phase 13 validation: node --check, `ctox business-os app validate <id> --installed|--source`, forbidden-pattern scan, and any available shell/browser smoke proof are green
+phase 14 cleanup: no root-level artifacts, source-installed app artifacts, probe files, blocker notes, generated bundles, package files, or stale phase rows remain
 ```
 
 Treat these common findings as automatic rework, not acceptable tradeoffs:
@@ -360,6 +411,8 @@ Treat these common findings as automatic rework, not acceptable tradeoffs:
 module.json has layout.right without layout.third_pane_justification
 index.html/index.css contains data-*-right, right-pane, right-column, right-resizer, or a three-column grid copied from another app without a real workflow need
 collections.schema.json starts directly with collections and omits schema_format
+module.json for a new/runtime-installed app has no SemVer version, uses legacy v1, uses 0.0.0, or claims public release below 1.0.0
+version 2.0.0 or later is used without a new module id/icon for a parallel major app line
 schema.js or collections.schema.json redeclares business_commands
 tests import index.js/schema.js directly, or load them through data:text/javascript/base64, instead of testing shared `.mjs` helpers plus JSON/text parity
 the phase tracker says done while validator or browser proof is red
