@@ -5730,9 +5730,6 @@ async function loadModuleCatalog(timeoutMs = 60000, options = {}) {
           updated_at_ms: Date.now(),
           source: cachedCatalog.source || 'business-os-shell',
         };
-        coll.upsert(mergedCatalog).catch((error) => {
-          console.warn('[business-os] failed to persist merged packaged module catalog', error);
-        });
         return normalizeModuleCatalog(mergedCatalog);
       }
     }
@@ -5745,11 +5742,9 @@ async function loadModuleCatalog(timeoutMs = 60000, options = {}) {
   });
 
   if (shellCatalog) {
-    try {
-      await coll.insert(shellCatalog);
-    } catch (err) {
-      console.warn('[business-os] failed to insert initial packaged catalog into RxDB', err);
-    }
+    // The packaged catalog is only a cold-start UI fallback. The persisted
+    // business_module_catalog is owned by the native CTOX runtime so freshly
+    // created installed modules cannot be shadowed by the shell seed.
     return normalizeModuleCatalog(shellCatalog);
   }
 
