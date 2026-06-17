@@ -10585,7 +10585,7 @@ fn complete_validated_stale_business_os_app_queue_tasks(
     let tasks = channels::list_queue_tasks(root, &["leased".to_string()], limit.max(1))?;
     let mut updated = 0usize;
     for task in tasks {
-        if inflight_leased_message_key(state, &task.message_key)
+        if actively_inflight_leased_message_key(state, &task.message_key)
             || business_os_app_module_target_from_prompt(&task.prompt).is_none()
         {
             continue;
@@ -15379,6 +15379,14 @@ fn queue_pressure_active(state: &Arc<Mutex<SharedState>>) -> bool {
 fn inflight_leased_message_key(state: &Arc<Mutex<SharedState>>, message_key: &str) -> bool {
     let shared = lock_shared_state(state);
     shared.leased_message_keys_inflight.contains(message_key)
+}
+
+fn actively_inflight_leased_message_key(
+    state: &Arc<Mutex<SharedState>>,
+    message_key: &str,
+) -> bool {
+    let shared = lock_shared_state(state);
+    shared.worker_active_count > 0 && shared.leased_message_keys_inflight.contains(message_key)
 }
 
 fn lock_shared_state<'a>(
@@ -20621,6 +20629,85 @@ Business OS command:
         }
 
         assert_eq!(route_status_for(&root, &task.message_key), "handled");
+    }
+
+    #[test]
+    fn stale_app_validation_recovery_completes_tracked_key_when_no_worker_active() {
+        let root = temp_root("stale-app-validation-recovery-green");
+        let script_dir = root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "process.exit(0);\n",
+        )
+        .expect("write green validator script fixture");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create inventory app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/inventory".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            track_leased_keys_locked(&mut shared, std::slice::from_ref(&task.message_key), &[]);
+        }
+
+        let updated = complete_validated_stale_business_os_app_queue_tasks(&root, &state, 10)
+            .expect("stale app validation recovery failed");
+
+        assert_eq!(updated, 1);
+        assert_eq!(route_status_for(&root, &task.message_key), "handled");
+    }
+
+    #[test]
+    fn stale_app_validation_recovery_skips_tracked_key_while_worker_active() {
+        let root = temp_root("stale-app-validation-recovery-active-worker");
+        let script_dir = root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "process.exit(0);\n",
+        )
+        .expect("write green validator script fixture");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create projects app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/projects".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.worker_active_count = 1;
+            track_leased_keys_locked(&mut shared, std::slice::from_ref(&task.message_key), &[]);
+        }
+
+        let updated = complete_validated_stale_business_os_app_queue_tasks(&root, &state, 10)
+            .expect("stale app validation recovery failed");
+
+        assert_eq!(updated, 0);
+        assert_eq!(route_status_for(&root, &task.message_key), "leased");
     }
 
     #[test]
