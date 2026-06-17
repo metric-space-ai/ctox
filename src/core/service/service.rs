@@ -3244,6 +3244,14 @@ struct PromptWorkerActivity {
     leases_released: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BusinessOsAppValidationQueueRecovery {
+    Unchanged,
+    Handled,
+    Rework,
+    Failed,
+}
+
 impl PromptWorkerActivity {
     fn start(root: &Path, state: &Arc<Mutex<SharedState>>, job: &QueuedPrompt) -> Self {
         {
@@ -3325,7 +3333,7 @@ impl Drop for PromptWorkerActivity {
         let app_validation_candidate_keys = self.leased_message_keys.clone();
         let leaked_message_key_set: HashSet<String> = leaked_message_keys.iter().cloned().collect();
         let mut leaked_message_keys = leaked_message_keys;
-        let mut app_validation_completion_errors = Vec::new();
+        let mut app_validation_cleanup_errors = Vec::new();
         let mut app_validation_retry_keys = Vec::new();
         if !app_validation_candidate_keys.is_empty() {
             let mut still_leaked = Vec::new();
@@ -3346,7 +3354,7 @@ impl Drop for PromptWorkerActivity {
                         }
                     }
                     Err(err) => {
-                        app_validation_completion_errors.push(format!(
+                        app_validation_cleanup_errors.push(format!(
                             "{}: {}",
                             message_key,
                             clip_text(&err.to_string(), 180)
@@ -3370,9 +3378,9 @@ impl Drop for PromptWorkerActivity {
                     ),
                 );
             }
-            if !app_validation_completion_errors.is_empty() {
+            if !app_validation_cleanup_errors.is_empty() {
                 let mut shared = lock_shared_state(&self.state);
-                for error in &app_validation_completion_errors {
+                for error in &app_validation_cleanup_errors {
                     push_event_locked(
                         &mut shared,
                         format!(
@@ -3474,12 +3482,46 @@ fn spawn_delayed_business_os_app_validation_cleanup(
         for delay_ms in BUSINESS_OS_APP_VALIDATION_CLEANUP_RETRY_DELAYS_MS {
             thread::sleep(Duration::from_millis(*delay_ms));
             let mut completed = Vec::new();
+            let mut reworked = Vec::new();
+            let mut failed = Vec::new();
             let mut remaining = Vec::new();
             let mut errors = Vec::new();
+            let is_final_attempt = *delay_ms
+                == *BUSINESS_OS_APP_VALIDATION_CLEANUP_RETRY_DELAYS_MS
+                    .last()
+                    .unwrap_or(delay_ms);
             for message_key in message_keys.iter() {
-                match complete_validated_business_os_app_queue_task(&root, message_key, &reason) {
-                    Ok(true) => completed.push(message_key.clone()),
-                    Ok(false) => {
+                let recovery = if is_final_attempt {
+                    recover_business_os_app_queue_task_from_validation(
+                        &root,
+                        message_key,
+                        &reason,
+                        &format!(
+                            "Business OS app artifact validation failed after delayed worker lease cleanup for {source_label}"
+                        ),
+                    )
+                } else {
+                    complete_validated_business_os_app_queue_task(&root, message_key, &reason).map(
+                        |handled| {
+                            if handled {
+                                BusinessOsAppValidationQueueRecovery::Handled
+                            } else {
+                                BusinessOsAppValidationQueueRecovery::Unchanged
+                            }
+                        },
+                    )
+                };
+                match recovery {
+                    Ok(BusinessOsAppValidationQueueRecovery::Handled) => {
+                        completed.push(message_key.clone())
+                    }
+                    Ok(BusinessOsAppValidationQueueRecovery::Rework) => {
+                        reworked.push(message_key.clone())
+                    }
+                    Ok(BusinessOsAppValidationQueueRecovery::Failed) => {
+                        failed.push(message_key.clone())
+                    }
+                    Ok(BusinessOsAppValidationQueueRecovery::Unchanged) => {
                         if delayed_app_validation_cleanup_should_continue(&root, message_key) {
                             remaining.push(message_key.clone());
                         }
@@ -3496,7 +3538,11 @@ fn spawn_delayed_business_os_app_validation_cleanup(
                     }
                 }
             }
-            if !completed.is_empty() || !errors.is_empty() {
+            if !completed.is_empty()
+                || !reworked.is_empty()
+                || !failed.is_empty()
+                || !errors.is_empty()
+            {
                 let mut shared = lock_shared_state(&state);
                 if !completed.is_empty() {
                     push_event_locked(
@@ -3504,6 +3550,26 @@ fn spawn_delayed_business_os_app_validation_cleanup(
                         format!(
                             "Completed {} validated Business OS app queue task(s) during delayed worker lease cleanup for {}",
                             completed.len(),
+                            source_label
+                        ),
+                    );
+                }
+                if !reworked.is_empty() {
+                    push_event_locked(
+                        &mut shared,
+                        format!(
+                            "Moved {} red Business OS app queue task(s) to validation rework during delayed worker lease cleanup for {}",
+                            reworked.len(),
+                            source_label
+                        ),
+                    );
+                }
+                if !failed.is_empty() {
+                    push_event_locked(
+                        &mut shared,
+                        format!(
+                            "Failed {} exhausted Business OS app validation queue task(s) during delayed worker lease cleanup for {}",
+                            failed.len(),
                             source_label
                         ),
                     );
@@ -9946,23 +10012,31 @@ fn start_channel_router(root: std::path::PathBuf, state: Arc<Mutex<SharedState>>
 
 fn start_business_os_app_recovery_loop(root: std::path::PathBuf, state: Arc<Mutex<SharedState>>) {
     thread::spawn(move || loop {
-        if !active_agent_loop_in_progress(&state) {
-            match recover_stale_business_os_app_queue_tasks(&root, &state, 16) {
-                Ok(updated) if updated > 0 => push_event(
-                    &state,
-                    format!(
-                        "Recovered {updated} stale Business OS app queue task(s) during dedicated app recovery loop"
+        let recovered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if !active_agent_loop_in_progress(&state) {
+                match recover_stale_business_os_app_queue_tasks(&root, &state, 16) {
+                    Ok(updated) if updated > 0 => push_event(
+                        &state,
+                        format!(
+                            "Recovered {updated} stale Business OS app queue task(s) during dedicated app recovery loop"
+                        ),
                     ),
-                ),
-                Ok(_) => {}
-                Err(err) => push_event(
-                    &state,
-                    format!(
-                        "Business OS app recovery loop skipped: {}",
-                        clip_text(&err.to_string(), 180)
+                    Ok(_) => {}
+                    Err(err) => push_event(
+                        &state,
+                        format!(
+                            "Business OS app recovery loop skipped: {}",
+                            clip_text(&err.to_string(), 180)
+                        ),
                     ),
-                ),
+                }
             }
+        }));
+        if recovered.is_err() {
+            push_event(
+                &state,
+                "Business OS app recovery loop panicked; continuing".to_string(),
+            );
         }
         thread::sleep(Duration::from_secs(BUSINESS_OS_APP_RECOVERY_POLL_SECS));
     });
@@ -10741,60 +10815,18 @@ fn recover_stale_business_os_app_queue_tasks(
         {
             continue;
         }
-        let job = queued_prompt_from_queue_task(task);
-        match business_os_app_module_validation_feedback(root, &job)? {
-            Some(feedback) if business_os_app_validation_repair_exhausted(&job.prompt) => {
-                let failure_reason = format!(
-                    "Business OS app validation repair attempts exhausted during idle recovery: {}",
-                    clip_text(&feedback, 1200)
-                );
-                channels::ack_leased_messages_with_failure_reason(
-                    root,
-                    &job.leased_message_keys,
-                    "failed",
-                    &failure_reason,
-                )?;
-                for message_key in &job.leased_message_keys {
-                    crate::business_os::store::fail_business_command_from_queue_error(
-                        root,
-                        message_key,
-                        &failure_reason,
-                    )?;
-                }
+        match recover_business_os_app_queue_task_from_validation(
+            root,
+            &task.message_key,
+            "Business OS app artifacts validated during idle recovery",
+            "Business OS app artifact validation failed during idle recovery for queue",
+        )? {
+            BusinessOsAppValidationQueueRecovery::Handled
+            | BusinessOsAppValidationQueueRecovery::Rework
+            | BusinessOsAppValidationQueueRecovery::Failed => {
                 updated = updated.saturating_add(1);
             }
-            Some(feedback) => {
-                let repair_attempts = business_os_app_validation_repair_attempt_count(&job.prompt);
-                let summary = format!(
-                    "Business OS app artifact validation failed during idle recovery for {}",
-                    job.source_label
-                );
-                apply_business_os_app_validation_rework_to_leased_queue(
-                    root,
-                    &job,
-                    &feedback,
-                    &summary,
-                    repair_attempts.saturating_add(1),
-                )?;
-                for message_key in &job.leased_message_keys {
-                    let _ =
-                        crate::business_os::store::refresh_business_command_queue_task_projection(
-                            root,
-                            message_key,
-                        );
-                }
-                updated = updated.saturating_add(1);
-            }
-            None => {
-                let handled = complete_business_os_app_validation_success_to_leased_queue(
-                    root,
-                    &job,
-                    "Business OS app artifacts validated during idle recovery",
-                )?;
-                if handled > 0 {
-                    updated = updated.saturating_add(1);
-                }
-            }
+            BusinessOsAppValidationQueueRecovery::Unchanged => {}
         }
     }
     Ok(updated)
@@ -10819,6 +10851,79 @@ fn complete_validated_business_os_app_queue_task(
         Some(_) => Ok(false),
         None => complete_business_os_app_validation_success_to_leased_queue(root, &job, reason)
             .map(|updated| updated > 0),
+    }
+}
+
+fn recover_business_os_app_queue_task_from_validation(
+    root: &Path,
+    message_key: &str,
+    success_reason: &str,
+    rework_summary: &str,
+) -> Result<BusinessOsAppValidationQueueRecovery> {
+    let Some(task) = channels::load_queue_task(root, message_key)? else {
+        return Ok(BusinessOsAppValidationQueueRecovery::Unchanged);
+    };
+    if !matches!(task.route_status.as_str(), "leased" | "pending") {
+        return Ok(BusinessOsAppValidationQueueRecovery::Unchanged);
+    }
+    if business_os_app_module_target_from_prompt(&task.prompt).is_none() {
+        return Ok(BusinessOsAppValidationQueueRecovery::Unchanged);
+    }
+    let route_status = task.route_status.clone();
+    let job = queued_prompt_from_queue_task(task);
+    match business_os_app_module_validation_feedback(root, &job)? {
+        None => {
+            let handled = complete_business_os_app_validation_success_to_leased_queue(
+                root,
+                &job,
+                success_reason,
+            )?;
+            if handled > 0 {
+                Ok(BusinessOsAppValidationQueueRecovery::Handled)
+            } else {
+                Ok(BusinessOsAppValidationQueueRecovery::Unchanged)
+            }
+        }
+        Some(feedback) => {
+            if route_status != "leased" {
+                return Ok(BusinessOsAppValidationQueueRecovery::Unchanged);
+            }
+            if business_os_app_validation_repair_exhausted(&job.prompt) {
+                let failure_reason = format!(
+                    "Business OS app validation repair attempts exhausted during recovery: {}",
+                    clip_text(&feedback, 1200)
+                );
+                channels::ack_leased_messages_with_failure_reason(
+                    root,
+                    &job.leased_message_keys,
+                    "failed",
+                    &failure_reason,
+                )?;
+                for message_key in &job.leased_message_keys {
+                    crate::business_os::store::fail_business_command_from_queue_error(
+                        root,
+                        message_key,
+                        &failure_reason,
+                    )?;
+                }
+                return Ok(BusinessOsAppValidationQueueRecovery::Failed);
+            }
+            let repair_attempts = business_os_app_validation_repair_attempt_count(&job.prompt);
+            apply_business_os_app_validation_rework_to_leased_queue(
+                root,
+                &job,
+                &feedback,
+                rework_summary,
+                repair_attempts.saturating_add(1),
+            )?;
+            for message_key in &job.leased_message_keys {
+                let _ = crate::business_os::store::refresh_business_command_queue_task_projection(
+                    root,
+                    message_key,
+                );
+            }
+            Ok(BusinessOsAppValidationQueueRecovery::Rework)
+        }
     }
 }
 
@@ -20927,6 +21032,82 @@ Business OS command:
                 .iter()
                 .any(|event| event.contains("delayed worker lease cleanup")),
             "delayed cleanup should record completion: {:?}",
+            shared.recent_events
+        );
+    }
+
+    #[test]
+    fn prompt_worker_drop_moves_released_red_business_os_app_queue_lease_to_rework() {
+        let root = temp_root("prompt-worker-delayed-red-app-rework");
+        let script_dir = root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "console.error('missing index.js and tests'); process.exit(1);\n",
+        )
+        .expect("write red validator script fixture");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create subscriptions app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/subscriptions".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let job = QueuedPrompt {
+            prompt: task.prompt.clone(),
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: task.suggested_skill.clone(),
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: task.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            track_leased_keys_locked(&mut shared, &job.leased_message_keys, &[]);
+        }
+        {
+            let mut activity = PromptWorkerActivity::start(&root, &state, &job);
+            let mut shared = lock_shared_state(&state);
+            activity.release_leased_keys_locked(&mut shared);
+        }
+
+        for _ in 0..40 {
+            if route_status_for(&root, &task.message_key) == "review_rework" {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+
+        assert_eq!(route_status_for(&root, &task.message_key), "review_rework");
+        let reloaded = channels::load_queue_task(&root, &task.message_key)
+            .expect("load failed")
+            .expect("missing queue task");
+        assert!(reloaded
+            .prompt
+            .contains("Business OS app artifact validation failed."));
+        assert!(reloaded.prompt.contains("missing index.js and tests"));
+        let shared = lock_shared_state(&state);
+        assert!(
+            shared.recent_events.iter().any(|event| event.contains(
+                "Moved 1 red Business OS app queue task(s) to validation rework during delayed worker lease cleanup"
+            )),
+            "delayed cleanup should record red app rework: {:?}",
             shared.recent_events
         );
     }
