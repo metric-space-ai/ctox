@@ -10607,7 +10607,7 @@ fn complete_validated_business_os_app_queue_task(
     let Some(task) = channels::load_queue_task(root, message_key)? else {
         return Ok(false);
     };
-    if task.route_status != "leased" {
+    if !matches!(task.route_status.as_str(), "leased" | "pending") {
         return Ok(false);
     }
     if business_os_app_module_target_from_prompt(&task.prompt).is_none() {
@@ -20513,6 +20513,63 @@ Business OS command:
             "drop should record validated app lease cleanup: {:?}",
             shared.recent_events
         );
+    }
+
+    #[test]
+    fn prompt_worker_drop_completes_released_pending_green_business_os_app_queue_task() {
+        let root = temp_root("prompt-worker-released-pending-green-app-drop");
+        let script_dir = root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "process.exit(0);\n",
+        )
+        .expect("write green validator script fixture");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create contracts app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/contracts".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let job = QueuedPrompt {
+            prompt: task.prompt.clone(),
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: task.suggested_skill.clone(),
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: task.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            track_leased_keys_locked(&mut shared, &job.leased_message_keys, &[]);
+        }
+        {
+            let mut activity = PromptWorkerActivity::start(&root, &state, &job);
+            let mut shared = lock_shared_state(&state);
+            activity.release_leased_keys_locked(&mut shared);
+            drop(shared);
+            channels::set_queue_task_route_status(&root, &task.message_key, "pending")
+                .expect("simulate worker route release before cleanup");
+        }
+
+        assert_eq!(route_status_for(&root, &task.message_key), "handled");
     }
 
     #[test]
