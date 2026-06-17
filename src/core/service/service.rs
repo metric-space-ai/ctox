@@ -109,6 +109,7 @@ const CHANNEL_SYNC_POLL_SECS: u64 = 60;
 const MISSION_MAINTENANCE_POLL_SECS: u64 = 15;
 const HARNESS_AUDIT_TICK_SECS: u64 = 300;
 const BUSINESS_OS_APP_RECOVERY_POLL_SECS: u64 = 10;
+const BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS: u64 = 30;
 const BUSINESS_OS_APP_RECOVERY_STALE_SECS: u64 = 180;
 const CHANNEL_ROUTER_LEASE_OWNER: &str = "ctox-service";
 const QUEUE_PRESSURE_GUARD_THRESHOLD: usize = 20;
@@ -2870,9 +2871,14 @@ fn begin_business_os_app_recovery_locked(shared: &mut SharedState, reason: &str)
     }
     if shared.app_recovery_active {
         let now = current_epoch_secs();
+        let stale_after_secs = if reason == "idle status snapshot" {
+            BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS
+        } else {
+            BUSINESS_OS_APP_RECOVERY_STALE_SECS
+        };
         let stale = shared
             .app_recovery_started_epoch_secs
-            .map(|started| now.saturating_sub(started) >= BUSINESS_OS_APP_RECOVERY_STALE_SECS)
+            .map(|started| now.saturating_sub(started) >= stale_after_secs)
             .unwrap_or(true);
         if !stale {
             return false;
@@ -21541,6 +21547,55 @@ Business OS command:
                 .iter()
                 .any(|event| event.contains("Reset stale Business OS app recovery guard")),
             "stale recovery guard reset should be observable: {:?}",
+            shared.recent_events
+        );
+    }
+
+    #[test]
+    fn status_snapshot_recovery_resets_idle_stale_app_recovery_guard() {
+        let root = temp_root("status-snapshot-idle-stale-app-recovery-guard");
+        let script_dir = root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "process.exit(0);\n",
+        )
+        .expect("write green validator script fixture");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create subscriptions app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/subscriptions".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.app_recovery_active = true;
+            shared.app_recovery_started_epoch_secs = Some(
+                current_epoch_secs().saturating_sub(BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS + 1),
+            );
+        }
+
+        status_from_shared_state(&root, &state).expect("status snapshot failed");
+
+        assert_eq!(route_status_for(&root, &task.message_key), "handled");
+        let shared = lock_shared_state(&state);
+        assert!(
+            shared
+                .recent_events
+                .iter()
+                .any(|event| event.contains("Reset stale Business OS app recovery guard")),
+            "idle stale recovery guard reset should be observable: {:?}",
             shared.recent_events
         );
     }
