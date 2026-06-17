@@ -5601,6 +5601,12 @@ fn start_prompt_worker(
                     outcome_recovery_prompt.is_some(),
                 );
             }
+            recover_business_os_app_queue_task_after_worker_finalization(
+                &root,
+                &state,
+                &job,
+                "after worker finalization",
+            );
             if let Some((work_id, summary)) = review_requeue {
                 match requeue_review_rejected_self_work(&root, &work_id, &summary) {
                     Ok(Some(task)) => push_event(
@@ -10830,6 +10836,63 @@ fn recover_stale_business_os_app_queue_tasks(
         }
     }
     Ok(updated)
+}
+
+fn recover_business_os_app_queue_task_after_worker_finalization(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+    job: &QueuedPrompt,
+    phase: &str,
+) -> usize {
+    if job.leased_message_keys.is_empty()
+        || business_os_app_module_target_from_prompt(&job.prompt).is_none()
+    {
+        return 0;
+    }
+    let mut updated = 0usize;
+    for message_key in &job.leased_message_keys {
+        match recover_business_os_app_queue_task_from_validation(
+            root,
+            message_key,
+            "Business OS app artifacts validated after worker finalization",
+            "Business OS app artifact validation failed after worker finalization for queue",
+        ) {
+            Ok(BusinessOsAppValidationQueueRecovery::Handled) => {
+                updated = updated.saturating_add(1);
+                push_event(
+                    state,
+                    format!("Recovered green Business OS app queue task {message_key} {phase}"),
+                );
+            }
+            Ok(BusinessOsAppValidationQueueRecovery::Rework) => {
+                updated = updated.saturating_add(1);
+                push_event(
+                    state,
+                    format!(
+                        "Moved red Business OS app queue task {message_key} to validation rework {phase}"
+                    ),
+                );
+            }
+            Ok(BusinessOsAppValidationQueueRecovery::Failed) => {
+                updated = updated.saturating_add(1);
+                push_event(
+                    state,
+                    format!(
+                        "Failed exhausted Business OS app validation queue task {message_key} {phase}"
+                    ),
+                );
+            }
+            Ok(BusinessOsAppValidationQueueRecovery::Unchanged) => {}
+            Err(err) => push_event(
+                state,
+                format!(
+                    "Business OS app validation recovery skipped for {message_key} {phase}: {}",
+                    clip_text(&err.to_string(), 180)
+                ),
+            ),
+        }
+    }
+    updated
 }
 
 fn complete_validated_business_os_app_queue_task(
@@ -21198,6 +21261,68 @@ Business OS command:
 
         assert_eq!(updated, 1);
         assert_eq!(route_status_for(&root, &task.message_key), "handled");
+    }
+
+    #[test]
+    fn worker_finalization_recovery_completes_green_business_os_app_queue_lease() {
+        let root = temp_root("worker-finalization-green-app-recovery");
+        let script_dir = root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "process.exit(0);\n",
+        )
+        .expect("write green validator script fixture");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create quality app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: quality\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/quality".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let job = QueuedPrompt {
+            prompt: task.prompt.clone(),
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: task.suggested_skill.clone(),
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: task.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        let updated = recover_business_os_app_queue_task_after_worker_finalization(
+            &root,
+            &state,
+            &job,
+            "test finalization",
+        );
+
+        assert_eq!(updated, 1);
+        assert_eq!(route_status_for(&root, &task.message_key), "handled");
+        let shared = lock_shared_state(&state);
+        assert!(
+            shared
+                .recent_events
+                .iter()
+                .any(|event| event.contains("Recovered green Business OS app queue task")),
+            "worker finalization recovery should emit an event: {:?}",
+            shared.recent_events
+        );
     }
 
     #[test]
