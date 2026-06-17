@@ -3361,6 +3361,17 @@ impl Drop for PromptWorkerActivity {
                     ),
                 );
             }
+            if !app_validation_completion_errors.is_empty() {
+                let mut shared = lock_shared_state(&self.state);
+                for error in &app_validation_completion_errors {
+                    push_event_locked(
+                        &mut shared,
+                        format!(
+                            "Failed Business OS app validation cleanup during worker lease cleanup: {error}"
+                        ),
+                    );
+                }
+            }
             leaked_message_keys = still_leaked;
         }
 
@@ -3411,14 +3422,6 @@ impl Drop for PromptWorkerActivity {
                 push_event_locked(
                     &mut shared,
                     format!("Failed to project leaked Business OS queue lease: {error}"),
-                );
-            }
-            for error in app_validation_completion_errors {
-                push_event_locked(
-                    &mut shared,
-                    format!(
-                        "Failed Business OS app validation cleanup before lease failure: {error}"
-                    ),
                 );
             }
         }

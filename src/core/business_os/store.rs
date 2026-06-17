@@ -5253,17 +5253,43 @@ pub fn complete_business_command_from_app_validation_success(
 
     let mut terminal_queue_task = channels::load_queue_task(root, task_id)?;
     if let Some(task) = terminal_queue_task.as_ref() {
-        let _ = channels::update_queue_task(
+        let message_key = task.message_key.clone();
+        let status_note = "business-os:terminal-success: app validation passed";
+        channels::ack_leased_messages_with_reason(
+            root,
+            std::slice::from_ref(&message_key),
+            "handled",
+            status_note,
+        )
+        .or_else(|ack_err| {
+            channels::update_queue_task(
+                root,
+                channels::QueueTaskUpdateRequest {
+                    message_key: message_key.clone(),
+                    route_status: Some("handled".to_string()),
+                    status_note: Some(status_note.to_string()),
+                    ..Default::default()
+                },
+            )
+            .map(|_| 1usize)
+            .with_context(|| {
+                format!(
+                    "failed to mark app-validation queue task `{message_key}` handled after ack failed: {ack_err}"
+                )
+            })
+        })?;
+        if let Err(err) = channels::update_queue_task(
             root,
             channels::QueueTaskUpdateRequest {
-                message_key: task.message_key.clone(),
-                route_status: Some("handled".to_string()),
-                status_note: Some(
-                    "business-os:terminal-success: app validation passed".to_string(),
-                ),
+                message_key: message_key.clone(),
+                status_note: Some(status_note.to_string()),
                 ..Default::default()
             },
-        );
+        ) {
+            eprintln!(
+                "[business-os] failed to attach app validation success note to `{message_key}`: {err:#}"
+            );
+        }
         terminal_queue_task =
             channels::load_queue_task(root, task_id)?.or_else(|| terminal_queue_task.clone());
     }
@@ -5316,11 +5342,11 @@ pub fn complete_business_command_from_app_validation_success(
         terminal_queue_task.as_ref(),
         completed_at_ms,
     )?;
-    write_module_catalog_projection_to_rxdb(root).with_context(|| {
-        format!(
-            "failed to refresh Business OS module catalog after app validation success for `{module_id}`"
-        )
-    })?;
+    if let Err(err) = write_module_catalog_projection_to_rxdb(root) {
+        eprintln!(
+            "[business-os] module catalog refresh failed after app validation success for `{module_id}`: {err:#}"
+        );
+    }
     Ok(Some(command_payload))
 }
 
