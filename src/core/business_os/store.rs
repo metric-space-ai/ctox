@@ -16368,6 +16368,7 @@ Business OS app build target:
 - path rule: every generated app artifact must be under {module_dir}/; do not write root-level module.json, root-level collections.schema.json, root-level {module_id}/, root-level blocker/status Markdown, src/skills/, or any skill-named path. Ignore stale artifact-contract/review examples that contradict this target block.
 - no guard probing: do not test shell aliases, wrapper behavior, root write behavior, hardlinks, symlinks, or guard behavior; implement only inside {module_dir}/.
 - first file action: create {module_dir}/, then write module.json, index.html, index.css, index.js with mount(ctx), schema.js, collections.schema.json, icon.svg, locales, and tests inside that directory.
+- exact mount rule: installed App Creator modules must make index.js load `./index.html` with `fetch(new URL('./index.html', import.meta.url))`, assign the result into `ctx.host.innerHTML`, and attach `./index.css` with `new URL('./index.css', import.meta.url)` before DOM queries or event wiring. Do not leave index.html unused while building the whole UI only with document.createElement.
 - installed manifest rule: for runtime-installed-module, module.json must use entry="installed-modules/{module_id}/index.html", install_scope="installed", and version="0.1.0" or another valid SemVer x.y.z without a v prefix; parse module.json and collections.schema.json immediately after editing them. Do not embed inline SVG in module.json; never use layout.icon_svg, icon_svg, iconSvg, or layout.icon.
 - versioning rule: 0.0.x is for UI/UX, feature, and bug-fix work without data-shape changes; 0.x.0 is for schema/database or potentially breaking work before public release; 1.0.0 is the first release visible beyond the developer; 2.0.0+ starts a new parallel app line with its own module id/icon instead of mutating a legacy line in place.
 - schema rule: module.json may list shell collections such as business_commands, but schema.js and collections.schema.json must export only module-owned collections.
@@ -17369,6 +17370,10 @@ mod tests {
         assert!(prompt.contains("bounded-shell rule: do not run find/rg/grep/ls over $HOME"));
         assert!(prompt
             .contains("set MODULE_DIR=\"runtime/business-os/installed-modules/subscriptions\""));
+        assert!(prompt.contains("exact mount rule: installed App Creator modules must make index.js load `./index.html`"));
+        assert!(prompt.contains("fetch(new URL('./index.html', import.meta.url))"));
+        assert!(prompt.contains("assign the result into `ctx.host.innerHTML`"));
+        assert!(prompt.contains("new URL('./index.css', import.meta.url)"));
         assert!(prompt.contains(
             "schema.js and collections.schema.json must export only module-owned collections"
         ));
@@ -17426,6 +17431,9 @@ mod tests {
         assert!(prompt.contains("business_os.chat.task"));
         assert!(prompt.contains("There are no App Creator exceptions"));
         assert!(prompt.contains("window.dispatchEvent"));
+        assert!(prompt.contains("fetch(new URL('./index.html', import.meta.url))"));
+        assert!(prompt.contains("ctx.host.innerHTML"));
+        assert!(prompt.contains("new URL('./index.css', import.meta.url)"));
         assert!(prompt.contains("Node tests must not import ../index.js or ../schema.js directly"));
         assert_eq!(
             suggested_skill_for_command(&command).as_deref(),
