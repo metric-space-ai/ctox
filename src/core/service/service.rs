@@ -108,6 +108,7 @@ const CHANNEL_ROUTER_POLL_SECS: u64 = 8;
 const CHANNEL_SYNC_POLL_SECS: u64 = 60;
 const MISSION_MAINTENANCE_POLL_SECS: u64 = 15;
 const HARNESS_AUDIT_TICK_SECS: u64 = 300;
+const BUSINESS_OS_APP_RECOVERY_POLL_SECS: u64 = 10;
 const CHANNEL_ROUTER_LEASE_OWNER: &str = "ctox-service";
 const QUEUE_PRESSURE_GUARD_THRESHOLD: usize = 20;
 const QUEUE_GUARD_SOURCE_LABEL: &str = "queue-guard";
@@ -821,6 +822,7 @@ pub fn run_foreground(root: &Path) -> Result<()> {
     release_stale_service_communication_leases_on_boot(root, &state);
     push_event(&state, format!("Loop ready on {}", listen_addr));
     start_channel_router(root.to_path_buf(), state.clone());
+    start_business_os_app_recovery_loop(root.to_path_buf(), state.clone());
     start_channel_syncer(root.to_path_buf());
     start_mission_maintenance_loop(root.to_path_buf(), state.clone());
     start_harness_audit_watcher(root.to_path_buf(), state.clone());
@@ -9939,6 +9941,30 @@ fn start_channel_router(root: std::path::PathBuf, state: Arc<Mutex<SharedState>>
             }
         }
         thread::sleep(Duration::from_secs(CHANNEL_ROUTER_POLL_SECS));
+    });
+}
+
+fn start_business_os_app_recovery_loop(root: std::path::PathBuf, state: Arc<Mutex<SharedState>>) {
+    thread::spawn(move || loop {
+        if !active_agent_loop_in_progress(&state) {
+            match recover_stale_business_os_app_queue_tasks(&root, &state, 16) {
+                Ok(updated) if updated > 0 => push_event(
+                    &state,
+                    format!(
+                        "Recovered {updated} stale Business OS app queue task(s) during dedicated app recovery loop"
+                    ),
+                ),
+                Ok(_) => {}
+                Err(err) => push_event(
+                    &state,
+                    format!(
+                        "Business OS app recovery loop skipped: {}",
+                        clip_text(&err.to_string(), 180)
+                    ),
+                ),
+            }
+        }
+        thread::sleep(Duration::from_secs(BUSINESS_OS_APP_RECOVERY_POLL_SECS));
     });
 }
 
