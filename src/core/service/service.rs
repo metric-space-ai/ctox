@@ -3317,8 +3317,7 @@ impl Drop for PromptWorkerActivity {
         };
 
         let app_validation_candidate_keys = self.leased_message_keys.clone();
-        let leaked_message_key_set: HashSet<String> =
-            leaked_message_keys.iter().cloned().collect();
+        let leaked_message_key_set: HashSet<String> = leaked_message_keys.iter().cloned().collect();
         let mut leaked_message_keys = leaked_message_keys;
         let mut app_validation_completion_errors = Vec::new();
         if !app_validation_candidate_keys.is_empty() {
@@ -6568,7 +6567,41 @@ fn complete_business_os_app_validation_success_to_leased_queue(
                     "failed to complete Business OS app command after green validation for {message_key}"
                 )
             })? {
-            Some(_) => updated = updated.saturating_add(1),
+            Some(_) => {
+                let task = channels::load_queue_task(root, message_key)?.with_context(|| {
+                    format!(
+                        "Business OS app validation completed command but queue task {message_key} disappeared"
+                    )
+                })?;
+                if task.route_status != "handled" {
+                    channels::update_queue_task(
+                        root,
+                        channels::QueueTaskUpdateRequest {
+                            message_key: message_key.clone(),
+                            route_status: Some("handled".to_string()),
+                            status_note: Some(
+                                "business-os:terminal-success: app validation passed".to_string(),
+                            ),
+                            ..Default::default()
+                        },
+                    )
+                    .with_context(|| {
+                        format!(
+                            "failed to mark app-validation-verified queue task {message_key} handled after command completion"
+                        )
+                    })?;
+                    crate::business_os::store::refresh_business_command_queue_task_projection(
+                        root,
+                        message_key,
+                    )
+                    .with_context(|| {
+                        format!(
+                            "failed to refresh Business OS app validation handled projection for {message_key}"
+                        )
+                    })?;
+                }
+                updated = updated.saturating_add(1);
+            }
             None => fallback_message_keys.push(message_key.clone()),
         }
     }
@@ -10626,10 +10659,11 @@ fn recover_stale_business_os_app_queue_tasks(
                     repair_attempts.saturating_add(1),
                 )?;
                 for message_key in &job.leased_message_keys {
-                    let _ = crate::business_os::store::refresh_business_command_queue_task_projection(
-                        root,
-                        message_key,
-                    );
+                    let _ =
+                        crate::business_os::store::refresh_business_command_queue_task_projection(
+                            root,
+                            message_key,
+                        );
                 }
                 updated = updated.saturating_add(1);
             }
@@ -10760,6 +10794,22 @@ fn run_ticket_dispatch_preflight(
 }
 
 fn reconcile_ticket_runtime_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<()> {
+    match recover_stale_business_os_app_queue_tasks(root, state, 8) {
+        Ok(updated) if updated > 0 => push_event(
+            state,
+            format!(
+                "Recovered {updated} stale Business OS app queue task(s) during router reconcile"
+            ),
+        ),
+        Ok(_) => {}
+        Err(err) => push_event(
+            state,
+            format!(
+                "Business OS app validation recovery skipped during router reconcile: {}",
+                clip_text(&err.to_string(), 180)
+            ),
+        ),
+    }
     let active_keys = {
         let shared = lock_shared_state(state);
         let mut keys = HashSet::new();
@@ -20715,6 +20765,47 @@ Business OS command:
 
         assert_eq!(updated, 1);
         assert_eq!(route_status_for(&root, &task.message_key), "handled");
+    }
+
+    #[test]
+    fn router_reconcile_completes_green_leased_business_os_app_task() {
+        let root = temp_root("router-reconcile-green-app-task");
+        let script_dir = root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "process.exit(0);\n",
+        )
+        .expect("write green validator script fixture");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create quality app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: quality\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/quality".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, CHANNEL_ROUTER_LEASE_OWNER)
+            .expect("failed to lease app queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        route_external_messages(&root, &state).expect("router tick should complete green app");
+
+        assert_eq!(route_status_for(&root, &task.message_key), "handled");
+        let shared = lock_shared_state(&state);
+        assert!(
+            shared.recent_events.iter().any(|event| event.contains(
+                "Recovered 1 stale Business OS app queue task(s) during router reconcile"
+            )),
+            "router reconcile should report green app recovery: {:?}",
+            shared.recent_events
+        );
     }
 
     #[test]
