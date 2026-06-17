@@ -453,7 +453,10 @@ const broadRules = [
   ['forbidden upstream rxdb literal', /from\s+['"]rxdb['"]|\bupstream rxdb\b/i],
   ['forbidden dependency literal esbuild', /\besbuild\b/i],
   ['forbidden dependency literal webpack', /\bwebpack\b/i],
-  ['forbidden dependency literal rollup', /\brollup\b/i],
+  [
+    'forbidden Rollup bundler dependency/config literal',
+    /\b(?:rollup\.config|rollup-plugin|@rollup|rollupjs|rollup\s+(?:build|bundle|config|plugin)|from\s+['"][^'"]*rollup|import\s*\(\s*['"][^'"]*rollup)/i,
+  ],
   ['forbidden dependency literal vite', /\bvite\b/i],
   ['forbidden dependency literal npm install', /\bnpm install\b/i],
   ['forbidden dependency literal npx', /\bnpx\b/i],
