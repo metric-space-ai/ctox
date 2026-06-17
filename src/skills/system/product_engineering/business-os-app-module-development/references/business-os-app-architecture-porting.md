@@ -194,12 +194,16 @@ Each new app should include at least one automation action that creates a normal
 
 The payload must include enough record facts for the receiving CTOX flow to act without scraping the UI.
 
-Use `business_os.chat.task` for chat/work items unless there is a specific existing `ctox.ticket.*` or module command pattern to follow.
+Use `business_os.chat.task` for App Creator chat/work/ticket items. This is the standard automation wire for generated apps.
 
 Do not use shell chat CustomEvents or `window.dispatchEvent` as a compatibility
 fallback for generated apps. The standard App Creator automation path is
 `ctx.commandBus.dispatch(...)` with both `type` and `command_type` set to
 `business_os.chat.task`, plus a `record_snapshot`.
+
+Do not use `ctox.business_os.ticket.followup.create`, `ctox.ticket.*`, or
+module-specific follow-up command types for generated App Creator automation.
+Those may appear in legacy examples, but they are not the App Creator contract.
 
 ## Validation Strategy
 

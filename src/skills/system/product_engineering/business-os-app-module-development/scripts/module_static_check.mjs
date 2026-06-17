@@ -358,6 +358,7 @@ for (const path of files.filter((file) => /\.(html|css|js|mjs)$/.test(file))) {
     const testEvasionRules = [
       ['validator scanner-evasion String.fromCharCode', /\bString\.fromCharCode\s*\(/],
       ['validator scanner-evasion forbidden token list', /\b(?:bundlerTokens|thirdPaneTokens|forbiddenTokens?|legacyTokens?)\b/],
+      ['validator scanner-evasion source absence assertion', /\bassert\.doesNotMatch\s*\(\s*\w*Source\b/],
       ['validator scanner-evasion anti-pattern source scan', /\bdoes\s+not\s+use\s+forbidden\b|\b(?:forbidden|legacy|anti[-_\s]?pattern)[\s\S]{0,160}\b(?:tokens?|literals?|patterns?|source|scan)\b/i],
       ['validator scanner-evasion workaround language', /\b(?:validator|checker|static checker)[\s\S]{0,160}\b(?:does not flag|bypass|workaround|evad|scan)\b/i],
     ];
@@ -466,6 +467,7 @@ const broadRules = [
   ['forbidden legacy shell chat event literal', /ctox-business-os-chat-submit|window\.dispatchEvent\s*\(/],
   ['forbidden command state literal pending_sync', /\bpending_sync\b/],
   ['forbidden direct command fallback literal', /business_commands\s+fallback|fallback\s+to\s+business_commands|falls?\s+back\s+to\s+business_commands|with\s+business_commands\s+fallback/i],
+  ['forbidden alternate App Creator automation command ctox.business_os.ticket.followup.create', /\bctox\.business_os\.ticket\.followup\.create\b/],
   ['forbidden third-pane literal layout.right', /\blayout\.right\b/],
   ['forbidden third-pane literal right-resizer', /\bright[-_]?resizer\b/i],
   ['forbidden third-pane literal right-column', /\bright-column\b/i],

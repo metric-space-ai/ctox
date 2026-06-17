@@ -512,6 +512,33 @@ function writeSourceModule(root, moduleId, overrides = {}) {
 
 {
   const root = makeWorkspace();
+  writeInstalledModule(root, 'wrongautomation', {
+    automationJs: [
+      'export function buildFollowUpCommand(record = {}) {',
+      '  return {',
+      "    module: 'ctox',",
+      "    type: 'ctox.business_os.ticket.followup.create',",
+      "    command_type: 'ctox.business_os.ticket.followup.create',",
+      "    record_id: record.id || 'demo',",
+      "    payload: { record_snapshot: record },",
+      '  };',
+      '}',
+      '',
+    ].join('\n'),
+    testJs: [
+      "import assert from 'node:assert/strict';",
+      "assert.equal('automation fixture', 'automation fixture');",
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'wrongautomation', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /alternate App Creator automation command/);
+  assert.match(run.stderr, /business_os\.chat\.task automation command/);
+}
+
+{
+  const root = makeWorkspace();
   writeInstalledModule(root, 'missingsnapshot', {
     automationJs: [
       'export function buildFollowUpCommand(record = {}) {',
@@ -645,6 +672,21 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   const run = runValidator(root, 'scannerevasiontest', '--installed');
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /validator scanner-evasion/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'sourceabsence', {
+    testJs: [
+      "import assert from 'node:assert/strict';",
+      "const indexSource = 'export async function mount(ctx) {}';",
+      "assert.doesNotMatch(indexSource, /ctx\\.db\\.raw/);",
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'sourceabsence', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /source absence assertion/);
 }
 
 console.log('[validate-app-module.test] OK');

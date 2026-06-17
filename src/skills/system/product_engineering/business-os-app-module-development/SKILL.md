@@ -47,6 +47,7 @@ you are about to test the guard by creating, moving, touching, symlinking, hardl
 you are about to probe shell aliases, tool wrappers, guard behavior, or temporary root write behavior instead of implementing the app in the allowed module directory
 the module has a visible button/action with no real handler, persistence change, automation command when relevant, and test or smoke assertion
 the module's automation uses window.dispatchEvent, a shell chat CustomEvent, a direct business_commands write fallback, or any other compatibility path instead of ctx.commandBus.dispatch for a standard CTOX work/chat/ticket item
+the module's automation uses `ctox.business_os.ticket.followup.create`, `ctox.ticket.*`, or a module-specific follow-up command type instead of the exact App Creator standard `business_os.chat.task`
 the module's tests, comments, helper names, or assertions describe a business_commands fallback as valid behavior; tests must prove commandBus.dispatch-only automation with type and command_type business_os.chat.task plus record_snapshot
 the module declares collections in module.json but not in schema.js and collections.schema.json
 the module-owned data model is unclear: central object, collection names, states, commands, and automation payload are not named
@@ -64,7 +65,7 @@ you are about to import browser entry files such as `index.js` or `schema.js` di
 you are spending extra turns reading validator/static-checker implementation internals before the required module file set exists; do not open `validate-app-module.mjs`, `module_static_check.mjs`, `assert-module-conformance.mjs`, or `assert-rxdb-only.mjs` before the required files exist and a validation command reports a concrete failure
 you are trying to satisfy or avoid scanner keywords by mentally reconstructing the checker instead of writing the smallest valid Business OS module and then repairing actual validator bullets
 you are about to write tests that contain forbidden legacy strings as negative-proof literals; generated tests must avoid the forbidden literals entirely and assert positive current-contract behavior instead
-you are about to write generated tests that scan source files for forbidden anti-pattern absence, build forbidden tokens from fragments, use String.fromCharCode or regex assembly to bypass validators, or describe validator/checker workarounds; delete that test and write positive contract tests instead
+you are about to write generated tests that use assert.doesNotMatch, scan source files for forbidden anti-pattern absence, build forbidden tokens from fragments, use String.fromCharCode or regex assembly to bypass validators, or describe validator/checker workarounds; delete that test and write positive contract tests instead
 tests and Business OS guards were not run after the last code change
 ```
 
@@ -161,7 +162,7 @@ IndexedDB/localStorage/sessionStorage app store -> CTOX DB collection supplied b
 HTTP fetch to backend -> not allowed for Business OS data; use RxDB/WebRTC and command bus
 npm dependency -> not allowed; use browser APIs, shipped vendor ESM, or local ESM modules
 background job -> CTOX queue task requested through ctx.commandBus.dispatch
-ticket/chat automation -> business_os.chat.task command object with outbound_channel/response_channel business_os_chat
+ticket/chat automation -> business_os.chat.task command object with outbound_channel/response_channel business_os_chat; no App Creator exception for ctox.business_os.ticket.followup.create or ctox.ticket.*
 ```
 
 CTOX DB is CTOX-owned and RxDB-derived. It is not npm `rxdb`, not `ctox.db`, and not a generic IndexedDB wrapper. Business data persists through the Business OS shell context and replicates WebRTC-only to the CTOX native peer. Do not add HTTP fallbacks.
