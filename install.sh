@@ -1422,8 +1422,9 @@ CUDASRC
 build_ctox() {
   local source_root="$1"
   local cargo; cargo="$(resolve_cargo)"
-  prepare_cargo_target_cache "$source_root/target" "ctox-main"
-  clean_stale_cmake_cache_dirs "$source_root/target" "$source_root"
+  local main_target_dir="$source_root/runtime/build/cargo-target"
+  prepare_cargo_target_cache "$main_target_dir" "ctox-main"
+  clean_stale_cmake_cache_dirs "$main_target_dir" "$source_root"
 
   # 1. Build main CTOX binary
   run_build_module "ctox CLI" "$source_root" "$cargo" build --release --bin ctox
