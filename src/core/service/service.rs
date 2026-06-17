@@ -109,6 +109,7 @@ const CHANNEL_SYNC_POLL_SECS: u64 = 60;
 const MISSION_MAINTENANCE_POLL_SECS: u64 = 15;
 const HARNESS_AUDIT_TICK_SECS: u64 = 300;
 const BUSINESS_OS_APP_RECOVERY_POLL_SECS: u64 = 10;
+const BUSINESS_OS_APP_RECOVERY_STALE_SECS: u64 = 180;
 const CHANNEL_ROUTER_LEASE_OWNER: &str = "ctox-service";
 const QUEUE_PRESSURE_GUARD_THRESHOLD: usize = 20;
 const QUEUE_GUARD_SOURCE_LABEL: &str = "queue-guard";
@@ -421,6 +422,7 @@ struct SharedState {
     worker_active_count: usize,
     worker_phase: Option<String>,
     app_recovery_active: bool,
+    app_recovery_started_epoch_secs: Option<u64>,
     pending_prompts: VecDeque<QueuedPrompt>,
     leased_message_keys_inflight: HashSet<String>,
     current_goal_preview: Option<String>,
@@ -439,6 +441,7 @@ impl Default for SharedState {
             worker_active_count: 0,
             worker_phase: None,
             app_recovery_active: false,
+            app_recovery_started_epoch_secs: None,
             pending_prompts: VecDeque::new(),
             leased_message_keys_inflight: HashSet::new(),
             current_goal_preview: None,
@@ -2827,10 +2830,9 @@ fn recover_business_os_app_queue_tasks_for_idle_status_snapshot(
 ) {
     {
         let mut shared = lock_shared_state(state);
-        if shared.busy || shared.worker_active_count > 0 || shared.app_recovery_active {
+        if !begin_business_os_app_recovery_locked(&mut shared, "idle status snapshot") {
             return;
         }
-        shared.app_recovery_active = true;
     }
     let recovered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         recover_stale_business_os_app_queue_tasks(root, state, 16)
@@ -2838,6 +2840,7 @@ fn recover_business_os_app_queue_tasks_for_idle_status_snapshot(
     {
         let mut shared = lock_shared_state(state);
         shared.app_recovery_active = false;
+        shared.app_recovery_started_epoch_secs = None;
     }
     match recovered {
         Ok(Ok(updated)) if updated > 0 => push_event(
@@ -2859,6 +2862,29 @@ fn recover_business_os_app_queue_tasks_for_idle_status_snapshot(
             "Business OS app recovery panicked during idle status snapshot; continuing".to_string(),
         ),
     }
+}
+
+fn begin_business_os_app_recovery_locked(shared: &mut SharedState, reason: &str) -> bool {
+    if shared.busy || shared.worker_active_count > 0 {
+        return false;
+    }
+    if shared.app_recovery_active {
+        let now = current_epoch_secs();
+        let stale = shared
+            .app_recovery_started_epoch_secs
+            .map(|started| now.saturating_sub(started) >= BUSINESS_OS_APP_RECOVERY_STALE_SECS)
+            .unwrap_or(true);
+        if !stale {
+            return false;
+        }
+        push_event_locked(
+            shared,
+            format!("Reset stale Business OS app recovery guard before {reason}"),
+        );
+    }
+    shared.app_recovery_active = true;
+    shared.app_recovery_started_epoch_secs = Some(current_epoch_secs());
+    true
 }
 
 fn business_os_health_snapshot(root: &Path) -> Value {
@@ -10077,10 +10103,9 @@ fn maybe_spawn_business_os_app_recovery(
 ) {
     {
         let mut shared = lock_shared_state(&state);
-        if shared.busy || shared.worker_active_count > 0 || shared.app_recovery_active {
+        if !begin_business_os_app_recovery_locked(&mut shared, reason) {
             return;
         }
-        shared.app_recovery_active = true;
     }
     thread::spawn(move || {
         let recovered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -10089,6 +10114,7 @@ fn maybe_spawn_business_os_app_recovery(
         {
             let mut shared = lock_shared_state(&state);
             shared.app_recovery_active = false;
+            shared.app_recovery_started_epoch_secs = None;
         }
         match recovered {
             Ok(Ok(updated)) if updated > 0 => {
@@ -21246,11 +21272,21 @@ Business OS command:
             activity.release_leased_keys_locked(&mut shared);
         }
 
-        for _ in 0..40 {
-            if route_status_for(&root, &task.message_key) == "review_rework" {
+        let expected_event =
+            "Moved 1 red Business OS app queue task(s) to validation rework during delayed worker lease cleanup";
+        for _ in 0..120 {
+            let status_ready = route_status_for(&root, &task.message_key) == "review_rework";
+            let event_ready = {
+                let shared = lock_shared_state(&state);
+                shared
+                    .recent_events
+                    .iter()
+                    .any(|event| event.contains(expected_event))
+            };
+            if status_ready && event_ready {
                 break;
             }
-            thread::sleep(Duration::from_millis(25));
+            thread::sleep(Duration::from_millis(50));
         }
 
         assert_eq!(route_status_for(&root, &task.message_key), "review_rework");
@@ -21263,9 +21299,10 @@ Business OS command:
         assert!(reloaded.prompt.contains("missing index.js and tests"));
         let shared = lock_shared_state(&state);
         assert!(
-            shared.recent_events.iter().any(|event| event.contains(
-                "Moved 1 red Business OS app queue task(s) to validation rework during delayed worker lease cleanup"
-            )),
+            shared
+                .recent_events
+                .iter()
+                .any(|event| event.contains(expected_event)),
             "delayed cleanup should record red app rework: {:?}",
             shared.recent_events
         );
@@ -21458,6 +21495,54 @@ Business OS command:
         }
 
         assert_eq!(route_status_for(&root, &task.message_key), "handled");
+    }
+
+    #[test]
+    fn status_snapshot_recovery_resets_stale_app_recovery_guard() {
+        let root = temp_root("status-snapshot-stale-app-recovery-guard");
+        let script_dir = root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "process.exit(0);\n",
+        )
+        .expect("write green validator script fixture");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create contracts app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/contracts".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.app_recovery_active = true;
+            shared.app_recovery_started_epoch_secs =
+                Some(current_epoch_secs().saturating_sub(BUSINESS_OS_APP_RECOVERY_STALE_SECS + 1));
+        }
+
+        status_from_shared_state(&root, &state).expect("status snapshot failed");
+
+        assert_eq!(route_status_for(&root, &task.message_key), "handled");
+        let shared = lock_shared_state(&state);
+        assert!(
+            shared
+                .recent_events
+                .iter()
+                .any(|event| event.contains("Reset stale Business OS app recovery guard")),
+            "stale recovery guard reset should be observable: {:?}",
+            shared.recent_events
+        );
     }
 
     #[test]
