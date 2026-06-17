@@ -10130,23 +10130,6 @@ fn active_agent_loop_in_progress(state: &Arc<Mutex<SharedState>>) -> bool {
 }
 
 fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<()> {
-    if let Err(err) = reconcile_ticket_runtime_state(root, state) {
-        push_event(state, format!("Ticket reconciliation failed: {err}"));
-    }
-    match crate::business_os::store::complete_ready_documents_report_commands(root, 8) {
-        Ok(completed) if completed > 0 => push_event(
-            state,
-            format!("Completed {completed} ready Business OS document report writeback(s)"),
-        ),
-        Ok(_) => {}
-        Err(err) => push_event(
-            state,
-            format!(
-                "Business OS document report writeback sweep failed: {}",
-                clip_text(&err.to_string(), 180)
-            ),
-        ),
-    }
     // The channel router runs on its own timer. It may not repair, lease, or
     // reprioritize external work while a worker is still inside a full
     // reasoning/tool/review loop; arbitration belongs after that loop ends.
@@ -10167,6 +10150,23 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
             },
         );
         return Ok(());
+    }
+    if let Err(err) = reconcile_ticket_runtime_state(root, state) {
+        push_event(state, format!("Ticket reconciliation failed: {err}"));
+    }
+    match crate::business_os::store::complete_ready_documents_report_commands(root, 8) {
+        Ok(completed) if completed > 0 => push_event(
+            state,
+            format!("Completed {completed} ready Business OS document report writeback(s)"),
+        ),
+        Ok(_) => {}
+        Err(err) => push_event(
+            state,
+            format!(
+                "Business OS document report writeback sweep failed: {}",
+                clip_text(&err.to_string(), 180)
+            ),
+        ),
     }
     if let Some(prompt) = maybe_take_next_queued_prompt_for_idle_dispatch(root, state) {
         start_prompt_worker(root.to_path_buf(), state.clone(), prompt);
@@ -21056,6 +21056,55 @@ Business OS command:
                 "Recovered 1 stale Business OS app queue task(s) during router reconcile"
             )),
             "router reconcile should report green app recovery: {:?}",
+            shared.recent_events
+        );
+    }
+
+    #[test]
+    fn router_reconcile_skips_app_recovery_while_worker_active_without_tracked_key() {
+        let root = temp_root("router-reconcile-active-worker-app-task");
+        let script_dir = root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "process.exit(0);\n",
+        )
+        .expect("write green validator script fixture");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create quality app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: quality\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/quality".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, CHANNEL_ROUTER_LEASE_OWNER)
+            .expect("failed to lease app queue task");
+        let state = Arc::new(Mutex::new(SharedState {
+            busy: false,
+            worker_active_count: 1,
+            ..SharedState::default()
+        }));
+
+        route_external_messages(&root, &state).expect("router tick should defer while active");
+
+        assert_eq!(
+            route_status_for(&root, &task.message_key),
+            "leased",
+            "router reconcile must not complete app validation while a worker is active"
+        );
+        let shared = lock_shared_state(&state);
+        assert!(
+            !shared.recent_events.iter().any(|event| event.contains(
+                "Recovered 1 stale Business OS app queue task(s) during router reconcile"
+            )),
+            "router reconcile must not recover app work during an active worker: {:?}",
             shared.recent_events
         );
     }
