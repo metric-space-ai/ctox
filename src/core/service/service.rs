@@ -3316,26 +3316,37 @@ impl Drop for PromptWorkerActivity {
             (leaked_message_keys, leaked_ticket_event_keys)
         };
 
+        let app_validation_candidate_keys = if self.leases_released {
+            self.leased_message_keys.clone()
+        } else {
+            leaked_message_keys.clone()
+        };
         let mut leaked_message_keys = leaked_message_keys;
         let mut app_validation_completion_errors = Vec::new();
-        if !leaked_message_keys.is_empty() {
+        if !app_validation_candidate_keys.is_empty() {
             let mut still_leaked = Vec::new();
             let mut completed = Vec::new();
-            for message_key in leaked_message_keys {
+            for message_key in app_validation_candidate_keys {
                 match complete_validated_business_os_app_queue_task(
                     &self.root,
                     &message_key,
                     "Business OS app artifacts validated after worker lease cleanup",
                 ) {
                     Ok(true) => completed.push(message_key),
-                    Ok(false) => still_leaked.push(message_key),
+                    Ok(false) => {
+                        if !self.leases_released {
+                            still_leaked.push(message_key);
+                        }
+                    }
                     Err(err) => {
                         app_validation_completion_errors.push(format!(
                             "{}: {}",
                             message_key,
                             clip_text(&err.to_string(), 180)
                         ));
-                        still_leaked.push(message_key);
+                        if !self.leases_released {
+                            still_leaked.push(message_key);
+                        }
                     }
                 }
             }
@@ -10596,6 +10607,9 @@ fn complete_validated_business_os_app_queue_task(
     let Some(task) = channels::load_queue_task(root, message_key)? else {
         return Ok(false);
     };
+    if task.route_status != "leased" {
+        return Ok(false);
+    }
     if business_os_app_module_target_from_prompt(&task.prompt).is_none() {
         return Ok(false);
     }
@@ -20437,6 +20451,68 @@ Business OS command:
             )
             .expect("read route last_error");
         assert_eq!(last_error, None);
+    }
+
+    #[test]
+    fn prompt_worker_drop_completes_released_green_business_os_app_queue_lease() {
+        let root = temp_root("prompt-worker-released-green-app-drop");
+        let script_dir = root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "process.exit(0);\n",
+        )
+        .expect("write green validator script fixture");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create inventory app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/inventory".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let job = QueuedPrompt {
+            prompt: task.prompt.clone(),
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: task.suggested_skill.clone(),
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: task.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            track_leased_keys_locked(&mut shared, &job.leased_message_keys, &[]);
+        }
+        {
+            let mut activity = PromptWorkerActivity::start(&root, &state, &job);
+            let mut shared = lock_shared_state(&state);
+            activity.release_leased_keys_locked(&mut shared);
+        }
+
+        assert_eq!(route_status_for(&root, &task.message_key), "handled");
+        let shared = lock_shared_state(&state);
+        assert!(
+            shared.recent_events.iter().any(|event| event.contains(
+                "Completed 1 validated Business OS app queue task(s) during worker lease cleanup"
+            )),
+            "drop should record validated app lease cleanup: {:?}",
+            shared.recent_events
+        );
     }
 
     #[test]
