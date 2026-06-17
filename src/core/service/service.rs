@@ -420,6 +420,7 @@ struct SharedState {
     busy: bool,
     worker_active_count: usize,
     worker_phase: Option<String>,
+    app_recovery_active: bool,
     pending_prompts: VecDeque<QueuedPrompt>,
     leased_message_keys_inflight: HashSet<String>,
     current_goal_preview: Option<String>,
@@ -437,6 +438,7 @@ impl Default for SharedState {
             busy: false,
             worker_active_count: 0,
             worker_phase: None,
+            app_recovery_active: false,
             pending_prompts: VecDeque::new(),
             leased_message_keys_inflight: HashSet::new(),
             current_goal_preview: None,
@@ -2678,6 +2680,7 @@ fn resolve_scrape_api_payload(root: &Path, raw_url: &str) -> Result<(u16, serde_
 }
 
 fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<ServiceStatus> {
+    maybe_spawn_business_os_app_recovery(root.to_path_buf(), state.clone(), "idle status snapshot");
     let shared = lock_shared_state(state);
     let worker_active_count = shared.worker_active_count;
     let worker_phase = shared.worker_phase.clone();
@@ -10018,34 +10021,87 @@ fn start_channel_router(root: std::path::PathBuf, state: Arc<Mutex<SharedState>>
 
 fn start_business_os_app_recovery_loop(root: std::path::PathBuf, state: Arc<Mutex<SharedState>>) {
     thread::spawn(move || loop {
-        let recovered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            if !active_agent_loop_in_progress(&state) {
-                match recover_stale_business_os_app_queue_tasks(&root, &state, 16) {
-                    Ok(updated) if updated > 0 => push_event(
-                        &state,
-                        format!(
-                            "Recovered {updated} stale Business OS app queue task(s) during dedicated app recovery loop"
-                        ),
-                    ),
-                    Ok(_) => {}
-                    Err(err) => push_event(
-                        &state,
-                        format!(
-                            "Business OS app recovery loop skipped: {}",
-                            clip_text(&err.to_string(), 180)
-                        ),
-                    ),
-                }
-            }
-        }));
-        if recovered.is_err() {
-            push_event(
-                &state,
-                "Business OS app recovery loop panicked; continuing".to_string(),
-            );
-        }
+        maybe_spawn_business_os_app_recovery(
+            root.clone(),
+            state.clone(),
+            "dedicated app recovery loop",
+        );
         thread::sleep(Duration::from_secs(BUSINESS_OS_APP_RECOVERY_POLL_SECS));
     });
+}
+
+fn maybe_spawn_business_os_app_recovery(
+    root: PathBuf,
+    state: Arc<Mutex<SharedState>>,
+    reason: &'static str,
+) {
+    {
+        let mut shared = lock_shared_state(&state);
+        if shared.busy || shared.worker_active_count > 0 || shared.app_recovery_active {
+            return;
+        }
+        shared.app_recovery_active = true;
+    }
+    thread::spawn(move || {
+        let recovered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            recover_stale_business_os_app_queue_tasks(&root, &state, 16)
+        }));
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.app_recovery_active = false;
+        }
+        match recovered {
+            Ok(Ok(updated)) if updated > 0 => {
+                push_event(
+                    &state,
+                    format!(
+                        "Recovered {updated} stale Business OS app queue task(s) during {reason}"
+                    ),
+                );
+                if reason != "idle status snapshot" {
+                    maybe_dispatch_after_business_os_app_recovery(root, state, reason);
+                }
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(err)) => push_event(
+                &state,
+                format!(
+                    "Business OS app recovery skipped during {reason}: {}",
+                    clip_text(&err.to_string(), 180)
+                ),
+            ),
+            Err(_) => push_event(
+                &state,
+                format!("Business OS app recovery panicked during {reason}; continuing"),
+            ),
+        }
+    });
+}
+
+fn maybe_dispatch_after_business_os_app_recovery(
+    root: PathBuf,
+    state: Arc<Mutex<SharedState>>,
+    reason: &'static str,
+) {
+    if active_agent_loop_in_progress(&state) {
+        return;
+    }
+    match maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state) {
+        Ok(Some(prompt)) => enqueue_prompt(
+            &root,
+            &state,
+            prompt,
+            format!("Queued durable queue task after Business OS app recovery during {reason}"),
+        ),
+        Ok(None) => {}
+        Err(err) => push_event(
+            &state,
+            format!(
+                "Failed to lease next durable queue task after Business OS app recovery during {reason}: {}",
+                clip_text(&err.to_string(), 180)
+            ),
+        ),
+    }
 }
 
 fn start_channel_syncer(root: std::path::PathBuf) {
@@ -21323,6 +21379,84 @@ Business OS command:
             "worker finalization recovery should emit an event: {:?}",
             shared.recent_events
         );
+    }
+
+    #[test]
+    fn status_snapshot_recovery_completes_green_business_os_app_queue_lease() {
+        let root = temp_root("status-snapshot-green-app-recovery");
+        let script_dir = root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "process.exit(0);\n",
+        )
+        .expect("write green validator script fixture");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create projects app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/projects".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        status_from_shared_state(&root, &state).expect("status snapshot failed");
+        for _ in 0..40 {
+            if route_status_for(&root, &task.message_key) == "handled" {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+
+        assert_eq!(route_status_for(&root, &task.message_key), "handled");
+    }
+
+    #[test]
+    fn status_snapshot_recovery_moves_red_business_os_app_queue_lease_to_rework() {
+        let root = temp_root("status-snapshot-red-app-recovery");
+        let script_dir = root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "console.error('module tests failed'); process.exit(1);\n",
+        )
+        .expect("write red validator script fixture");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create subscriptions app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/subscriptions".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        status_from_shared_state(&root, &state).expect("status snapshot failed");
+        for _ in 0..40 {
+            if route_status_for(&root, &task.message_key) == "review_rework" {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+
+        assert_eq!(route_status_for(&root, &task.message_key), "review_rework");
     }
 
     #[test]
