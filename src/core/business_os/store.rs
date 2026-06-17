@@ -5316,6 +5316,11 @@ pub fn complete_business_command_from_app_validation_success(
         terminal_queue_task.as_ref(),
         completed_at_ms,
     )?;
+    write_module_catalog_projection_to_rxdb(root).with_context(|| {
+        format!(
+            "failed to refresh Business OS module catalog after app validation success for `{module_id}`"
+        )
+    })?;
     Ok(Some(command_payload))
 }
 

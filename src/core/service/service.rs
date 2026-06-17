@@ -16657,6 +16657,58 @@ mod tests {
         root
     }
 
+    fn seed_business_os_app_module_fixture(root: &Path, module_id: &str) {
+        let app_root = root.join("src/apps/business-os");
+        let core_module = app_root.join("modules/ctox");
+        let installed_module = root
+            .join("runtime/business-os/installed-modules")
+            .join(module_id);
+        std::fs::create_dir_all(&core_module).expect("create core module fixture");
+        std::fs::create_dir_all(&installed_module).expect("create installed module fixture");
+        std::fs::write(app_root.join("index.html"), "<!doctype html>\n")
+            .expect("write Business OS app root fixture");
+        std::fs::write(
+            core_module.join("module.json"),
+            r#"{"id":"ctox","title":"CTOX","entry":"modules/ctox/index.html","install_scope":"core"}"#,
+        )
+        .expect("write core module manifest fixture");
+        std::fs::write(
+            installed_module.join("module.json"),
+            format!(
+                r#"{{
+  "id": "{module_id}",
+  "title": "{module_id}",
+  "version": "0.1.0",
+  "entry": "installed-modules/{module_id}/index.html",
+  "install_scope": "installed",
+  "collections": ["business_commands"]
+}}"#
+            ),
+        )
+        .expect("write installed module manifest fixture");
+    }
+
+    fn rxdb_module_catalog_contains(root: &Path, module_id: &str) -> bool {
+        let conn = rusqlite::Connection::open(crate::business_os::store::rxdb_store_path(root))
+            .expect("open RxDB store");
+        let catalog_json: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__business_module_catalog__v0 WHERE id = 'module-catalog'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read module catalog");
+        let catalog: Value = serde_json::from_str(&catalog_json).expect("parse module catalog");
+        catalog
+            .get("modules")
+            .and_then(Value::as_array)
+            .is_some_and(|modules| {
+                modules
+                    .iter()
+                    .any(|module| module.get("id").and_then(Value::as_str) == Some(module_id))
+            })
+    }
+
     #[test]
     fn business_os_surfaces_autostart_by_default_and_honor_runtime_config() {
         let root = temp_root("business-os-autostart-config");
@@ -20936,6 +20988,7 @@ Business OS command:
     #[test]
     fn business_os_app_validation_worker_error_after_green_completes_business_command() {
         let root = temp_root("business-os-app-validation-worker-error-green-command");
+        seed_business_os_app_module_fixture(&root, "subscriptions");
         let accepted = crate::business_os::store::accept_rxdb_business_command(
             &root,
             json!({
@@ -21028,6 +21081,10 @@ Business OS command:
                 .pointer("/result/artifact_directory")
                 .and_then(Value::as_str),
             Some("runtime/business-os/installed-modules/subscriptions")
+        );
+        assert!(
+            rxdb_module_catalog_contains(&root, "subscriptions"),
+            "successful app command completion should refresh the module catalog"
         );
     }
 

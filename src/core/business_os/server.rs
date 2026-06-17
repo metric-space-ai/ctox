@@ -168,6 +168,9 @@ pub fn serve_business_os(root: &Path, options: BusinessOsServeOptions) -> anyhow
         Ok(()) => {}
         Err(err) => eprintln!("[business-os] native rxdb peer config failed: {err:#}"),
     }
+    if let Err(err) = store::write_module_catalog_projection_to_rxdb(root) {
+        eprintln!("[business-os] module catalog refresh failed at serve start: {err:#}");
+    }
     let server = Server::http(&options.addr)
         .map_err(|err| anyhow::anyhow!("failed to bind Business OS server: {err}"))?;
     println!("CTOX Business OS listening on http://{}", options.addr);
