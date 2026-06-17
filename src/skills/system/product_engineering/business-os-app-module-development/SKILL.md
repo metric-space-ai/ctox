@@ -3,7 +3,6 @@ name: business-os-app-module-development
 description: Use whenever CTOX or Business OS must build, modify, repair, install, review, or generate a Business OS app/module from chat, App Creator, App Store, CLI, inbound communication, or an external agent. Requires reading existing Business OS apps first, using the CTOX DB WebRTC data plane, and shipping a runnable no-build ESM module rather than a plan, skill file, or generic web app.
 metadata:
   short-description: Build production-ready CTOX Business OS app modules with the native app, data, automation, and validation contracts
-cluster: product_engineering
 ---
 
 # Business OS App Module Development
@@ -61,6 +60,7 @@ the validator reports missing files, right/third-pane layout, schema, manifest, 
 you are about to write a very large app file as one huge tool-call argument or here-doc; keep generated files concise and split large writes into bounded chunks
 you are about to patch a large generated JavaScript file with fragile line-number sed edits instead of rewriting the relevant bounded helper/file
 you are about to make a failing test match broken behavior instead of fixing the app contract violation it exposed
+you are about to write or keep generated tests whose fixture expectations are not hand-computed and internally consistent with the helper logic they exercise
 you are about to import browser entry files such as `index.js` or `schema.js` directly from Node tests, or through `data:text/javascript`, base64, `Buffer.from(source)`, or any generated data URL, instead of testing local `.mjs` helpers and JSON/text parity
 you are spending extra turns reading validator/static-checker implementation internals before the required module file set exists; do not open `validate-app-module.mjs`, `module_static_check.mjs`, `assert-module-conformance.mjs`, or `assert-rxdb-only.mjs` before the required files exist and a validation command reports a concrete failure
 you are trying to satisfy or avoid scanner keywords by mentally reconstructing the checker instead of writing the smallest valid Business OS module and then repairing actual validator bullets
@@ -490,7 +490,7 @@ phase 8 UI layout: default is one/two panes plus modal or drawer; no layout.righ
 phase 9 UI controls: every visible button, filter, tab, menu, and form action has a real handler and state/persistence/dispatch effect
 phase 10 CSS: module CSS is scoped under the module root; no :root token definitions, shell token redefinitions, self-referential custom properties, decorative resize handles, or layout affordances copied from unrelated modules
 phase 11 dependencies: browser runtime uses only vanilla HTML/CSS/browser ESM and local relative ESM imports; no UI framework, JSX/TSX, package manager, bare package import, remote import, CommonJS, bundler, transpiler, or generated bundle
-phase 12 tests: tests import only local `.mjs` helpers and JSON/text files; they do not import `index.js`/`schema.js` directly, do not use data: URLs, and cover schema parity, core command builders, and at least one CRUD/automation path
+phase 12 tests: tests import only local `.mjs` helpers and JSON/text files; they do not import `index.js`/`schema.js` directly, do not use data: URLs, and cover schema parity, core command builders, and at least one CRUD/automation path; fixture totals/counts are hand-computed in comments or small named facts and are consistent with the implementation
 phase 13 validation: node --check, `ctox business-os app validate <id> --installed|--source`, forbidden-pattern scan, and any available shell/browser smoke proof are green
 phase 14 cleanup: no root-level artifacts, source-installed app artifacts, probe files, blocker notes, generated bundles, package files, or stale phase rows remain
 ```
@@ -603,6 +603,15 @@ earlier layer is still red:
 9. no-dependency module tests that import `.mjs` helpers, not browser `.js` entrypoints
 10. real-shell smoke proof when available
 ```
+
+For generated module tests, make the expected values auditable before using
+them as a gate. Small aggregate tests must name or comment the hand-computed
+facts that produce each count or total, for example which records are
+over-budget, invoice-ready, follow-up-required, deleted, or excluded. If a test
+fails, first check whether the expected value contradicts the fixture and the
+business rule. Fix the app logic when the implementation violates the rule; fix
+the test when the test expectation is mathematically inconsistent. Never leave
+a validator red because a generated self-test expects impossible counts.
 
 Run the most specific checks available:
 

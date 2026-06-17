@@ -6719,7 +6719,7 @@ fn render_business_os_app_module_validation_feedback(
     report: &str,
 ) -> String {
     format!(
-        "Business OS app artifact validation failed. Continue the same app-build task and repair the generated module before finishing.\n\nTask source: {}\n\nBusiness OS app build target:\n- module_id: {}\n- install_target: {}\n- only_allowed_app_artifact_directory: {}\n\nallowed artifact directory: {}\n\nValidator report:\n{}\n\nImmediate repair order:\n1. Create or repair every missing required file first: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales/de.json, locales/en.json, and tests/*.test.mjs under {}.\n2. Remove default third/right panes, right-column CSS/resizers, and three-column grids unless the workflow explicitly justifies a persistent third pane.\n3. Re-run the validator and keep repairing exact bullets until it is green.\n\nRepair rules:\n- Edit only files under {}.\n- Do not create root-level module.json, root-level collections.schema.json, src/skills output, package-manager files, node_modules, or HTTP/database fallbacks.\n- Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or direct SQL against queue/command/runtime status rows. CTOX service owns lifecycle completion after green validation.\n- For installed modules, module.json.entry must be installed-modules/{}/index.html and module.json.install_scope must be installed.\n- schema.js and collections.schema.json must export only module-owned collections; shell collections such as business_commands stay dependencies in module.json.collections only.\n- Remove default third/right panes unless there is a concrete persistent workflow justification.\n- Run the validator again before claiming completion:\n  ctox business-os app validate {} {}\n\nOriginal task remains active:\n{}",
+        "Business OS app artifact validation failed. Continue the same app-build task and repair the generated module before finishing.\n\nTask source: {}\n\nBusiness OS app build target:\n- module_id: {}\n- install_target: {}\n- only_allowed_app_artifact_directory: {}\n\nallowed artifact directory: {}\n\nValidator report:\n{}\n\nImmediate repair order:\n1. Create or repair every missing required file first: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales/de.json, locales/en.json, and tests/*.test.mjs under {}.\n2. If module tests fail, verify the failing fixture by hand: expected counts/totals must be internally consistent with the domain rules and helper logic. Fix app logic when the rule is violated; fix generated test expectations when they are mathematically impossible.\n3. Remove default third/right panes, right-column CSS/resizers, and three-column grids unless the workflow explicitly justifies a persistent third pane.\n4. Re-run the validator and keep repairing exact bullets until it is green.\n\nRepair rules:\n- Edit only files under {}.\n- Do not create root-level module.json, root-level collections.schema.json, src/skills output, package-manager files, node_modules, or HTTP/database fallbacks.\n- Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or direct SQL against queue/command/runtime status rows. CTOX service owns lifecycle completion after green validation.\n- For installed modules, module.json.entry must be installed-modules/{}/index.html and module.json.install_scope must be installed.\n- schema.js and collections.schema.json must export only module-owned collections; shell collections such as business_commands stay dependencies in module.json.collections only.\n- Remove default third/right panes unless there is a concrete persistent workflow justification.\n- Run the validator again before claiming completion:\n  ctox business-os app validate {} {}\n\nOriginal task remains active:\n{}",
         job.source_label,
         target.module_id,
         target.install_target,
@@ -10531,12 +10531,12 @@ fn maybe_lease_next_durable_queue_prompt_for_idle_dispatch(
             return Ok(None);
         }
     }
-    match complete_validated_stale_business_os_app_queue_tasks(root, state, 8) {
+    match recover_stale_business_os_app_queue_tasks(root, state, 8) {
         Ok(updated) if updated > 0 => {
             push_event(
                 state,
                 format!(
-                    "Recovered {updated} validated Business OS app queue task(s) before leasing new work"
+                    "Recovered {updated} stale Business OS app queue task(s) before leasing new work"
                 ),
             );
         }
@@ -10577,7 +10577,7 @@ fn maybe_lease_next_durable_queue_prompt_for_idle_dispatch(
     Ok(None)
 }
 
-fn complete_validated_stale_business_os_app_queue_tasks(
+fn recover_stale_business_os_app_queue_tasks(
     root: &Path,
     state: &Arc<Mutex<SharedState>>,
     limit: usize,
@@ -10590,12 +10590,59 @@ fn complete_validated_stale_business_os_app_queue_tasks(
         {
             continue;
         }
-        if complete_validated_business_os_app_queue_task(
-            root,
-            &task.message_key,
-            "Business OS app artifacts validated during idle recovery",
-        )? {
-            updated = updated.saturating_add(1);
+        let job = queued_prompt_from_queue_task(task);
+        match business_os_app_module_validation_feedback(root, &job)? {
+            Some(feedback) if business_os_app_validation_repair_exhausted(&job.prompt) => {
+                let failure_reason = format!(
+                    "Business OS app validation repair attempts exhausted during idle recovery: {}",
+                    clip_text(&feedback, 1200)
+                );
+                channels::ack_leased_messages_with_failure_reason(
+                    root,
+                    &job.leased_message_keys,
+                    "failed",
+                    &failure_reason,
+                )?;
+                for message_key in &job.leased_message_keys {
+                    crate::business_os::store::fail_business_command_from_queue_error(
+                        root,
+                        message_key,
+                        &failure_reason,
+                    )?;
+                }
+                updated = updated.saturating_add(1);
+            }
+            Some(feedback) => {
+                let repair_attempts = business_os_app_validation_repair_attempt_count(&job.prompt);
+                let summary = format!(
+                    "Business OS app artifact validation failed during idle recovery for {}",
+                    job.source_label
+                );
+                apply_business_os_app_validation_rework_to_leased_queue(
+                    root,
+                    &job,
+                    &feedback,
+                    &summary,
+                    repair_attempts.saturating_add(1),
+                )?;
+                for message_key in &job.leased_message_keys {
+                    let _ = crate::business_os::store::refresh_business_command_queue_task_projection(
+                        root,
+                        message_key,
+                    );
+                }
+                updated = updated.saturating_add(1);
+            }
+            None => {
+                let handled = complete_business_os_app_validation_success_to_leased_queue(
+                    root,
+                    &job,
+                    "Business OS app artifacts validated during idle recovery",
+                )?;
+                if handled > 0 {
+                    updated = updated.saturating_add(1);
+                }
+            }
         }
     }
     Ok(updated)
@@ -20663,7 +20710,7 @@ Business OS command:
             track_leased_keys_locked(&mut shared, std::slice::from_ref(&task.message_key), &[]);
         }
 
-        let updated = complete_validated_stale_business_os_app_queue_tasks(&root, &state, 10)
+        let updated = recover_stale_business_os_app_queue_tasks(&root, &state, 10)
             .expect("stale app validation recovery failed");
 
         assert_eq!(updated, 1);
@@ -20703,7 +20750,7 @@ Business OS command:
             track_leased_keys_locked(&mut shared, std::slice::from_ref(&task.message_key), &[]);
         }
 
-        let updated = complete_validated_stale_business_os_app_queue_tasks(&root, &state, 10)
+        let updated = recover_stale_business_os_app_queue_tasks(&root, &state, 10)
             .expect("stale app validation recovery failed");
 
         assert_eq!(updated, 0);
@@ -21064,6 +21111,66 @@ Business OS command:
         assert!(leased
             .prompt
             .contains("Business OS app artifact validation failed."));
+    }
+
+    #[test]
+    fn dispatcher_recovers_red_stale_app_lease_before_fresh_pending_app_tasks() {
+        let root = temp_root("business-os-app-red-stale-lease-priority");
+        let script_dir = root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "console.error('module tests failed: expected count is inconsistent'); process.exit(1);\n",
+        )
+        .expect("write validator script fixture");
+        let stale_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create contracts app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/contracts".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create stale app queue task");
+        channels::lease_queue_task(&root, &stale_task.message_key, "ctox-service-test")
+            .expect("failed to lease stale app queue task");
+        let fresh_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create inventory app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/inventory".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create fresh app queue task");
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let leased = maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state)
+            .expect("dispatcher should not fail")
+            .expect("expected recovered stale app prompt");
+
+        assert_eq!(
+            leased.leased_message_keys,
+            vec![stale_task.message_key.clone()]
+        );
+        assert_eq!(route_status_for(&root, &stale_task.message_key), "leased");
+        assert_eq!(route_status_for(&root, &fresh_task.message_key), "pending");
+        assert!(leased
+            .prompt
+            .contains("Business OS app artifact validation failed."));
+        assert!(leased
+            .prompt
+            .contains("module tests failed: expected count is inconsistent"));
     }
 
     #[test]

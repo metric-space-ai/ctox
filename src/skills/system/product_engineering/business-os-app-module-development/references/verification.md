@@ -25,6 +25,15 @@ Do not modify tests to match a broken module contract. A passing custom test is
 not evidence while `ctox business-os app validate`, `module_static_check.mjs`,
 or `validate-app-module.mjs` is red.
 
+Generated tests must also be internally correct. Before treating a failing
+module test as an app failure, verify that its fixture expectations are
+hand-computed and consistent with the domain rules. Aggregate assertions such as
+counts, totals, over-budget flags, invoice-ready flags, and follow-up-required
+flags should be backed by small named fixture facts or comments. If the test
+expects an impossible count, repair the test; if the helper violates the
+documented business rule, repair the helper. The validator is not green until
+the generated tests and implementation agree on a coherent rule set.
+
 ## Static Checks
 
 Run the narrow checks that match the touched files. Always set `MODULE_DIR`
