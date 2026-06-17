@@ -2680,7 +2680,7 @@ fn resolve_scrape_api_payload(root: &Path, raw_url: &str) -> Result<(u16, serde_
 }
 
 fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<ServiceStatus> {
-    maybe_spawn_business_os_app_recovery(root.to_path_buf(), state.clone(), "idle status snapshot");
+    recover_business_os_app_queue_tasks_for_idle_status_snapshot(root, state);
     let shared = lock_shared_state(state);
     let worker_active_count = shared.worker_active_count;
     let worker_phase = shared.worker_phase.clone();
@@ -2819,6 +2819,46 @@ fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Res
         work_hours: crate::service::working_hours::snapshot(root),
         degraded_probe: false,
     })
+}
+
+fn recover_business_os_app_queue_tasks_for_idle_status_snapshot(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+) {
+    {
+        let mut shared = lock_shared_state(state);
+        if shared.busy || shared.worker_active_count > 0 || shared.app_recovery_active {
+            return;
+        }
+        shared.app_recovery_active = true;
+    }
+    let recovered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        recover_stale_business_os_app_queue_tasks(root, state, 16)
+    }));
+    {
+        let mut shared = lock_shared_state(state);
+        shared.app_recovery_active = false;
+    }
+    match recovered {
+        Ok(Ok(updated)) if updated > 0 => push_event(
+            state,
+            format!(
+                "Recovered {updated} stale Business OS app queue task(s) during idle status snapshot"
+            ),
+        ),
+        Ok(Ok(_)) => {}
+        Ok(Err(err)) => push_event(
+            state,
+            format!(
+                "Business OS app recovery skipped during idle status snapshot: {}",
+                clip_text(&err.to_string(), 180)
+            ),
+        ),
+        Err(_) => push_event(
+            state,
+            "Business OS app recovery panicked during idle status snapshot; continuing".to_string(),
+        ),
+    }
 }
 
 fn business_os_health_snapshot(root: &Path) -> Value {
