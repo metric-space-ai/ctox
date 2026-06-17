@@ -50,6 +50,7 @@ the module's automation uses `ctox.business_os.ticket.followup.create`, `ctox.ti
 the module's tests, comments, helper names, or assertions describe a business_commands fallback as valid behavior; tests must prove commandBus.dispatch-only automation with type and command_type business_os.chat.task plus record_snapshot
 the module declares collections in module.json but not in schema.js and collections.schema.json
 the module-owned data model is unclear: central object, collection names, states, commands, and automation payload are not named
+index.js does not load the module fragment with `fetch(new URL('./index.html', import.meta.url))`, assign it into `ctx.host.innerHTML`, and attach `index.css` through a local `new URL('./index.css', import.meta.url)` stylesheet before DOM queries or event wiring
 the app has a decorative third pane, layout.right by default, right-column resizers by default, decorative controls, fake AI buttons, fake status-only actions, or UI that is not needed for the workflow
 module.json embeds `layout.icon_svg` instead of using the required separate `icon.svg`
 module.json embeds inline SVG in any field such as `icon_svg`, `iconSvg`, `layout.icon`, or `layout.icon_svg`; generated apps must keep all SVG markup only in icon.svg
@@ -170,9 +171,9 @@ CTOX DB is CTOX-owned and RxDB-derived. It is not npm `rxdb`, not `ctox.db`, and
 Generated App Creator apps must be vanilla static Business OS modules:
 
 ```text
-index.html -> static fragment loaded by the shell
+index.html -> static fragment owned by the module
 index.css -> scoped module CSS
-index.js -> browser ESM exporting mount(ctx)
+index.js -> browser ESM exporting mount(ctx), loading index.html into ctx.host.innerHTML, attaching index.css, then wiring data, events, and automation
 local .mjs helpers -> optional pure logic, schemas, reducers, and command builders
 ```
 
@@ -207,6 +208,24 @@ runtime/business-os/installed-modules/<id>/
   locales/en.json
   tests/<id>.test.mjs         # or <id>.test.mjs for small modules
 ```
+
+The Business OS shell imports `index.js` and calls `mount(ctx)`. It does not
+inject the module's `index.html` or `index.css`. Every generated App Creator
+module must load its own static fragment and stylesheet before querying DOM
+nodes:
+
+```js
+export async function mount(ctx) {
+  attachStylesheetOnce();
+  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  // Now query ctx.host and wire persistence, actions, and automation.
+}
+```
+
+Attach the stylesheet through a local
+`new URL('./index.css', import.meta.url)` link. Do not leave `ctx.host` empty
+while `mount(ctx)` only registers events against selectors that live in
+`index.html`.
 
 Resolve the target directory before writing any file:
 

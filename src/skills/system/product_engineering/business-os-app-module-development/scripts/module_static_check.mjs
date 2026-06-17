@@ -521,6 +521,17 @@ if (installedMode) {
   if (!/\brecord_snapshot\b/.test(allModuleText)) {
     fail('installed App Creator module automation must include a source record_snapshot');
   }
+  const indexJsPath = join(moduleDir, 'index.js');
+  const indexJsText = existsSync(indexJsPath) ? readFileSync(indexJsPath, 'utf8') : '';
+  if (!/fetch\s*\(\s*new\s+URL\s*\(\s*['"]\.\/index\.html['"]\s*,\s*import\.meta\.url\s*\)/.test(indexJsText)) {
+    fail('installed App Creator module index.js must load ./index.html with fetch(new URL(\'./index.html\', import.meta.url)) before DOM wiring');
+  }
+  if (!/(?:ctx|state\.ctx)\.host\.innerHTML\s*=/.test(indexJsText)) {
+    fail('installed App Creator module mount(ctx) must render index.html into ctx.host.innerHTML');
+  }
+  if (!/new\s+URL\s*\(\s*['"]\.\/index\.css['"]\s*,\s*import\.meta\.url\s*\)/.test(indexJsText)) {
+    fail('installed App Creator module index.js must attach ./index.css through a local new URL(\'./index.css\', import.meta.url) stylesheet');
+  }
 }
 
 if (failures.length > 0) {

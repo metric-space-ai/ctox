@@ -16,9 +16,10 @@ not work on lower layers until the higher layer is green:
 6. collection ownership and schema parity
 7. UI layout contract
 8. runtime import/dependency/data-plane contract
-9. index.js syntax
-10. no-dependency tests
-11. real-shell smoke
+9. index.html/index.css mount contract
+10. index.js syntax
+11. no-dependency tests
+12. real-shell smoke
 ```
 
 Do not modify tests to match a broken module contract. A passing custom test is
@@ -60,6 +61,7 @@ node -e "const fs=require('fs'); const m=JSON.parse(fs.readFileSync('$MODULE_DIR
 # Shared per-module file checks after choosing the correct MODULE_DIR:
 node --check "$MODULE_DIR/index.js"
 node --test "$MODULE_DIR"/tests/*.test.mjs
+node -e "const fs=require('fs'); const s=fs.readFileSync('$MODULE_DIR/index.js','utf8'); if (!/fetch\\s*\\(\\s*new\\s+URL\\s*\\(\\s*['\\\"]\\.\\/index\\.html['\\\"]\\s*,\\s*import\\.meta\\.url\\s*\\)/.test(s)) throw new Error('index.js must load index.html via fetch(new URL(...))'); if (!/(?:ctx|state\\.ctx)\\.host\\.innerHTML\\s*=/.test(s)) throw new Error('index.js must assign index.html into ctx.host.innerHTML'); if (!/new\\s+URL\\s*\\(\\s*['\\\"]\\.\\/index\\.css['\\\"]\\s*,\\s*import\\.meta\\.url\\s*\\)/.test(s)) throw new Error('index.js must attach index.css by local URL'); console.log('module HTML/CSS mount contract OK')"
 ! rg -n "ctx\\??\\.db\\??\\.raw|\\bdb\\??\\.raw\\b|ctx\\.collections|ctox\\.db|fetch\\('/api/business-os|from ['\\\"]rxdb|from ['\\\"]node:|from ['\\\"][^./]|require\\(|https?://|cdn\\." "$MODULE_DIR" --glob '*.js' --glob '*.mjs' --glob '*.html' --glob '!tests/**' --glob '!*.test.mjs'
 ! rg -n "import .*\\.json" "$MODULE_DIR" --glob '*.js' --glob '*.mjs' --glob '!tests/**' --glob '!*.test.mjs'
 ! rg -n "React\\.|ReactDOM|createRoot\\(|from ['\\\"][^'\\\"]*react|Vue\\.|createApp\\(|from ['\\\"][^'\\\"]*vue|from ['\\\"][^'\\\"]*svelte|from ['\\\"][^'\\\"]*@angular|from ['\\\"][^'\\\"]*solid-js|from ['\\\"][^'\\\"]*preact|from ['\\\"][^'\\\"]*lit|jsx-runtime|@jsx" "$MODULE_DIR" --glob '*.js' --glob '*.mjs' --glob '*.html' --glob '!tests/**' --glob '!*.test.mjs'

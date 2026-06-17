@@ -40,6 +40,25 @@ External agents should build the same contract, but their output is not
 production evidence until the CTOX App Creator or command flow can materialize,
 validate, and mount the runtime-installed module from the installed app root.
 
+The Business OS shell imports `index.js` and calls `mount(ctx)`. It does not
+automatically inject a generated module's `index.html` or `index.css` into the
+workspace. Runtime-installed App Creator modules must therefore do this before
+any DOM query or event wiring:
+
+```js
+export async function mount(ctx) {
+  attachStylesheetOnce();
+  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  // Now wire ctx.host selectors, data subscriptions, persistence, and actions.
+}
+```
+
+Attach `index.css` through a local stylesheet URL such as
+`new URL('./index.css', import.meta.url)`. A module that only calls
+`host.querySelector(...)` against elements declared in `index.html` without
+first assigning `ctx.host.innerHTML` will mount as a blank app even when all
+files exist and `index.html` returns 200.
+
 `module.json` must list every collection read or written, including
 dependencies such as `business_commands`, `customer_accounts`, `desktop_files`,
 or adjacent module collections.

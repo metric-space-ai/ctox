@@ -92,13 +92,23 @@ function writeInstalledModule(root, moduleId, overrides = {}) {
     '}',
     '',
   ].join('\n'));
-  writeFileSync(join(dir, 'index.html'), overrides.indexHtml || '<main class="good-module"><section>Ready</section></main>\n');
+  writeFileSync(join(dir, 'index.html'), overrides.indexHtml || '<main class="good-module"><button type="button" data-action="follow-up">Review</button></main>\n');
   writeFileSync(join(dir, 'index.css'), overrides.indexCss || '.good-module { --good-accent: #2563eb; color: inherit; }\n');
   writeFileSync(join(dir, 'index.js'), overrides.indexJs || [
     "import { buildFollowUpCommand } from './core/automation.mjs';",
     '',
+    'async function ensureStyles() {',
+    "  if (document.querySelector('link[data-module-styles=\"good\"]')) return;",
+    "  const link = document.createElement('link');",
+    "  link.rel = 'stylesheet';",
+    "  link.href = new URL('./index.css', import.meta.url).href;",
+    "  link.dataset.moduleStyles = 'good';",
+    "  document.head.append(link);",
+    '}',
+    '',
     'export async function mount(ctx) {',
-    "  ctx.host.innerHTML = '<button type=\"button\" data-action=\"follow-up\">Review</button>';",
+    '  await ensureStyles();',
+    "  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());",
     "  ctx.host.querySelector('[data-action=\"follow-up\"]')?.addEventListener('click', () => {",
     "    ctx.commandBus.dispatch(buildFollowUpCommand({ id: 'demo', title: 'Demo' }));",
     '  });',
@@ -488,6 +498,28 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /must dispatch at least one real automation through ctx\.commandBus\.dispatch/);
   assert.match(run.stderr, /must include a business_os\.chat\.task automation command/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'missinghtmlmount', {
+    indexJs: [
+      "import { buildFollowUpCommand } from './core/automation.mjs';",
+      '',
+      'export async function mount(ctx) {',
+      '  const { host } = ctx;',
+      "  host.querySelector('[data-action=\"follow-up\"]')?.addEventListener('click', () => {",
+      "    ctx.commandBus.dispatch(buildFollowUpCommand({ id: 'demo', title: 'Demo' }));",
+      '  });',
+      '  return () => { host.innerHTML = ""; };',
+      '}',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'missinghtmlmount', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /index\.js must load \.\/index\.html/);
+  assert.match(run.stderr, /must render index\.html into ctx\.host\.innerHTML/);
 }
 
 {
