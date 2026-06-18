@@ -429,6 +429,15 @@ if (manifest) {
   if (manifest.layout?.right && !manifest.layout?.third_pane_justification) {
     fail('module.json layout.right requires layout.third_pane_justification; use two panes plus modals/drawers by default');
   }
+  if (
+    manifest.layout?.drawers
+    && typeof manifest.layout.drawers === 'object'
+    && !Array.isArray(manifest.layout.drawers)
+    && Object.prototype.hasOwnProperty.call(manifest.layout.drawers, 'right')
+    && !manifest.layout?.third_pane_justification
+  ) {
+    fail('module.json layout.drawers.right is third/right-panel metadata; remove it and use an in-module modal or focused two-pane flow unless a persistent third pane was explicitly requested');
+  }
   if (manifest.layout?.icon_svg) {
     fail('module.json layout.icon_svg is forbidden; keep icons in icon.svg instead of embedding SVG in the manifest');
   }

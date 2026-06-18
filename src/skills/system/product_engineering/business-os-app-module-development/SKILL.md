@@ -48,7 +48,7 @@ you are about to run npm, npx, pnpm, yarn, bun, npm install, npm init, npm test,
 you are about to use esbuild, Vite, Rollup, Webpack, node:vm, or new Function as a syntax-check, import, schema-transform, or test workaround
 you are about to mention forbidden package-manager, bundler, or dependency names as tooling, import, config, install, test, or build concepts inside generated app files, tests, comments, or user-visible copy; keep tooling references only in validation/skill context. Domain words that collide with tool names, such as "rollup" for KPI or finance summaries, are allowed when they clearly describe business data and not JavaScript tooling.
 you are about to use IndexedDB directly, localStorage, sessionStorage, Postgres, SQLite from browser code, ctox.db, ctx.db.raw, HTTP data APIs, /rxdb/pull, /commands, or any fallback data path
-you are about to use legacy module patterns as implementation authority instead of translating them to the current contract; examples to reject for new App Creator apps include ctx.db.raw, ctx.collections, manual business_commands inserts/upserts, pending_sync command fallbacks, window.dispatchEvent('ctox-business-os-chat-submit'), esbuild/fake-DOM tests, JSON-module schema wrappers, and default layout.right panes
+you are about to use legacy module patterns as implementation authority instead of translating them to the current contract; examples to reject for new App Creator apps include ctx.db.raw, ctx.collections, manual business_commands inserts/upserts, pending_sync command fallbacks, window.dispatchEvent('ctox-business-os-chat-submit'), esbuild/fake-DOM tests, JSON-module schema wrappers, default layout.right panes, and right-drawer manifest metadata
 you are about to request complete file dumps, delegate a broad subagent sweep, or spend more than a short targeted pass on existing modules before writing the first runnable module files
 you are about to run broad discovery commands over `$HOME`, `/Users`, the whole install root, the whole repo, or validator/checker names; use exact known paths, `MODULE_DIR`, and at most the three selected few-shot modules
 you are about to read or write `$HOME/.local/state/ctox/business-os/installed-modules` directly; use the prompted `runtime/business-os/installed-modules/<id>/` module path only
@@ -77,7 +77,7 @@ index.js does not load the module fragment with `fetch(new URL('./index.html', i
 index.html is a full browser document or declares document/head resources; App Creator `index.html` must be a shell fragment only, with no `<!doctype>`, `<html>`, `<head>`, `<body>`, `<link>`, `<script>`, `<meta>`, `<title>`, or `<style>` tags
 index.js queries a `data-*` selector that is absent from index.html and from generated markup
 tests under `tests/` read module files with `../../module.json`, `../../collections.schema.json`, or `../../schema.js`; from `tests/*.test.mjs`, the module root is exactly `..`, so sibling files must resolve from `resolve(testDir, '..')`
-the app has a decorative third pane, layout.right by default, right-column resizers by default, decorative controls, fake AI buttons, fake status-only actions, or UI that is not needed for the workflow
+the app has a decorative third pane, layout.right by default, layout.drawers.right/right-drawer metadata by default, right-column resizers by default, decorative controls, fake AI buttons, fake status-only actions, or UI that is not needed for the workflow
 module.json embeds `layout.icon_svg` instead of using the required separate `icon.svg`
 module.json embeds inline SVG in any field such as `icon_svg`, `iconSvg`, `layout.icon`, or `layout.icon_svg`; generated apps must keep all SVG markup only in icon.svg
 index.css defines shell/base tokens such as `--surface` or creates self-referential local tokens such as `--<id>-bg: var(--<id>-bg)`
@@ -99,7 +99,7 @@ you are spending extra turns reading validator/static-checker implementation int
 you are trying to satisfy or avoid scanner keywords by mentally reconstructing the checker instead of writing the smallest valid Business OS module and then repairing actual validator bullets
 you are about to write tests that contain forbidden legacy strings as negative-proof literals; generated tests must avoid the forbidden literals entirely and assert positive current-contract behavior instead
 you are about to write generated tests that use assert.doesNotMatch, scan source files for forbidden anti-pattern absence, build forbidden tokens from fragments, use String.fromCharCode or regex assembly to bypass validators, or describe validator/checker workarounds; delete that test and write positive contract tests instead
-you are about to assert that a manifest, HTML fragment, CSS file, or source file lacks a forbidden third-pane/right-pane pattern by embedding that forbidden term in a test name, assertion, failure message, regex, comment, or string literal; validators own absence checks. Test positive layout facts instead, such as `manifest.layout.shell === "full-workspace"` plus the expected left/center labels and the expected module root class.
+you are about to assert that a manifest, HTML fragment, CSS file, or source file lacks a forbidden third-pane/right-pane pattern by embedding that forbidden term in a test name, assertion, failure message, regex, comment, property access, or string literal; validators own absence checks. Do not write `manifest.layout?.right`, `manifest.layout.drawers?.right`, or equivalent negative layout access. Test positive layout facts instead, such as `manifest.layout.shell === "full-workspace"`, the expected left/center labels, `Object.keys(manifest.layout).sort()` equalling only the expected keys, and the expected module root class.
 tests and Business OS guards were not run after the last code change
 ```
 
@@ -416,9 +416,11 @@ Minimum installed-module manifest fields:
 ```
 
 This is also a negative example: do not add `"right": "Details"`,
-`"right": "Inspector"`, or any `layout.right` unless the user explicitly asked
-for a persistent third pane and you also add `layout.third_pane_justification`.
-The default Business OS app surface is one or two panes plus a modal/drawer.
+`"right": "Inspector"`, `layout.drawers.right`, or any `layout.right` unless
+the user explicitly asked for a persistent third pane and you also add
+`layout.third_pane_justification`. The default Business OS app surface is one
+or two panes plus an in-module modal/drawer. Do not use right-drawer manifest
+metadata as a decorative substitute for a third pane.
 Do not embed SVG in `module.json.layout.icon_svg`; keep the icon in the
 required separate `icon.svg` file. Do not put inline SVG markup in any manifest
 field, including `icon_svg`, `iconSvg`, `layout.icon`, or `layout.icon_svg`.
@@ -562,12 +564,14 @@ similar. Validators own negative anti-pattern checks. Generated module tests
 must assert positive behavior only: schema parity, reducers/calculations,
 valid command payload shape, and `ctx.commandBus.dispatch` integration hooks.
 For layout tests, assert the expected positive contract, for example
-`manifest.layout.shell`, the left/center labels, the absence of an explicit
-third-pane justification when no third pane exists, and the module root class
-used by the fragment/CSS. Do not write checks such as
-`!('right' in manifest.layout)`, `!('right_resizer' in manifest.layout)`, or
-failure messages like "no default right-resizer"; those literals make the test
-file itself fail the static checker.
+`manifest.layout.shell`, the left/center labels, the exact expected layout key
+set, and the module root class used by the fragment/CSS. Do not write checks
+or property reads such as `manifest.layout?.right`,
+`manifest.layout.drawers?.right`, `!('right' in manifest.layout)`,
+`!('right_resizer' in manifest.layout)`, or failure messages like "no default
+right-resizer"; those literals make the test file itself fail the static
+checker. A good assertion is
+`assert.deepEqual(Object.keys(manifest.layout).sort(), ['center', 'left', 'shell'])`.
 
 `module.json` must list every collection the module reads/writes. Shell collections such as `business_commands`, `ctox_queue_tasks`, `business_module_catalog`, and `ctox_runtime_settings` may be listed when used, but module-owned collections must be declared in both `schema.js` and `collections.schema.json`.
 
@@ -598,7 +602,7 @@ export function mount(ctx) {
 ## UI Rules
 
 - Start with the smallest work surface that fits the workflow. Two panes plus modals are usually better than three panes.
-- Default to one or two panes plus modals/drawers. Do not create `layout.right`, `.right` sections, right-column resizers, or three-column CSS grids by default.
+- Default to one or two panes plus in-module modals/drawers. Do not create `layout.right`, `layout.drawers.right`, right-drawer manifest metadata, `.right` sections, right-column resizers, or three-column CSS grids by default.
 - Do not assume a shell "right rail" or inspector exists. Only use shell toolbar/event APIs after inspecting an existing module that uses that exact API; otherwise keep the action inside the module's normal one/two-pane surface.
 - Use a third pane only when the user explicitly asked for one or when the workflow has a persistent separate context stream that must remain visible while editing. If you use one, add a short code comment in the module explaining that workflow need. Otherwise use a modal or drawer.
 - Do not add visible controls unless they work end to end.
@@ -650,7 +654,7 @@ phase 4 versioning: new/runtime-installed module.json uses SemVer x.y.z without 
 phase 5 schema: collections.schema.json has schema_format ctox-business-os-module-collections-v1, contains only module-owned collections, and matches schema.js
 phase 6 persistence: all durable records use ctx.db facade collections; no ctox.db, db.raw, Web Storage, HTTP data route, table creation, or manual database file
 phase 7 automation: at least one visible action dispatches a real `business_os.chat.task` command through ctx.commandBus.dispatch and has a testable payload builder
-phase 8 UI layout: default is one/two panes plus modal or drawer; no layout.right, right rail, right-column CSS, right resizer, or three-column grid unless explicitly justified by workflow
+phase 8 UI layout: default is one/two panes plus an in-module modal or drawer; no layout.right, layout.drawers.right/right-drawer manifest metadata, right rail, right-column CSS, right resizer, or three-column grid unless explicitly justified by workflow
 phase 9 UI controls: every visible button, filter, tab, menu, and form action has a real handler and state/persistence/dispatch effect; every `data-*` selector queried in index.js exists in index.html or generated markup
 phase 10 CSS: module CSS is scoped under the module root class; no :root/html/body custom property definitions, shell token redefinitions, self-referential custom properties, decorative resize handles, or layout affordances copied from unrelated modules
 phase 11 dependencies: browser runtime uses only vanilla HTML/CSS/browser ESM and local relative ESM imports; no UI framework, JSX/TSX, package manager, bare package import, remote import, CommonJS, bundler, transpiler, or generated bundle
@@ -662,7 +666,7 @@ phase 14 cleanup: no unexpected installed-module root entries remain; runtime-in
 Treat these common findings as automatic rework, not acceptable tradeoffs:
 
 ```text
-module.json has layout.right without layout.third_pane_justification
+module.json has layout.right or layout.drawers.right without layout.third_pane_justification
 module.json embeds layout.icon_svg instead of using icon.svg
 index.html/index.css contains data-*-right, right-pane, right-column, right-resizer, or a three-column grid copied from another app without a real workflow need
 collections.schema.json starts directly with collections and omits schema_format

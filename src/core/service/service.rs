@@ -6746,10 +6746,19 @@ fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
         target.module_id,
         target.mode_flag,
     );
-    prompt.replace(
-        "- Tests must prove positive behavior only.",
-        "- ESM import/export rule: every named local import in index.js, core/*.mjs, and tests/*.mjs must be exported by the target file. Preserve scaffold helper exports such as COLLECTION_NAME, createRecord, normalizeStatus, summarizeRecords, and visibleRecords unless every importer is updated in the same turn.\n- Tests must prove positive behavior only.",
-    )
+    prompt
+        .replace(
+            "- Use one/two panes plus modals or drawers by default. Remove `layout.right`, right panes, right-column CSS/resizers, and three-column grids unless the user explicitly requested a persistent third pane and the manifest carries a concrete workflow justification.",
+            "- Use one/two panes plus in-module modals or drawers by default. Remove `layout.right`, `layout.drawers.right`, right-drawer manifest metadata, right panes, right-column CSS/resizers, and three-column grids unless the user explicitly requested a persistent third pane and the manifest carries a concrete workflow justification.",
+        )
+        .replace(
+            "- Tests must prove positive behavior only. Do not write negative source-text scans, forbidden-literal assertions, or tests that quote banned anti-pattern strings such as layout/right-pane keys; validators own those checks.",
+            "- Tests must prove positive behavior only. Do not write negative source-text scans, forbidden-literal assertions, or tests that quote or access banned anti-pattern strings such as layout/right-pane keys; validators own those checks. Do not write `manifest.layout?.right`, `manifest.layout.drawers?.right`, or similar absence tests; assert the positive expected layout key set instead.",
+        )
+        .replace(
+            "- Tests must prove positive behavior only.",
+            "- ESM import/export rule: every named local import in index.js, core/*.mjs, and tests/*.mjs must be exported by the target file. Preserve scaffold helper exports such as COLLECTION_NAME, createRecord, normalizeStatus, summarizeRecords, and visibleRecords unless every importer is updated in the same turn.\n- Tests must prove positive behavior only.",
+        )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -7338,12 +7347,28 @@ fn render_business_os_app_module_validation_feedback(
     );
     feedback
         .replace(
+            "8. Remove default third/right panes, right-column CSS/resizers, and three-column grids unless the workflow explicitly justifies a persistent third pane.",
+            "8. Remove default third/right panes, layout.drawers.right/right-drawer manifest metadata, right-column CSS/resizers, and three-column grids unless the workflow explicitly justifies a persistent third pane.",
+        )
+        .replace(
+            "9. If tests mention forbidden anti-pattern strings only to prove absence, delete those negative source-text tests and replace them with positive behavior/schema/helper assertions.",
+            "9. If tests mention or access forbidden anti-pattern strings only to prove absence, including `manifest.layout?.right` or `manifest.layout.drawers?.right`, delete those negative layout/source-text tests and replace them with positive behavior/schema/helper/layout-key assertions.",
+        )
+        .replace(
+            "- Remove default third/right panes unless there is a concrete persistent workflow justification.",
+            "- Remove default third/right panes and right-drawer manifest metadata unless there is a concrete persistent workflow justification.",
+        )
+        .replace(
+            "- Tests must not quote forbidden anti-pattern strings for absence checks; validators own source-text bans.",
+            "- Tests must not quote or access forbidden anti-pattern strings for absence checks; validators own source-text bans. Use positive layout key assertions instead of `manifest.layout?.right` or `manifest.layout.drawers?.right`.",
+        )
+        .replace(
             "8. Remove default third/right panes",
             "8. If the validator or module tests report `does not provide an export named`, update every importer and helper export together. Preserve scaffold exports such as COLLECTION_NAME, createRecord, normalizeStatus, summarizeRecords, and visibleRecords unless index.js and tests no longer import them.\n9. Remove default third/right panes",
         )
         .replace(
-            "9. If tests mention forbidden anti-pattern strings",
-            "10. If tests mention forbidden anti-pattern strings",
+            "9. If tests mention or access forbidden anti-pattern strings",
+            "10. If tests mention or access forbidden anti-pattern strings",
         )
         .replace(
             "10. Re-run the validator",
