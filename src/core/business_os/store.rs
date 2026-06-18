@@ -14990,7 +14990,10 @@ fn process_cv_print_parse_command(
 }
 
 pub fn is_ats_active_command(command_type: &str) -> bool {
-    matches!(command_type, "ats.deployment.check" | "ats.consent.check")
+    matches!(
+        command_type,
+        "ats.deployment.check" | "ats.consent.check" | "ats.retention.due"
+    )
 }
 
 /// Load every non-deleted record of `collection` whose JSON `field` equals
@@ -15079,6 +15082,49 @@ fn handle_ats_active_command(
             )?;
             let allowed = super::ats_gates::evaluate_consent_gate(purpose, &consents, now);
             Ok(serde_json::json!({ "ok": true, "allowed": allowed, "purpose": purpose }))
+        }
+        "ats.retention.due" => {
+            // Löschfristen: return the record ids of a collection that are past
+            // their retention window, computed native-side. Read-only (the purge
+            // itself is a separate admin action).
+            let collection = command
+                .payload
+                .get("collection")
+                .and_then(Value::as_str)
+                .context("ats.retention.due requires collection")?;
+            let retention_days = command
+                .payload
+                .get("retention_days")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let reference_field = command
+                .payload
+                .get("reference_field")
+                .and_then(Value::as_str)
+                .unwrap_or("created_at_ms");
+            let mut stmt = conn.prepare(
+                "SELECT record_id, payload_json FROM business_records
+                 WHERE collection = ?1 AND deleted = 0",
+            )?;
+            let rows = stmt.query_map(params![collection], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            let mut due_ids = Vec::new();
+            for row in rows {
+                let (id, payload) = row?;
+                let reference = serde_json::from_str::<Value>(&payload)
+                    .ok()
+                    .and_then(|v| v.get(reference_field).and_then(Value::as_i64))
+                    .unwrap_or(0);
+                if super::ats_gates::retention_due(reference, retention_days, now) {
+                    due_ids.push(id);
+                }
+            }
+            Ok(serde_json::json!({
+                "ok": true,
+                "count": due_ids.len(),
+                "due_ids": due_ids,
+            }))
         }
         other => Err(anyhow::anyhow!("unsupported ats command type: {other}")),
     }
