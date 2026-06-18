@@ -68,32 +68,56 @@ async function findAll(collection) {
     .sort((a, b) => (b.updated_at_ms || 0) - (a.updated_at_ms || 0));
 }
 
+function activeCollection(name) {
+  const facade = stateRef?.ctx?.db;
+  if (!facade || !name) return null;
+  return facade.collection?.(name) || null;
+}
+
+function isBusinessOsPermissionDenied(error) {
+  return error?.code === 'CTOX_BUSINESS_OS_PERMISSION_DENIED'
+    || error?.name === 'BusinessOsPermissionError';
+}
+
 export async function loadActiveOutreachData() {
-  if (!stateRef?.ctx?.db?.raw) return;
-  const raw = stateRef.ctx.db.raw;
-  const [
-    engagements,
-    messages,
-    approvals,
-    sequences,
-    senderAssignments,
-    meetingRequests,
-    suppressionEntries,
-    accountLimits,
-    skillbooks,
-    letterTemplates,
-  ] = await Promise.all([
-    findAll(raw.outbound_engagements),
-    findAll(raw.outbound_messages),
-    findAll(raw.outbound_approvals),
-    findAll(raw.outbound_sequences),
-    findAll(raw.outbound_sender_assignments),
-    findAll(raw.outbound_meeting_requests),
-    findAll(raw.outbound_suppression_entries),
-    findAll(raw.outbound_account_limits),
-    findAll(raw.outbound_skillbooks),
-    findAll(raw.outbound_letter_templates),
-  ]);
+  if (!stateRef?.ctx?.db) return;
+  let engagements = [];
+  let messages = [];
+  let approvals = [];
+  let sequences = [];
+  let senderAssignments = [];
+  let meetingRequests = [];
+  let suppressionEntries = [];
+  let accountLimits = [];
+  let skillbooks = [];
+  let letterTemplates = [];
+  try {
+    [
+      engagements,
+      messages,
+      approvals,
+      sequences,
+      senderAssignments,
+      meetingRequests,
+      suppressionEntries,
+      accountLimits,
+      skillbooks,
+      letterTemplates,
+    ] = await Promise.all([
+      findAll(activeCollection('outbound_engagements')),
+      findAll(activeCollection('outbound_messages')),
+      findAll(activeCollection('outbound_approvals')),
+      findAll(activeCollection('outbound_sequences')),
+      findAll(activeCollection('outbound_sender_assignments')),
+      findAll(activeCollection('outbound_meeting_requests')),
+      findAll(activeCollection('outbound_suppression_entries')),
+      findAll(activeCollection('outbound_account_limits')),
+      findAll(activeCollection('outbound_skillbooks')),
+      findAll(activeCollection('outbound_letter_templates')),
+    ]);
+  } catch (error) {
+    if (!isBusinessOsPermissionDenied(error)) throw error;
+  }
   stateRef.engagements = engagements;
   stateRef.engagementMessages = messages;
   stateRef.engagementApprovals = approvals;
@@ -1022,7 +1046,7 @@ async function dispatchOutboundCommand(type, recordId, payload, options = {}) {
 }
 
 async function waitForOutboundCommandProjection(commandId, timeoutMs) {
-  const collection = stateRef.ctx?.db?.raw?.business_commands;
+  const collection = activeCollection('business_commands');
   if (!collection || !commandId) {
     throw new Error('business_commands collection is required for outbound command acknowledgements');
   }
@@ -1045,8 +1069,7 @@ async function waitForOutboundCommandProjection(commandId, timeoutMs) {
 
 async function projectOutboundCommandResult(command) {
   const result = command?.result;
-  const raw = stateRef.ctx?.db?.raw;
-  if (!result || !raw) return;
+  if (!result || !stateRef?.ctx?.db) return;
   const projections = [
     ['outbound_engagements', result.engagement],
     ['outbound_messages', result.message],
@@ -1058,15 +1081,17 @@ async function projectOutboundCommandResult(command) {
     ['outbound_meeting_requests', result.meeting_request || result.request],
   ];
   for (const [collectionName, record] of projections) {
-    if (!record?.id || !raw[collectionName]) continue;
-    await upsertLocalProjection(raw[collectionName], record);
+    const collection = activeCollection(collectionName);
+    if (!record?.id || !collection) continue;
+    await upsertLocalProjection(collection, record);
   }
   if (Array.isArray(result.updated)) {
     for (const record of result.updated) {
       const collectionName = record?.collection || record?.collection_name;
       const payload = record?.record || record?.message || record;
-      if (!collectionName || !payload?.id || !raw[collectionName]) continue;
-      await upsertLocalProjection(raw[collectionName], payload);
+      const collection = activeCollection(collectionName);
+      if (!collectionName || !payload?.id || !collection) continue;
+      await upsertLocalProjection(collection, payload);
     }
   }
 }
@@ -1783,13 +1808,13 @@ async function addSuppressionFromEngagement(engagementId) {
     setError(translate('noEmailForSuppression', 'Engagement hat keine Mailadresse.'));
     return;
   }
-  const raw = stateRef.ctx?.db?.raw?.outbound_suppression_entries;
-  if (!raw) {
+  const collection = activeCollection('outbound_suppression_entries');
+  if (!collection) {
     setError(translate('noSuppressionCollection', 'Unterdrückungsliste ist gerade nicht verfügbar.'));
     return;
   }
   const id = `supp_${crypto.randomUUID()}`;
-  await raw.insert({
+  await collection.insert({
     id,
     email: email.toLowerCase(),
     reason: 'unsubscribe',

@@ -10,10 +10,8 @@
 //   - mount(ctx) returns a cleanup function. The shell calls it on unmount
 //     and the cleanup detaches every collection.$ subscription we opened
 //     during the lifetime of the mount.
-//   - All read paths go through `resolveCollection(name)`, which prefers
-//     `ctx.db[name]` (real RxDB), then `ctx.db.collections[name]` (Proxy), then
-//     `ctx.db.collection(name)` (factory). All three shapes are valid depending
-//     on whether the shell is in browser-rxdb or shared/db mode.
+//   - All read paths go through `resolveCollection(name)`, using the Shell's
+//     explicit `ctx.db.collection(name)` facade contract.
 //   - Reactive sync: we subscribe to `collection.$` for every watched
 //     collection and coalesce emissions into one render via `scheduleRefresh`
 //     (matches `customers/index.js:1037 wireRealtime()`). This means we no
@@ -78,9 +76,7 @@ const STATE_LABELS = {
 
 function resolveCollection(name) {
   if (!STATE.ctx?.db) return null;
-  return STATE.ctx.db[name]
-    || STATE.ctx.db.collections?.[name]
-    || (typeof STATE.ctx.db.collection === 'function' ? STATE.ctx.db.collection(name) : null);
+  return STATE.ctx.db.collection?.(name) || null;
 }
 
 function wireRealtime() {
@@ -996,8 +992,23 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+function invoicesDebugSnapshot() {
+  return {
+    mounted: Boolean(STATE.ctx),
+    invoice_count: Array.isArray(STATE.invoices) ? STATE.invoices.length : 0,
+    selected_invoice_id: STATE.selectedInvoiceId || '',
+    filter: STATE.filter || 'all',
+    busy: Boolean(STATE.busy),
+    last_error: STATE.lastError || '',
+    watched_collections: [...WATCHED_COLLECTIONS],
+  };
+}
+
 if (typeof window !== 'undefined') {
-  window.__ctoxInvoicesModule = { mount, STATE };
+  window.__ctoxInvoicesModule = Object.freeze({
+    mount,
+    inspect: invoicesDebugSnapshot,
+  });
 }
 
 async function ensureMountedMarkup(ctx) {

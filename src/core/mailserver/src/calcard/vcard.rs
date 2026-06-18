@@ -46,7 +46,11 @@ impl VCard {
                     let val = parts[1].to_string();
 
                     // Strip parameters from key, e.g. "EMAIL;TYPE=internet" -> "EMAIL"
-                    let key = key_part.split(';').next().unwrap_or(key_part).to_uppercase();
+                    let key = key_part
+                        .split(';')
+                        .next()
+                        .unwrap_or(key_part)
+                        .to_uppercase();
 
                     match key.as_str() {
                         "UID" => uid = val.clone(),

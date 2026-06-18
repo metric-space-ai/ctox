@@ -68,7 +68,7 @@ const RUST_RULES = [
   // TcpListener is allowed only inside signaling_client.rs tests (the chaos
   // test runs a local WebSocket server).
   { name: 'rust-tcp-listener', pattern: new RegExp('TcpListener'), allow: { 'signaling_client.rs': 2 } },
-  // Runtime config flows through the SQLite runtime store (CLAUDE.md rule),
+  // Runtime config flows through the SQLite runtime store (AGENTS.md rule),
   // not process env. One legacy escape hatch exists (UDP bind addr).
   { name: 'rust-env-read', pattern: new RegExp('std::env::var'), allow: { 'connection_handler_rs.rs': 1 } },
 ];
@@ -97,16 +97,18 @@ for (const file of readdirSync(rustPluginDir).filter((name) => name.endsWith('.r
 }
 
 // ---------------------------------------------------------------------------
-// Cache-buster parity: all three bundle importers must carry an IDENTICAL
-// `?v=` string. The browser module cache keys on the full URL — a mismatch
-// loads a SECOND copy of the bundle with its own SHARED_ROOM_PEERS map, i.e.
-// a duplicate signaling socket + RTCPeerConnection per room (peer storm).
+// Cache-buster parity: every file that imports the bundle must carry an
+// IDENTICAL `?v=` string. The browser module cache keys on the full URL — a
+// mismatch loads a SECOND copy of the bundle with its own SHARED_ROOM_PEERS
+// map, i.e. a duplicate signaling socket + RTCPeerConnection per room (peer
+// storm). matching/ui/businessOsDataSource.js no longer imports the bundle (it
+// reads the shell-injected database via getDatabase()), so it is not a bundle
+// importer and is not checked here.
 // ---------------------------------------------------------------------------
 {
   const importers = [
     resolve(repoRoot, 'src/apps/business-os/shared/db.js'),
     resolve(repoRoot, 'src/apps/business-os/shared/sync.js'),
-    resolve(repoRoot, 'src/apps/business-os/modules/matching/ui/businessOsDataSource.js'),
   ];
   const busters = importers.map((path) => {
     const match = readFileSync(path, 'utf8').match(/ctox-rxdb-js\.mjs\?v=([^'"`]+)/);

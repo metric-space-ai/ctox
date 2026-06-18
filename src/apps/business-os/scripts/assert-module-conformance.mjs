@@ -42,11 +42,15 @@
 //
 // The HTTP-path and upstream-rxdb-import rules live in assert-rxdb-only.mjs;
 // this guard does not duplicate them.
+// The DB-isolation inventory/drift rules live in
+// assert-db-isolation-inventory.mjs and are invoked here so the standard module
+// conformance gate fails on new unscoped raw/property/proxy/cache DB access.
 //
 // ALLOWLIST POLICY: entries below freeze violations that existed when the
 // guard was introduced. Do not add new entries — remove them as modules are
 // migrated to the contract.
 
+import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -55,6 +59,7 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, '..');
 const repoRoot = resolve(appRoot, '../../..');
 const modulesRoot = join(appRoot, 'modules');
+const dbIsolationInventoryGuard = join(scriptDir, 'assert-db-isolation-inventory.mjs');
 
 // Registered by the shell before any module mounts (app.js
 // CRITICAL_SYNC_COLLECTIONS); modules may list them without re-declaring.
@@ -219,6 +224,8 @@ for (const [collection, declarations] of collectionDeclarations) {
   }
 }
 
+runDbIsolationInventoryGuard();
+
 if (offenders.length) {
   console.error(`Business OS module conformance failed:\n${offenders.map((line) => `- ${line}`).join('\n')}`);
   process.exit(1);
@@ -235,4 +242,14 @@ function stableStringify(value) {
   }
   if (typeof value === 'function') return JSON.stringify(String(value));
   return JSON.stringify(value) ?? 'undefined';
+}
+
+function runDbIsolationInventoryGuard() {
+  const result = spawnSync(process.execPath, [dbIsolationInventoryGuard], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+  if (result.status === 0) return;
+  const output = `${result.stderr || ''}${result.stdout || ''}`.trim();
+  offenders.push(`db-isolation-inventory — ${output || 'guard failed without output'}`);
 }

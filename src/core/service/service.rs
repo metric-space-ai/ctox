@@ -109,6 +109,8 @@ const CHANNEL_SYNC_POLL_SECS: u64 = 60;
 const MISSION_MAINTENANCE_POLL_SECS: u64 = 15;
 const HARNESS_AUDIT_TICK_SECS: u64 = 300;
 const BUSINESS_OS_APP_RECOVERY_POLL_SECS: u64 = 10;
+const IDLE_QUEUE_DISPATCH_POLL_SECS: u64 = 8;
+const WORKER_IDLE_QUEUE_KICK_DELAY_MS: u64 = 250;
 const BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS: u64 = 30;
 const BUSINESS_OS_APP_RECOVERY_STALE_SECS: u64 = 180;
 const BUSINESS_OS_APP_RECOVERY_SCAN_LIMIT: usize = 128;
@@ -1477,36 +1479,51 @@ fn is_non_work_tui_probe(prompt: &str) -> bool {
 
 fn start_work_hours_dispatcher(root: PathBuf, state: Arc<Mutex<SharedState>>) {
     thread::spawn(move || loop {
-        thread::sleep(Duration::from_secs(60));
-        if !crate::service::working_hours::accepts_work(&root) {
-            continue;
-        }
-        match maybe_next_idle_dispatch_prompt(&root, &state) {
-            Ok(Some(IdleDispatchPrompt::InMemory(queued))) => {
-                push_event(
-                    &state,
-                    "Working-hours window open; resuming queued work".to_string(),
-                );
-                start_prompt_worker(root.clone(), state.clone(), queued);
-            }
-            Ok(Some(IdleDispatchPrompt::Durable(queued))) => {
-                enqueue_prompt(
-                    &root,
-                    &state,
-                    queued,
-                    "Working-hours window open; leasing durable queue task".to_string(),
-                );
-            }
-            Ok(None) => {}
-            Err(err) => push_event(
+        let tick = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_work_hours_dispatch_tick(&root, &state)
+        }));
+        match tick {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => push_event(
                 &state,
                 format!(
                     "Working-hours dispatcher failed to lease durable queue task: {}",
                     clip_text(&err.to_string(), 180)
                 ),
             ),
+            Err(_) => push_event(
+                &state,
+                "Working-hours dispatcher panicked during idle queue dispatch; continuing"
+                    .to_string(),
+            ),
         }
+        thread::sleep(Duration::from_secs(IDLE_QUEUE_DISPATCH_POLL_SECS));
     });
+}
+
+fn run_work_hours_dispatch_tick(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<()> {
+    if !crate::service::working_hours::accepts_work(root) {
+        return Ok(());
+    }
+    match maybe_next_idle_dispatch_prompt(root, state)? {
+        Some(IdleDispatchPrompt::InMemory(queued)) => {
+            push_event(
+                state,
+                "Working-hours window open; resuming queued work".to_string(),
+            );
+            start_prompt_worker(root.to_path_buf(), state.clone(), queued);
+        }
+        Some(IdleDispatchPrompt::Durable(queued)) => {
+            enqueue_prompt(
+                root,
+                state,
+                queued,
+                "Working-hours window open; leasing durable queue task".to_string(),
+            );
+        }
+        None => {}
+    }
+    Ok(())
 }
 
 fn run_plan_routing_repair(root: &Path, state: &Arc<Mutex<SharedState>>, phase: &str) {
@@ -3608,6 +3625,17 @@ impl Drop for PromptWorkerActivity {
                 );
             }
         }
+
+        maybe_enqueue_next_durable_queue_after_worker_idle(
+            &self.root,
+            &self.state,
+            "Queued durable queue task after worker activity dropped",
+        );
+        spawn_delayed_worker_idle_queue_kick(
+            self.root.clone(),
+            self.state.clone(),
+            "Queued durable queue task after worker activity settled".to_string(),
+        );
     }
 }
 
@@ -3678,11 +3706,9 @@ fn spawn_delayed_business_os_app_validation_cleanup(
                     }
                 }
             }
-            if !completed.is_empty()
-                || !reworked.is_empty()
-                || !failed.is_empty()
-                || !errors.is_empty()
-            {
+            let terminal_recovery =
+                !completed.is_empty() || !reworked.is_empty() || !failed.is_empty();
+            if terminal_recovery || !errors.is_empty() {
                 let mut shared = lock_shared_state(&state);
                 if !completed.is_empty() {
                     push_event_locked(
@@ -3722,6 +3748,13 @@ fn spawn_delayed_business_os_app_validation_cleanup(
                         ),
                     );
                 }
+            }
+            if terminal_recovery && remaining.is_empty() {
+                maybe_dispatch_after_business_os_app_recovery(
+                    root.clone(),
+                    state.clone(),
+                    "delayed worker lease cleanup",
+                );
             }
             if remaining.is_empty() {
                 break;
@@ -6703,7 +6736,7 @@ fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
         return job.prompt.clone();
     };
     let prompt = format!(
-        "{}\n\nBusiness OS app module execution rules:\n- Your only deliverable is the runnable Business OS app/module under `{}`. Do not create plans, skill files, trace files, root aliases, or blocker/status notes as substitutes for the app.\n- The CTOX service owns queue and Business OS command lifecycle. Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, `ctox queue block`, or direct SQL against queue/command/runtime status tables. Do not act on queue IDs shown in context or open-work blocks; they are service context, not your completion target.\n- CTOX service preflight creates a validator-clean scaffold before this turn when the target directory is missing or empty. Start from the files already under `{}`; do not hand-author module.json, schema.js, collections.schema.json, mount wiring, persistence helpers, automation helpers, or tests from scratch.\n- If `{}` is empty because the preflight explicitly failed, stop and report the scaffold failure. Do not invent a different structure.\n- Preserve scaffold invariants: do not delete `core/automation.mjs`, `core/records.mjs`, `locales/de.json`, `locales/en.json`, or `tests/*.test.mjs`. If you customize domain collections, helpers, or automation, update the matching tests in the same turn.\n- Customize only files under `{}` for the requested domain and workflow. Keep the generated persistence, mount, stylesheet, schema, and automation contracts unless a validator failure demands a specific repair.\n- Exact mount rule: index.js must load `./index.html` with `fetch(new URL('./index.html', import.meta.url))`, assign the loaded HTML into `ctx.host.innerHTML`, and attach `./index.css` with `new URL('./index.css', import.meta.url)` before DOM queries or event wiring. Every `data-*` selector queried in index.js must exist in index.html or in generated markup.\n- CSS token rule: never define custom properties on `:root`, `html`, or `body`. Put module-local custom properties on the module root class from index.html, and never redefine shell token names such as `--surface`, `--text`, or `--line`.\n- Automation command rule: keep an exported command builder that returns `type: 'business_os.chat.task'`, `command_type: 'business_os.chat.task'`, and `payload.record_snapshot`. Use ctx.commandBus.dispatch for the visible automation action.\n- Use `MODULE_DIR=\"{}\"` and write every generated file as `$MODULE_DIR/<file>`. Do not write root-level app artifacts or `src/apps/business-os/installed-modules` for runtime-installed modules.\n- Use one/two panes plus modals or drawers by default. Remove `layout.right`, right panes, right-column CSS/resizers, and three-column grids unless the user explicitly requested a persistent third pane and the manifest carries a concrete workflow justification.\n- Every visible control must have a real handler that mutates a module-owned collection or dispatches a tested Business OS command payload. Remove decorative controls instead of leaving placeholders.\n- Tests are required app artifacts. Keep or replace `tests/*.test.mjs` in the same turn; do not leave the tests directory empty.\n- Tests must prove positive behavior only. Do not write negative source-text scans, forbidden-literal assertions, or tests that quote banned anti-pattern strings such as layout/right-pane keys; validators own those checks.\n- Before claiming success, run the module tests plus `ctox business-os app validate {} {}`. If validation reports any failure, repair the exact bullets and rerun; do not finish on a red validator.\n- Final response should only summarize app files and verification. Do not include queue IDs, command IDs, internal table names, or lifecycle claims.",
+        "{}\n\nBusiness OS app module execution rules:\n- Your only deliverable is the runnable Business OS app/module under `{}`. Do not create plans, skill files, trace files, root aliases, or blocker/status notes as substitutes for the app.\n- The CTOX service owns queue and Business OS command lifecycle. Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, `ctox queue block`, or direct SQL against queue/command/runtime status tables. Do not act on queue IDs shown in context or open-work blocks; they are service context, not your completion target.\n- CTOX service preflight creates a validator-clean scaffold before this turn when the target directory is missing or empty. Start from the files already under `{}`; do not hand-author module.json, schema.js, collections.schema.json, mount wiring, persistence helpers, automation helpers, or tests from scratch.\n- If `{}` is empty because the preflight explicitly failed, stop and report the scaffold failure. Do not invent a different structure.\n- Preserve scaffold invariants: do not delete `core/automation.mjs`, `core/records.mjs`, `locales/de.json`, `locales/en.json`, or `tests/*.test.mjs`. If you customize domain collections, helpers, or automation, update the matching tests in the same turn.\n- Inspect and edit with a narrow tool budget. Do not dump whole generated files, loop over all app artifacts with `cat`, or run broad repo/source scans. Use targeted `sed -n` ranges, exact `rg -n` selectors/imports, and validator output to repair concrete issues.\n- Do not use Python, base64 blobs, Node writer scripts, generated writer scripts, data URLs, or temporary file-copy wrappers to create or patch app files. If a direct edit becomes fragile, reduce scope, split the file into a smaller local ESM helper, or edit the smaller affected file.\n- Installed root artifact rule: the module root may contain only module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, core/, locales/, and tests/. Do not leave typo or scratch files such as m, modul.json, temporary manifests, status notes, or ad hoc folders in the module root.\n- Schema artifact rule: keep the canonical root `schema.js`; do not rename it, delete it, replace it with `schema.mjs`, or leave root-level `schema.mjs`/`schema.cjs` aliases. Put reusable ESM schema fragments under `core/*.mjs` and re-export them from `schema.js`.\n- Customize only files under `{}` for the requested domain and workflow. Keep the generated persistence, mount, stylesheet, schema, and automation contracts unless a validator failure demands a specific repair.\n- Exact mount rule: index.js must load `./index.html` with `fetch(new URL('./index.html', import.meta.url))`, assign the loaded HTML into `ctx.host.innerHTML`, and attach `./index.css` with `new URL('./index.css', import.meta.url)` before DOM queries or event wiring. Every `data-*` selector queried in index.js must exist in index.html or in generated markup.\n- CSS token rule: never define custom properties on `:root`, `html`, or `body`. Put module-local custom properties on the module root class from index.html, and never redefine shell token names such as `--surface`, `--text`, or `--line`.\n- Automation command rule: keep an exported command builder that returns `type: 'business_os.chat.task'`, `command_type: 'business_os.chat.task'`, and `payload.record_snapshot`. Use ctx.commandBus.dispatch for the visible automation action.\n- Use `MODULE_DIR=\"{}\"` and write every generated file as `$MODULE_DIR/<file>`. Do not write root-level app artifacts or `src/apps/business-os/installed-modules` for runtime-installed modules.\n- Use one/two panes plus modals or drawers by default. Remove `layout.right`, right panes, right-column CSS/resizers, and three-column grids unless the user explicitly requested a persistent third pane and the manifest carries a concrete workflow justification.\n- Every visible control must have a real handler that mutates a module-owned collection or dispatches a tested Business OS command payload. Remove decorative controls instead of leaving placeholders.\n- Tests are required app artifacts. Keep or replace `tests/*.test.mjs` in the same turn; do not leave the tests directory empty.\n- Tests must prove positive behavior only. Do not write negative source-text scans, forbidden-literal assertions, or tests that quote banned anti-pattern strings such as layout/right-pane keys; validators own those checks.\n- Before claiming success, run the module tests plus `ctox business-os app validate {} {}`. If validation reports any failure, repair the exact bullets and rerun. If validation is green, stop immediately and write the final response; do not run repository-wide conformance scripts, broad source RxDB scans, extra file dumps, cosmetic rewrites, or additional polishing passes.\n- Final response should only summarize app files and verification. Do not include queue IDs, command IDs, internal table names, or lifecycle claims.",
         job.prompt,
         target.artifact_directory,
         target.artifact_directory,
@@ -6713,10 +6746,19 @@ fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
         target.module_id,
         target.mode_flag,
     );
-    prompt.replace(
-        "- Tests must prove positive behavior only.",
-        "- ESM import/export rule: every named local import in index.js, core/*.mjs, and tests/*.mjs must be exported by the target file. Preserve scaffold helper exports such as COLLECTION_NAME, createRecord, normalizeStatus, summarizeRecords, and visibleRecords unless every importer is updated in the same turn.\n- Tests must prove positive behavior only.",
-    )
+    prompt
+        .replace(
+            "- Use one/two panes plus modals or drawers by default. Remove `layout.right`, right panes, right-column CSS/resizers, and three-column grids unless the user explicitly requested a persistent third pane and the manifest carries a concrete workflow justification.",
+            "- Use one/two panes plus in-module modals or drawers by default. Remove `layout.right`, `layout.drawers.right`, right-drawer manifest metadata, right panes, right-column CSS/resizers, and three-column grids unless the user explicitly requested a persistent third pane and the manifest carries a concrete workflow justification.",
+        )
+        .replace(
+            "- Tests must prove positive behavior only. Do not write negative source-text scans, forbidden-literal assertions, or tests that quote banned anti-pattern strings such as layout/right-pane keys; validators own those checks.",
+            "- Tests must prove positive behavior only. Do not write negative source-text scans, forbidden-literal assertions, or tests that quote or access banned anti-pattern strings such as layout/right-pane keys; validators own those checks. Do not write `manifest.layout?.right`, `manifest.layout.drawers?.right`, or similar absence tests; assert the positive expected layout key set instead.",
+        )
+        .replace(
+            "- Tests must prove positive behavior only.",
+            "- ESM import/export rule: every named local import in index.js, core/*.mjs, and tests/*.mjs must be exported by the target file. Preserve scaffold helper exports such as COLLECTION_NAME, createRecord, normalizeStatus, summarizeRecords, and visibleRecords unless every importer is updated in the same turn.\n- Tests must prove positive behavior only.",
+        )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -7287,7 +7329,7 @@ fn render_business_os_app_module_validation_feedback(
     report: &str,
 ) -> String {
     let feedback = format!(
-        "Business OS app artifact validation failed. Continue the same app-build task and repair the generated module before finishing.\n\nTask source: {}\n\nBusiness OS app build target:\n- module_id: {}\n- install_target: {}\n- only_allowed_app_artifact_directory: {}\n\nallowed artifact directory: {}\n\nValidator report:\n{}\n\nImmediate repair order:\n1. If required scaffold files are missing, run `ctox business-os app scaffold {} {} --repair-missing` from the workspace root. Use `--force` only to reset a failed new-app scaffold, never for an existing app modification.\n2. Create or repair every missing required file first: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, core/automation.mjs, core/records.mjs, locales/de.json, locales/en.json, and tests/*.test.mjs under {}.\n3. Do not delete scaffold invariants. Preserve core/automation.mjs, core/records.mjs, locales, and tests; if domain collections/helpers change, update the matching tests in the same turn.\n4. If the validator reports selector or mount drift, edit index.html and index.js together so mount(ctx) loads `./index.html` with `fetch(new URL('./index.html', import.meta.url))`, assigns it into `ctx.host.innerHTML`, attaches `./index.css` with `new URL('./index.css', import.meta.url)`, and every `data-*` selector queried by index.js exists in index.html or generated markup.\n5. If the validator reports CSS token drift or `:root`, move module custom properties from `:root`, `html`, or `body` onto the module root class used in index.html. Do not redefine shell token names.\n6. If the validator reports automation, keep a command builder that returns `type: 'business_os.chat.task'`, `command_type: 'business_os.chat.task'`, and `payload.record_snapshot`, then dispatch that command through ctx.commandBus.dispatch from a real visible action.\n7. If module tests fail, verify the failing fixture by hand: expected counts/totals must be internally consistent with the domain rules and helper logic. Fix app logic when the rule is violated; fix generated test expectations when they are mathematically impossible.\n8. Remove default third/right panes, right-column CSS/resizers, and three-column grids unless the workflow explicitly justifies a persistent third pane.\n9. If tests mention forbidden anti-pattern strings only to prove absence, delete those negative source-text tests and replace them with positive behavior/schema/helper assertions.\n10. Re-run the validator and keep repairing exact bullets until it is green.\n\nRepair rules:\n- Edit only files under {}.\n- Do not create root-level module.json, root-level collections.schema.json, src/skills output, package-manager files, node_modules, or HTTP/database fallbacks.\n- Do not run or rely on npm, npx, pnpm, yarn, bun, esbuild, Vite, Rollup, Webpack, bundlers, transpilers, package installs, package.json, or node_modules as syntax, import, test, or readiness proof. Business OS apps are no-build vanilla HTML/CSS/browser ESM.\n- Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or direct SQL against queue/command/runtime status rows. CTOX service owns lifecycle completion after green validation.\n- For installed modules, module.json.entry must be installed-modules/{}/index.html and module.json.install_scope must be installed.\n- schema.js and collections.schema.json must export only module-owned collections; shell collections such as business_commands stay dependencies in module.json.collections only.\n- Remove default third/right panes unless there is a concrete persistent workflow justification.\n- Tests must not quote forbidden anti-pattern strings for absence checks; validators own source-text bans.\n- Run the validator again before claiming completion:\n  ctox business-os app validate {} {}\n\nOriginal task remains active:\n{}",
+        "Business OS app artifact validation failed. Continue the same app-build task and repair the generated module before finishing.\n\nTask source: {}\n\nBusiness OS app build target:\n- module_id: {}\n- install_target: {}\n- only_allowed_app_artifact_directory: {}\n\nallowed artifact directory: {}\n\nValidator report:\n{}\n\nImmediate repair order:\n1. If required scaffold files are missing, run `ctox business-os app scaffold {} {} --repair-missing` from the workspace root. Use `--force` only to reset a failed new-app scaffold, never for an existing app modification.\n2. Create or repair every missing required file first: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, core/automation.mjs, core/records.mjs, locales/de.json, locales/en.json, and tests/*.test.mjs under {}.\n3. Do not delete scaffold invariants. Preserve core/automation.mjs, core/records.mjs, locales, and tests; if domain collections/helpers change, update the matching tests in the same turn.\n4. If the validator reports selector or mount drift, edit index.html and index.js together so mount(ctx) loads `./index.html` with `fetch(new URL('./index.html', import.meta.url))`, assigns it into `ctx.host.innerHTML`, attaches `./index.css` with `new URL('./index.css', import.meta.url)`, and every `data-*` selector queried by index.js exists in index.html or generated markup.\n5. If the validator reports CSS token drift or `:root`, move module custom properties from `:root`, `html`, or `body` onto the module root class used in index.html. Do not redefine shell token names.\n6. If the validator reports automation, keep a command builder that returns `type: 'business_os.chat.task'`, `command_type: 'business_os.chat.task'`, and `payload.record_snapshot`, then dispatch that command through ctx.commandBus.dispatch from a real visible action.\n7. If module tests fail, verify the failing fixture by hand: expected counts/totals must be internally consistent with the domain rules and helper logic. Fix app logic when the rule is violated; fix generated test expectations when they are mathematically impossible.\n8. Remove default third/right panes, right-column CSS/resizers, and three-column grids unless the workflow explicitly justifies a persistent third pane.\n9. If tests mention forbidden anti-pattern strings only to prove absence, delete those negative source-text tests and replace them with positive behavior/schema/helper assertions.\n10. Re-run the app-specific validator and keep repairing exact bullets until it is green. Once it is green, stop immediately and return the final response; do not run repository-wide conformance scripts, broad source RxDB scans, extra file dumps, cosmetic rewrites, or polishing passes.\n\nRepair rules:\n- Edit only files under {}.\n- Do not dump whole generated files, loop over all app artifacts with `cat`, or run broad source/repo scans. Use targeted `sed -n` ranges, exact `rg -n` selectors/imports, and the validator report for concrete repairs.\n- Do not use Python, base64 blobs, Node writer scripts, generated writer scripts, data URLs, or temporary file-copy wrappers to create or patch app files. If a direct edit becomes fragile, reduce scope, split the file into a smaller local ESM helper, or edit the smaller affected file.\n- Do not create root-level module.json, root-level collections.schema.json, src/skills output, package-manager files, node_modules, or HTTP/database fallbacks.\n- Do not run or rely on npm, npx, pnpm, yarn, bun, esbuild, Vite, Rollup, Webpack, bundlers, transpilers, package installs, package.json, or node_modules as syntax, import, test, or readiness proof. Business OS apps are no-build vanilla HTML/CSS/browser ESM.\n- Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or direct SQL against queue/command/runtime status rows. CTOX service owns lifecycle completion after green validation.\n- For installed modules, module.json.entry must be installed-modules/{}/index.html and module.json.install_scope must be installed.\n- schema.js and collections.schema.json must export only module-owned collections; shell collections such as business_commands stay dependencies in module.json.collections only.\n- Remove default third/right panes unless there is a concrete persistent workflow justification.\n- Tests must not quote forbidden anti-pattern strings for absence checks; validators own source-text bans.\n- Run the validator again before claiming completion:\n  ctox business-os app validate {} {}\n\nOriginal task remains active:\n{}",
         job.source_label,
         target.module_id,
         target.install_target,
@@ -7305,12 +7347,28 @@ fn render_business_os_app_module_validation_feedback(
     );
     feedback
         .replace(
+            "8. Remove default third/right panes, right-column CSS/resizers, and three-column grids unless the workflow explicitly justifies a persistent third pane.",
+            "8. Remove default third/right panes, layout.drawers.right/right-drawer manifest metadata, right-column CSS/resizers, and three-column grids unless the workflow explicitly justifies a persistent third pane.",
+        )
+        .replace(
+            "9. If tests mention forbidden anti-pattern strings only to prove absence, delete those negative source-text tests and replace them with positive behavior/schema/helper assertions.",
+            "9. If tests mention or access forbidden anti-pattern strings only to prove absence, including `manifest.layout?.right` or `manifest.layout.drawers?.right`, delete those negative layout/source-text tests and replace them with positive behavior/schema/helper/layout-key assertions.",
+        )
+        .replace(
+            "- Remove default third/right panes unless there is a concrete persistent workflow justification.",
+            "- Remove default third/right panes and right-drawer manifest metadata unless there is a concrete persistent workflow justification.",
+        )
+        .replace(
+            "- Tests must not quote forbidden anti-pattern strings for absence checks; validators own source-text bans.",
+            "- Tests must not quote or access forbidden anti-pattern strings for absence checks; validators own source-text bans. Use positive layout key assertions instead of `manifest.layout?.right` or `manifest.layout.drawers?.right`.",
+        )
+        .replace(
             "8. Remove default third/right panes",
             "8. If the validator or module tests report `does not provide an export named`, update every importer and helper export together. Preserve scaffold exports such as COLLECTION_NAME, createRecord, normalizeStatus, summarizeRecords, and visibleRecords unless index.js and tests no longer import them.\n9. Remove default third/right panes",
         )
         .replace(
-            "9. If tests mention forbidden anti-pattern strings",
-            "10. If tests mention forbidden anti-pattern strings",
+            "9. If tests mention or access forbidden anti-pattern strings",
+            "10. If tests mention or access forbidden anti-pattern strings",
         )
         .replace(
             "10. Re-run the validator",
@@ -11304,6 +11362,53 @@ fn maybe_lease_next_durable_queue_prompt_for_idle_dispatch(
     Ok(None)
 }
 
+fn maybe_lease_next_durable_queue_after_worker_idle(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+) -> Result<Option<QueuedPrompt>> {
+    if active_agent_loop_in_progress(state) {
+        return Ok(None);
+    }
+    maybe_lease_next_durable_queue_prompt_for_idle_dispatch(root, state)
+}
+
+fn maybe_enqueue_next_durable_queue_after_worker_idle(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+    event: &str,
+) {
+    match maybe_lease_next_durable_queue_after_worker_idle(root, state) {
+        Ok(Some(queued)) => enqueue_prompt(root, state, queued, event.to_string()),
+        Ok(None) => {}
+        Err(err) => push_event(
+            state,
+            format!(
+                "Failed to lease next durable queue task after worker activity dropped: {}",
+                clip_text(&err.to_string(), 180)
+            ),
+        ),
+    }
+}
+
+fn spawn_delayed_worker_idle_queue_kick(
+    root: PathBuf,
+    state: Arc<Mutex<SharedState>>,
+    event: String,
+) {
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(WORKER_IDLE_QUEUE_KICK_DELAY_MS));
+        let kicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            maybe_enqueue_next_durable_queue_after_worker_idle(&root, &state, &event);
+        }));
+        if kicked.is_err() {
+            push_event(
+                &state,
+                "Delayed worker-idle queue kick panicked; continuing".to_string(),
+            );
+        }
+    });
+}
+
 fn recover_stale_business_os_app_queue_tasks(
     root: &Path,
     state: &Arc<Mutex<SharedState>>,
@@ -11321,9 +11426,14 @@ fn recover_stale_business_os_app_queue_task_summary(
     let tasks = channels::list_queue_tasks(root, &["leased".to_string()], limit.max(1))?;
     let mut summary = BusinessOsAppQueueRecoverySummary::default();
     for task in tasks {
-        if active_or_pending_leased_message_key(state, &task.message_key)
-            || business_os_app_module_target_from_prompt(&task.prompt).is_none()
-        {
+        if active_or_pending_leased_message_key(state, &task.message_key) {
+            continue;
+        }
+        let Some(target) = business_os_app_module_target_from_prompt(&task.prompt) else {
+            continue;
+        };
+        if requeue_unstarted_business_os_app_queue_task(root, &task, &target)? {
+            summary.rework = summary.rework.saturating_add(1);
             continue;
         }
         match recover_business_os_app_queue_task_from_validation(
@@ -11345,6 +11455,36 @@ fn recover_stale_business_os_app_queue_task_summary(
         }
     }
     Ok(summary)
+}
+
+fn requeue_unstarted_business_os_app_queue_task(
+    root: &Path,
+    task: &channels::QueueTaskView,
+    target: &BusinessOsAppModuleTarget,
+) -> Result<bool> {
+    if task.route_status != "leased" {
+        return Ok(false);
+    }
+    let artifact_dir = root.join(&target.artifact_directory);
+    if business_os_app_artifact_dir_has_user_content(&artifact_dir)? {
+        return Ok(false);
+    }
+    let _updated = channels::update_queue_task(
+        root,
+        channels::QueueTaskUpdateRequest {
+            message_key: task.message_key.clone(),
+            route_status: Some("pending".to_string()),
+            status_note: Some(
+                "business-os:requeued-unstarted-app: app target missing or empty".to_string(),
+            ),
+            ..Default::default()
+        },
+    )?;
+    let _ = crate::business_os::store::refresh_business_command_queue_task_projection(
+        root,
+        &task.message_key,
+    );
+    Ok(true)
 }
 
 fn recover_business_os_app_queue_task_after_worker_finalization(
@@ -21086,6 +21226,9 @@ Business OS command:
         assert!(feedback.contains("ctox business-os app validate contracts --installed"));
         assert!(feedback.contains("Immediate repair order:"));
         assert!(feedback.contains("Create or repair every missing required file first"));
+        assert!(feedback.contains("Once it is green, stop immediately"));
+        assert!(feedback.contains("Do not dump whole generated files"));
+        assert!(feedback.contains("Do not use Python, base64 blobs, Node writer scripts"));
         assert!(feedback.contains("Do not call `ctox queue ack`"));
     }
 
@@ -21121,8 +21264,15 @@ Business OS command:
         assert!(prompt.contains("ctx.host.innerHTML"));
         assert!(prompt.contains("new URL('./index.css', import.meta.url)"));
         assert!(prompt.contains("CSS token rule: never define custom properties on `:root`"));
+        assert!(prompt.contains("Installed root artifact rule"));
+        assert!(prompt.contains("modul.json"));
+        assert!(prompt.contains("Schema artifact rule: keep the canonical root `schema.js`"));
         assert!(prompt.contains("Tests are required app artifacts"));
         assert!(prompt.contains("ESM import/export rule"));
+        assert!(prompt.contains("Inspect and edit with a narrow tool budget"));
+        assert!(prompt.contains("Do not dump whole generated files"));
+        assert!(prompt.contains("Do not use Python, base64 blobs, Node writer scripts"));
+        assert!(prompt.contains("If validation is green, stop immediately"));
         assert!(prompt.contains("ctox business-os app validate contracts --installed"));
     }
 
@@ -21607,6 +21757,20 @@ Business OS command:
             },
         )
         .expect("failed to create app queue task");
+        let next_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create contracts app".to_string(),
+                prompt: "Build the next small Business OS app.".to_string(),
+                thread_key: "business-os/apps/contracts".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create next app queue task");
         channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
             .expect("failed to lease app queue task");
         let job = QueuedPrompt {
@@ -21627,6 +21791,10 @@ Business OS command:
         {
             let mut shared = lock_shared_state(&state);
             track_leased_keys_locked(&mut shared, &job.leased_message_keys, &[]);
+            shared.last_error = Some(
+                "CTOX chat could not continue because the configured OpenAI API quota is exhausted or billing is unavailable for the selected model.".to_string(),
+            );
+            shared.last_progress_epoch_secs = current_epoch_secs().saturating_sub(15);
         }
         {
             let mut activity = PromptWorkerActivity::start(&root, &state, &job);
@@ -21645,7 +21813,34 @@ Business OS command:
         }
 
         assert_eq!(route_status_for(&root, &task.message_key), "handled");
+        for _ in 0..20 {
+            let next_leased = route_status_for(&root, &next_task.message_key) == "leased";
+            let queued_pending = {
+                let shared = lock_shared_state(&state);
+                shared.pending_prompts.iter().any(|prompt| {
+                    prompt
+                        .leased_message_keys
+                        .iter()
+                        .any(|message_key| message_key == &next_task.message_key)
+                })
+            };
+            if next_leased && queued_pending {
+                break;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(route_status_for(&root, &next_task.message_key), "leased");
         let shared = lock_shared_state(&state);
+        assert!(
+            shared.pending_prompts.iter().any(|prompt| {
+                prompt
+                    .leased_message_keys
+                    .iter()
+                    .any(|message_key| message_key == &next_task.message_key)
+            }),
+            "delayed cleanup should queue the next durable task under runtime backoff: {:?}",
+            shared.pending_prompts
+        );
         assert!(
             shared
                 .recent_events
@@ -21829,6 +22024,47 @@ Business OS command:
 
         assert_eq!(updated, 1);
         assert_eq!(route_status_for(&root, &task.message_key), "handled");
+    }
+
+    #[test]
+    fn stale_app_recovery_requeues_leased_missing_target_before_validation() {
+        let root = temp_root("stale-app-recovery-missing-target-requeue");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create quality app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: quality\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/quality".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        let updated = recover_stale_business_os_app_queue_tasks(&root, &state, 10)
+            .expect("stale app recovery failed");
+
+        assert_eq!(updated, 1);
+        let reloaded = channels::load_queue_task(&root, &task.message_key)
+            .expect("load queue task")
+            .expect("queue task exists");
+        assert_eq!(reloaded.route_status, "pending");
+        assert_eq!(
+            reloaded.status_note.as_deref(),
+            Some("business-os:requeued-unstarted-app: app target missing or empty")
+        );
+        assert!(
+            !root
+                .join("runtime/business-os/installed-modules/quality")
+                .exists(),
+            "requeue must not scaffold or complete the app"
+        );
     }
 
     #[test]
@@ -26000,6 +26236,56 @@ Use shell tools to create or update these files."
             !shared.busy,
             "leasing durable queue work should let enqueue_prompt/start_prompt_worker own busy state"
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn worker_idle_cleanup_leases_next_durable_queue_after_busy_clears() {
+        let root = temp_root("ctox-worker-idle-cleanup-kicks-next");
+        let queue_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Next Business OS app bench task".to_string(),
+                prompt: "Build the next small Business OS app.".to_string(),
+                thread_key: "business-os/apps/bench/next".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed durable queue task");
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.busy = true;
+            shared.worker_active_count = 1;
+        }
+        let skipped = maybe_lease_next_durable_queue_after_worker_idle(&root, &state)
+            .expect("busy worker cleanup probe should not fail");
+        assert!(
+            skipped.is_none(),
+            "worker cleanup must not lease while the active worker still owns the serial slot"
+        );
+        assert_eq!(route_status_for(&root, &queue_task.message_key), "pending");
+
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.busy = false;
+            shared.worker_active_count = 0;
+        }
+        let next = maybe_lease_next_durable_queue_after_worker_idle(&root, &state)
+            .expect("idle worker cleanup lease should not fail")
+            .expect("expected durable queue prompt after worker activity cleared");
+        assert_eq!(
+            next.leased_message_keys,
+            vec![queue_task.message_key.clone()]
+        );
+        assert_eq!(next.source_label, "queue");
+        assert_eq!(route_status_for(&root, &queue_task.message_key), "leased");
 
         let _ = std::fs::remove_dir_all(&root);
     }

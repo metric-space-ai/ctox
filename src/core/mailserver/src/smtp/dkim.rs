@@ -2,9 +2,9 @@
 // ref: ctox-mailserver custom lightweight DKIM signing using ring
 
 use crate::util::errors::{StalwartError, StalwartResult};
+use base64::prelude::*;
 use ring::signature::{self, KeyPair};
 use sha2::{Digest, Sha256};
-use base64::prelude::*;
 
 pub struct DkimSigner {
     selector: String,
@@ -42,22 +42,31 @@ impl DkimSigner {
         let header_to_sign = format!("from: {}\r\n{}", from, dkim_header_tmpl);
 
         // Sign using ring
-        let signature_b64 = if let Ok(key_pair) = signature::RsaKeyPair::from_pkcs8(&self.private_key_der) {
-            let key_pair: signature::RsaKeyPair = key_pair;
-            let mut sig_buf = vec![0u8; key_pair.public_key().modulus_len()];
-            let rng = ring::rand::SystemRandom::new();
-            if key_pair.sign(&signature::RSA_PKCS1_SHA256, &rng, header_to_sign.as_bytes(), &mut sig_buf).is_ok() {
-                BASE64_STANDARD.encode(&sig_buf)
+        let signature_b64 =
+            if let Ok(key_pair) = signature::RsaKeyPair::from_pkcs8(&self.private_key_der) {
+                let key_pair: signature::RsaKeyPair = key_pair;
+                let mut sig_buf = vec![0u8; key_pair.public_key().modulus_len()];
+                let rng = ring::rand::SystemRandom::new();
+                if key_pair
+                    .sign(
+                        &signature::RSA_PKCS1_SHA256,
+                        &rng,
+                        header_to_sign.as_bytes(),
+                        &mut sig_buf,
+                    )
+                    .is_ok()
+                {
+                    BASE64_STANDARD.encode(&sig_buf)
+                } else {
+                    "MOCK_SIGNATURE_FAIL".to_string()
+                }
             } else {
-                "MOCK_SIGNATURE_FAIL".to_string()
-            }
-        } else {
-            // Fallback for non-PKCS8 keys or stubs
-            let mut hasher = Sha256::new();
-            hasher.update(header_to_sign.as_bytes());
-            let fallback_sig = hasher.finalize();
-            BASE64_STANDARD.encode(fallback_sig)
-        };
+                // Fallback for non-PKCS8 keys or stubs
+                let mut hasher = Sha256::new();
+                hasher.update(header_to_sign.as_bytes());
+                let fallback_sig = hasher.finalize();
+                BASE64_STANDARD.encode(fallback_sig)
+            };
 
         let full_dkim_header = format!("{}{}", dkim_header_tmpl, signature_b64);
         Ok(format!("{}\r\n{}", full_dkim_header, body))

@@ -38,7 +38,10 @@ function t(key, de, ...args) {
   args.forEach((a, i) => { s = s.replace(`{${i}}`, a); });
   return s;
 }
-function col(name) { const db = state.ctx?.db; return db?.raw?.[name] || db?.collection?.(name) || null; }
+function col(name) {
+  const db = state.ctx?.db;
+  return db?.collection?.(name) || null;
+}
 
 export async function mount(ctx) {
   state.ctx = ctx;

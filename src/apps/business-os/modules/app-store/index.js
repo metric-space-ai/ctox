@@ -1,5 +1,22 @@
 import { CtoxResizer } from '../../shared/resizer.js';
 import { loadModuleMessages } from '../../shared/i18n.js';
+import {
+  appLifecycleBadge,
+  appReleaseProjection,
+  businessDataAreaLabel,
+  canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
+} from '../../shared/app-lifecycle.js';
+import {
+  BusinessOsPermissions,
+  canInstallBusinessApps,
+  canModifyBusinessModule,
+  canUninstallBusinessApp,
+  canUseBusinessPermission,
+} from '../../shared/permissions.js';
+import {
+  buildGlobalCtoxAgentScopeView,
+  renderGlobalCtoxAgentScopeHtml,
+} from '../../shared/shell-permissions-ui.js';
 
 const CTOX_REPO = 'metric-space-ai/ctox';
 const CTOX_BRANCH = 'main';
@@ -65,6 +82,8 @@ export async function mount(ctx) {
   // Setup resizer
   const containerEl = ctx.host.querySelector('[data-app-store-root]') || ctx.host;
   const resizerEl = ctx.host.querySelector('.app-store-col-resizer');
+  const leftWidthKey = ctx.storageScope?.key?.('ctox.app-store.leftWidth', { moduleId: 'app-store' })
+    || 'ctox.app-store.leftWidth';
   let resizerCleanup = null;
   if (resizerEl) {
     const resizer = new CtoxResizer({
@@ -74,11 +93,11 @@ export async function mount(ctx) {
       side: 'left',
       minWidth: 240,
       maxWidth: 500,
-      onResize: (width) => localStorage.setItem('ctox.app-store.leftWidth', width)
+      onResize: (width) => localStorage.setItem(leftWidthKey, width)
     });
     resizerCleanup = () => resizer.destroy();
   }
-  const leftWidth = localStorage.getItem('ctox.app-store.leftWidth') || '320';
+  const leftWidth = localStorage.getItem(leftWidthKey) || '320';
   containerEl.style.setProperty('--app-store-left-width', `${leftWidth}px`);
 
   return () => {
@@ -188,6 +207,7 @@ async function triggerCardAction(appId, actionType) {
   if (actionType === 'install') {
     await installMarketplaceItem(item);
   } else if (actionType === 'update') {
+    if (!canInstallAppStoreItem(state, item)) return;
     if (item.modification_status === 'modified'
       && !confirm(`${item.title} hat lokale Änderungen. Ein Update überschreibt sie. Vor dem Update wird automatisch eine Wiederherstellungs-Version angelegt – fortfahren?`)) {
       return;
@@ -204,8 +224,13 @@ async function triggerCardAction(appId, actionType) {
       openModule(item.id);
     }
   } else if (actionType === 'edit') {
+    if (!canEditAppStoreItem(state, item)) return;
     openCreatorFromStore({ mode: 'upgrade', upgrade: item.id });
+  } else if (actionType === 'release') {
+    if (!canReleaseAppStoreItem(state, item)) return;
+    await openReleaseDialog(item);
   } else if (actionType === 'uninstall') {
+    if (!canUninstallAppStoreItem(state, item)) return;
     await uninstallInstalledItem(item);
   } else if (actionType === 'repository') {
     if (item.homepage) {
@@ -359,31 +384,11 @@ function isLaunchableModule(item) {
 }
 
 function canSeeModuleForAppVersion(item) {
-  if (!isRuntimeInstalledModule(item)) return true;
-  if (hasPublicAppVersion(item)) return true;
-  return canModifyAppStoreAppForModule(state, item);
+  return canSeeAppStoreModuleForAppVersion(state, item);
 }
 
-function isRuntimeInstalledModule(item) {
-  const entry = String(item?.entry || '').trim();
-  return item?.source === 'installed'
-    || item?.install_scope === 'installed'
-    || entry.startsWith('installed-modules/');
-}
-
-function hasPublicAppVersion(item) {
-  const parsed = parseBusinessAppSemver(item?.version);
-  return Boolean(parsed && parsed.major >= 1);
-}
-
-function parseBusinessAppSemver(version) {
-  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(String(version || '').trim());
-  if (!match) return null;
-  return {
-    major: Number(match[1]),
-    minor: Number(match[2]),
-    patch: Number(match[3]),
-  };
+function canSeeAppStoreModuleForAppVersion(permissionState, item) {
+  return lifecycleCanSeeModuleForAppVersion(item, appStorePermissionOptions(permissionState));
 }
 
 function moduleKind(item) {
@@ -436,6 +441,8 @@ function normalizeItem(item, kind) {
   const moduleClass = installable ? 'fork' : 'maintained';
   const update = updateStateFor(item, remote, kind, moduleClass);
   const modification = modificationStateFor(item, release, kind, id);
+  const lifecycle = appLifecycleBadge(item, appStorePermissionOptions(state));
+  const releaseProjection = appReleaseProjection(item);
   return {
     id,
     kind,
@@ -468,6 +475,8 @@ function normalizeItem(item, kind) {
     update_reason: update.reason,
     modification_status: modification.status,
     modification_label: modification.label,
+    lifecycle,
+    release_projection: releaseProjection,
     version_state: versionStateFor(id),
     latest_release: release,
     raw: item,
@@ -664,7 +673,13 @@ function renderCard(item) {
     if (cardStatus === 'installed') {
       actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">${escapeHtml(state.t('actionOpen', 'Öffnen'))}</button>`;
     } else if (item.installable) {
-      actionsHtml += `<button type="button" class="card-btn primary" data-card-action="install" aria-label="${escapeHtml(item.title)} installieren">${escapeHtml(state.t('actionInstall', 'Installieren'))}</button>`;
+      actionsHtml += canInstallAppStoreItem(state, item)
+        ? `<button type="button" class="card-btn primary" data-card-action="install" aria-label="${escapeHtml(item.title)} installieren">${escapeHtml(state.t('actionInstall', 'Installieren'))}</button>`
+        : disabledActionButtonHtml(
+          state.t('actionInstall', 'Installieren'),
+          appStorePermissionDeniedReason('install'),
+          item.title,
+        );
     }
     if (item.homepage) {
       actionsHtml += `<button type="button" class="card-btn secondary external" data-card-action="repository" data-external-action="github" title="GitHub repository in new tab" aria-label="GitHub repository in new tab">GitHub ${externalLinkIcon()}</button>`;
@@ -676,12 +691,12 @@ function renderCard(item) {
     actionsHtml += versionsButtonHtml(item);
   } else if (item.kind === 'starter') {
     actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">${escapeHtml(state.t('actionOpen', 'Öffnen'))}</button>`;
-    actionsHtml += actionButtonsForManagedItem(item);
+    actionsHtml += actionButtonsForManagedItem(item, state);
   } else {
     // Local / Installed non-system apps
     actionsHtml += `
       <button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">${escapeHtml(state.t('actionOpen', 'Öffnen'))}</button>
-      ${actionButtonsForManagedItem(item)}
+      ${actionButtonsForManagedItem(item, state)}
     `;
   }
 
@@ -694,7 +709,10 @@ function renderCard(item) {
 
   card.innerHTML = `
     <div class="app-card-head">
-      <div class="app-card-icon">${iconMarkupForItem(item)}</div>
+      <div class="app-card-icon">
+        ${iconMarkupForItem(item)}
+        ${item.lifecycle?.runtimeInstalled ? `<span class="app-lifecycle-dot" data-state="${escapeHtml(item.lifecycle.state)}" title="${escapeAttr(item.lifecycle.title)}" aria-hidden="true"></span>` : ''}
+      </div>
       <div class="app-card-meta">
         <h3 class="app-card-title">${escapeHtml(item.title)}</h3>
         <span class="app-card-category">${escapeHtml(item.category)}</span>
@@ -704,6 +722,8 @@ function renderCard(item) {
     <div class="app-card-version-row">
       <span>${escapeHtml(item.installed_version)}</span>
       <span>${escapeHtml(item.available_version)}</span>
+      ${item.lifecycle?.runtimeInstalled ? `<span class="app-lifecycle-badge" data-state="${escapeHtml(item.lifecycle.state)}" title="${escapeAttr(item.lifecycle.title)}">${escapeHtml(item.lifecycle.version)} · ${escapeHtml(item.lifecycle.text)}</span>` : ''}
+      ${releaseProjectionBadgeHtml(item)}
       <span class="app-mod-state ${escapeHtml(item.modification_status)}">${escapeHtml(item.modification_label)}</span>
     </div>
     ${actionsHtml}
@@ -714,6 +734,20 @@ function renderCard(item) {
     </footer>
   `;
   return card;
+}
+
+function releaseProjectionBadgeHtml(item) {
+  const projection = item?.release_projection;
+  if (!projection?.hasReleaseState || (!projection.currentVersion && projection.status === 'unreleased')) return '';
+  const text = projection.currentVersion
+    ? `Freigabe ${projection.currentVersion}`
+    : (projection.statusLabel || 'Freigabe');
+  const title = [
+    projection.releaseLine,
+    projection.rollbackLine,
+    projection.dataAccess?.summary,
+  ].filter(Boolean).join(' · ');
+  return `<span class="app-release-state" data-release-status="${escapeHtml(projection.status || 'unknown')}" title="${escapeAttr(title)}">${escapeHtml(text)}</span>`;
 }
 
 function operationForItem(itemOrId) {
@@ -755,7 +789,7 @@ function renderDetails() {
   }
   if (els.detailIcon) els.detailIcon.innerHTML = iconMarkupForItem(item);
   if (els.detailTitle) els.detailTitle.textContent = item.title;
-  if (els.detailVersion) els.detailVersion.textContent = item.version;
+  if (els.detailVersion) els.detailVersion.textContent = item.lifecycle?.version || item.version;
   if (els.detailCategory) els.detailCategory.textContent = item.category;
   if (els.detailDeveloper) els.detailDeveloper.textContent = item.developer;
   if (els.detailLicense) els.detailLicense.textContent = item.license;
@@ -785,10 +819,13 @@ function renderEmptyDetails() {
 
 function renderDocumentation(item) {
   const wrap = document.createElement('div');
+  const releaseFacts = releaseFactLinesForItem(item);
   const lines = [
     item.description || 'No documentation available yet.',
     item.installed_version ? item.installed_version : '',
     item.available_version ? item.available_version : '',
+    item.lifecycle?.label ? `Sichtbarkeit: ${item.lifecycle.label} - ${item.lifecycle.reason}` : '',
+    ...releaseFacts,
     item.update_reason ? `Update: ${item.update_reason}` : '',
     item.modification_label ? `Modifikation: ${item.modification_label}` : '',
     item.latest_release ? `Letztes Release: v${item.latest_release.version} (${item.latest_release.status})` : '',
@@ -796,7 +833,9 @@ function renderDocumentation(item) {
     item.source_path ? `Source path: ${item.source_path}` : '',
     item.local_manifest_path ? `Local manifest: ${item.local_manifest_path}` : '',
     item.download_url ? `Installer archive: ${item.download_url}` : '',
-    item.permissions?.length ? `Collections: ${item.permissions.join(', ')}` : '',
+    item.permissions?.length && !item.release_projection?.dataAccess?.hasReview
+      ? `Deklarierte Datenbereiche: ${item.permissions.map(businessDataAreaLabel).join(', ')}`
+      : '',
   ].filter(Boolean);
   for (const line of lines) {
     const p = document.createElement('p');
@@ -806,7 +845,29 @@ function renderDocumentation(item) {
   return wrap;
 }
 
+function releaseFactLinesForItem(item) {
+  const projection = item?.release_projection || appReleaseProjection(item?.raw || item);
+  if (!projection) return [];
+  const lines = [];
+  if (projection.hasReleaseState) {
+    lines.push(`Freigabe: ${projection.releaseLine}`);
+    if (projection.rollbackLine) lines.push(`Rollback: ${projection.rollbackLine}`);
+  }
+  if (projection.dataAccess?.summary) {
+    lines.push(`Datenzugriff: ${projection.dataAccess.summary}`);
+  }
+  if (projection.dataAccess?.reviewNote) {
+    lines.push(`Review: ${projection.dataAccess.reviewNote}`);
+  }
+  return lines;
+}
+
 async function installMarketplaceItem(item, { update = false } = {}) {
+  if (!canInstallAppStoreItem(state, item)) {
+    state.status = { kind: 'error', text: 'Du darfst diese App nicht installieren oder aktualisieren.' };
+    render();
+    return;
+  }
   await runStoreCommand({
     label: update ? `Updating ${item.title}...` : `Installing ${item.title}...`,
     success: update ? `${item.title} updated.` : `${item.title} installed.`,
@@ -835,6 +896,11 @@ async function installTemplateItem(item) {
 }
 
 async function uninstallInstalledItem(item) {
+  if (!canUninstallAppStoreItem(state, item)) {
+    state.status = { kind: 'error', text: 'Du darfst diese App nicht entfernen.' };
+    render();
+    return;
+  }
   if (!confirm(`Uninstall ${item.title}? Local source files will be removed from installed-modules.`)) return;
   await runStoreCommand({
     label: `Uninstalling ${item.title}...`,
@@ -924,6 +990,134 @@ async function rollbackToVersion(item, versionId) {
       version_id: versionId,
     },
   });
+}
+
+async function openReleaseDialog(item) {
+  const model = releaseWizardModel(item, state);
+  const overlay = document.createElement('div');
+  overlay.className = 'app-store-version-overlay';
+  const dataRows = model.dataAreas.length
+    ? model.dataAreas.map((area) => `
+      <li class="app-release-data-row">
+        <div>
+          <strong>${escapeHtml(area.label)}</strong>
+          <span>${escapeHtml(area.collection)}</span>
+        </div>
+        <label>
+          <input type="checkbox" name="read_collections" value="${escapeAttr(area.collection)}">
+          Lesen freigegeben
+        </label>
+        <label>
+          <input type="checkbox" name="write_collections" value="${escapeAttr(area.collection)}">
+          Schreiben freigegeben
+        </label>
+      </li>`).join('')
+    : '<li class="app-release-data-row is-empty">Keine Datenbereiche im Manifest deklariert.</li>';
+  const sourceOptions = releaseVersionOptionsHtml(model.versions, model.sourceVersionId, 'Aktuelle Quelle');
+  const rollbackOptions = releaseVersionOptionsHtml(model.versions, model.rollbackVersionId, 'Kein Rollback-Ziel');
+  overlay.innerHTML = `
+    <form class="app-store-version-dialog app-release-dialog" role="dialog" aria-modal="true" aria-label="Freigabe von ${escapeAttr(item.title)}">
+      <header class="app-version-head">
+        <h3>Freigabe vorbereiten - ${escapeHtml(item.title)}</h3>
+        <button type="button" class="card-btn link" data-release-close aria-label="Schließen">Schließen</button>
+      </header>
+      <div class="app-release-form">
+        <label>
+          <span>Zielversion</span>
+          <input name="target_version" value="${escapeAttr(model.targetVersion)}" required pattern="\\d+\\.\\d+\\.\\d+">
+        </label>
+        <label>
+          <span>Sichtbarkeit nach Freigabe</span>
+          <select name="release_channel">
+            <option value="team" ${model.releaseChannel === 'team' ? 'selected' : ''}>Team</option>
+            <option value="restricted" ${model.releaseChannel === 'restricted' ? 'selected' : ''}>Eingeschränkt</option>
+          </select>
+        </label>
+        <label>
+          <span>Quell-Snapshot</span>
+          <select name="source_version_id">${sourceOptions}</select>
+        </label>
+        <label>
+          <span>Rollback-Ziel</span>
+          <select name="rollback_version_id">${rollbackOptions}</select>
+        </label>
+        <label>
+          <span>App-Verantwortliche</span>
+          <input name="responsible_user_ids" value="${escapeAttr(model.responsibleUserIds.join(', '))}" placeholder="user-id, user-id">
+        </label>
+        <label>
+          <span>Release-Notiz</span>
+          <textarea name="notes" rows="3" placeholder="Was wird für das Team freigegeben?">${escapeHtml(model.notes)}</textarea>
+        </label>
+        <section class="app-release-data-review" aria-label="Datenzugriff Review">
+          <h4>Datenzugriff Review</h4>
+          <p>Datenrechte werden hier nur geprüft und dokumentiert. Fehlende Team-Rechte bleiben als gesperrte Datenbereiche sichtbar.</p>
+          <ul>${dataRows}</ul>
+        </section>
+      </div>
+      <footer class="app-release-actions">
+        <button type="button" class="card-btn secondary" data-release-close>Abbrechen</button>
+        <button type="submit" class="card-btn primary">Freigabe senden</button>
+      </footer>
+    </form>`;
+
+  const close = () => {
+    overlay.remove();
+    window.removeEventListener('keydown', onEscape);
+  };
+  const onEscape = (event) => { if (event.key === 'Escape') close(); };
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay || event.target.closest('[data-release-close]')) close();
+  });
+  overlay.querySelector('form')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const payload = releasePayloadFromForm(item, event.currentTarget);
+    close();
+    await releaseModule(item, payload);
+  });
+  window.addEventListener('keydown', onEscape);
+  document.body.append(overlay);
+}
+
+function releaseVersionOptionsHtml(versions, selectedId, emptyLabel) {
+  const options = [`<option value="">${escapeHtml(emptyLabel)}</option>`];
+  for (const version of versions) {
+    const id = String(version?.version_id || '');
+    if (!id) continue;
+    const label = [
+      version.label || originLabel(version.origin),
+      version.seq ? `#${version.seq}` : '',
+      version.created_at_ms ? new Date(version.created_at_ms).toLocaleString() : '',
+    ].filter(Boolean).join(' · ');
+    options.push(`<option value="${escapeAttr(id)}" ${id === selectedId ? 'selected' : ''}>${escapeHtml(label || id)}</option>`);
+  }
+  return options.join('');
+}
+
+async function releaseModule(item, payload) {
+  await runStoreCommand({
+    label: `${item.title} wird freigegeben...`,
+    success: `${item.title} wurde zur Team-Version freigegeben.`,
+    commandType: 'ctox.module.release',
+    moduleId: item.id,
+    payload,
+  });
+}
+
+function releasePayloadFromForm(item, form) {
+  const data = new FormData(form);
+  const readCollections = data.getAll('read_collections').map(String);
+  const writeCollections = data.getAll('write_collections').map(String);
+  return releasePayloadForWizard(item, {
+    targetVersion: data.get('target_version'),
+    releaseChannel: data.get('release_channel'),
+    sourceVersionId: data.get('source_version_id'),
+    rollbackVersionId: data.get('rollback_version_id'),
+    responsibleUserIds: data.get('responsible_user_ids'),
+    notes: data.get('notes'),
+    readCollections,
+    writeCollections,
+  }, state);
 }
 
 async function runStoreCommand({ label, success, commandType, moduleId, payload }) {
@@ -1189,19 +1383,149 @@ function modificationStateFor(item, release, kind, resolvedId) {
   return { status: 'modified', label: 'Modifiziert' };
 }
 
-function actionButtonsForManagedItem(item) {
+function actionButtonsForManagedItem(item, permissionState = state) {
   let html = '';
   if (item.update_available && item.download_url) {
-    html += `<button type="button" class="card-btn warn" data-card-action="update" aria-label="${escapeHtml(item.title)} aktualisieren">${escapeHtml(state.t('actionUpdate', 'Aktualisieren'))}</button>`;
+    html += canInstallAppStoreItem(permissionState, item)
+      ? `<button type="button" class="card-btn warn" data-card-action="update" aria-label="${escapeHtml(item.title)} aktualisieren">${escapeHtml(state.t('actionUpdate', 'Aktualisieren'))}</button>`
+      : disabledActionButtonHtml(
+        state.t('actionUpdate', 'Aktualisieren'),
+        appStorePermissionDeniedReason('update'),
+        item.title,
+      );
   }
-  if (item.editable) {
+  if (item.editable && canEditAppStoreItem(permissionState, item)) {
     html += `<button type="button" class="card-btn secondary" data-card-action="edit" aria-label="${escapeHtml(item.title)} bearbeiten">${escapeHtml(state.t('actionEdit', 'Bearbeiten'))}</button>`;
+  }
+  if (isReleaseCandidateItem(item)) {
+    html += canReleaseAppStoreItem(permissionState, item)
+      ? `<button type="button" class="card-btn secondary" data-card-action="release" aria-label="${escapeHtml(item.title)} freigeben">${escapeHtml(state.t('actionRelease', 'Freigeben'))}</button>`
+      : disabledActionButtonHtml(
+        state.t('actionRelease', 'Freigeben'),
+        appStorePermissionDeniedReason('release'),
+        item.title,
+      );
   }
   html += versionsButtonHtml(item);
   if (item.deletable) {
-    html += `<button type="button" class="card-btn danger" data-card-action="uninstall" aria-label="${escapeHtml(item.title)} deinstallieren">${escapeHtml(state.t('actionUninstall', 'Deinstallieren'))}</button>`;
+    html += canUninstallAppStoreItem(permissionState, item)
+      ? `<button type="button" class="card-btn danger" data-card-action="uninstall" aria-label="${escapeHtml(item.title)} deinstallieren">${escapeHtml(state.t('actionUninstall', 'Deinstallieren'))}</button>`
+      : disabledActionButtonHtml(
+        state.t('actionUninstall', 'Deinstallieren'),
+        appStorePermissionDeniedReason('uninstall'),
+        item.title,
+      );
   }
   return html;
+}
+
+function disabledActionButtonHtml(label, reason, itemTitle = '') {
+  const aria = `${itemTitle ? `${itemTitle}: ` : ''}${label} nicht verfügbar. ${reason}`;
+  return `<button type="button" class="card-btn denied" disabled aria-disabled="true" title="${escapeAttr(reason)}" aria-label="${escapeAttr(aria)}" data-disabled-reason="${escapeAttr(reason)}">${escapeHtml(label)}</button>`;
+}
+
+function appStorePermissionDeniedReason(action) {
+  if (action === 'install' || action === 'update') {
+    return 'Nur Owner, Admins oder Personen mit App-Installationsrecht können Apps installieren oder aktualisieren.';
+  }
+  if (action === 'uninstall') {
+    return 'Nur Owner, Admins oder Personen mit Entfernungsrecht können diese App entfernen.';
+  }
+  if (action === 'release') {
+    return 'Nur Owner, Admins oder Personen mit Freigaberecht können eine Team-Version veröffentlichen.';
+  }
+  return 'Diese Aktion ist für deine Business-OS Rolle nicht freigegeben.';
+}
+
+function isReleaseCandidateItem(item) {
+  return Boolean(
+    item?.id
+    && (
+      item.lifecycle?.runtimeInstalled
+      || item.install_scope === 'installed'
+      || item.raw?.install_scope === 'installed'
+      || item.raw?.source === 'installed'
+    )
+  );
+}
+
+function releaseWizardModel(item, permissionState = state) {
+  const versions = Array.isArray(item?.version_state?.versions) ? item.version_state.versions : [];
+  const releaseProjection = item?.release_projection || appReleaseProjection(item?.raw || item);
+  const actor = actorContext(permissionState?.ctx?.session);
+  const collections = releaseDataAreaCollections(item);
+  return {
+    moduleId: item?.id || item?.module_id || '',
+    title: item?.title || item?.id || '',
+    canRelease: canReleaseAppStoreItem(permissionState, item),
+    targetVersion: releaseTargetVersion(item),
+    releaseChannel: releaseProjection?.status === 'restricted' ? 'restricted' : 'team',
+    sourceVersionId: String(versions[0]?.version_id || ''),
+    rollbackVersionId: String(releaseProjection?.rollbackVersionId || versions[1]?.version_id || ''),
+    responsibleUserIds: actor.id ? [actor.id] : [],
+    notes: '',
+    versions,
+    dataAreas: collections.map((collection) => ({
+      collection,
+      label: businessDataAreaLabel(collection),
+    })),
+    lockedStateBehavior: 'App renders a locked data state until explicit Team data grants exist.',
+  };
+}
+
+function releasePayloadForWizard(item, values = {}, permissionState = state) {
+  const model = releaseWizardModel(item, permissionState);
+  const collections = model.dataAreas.map((area) => area.collection);
+  const readCollections = normalizedSelectedCollections(values.readCollections, collections);
+  const writeCollections = normalizedSelectedCollections(values.writeCollections, collections);
+  const responsibleUserIds = Array.isArray(values.responsibleUserIds)
+    ? values.responsibleUserIds
+    : String(values.responsibleUserIds || '').split(',');
+  return {
+    module_id: model.moduleId,
+    target_version: String(values.targetVersion || model.targetVersion).trim(),
+    release_channel: String(values.releaseChannel || model.releaseChannel || 'team').trim(),
+    source_version_id: String(values.sourceVersionId || model.sourceVersionId || '').trim(),
+    rollback_version_id: String(values.rollbackVersionId || model.rollbackVersionId || '').trim(),
+    responsible_user_ids: responsibleUserIds.map((id) => String(id || '').trim()).filter(Boolean),
+    notes: String(values.notes || model.notes || '').trim(),
+    data_access_review: {
+      completed: true,
+      status: 'completed',
+      reviewed_by: actorContext(permissionState?.ctx?.session).id,
+      collections,
+      read_collections: readCollections,
+      write_collections: writeCollections,
+      locked_read_collections: collections.filter((collection) => !readCollections.includes(collection)),
+      locked_write_collections: collections.filter((collection) => !writeCollections.includes(collection)),
+      locked_state_behavior: model.lockedStateBehavior,
+      review_is_evidence_only: true,
+      grants_implied: false,
+      notes: 'App Store Freigabe-Review',
+    },
+  };
+}
+
+function releaseTargetVersion(item) {
+  const rawVersion = String(item?.lifecycle?.version || item?.version || item?.raw?.version || '').replace(/^v/i, '').trim();
+  if (/^\d+\.\d+\.\d+$/.test(rawVersion)) {
+    const major = Number(rawVersion.split('.')[0]);
+    return major >= 1 ? rawVersion : '1.0.0';
+  }
+  return '1.0.0';
+}
+
+function releaseDataAreaCollections(item) {
+  const declared = [
+    ...(Array.isArray(item?.permissions) ? item.permissions : []),
+    ...(Array.isArray(item?.raw?.collections) ? item.raw.collections : []),
+  ];
+  return [...new Set(declared.map((collection) => String(collection || '').trim()).filter(Boolean))];
+}
+
+function normalizedSelectedCollections(selected, allowed) {
+  const allowedSet = new Set(allowed);
+  return [...new Set((selected || []).map((collection) => String(collection || '').trim()).filter((collection) => allowedSet.has(collection)))];
 }
 
 function versionsButtonHtml(item) {
@@ -1413,9 +1737,25 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;');
 }
 
+function escapeAttr(value) {
+  return escapeHtml(value);
+}
+
 export const __appStoreTestHooks = {
   actionButtonsForManagedItem,
+  appStoreContextChatDetail,
+  appStorePermissionDeniedReason,
+  buildAppStoreAgentScopeView,
+  canEditAppStoreItem,
+  canInstallAppStoreItem,
+  canModifyAppStoreAppForModule,
+  canReleaseAppStoreItem,
+  canSeeAppStoreModuleForAppVersion,
+  canSeeModuleForAppVersion,
+  canUninstallAppStoreItem,
   appCountLabel,
+  appLifecycleBadge,
+  appReleaseProjection,
   chooseCanonicalCatalogItem,
   compareVersions,
   creatorHashFromStore,
@@ -1429,6 +1769,10 @@ export const __appStoreTestHooks = {
   originLabel,
   operationMessageHtml,
   progressButtonHtml,
+  releasePayloadForWizard,
+  releaseFactLinesForItem,
+  releaseProjectionBadgeHtml,
+  releaseWizardModel,
   sanitizeId,
   statusForCard,
   statusLabel,
@@ -1438,6 +1782,9 @@ export const __appStoreTestHooks = {
 
 function initAppStoreContextMenu(state) {
   state.contextMenu?.remove();
+  const host = state.ctx.host;
+  const previousLocalContextMenu = host?.getAttribute('data-ctox-local-context-menu') ?? null;
+  host?.setAttribute('data-ctox-local-context-menu', 'app-store');
   const menu = document.createElement('div');
   menu.className = 'ctox-context-menu app-store-context-menu';
   menu.hidden = true;
@@ -1459,12 +1806,17 @@ function initAppStoreContextMenu(state) {
     if (event.key === 'Escape') hideAppStoreContextMenu(state);
   };
 
-  state.ctx.host.addEventListener('contextmenu', handleContextMenu);
+  host?.addEventListener('contextmenu', handleContextMenu);
   window.addEventListener('click', handleOutsideClick, { capture: true });
   window.addEventListener('keydown', handleEscape);
 
   return () => {
-    state.ctx.host.removeEventListener('contextmenu', handleContextMenu);
+    host?.removeEventListener('contextmenu', handleContextMenu);
+    if (previousLocalContextMenu === null) {
+      host?.removeAttribute('data-ctox-local-context-menu');
+    } else {
+      host?.setAttribute('data-ctox-local-context-menu', previousLocalContextMenu);
+    }
     window.removeEventListener('click', handleOutsideClick, { capture: true });
     window.removeEventListener('keydown', handleEscape);
     hideAppStoreContextMenu(state);
@@ -1477,29 +1829,95 @@ function hideAppStoreContextMenu(state) {
   if (state.contextMenu) state.contextMenu.hidden = true;
 }
 
-function canModifyAppStoreApp(state) {
-  if (typeof state.ctx.canModifyModule === 'function' && state.ctx.canModifyModule()) return true;
-  const user = state.ctx.session?.user || {};
-  const role = normalizeBusinessOsRole(user.role || (user.is_admin ? 'admin' : 'user'));
-  return ['admin', 'chef'].includes(role);
-}
-
 function canModifyAppStoreAppForModule(state, item) {
-  const user = state.ctx?.session?.user || {};
-  const role = normalizeBusinessOsRole(user.role || (user.is_admin ? 'admin' : 'user'));
-  if (['admin', 'chef'].includes(role)) return true;
-  if (role !== 'founder') return false;
-  const userId = String(user.id || '').trim();
-  if (!userId || !item?.id) return false;
-  const assignments = state.catalog?.governance?.founders?.[item.id] || [];
-  return assignments.some((assignment) => assignment?.user_id === userId && assignment.active !== false);
+  return canModifyBusinessModule(item, appStorePermissionOptions(state));
 }
 
-function normalizeBusinessOsRole(role) {
-  const value = String(role || '').trim().toLowerCase().replace(/^business_os_/, '');
-  if (value === 'owner') return 'chef';
-  if (['chef', 'admin', 'founder', 'user'].includes(value)) return value;
-  return 'user';
+function canInstallAppStoreItem(state, item) {
+  const moduleId = String(item?.id || item?.module_id || '').trim();
+  if (!moduleId) return false;
+  return canInstallBusinessApps({
+    ...appStorePermissionOptions(state),
+    scopeType: 'module',
+    scopeId: moduleId,
+  });
+}
+
+function canEditAppStoreItem(state, item) {
+  return canModifyAppStoreAppForModule(state, item);
+}
+
+function canUninstallAppStoreItem(state, item) {
+  return canUninstallBusinessApp(item, appStorePermissionOptions(state));
+}
+
+function canReleaseAppStoreItem(state, item) {
+  const moduleId = String(item?.id || item?.module_id || '').trim();
+  if (!moduleId || !isReleaseCandidateItem(item)) return false;
+  return canUseBusinessPermission({
+    ...appStorePermissionOptions(state),
+    permission: BusinessOsPermissions.AppsRelease,
+    scopeType: 'module',
+    scopeId: moduleId,
+  });
+}
+
+function appStorePermissionOptions(state) {
+  return {
+    session: state?.ctx?.session || null,
+    governance: state?.catalog?.governance || state?.ctx?.governance || null,
+  };
+}
+
+function canModifyAppStoreContext(state, context) {
+  const moduleId = String(context?.app_id || context?.record_id || 'app-store').trim();
+  return canModifyAppStoreAppForModule(state, { id: moduleId || 'app-store' });
+}
+
+function buildAppStoreAgentScopeView(state, context = {}, mode = 'data') {
+  const moduleId = sanitizeId(context.app_id || context.record_id || 'app-store') || 'app-store';
+  const canModify = mode === 'app' && canModifyAppStoreContext(state, context);
+  const dataAccess = context.data_access && typeof context.data_access === 'object'
+    ? context.data_access
+    : {};
+  return buildGlobalCtoxAgentScopeView({
+    actor: actorContext(state?.ctx?.session),
+    module: {
+      id: moduleId,
+      module_id: moduleId,
+      title: context.app_title || context.label || moduleId,
+      name: context.app_title || context.label || moduleId,
+      version: context.app_version || '',
+    },
+    lifecycle: {
+      versionLabel: context.app_version || '',
+      version: context.app_version || '',
+      state: context.app_visibility || context.app_status || (context.app_id ? 'unknown' : 'store'),
+      label: context.app_visibility_label || context.app_status || (context.app_id ? '' : 'App Store'),
+      public: context.app_visibility === 'team',
+      runtimeInstalled: context.app_status === 'installed' || context.app_status === 'local',
+      canManage: canModify,
+    },
+    dataAccess: {
+      ...dataAccess,
+      summary: dataAccess.summary
+        || context.data_access_summary
+        || (context.app_id ? 'Keine Datenbereiche deklariert' : 'App Store Suche und Katalogdaten'),
+      declared: dataAccess.declared || dataAccess.declared_collections || dataAccess.declaredCollectionIds || [],
+      granted: dataAccess.granted || dataAccess.granted_collections || dataAccess.grantedCollectionIds || [],
+      locked: dataAccess.locked || dataAccess.locked_collections || dataAccess.lockedCollectionIds || [],
+      grantsImplied: dataAccess.grantsImplied === true || dataAccess.grants_implied === true,
+    },
+    context: {
+      ...context,
+      module: moduleId,
+      record_id: context.record_id || moduleId,
+      record_type: context.record_type || (context.app_id ? 'app' : 'store'),
+      label: context.label || context.app_title || moduleId,
+    },
+    canModify,
+    externalActions: 'none',
+  });
 }
 
 function appStoreCommandContextFromElement(state, target) {
@@ -1508,6 +1926,7 @@ function appStoreCommandContextFromElement(state, target) {
   const card = element?.closest('[data-app-id]');
   const appId = card?.dataset?.appId || '';
   const item = appId ? catalogItems().find((candidate) => candidate.id === appId) : null;
+  const projection = item?.release_projection || appReleaseProjection(item?.raw || item);
 
   return {
     module: 'app-store',
@@ -1521,8 +1940,12 @@ function appStoreCommandContextFromElement(state, target) {
     app_developer: item?.developer || '',
     app_version: item?.version || '',
     app_status: item?.status || '',
+    app_visibility: item?.lifecycle?.state || '',
+    app_visibility_label: item?.lifecycle?.label || '',
     app_category: item?.category || '',
     app_source: item?.source || '',
+    data_access: projection?.dataAccess || null,
+    data_access_summary: projection?.dataAccess?.summary || '',
     active_search: state.query || '',
     active_scope: state.scope || 'marketplace',
     selected_text: String(window.getSelection?.()?.toString?.() || '').trim().slice(0, 1000),
@@ -1532,7 +1955,8 @@ function appStoreCommandContextFromElement(state, target) {
 
 function renderAppStoreContextMenu(state, context, x, y) {
   ensureCtoxContextMenuStyles();
-  const canModifyApp = canModifyAppStoreApp(state);
+  const canModifyApp = canModifyAppStoreContext(state, context);
+  const agentScope = buildAppStoreAgentScopeView(state, context, canModifyApp ? 'app' : 'data');
   state.contextMenu.innerHTML = `
     <form class="app-store-context-chat" data-app-store-context-chat-form>
       <header>
@@ -1545,9 +1969,10 @@ function renderAppStoreContextMenu(state, context, x, y) {
       ${canModifyApp ? `
         <div class="ctox-context-mode" role="radiogroup" aria-label="CTOX Aufgabe">
           <label><input type="radio" name="contextMode" value="data" checked /> Mit Daten arbeiten</label>
-          <label><input type="radio" name="contextMode" value="app" /> App modifizieren</label>
+          <label><input type="radio" name="contextMode" value="app" /> App ändern</label>
         </div>
       ` : ''}
+      ${renderGlobalCtoxAgentScopeHtml({ view: agentScope })}
       <textarea data-app-store-context-message placeholder="Was soll CTOX im App Store tun oder anpassen?"></textarea>
       <footer>
         <span data-app-store-context-status></span>
@@ -1584,48 +2009,65 @@ async function dispatchAppStoreContextChat(state, context, message, mode = 'data
     return;
   }
 
-  const safeMode = mode === 'app' && canModifyAppStoreApp(state) ? 'app' : 'data';
+  const safeMode = mode === 'app' && canModifyAppStoreContext(state, context) ? 'app' : 'data';
   if (!document.querySelector('[data-ctox-chat-root]')) {
     if (status) status.textContent = 'Chat ist noch nicht bereit.';
     return;
   }
   if (status) status.textContent = 'Oeffne Chat...';
-  const title = `${safeMode === 'app' ? 'App Store App modifizieren' : 'Store durchsuchen'} · ${context.label || 'App Store'}`;
-  const instruction = safeMode === 'app'
-    ? `Modifiziere die App-Store-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, App-Store-Daten/Katalog selbst nicht als primäres Ziel verändern.\n\n${trimmed}`
-    : trimmed;
-
   window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
-    detail: {
-      text: trimmed,
-      module: 'app-store',
-      source_title: 'App Store',
-      command_type: safeMode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
-      record_id: safeMode === 'app' ? 'app-store' : (context.record_id || 'app-store'),
-      title,
-      instruction,
-      payload: {
-        title,
-        instruction,
-        prompt: trimmed,
-        user_message: trimmed,
-        mode: safeMode,
-        target: safeMode === 'app' ? 'app' : 'data',
-        context,
-        thread_key: 'business-os/app-store',
-      },
-      client_context: {
-        action: 'context-chat',
-        mode: safeMode,
-        column: context.column,
-        record_type: context.record_type,
-        app_id: context.app_id || '',
-        active_search: context.active_search || '',
-        active_scope: context.active_scope || '',
-      },
-    },
+    detail: appStoreContextChatDetail(state, context, trimmed, safeMode),
   }));
   hideAppStoreContextMenu(state);
+}
+
+function appStoreContextChatDetail(state, context, message, mode = 'data') {
+  const safeMode = mode === 'app' && canModifyAppStoreContext(state, context) ? 'app' : 'data';
+  const targetModuleId = sanitizeId(context?.app_id || context?.record_id || 'app-store') || 'app-store';
+  const label = context?.label || context?.app_title || targetModuleId || 'App Store';
+  const agentScope = buildAppStoreAgentScopeView(state, context, safeMode);
+  const title = `${safeMode === 'app' ? 'App ändern' : 'Store durchsuchen'} · ${label}`;
+  const instruction = safeMode === 'app'
+    ? `Modifiziere die ausgewählte Business-OS-App "${label}". Zielmodul: ${targetModuleId}.\n\n${message}`
+    : message;
+  return {
+    text: message,
+    module: 'app-store',
+    source_title: 'App Store',
+    command_type: safeMode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
+    record_id: safeMode === 'app' ? targetModuleId : (context?.record_id || 'app-store'),
+    title,
+    instruction,
+    payload: {
+      title,
+      instruction,
+      prompt: message,
+      user_message: message,
+      mode: safeMode,
+      target: safeMode === 'app' ? 'app' : 'data',
+      module_id: safeMode === 'app' ? targetModuleId : undefined,
+      app_id: safeMode === 'app' ? targetModuleId : (context?.app_id || ''),
+      context,
+      thread_key: 'business-os/app-store',
+    },
+    client_context: {
+      source: 'business-os-app-store',
+      module: 'app-store',
+      source_module: 'app-store',
+      action: 'context-chat',
+      mode: safeMode,
+      target: safeMode === 'app' ? 'app' : 'data',
+      column: context?.column,
+      record_type: context?.record_type,
+      record_id: context?.record_id || targetModuleId,
+      module_id: targetModuleId,
+      app_id: context?.app_id || targetModuleId,
+      actor: agentScope.actor,
+      visible_scope: agentScope,
+      active_search: context?.active_search || '',
+      active_scope: context?.active_scope || '',
+    },
+  };
 }
 
 function ensureCtoxContextMenuStyles() {
@@ -1697,6 +2139,52 @@ function ensureCtoxContextMenuStyles() {
     .ctox-context-menu .ctox-context-mode input {
       margin: 0;
       accent-color: var(--bo-accent, #23665f);
+    }
+    .ctox-context-menu .ctox-agent-scope {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
+      border-radius: var(--radius-control, 6px);
+      background: color-mix(in srgb, var(--bo-surface-muted, var(--surface-2, #eef3f7)) 82%, transparent);
+      padding: 8px;
+    }
+    .ctox-context-menu .ctox-agent-scope-title {
+      color: var(--bo-text, var(--text, #18222d));
+      font-size: 10.5px;
+      font-weight: 820;
+      line-height: 1.2;
+    }
+    .ctox-context-menu .ctox-agent-scope dl {
+      display: grid;
+      gap: 4px;
+      margin: 0;
+      min-width: 0;
+    }
+    .ctox-context-menu .ctox-agent-scope dl > div {
+      display: grid;
+      grid-template-columns: minmax(78px, 0.34fr) minmax(0, 1fr);
+      align-items: baseline;
+      gap: 8px;
+      min-width: 0;
+    }
+    .ctox-context-menu .ctox-agent-scope dt,
+    .ctox-context-menu .ctox-agent-scope dd {
+      min-width: 0;
+      margin: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .ctox-context-menu .ctox-agent-scope dt {
+      color: var(--bo-muted, var(--muted, #64747c));
+      font-size: 10.5px;
+      font-weight: 740;
+    }
+    .ctox-context-menu .ctox-agent-scope dd {
+      color: var(--bo-text, var(--text, #18222d));
+      font-size: 11px;
+      font-weight: 680;
     }
     .ctox-context-menu form header div {
       min-width: 0;

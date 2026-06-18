@@ -1,6 +1,6 @@
 // ref: stalwart/src/smtp/client/mod.rs:1-40
-use crate::util::errors::{StalwartError, StalwartResult};
 use crate::smtp::dkim::DkimSigner;
+use crate::util::errors::{StalwartError, StalwartResult};
 use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -38,11 +38,13 @@ impl SmtpOutboundClient {
         body: &str,
         dkim: Option<&DkimSigner>,
     ) -> StalwartResult<()> {
-        self.send_command(&format!("MAIL FROM:<{}>\r\n", from)).await?;
+        self.send_command(&format!("MAIL FROM:<{}>\r\n", from))
+            .await?;
         self.read_response(250).await?;
 
         for recipient in to {
-            self.send_command(&format!("RCPT TO:<{}>\r\n", recipient)).await?;
+            self.send_command(&format!("RCPT TO:<{}>\r\n", recipient))
+                .await?;
             self.read_response(250).await?;
         }
 
@@ -56,7 +58,16 @@ impl SmtpOutboundClient {
             body.to_string()
         };
 
-        self.send_command(&format!("{}{}\r\n.\r\n", signed_body, if signed_body.ends_with("\r\n") { "" } else { "\r\n" })).await?;
+        self.send_command(&format!(
+            "{}{}\r\n.\r\n",
+            signed_body,
+            if signed_body.ends_with("\r\n") {
+                ""
+            } else {
+                "\r\n"
+            }
+        ))
+        .await?;
         self.read_response(250).await?;
 
         Ok(())
@@ -77,7 +88,6 @@ impl SmtpOutboundClient {
         self.read_response(250).await?;
         Ok(())
     }
-
 
     async fn send_command(&mut self, cmd: &str) -> StalwartResult<()> {
         if let Some(ref mut stream) = self.stream {

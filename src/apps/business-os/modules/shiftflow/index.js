@@ -4,6 +4,19 @@ import { CtoxResizer } from '../../shared/resizer.js';
 import { accumulateUeberlassung, checkDailyHours, checkRestPeriods } from './core/arbzg.js';
 
 const MOD_BUILD = '20260605-rxdb-cancel1';
+const PLANNING_COLLECTIONS = Object.freeze([
+  'planning_employees',
+  'planning_projects',
+  'planning_shifts',
+  'planning_time_records',
+  'planning_absences',
+]);
+const SEED_WRITE_COLLECTIONS = Object.freeze([
+  'planning_employees',
+  'planning_projects',
+  'planning_shifts',
+  'planning_time_records',
+]);
 
 let activeSubscriptions = [];
 let currentWeekStart = getMondayOfCurrentWeek();
@@ -15,6 +28,32 @@ let lang = 'de';
 let t = (key, fallback) => fallback ?? key;
 let contextMenu = null;
 let contextMenuCleanup = null;
+
+function shiftflowCollection(ctx, name) {
+  const facade = ctx?.db;
+  if (!facade || !name) return null;
+  return facade.collection?.(name) || null;
+}
+
+function shiftflowDb(ctx) {
+  const entries = PLANNING_COLLECTIONS.map((name) => [name, shiftflowCollection(ctx, name)]);
+  if (entries.some(([, collection]) => !collection)) return null;
+  return Object.fromEntries(entries);
+}
+
+function canReadCollection(ctx, name) {
+  const permissionCheck = ctx?.permissions?.canReadCollection;
+  return typeof permissionCheck !== 'function' || permissionCheck(name) === true;
+}
+
+function canWriteCollection(ctx, name) {
+  const permissionCheck = ctx?.permissions?.canWriteCollection;
+  return typeof permissionCheck !== 'function' || permissionCheck(name) === true;
+}
+
+function canWriteSeedData(ctx) {
+  return SEED_WRITE_COLLECTIONS.every((name) => canWriteCollection(ctx, name));
+}
 
 export async function mount(ctx) {
   lang = ctx.locale === 'en' ? 'en' : 'de';
@@ -110,7 +149,7 @@ export async function mount(ctx) {
   els.billingEndDate.value = lastDay.toISOString().split('T')[0];
 
   // Ensure DB collections exist and seed mock data if empty
-  await seedMockDataIfEmpty(ctx.db);
+  await seedMockDataIfEmpty(ctx);
 
   // Setup reactive RxDB subscriptions
   setupSubscriptions(ctx, els);
@@ -317,7 +356,9 @@ function setPublishStatus(els, message = '') {
 // Database Operations & Data Seeding
 // -------------------------------------------------------------
 
-async function seedMockDataIfEmpty(db) {
+async function seedMockDataIfEmpty(ctx) {
+  if (!canReadCollection(ctx, 'planning_employees') || !canWriteSeedData(ctx)) return;
+  const db = shiftflowDb(ctx);
   if (!db) return;
 
   const empCount = await db.planning_employees.find().exec();
@@ -642,15 +683,16 @@ async function seedMockDataIfEmpty(db) {
 // -------------------------------------------------------------
 
 function setupSubscriptions(ctx, els) {
-  if (!ctx.db) return;
+  const db = shiftflowDb(ctx);
+  if (!db || !PLANNING_COLLECTIONS.every((name) => canReadCollection(ctx, name))) return;
 
   // 1. Reactive Employees Subscription
-  const empSub = ctx.db.planning_employees.find().$.subscribe(async (employees) => {
-    const timeRecords = await ctx.db.planning_time_records.find().exec();
+  const empSub = db.planning_employees.find().$.subscribe(async (employees) => {
+    const timeRecords = await db.planning_time_records.find().exec();
     renderEmployeesList(employees, timeRecords, els, ctx);
 
-    const projects = await ctx.db.planning_projects.find().exec();
-    const shifts = await ctx.db.planning_shifts.find().exec();
+    const projects = await db.planning_projects.find().exec();
+    const shifts = await db.planning_shifts.find().exec();
     renderSchedulerGrid(employees, projects, shifts, els, ctx);
 
     if (selectedEmployeeId) {
@@ -660,13 +702,13 @@ function setupSubscriptions(ctx, els) {
   activeSubscriptions.push(empSub);
 
   // 2. Reactive Projects Subscription
-  const projSub = ctx.db.planning_projects.find().$.subscribe(async (projects) => {
+  const projSub = db.planning_projects.find().$.subscribe(async (projects) => {
     renderProjectsList(projects, els, ctx);
 
-    const employees = await ctx.db.planning_employees.find().exec();
-    const shifts = await ctx.db.planning_shifts.find().exec();
+    const employees = await db.planning_employees.find().exec();
+    const shifts = await db.planning_shifts.find().exec();
     renderSchedulerGrid(employees, projects, shifts, els, ctx);
-    renderBillingAggregation(employees, projects, await ctx.db.planning_time_records.find().exec(), els);
+    renderBillingAggregation(employees, projects, await db.planning_time_records.find().exec(), els);
 
     if (selectedEmployeeId) {
       openEmployeeDetailsInspector(selectedEmployeeId, employees, els, ctx);
@@ -675,9 +717,9 @@ function setupSubscriptions(ctx, els) {
   activeSubscriptions.push(projSub);
 
   // 3. Reactive Shifts Subscription
-  const shiftSub = ctx.db.planning_shifts.find().$.subscribe(async (shifts) => {
-    const employees = await ctx.db.planning_employees.find().exec();
-    const projects = await ctx.db.planning_projects.find().exec();
+  const shiftSub = db.planning_shifts.find().$.subscribe(async (shifts) => {
+    const employees = await db.planning_employees.find().exec();
+    const projects = await db.planning_projects.find().exec();
     renderSchedulerGrid(employees, projects, shifts, els, ctx);
 
     if (selectedEmployeeId) {
@@ -687,12 +729,12 @@ function setupSubscriptions(ctx, els) {
   activeSubscriptions.push(shiftSub);
 
   // 4. Reactive Time Records Subscription
-  const timeSub = ctx.db.planning_time_records.find().$.subscribe(async (records) => {
-    const employees = await ctx.db.planning_employees.find().exec();
-    const projects = await ctx.db.planning_projects.find().exec();
-    const shifts = await ctx.db.planning_shifts.find().exec();
+  const timeSub = db.planning_time_records.find().$.subscribe(async (records) => {
+    const employees = await db.planning_employees.find().exec();
+    const projects = await db.planning_projects.find().exec();
+    const shifts = await db.planning_shifts.find().exec();
 
-    renderTimesheets(employees, projects, shifts, records, els);
+    renderTimesheets(employees, projects, shifts, records, els, ctx);
     renderEmployeesList(employees, records, els, ctx);
     renderBillingAggregation(employees, projects, records, els);
 
@@ -1044,7 +1086,7 @@ function renderSchedulerGrid(employees, projects, shifts, els, ctx) {
       }
 
       // Automatically create a scheduled shift
-      const db = globalThis.CTOX_ACTIVE_DB || els.activeEmployeeList.__ctx__db;
+      const db = shiftflowDb(ctx);
       if (!db) return;
 
       const proj = projects.find(p => p.id === finalProjId);
@@ -1082,7 +1124,7 @@ function renderSchedulerGrid(employees, projects, shifts, els, ctx) {
   });
 }
 
-function renderTimesheets(employees, projects, shifts, records, els) {
+function renderTimesheets(employees, projects, shifts, records, els, ctx) {
   // Only show records with 'pending' status for approvals
   const pendingRecords = records.filter(rec => rec.approval_status === 'pending' && rec.end_time !== null);
 
@@ -1185,13 +1227,13 @@ function renderTimesheets(employees, projects, shifts, records, els) {
   // Bind individual timesheet approvals / rejections
   els.timesheetsList.querySelectorAll('.btn-approve').forEach(btn => {
     btn.addEventListener('click', () => {
-      approveSingleRecord(btn.dataset.recId, els);
+      approveSingleRecord(btn.dataset.recId, ctx);
     });
   });
 
   els.timesheetsList.querySelectorAll('.btn-reject').forEach(btn => {
     btn.addEventListener('click', () => {
-      rejectSingleRecord(btn.dataset.recId, els);
+      rejectSingleRecord(btn.dataset.recId, ctx);
     });
   });
 }
@@ -1402,8 +1444,8 @@ function openBillingDetailsInspector(projId, projectData, els, ctx) {
 // Timesheet Approvals actions
 // -------------------------------------------------------------
 
-async function approveSingleRecord(recId, els) {
-  const db = globalThis.CTOX_ACTIVE_DB || els.activeEmployeeList.__ctx__db;
+async function approveSingleRecord(recId, ctx) {
+  const db = shiftflowDb(ctx);
   if (!db) return;
 
   const doc = await db.planning_time_records.findOne(recId).exec();
@@ -1422,8 +1464,8 @@ async function approveSingleRecord(recId, els) {
   }
 }
 
-async function rejectSingleRecord(recId, els) {
-  const db = globalThis.CTOX_ACTIVE_DB || els.activeEmployeeList.__ctx__db;
+async function rejectSingleRecord(recId, ctx) {
+  const db = shiftflowDb(ctx);
   if (!db) return;
 
   const doc = await db.planning_time_records.findOne(recId).exec();
@@ -1435,8 +1477,8 @@ async function rejectSingleRecord(recId, els) {
   }
 }
 
-async function approveAllTimesheets(els) {
-  const db = globalThis.CTOX_ACTIVE_DB || els.activeEmployeeList.__ctx__db;
+async function approveAllTimesheets(ctx) {
+  const db = shiftflowDb(ctx);
   if (!db) return;
 
   const records = await db.planning_time_records.find({ selector: { approval_status: 'pending' } }).exec();
@@ -1460,7 +1502,7 @@ async function publishCurrentWeekSchedule(ctx, els) {
   if (!ctx.db) return;
 
   const { startMs, endMs } = getWeekBoundsMs(currentWeekStart);
-  const weekShifts = await ctx.db.planning_shifts.find({
+  const weekShifts = await shiftflowCollection(ctx, 'planning_shifts').find({
     selector: {
       start_time: { $gte: startMs, $lte: endMs }
     }
@@ -1511,7 +1553,7 @@ async function openShiftDetails(shiftId, shifts, employees, els, ctx) {
   if (!shift) return;
 
   const emp = employees.find(e => e.id === shift.employee_id);
-  const db = globalThis.CTOX_ACTIVE_DB || els.activeEmployeeList.__ctx__db;
+  const db = shiftflowDb(ctx);
   let projName = shift.location || t('location', 'Einsatzort');
 
   if (db && shift.project_id) {
@@ -1592,7 +1634,7 @@ async function openEmployeeDetailsInspector(empId, employees, els, ctx) {
     return;
   }
 
-  const db = globalThis.CTOX_ACTIVE_DB || els.activeEmployeeList.__ctx__db;
+  const db = shiftflowDb(ctx);
   if (!db) return;
 
   // Fetch shifts for this employee in the current week (from currentWeekStart)
@@ -1860,12 +1902,12 @@ function openEmployeeDrawer(emp, els, ctx) {
       const confirmDelete = confirm(t('confirmDeleteEmployee', 'Möchtest du den Mitarbeiter "{0}" wirklich löschen? Alle zugeordneten Schichten werden ebenfalls gelöscht.', emp.name));
       if (!confirmDelete) return;
 
-      const doc = await ctx.db.planning_employees.findOne(emp.id).exec();
+      const doc = await shiftflowCollection(ctx, 'planning_employees').findOne(emp.id).exec();
       if (doc) {
         await doc.remove();
       }
 
-      const associatedShifts = await ctx.db.planning_shifts.find({ selector: { employee_id: emp.id } }).exec();
+      const associatedShifts = await shiftflowCollection(ctx, 'planning_shifts').find({ selector: { employee_id: emp.id } }).exec();
       for (const s of associatedShifts) {
         await s.remove();
       }
@@ -1891,7 +1933,7 @@ function openEmployeeDrawer(emp, els, ctx) {
     });
 
     if (isEdit) {
-      const doc = await ctx.db.planning_employees.findOne(emp.id).exec();
+      const doc = await shiftflowCollection(ctx, 'planning_employees').findOne(emp.id).exec();
       if (doc) {
         await doc.incrementalPatch({
           name,
@@ -1908,7 +1950,7 @@ function openEmployeeDrawer(emp, els, ctx) {
       const randomColor = colors[Math.floor(Math.random() * colors.length)];
 
       const id = 'emp_' + Date.now();
-      await ctx.db.planning_employees.insert({
+      await shiftflowCollection(ctx, 'planning_employees').insert({
         id,
         kind: 'employee',
         name,
@@ -1996,7 +2038,7 @@ function openProjectDrawer(proj, els, ctx) {
 
   if (isEdit) {
     body.querySelector('[data-drawer-delete]').addEventListener('click', async () => {
-      const shiftCount = await ctx.db.planning_shifts.find({ selector: { project_id: proj.id } }).exec();
+      const shiftCount = await shiftflowCollection(ctx, 'planning_shifts').find({ selector: { project_id: proj.id } }).exec();
       if (shiftCount.length > 0) {
         const confirmDelete = confirm(t('confirmDeleteProjectWithShifts', 'Es sind noch {0} Schichten für das Projekt "{1}" geplant. Willst du das Projekt trotzdem löschen?', shiftCount.length, proj.name));
         if (!confirmDelete) return;
@@ -2005,7 +2047,7 @@ function openProjectDrawer(proj, els, ctx) {
         if (!confirmDelete) return;
       }
 
-      const doc = await ctx.db.planning_projects.findOne(proj.id).exec();
+      const doc = await shiftflowCollection(ctx, 'planning_projects').findOne(proj.id).exec();
       if (doc) {
         await doc.remove();
       }
@@ -2033,13 +2075,13 @@ function openProjectDrawer(proj, els, ctx) {
     };
 
     if (isEdit) {
-      const doc = await ctx.db.planning_projects.findOne(proj.id).exec();
+      const doc = await shiftflowCollection(ctx, 'planning_projects').findOne(proj.id).exec();
       if (doc) {
         await doc.incrementalPatch(patch);
       }
     } else {
       const id = 'proj_' + Date.now();
-      await ctx.db.planning_projects.insert({
+      await shiftflowCollection(ctx, 'planning_projects').insert({
         id,
         kind: 'project',
         created_at_ms: Date.now(),
@@ -2061,8 +2103,8 @@ async function openShiftDrawer(shift, dateStr, empId, projId, els, ctx) {
   const kicker = isEdit ? t('shiftDetailsKicker', 'Dienst-Details') : t('shiftNewKicker', 'Neue Einteilung');
   const submitText = isEdit ? t('save', 'Speichern') : t('tabScheduler', 'Planen');
 
-  const employees = await ctx.db.planning_employees.find().exec();
-  const projects = await ctx.db.planning_projects.find().exec();
+  const employees = await shiftflowCollection(ctx, 'planning_employees').find().exec();
+  const projects = await shiftflowCollection(ctx, 'planning_projects').find().exec();
 
   const activeProj = projects.filter(p => p.status === 'active');
 
@@ -2163,7 +2205,7 @@ async function openShiftDrawer(shift, dateStr, empId, projId, els, ctx) {
       const confirmDelete = confirm(t('confirmDeleteShift', 'Möchtest du diese Schicht wirklich löschen?'));
       if (!confirmDelete) return;
 
-      const doc = await ctx.db.planning_shifts.findOne(shift.id).exec();
+      const doc = await shiftflowCollection(ctx, 'planning_shifts').findOne(shift.id).exec();
       if (doc) {
         await doc.remove();
       }
@@ -2193,7 +2235,7 @@ async function openShiftDrawer(shift, dateStr, empId, projId, els, ctx) {
     const startTime = getTimestamp(dateVal, startStr);
     const endTime = getTimestamp(dateVal, endStr);
 
-    const proj = await ctx.db.planning_projects.findOne(projId).exec();
+    const proj = await shiftflowCollection(ctx, 'planning_projects').findOne(projId).exec();
     const projName = proj ? proj.name : t('shift', 'Dienst');
 
     const patch = {
@@ -2209,13 +2251,13 @@ async function openShiftDrawer(shift, dateStr, empId, projId, els, ctx) {
     };
 
     if (isEdit) {
-      const doc = await ctx.db.planning_shifts.findOne(shift.id).exec();
+      const doc = await shiftflowCollection(ctx, 'planning_shifts').findOne(shift.id).exec();
       if (doc) {
         await doc.incrementalPatch(patch);
       }
     } else {
       const id = 'shift_' + Date.now();
-      await ctx.db.planning_shifts.insert({
+      await shiftflowCollection(ctx, 'planning_shifts').insert({
         id,
         kind: 'shift',
         status: 'published',
@@ -2235,9 +2277,6 @@ async function openShiftDrawer(shift, dateStr, empId, projId, els, ctx) {
 // -------------------------------------------------------------
 
 function bindEventListeners(ctx, els) {
-  els.activeEmployeeList.__ctx__db = ctx.db;
-  globalThis.CTOX_ACTIVE_DB = ctx.db;
-
   // Prev / Next Week
   els.prevWeekBtn.addEventListener('click', () => {
     currentWeekStart.setDate(currentWeekStart.getDate() - 7);
@@ -2313,7 +2352,7 @@ function bindEventListeners(ctx, els) {
   });
 
   // Timesheets Workbench Actions
-  els.approveAllTimesheetsBtn.addEventListener('click', () => approveAllTimesheets(els));
+  els.approveAllTimesheetsBtn.addEventListener('click', () => approveAllTimesheets(ctx));
 
   els.btnPublishSchedule.addEventListener('click', () => {
     publishCurrentWeekSchedule(ctx, els);
@@ -2350,9 +2389,9 @@ function bindEventListeners(ctx, els) {
 }
 
 function triggerScheduleGridRefresh(ctx, els) {
-  ctx.db.planning_shifts.find().exec().then(shifts => {
-    ctx.db.planning_employees.find().exec().then(employees => {
-      ctx.db.planning_projects.find().exec().then(projects => {
+  shiftflowCollection(ctx, 'planning_shifts').find().exec().then(shifts => {
+    shiftflowCollection(ctx, 'planning_employees').find().exec().then(employees => {
+      shiftflowCollection(ctx, 'planning_projects').find().exec().then(projects => {
         renderSchedulerGrid(employees, projects, shifts, els, ctx);
       });
     });
@@ -2360,17 +2399,17 @@ function triggerScheduleGridRefresh(ctx, els) {
 }
 
 function triggerSidebarsUpdate(ctx, els) {
-  ctx.db.planning_employees.find().exec().then(employees => {
-    ctx.db.planning_time_records.find().exec().then(records => {
+  shiftflowCollection(ctx, 'planning_employees').find().exec().then(employees => {
+    shiftflowCollection(ctx, 'planning_time_records').find().exec().then(records => {
       renderEmployeesList(employees, records, els, ctx);
     });
   });
 }
 
 function triggerBillingAggregationUpdate(ctx, els) {
-  ctx.db.planning_employees.find().exec().then(employees => {
-    ctx.db.planning_projects.find().exec().then(projects => {
-      ctx.db.planning_time_records.find().exec().then(records => {
+  shiftflowCollection(ctx, 'planning_employees').find().exec().then(employees => {
+    shiftflowCollection(ctx, 'planning_projects').find().exec().then(projects => {
+      shiftflowCollection(ctx, 'planning_time_records').find().exec().then(records => {
         renderBillingAggregation(employees, projects, records, els);
       });
     });
@@ -2382,11 +2421,13 @@ function triggerBillingAggregationUpdate(ctx, els) {
 // -------------------------------------------------------------
 
 async function autoGenerateSchedule(ctx, els) {
-  const db = ctx.db;
-  if (!db) return;
+  const employeesCollection = shiftflowCollection(ctx, 'planning_employees');
+  const projectsCollection = shiftflowCollection(ctx, 'planning_projects');
+  const shiftsCollection = shiftflowCollection(ctx, 'planning_shifts');
+  if (!employeesCollection || !projectsCollection || !shiftsCollection) return;
 
-  const employees = await db.planning_employees.find({ selector: { status: 'active' } }).exec();
-  const projects = await db.planning_projects.find({ selector: { status: 'active' } }).exec();
+  const employees = await employeesCollection.find({ selector: { status: 'active' } }).exec();
+  const projects = await projectsCollection.find({ selector: { status: 'active' } }).exec();
 
   if (employees.length === 0 || projects.length === 0) {
     alert(t('aiSetupRequirement', 'Es müssen mindestens ein aktiver Mitarbeiter und ein aktives Projekt existieren!'));
@@ -2398,7 +2439,7 @@ async function autoGenerateSchedule(ctx, els) {
   const dayStart = monday.getTime();
   const dayEnd = dayStart + 7 * 24 * 3600000 - 1;
 
-  const weekShifts = await db.planning_shifts.find({
+  const weekShifts = await shiftsCollection.find({
     selector: {
       start_time: { $gte: dayStart, $lte: dayEnd }
     }
@@ -2419,14 +2460,14 @@ async function autoGenerateSchedule(ctx, els) {
 
   let shiftIndex = 1;
   for (let day = 0; day < 5; day++) { // Mon-Fri
-    employees.forEach((emp, empIdx) => {
+    for (const [empIdx, emp] of employees.entries()) {
       // Rotate projects among employees
       const proj = projects[ (empIdx + day) % projects.length ];
 
       const startTime = getTimestamp(day, '08:00');
       const endTime = getTimestamp(day, '16:00');
 
-      db.planning_shifts.insert({
+      await shiftsCollection.insert({
         id: `shift_auto_${Date.now()}_${shiftIndex++}`,
         kind: 'shift',
         employee_id: emp.id,
@@ -2441,7 +2482,7 @@ async function autoGenerateSchedule(ctx, els) {
         created_at_ms: Date.now(),
         updated_at_ms: Date.now()
       });
-    });
+    }
   }
 
   // Display a nice chat success message
@@ -2456,11 +2497,12 @@ async function autoGenerateSchedule(ctx, els) {
 }
 
 async function runConflictsAnalysis(ctx, els) {
-  const db = ctx.db;
-  if (!db) return;
+  const shiftsCollection = shiftflowCollection(ctx, 'planning_shifts');
+  const employeesCollection = shiftflowCollection(ctx, 'planning_employees');
+  if (!shiftsCollection || !employeesCollection) return;
 
-  const shifts = await db.planning_shifts.find().exec();
-  const employees = await db.planning_employees.find().exec();
+  const shifts = await shiftsCollection.find().exec();
+  const employees = await employeesCollection.find().exec();
 
   const monday = new Date(currentWeekStart);
   const weekStartMs = monday.getTime();

@@ -2588,6 +2588,9 @@ async fn accept_pending_business_command(
     if command_type.starts_with("ctox.ticket.") {
         sync_ticket_state_with_database(&root, database).await?;
     }
+    if command_type.starts_with("support.") {
+        project_support_command_result(root.clone(), database, &accepted).await?;
+    }
     if command_type == "ctox.file.materialize" {
         if let Some(materialized_path) = accepted
             .get("result")
@@ -2617,6 +2620,7 @@ async fn accept_pending_business_command(
             | "ctox.module.release"
             | "ctox.module.rollback"
             | "ctox.module.rollback_version"
+            | "ctox.module.repair_lifecycle_projection"
             | "ctox.app_store.install"
             | "ctox.app_store.uninstall"
     ) {
@@ -2689,6 +2693,67 @@ async fn accept_pending_business_command(
     }
 
     Ok(())
+}
+
+async fn project_support_command_result(
+    root: PathBuf,
+    database: &Arc<RxDatabase>,
+    accepted: &Value,
+) -> anyhow::Result<()> {
+    let projections = accepted
+        .get("result")
+        .and_then(|result| result.get("projections"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for projection in projections {
+        let Some(collection) = projection
+            .get("collection")
+            .and_then(Value::as_str)
+            .and_then(support_projection_collection)
+        else {
+            continue;
+        };
+        let Some(record_id) = projection
+            .get("record_id")
+            .or_else(|| projection.get("id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        upsert_business_record_projection(root.clone(), database, collection, record_id).await?;
+    }
+    Ok(())
+}
+
+fn support_projection_collection(collection: &str) -> Option<&'static str> {
+    match collection {
+        "support_inboxes" => Some("support_inboxes"),
+        "support_conversations" => Some("support_conversations"),
+        "support_thread_links" => Some("support_thread_links"),
+        "support_identity_links" => Some("support_identity_links"),
+        "support_notes" => Some("support_notes"),
+        "support_conversation_events" => Some("support_conversation_events"),
+        "support_labels" => Some("support_labels"),
+        "support_label_assignments" => Some("support_label_assignments"),
+        "support_views" => Some("support_views"),
+        "support_view_filters" => Some("support_view_filters"),
+        "support_assignment_policies" => Some("support_assignment_policies"),
+        "support_assignment_events" => Some("support_assignment_events"),
+        "support_macros" => Some("support_macros"),
+        "support_automation_rules" => Some("support_automation_rules"),
+        "support_sla_policies" => Some("support_sla_policies"),
+        "support_applied_slas" => Some("support_applied_slas"),
+        "support_sla_events" => Some("support_sla_events"),
+        "support_agent_requests" => Some("support_agent_requests"),
+        "support_agent_suggestions" => Some("support_agent_suggestions"),
+        "support_reporting_events" => Some("support_reporting_events"),
+        "support_reporting_rollups" => Some("support_reporting_rollups"),
+        _ => None,
+    }
 }
 
 fn is_browser_runtime_command(command_type: &str) -> bool {
@@ -4026,10 +4091,22 @@ async fn sync_module_catalog_with_database(
     let module_catalog = database
         .collection("business_module_catalog")
         .context("business_module_catalog collection is not registered")?;
-    module_catalog
-        .incremental_upsert(document)
-        .await
-        .map_err(|err| anyhow::anyhow!("upsert module catalog projection: {err}"))?;
+    match module_catalog.incremental_upsert(document.clone()).await {
+        Ok(_) => {}
+        Err(err) if is_recoverable_projection_write_error(&err) => {
+            match module_catalog.upsert(document.clone()).await {
+                Ok(_) => {}
+                Err(_) => repair_projection_document_envelope_and_upsert(&module_catalog, document)
+                    .await
+                    .map_err(|fallback_err| {
+                        anyhow::anyhow!(
+                            "upsert module catalog projection after document cache envelope repair failed: {fallback_err}"
+                        )
+                    })?,
+            }
+        }
+        Err(err) => return Err(anyhow::anyhow!("upsert module catalog projection: {err}")),
+    }
     Ok(())
 }
 
@@ -4158,6 +4235,15 @@ async fn sync_business_record_projections_with_database(
     database: &Arc<RxDatabase>,
     since_by_collection: &mut HashMap<String, i64>,
 ) -> anyhow::Result<usize> {
+    let support_intake_root = root.to_path_buf();
+    let support_intake_count = tokio::task::spawn_blocking(move || {
+        super::support::project_communication_intake(
+            &support_intake_root,
+            BUSINESS_RECORD_PROJECTION_SYNC_LIMIT,
+        )
+    })
+    .await
+    .context("join support communication intake projection")??;
     let collections = business_record_projection_collections();
     let root = root.to_path_buf();
     let pull_jobs = collections
@@ -4187,7 +4273,7 @@ async fn sync_business_record_projections_with_database(
     }
 
     let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
-    let mut count = 0usize;
+    let mut count = support_intake_count;
     for (collection_name, since_ms, pulled) in pulled_collections {
         let documents = pulled
             .get("documents")
@@ -4750,7 +4836,7 @@ async fn upsert_business_record_projection_document(
         return upsert_business_record_projection_tombstone(collection, document).await;
     }
     normalize_business_record_projection_document(collection, collection_name, &mut document)?;
-    match collection.incremental_upsert(document.clone()).await {
+    match collection.upsert(document.clone()).await {
         Ok(_) => Ok(()),
         Err(err) if is_recoverable_projection_write_error(&err) => match collection.upsert(document.clone()).await
         {
@@ -8207,6 +8293,7 @@ mod tests {
                 display_name: "Alice".to_string(),
                 role: "founder".to_string(),
                 active: true,
+                accept_recovery_responsibility: false,
             },
         )
         .expect("upsert business user");
@@ -8390,6 +8477,107 @@ mod tests {
             )
             .expect("projected version count");
         assert_eq!(version_count, 1);
+    }
+
+    #[test]
+    fn sync_business_record_projections_updates_existing_support_conversation_fields() {
+        let root = tempfile::tempdir().expect("temp root");
+        let conn = store::open_store(root.path()).expect("open business store");
+        store::upsert_business_record(
+            &conn,
+            "support_conversations",
+            "conv_projection_update",
+            1_000,
+            json!({
+                "id": "conv_projection_update",
+                "is_deleted": false,
+                "created_at_ms": 900,
+                "updated_at_ms": 1_000,
+                "inbox_id": "",
+                "primary_thread_key": "mail:projection-update",
+                "status": "open",
+                "priority": "high",
+                "assignee_id": "",
+                "team_id": "",
+                "customer_account_id": "",
+                "customer_contact_id": "",
+                "ticket_case_id": "",
+                "last_message_key": "",
+                "last_activity_at_ms": 1_000,
+                "waiting_since_ms": 0,
+                "snoozed_until_ms": 0,
+                "unread_count": 0,
+                "label_ids": [],
+                "custom_attributes": {},
+                "search_text": "Projection update support conversation"
+            }),
+        )
+        .expect("insert support conversation business record");
+        drop(conn);
+
+        assert!(sync_business_record_projections(root.path()).expect("initial sync") >= 1);
+
+        let conn = store::open_store(root.path()).expect("reopen business store");
+        store::upsert_business_record(
+            &conn,
+            "support_conversations",
+            "conv_projection_update",
+            2_000,
+            json!({
+                "id": "conv_projection_update",
+                "is_deleted": false,
+                "created_at_ms": 900,
+                "updated_at_ms": 2_000,
+                "inbox_id": "",
+                "primary_thread_key": "mail:projection-update",
+                "status": "waiting",
+                "priority": "low",
+                "assignee_id": "local-dev",
+                "team_id": "",
+                "customer_account_id": "",
+                "customer_contact_id": "",
+                "ticket_case_id": "",
+                "last_message_key": "",
+                "last_activity_at_ms": 2_000,
+                "waiting_since_ms": 0,
+                "snoozed_until_ms": 0,
+                "unread_count": 0,
+                "label_ids": [],
+                "custom_attributes": {},
+                "search_text": "Projection update support conversation"
+            }),
+        )
+        .expect("update support conversation business record");
+        drop(conn);
+
+        assert!(sync_business_record_projections(root.path()).expect("second sync") >= 1);
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open rxdb sqlite");
+        let conversation_json: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__support_conversations__v0 WHERE id = 'conv_projection_update'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("projected support conversation row");
+        let conversation: Value =
+            serde_json::from_str(&conversation_json).expect("support conversation json");
+        assert_eq!(
+            conversation.get("status").and_then(Value::as_str),
+            Some("waiting")
+        );
+        assert_eq!(
+            conversation.get("priority").and_then(Value::as_str),
+            Some("low")
+        );
+        assert_eq!(
+            conversation.get("assignee_id").and_then(Value::as_str),
+            Some("local-dev")
+        );
+        assert_eq!(
+            conversation.get("updated_at_ms").and_then(Value::as_i64),
+            Some(2_000)
+        );
     }
 
     #[test]
@@ -9924,6 +10112,126 @@ mod tests {
     }
 
     #[test]
+    fn native_peer_consumes_support_note_command_and_projects_support_records() {
+        let root = tempfile::tempdir().expect("temp root");
+        {
+            let conn = store::open_store(root.path()).expect("open business store");
+            conn.execute(
+                "INSERT INTO business_users
+                    (user_id, display_name, role, active, created_at_ms, updated_at_ms)
+                 VALUES ('tester', 'Tester', 'admin', 1, ?1, ?1)",
+                params![now_ms() as i64],
+            )
+            .expect("seed admin user");
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let database = open_test_database(store::rxdb_store_path(root.path()))
+                .await
+                .expect("open rxdb sqlite");
+            database
+                .add_collections(collection_creators())
+                .await
+                .expect("register collections");
+            let commands = database
+                .collection("business_commands")
+                .expect("business_commands collection");
+            commands
+                .insert(json!({
+                    "id": "cmd_support_note_create",
+                    "command_id": "cmd_support_note_create",
+                    "module": "support",
+                    "command_type": "support.note.create",
+                    "record_id": "conv-support-1",
+                    "status": "pending_sync",
+                    "inbound_channel": "support",
+                    "payload": {
+                        "conversation_id": "conv-support-1",
+                        "thread_key": "mail:thread-support-1",
+                        "body": "Customer asked for a printengine update.",
+                        "visibility": "internal"
+                    },
+                    "client_context": {
+                        "actor": {
+                            "id": "tester",
+                            "display_name": "Tester",
+                            "role": "admin",
+                            "is_admin": true
+                        }
+                    },
+                    "updated_at_ms": now_ms() as u64
+                }))
+                .await
+                .expect("insert pending support command");
+
+            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
+                .await
+                .expect("consume pending support command");
+
+            let accepted = commands
+                .find_one(Some(MangoQuery {
+                    selector: Some(json!({ "id": { "$eq": "cmd_support_note_create" } })),
+                    ..Default::default()
+                }))
+                .expect("accepted query")
+                .exec(false)
+                .await
+                .expect("accepted document");
+            assert_eq!(
+                accepted.get("status").and_then(Value::as_str),
+                Some("completed")
+            );
+            assert_eq!(
+                accepted.get("task_status").and_then(Value::as_str),
+                Some("completed")
+            );
+
+            let notes = database
+                .collection("support_notes")
+                .expect("support_notes collection");
+            let note_docs = notes
+                .find(None)
+                .expect("support notes query")
+                .exec(false)
+                .await
+                .expect("support note documents");
+            let note_docs = note_docs.as_array().expect("support note documents array");
+            assert!(
+                note_docs.iter().any(|doc| {
+                    doc.get("conversation_id").and_then(Value::as_str) == Some("conv-support-1")
+                        && doc.get("body").and_then(Value::as_str)
+                            == Some("Customer asked for a printengine update.")
+                }),
+                "missing projected support note: {note_docs:?}"
+            );
+
+            let conversations = database
+                .collection("support_conversations")
+                .expect("support_conversations collection");
+            let conversation_docs = conversations
+                .find(None)
+                .expect("support conversation query")
+                .exec(false)
+                .await
+                .expect("support conversation documents");
+            let conversation_docs = conversation_docs
+                .as_array()
+                .expect("support conversation documents array");
+            assert!(
+                conversation_docs.iter().any(|doc| {
+                    doc.get("id").and_then(Value::as_str) == Some("conv-support-1")
+                        && doc.get("status").and_then(Value::as_str) == Some("open")
+                }),
+                "missing projected support conversation: {conversation_docs:?}"
+            );
+        });
+    }
+
+    #[test]
     fn native_peer_marks_invalid_ticket_commands_failed() {
         let root = tempfile::tempdir().expect("temp root");
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -10518,8 +10826,8 @@ mod tests {
 
             commands
                 .insert(json!({
-                    "id": "cmd_user_upsert",
-                    "command_id": "cmd_user_upsert",
+                    "id": "cmd_admin_owner_upsert_denied",
+                    "command_id": "cmd_admin_owner_upsert_denied",
                     "module": "ctox",
                     "command_type": "ctox.business_os.user.upsert",
                     "record_id": "chef",
@@ -10543,11 +10851,77 @@ mod tests {
                     "updated_at_ms": now_ms() as u64
                 }))
                 .await
-                .expect("insert user command");
+                .expect("insert denied owner-upsert command");
 
             consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
                 .await
-                .expect("consume user command");
+                .expect("consume denied owner-upsert command");
+
+            let denied_owner_command = commands
+                .find_one(Some(MangoQuery {
+                    selector: Some(json!({ "id": { "$eq": "cmd_admin_owner_upsert_denied" } })),
+                    ..Default::default()
+                }))
+                .expect("denied owner-upsert command query")
+                .exec(false)
+                .await
+                .expect("denied owner-upsert command document");
+            assert_eq!(
+                denied_owner_command.get("status").and_then(Value::as_str),
+                Some("failed"),
+                "denied_owner_command={denied_owner_command}"
+            );
+            assert_eq!(
+                denied_owner_command
+                    .pointer("/result/policy_decision/permission")
+                    .and_then(Value::as_str),
+                Some("workspace.manage"),
+                "denied_owner_command={denied_owner_command}"
+            );
+
+            let owner_conn = store::open_store(root.path()).expect("open business store");
+            let owner_now = now_ms() as i64;
+            owner_conn
+                .execute(
+                    "INSERT INTO business_users
+                        (user_id, display_name, role, active, created_at_ms, updated_at_ms)
+                     VALUES ('workspace-owner', 'Workspace Owner', 'chef', 1, ?1, ?1)",
+                    rusqlite::params![owner_now],
+                )
+                .expect("seed workspace owner");
+            drop(owner_conn);
+
+            commands
+                .insert(json!({
+                    "id": "cmd_user_upsert",
+                    "command_id": "cmd_user_upsert",
+                    "module": "ctox",
+                    "command_type": "ctox.business_os.user.upsert",
+                    "record_id": "chef",
+                    "status": "pending_sync",
+                    "inbound_channel": "ctox",
+                    "payload": {
+                        "id": "chef",
+                        "display_name": "Chef",
+                        "role": "chef",
+                        "active": true
+                    },
+                    "client_context": {
+                        "actor": {
+                            "id": "workspace-owner",
+                            "display_name": "Workspace Owner",
+                            "is_admin": true
+                        },
+                        "source": "test"
+                    },
+                    "updated_at_ms": now_ms() as u64
+                }))
+                .await
+                .expect("insert owner user command");
+
+            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
+                .await
+                .expect("consume owner user command");
 
             let user_command = commands
                 .find_one(Some(MangoQuery {

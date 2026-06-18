@@ -7285,5 +7285,1378 @@
       "updated_at_ms"
     ],
     "additionalProperties": true
+  },
+  "support_agent_requests": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "conversation_id": {
+        "type": "string"
+      },
+      "command_id": {
+        "type": "string"
+      },
+      "task_id": {
+        "type": "string"
+      },
+      "request_kind": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "required_skills": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "writeback_contract": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "conversation_id",
+      "request_kind",
+      "status"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "conversation_id",
+      "command_id",
+      "task_id",
+      "status"
+    ],
+    "additionalProperties": true
+  },
+  "support_agent_suggestions": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "conversation_id": {
+        "type": "string"
+      },
+      "source_command_id": {
+        "type": "string"
+      },
+      "task_id": {
+        "type": "string"
+      },
+      "suggestion_kind": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "confidence": {
+        "type": "number"
+      },
+      "required_human_action": {
+        "type": "string"
+      },
+      "summary": {
+        "type": "string"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "conversation_id",
+      "suggestion_kind",
+      "status"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "conversation_id",
+      "source_command_id",
+      "task_id",
+      "suggestion_kind",
+      "status"
+    ],
+    "additionalProperties": true
+  },
+  "support_applied_slas": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "conversation_id": {
+        "type": "string"
+      },
+      "policy_id": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "first_response_due_at_ms": {
+        "type": "number"
+      },
+      "next_response_due_at_ms": {
+        "type": "number"
+      },
+      "resolution_due_at_ms": {
+        "type": "number"
+      },
+      "breached_at_ms": {
+        "type": "number"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "conversation_id",
+      "policy_id",
+      "status"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "conversation_id",
+      "policy_id",
+      "status",
+      "resolution_due_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "support_assignment_events": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "conversation_id": {
+        "type": "string"
+      },
+      "policy_id": {
+        "type": "string"
+      },
+      "assignee_id": {
+        "type": "string"
+      },
+      "previous_assignee_id": {
+        "type": "string"
+      },
+      "event_type": {
+        "type": "string"
+      },
+      "occurred_at_ms": {
+        "type": "number"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "conversation_id",
+      "event_type",
+      "occurred_at_ms"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "conversation_id",
+      "policy_id",
+      "assignee_id",
+      [
+        "conversation_id",
+        "occurred_at_ms"
+      ]
+    ],
+    "additionalProperties": true
+  },
+  "support_assignment_policies": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "name": {
+        "type": "string"
+      },
+      "strategy": {
+        "type": "string"
+      },
+      "fair_distribution_limit": {
+        "type": "number"
+      },
+      "fair_distribution_window_ms": {
+        "type": "number"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "name",
+      "strategy"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "strategy"
+    ],
+    "additionalProperties": true
+  },
+  "support_automation_rules": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "name": {
+        "type": "string"
+      },
+      "event_name": {
+        "type": "string"
+      },
+      "active": {
+        "type": "boolean"
+      },
+      "query_operator": {
+        "type": "string"
+      },
+      "conditions_json": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "actions_json": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "name",
+      "event_name",
+      "active"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "event_name",
+      "active"
+    ],
+    "additionalProperties": true
+  },
+  "support_conversation_events": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "conversation_id": {
+        "type": "string"
+      },
+      "event_type": {
+        "type": "string"
+      },
+      "actor_id": {
+        "type": "string"
+      },
+      "source_command_id": {
+        "type": "string"
+      },
+      "source_task_id": {
+        "type": "string"
+      },
+      "summary": {
+        "type": "string"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "occurred_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "conversation_id",
+      "event_type",
+      "occurred_at_ms"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "conversation_id",
+      "event_type",
+      "source_command_id",
+      [
+        "conversation_id",
+        "occurred_at_ms"
+      ]
+    ],
+    "additionalProperties": true
+  },
+  "support_conversations": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "inbox_id": {
+        "type": "string"
+      },
+      "primary_thread_key": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "status": {
+        "type": "string"
+      },
+      "priority": {
+        "type": "string"
+      },
+      "assignee_id": {
+        "type": "string"
+      },
+      "team_id": {
+        "type": "string"
+      },
+      "customer_account_id": {
+        "type": "string"
+      },
+      "customer_contact_id": {
+        "type": "string"
+      },
+      "ticket_case_id": {
+        "type": "string"
+      },
+      "last_message_key": {
+        "type": "string"
+      },
+      "last_activity_at_ms": {
+        "type": "number"
+      },
+      "waiting_since_ms": {
+        "type": "number"
+      },
+      "snoozed_until_ms": {
+        "type": "number"
+      },
+      "unread_count": {
+        "type": "number"
+      },
+      "label_ids": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "custom_attributes": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "search_text": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "status",
+      "priority",
+      "last_activity_at_ms",
+      "search_text"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "inbox_id",
+      "status",
+      "priority",
+      "assignee_id",
+      "team_id",
+      "customer_account_id",
+      "customer_contact_id",
+      "last_activity_at_ms",
+      [
+        "status",
+        "last_activity_at_ms"
+      ],
+      [
+        "assignee_id",
+        "last_activity_at_ms"
+      ],
+      [
+        "team_id",
+        "last_activity_at_ms"
+      ]
+    ],
+    "additionalProperties": true
+  },
+  "support_identity_links": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "channel": {
+        "type": "string"
+      },
+      "account_key": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "external_identity": {
+        "type": "string"
+      },
+      "normalized_identity": {
+        "type": "string"
+      },
+      "customer_account_id": {
+        "type": "string"
+      },
+      "customer_contact_id": {
+        "type": "string"
+      },
+      "confidence": {
+        "type": "number"
+      },
+      "status": {
+        "type": "string"
+      },
+      "source": {
+        "type": "string"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "channel",
+      "normalized_identity",
+      "status"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "channel",
+      "account_key",
+      "normalized_identity",
+      "customer_contact_id",
+      "status"
+    ],
+    "additionalProperties": true
+  },
+  "support_inboxes": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "name": {
+        "type": "string"
+      },
+      "description": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "channel_filters_json": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "team_id": {
+        "type": "string"
+      },
+      "assignment_policy_id": {
+        "type": "string"
+      },
+      "sla_policy_id": {
+        "type": "string"
+      },
+      "policy_json": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "is_default": {
+        "type": "boolean"
+      },
+      "sort_key": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "name",
+      "status"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "status",
+      "team_id",
+      "is_default"
+    ],
+    "additionalProperties": true
+  },
+  "support_label_assignments": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "conversation_id": {
+        "type": "string"
+      },
+      "label_id": {
+        "type": "string"
+      },
+      "assigned_by_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "conversation_id",
+      "label_id"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "conversation_id",
+      "label_id",
+      [
+        "conversation_id",
+        "updated_at_ms"
+      ]
+    ],
+    "additionalProperties": true
+  },
+  "support_labels": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "title": {
+        "type": "string"
+      },
+      "color": {
+        "type": "string"
+      },
+      "description": {
+        "type": "string"
+      },
+      "sidebar": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "title"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "title",
+      "sidebar"
+    ],
+    "additionalProperties": true
+  },
+  "support_macros": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "title": {
+        "type": "string"
+      },
+      "visibility": {
+        "type": "string"
+      },
+      "owner_id": {
+        "type": "string"
+      },
+      "actions_json": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "title",
+      "visibility"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "visibility",
+      "owner_id"
+    ],
+    "additionalProperties": true
+  },
+  "support_notes": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "conversation_id": {
+        "type": "string"
+      },
+      "author_id": {
+        "type": "string"
+      },
+      "body": {
+        "type": "string"
+      },
+      "visibility": {
+        "type": "string"
+      },
+      "source": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "conversation_id",
+      "body",
+      "visibility"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "conversation_id",
+      "author_id",
+      [
+        "conversation_id",
+        "created_at_ms"
+      ]
+    ],
+    "additionalProperties": true
+  },
+  "support_reporting_events": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "conversation_id": {
+        "type": "string"
+      },
+      "event_name": {
+        "type": "string"
+      },
+      "metric_name": {
+        "type": "string"
+      },
+      "value_ms": {
+        "type": "number"
+      },
+      "occurred_at_ms": {
+        "type": "number"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "event_name",
+      "occurred_at_ms"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "conversation_id",
+      "event_name",
+      "metric_name",
+      [
+        "event_name",
+        "occurred_at_ms"
+      ]
+    ],
+    "additionalProperties": true
+  },
+  "support_reporting_rollups": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "rollup_key": {
+        "type": "string"
+      },
+      "bucket_start_ms": {
+        "type": "number"
+      },
+      "bucket_end_ms": {
+        "type": "number"
+      },
+      "metric_name": {
+        "type": "string"
+      },
+      "dimensions": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "value": {
+        "type": "number"
+      },
+      "count": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "rollup_key",
+      "bucket_start_ms",
+      "metric_name"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "rollup_key",
+      "metric_name",
+      "bucket_start_ms"
+    ],
+    "additionalProperties": true
+  },
+  "support_sla_events": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "conversation_id": {
+        "type": "string"
+      },
+      "applied_sla_id": {
+        "type": "string"
+      },
+      "event_type": {
+        "type": "string"
+      },
+      "occurred_at_ms": {
+        "type": "number"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "conversation_id",
+      "event_type",
+      "occurred_at_ms"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "conversation_id",
+      "applied_sla_id",
+      "event_type",
+      [
+        "conversation_id",
+        "occurred_at_ms"
+      ]
+    ],
+    "additionalProperties": true
+  },
+  "support_sla_policies": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "name": {
+        "type": "string"
+      },
+      "active": {
+        "type": "boolean"
+      },
+      "first_response_target_ms": {
+        "type": "number"
+      },
+      "next_response_target_ms": {
+        "type": "number"
+      },
+      "resolution_target_ms": {
+        "type": "number"
+      },
+      "business_hours_json": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "name",
+      "active"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "active"
+    ],
+    "additionalProperties": true
+  },
+  "support_thread_links": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "conversation_id": {
+        "type": "string"
+      },
+      "thread_key": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "channel": {
+        "type": "string"
+      },
+      "account_key": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "link_role": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "conversation_id",
+      "thread_key"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "conversation_id",
+      "thread_key",
+      [
+        "conversation_id",
+        "updated_at_ms"
+      ]
+    ],
+    "additionalProperties": true
+  },
+  "support_view_filters": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "view_id": {
+        "type": "string"
+      },
+      "field": {
+        "type": "string"
+      },
+      "operator": {
+        "type": "string"
+      },
+      "value": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "position": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "view_id",
+      "field",
+      "operator"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "view_id",
+      "field",
+      "position"
+    ],
+    "additionalProperties": true
+  },
+  "support_views": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "title": {
+        "type": "string"
+      },
+      "owner_id": {
+        "type": "string"
+      },
+      "scope": {
+        "type": "string"
+      },
+      "position": {
+        "type": "number"
+      },
+      "filters_json": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "sorts_json": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "title",
+      "scope"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "owner_id",
+      "scope",
+      "position"
+    ],
+    "additionalProperties": true
   }
 }

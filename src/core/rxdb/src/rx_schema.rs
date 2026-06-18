@@ -255,9 +255,7 @@ pub fn validate_write_document(
             continue;
         }
         match obj.get(req) {
-            None | Some(Value::Null) => {
-                return Err(format!("required field '{req}' is missing"))
-            }
+            None | Some(Value::Null) => return Err(format!("required field '{req}' is missing")),
             _ => {}
         }
     }
@@ -283,7 +281,9 @@ pub fn validate_write_document(
             _ => true, // compound/unknown declared types: do not reject
         };
         if !type_ok {
-            return Err(format!("field '{name}' has wrong type (expected {declared})"));
+            return Err(format!(
+                "field '{name}' has wrong type (expected {declared})"
+            ));
         }
         if declared == "string" {
             if let (Some(max), Some(s)) = (prop.max_length, value.as_str()) {
@@ -350,6 +350,6 @@ mod write_validation_tests {
         bad(json!({"id":"a","title":null})); // required null
         bad(json!({"id":"a","title":"hi","count":"NaN"})); // wrong type
         bad(json!({"id":"a","title":"way-too-long-title"})); // maxLength 8
-        bad(json!(["not","an","object"])); // not an object
+        bad(json!(["not", "an", "object"])); // not an object
     }
 }

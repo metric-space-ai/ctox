@@ -1,4 +1,13 @@
 import { showBusinessConfirm } from './dialogs.js';
+import { appReleaseProjection } from './app-lifecycle.js';
+import { canModifyBusinessModule } from './permissions.js';
+import {
+  assignableRolesForActor,
+  normalizeRole,
+  roleCanManage,
+  roleDisplayName,
+} from './roles.js';
+import { renderModuleWhyDiagnosticsHtml } from './shell-permissions-ui.js';
 
 export async function openReactSettings({
   mount,
@@ -24,7 +33,6 @@ export async function openReactSettings({
   const user = session?.user || {};
   const role = resolveRole(session);
   const isAdmin = roleCanManage(role);
-  const canOpenAdmin = isAdmin || role === 'founder';
   const settingsState = {
     tab: initialTab || 'runtime',
     commandStatus: '',
@@ -33,10 +41,20 @@ export async function openReactSettings({
     runtimeLoading: false,
     users: null,
     canManageUsers: false,
+    activity: {
+      events: [],
+      loading: false,
+      loaded: false,
+      error: '',
+    },
     modules: Array.isArray(modules) ? modules : [],
     governance,
     templates: null,
     editingModuleId: '',
+    moduleWhyDiagnostics: {},
+    moduleWhyStatus: {},
+    moduleSupportDiagnostics: {},
+    moduleSupportStatus: {},
     channels: {
       accounts: [],
       wizard: null,
@@ -129,7 +147,48 @@ export async function openReactSettings({
     render();
   };
 
+  const refreshActivity = async () => {
+    if (!isAdmin) return;
+    settingsState.activity = {
+      ...settingsState.activity,
+      loading: true,
+      error: '',
+    };
+    render();
+    try {
+      const payload = await loadBusinessActivity({ commandBus, db, session, sync });
+      settingsState.activity = {
+        events: Array.isArray(payload.events) ? payload.events : [],
+        loading: false,
+        loaded: true,
+        error: '',
+      };
+    } catch (error) {
+      settingsState.activity = {
+        ...settingsState.activity,
+        loading: false,
+        loaded: true,
+        error: String(error?.message || error),
+      };
+    }
+    render();
+  };
+  const revokeModuleSupportDownloadUrl = (moduleId) => {
+    const status = settingsState.moduleSupportStatus?.[moduleId];
+    if (status?.downloadUrl && globalThis.URL?.revokeObjectURL) {
+      try { globalThis.URL.revokeObjectURL(status.downloadUrl); } catch {}
+    }
+  };
+  const revokeModuleSupportDownloadUrls = () => {
+    Object.keys(settingsState.moduleSupportStatus || {}).forEach(revokeModuleSupportDownloadUrl);
+  };
+
   const render = () => {
+    const canOpenAdmin = canOpenModuleAdmin({
+      modules: settingsState.modules.length ? settingsState.modules : modules,
+      session,
+      governance: settingsState.governance,
+    });
     body.innerHTML = settingsTemplate({
       modules,
       managedModules: settingsState.modules,
@@ -147,7 +206,12 @@ export async function openReactSettings({
       runtimeLoading: settingsState.runtimeLoading,
       users: settingsState.users,
       canManageUsers: settingsState.canManageUsers,
+      activity: settingsState.activity,
       editingModuleId: settingsState.editingModuleId,
+      moduleWhyDiagnostics: settingsState.moduleWhyDiagnostics,
+      moduleWhyStatus: settingsState.moduleWhyStatus,
+      moduleSupportDiagnostics: settingsState.moduleSupportDiagnostics,
+      moduleSupportStatus: settingsState.moduleSupportStatus,
       governance: settingsState.governance,
       channels: settingsState.channels,
     });
@@ -158,6 +222,7 @@ export async function openReactSettings({
         clearInterval(settingsState.channels.qrPoll);
         settingsState.channels.qrPoll = null;
       }
+      revokeModuleSupportDownloadUrls();
       onClose?.();
     });
     body.querySelector('[data-open-account-settings]')?.addEventListener('click', onAccount);
@@ -182,6 +247,9 @@ export async function openReactSettings({
         if (settingsState.tab === 'channels') {
           ensureChannelCollections().then(refreshChannelAccounts).catch(refreshChannelAccounts);
           startChannelAccountsSub();
+        }
+        if (settingsState.tab === 'activity' && isAdmin && !settingsState.activity.loaded) {
+          refreshActivity();
         }
       });
     });
@@ -230,6 +298,7 @@ export async function openReactSettings({
       render();
     });
     body.querySelector('[data-runtime-refresh]')?.addEventListener('click', refreshRuntimeSettings);
+    body.querySelector('[data-activity-refresh]')?.addEventListener('click', refreshActivity);
     body.querySelector('[data-runtime-authorize-subscription]')?.addEventListener('click', async () => {
       const authWindow = window.open('', 'ctox-chatgpt-subscription');
       settingsState.subscriptionAuth = { status: 'starting', message: 'Geräte-Code wird bei CTOX angefordert.' };
@@ -327,48 +396,100 @@ export async function openReactSettings({
         render();
       });
     });
+    body.querySelectorAll('[data-module-why]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const moduleId = button.dataset.moduleWhy || '';
+        if (!moduleId) return;
+        settingsState.moduleWhyStatus = {
+          ...settingsState.moduleWhyStatus,
+          [moduleId]: { loading: true, error: '' },
+        };
+        settingsState.commandStatus = `Zugriff für ${moduleId} wird geprüft...`;
+        render();
+        try {
+          const diagnostics = await loadModuleWhyDiagnostics(moduleId, {
+            commandBus,
+            db,
+            session,
+            sync,
+          });
+          settingsState.moduleWhyDiagnostics = {
+            ...settingsState.moduleWhyDiagnostics,
+            [moduleId]: diagnostics,
+          };
+          settingsState.moduleWhyStatus = {
+            ...settingsState.moduleWhyStatus,
+            [moduleId]: { loading: false, error: '' },
+          };
+          settingsState.commandStatus = `Zugriff für ${moduleId} geprüft.`;
+        } catch (error) {
+          settingsState.moduleWhyStatus = {
+            ...settingsState.moduleWhyStatus,
+            [moduleId]: { loading: false, error: String(error?.message || error) },
+          };
+          settingsState.commandStatus = String(error?.message || error);
+        }
+        render();
+      });
+    });
+    body.querySelectorAll('[data-module-support-diagnostics]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const moduleId = button.dataset.moduleSupportDiagnostics || '';
+        if (!moduleId) return;
+        revokeModuleSupportDownloadUrl(moduleId);
+        settingsState.moduleSupportStatus = {
+          ...settingsState.moduleSupportStatus,
+          [moduleId]: { loading: true, error: '', downloadUrl: '', downloadName: '' },
+        };
+        settingsState.commandStatus = `Support-Paket für ${moduleId} wird erstellt...`;
+        render();
+        try {
+          const artifact = await exportSupportDiagnosticsArtifact(moduleId, {
+            commandBus,
+            db,
+            session,
+            sync,
+          });
+          const download = createSupportDiagnosticsDownload(artifact, moduleId);
+          settingsState.moduleSupportDiagnostics = {
+            ...settingsState.moduleSupportDiagnostics,
+            [moduleId]: artifact,
+          };
+          settingsState.moduleSupportStatus = {
+            ...settingsState.moduleSupportStatus,
+            [moduleId]: {
+              loading: false,
+              error: '',
+              downloadUrl: download.url,
+              downloadName: download.filename,
+            },
+          };
+          settingsState.commandStatus = `Support-Paket für ${moduleId} erstellt.`;
+        } catch (error) {
+          settingsState.moduleSupportStatus = {
+            ...settingsState.moduleSupportStatus,
+            [moduleId]: {
+              loading: false,
+              error: String(error?.message || error),
+              downloadUrl: '',
+              downloadName: '',
+            },
+          };
+          settingsState.commandStatus = String(error?.message || error);
+        }
+        render();
+      });
+    });
     body.querySelectorAll('[data-founder-save]').forEach((button) => {
       button.addEventListener('click', async () => {
         const moduleId = button.dataset.founderSave || '';
         const userId = body.querySelector(`[data-founder-user="${cssEscape(moduleId)}"]`)?.value?.trim() || '';
         if (!moduleId || !userId) return;
-        settingsState.commandStatus = 'Founder-Zuordnung wird gespeichert...';
+        settingsState.commandStatus = 'Verantwortlichen-Zuordnung wird gespeichert...';
         render();
         try {
           settingsState.governance = await assignFounder(moduleId, userId, true, { commandBus, db, session });
-          settingsState.commandStatus = `${userId} ist Founder für ${moduleId}.`;
-        } catch (error) {
-          settingsState.commandStatus = String(error?.message || error);
-        }
-        render();
-      });
-    });
-    body.querySelectorAll('[data-module-release]').forEach((button) => {
-      button.addEventListener('click', async () => {
-        const moduleId = button.dataset.moduleRelease || '';
-        settingsState.commandStatus = 'Modul-Version wird gespeichert...';
-        render();
-        try {
-          settingsState.governance = await releaseModule(moduleId, { commandBus, db, session });
-          settingsState.commandStatus = `Version für ${moduleId} gespeichert.`;
-        } catch (error) {
-          settingsState.commandStatus = String(error?.message || error);
-        }
-        render();
-      });
-    });
-    body.querySelectorAll('[data-module-rollback]').forEach((button) => {
-      button.addEventListener('click', async () => {
-        const moduleId = button.dataset.moduleRollback || '';
-        const versionId = body.querySelector(`[data-rollback-version="${cssEscape(moduleId)}"]`)?.value || '';
-        if (!moduleId || !versionId) return;
-        settingsState.commandStatus = 'Rollback wird angewendet...';
-        render();
-        try {
-          settingsState.governance = await rollbackModule(moduleId, versionId, { commandBus, db, session });
-          settingsState.commandStatus = `Rollback für ${moduleId} angewendet.`;
-          await refreshManagedModules();
-          await onModulesChanged?.();
+          settingsState.commandStatus = `${userId} ist verantwortlich für ${moduleId}.`;
         } catch (error) {
           settingsState.commandStatus = String(error?.message || error);
         }
@@ -458,8 +579,15 @@ export async function openReactSettings({
     startChannelAccountsSub();
   }
   refreshUsers();
-  if (settingsState.tab === 'admin' && canOpenAdmin) {
+  if (settingsState.tab === 'admin' && canOpenModuleAdmin({
+    modules: settingsState.modules.length ? settingsState.modules : modules,
+    session,
+    governance: settingsState.governance,
+  })) {
     refreshManagedModules();
+  }
+  if (settingsState.tab === 'activity' && isAdmin) {
+    refreshActivity();
   }
 }
 
@@ -480,7 +608,12 @@ function settingsTemplate({
   runtimeLoading,
   users,
   canManageUsers,
+  activity,
   editingModuleId,
+  moduleWhyDiagnostics,
+  moduleWhyStatus,
+  moduleSupportDiagnostics,
+  moduleSupportStatus,
   governance,
   channels,
 }) {
@@ -496,7 +629,7 @@ function settingsTemplate({
         <strong>${escapeHtml(user.display_name || user.id || 'Nicht eingeloggt')}</strong>
         <span>${escapeHtml(user.id || 'keine Session')}</span>
       </div>
-      <mark class="role-badge">${escapeHtml(role)}</mark>
+      <mark class="role-badge">${escapeHtml(roleDisplayName(role))}</mark>
     </section>
 
     <nav class="settings-tabs" aria-label="Settings Bereiche">
@@ -504,6 +637,7 @@ function settingsTemplate({
       ${tabButton('channels', 'Channels', tab)}
       ${tabButton('sync', 'Sync', tab)}
       ${tabButton('users', 'Nutzer', tab)}
+      ${isAdmin ? tabButton('activity', 'Aktivität', tab) : ''}
       ${canOpenAdmin ? tabButton('admin', 'Module', tab) : ''}
     </nav>
 
@@ -512,7 +646,17 @@ function settingsTemplate({
       ${tab === 'channels' ? channelsPanel(channels) : ''}
       ${tab === 'sync' ? syncPanel(syncConfig, isAdmin) : ''}
       ${tab === 'users' ? usersPanel(user, role, isAdmin, users, canManageUsers) : ''}
-      ${tab === 'admin' && canOpenAdmin ? adminPanel(managedModules || modules, templates, editingModuleId, { isAdmin, role, user, governance }) : ''}
+      ${tab === 'activity' && isAdmin ? activityPanel(activity) : ''}
+      ${tab === 'admin' && canOpenAdmin ? adminPanel(managedModules || modules, templates, editingModuleId, {
+    isAdmin,
+    role,
+    user,
+    governance,
+    moduleWhyDiagnostics,
+    moduleWhyStatus,
+    moduleSupportDiagnostics,
+    moduleSupportStatus,
+  }) : ''}
     </div>
 
     <footer class="settings-footer">
@@ -649,7 +793,7 @@ function runtimePanel(isAdmin, runtimeSettings, runtimeLoading, subscriptionAuth
     <section class="settings-section">
       <header><h3>Queue Policy</h3><span>Operative Arbeit läuft über CTOX Tasks.</span></header>
       <div class="settings-grid is-one">
-        <label><span>Founder Review</span><select data-policy-review ${isAdmin ? '' : 'disabled'}><option value="strict-founder-review">Externe Nachrichten immer prüfen</option><option value="internal-autonomy">Interne Tasks autonom</option></select></label>
+        <label><span>Verantwortlichen-Prüfung</span><select data-policy-review ${isAdmin ? '' : 'disabled'}><option value="strict-founder-review">Externe Nachrichten immer prüfen</option><option value="internal-autonomy">Interne Tasks autonom</option></select></label>
       </div>
       ${isAdmin ? `<button class="text-button settings-primary" type="button" data-settings-command="policy">Policy prüfen lassen</button>` : ''}
     </section>
@@ -687,21 +831,22 @@ function usersPanel(user, role, isAdmin, users, canManageUsers) {
     role,
     active: true,
   }];
+  const roleOptions = assignableRolesForActor(role);
   return `
     <section class="settings-section">
       <header><h3>Aktive Sitzung</h3><span>${escapeHtml(roleDisplayName(role))} Session</span></header>
       <table class="settings-table">
         <tbody>
-          <tr><th>User</th><td>${escapeHtml(user.display_name || user.id || '-')}</td></tr>
+          <tr><th>Teammitglied</th><td>${escapeHtml(user.display_name || user.id || '-')}</td></tr>
           <tr><th>ID</th><td>${escapeHtml(user.id || '-')}</td></tr>
           <tr><th>Rolle</th><td>${escapeHtml(roleDisplayName(role))}</td></tr>
         </tbody>
       </table>
     </section>
     <section class="settings-section">
-      <header><h3>User Management</h3><span>${escapeHtml(canManageUsers ? 'Persistenter Business-OS User Store.' : 'Nur eigene Sitzung sichtbar.')}</span></header>
+      <header><h3>Team & Zugaenge</h3><span>${escapeHtml(canManageUsers ? 'Persistenter Business-OS Team Store.' : 'Nur eigene Sitzung sichtbar.')}</span></header>
       <table class="settings-table">
-        <thead><tr><th>User</th><th>Rolle</th><th>Status</th></tr></thead>
+        <thead><tr><th>Teammitglied</th><th>Rolle</th><th>Status</th></tr></thead>
         <tbody>
           ${rows.map((row) => `
             <tr>
@@ -714,19 +859,181 @@ function usersPanel(user, role, isAdmin, users, canManageUsers) {
       </table>
       ${canManageUsers ? `
         <div class="settings-user-form">
-          <input data-user-id placeholder="user-id" />
+          <input data-user-id placeholder="team-id" />
           <input data-user-name placeholder="Anzeigename" />
           <select data-user-role>
-            <option value="user">User</option>
-            <option value="founder">Founder</option>
-            <option value="admin">Admin</option>
-            <option value="chef">Chef</option>
+            ${roleOptions.map((option) => `<option value="${escapeAttr(option)}">${escapeHtml(roleDisplayName(option))}</option>`).join('')}
           </select>
           <button class="text-button settings-primary" type="button" data-user-save>Nutzer speichern</button>
         </div>
       ` : `<p class="settings-note">Nutzerverwaltung ist für Admins sichtbar.</p>`}
     </section>
   `;
+}
+
+function activityPanel(activity = {}) {
+  const events = Array.isArray(activity.events) ? activity.events : [];
+  const summary = activity.loading
+    ? 'Aktivität wird geladen.'
+    : `${events.length} Einträge`;
+  return `
+    <section class="settings-section">
+      <header>
+        <h3>Aktivität</h3>
+        <span>${escapeHtml(summary)}</span>
+      </header>
+      <div class="runtime-actions">
+        <button class="text-button settings-primary" type="button" data-activity-refresh ${activity.loading ? 'disabled' : ''}>Neu laden</button>
+      </div>
+      ${activity.error ? `<p class="settings-note">${escapeHtml(activity.error)}</p>` : ''}
+      ${events.length ? `
+        <table class="settings-table">
+          <thead><tr><th>Ereignis</th><th>Ausgeführt von</th><th>Zeit</th></tr></thead>
+          <tbody>
+            ${events.map(activityRow).join('')}
+          </tbody>
+        </table>
+      ` : `<p class="settings-note">${escapeHtml(activity.loaded ? 'Noch keine Aktivität.' : 'Noch nicht geladen.')}</p>`}
+    </section>
+  `;
+}
+
+function activityRow(event) {
+  const payload = event?.payload || {};
+  const actor = payload.actor || {};
+  const observedAt = Number(event?.observed_at_ms || payload.observed_at_ms || 0);
+  return `
+    <tr>
+      <td>
+        <strong>${escapeHtml(activityTitle(event))}</strong>
+        <small>${escapeHtml(activityDetail(event))}</small>
+      </td>
+      <td>${escapeHtml(actor.display_name || actor.id || '-')}</td>
+      <td>${escapeHtml(formatMsShort(observedAt))}</td>
+    </tr>
+  `;
+}
+
+function activityTitle(event) {
+  const type = String(event?.type || event?.payload?.event_type || '');
+  if (type === 'business_os.policy.allowed') return 'Aktion erlaubt';
+  if (type === 'business_os.policy.denied') return 'Aktion blockiert';
+  if (type === 'business_os.user.changed') return 'Teammitglied aktualisiert';
+  if (type === 'business_os.app_responsibility.changed') return 'App-Verantwortung aktualisiert';
+  if (type === 'business_os.external_approval.decided') return 'Externe Freigabe entschieden';
+  if (type === 'business_os.module.release.succeeded') return 'App-Version veröffentlicht';
+  if (type === 'business_os.module.release.failed') return 'App-Freigabe fehlgeschlagen';
+  if (type === 'business_os.module.rollback.succeeded') return 'App-Rollback angewendet';
+  if (type === 'business_os.module.rollback.failed') return 'App-Rollback fehlgeschlagen';
+  return 'Aktivität';
+}
+
+function activityDetail(event) {
+  const payload = event?.payload || {};
+  const type = String(event?.type || payload.event_type || '');
+  if (type === 'business_os.policy.allowed') {
+    return `${activityCommandLabel(payload.command_type)} wurde erlaubt.`;
+  }
+  if (type === 'business_os.policy.denied') {
+    return `${activityCommandLabel(payload.command_type)} wurde blockiert.`;
+  }
+  if (type === 'business_os.user.changed') {
+    const previous = payload.previous || {};
+    const current = payload.current || {};
+    const name = current.display_name || current.id || payload.user_id || event?.record_id || 'Teammitglied';
+    if (previous.role && current.role && previous.role !== current.role) {
+      return `${name}: ${roleDisplayName(previous.role)} -> ${roleDisplayName(current.role)}`;
+    }
+    if (typeof previous.active === 'boolean' && typeof current.active === 'boolean' && previous.active !== current.active) {
+      return `${name}: ${current.active ? 'aktiviert' : 'deaktiviert'}`;
+    }
+    return `${name} wurde aktualisiert.`;
+  }
+  if (type === 'business_os.app_responsibility.changed') {
+    const current = payload.current || {};
+    const moduleId = payload.module_id || current.module_id || 'App';
+    const userId = payload.user_id || current.user_id || 'Teammitglied';
+    const active = current.active !== false;
+    return active
+      ? `${userId} ist verantwortlich für ${moduleId}.`
+      : `${userId} ist nicht mehr verantwortlich für ${moduleId}.`;
+  }
+  if (type === 'business_os.external_approval.decided') {
+    const message = payload.message || {};
+    const messageId = payload.message_id || message.id || 'Nachricht';
+    return `${messageId}: ${approvalDecisionLabel(payload.decision)}`;
+  }
+  if (type === 'business_os.module.release.succeeded' || type === 'business_os.module.release.failed') {
+    const summary = payload.summary || {};
+    const moduleId = summary.module_id || payload.record_id || event?.record_id || 'App';
+    const version = activityVersionLabel(summary.target_version || summary.version_id);
+    const audience = releaseChannelLabel(summary.release_channel);
+    return type.endsWith('.succeeded')
+      ? `${moduleId}: Version ${version} wurde für ${audience} veröffentlicht.`
+      : `${moduleId}: Version ${version} konnte nicht veröffentlicht werden.`;
+  }
+  if (type === 'business_os.module.rollback.succeeded' || type === 'business_os.module.rollback.failed') {
+    const summary = payload.summary || {};
+    const moduleId = summary.module_id || payload.record_id || event?.record_id || 'App';
+    const version = activityVersionLabel(summary.target_version
+      || summary.rollback_version_id
+      || summary.version_id
+      || summary.rolled_back_to
+      || '');
+    return type.endsWith('.succeeded')
+      ? `${moduleId}: Rollback auf ${version} wurde angewendet.`
+      : `${moduleId}: Rollback auf ${version} konnte nicht angewendet werden.`;
+  }
+  return 'Business-OS Aktivität.';
+}
+
+function approvalDecisionLabel(decision) {
+  return {
+    approved: 'freigegeben',
+    rejected: 'abgelehnt',
+    changes_requested: 'Änderungen angefordert',
+  }[String(decision || '')] || 'entschieden';
+}
+
+function releaseChannelLabel(channel) {
+  return {
+    team: 'Team',
+    restricted: 'ausgewählte Personen',
+    private: 'nur mich',
+  }[String(channel || '')] || 'Team';
+}
+
+function activityVersionLabel(value) {
+  const text = String(value || '').trim();
+  if (!text) return 'gewählte Version';
+  if (/^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(text)) return text.replace(/^v/i, '');
+  if (/^(?:version|modver|modrel|cmd|evt)[_-]/i.test(text) || /^[0-9a-f]{8,}(?:-[0-9a-f]{4,})*/i.test(text)) {
+    return 'gewählte Version';
+  }
+  return text;
+}
+
+function activityCommandLabel(commandType) {
+  return {
+    'ctox.runtime_settings.save': 'Runtime ändern',
+    'ctox.subscription_auth.start': 'ChatGPT Login starten',
+    'ctox.business_os.user.upsert': 'Teammitglied speichern',
+    'ctox.business_os.audit.list': 'Aktivität ansehen',
+    'ctox.channel.configure': 'Channel konfigurieren',
+    'ctox.source.save': 'App-Datei speichern',
+    'ctox.source.rollback_snapshot': 'App-Datei zurückrollen',
+    'ctox.module.release': 'Version speichern',
+    'ctox.module.assign_founder': 'Verantwortliche:n zuweisen',
+    'ctox.module.save': 'Modul ändern',
+    'ctox.module.delete': 'Modul löschen',
+    'ctox.module.install_template': 'Modul hinzufügen',
+    'ctox.module.rollback': 'Rollback anwenden',
+    'ctox.module.rollback_version': 'Rollback anwenden',
+    'ctox.business_os.why': 'Zugriff erklären',
+    'ctox.business_os.support.export_diagnostics': 'Support-Diagnose exportieren',
+    'ctox.app_store.install': 'App installieren',
+    'ctox.app_store.uninstall': 'App entfernen',
+  }[String(commandType || '')] || 'Aktion';
 }
 
 function adminPanel(modules, templates, editingModuleId, permissions) {
@@ -748,6 +1055,7 @@ function adminPanel(modules, templates, editingModuleId, permissions) {
       ${editingModuleId ? moduleEditForm(rows.find((mod) => mod.id === editingModuleId)) : ''}
       <button class="text-button settings-primary" type="button" data-module-refresh>Module neu laden</button>
     </section>
+	    ${permissions.isAdmin ? agentGrantBoundaryPanel(permissions.governance, modules) : ''}
 	    ${permissions.isAdmin ? `<section class="settings-section">
 	      <header><h3>Modul hinzufügen</h3><span>Blanko oder aus Template.</span></header>
       <div class="settings-grid is-one">
@@ -764,12 +1072,105 @@ function adminPanel(modules, templates, editingModuleId, permissions) {
 	    ${permissions.isAdmin ? `<section class="settings-section">
 	      <header><h3>Inbound / Outbound</h3><span>Wie in der TUI als CTOX-gesteuerte Policy.</span></header>
       <div class="settings-grid is-one">
-        <label><span>Inbound</span><select data-inbound-policy><option value="business-os">Business OS Commands</option><option value="founder">Founder Messages</option><option value="tickets">Tickets / Issues</option></select></label>
-        <label><span>Outbound</span><select data-outbound-policy><option value="strict-founder-review">Strict Founder Review</option><option value="internal-autonomy">Internal Autonomy</option></select></label>
+        <label><span>Inbound</span><select data-inbound-policy><option value="business-os">Business OS Commands</option><option value="founder">Verantwortlichen-Nachrichten</option><option value="tickets">Tickets / Issues</option></select></label>
+        <label><span>Outbound</span><select data-outbound-policy><option value="strict-founder-review">Verantwortlichen-Prüfung</option><option value="internal-autonomy">Interne Autonomie</option></select></label>
       </div>
 	      <button class="text-button settings-primary" type="button" data-settings-command="routing">Routing Policy an CTOX geben</button>
 	    </section>` : ''}
 	  `;
+}
+
+function agentGrantBoundaryPanel(governance, modules = []) {
+  const grants = explicitGrantRows(governance);
+  return `
+    <section class="settings-section" data-agent-grant-boundary>
+      <header>
+        <h3>Agent- und App-Zugriff</h3>
+        <span>${escapeHtml(`${grants.length} Sonderfreigaben`)}</span>
+      </header>
+      <p class="settings-note">Diese Ansicht zeigt aktive Sonderfreigaben aus der CTOX Policy. Änderungen laufen über Owner/Admin-Policy, nicht direkt in Settings.</p>
+      ${grants.length ? `
+        <table class="settings-table agent-grants-table">
+          <thead><tr><th>Wer</th><th>Darf</th><th>Wo</th><th>Status</th></tr></thead>
+          <tbody>
+            ${grants.map((grant) => `
+              <tr>
+                <td><strong>${escapeHtml(subjectGrantLabel(grant))}</strong><small>${escapeHtml(grant.subject_id || '')}</small></td>
+                <td>${escapeHtml(permissionGrantLabel(grant.permission))}</td>
+                <td>${escapeHtml(scopeGrantLabel(grant, modules))}</td>
+                <td>${escapeHtml(grant.active === false ? 'Inaktiv' : 'Aktiv')}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      ` : '<p class="settings-note">Keine Sonderfreigaben. Teammitglieder sehen Team-Versionen und nutzen nur die Datenrechte aus ihrer Rolle oder App-Zuweisung.</p>'}
+    </section>
+  `;
+}
+
+function explicitGrantRows(governance) {
+  const grants = governance?.permission_model?.explicit_grants
+    || governance?.governance?.permission_model?.explicit_grants
+    || [];
+  return (Array.isArray(grants) ? grants : [])
+    .filter((grant) => grant && grant.active !== false)
+    .map((grant) => ({
+      grant_id: String(grant.grant_id || ''),
+      subject_type: String(grant.subject_type || ''),
+      subject_id: String(grant.subject_id || ''),
+      permission: String(grant.permission || ''),
+      scope_type: String(grant.scope_type || ''),
+      scope_id: String(grant.scope_id || ''),
+      active: grant.active,
+    }));
+}
+
+function subjectGrantLabel(grant) {
+  const type = String(grant?.subject_type || '').toLowerCase();
+  if (['agent', 'mcp_actor', 'service_actor'].includes(type)) return 'Agent';
+  if (type === 'user') return 'Teammitglied';
+  if (type === 'role') return 'Rolle';
+  if (type === 'team') return 'Team';
+  return 'Akteur';
+}
+
+function permissionGrantLabel(permission) {
+  return {
+    'apps.view': 'App sehen',
+    'apps.modify': 'App ändern',
+    'apps.source.view': 'Source ansehen',
+    'apps.release': 'Version freigeben',
+    'apps.rollback': 'Rollback anwenden',
+    'data.read': 'Daten lesen',
+    'data.write': 'Daten ändern',
+    'external.approve': 'Externe Wirkung freigeben',
+    'mcp.manage': 'MCP verwalten',
+    'users.manage': 'Team verwalten',
+  }[String(permission || '')] || 'Sonderrecht';
+}
+
+function businessCollectionLabel(collectionId) {
+  return String(collectionId || '')
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ') || 'Daten';
+}
+
+function scopeGrantLabel(grant, modules = []) {
+  const type = String(grant?.scope_type || '').toLowerCase();
+  const id = String(grant?.scope_id || '').trim();
+  if (type === 'workspace') return 'Workspace';
+  if (type === 'module') {
+    const mod = (Array.isArray(modules) ? modules : []).find((item) => item?.id === id);
+    return `App ${mod?.title || id}`;
+  }
+  if (type === 'collection') return `Datenbereich ${businessCollectionLabel(id)} (${id})`;
+  if (type === 'record') return `Datensatz ${id}`;
+  if (type === 'task') return `Task ${id}`;
+  if (type === 'approval') return `Freigabe ${id}`;
+  if (type === 'mcp') return `MCP ${id || 'Business OS'}`;
+  return id || 'Scope';
 }
 
 function moduleRow(mod, editingModuleId, permissions) {
@@ -777,6 +1178,13 @@ function moduleRow(mod, editingModuleId, permissions) {
   const canDelete = moduleCanDelete(mod);
   const releases = releasesForModule(permissions.governance, mod.id);
   const founders = foundersForModule(permissions.governance, mod.id);
+  const releaseFacts = moduleReleaseProjectionHtml(mod);
+  const whyStatus = permissions.moduleWhyStatus?.[mod.id] || {};
+  const whyDiagnostics = permissions.moduleWhyDiagnostics?.[mod.id] || null;
+  const whyHtml = moduleWhyDiagnosticsHtml(whyDiagnostics, whyStatus);
+  const supportStatus = permissions.moduleSupportStatus?.[mod.id] || {};
+  const supportDiagnostics = permissions.moduleSupportDiagnostics?.[mod.id] || null;
+  const supportHtml = moduleSupportDiagnosticsHtml(supportDiagnostics, supportStatus, mod);
   return `
     <tr ${editingModuleId === mod.id ? 'aria-current="true"' : ''}>
       <td>
@@ -785,29 +1193,333 @@ function moduleRow(mod, editingModuleId, permissions) {
       </td>
 	      <td>
 	        ${escapeHtml(kind)}
-	        ${founders.length ? `<small>Founder: ${founders.map((item) => escapeHtml(item.user_id)).join(', ')}</small>` : ''}
+	        ${founders.length ? `<small>Verantwortlich: ${founders.map((item) => escapeHtml(item.user_id)).join(', ')}</small>` : ''}
+	        ${releaseFacts}
 	      </td>
 	      <td>
 	        <div class="module-admin-actions">
 	          <button class="text-button" type="button" data-module-edit="${escapeAttr(mod.id)}">Editieren</button>
-	          <button class="text-button" type="button" data-module-release="${escapeAttr(mod.id)}">Version speichern</button>
-	          ${releases.length ? `
-	            <select data-rollback-version="${escapeAttr(mod.id)}">
-	              ${releases.map((release) => `<option value="${escapeAttr(release.version_id)}">v${escapeHtml(release.version)} ${escapeHtml(release.status || '')}</option>`).join('')}
-	            </select>
-	            <button class="text-button" type="button" data-module-rollback="${escapeAttr(mod.id)}">Rollback</button>
-	          ` : ''}
+	          <button class="text-button" type="button" data-module-why="${escapeAttr(mod.id)}" ${whyStatus.loading ? 'disabled' : ''}>Warum?</button>
+	          ${permissions.isAdmin ? `<button class="text-button" type="button" data-module-support-diagnostics="${escapeAttr(mod.id)}" ${supportStatus.loading ? 'disabled' : ''}>Support-Paket</button>` : ''}
+	          ${moduleReleaseDiagnosticsHtml(mod, releases)}
 	          <button class="text-button" type="button" data-module-delete="${escapeAttr(mod.id)}" ${canDelete ? '' : 'disabled'}>Löschen</button>
 	        </div>
+	        ${whyHtml}
+	        ${supportHtml}
 	        ${permissions.isAdmin ? `
 	          <div class="module-admin-actions">
-	            <input data-founder-user="${escapeAttr(mod.id)}" placeholder="founder user-id" />
-	            <button class="text-button" type="button" data-founder-save="${escapeAttr(mod.id)}">Founder zuweisen</button>
+	            <input data-founder-user="${escapeAttr(mod.id)}" placeholder="team user-id" />
+	            <button class="text-button" type="button" data-founder-save="${escapeAttr(mod.id)}">Verantwortliche:n zuweisen</button>
 	          </div>
 	        ` : ''}
 	      </td>
 	    </tr>
 	  `;
+}
+
+function moduleWhyDiagnosticsHtml(diagnostics, status = {}) {
+  if (status.loading) {
+    return '<p class="settings-note" data-module-why-status>Zugriff wird geprüft...</p>';
+  }
+  if (status.error) {
+    return `<p class="settings-note" data-module-why-status>${escapeHtml(status.error)}</p>`;
+  }
+  if (!diagnostics || typeof diagnostics !== 'object') return '';
+  return renderModuleWhyDiagnosticsHtml({
+    view: nativeWhyDiagnosticsView(diagnostics),
+    labels: { whyTitle: 'Warum?' },
+  });
+}
+
+function moduleSupportDiagnosticsHtml(artifact, status = {}, mod = {}) {
+  if (status.loading) {
+    return '<p class="settings-note" data-module-support-status>Support-Paket wird erstellt...</p>';
+  }
+  if (status.error) {
+    return `<p class="settings-note" data-module-support-status>${escapeHtml(status.error)}</p>`;
+  }
+  if (!artifact || typeof artifact !== 'object') return '';
+  const moduleId = String(mod?.id || artifact?.scope?.module_id || '');
+  const schema = String(artifact.artifact_schema || '');
+  const schemaVersion = Number(artifact.schema_version || 0);
+  const profile = String(artifact.redaction?.profile || '');
+  const generatedAt = formatMsShort(artifact.generated_at_ms);
+  const activityCount = Number(artifact.activity?.count || 0);
+  const why = artifact.diagnostics?.why && typeof artifact.diagnostics.why === 'object'
+    ? artifact.diagnostics.why
+    : null;
+  const whyModule = why?.module || {};
+  const lifecycle = why?.lifecycle || {};
+  const decisions = why?.decisions || {};
+  const dataAreas = Array.isArray(why?.data_access?.areas) ? why.data_access.areas : [];
+  const readableAreas = dataAreas.filter((area) => supportDecisionAllowed(area?.read_decision)).length;
+  const writableAreas = dataAreas.filter((area) => supportDecisionAllowed(area?.write_decision)).length;
+  const visibilityText = supportVisibilityText(lifecycle, whyModule, mod);
+  const modifyText = supportDecisionAllowed(decisions.modify) ? 'Ändern erlaubt' : 'Ändern gesperrt';
+  const releaseText = supportDecisionAllowed(decisions.release) ? 'Freigabe erlaubt' : 'Freigabe gesperrt';
+  const downloadHtml = status.downloadUrl
+    ? `<a class="text-button" href="${escapeAttr(status.downloadUrl)}" download="${escapeAttr(status.downloadName || supportDiagnosticsFilename(moduleId))}" data-support-diagnostics-download="${escapeAttr(moduleId)}">JSON herunterladen</a>`
+    : '<span class="settings-note">Download wird vorbereitet.</span>';
+  return `
+    <div class="module-support-diagnostics" data-support-diagnostics="${escapeAttr(moduleId)}" data-support-schema="${escapeAttr(schema)}" data-redaction-profile="${escapeAttr(profile)}">
+      <strong class="module-support-title">Support-Paket</strong>
+      <dl>
+        <div data-support-row="schema">
+          <dt>Format</dt>
+          <dd><strong>${escapeHtml(supportArtifactSchemaLabel(schema))}</strong><span>${escapeHtml(schemaVersion ? `Schema-Version ${schemaVersion}` : 'Schema-Version geprüft')}</span></dd>
+        </div>
+        <div data-support-row="redaction">
+          <dt>Schutz</dt>
+          <dd><strong>${escapeHtml(supportRedactionProfileLabel(profile))}</strong><span>Keine Nachrichteninhalte, KI-Eingaben, Datensatzinhalte oder Zugangswerte enthalten.</span></dd>
+        </div>
+        <div data-support-row="scope">
+          <dt>Umfang</dt>
+          <dd><strong>${escapeHtml(mod?.title || whyModule.title || moduleId || 'Business OS')}</strong><span>${escapeHtml(visibilityText)}</span></dd>
+        </div>
+        <div data-support-row="activity">
+          <dt>Aktivität</dt>
+          <dd><strong>${escapeHtml(`${activityCount} Ereignis${activityCount === 1 ? '' : 'se'} zusammengefasst`)}</strong><span>Erstellt ${escapeHtml(generatedAt)}</span></dd>
+        </div>
+        <div data-support-row="why">
+          <dt>Zugriff</dt>
+          <dd><strong>${escapeHtml(`${modifyText} · ${releaseText}`)}</strong><span>${escapeHtml(`${dataAreas.length} Datenbereich(e): ${readableAreas} lesbar, ${writableAreas} schreibbar`)}</span></dd>
+        </div>
+      </dl>
+      <div class="module-support-actions">${downloadHtml}</div>
+    </div>
+  `;
+}
+
+function nativeWhyDiagnosticsView(diagnostics = {}) {
+  const app = diagnostics.app || diagnostics.module || {};
+  const actor = diagnostics.actor || {};
+  const actionDecisions = diagnostics.action_decisions || diagnostics.decisions || {};
+  const lifecycle = diagnostics.lifecycle || {};
+  const visibility = diagnostics.visibility || actionDecisions.visibility || {};
+  const open = actionDecisions.open || {};
+  const modify = actionDecisions.modify || {};
+  const source = actionDecisions.source || {};
+  const release = actionDecisions.release || {};
+  const rollback = actionDecisions.rollback || {};
+  const dataAreas = Array.isArray(diagnostics.data_areas)
+    ? diagnostics.data_areas
+    : (Array.isArray(diagnostics.data_access?.areas) ? diagnostics.data_access.areas : []);
+  const dataSummary = nativeWhyDataSummary(dataAreas);
+  const rows = [
+    {
+      key: 'actor',
+      label: 'Akteur',
+      state: 'info',
+      value: nativeWhyActorLabel(actor),
+      reason: `Entscheidungen gelten für diese App: ${cleanDiagnosticText(app.title || app.module_id || 'App')}`,
+    },
+    {
+      key: 'visibility',
+      label: 'Sichtbarkeit',
+      state: nativeWhyDecisionState(visibility.allowed),
+      value: [cleanDiagnosticText(lifecycle.visibility_state || visibility.value || 'Unklar'), nativeWhyVersionLabel(app)]
+        .filter(Boolean)
+        .join(' · '),
+      reason: nativeWhyReason(visibility, 'App-Sichtbarkeit folgt Version, Sichtbarkeitsstatus und App-Zuweisung.'),
+    },
+    nativeWhyDecisionRow('open', 'App öffnen', open, 'Öffnen folgt der App-Sichtbarkeit; Datenzugriff wird danach separat geprüft.'),
+    nativeWhyDecisionRow('modify', 'App ändern', modify, 'Ändern bleibt App-Verantwortlichen, Admins oder Ownern vorbehalten.'),
+    nativeWhyDecisionRow('source', 'Source öffnen', source, 'Source bleibt ohne Source-Recht oder App-Verantwortung verborgen.'),
+    nativeWhyDecisionRow('release', 'Freigabe', release, 'Freigaben brauchen ein Release-Recht für diese App.'),
+    nativeWhyDecisionRow('rollback', 'Rollback', rollback, 'Rollback braucht ein Rollback-Recht für diese App.'),
+    {
+      key: 'data',
+      label: 'Datenbereiche',
+      state: dataAreas.length && dataAreas.some((area) => (
+        nativeWhyAreaDecision(area, 'read').allowed === false
+          || nativeWhyAreaDecision(area, 'write').allowed === false
+      ))
+        ? 'blocked'
+        : 'info',
+      value: dataSummary,
+      reason: 'App-Sichtbarkeit gibt keine Datenrechte frei; Lesen und Schreiben werden pro Datenbereich geprüft.',
+    },
+  ];
+  return {
+    rows,
+    actor: {
+      id: cleanDiagnosticText(actor.id),
+      label: cleanDiagnosticText(actor.display_name || actor.id) || 'Unbekannter Nutzer',
+      role: cleanDiagnosticText(actor.role || 'user'),
+      is_admin: actor.is_admin === true,
+    },
+    app: {
+      module_id: cleanDiagnosticText(app.module_id || app.id),
+      module_title: cleanDiagnosticText(app.title || app.module_id || app.id),
+      version: nativeWhyVersionLabel(app),
+      visibility: cleanDiagnosticText(lifecycle.visibility_state || visibility.value),
+      lifecycle_state: cleanDiagnosticText(lifecycle.visibility_state),
+      public: visibility.allowed === true,
+      runtime_installed: lifecycle.runtime_installed === true || app.runtime_installed === true,
+      can_see: visibility.allowed === true,
+      can_open: open.allowed === true,
+      can_modify: modify.allowed === true,
+      can_open_source: source.allowed === true,
+      can_release: release.allowed === true,
+      can_rollback: rollback.allowed === true,
+    },
+    release: {
+      line: nativeWhyDecisionLabel(release.allowed),
+      rollback_line: nativeWhyDecisionLabel(rollback.allowed),
+      status: '',
+      status_label: '',
+      has_release_state: false,
+    },
+    data: {
+      summary: dataSummary,
+      status: '',
+      status_label: '',
+      declared_collections: dataAreas.map((area) => cleanDiagnosticText(area.collection_id)).filter(Boolean),
+      granted_collections: dataAreas
+        .filter((area) => (
+          nativeWhyAreaDecision(area, 'read').allowed === true
+            || nativeWhyAreaDecision(area, 'write').allowed === true
+        ))
+        .map((area) => cleanDiagnosticText(area.collection_id || area.collection))
+        .filter(Boolean),
+      locked_collections: dataAreas
+        .filter((area) => (
+          nativeWhyAreaDecision(area, 'read').allowed === false
+            && nativeWhyAreaDecision(area, 'write').allowed === false
+        ))
+        .map((area) => cleanDiagnosticText(area.collection_id || area.collection))
+        .filter(Boolean),
+      review_note: '',
+      grants_implied: false,
+      decisions: dataAreas.map(nativeWhyDataDecisionRow).filter(Boolean),
+    },
+  };
+}
+
+function nativeWhyDecisionRow(key, label, decision, fallbackReason) {
+  return {
+    key,
+    label,
+    state: nativeWhyDecisionState(decision?.allowed),
+    value: nativeWhyDecisionLabel(decision?.allowed),
+    reason: nativeWhyReason(decision, fallbackReason),
+  };
+}
+
+function nativeWhyDataDecisionRow(area) {
+  const collection = cleanDiagnosticText(area?.collection_id || area?.collection);
+  if (!collection) return null;
+  const readDecision = nativeWhyAreaDecision(area, 'read');
+  const writeDecision = nativeWhyAreaDecision(area, 'write');
+  return {
+    collection,
+    label: businessCollectionLabel(collection),
+    read: {
+      allowed: readDecision.allowed === true,
+      label: `Lesen ${nativeWhyDecisionLabel(readDecision.allowed)}`,
+      reason: nativeWhyReason(readDecision, 'Lesen wird über Datenrechte für diesen Datenbereich entschieden.'),
+    },
+    write: {
+      allowed: writeDecision.allowed === true,
+      label: `Schreiben ${nativeWhyDecisionLabel(writeDecision.allowed)}`,
+      reason: nativeWhyReason(writeDecision, 'Schreiben wird über Datenrechte für diesen Datenbereich entschieden.'),
+    },
+  };
+}
+
+function nativeWhyDataSummary(dataAreas) {
+  if (!Array.isArray(dataAreas) || !dataAreas.length) return 'Keine Datenbereiche deklariert';
+  const readable = dataAreas.filter((area) => nativeWhyAreaDecision(area, 'read').allowed === true).length;
+  const writable = dataAreas.filter((area) => nativeWhyAreaDecision(area, 'write').allowed === true).length;
+  return `${dataAreas.length} Datenbereich(e): ${readable} lesbar, ${writable} schreibbar`;
+}
+
+function nativeWhyAreaDecision(area, mode) {
+  if (!area || typeof area !== 'object') return {};
+  if (mode === 'read') return area.read_decision || area.read || {};
+  if (mode === 'write') return area.write_decision || area.write || {};
+  return {};
+}
+
+function nativeWhyActorLabel(actor = {}) {
+  const name = cleanDiagnosticText(actor.display_name || actor.id) || 'Unbekannter Nutzer';
+  const role = cleanDiagnosticText(actor.role || 'user');
+  return role ? `${name} · ${roleDisplayName(role)}` : name;
+}
+
+function nativeWhyVersionLabel(app = {}) {
+  const version = cleanDiagnosticText(app.version || app.current_semver);
+  return version ? (version.startsWith('v') ? version : `v${version}`) : '';
+}
+
+function nativeWhyDecisionState(allowed) {
+  if (allowed === true) return 'allowed';
+  if (allowed === false) return 'blocked';
+  return 'info';
+}
+
+function nativeWhyDecisionLabel(allowed) {
+  if (allowed === true) return 'Erlaubt';
+  if (allowed === false) return 'Nicht erlaubt';
+  return 'Unklar';
+}
+
+function nativeWhyReason(decision, fallback) {
+  const text = cleanDiagnosticText(decision?.display_reason || decision?.reason);
+  if (!text) return fallback;
+  if (/^Allowed\.$/i.test(text)) return fallback;
+  if (/^This role is not allowed to perform this action/i.test(text)) return fallback;
+  return text;
+}
+
+function cleanDiagnosticText(value) {
+  return String(value ?? '').trim();
+}
+
+function moduleReleaseDiagnosticsHtml(mod, releases) {
+  const releaseRows = Array.isArray(releases) ? releases : [];
+  return `
+    <div class="module-admin-release-diagnostics" data-module-release-diagnostics="${escapeAttr(mod.id)}">
+      <button class="text-button" type="button" disabled aria-disabled="true">Freigabe im App Store</button>
+      ${releaseRows.length ? `
+        <select disabled aria-label="Rollback-Versionen nur Diagnose">
+          ${releaseRows.map((release) => `<option value="${escapeAttr(release.version_id)}">v${escapeHtml(release.version)} ${escapeHtml(release.status || '')}</option>`).join('')}
+        </select>
+        <button class="text-button" type="button" disabled aria-disabled="true">Rollback nur Diagnose</button>
+      ` : ''}
+      <small>Settings zeigt Release und Rollback nur als Diagnose; aktive Freigabe laeuft ueber den App Store Publish-Flow.</small>
+    </div>
+  `;
+}
+
+function moduleReleaseProjectionHtml(mod) {
+  const projection = appReleaseProjection(mod);
+  const dataAccess = projection.dataAccess || {};
+  const hasDataAccessFact = dataAccess.hasReview === true
+    || (Array.isArray(dataAccess.declared) && dataAccess.declared.length > 0)
+    || (Array.isArray(dataAccess.granted) && dataAccess.granted.length > 0)
+    || (Array.isArray(dataAccess.locked) && dataAccess.locked.length > 0);
+  const facts = [];
+  if (projection.hasReleaseState) {
+    facts.push(['Freigabe', projection.releaseLine]);
+  }
+  if (projection.rollbackLine) {
+    facts.push(['Rollback', projection.rollbackLine]);
+  }
+  if (hasDataAccessFact && dataAccess.summary) {
+    facts.push(['Datenzugriff', dataAccess.summary]);
+  }
+  if (dataAccess.reviewNote) {
+    facts.push(['Review', dataAccess.reviewNote]);
+  }
+  if (!facts.length) return '';
+  return `
+    <div class="module-admin-release-facts" data-module-release-projection="${escapeAttr(mod.id)}">
+      ${facts.map(([label, value]) => `
+        <small class="module-admin-release-fact"><b>${escapeHtml(label)}:</b> ${escapeHtml(value)}</small>
+      `).join('')}
+    </div>
+  `;
 }
 
 function moduleEditForm(mod) {
@@ -877,7 +1589,7 @@ function settingsCommand(type, root, { syncConfig }) {
     type: `ctox.users.${type}`,
     record_id: 'users',
     payload: {
-      instruction: `${userAction}: öffne die CTOX User- und Session-Verwaltung, prüfe Rollenrechte und bereite die Änderung für diese Business-OS-Instanz vor.`,
+      instruction: `${userAction}: öffne die CTOX Team- und Session-Verwaltung, prüfe Rollenrechte und bereite die Änderung für diese Business-OS-Instanz vor.`,
     },
     client_context: { module: 'ctox', surface: 'business-os-settings' },
   };
@@ -1116,21 +1828,6 @@ function normalizeUsersForSession(users, session) {
   return normalized.filter((user) => user.id === currentId);
 }
 
-function normalizeRole(role) {
-  const value = String(role || '').trim().toLowerCase().replace(/^business_os_/, '');
-  if (value === 'owner') return 'chef';
-  if (['chef', 'admin', 'founder', 'user'].includes(value)) return value;
-  return 'user';
-}
-
-function roleCanManage(role) {
-  return ['chef', 'admin'].includes(normalizeRole(role));
-}
-
-function roleDisplayName(role) {
-  return { chef: 'Chef', admin: 'Admin', founder: 'Founder', user: 'User' }[normalizeRole(role)] || role;
-}
-
 function moduleKind(mod) {
   return moduleIsCore(mod) ? 'Core' : 'Installiert';
 }
@@ -1146,10 +1843,18 @@ function moduleCanDelete(mod) {
 }
 
 function canModifyModuleInSettings(mod, { isAdmin, role, user, governance }) {
-  if (isAdmin) return true;
-  if (normalizeRole(role) !== 'founder') return false;
-  const assignments = governance?.founders?.[mod?.id] || [];
-  return assignments.some((item) => item.user_id === user?.id && item.active !== false);
+  return canModifyBusinessModule(mod, {
+    session: { user: { ...user, role, is_admin: isAdmin } },
+    governance,
+  });
+}
+
+function canOpenModuleAdmin({ modules, session, governance }) {
+  if (roleCanManage(resolveRole(session))) return true;
+  return (Array.isArray(modules) ? modules : []).some((mod) => canModifyBusinessModule(mod, {
+    session,
+    governance,
+  }));
 }
 
 function foundersForModule(governance, moduleId) {
@@ -1245,6 +1950,142 @@ async function saveUser(payload, { commandBus, db, session } = {}) {
     source: 'business-os-settings',
   });
   return command.result || command;
+}
+
+async function loadBusinessActivity({ commandBus, db, session, sync } = {}) {
+  const command = await dispatchModuleCommand({
+    commandBus,
+    db,
+    session,
+    sync,
+    commandType: 'ctox.business_os.audit.list',
+    moduleId: 'ctox',
+    recordId: 'business-activity',
+    payload: { limit: 50 },
+    source: 'business-os-settings',
+    timeoutMs: 15000,
+  });
+  const payload = command.result || command;
+  if (command.status === 'failed' || payload?.ok === false) {
+    throw new Error(payload?.error || 'Aktivität konnte nicht geladen werden.');
+  }
+  return payload;
+}
+
+async function loadModuleWhyDiagnostics(moduleId, { commandBus, db, session, sync } = {}) {
+  const normalizedModuleId = String(moduleId || '').trim();
+  if (!normalizedModuleId) throw new Error('App fehlt für die Zugriffsdiagnose.');
+  const command = await dispatchModuleCommand({
+    commandBus,
+    db,
+    session,
+    sync,
+    commandType: 'ctox.business_os.why',
+    moduleId: normalizedModuleId,
+    recordId: normalizedModuleId,
+    payload: {
+      module_id: normalizedModuleId,
+      include_actions: true,
+      include_data_areas: true,
+    },
+    source: 'business-os-settings',
+    timeoutMs: 15000,
+    requireResult: true,
+  });
+  const payload = command.result || command;
+  if (command.status === 'failed' || payload?.ok === false) {
+    throw new Error(payload?.error || 'Zugriff konnte nicht erklärt werden.');
+  }
+  if (payload?.kind !== 'business_os_why_diagnostics') {
+    throw new Error('Zugriff konnte noch nicht vollständig erklärt werden.');
+  }
+  return payload;
+}
+
+async function exportSupportDiagnosticsArtifact(moduleId, { commandBus, db, session, sync } = {}) {
+  const normalizedModuleId = String(moduleId || '').trim();
+  if (!normalizedModuleId) throw new Error('App fehlt für das Support-Paket.');
+  const command = await dispatchModuleCommand({
+    commandBus,
+    db,
+    session,
+    sync,
+    commandType: 'ctox.business_os.support.export_diagnostics',
+    moduleId: normalizedModuleId,
+    recordId: `support:${normalizedModuleId}`,
+    payload: {
+      module_id: normalizedModuleId,
+      include_why: true,
+      limit: 50,
+    },
+    source: 'business-os-settings',
+    timeoutMs: 20000,
+    requireResult: true,
+  });
+  const payload = command.result || command;
+  if (command.status === 'failed' || payload?.ok === false) {
+    throw new Error(payload?.error || 'Support-Paket konnte nicht erstellt werden.');
+  }
+  if (
+    payload?.kind !== 'business_os_support_diagnostics_artifact'
+    || payload?.artifact_schema !== 'ctox.business_os.support_diagnostics.v1'
+  ) {
+    throw new Error('Support-Paket hat noch kein geprüftes Format.');
+  }
+  return payload;
+}
+
+function createSupportDiagnosticsDownload(artifact, moduleId) {
+  if (!globalThis.Blob || !globalThis.URL?.createObjectURL) {
+    return { url: '', filename: supportDiagnosticsFilename(moduleId) };
+  }
+  const blob = new Blob([JSON.stringify(artifact, null, 2)], { type: 'application/json' });
+  return {
+    url: globalThis.URL.createObjectURL(blob),
+    filename: supportDiagnosticsFilename(moduleId, artifact?.generated_at_ms),
+  };
+}
+
+function supportDiagnosticsFilename(moduleId, generatedAtMs = 0) {
+  const stamp = Number(generatedAtMs || 0) > 0
+    ? new Date(Number(generatedAtMs)).toISOString().replace(/[:.]/g, '-')
+    : 'latest';
+  return `ctox-business-os-support-${safeDownloadPart(moduleId || 'workspace')}-${stamp}.json`;
+}
+
+function safeDownloadPart(value) {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return normalized || 'workspace';
+}
+
+function supportArtifactSchemaLabel(schema) {
+  if (schema === 'ctox.business_os.support_diagnostics.v1') return 'CTOX Support-Diagnose';
+  return 'Geprüftes Support-Format';
+}
+
+function supportRedactionProfileLabel(profile) {
+  if (profile === 'support-safe-v1') return 'Support-sicher';
+  return 'Geschützt';
+}
+
+function supportDecisionAllowed(decision) {
+  return decision?.allowed === true;
+}
+
+function supportVisibilityText(lifecycle = {}, app = {}, mod = {}) {
+  const version = String(lifecycle.current_semver || app.version || mod.version || '').trim();
+  const visibility = String(lifecycle.visibility_state || lifecycle.audience || lifecycle.release_channel || '').toLowerCase();
+  const label = {
+    private: 'Nur Ersteller oder Verantwortliche',
+    team: 'Team sichtbar',
+    restricted: 'Ausgewählte Personen',
+    public: 'Team sichtbar',
+  }[visibility] || 'Sichtbarkeit geprüft';
+  return version ? `${label} · v${version.replace(/^v/i, '')}` : label;
 }
 
 async function loadRuntimeSettings({ db } = {}) {
@@ -1425,34 +2266,6 @@ async function assignFounder(moduleId, userId, active, { commandBus, db, session
   return command.result || command;
 }
 
-async function releaseModule(moduleId, { commandBus, db, session } = {}) {
-  const command = await dispatchModuleCommand({
-    commandBus,
-    db,
-    session,
-    commandType: 'ctox.module.release',
-    moduleId,
-    recordId: moduleId,
-    payload: { module_id: moduleId, notes: 'Business OS module release' },
-    source: 'business-os-settings',
-  });
-  return command.result || command;
-}
-
-async function rollbackModule(moduleId, versionId, { commandBus, db, session } = {}) {
-  const command = await dispatchModuleCommand({
-    commandBus,
-    db,
-    session,
-    commandType: 'ctox.module.rollback',
-    moduleId,
-    recordId: versionId,
-    payload: { module_id: moduleId, version_id: versionId },
-    source: 'business-os-settings',
-  });
-  return command.result || command;
-}
-
 async function deleteModule(moduleId, { commandBus, db, session } = {}) {
   const command = await dispatchModuleCommand({
     commandBus,
@@ -1496,6 +2309,7 @@ async function dispatchModuleCommand({
   payload,
   source,
   timeoutMs,
+  requireResult,
 }) {
   await sync?.startCollection?.('business_commands');
   if (!commandBus?.dispatch || !db?.collection?.('business_commands')) {
@@ -1515,16 +2329,16 @@ async function dispatchModuleCommand({
       actor: actorContext(session),
     },
   };
-  await dispatchCommandWithRxdbRecovery(commandBus, command, { db, sync });
-  return waitForCommandProjection(db, commandId, { sync, timeoutMs });
+  const dispatched = await dispatchCommandWithRxdbRecovery(commandBus, command, { db, sync });
+  if (commandProjectionIsReady(dispatched, { requireResult })) return dispatched;
+  return waitForCommandProjection(db, commandId, { sync, timeoutMs, requireResult });
 }
 
 async function dispatchCommandWithRxdbRecovery(commandBus, command, { db, sync } = {}) {
   let lastError = null;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      await commandBus.dispatch(command);
-      return;
+      return await commandBus.dispatch(command);
     } catch (error) {
       if (!isClosedRxDbCollectionError(error)) throw error;
       lastError = error;
@@ -1545,7 +2359,11 @@ async function waitForCommandProjection(db, commandId, options = {}) {
       const data = doc?.toJSON?.();
       if (data && data.status && data.status !== 'pending_sync') {
         if (data.status === 'failed') throw new Error(data.error || `Command ${commandId} failed`);
-        return data;
+        if (options.requireResult && data.result == null) {
+          lastError = new Error(`Command ${commandId} wurde noch ohne Ergebnis synchronisiert.`);
+        } else {
+          return data;
+        }
       }
     } catch (error) {
       if (!isClosedRxDbCollectionError(error)) throw error;
@@ -1556,6 +2374,14 @@ async function waitForCommandProjection(db, commandId, options = {}) {
   }
   if (lastError) throw lastError;
   throw new Error(`Command ${commandId} wurde nicht synchronisiert.`);
+}
+
+function commandProjectionIsReady(value, options = {}) {
+  if (!value || typeof value !== 'object') return false;
+  if (value.status === 'failed') return true;
+  if (!value.status || value.status === 'pending_sync') return false;
+  if (options.requireResult && value.result == null) return false;
+  return true;
 }
 
 async function recoverBusinessCommandsCollection({ db, sync } = {}) {
@@ -2709,3 +3535,14 @@ function formatIsoShort(value) {
   const date = new Date(ms);
   return `${String(date.getDate()).padStart(2, '0')}.${String(date.getMonth() + 1).padStart(2, '0')}.${date.getFullYear()} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
+
+function formatMsShort(value) {
+  const ms = Number(value || 0);
+  if (!Number.isFinite(ms) || ms <= 0) return '—';
+  const date = new Date(ms);
+  return `${String(date.getDate()).padStart(2, '0')}.${String(date.getMonth() + 1).padStart(2, '0')}.${date.getFullYear()} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+export const __reactSettingsTestHooks = {
+  settingsTemplate,
+};

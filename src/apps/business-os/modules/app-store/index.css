@@ -451,6 +451,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
 }
 
 .app-card-icon svg,
@@ -517,6 +518,67 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.app-lifecycle-dot {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--surface);
+  border-radius: 999px;
+  background: var(--muted);
+}
+
+.app-lifecycle-dot[data-state="private"],
+.app-lifecycle-badge[data-state="private"] {
+  color: color-mix(in srgb, var(--warning) 78%, var(--text));
+  border-color: color-mix(in srgb, var(--warning) 38%, var(--app-store-line));
+}
+
+.app-lifecycle-dot[data-state="private"] {
+  background: color-mix(in srgb, var(--warning) 86%, var(--text));
+}
+
+.app-lifecycle-dot[data-state="preview"],
+.app-lifecycle-badge[data-state="preview"] {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--app-store-line));
+}
+
+.app-lifecycle-dot[data-state="preview"] {
+  background: var(--accent);
+}
+
+.app-lifecycle-dot[data-state="team"],
+.app-lifecycle-badge[data-state="team"] {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 34%, var(--app-store-line));
+}
+
+.app-lifecycle-dot[data-state="team"] {
+  background: var(--success);
+}
+
+.app-release-state[data-release-status="released"] {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 34%, var(--app-store-line));
+}
+
+.app-release-state[data-release-status="rolled_back"] {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 38%, var(--app-store-line));
+}
+
+.app-lifecycle-dot[data-state="restricted"],
+.app-lifecycle-badge[data-state="restricted"] {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 34%, var(--app-store-line));
+}
+
+.app-lifecycle-dot[data-state="restricted"] {
+  background: var(--danger);
 }
 
 .app-mod-state.clean {
@@ -804,6 +866,12 @@
   opacity: 0.78;
   transform: none;
   box-shadow: none;
+}
+
+.card-btn.denied {
+  border-color: color-mix(in srgb, var(--warning) 38%, var(--app-store-line));
+  background: color-mix(in srgb, var(--warning-soft) 58%, var(--surface));
+  color: var(--text);
 }
 
 .card-btn.primary {
@@ -1209,4 +1277,110 @@
 .app-version-meta span {
   font-size: 12px;
   color: var(--muted);
+}
+
+.app-release-dialog {
+  width: min(680px, 100%);
+}
+
+.app-release-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding: 16px 18px;
+  overflow-y: auto;
+}
+
+.app-release-form label,
+.app-release-data-review {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.app-release-form span,
+.app-release-data-review p,
+.app-release-data-row span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.app-release-form input,
+.app-release-form select,
+.app-release-form textarea {
+  width: 100%;
+  border: 1px solid var(--app-store-line);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: var(--surface-1);
+  color: var(--text);
+  font: inherit;
+}
+
+.app-release-form textarea {
+  resize: vertical;
+}
+
+.app-release-data-review {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--app-store-line);
+  padding-top: 14px;
+}
+
+.app-release-data-review h4,
+.app-release-data-review p {
+  margin: 0;
+}
+
+.app-release-data-review ul {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.app-release-data-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--app-store-line);
+  border-radius: 8px;
+}
+
+.app-release-data-row label {
+  flex-direction: row;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.app-release-data-row input {
+  width: auto;
+}
+
+.app-release-data-row.is-empty {
+  display: block;
+  color: var(--muted);
+}
+
+.app-release-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--app-store-line);
+}
+
+@media (max-width: 640px) {
+  .app-release-form,
+  .app-release-data-row {
+    grid-template-columns: 1fr;
+  }
+
+  .app-release-data-row label {
+    white-space: normal;
+  }
 }

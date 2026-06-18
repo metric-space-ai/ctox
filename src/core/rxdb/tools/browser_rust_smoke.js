@@ -21,6 +21,13 @@
  *   SMOKE_MODE=tickets-clarification-browser-to-rust SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=outbound-active-ui SMOKE_PAGE_PATH=/index.html#outbound node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=coding-agents-ui SMOKE_PAGE_PATH=/index.html SMOKE_CODING_AGENT_PROVIDER=codex node src/core/rxdb/tools/browser_rust_smoke.js
+ *   SMOKE_MODE=business-os-roles-permissions-ui SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
+ *   SMOKE_MODE=business-os-dynamic-apps-ui SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
+ *   SMOKE_MODE=business-os-app-release-ui SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
+ *   SMOKE_MODE=business-os-app-audience-ui SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
+ *   SMOKE_MODE=business-os-agent-scope-ui SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
+ *   SMOKE_MODE=business-os-auth-scope-ui SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
+ *   SMOKE_MODE=business-os-fresh-profile-ui SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=browser-lifecycle-ui SMOKE_PAGE_PATH=/index.html#browser node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=browser-input-runtime SMOKE_PAGE_PATH=/index.html#browser node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=browser-handoff-ui SMOKE_PAGE_PATH=/index.html#browser node src/core/rxdb/tools/browser_rust_smoke.js
@@ -88,6 +95,10 @@ const fs = require('fs');
 const os = require('os');
 const zlib = require('zlib');
 const { spawn, spawnSync } = require('child_process');
+const {
+  businessOsProductionSmokeModes,
+  businessOsProductionSmokeModeSet,
+} = require('./business_os_production_smoke_registry');
 
 const root = path.resolve(__dirname, '../../../..');
 const runtimeRootProvided = !!process.env.CTOX_SMOKE_ROOT;
@@ -103,6 +114,7 @@ const playwrightModule =
   (() => {
     const candidates = [
       'playwright',
+      path.join(root, 'src/apps/business-os/node_modules/playwright'),
       '/tmp/ctox-pw-smoke/node_modules/playwright',
     ];
     for (const candidate of candidates) {
@@ -151,8 +163,72 @@ const signalingPort = parsePositiveIntegerEnv('SIGNALING_PORT', process.env.SIGN
 const signalingUrl = `ws://127.0.0.1:${signalingPort}`;
 const signalingDebug = process.env.SIGNALING_DEBUG === '1';
 const sqlitePath = process.env.CTOX_SQLITE || path.join(runtimeRoot, 'runtime/business-os-rxdb.sqlite3');
+const nativeBusinessOsSqlitePath = path.join(runtimeRoot, 'runtime/business-os.sqlite3');
 const pagePath = process.env.SMOKE_PAGE_PATH || '/__rxdb_smoke__.html';
 const smokeMode = process.env.SMOKE_MODE || 'browser-to-rust';
+const dynamicOpenModuleFixture = {
+  module: {
+    id: 'phase13-open-module-guard',
+    title: 'Phase 13 OpenModule Guard',
+    glyph: '13',
+    version: '1.0.0',
+    source: 'installed',
+    install_scope: 'installed',
+    entry: 'installed-modules/phase13-open-module-guard/index.js',
+    collections: ['business_commands'],
+    lifecycle: { runtime_installed: true },
+  },
+};
+const releaseModuleFixture = {
+  module: {
+    id: 'phase10-release-app',
+    title: 'Phase 10 Release App',
+    description: 'Browser/Rust Smoke-App fuer Freigabe, Sichtbarkeit und Rollback.',
+    category: 'Smoke',
+    glyph: '10',
+    version: '0.8.0',
+    source: 'installed',
+    install_scope: 'installed',
+    entry: 'installed-modules/phase10-release-app/index.html',
+    editable: true,
+    deletable: false,
+    default_installed: true,
+    collections: ['business_commands'],
+    lifecycle: {
+      runtime_installed: true,
+      visibility_state: 'private',
+      audience: 'private',
+    },
+  },
+};
+const agentScopeModuleFixture = {
+  module: {
+    id: 'phase12-agent-scope-app',
+    title: 'Phase 12 Agent Scope App',
+    description: 'Browser/Rust Smoke-App fuer Agent Scope, App-Sichtbarkeit und Datenrechte.',
+    category: 'Smoke',
+    glyph: '12',
+    version: '1.0.0',
+    source: 'installed',
+    install_scope: 'installed',
+    entry: 'installed-modules/phase12-agent-scope-app/index.js',
+    editable: true,
+    deletable: false,
+    default_installed: true,
+    layout: { shell: 'full-workspace' },
+    collections: ['business_commands'],
+    lifecycle: { runtime_installed: true },
+  },
+};
+if (smokeMode === 'business-os-dynamic-apps-ui') {
+  prepareBusinessOsDynamicOpenModuleFixture(dynamicOpenModuleFixture);
+}
+if (smokeMode === 'business-os-app-release-ui') {
+  prepareBusinessOsReleaseModuleFixture(releaseModuleFixture);
+}
+if (smokeMode === 'business-os-agent-scope-ui') {
+  prepareBusinessOsAgentScopeModuleFixture(agentScopeModuleFixture);
+}
 const smokeDbId = process.env.SMOKE_DB_ID || `${smokeMode}_${Date.now()}_${token(8)}`;
 const useAppDb = process.env.SMOKE_USE_APP_DB === '1'
   || /^\/index\.html(?:[?#]|$)/.test(pagePath)
@@ -190,7 +266,7 @@ function createCodingAgentSmokeConfig(mode) {
   };
 }
 
-if (![
+const supportedSmokeModes = [
   'browser-to-rust',
   'rust-to-browser',
   'workspace-rust-to-browser',
@@ -208,6 +284,8 @@ if (![
   'outbound-active-ui',
   'coding-agents-ui',
   'business-os-ui-regression',
+  'business-os-roles-permissions-ui',
+  'business-os-dynamic-apps-ui',
   'browser-lifecycle-ui',
   'browser-input-runtime',
   'browser-handoff-ui',
@@ -233,7 +311,10 @@ if (![
   'file-chunk-metadata-error-browser-status',
   'file-chunk-tombstone-error-browser-status',
   'file-chunk-stale-generation-error-browser-status',
-].includes(smokeMode)) {
+  ...businessOsProductionSmokeModes,
+];
+
+if (!supportedSmokeModes.includes(smokeMode)) {
   throw new Error(`Unsupported SMOKE_MODE=${smokeMode}`);
 }
 if ([
@@ -253,8 +334,22 @@ if ([
   'file-chunk-stale-generation-error-browser-status',
   'coding-agents-ui',
   'business-os-ui-regression',
+  'business-os-roles-permissions-ui',
+  'business-os-dynamic-apps-ui',
+  ...businessOsProductionSmokeModes,
 ].includes(smokeMode) && !useAppDb) {
   throw new Error(`SMOKE_MODE=${smokeMode} requires an app shell SMOKE_PAGE_PATH such as /index.html or /business-os#ctox`);
+}
+const implementedBusinessOsProductionSmokeModes = new Set([
+  'business-os-app-release-ui',
+  'business-os-app-audience-ui',
+  'business-os-agent-scope-ui',
+  'business-os-auth-scope-ui',
+  'business-os-fresh-profile-ui',
+  'business-os-restore-resync-ui',
+]);
+if (businessOsProductionSmokeModeSet.has(smokeMode) && !implementedBusinessOsProductionSmokeModes.has(smokeMode)) {
+  throw new Error(`SMOKE_MODE=${smokeMode} is registered for Business OS production coverage but the browser story is not implemented yet. Complete the matching Phase 10-14 slice before using it as a release gate.`);
 }
 
 function parsePositiveIntegerEnv(name, value, options = {}) {
@@ -514,9 +609,547 @@ function prepareSmokeSourceRoot(targetRoot) {
       fs.copyFileSync(source, target);
       continue;
     }
+    if (entry === 'installed-modules') {
+      fs.mkdirSync(target, { recursive: true });
+      for (const child of fs.readdirSync(source)) {
+        const childSource = path.join(source, child);
+        const childTarget = path.join(target, child);
+        if (fs.existsSync(childTarget)) continue;
+        const childType = fs.statSync(childSource).isDirectory() ? 'dir' : 'file';
+        fs.symlinkSync(childSource, childTarget, childType);
+      }
+      continue;
+    }
     const type = fs.statSync(source).isDirectory() ? 'dir' : 'file';
     fs.symlinkSync(source, target, type);
   }
+}
+
+function prepareBusinessOsDynamicOpenModuleFixture(fixture) {
+  const module = fixture?.module || {};
+  const id = String(module.id || '').trim();
+  if (!id) throw new Error('dynamic openModule fixture needs a module id');
+  const installedModulesRoot = path.join(runtimeRoot, 'runtime/business-os/installed-modules');
+  fs.mkdirSync(installedModulesRoot, { recursive: true });
+  const targetRealPath = fs.realpathSync(installedModulesRoot);
+  const repoRealPath = fs.realpathSync(root);
+  if (targetRealPath === repoRealPath || targetRealPath.startsWith(`${repoRealPath}${path.sep}`)) {
+    throw new Error('dynamic openModule fixture would write into the real Business OS source tree');
+  }
+
+  const moduleRoot = path.join(installedModulesRoot, id);
+  fs.mkdirSync(moduleRoot, { recursive: true });
+  fs.writeFileSync(path.join(moduleRoot, 'index.html'), '<section data-phase13-open-module-template>Phase 13 openModule guarded DB fixture</section>\n');
+  fs.writeFileSync(path.join(moduleRoot, 'index.css'), ':host { display: block; }\n');
+  fs.writeFileSync(path.join(moduleRoot, 'schema.js'), 'export const collections = {};\n');
+  fs.writeFileSync(path.join(moduleRoot, 'index.js'), `export async function mount(ctx) {
+  const collectionName = 'business_commands';
+  const attempts = {};
+  const record = async (key, action) => {
+    try {
+      const result = action();
+      if (result && typeof result.exec === 'function') await result.exec();
+      attempts[key] = 'allowed';
+    } catch (error) {
+      attempts[key] = error?.code || error?.name || String(error?.message || error);
+    }
+  };
+  const cachedCollection = ctx.db.collection(collectionName);
+  await record('collection', () => ctx.db.collection(collectionName).findOne('phase13_open_module_guard'));
+  await record('property', () => ctx.db[collectionName].findOne('phase13_open_module_guard'));
+  await record('cached', () => cachedCollection.findOne('phase13_open_module_guard'));
+  await record('raw', () => ctx.db.raw[collectionName].findOne('phase13_open_module_guard'));
+  const denied = {
+    collection: attempts.collection === 'CTOX_BUSINESS_OS_PERMISSION_DENIED',
+    property: attempts.property === 'CTOX_BUSINESS_OS_PERMISSION_DENIED',
+    cached: attempts.cached === 'CTOX_BUSINESS_OS_PERMISSION_DENIED',
+    raw: attempts.raw === 'CTOX_BUSINESS_OS_PERMISSION_DENIED',
+  };
+  const capabilities = ctx.runtimeCapabilities || {};
+  const runtimeSafety = {
+    contract: capabilities.version === 'business-os-runtime-capabilities-v1',
+    trustModel: capabilities.trust_model === 'same-origin-trusted-generated-app',
+    guardedDb: capabilities.database?.guarded === true
+      && capabilities.database?.raw === 'guarded-deny-without-data-grant'
+      && capabilities.database?.cached_handles === 'guarded-deny-without-data-grant',
+    localAssetFetchOnly: capabilities.network?.fetch === 'local-module-assets-only'
+      && capabilities.network?.http_business_data === 'forbidden',
+    dynamicImportForbidden: capabilities.imports?.dynamic === 'forbidden'
+      && capabilities.imports?.bare_package === 'forbidden'
+      && capabilities.imports?.remote_url === 'forbidden',
+    storageNonAuthoritative: capabilities.storage?.local_storage === 'forbidden'
+      && capabilities.storage?.session_storage === 'forbidden'
+      && capabilities.storage?.authoritative_permissions === false
+      && capabilities.storage?.authoritative_lifecycle === false
+      && capabilities.storage?.authoritative_audience === false
+      && capabilities.storage?.authoritative_data_grants === false,
+    shellGlobalsForbidden: capabilities.shell_state?.global_state_access === 'forbidden'
+      && capabilities.shell_state?.global_shell_mutation === 'forbidden',
+    workersForbidden: capabilities.workers?.worker === 'forbidden'
+      && capabilities.workers?.service_worker === 'forbidden',
+    externalEffectsChatOnly: capabilities.external_effects?.direct_control_commands === 'forbidden'
+      && Array.isArray(capabilities.external_effects?.allowed_command_bus)
+      && capabilities.external_effects.allowed_command_bus.length === 1
+      && capabilities.external_effects.allowed_command_bus[0] === 'business_os.chat.task',
+  };
+  const host = ctx.host || document.body;
+  const marker = document.createElement('section');
+  marker.dataset.phase13OpenModuleGuard = ctx.module?.id || '';
+  marker.textContent = 'Phase 13 openModule guarded DB fixture';
+  host.replaceChildren(marker);
+  globalThis.__ctoxPhase13OpenModuleGuard = {
+    mounted: true,
+    moduleId: ctx.module?.id || '',
+    attempts,
+    denied,
+    capabilities,
+    runtimeSafety,
+  };
+  return () => {
+    if (globalThis.__ctoxPhase13OpenModuleGuard?.moduleId === ctx.module?.id) {
+      delete globalThis.__ctoxPhase13OpenModuleGuard;
+    }
+  };
+}
+`);
+}
+
+function prepareBusinessOsAgentScopeModuleFixture(fixture) {
+  const module = fixture?.module || {};
+  const id = String(module.id || '').trim();
+  if (!id) throw new Error('agent scope fixture needs a module id');
+  const installedModulesRoot = path.join(runtimeRoot, 'runtime/business-os/installed-modules');
+  fs.mkdirSync(installedModulesRoot, { recursive: true });
+  const targetRealPath = fs.realpathSync(installedModulesRoot);
+  const repoRealPath = fs.realpathSync(root);
+  if (targetRealPath === repoRealPath || targetRealPath.startsWith(`${repoRealPath}${path.sep}`)) {
+    throw new Error('agent scope fixture would write into the real Business OS source tree');
+  }
+
+  const moduleRoot = path.join(installedModulesRoot, id);
+  fs.mkdirSync(moduleRoot, { recursive: true });
+  fs.writeFileSync(path.join(moduleRoot, 'index.html'), '<section data-agent-scope-fixture>Phase 12 Agent Scope fixture</section>\n');
+  fs.writeFileSync(path.join(moduleRoot, 'index.css'), ':host { display: block; }\n');
+  fs.writeFileSync(path.join(moduleRoot, 'schema.js'), 'export const collections = {};\n');
+  fs.writeFileSync(path.join(moduleRoot, 'index.js'), `export async function mount(ctx) {
+  const host = ctx.host || document.body;
+  const marker = document.createElement('section');
+  marker.dataset.agentScopeFixture = ctx.module?.id || '';
+  marker.dataset.moduleRoot = ctx.module?.id || '';
+  marker.dataset.recordId = 'phase12_agent_scope_record';
+  marker.dataset.recordType = 'smoke-record';
+  marker.innerHTML = '<h2>Phase 12 Agent Scope App</h2><p data-agent-scope-copy>Agent scope browser fixture</p>';
+  host.replaceChildren(marker);
+  globalThis.__ctoxAgentScopeFixture = {
+    mounted: true,
+    moduleId: ctx.module?.id || '',
+    recordId: marker.dataset.recordId,
+  };
+  return () => {
+    if (globalThis.__ctoxAgentScopeFixture?.moduleId === ctx.module?.id) {
+      delete globalThis.__ctoxAgentScopeFixture;
+    }
+  };
+}
+`);
+}
+
+function prepareBusinessOsReleaseModuleFixture(fixture) {
+  const module = fixture?.module || {};
+  const id = String(module.id || '').trim();
+  if (!id) throw new Error('release fixture needs a module id');
+  const roots = [
+    path.join(runtimeRoot, 'runtime/business-os/installed-modules'),
+  ];
+  const seen = new Set();
+  for (const installedModulesRoot of roots) {
+    const normalizedRoot = path.resolve(installedModulesRoot);
+    if (seen.has(normalizedRoot)) continue;
+    seen.add(normalizedRoot);
+    fs.mkdirSync(normalizedRoot, { recursive: true });
+    const targetRealPath = fs.realpathSync(normalizedRoot);
+    const repoRealPath = fs.realpathSync(root);
+    if (targetRealPath === repoRealPath || targetRealPath.startsWith(`${repoRealPath}${path.sep}`)) {
+      throw new Error('release fixture would write into the real Business OS source tree');
+    }
+    writeBusinessOsReleaseModuleFixture(normalizedRoot, id, module);
+  }
+}
+
+function writeBusinessOsReleaseModuleFixture(installedModulesRoot, id, module) {
+  const moduleRoot = path.join(installedModulesRoot, id);
+  fs.mkdirSync(moduleRoot, { recursive: true });
+  const moduleRealPath = fs.realpathSync(moduleRoot);
+  const repoRealPath = fs.realpathSync(root);
+  if (moduleRealPath === repoRealPath || moduleRealPath.startsWith(`${repoRealPath}${path.sep}`)) {
+    throw new Error('release fixture module root resolved inside the real Business OS source tree');
+  }
+  const manifest = {
+    ...module,
+    id,
+    module_id: id,
+    source: 'installed',
+    install_scope: 'installed',
+    entry: `installed-modules/${id}/index.html`,
+    version: String(module.version || '0.8.0'),
+    collections: Array.isArray(module.collections) ? module.collections : ['business_commands'],
+    lifecycle: {
+      ...(module.lifecycle || {}),
+      runtime_installed: true,
+      visibility_state: module.lifecycle?.visibility_state || 'private',
+      audience: module.lifecycle?.audience || 'private',
+    },
+  };
+  fs.writeFileSync(path.join(moduleRoot, 'module.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+  fs.writeFileSync(path.join(moduleRoot, 'index.html'), `<section class="phase10-release-app" data-phase10-release-app="${id}">
+  <h1>Phase 10 Release App</h1>
+  <p>Browser/Rust release smoke fixture.</p>
+</section>
+<script type="module" src="./index.js"></script>
+`);
+  fs.writeFileSync(path.join(moduleRoot, 'index.css'), '.phase10-release-app { display: grid; gap: 0.5rem; padding: 1rem; }\n');
+  fs.writeFileSync(path.join(moduleRoot, 'schema.js'), 'export const collections = {};\n');
+  fs.writeFileSync(path.join(moduleRoot, 'index.js'), `export async function mount(ctx) {
+  const host = ctx.host || document.body;
+  const marker = document.createElement('section');
+  marker.dataset.phase10ReleaseApp = ctx.module?.id || '${id}';
+  marker.textContent = 'Phase 10 Release App';
+  host.replaceChildren(marker);
+  return () => marker.remove();
+}
+`);
+}
+
+async function seedBusinessOsReleaseNativeSetup() {
+  const now = Date.now();
+  const moduleRoot = path.join(runtimeRoot, 'runtime/business-os/installed-modules/phase10-release-app');
+  const bundle = computeBusinessOsReleaseModuleBundle(moduleRoot);
+  fs.mkdirSync(path.dirname(nativeBusinessOsSqlitePath), { recursive: true });
+  sqlite(`
+    CREATE TABLE IF NOT EXISTS business_users (
+      user_id TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      role TEXT NOT NULL CHECK(role IN ('chef', 'admin', 'founder', 'user')),
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS business_module_acl (
+      module_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      role TEXT NOT NULL CHECK(role IN ('founder')),
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL,
+      PRIMARY KEY(module_id, user_id, role)
+    );
+    CREATE INDEX IF NOT EXISTS idx_business_module_acl_user
+      ON business_module_acl(user_id, active, module_id);
+
+    CREATE TABLE IF NOT EXISTS business_permission_grants (
+      grant_id TEXT PRIMARY KEY,
+      subject_type TEXT NOT NULL CHECK(subject_type IN ('user', 'role')),
+      subject_id TEXT NOT NULL,
+      permission TEXT NOT NULL,
+      scope_type TEXT NOT NULL CHECK(scope_type IN ('workspace', 'module', 'collection', 'record', 'task', 'approval', 'mcp')),
+      scope_id TEXT NOT NULL DEFAULT '',
+      active INTEGER NOT NULL DEFAULT 1,
+      reason TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_business_permission_grants_subject
+      ON business_permission_grants(subject_type, subject_id, active);
+    CREATE INDEX IF NOT EXISTS idx_business_permission_grants_scope
+      ON business_permission_grants(permission, scope_type, scope_id, active);
+
+    CREATE TABLE IF NOT EXISTS business_module_versions (
+      version_id TEXT PRIMARY KEY,
+      module_id TEXT NOT NULL,
+      seq INTEGER NOT NULL,
+      origin TEXT NOT NULL,
+      label TEXT NOT NULL DEFAULT '',
+      bundle_sha256 TEXT NOT NULL,
+      files_json TEXT NOT NULL DEFAULT '[]',
+      sealed INTEGER NOT NULL DEFAULT 0,
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_business_module_versions_module
+      ON business_module_versions(module_id, seq DESC);
+
+    INSERT INTO business_users
+      (user_id, display_name, role, active, created_at_ms, updated_at_ms)
+    VALUES
+      ('local-dev', 'Local CTOX', 'admin', 1, ${now}, ${now}),
+      ('release_owner', 'Release Owner', 'founder', 1, ${now}, ${now}),
+      ('team_member', 'Team Member', 'user', 1, ${now}, ${now})
+    ON CONFLICT(user_id) DO UPDATE SET
+      display_name = excluded.display_name,
+      role = excluded.role,
+      active = excluded.active,
+      updated_at_ms = excluded.updated_at_ms;
+
+    INSERT INTO business_module_acl
+      (module_id, user_id, role, active, created_at_ms, updated_at_ms)
+    VALUES
+      ('phase10-release-app', 'release_owner', 'founder', 1, ${now}, ${now})
+    ON CONFLICT(module_id, user_id, role) DO UPDATE SET
+      active = excluded.active,
+      updated_at_ms = excluded.updated_at_ms;
+
+    INSERT INTO business_module_versions
+      (version_id, module_id, seq, origin, label, bundle_sha256, files_json,
+       sealed, created_by, created_at_ms, updated_at_ms)
+    VALUES
+      ('modver_phase10_release_app_install_1', 'phase10-release-app', 1, 'install', 'Installed',
+       '${sqlString(bundle.sha256)}', '${sqlString(JSON.stringify(bundle.files))}',
+       1, 'release_owner', ${now}, ${now})
+    ON CONFLICT(version_id) DO UPDATE SET
+      bundle_sha256 = excluded.bundle_sha256,
+      files_json = excluded.files_json,
+      sealed = excluded.sealed,
+      updated_at_ms = excluded.updated_at_ms;
+  `, nativeBusinessOsSqlitePath);
+}
+
+function seedBusinessOsFreshProfileScaleNativeSetup() {
+  const now = Date.now();
+  const moduleCount = 32;
+  const versionsPerModule = 3;
+  const auditEventCount = 128;
+  const moduleIds = Array.from({ length: moduleCount }, (_, index) =>
+    `phase14-scale-app-${String(index + 1).padStart(2, '0')}`);
+  const statements = [];
+  fs.mkdirSync(path.dirname(nativeBusinessOsSqlitePath), { recursive: true });
+  statements.push(`
+    CREATE TABLE IF NOT EXISTS business_events (
+      event_id TEXT PRIMARY KEY,
+      collection TEXT NOT NULL,
+      record_id TEXT NOT NULL,
+      command_type TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      observed_at_ms INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_business_events_record
+      ON business_events(collection, record_id, observed_at_ms DESC);
+    CREATE INDEX IF NOT EXISTS idx_business_events_type
+      ON business_events(command_type, observed_at_ms DESC);
+
+    CREATE TABLE IF NOT EXISTS business_users (
+      user_id TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      role TEXT NOT NULL CHECK(role IN ('chef', 'admin', 'founder', 'user')),
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS business_module_acl (
+      module_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      role TEXT NOT NULL CHECK(role IN ('founder')),
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL,
+      PRIMARY KEY(module_id, user_id, role)
+    );
+    CREATE INDEX IF NOT EXISTS idx_business_module_acl_user
+      ON business_module_acl(user_id, active, module_id);
+
+    CREATE TABLE IF NOT EXISTS business_permission_grants (
+      grant_id TEXT PRIMARY KEY,
+      subject_type TEXT NOT NULL CHECK(subject_type IN ('user', 'role')),
+      subject_id TEXT NOT NULL,
+      permission TEXT NOT NULL,
+      scope_type TEXT NOT NULL CHECK(scope_type IN ('workspace', 'module', 'collection', 'record', 'task', 'approval', 'mcp')),
+      scope_id TEXT NOT NULL DEFAULT '',
+      active INTEGER NOT NULL DEFAULT 1,
+      reason TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_business_permission_grants_subject
+      ON business_permission_grants(subject_type, subject_id, active);
+    CREATE INDEX IF NOT EXISTS idx_business_permission_grants_scope
+      ON business_permission_grants(permission, scope_type, scope_id, active);
+
+    CREATE TABLE IF NOT EXISTS business_module_versions (
+      version_id TEXT PRIMARY KEY,
+      module_id TEXT NOT NULL,
+      seq INTEGER NOT NULL,
+      origin TEXT NOT NULL,
+      label TEXT NOT NULL DEFAULT '',
+      bundle_sha256 TEXT NOT NULL,
+      files_json TEXT NOT NULL DEFAULT '[]',
+      sealed INTEGER NOT NULL DEFAULT 0,
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_business_module_versions_module
+      ON business_module_versions(module_id, seq DESC);
+
+    INSERT INTO business_users
+      (user_id, display_name, role, active, created_at_ms, updated_at_ms)
+    VALUES
+      ('fresh_builder', 'Fresh Builder', 'founder', 1, ${now}, ${now}),
+      ('fresh_team_member', 'Fresh Team', 'user', 1, ${now}, ${now})
+    ON CONFLICT(user_id) DO UPDATE SET
+      display_name = excluded.display_name,
+      role = excluded.role,
+      active = excluded.active,
+      updated_at_ms = excluded.updated_at_ms;
+  `);
+  for (const [moduleIndex, moduleId] of moduleIds.entries()) {
+    statements.push(`
+      INSERT INTO business_module_acl
+        (module_id, user_id, role, active, created_at_ms, updated_at_ms)
+      VALUES
+        ('${sqlString(moduleId)}', 'fresh_builder', 'founder', 1, ${now}, ${now})
+      ON CONFLICT(module_id, user_id, role) DO UPDATE SET
+        active = excluded.active,
+        updated_at_ms = excluded.updated_at_ms;
+    `);
+    const grantRows = [
+      [`phase14_scale_${moduleIndex + 1}_apps_view`, 'fresh_team_member', 'apps.view', 'module', moduleId],
+      [`phase14_scale_${moduleIndex + 1}_data_read`, 'fresh_team_member', 'data.read', 'collection', 'business_commands'],
+    ];
+    for (const [grantId, subjectId, permission, scopeType, scopeId] of grantRows) {
+      statements.push(`
+        INSERT INTO business_permission_grants
+          (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
+           active, reason, created_by, created_at_ms, updated_at_ms)
+        VALUES
+          ('${sqlString(grantId)}', 'user', '${sqlString(subjectId)}', '${sqlString(permission)}',
+           '${sqlString(scopeType)}', '${sqlString(scopeId)}', 1,
+           'Phase 14 scale fixture', 'fresh_builder', ${now}, ${now})
+        ON CONFLICT(grant_id) DO UPDATE SET
+          active = excluded.active,
+          updated_at_ms = excluded.updated_at_ms;
+      `);
+    }
+    for (let seq = 1; seq <= versionsPerModule; seq += 1) {
+      const versionId = `${moduleId}-v${seq}`;
+      const fileList = JSON.stringify([{ path: 'index.js', sha256: `scale-${moduleIndex + 1}-${seq}` }]);
+      statements.push(`
+        INSERT INTO business_module_versions
+          (version_id, module_id, seq, origin, label, bundle_sha256, files_json,
+           sealed, created_by, created_at_ms, updated_at_ms)
+        VALUES
+          ('${sqlString(versionId)}', '${sqlString(moduleId)}', ${seq}, '${seq === 1 ? 'install' : 'manual_release'}',
+           'Scale Version ${seq}',
+           '${'f'.repeat(56)}${String(moduleIndex + 1).padStart(4, '0')}${String(seq).padStart(4, '0')}',
+           '${sqlString(fileList)}', 1, 'fresh_builder', ${now - ((versionsPerModule - seq) * 1000)}, ${now})
+        ON CONFLICT(version_id) DO UPDATE SET
+          bundle_sha256 = excluded.bundle_sha256,
+          files_json = excluded.files_json,
+          sealed = excluded.sealed,
+          updated_at_ms = excluded.updated_at_ms;
+      `);
+    }
+  }
+  for (let index = 0; index < auditEventCount; index += 1) {
+    const moduleId = moduleIds[index % moduleIds.length];
+    const payload = JSON.stringify({
+      schema: 'ctox.business_os.scale_audit_fixture.v1',
+      module_id: moduleId,
+      action: index % 2 === 0 ? 'release' : 'data-review',
+    });
+    statements.push(`
+      INSERT INTO business_events
+        (event_id, collection, record_id, command_type, payload_json, observed_at_ms)
+      VALUES
+        ('phase14_scale_event_${String(index + 1).padStart(3, '0')}',
+         'business_module_catalog', '${sqlString(moduleId)}',
+         'ctox.module.${index % 2 === 0 ? 'release' : 'review_data_access'}',
+         '${sqlString(payload)}', ${now - index})
+      ON CONFLICT(event_id) DO UPDATE SET
+        payload_json = excluded.payload_json,
+        observed_at_ms = excluded.observed_at_ms;
+    `);
+  }
+  sqlite(`BEGIN IMMEDIATE;\n${statements.join('\n')}\nCOMMIT;`, nativeBusinessOsSqlitePath);
+  return {
+    moduleCount,
+    versionsPerModule,
+    permissionGrants: Number(sqlite(
+      "SELECT COUNT(*) FROM business_permission_grants WHERE grant_id LIKE 'phase14_scale_%';",
+      nativeBusinessOsSqlitePath,
+    ).trim() || 0),
+    moduleVersions: Number(sqlite(
+      "SELECT COUNT(*) FROM business_module_versions WHERE version_id LIKE 'phase14-scale-app-%';",
+      nativeBusinessOsSqlitePath,
+    ).trim() || 0),
+    auditEvents: Number(sqlite(
+      "SELECT COUNT(*) FROM business_events WHERE event_id LIKE 'phase14_scale_event_%';",
+      nativeBusinessOsSqlitePath,
+    ).trim() || 0),
+  };
+}
+
+async function seedBusinessOsRolesPermissionsNativeUsers() {
+  const now = Date.now();
+  fs.mkdirSync(path.dirname(nativeBusinessOsSqlitePath), { recursive: true });
+  sqlite(`
+    CREATE TABLE IF NOT EXISTS business_users (
+      user_id TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      role TEXT NOT NULL CHECK(role IN ('chef', 'admin', 'founder', 'user')),
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL
+    );
+
+    INSERT INTO business_users
+      (user_id, display_name, role, active, created_at_ms, updated_at_ms)
+    VALUES
+      ('owner_ui', 'Owner UI', 'chef', 1, ${now}, ${now}),
+      ('team_member', 'Team Member', 'user', 1, ${now}, ${now}),
+      ('source_viewer', 'Source Viewer', 'user', 1, ${now}, ${now}),
+      ('app_modifier', 'App Modifier', 'user', 1, ${now}, ${now}),
+      ('founder_ui', 'Founder UI', 'founder', 1, ${now}, ${now})
+    ON CONFLICT(user_id) DO UPDATE SET
+      display_name = excluded.display_name,
+      role = excluded.role,
+      active = excluded.active,
+      updated_at_ms = excluded.updated_at_ms;
+  `, nativeBusinessOsSqlitePath);
+}
+
+function computeBusinessOsReleaseModuleBundle(moduleRoot) {
+  const files = [];
+  const allowed = new Set(['css', 'html', 'js', 'json', 'md', 'mjs', 'ts', 'svg']);
+  const walk = (dir, prefix = '') => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const abs = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(abs, rel);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const ext = path.extname(entry.name).slice(1).toLowerCase();
+      if (!allowed.has(ext)) continue;
+      const content = fs.readFileSync(abs, 'utf8');
+      files.push({
+        path: rel,
+        sha256: crypto.createHash('sha256').update(content).digest('hex'),
+        content,
+      });
+    }
+  };
+  walk(moduleRoot);
+  files.sort((left, right) => left.path.localeCompare(right.path));
+  const digestInput = files.map((file) => `${file.path}\0${file.sha256}\n`).join('');
+  return {
+    files,
+    sha256: crypto.createHash('sha256').update(digestInput).digest('hex'),
+  };
 }
 
 function removeSmokePath(targetPath) {
@@ -979,14 +1612,14 @@ async function waitForNativePeerSyncConfig(ms = 60000) {
   throw new Error(`timeout waiting for native RxDB peer sync config: ${JSON.stringify(lastConfig)}`);
 }
 
-function sqlite(statement) {
+function sqlite(statement, targetPath = sqlitePath) {
   const deadline = Date.now() + 20000;
   let lastOutput = '';
   while (Date.now() <= deadline) {
     const result = spawnSync('/usr/bin/sqlite3', [
       '-cmd',
       '.timeout 10000',
-      sqlitePath,
+      targetPath,
       statement,
     ], { encoding: 'utf8' });
     if (result.status === 0) return result.stdout;
@@ -1930,6 +2563,15 @@ function ensureCtoxSmokeBinary() {
   if (nativeSchemaDriftFixture) {
     console.log(`native_schema_drift_seed=${JSON.stringify(nativeSchemaDriftFixture)}`);
   }
+  if (smokeMode === 'business-os-app-release-ui') {
+    await seedBusinessOsReleaseNativeSetup();
+  }
+  const freshProfileScaleSeed = smokeMode === 'business-os-fresh-profile-ui'
+    ? seedBusinessOsFreshProfileScaleNativeSetup()
+    : null;
+  if (smokeMode === 'business-os-roles-permissions-ui') {
+    await seedBusinessOsRolesPermissionsNativeUsers();
+  }
   let ctox = startCtoxServer();
   const browserDiagnostics = {
     warnings: 0,
@@ -1981,6 +2623,7 @@ function ensureCtoxSmokeBinary() {
 
   let browser;
   let browserUserDataDir = null;
+  let freshProfileInitialStorage = null;
   const outerPhaseTimings = {};
   try {
     const ctoxServerWaitStartedAt = Date.now();
@@ -1998,6 +2641,15 @@ function ensureCtoxSmokeBinary() {
     }
     const browserLaunchStartedAt = Date.now();
     browserUserDataDir = fs.mkdtempSync(path.join(runtimeRoot, 'browser-profile-'));
+    if (smokeMode === 'business-os-fresh-profile-ui') {
+      const profileEntries = fs.readdirSync(browserUserDataDir);
+      freshProfileInitialStorage = {
+        cleanIndexedDb: !fs.existsSync(path.join(browserUserDataDir, 'Default', 'IndexedDB')),
+        cleanLocalStorage: !fs.existsSync(path.join(browserUserDataDir, 'Default', 'Local Storage')),
+        cleanSessionStorage: !fs.existsSync(path.join(browserUserDataDir, 'Default', 'Session Storage')),
+        emptyProfile: profileEntries.length === 0,
+      };
+    }
     browser = await chromium.launchPersistentContext(browserUserDataDir, chromiumLaunchOptions());
     const page = await browser.newPage();
     outerPhaseTimings.browserLaunchMs = Date.now() - browserLaunchStartedAt;
@@ -2031,7 +2683,7 @@ function ensureCtoxSmokeBinary() {
     });
     page.on('requestfailed', (request) => {
       const url = request.url();
-      if (url.includes('/app.js') || url.includes('/shared/') || url.includes('/modules/') || url.includes('/vendor/')) {
+      if (url.includes('/app.js') || url.includes('/shared/') || url.includes('/modules/') || url.includes('/installed-modules/') || url.includes('/vendor/')) {
         if (isExpectedNetworkFlapRequestFailure(request)) {
           browserDiagnostics.expectedNetworkFlapRequestFailures += 1;
         } else {
@@ -2042,7 +2694,7 @@ function ensureCtoxSmokeBinary() {
     });
     page.on('response', (response) => {
       const url = response.url();
-      if (response.status() >= 400 && (url.includes('/app.js') || url.includes('/shared/') || url.includes('/modules/') || url.includes('/vendor/'))) {
+      if (response.status() >= 400 && (url.includes('/app.js') || url.includes('/shared/') || url.includes('/modules/') || url.includes('/installed-modules/') || url.includes('/vendor/'))) {
         browserDiagnostics.assetResponseErrors += 1;
         console.error(`[browser:response] ${response.status()} ${url}`);
       }
@@ -2085,6 +2737,28 @@ function ensureCtoxSmokeBinary() {
         'ctox_business_os__desktop_file_chunks__v0',
       ]);
       return true;
+    });
+    await page.exposeFunction('__ctoxStopNativePeerForRestoreSmoke', async () => {
+      await stopChild(ctox);
+      ctox = null;
+      return true;
+    });
+    await page.exposeFunction('__ctoxStartNativePeerForRestoreSmoke', async () => {
+      if (ctox) await stopChild(ctox);
+      ctox = startCtoxServer();
+      await waitForCtoxServerListening(ctox);
+      await waitForNativePeerSyncConfig(60000);
+      await waitForSqliteTables([
+        'ctox_business_os__desktop_files__v0',
+        'ctox_business_os__desktop_file_chunks__v0',
+      ]);
+      return true;
+    });
+    await page.exposeFunction('__ctoxSqliteFileExistsForRestoreSmoke', async (id) => {
+      const safeId = sqlString(String(id || ''));
+      const fileRows = Number(sqlite(`SELECT COUNT(*) FROM ctox_business_os__desktop_files__v0 WHERE id='${safeId}';`).trim() || '0');
+      const chunkRows = Number(sqlite(`SELECT COUNT(*) FROM ctox_business_os__desktop_file_chunks__v0 WHERE id='${sqlString(`${id}_0`)}';`).trim() || '0');
+      return fileRows > 0 || chunkRows > 0;
     });
     await page.exposeFunction('__ctoxRolloverNativePeerInProcess', async () => {
       const res = await fetch(`http://127.0.0.1:${businessPort}/api/business-os/sync/native-peer/restart`, {
@@ -2133,7 +2807,8 @@ function ensureCtoxSmokeBinary() {
       || smokeMode === 'workspace-large-file-viewer-rust-to-browser'
       || smokeMode === 'workspace-large-file-viewer-restart-rust-to-browser';
     const deferredFileCollectionStartupMode = backgroundIndexerSmokeMode
-      || smokeMode === 'file-chunk-tombstone-error-browser-status';
+      || smokeMode === 'file-chunk-tombstone-error-browser-status'
+      || smokeMode === 'business-os-app-release-ui';
     if (useAppDb) {
       let startupState = null;
       const smokeHookWaitStartedAt = Date.now();
@@ -2710,16 +3385,937 @@ function ensureCtoxSmokeBinary() {
       // contract below requires COMPLETE initial sync, so poll the status
       // until the lazy tail finishes (bounded) before asserting.
       const advancedStatus = await waitForHealthyCompleteStatus(page, {
-        timeoutMs: 60000,
+        timeoutMs: smokeMode === 'business-os-app-release-ui' ? 240000 : 60000,
         requiredCollections: startupRequiredCollections,
       });
       outerPhaseTimings.startupAdvancedStatusMs = Date.now() - startupAdvancedStatusStartedAt;
       if (!advancedStatus?.ok) {
         throw new Error(`Business OS advanced status unhealthy after startup: ${JSON.stringify(advancedStatus, null, 2)}`);
       }
-      assertHealthyAdvancedStatusContract(advancedStatus);
+      if (smokeMode !== 'business-os-app-release-ui') {
+        assertHealthyAdvancedStatusContract(advancedStatus);
+      }
       advancedStatusEvidenceVersion = advancedStatus.version || '';
       advancedStatusEvidenceRuntime = advancedStatus.rxdbRuntime || null;
+      if (smokeMode === 'business-os-auth-scope-ui') {
+        const requiredCollections = [
+          'business_module_catalog',
+          'ctox_runtime_settings',
+          'business_commands',
+          'ctox_queue_tasks',
+          'desktop_files',
+          'desktop_file_chunks',
+        ];
+        const authSnapshot = async () => page.evaluate(async () => {
+          const smoke = globalThis.ctoxBusinessOsSmoke;
+          const state = smoke?.state || globalThis.CTOX_BUSINESS_OS_APP;
+          let storageKeys = {};
+          try {
+            storageKeys = typeof smoke?.storageKeys === 'function' ? smoke.storageKeys() : {};
+          } catch {}
+          return {
+            authState: document.body?.dataset?.authState || '',
+            moduleShell: document.body?.dataset?.moduleShell || '',
+            moduleLoading: document.body?.dataset?.moduleLoading || '',
+            hasGate: Boolean(document.querySelector('[data-login-gate-form]')),
+            hasSmoke: Boolean(smoke),
+            authenticated: Boolean(state?.session?.authenticated),
+            moduleCount: Array.isArray(state?.modules) ? state.modules.length : 0,
+            activeModule: state?.activeModule?.id || '',
+            instanceId: state?.syncConfig?.instance_id
+              || state?.syncConfig?.instanceId
+              || state?.sync?.config?.instance_id
+              || state?.sync?.config?.instanceId
+              || '',
+            storageWorkspace: storageKeys.workspace || '',
+            storageActor: storageKeys.actor || '',
+            actorId: state?.session?.user?.id || '',
+            actorRole: state?.session?.user?.role || '',
+            legacySessionToken: localStorage.getItem('ctox.businessOs.sessionToken') || '',
+            legacyAuthHeader: localStorage.getItem('ctox.businessOs.authHeader') || '',
+            loggedOut: localStorage.getItem('ctox.businessOs.loggedOut') || '',
+            pairingConfigKey: storageKeys.pairingConfig || 'ctox.businessOs.pairingConfig',
+            visibleText: (document.body?.innerText || '').slice(0, 700),
+          };
+        });
+        const waitForAuthenticatedShell = async (label) => {
+          await page.waitForFunction(() => {
+            const smoke = globalThis.ctoxBusinessOsSmoke;
+            const state = smoke?.state || globalThis.CTOX_BUSINESS_OS_APP;
+            const modulesLoaded = Array.isArray(state?.modules) && state.modules.length > 0;
+            const shellOpened = Boolean(document.body?.dataset?.moduleShell);
+            const loading = Boolean(document.body?.dataset?.moduleLoading);
+            return Boolean(smoke)
+              && Boolean(state?.session?.authenticated)
+              && modulesLoaded
+              && shellOpened
+              && !loading;
+          }, null, { timeout: 60000 });
+          const status = await waitForHealthyCompleteStatus(page, {
+            timeoutMs: 60000,
+            requiredCollections,
+          });
+          if (!status?.ok) {
+            throw new Error(`Business OS auth smoke ${label} advanced status unhealthy: ${JSON.stringify(status, null, 2)}`);
+          }
+          assertHealthyAdvancedStatusContract(status);
+          return {
+            snapshot: await authSnapshot(),
+            status,
+          };
+        };
+        const waitForLoginGate = async (label) => {
+          await page.waitForFunction(() => (
+            document.body?.dataset?.authState === 'locked'
+              && Boolean(document.querySelector('[data-login-gate-form]'))
+          ), null, { timeout: 30000 });
+          const snapshot = await authSnapshot();
+          if (!snapshot.hasGate || snapshot.authenticated || snapshot.moduleShell || snapshot.moduleCount > 0) {
+            throw new Error(`Business OS auth smoke ${label} did not stay locked: ${JSON.stringify(snapshot, null, 2)}`);
+          }
+          return snapshot;
+        };
+        const clickAccountLogout = async () => {
+          await page.locator('[data-open-account]').click({ timeout: 10000 });
+          await page.locator('[data-logout]').click({ timeout: 10000 });
+          await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
+        };
+        const gotoInstrumentedSmokeUrl = async (label) => {
+          let lastError = null;
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            try {
+              await page.goto(smokeUrl, { waitUntil: 'commit', timeout: 10000 });
+              return;
+            } catch (error) {
+              lastError = error;
+              if (!String(error?.message || error).includes('net::ERR_ABORTED')) break;
+              await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
+              await new Promise((resolve) => setTimeout(resolve, 250));
+            }
+          }
+          throw new Error(`Business OS auth smoke could not navigate to instrumented URL for ${label}: ${String(lastError?.message || lastError)}`);
+        };
+        const initial = await authSnapshot();
+        if (!initial.authenticated || initial.moduleCount === 0 || !initial.moduleShell) {
+          throw new Error(`Business OS auth smoke did not start authenticated: ${JSON.stringify(initial, null, 2)}`);
+        }
+        const browserContextClean = !initial.legacySessionToken
+          && !initial.legacyAuthHeader
+          && initial.loggedOut !== '1';
+        const initialTenantScope = initial.storageWorkspace || initial.instanceId;
+        const actorRole = initial.actorRole || 'unknown';
+        await page.reload({ waitUntil: 'commit', timeout: 10000 });
+        const afterReload = await waitForAuthenticatedShell('authenticated reload');
+        const reloadTenantScope = afterReload.snapshot.storageWorkspace || afterReload.snapshot.instanceId;
+        const authenticatedReloadVerified = afterReload.snapshot.authenticated === true
+          && afterReload.snapshot.moduleCount > 0
+          && afterReload.snapshot.loggedOut !== '1';
+        const forgedTenantScope = `${initialTenantScope || 'local-workspace'}-forged`;
+        await page.evaluate(({ pairingConfigKey, forgedTenantScope: forged }) => {
+          const forgedPairing = {
+            ok: true,
+            source: 'stored',
+            app_hosting: 'web_deploy',
+            sync_mode: 'p2p-first',
+            instance_id: forged,
+            peer_role: 'browser',
+            sync_room: `ctox-business-os:${forged}:forged`,
+            signaling_room_password: 'forged-room-password',
+            signaling_urls: ['ws://127.0.0.1:9'],
+            transport: 'webrtc',
+            http_bridge_available: false,
+            session: {
+              authenticated: true,
+              user: {
+                id: 'forged-cross-scope-user',
+                display_name: 'Forged Cross Scope User',
+                role: 'admin',
+              },
+            },
+          };
+          localStorage.setItem(pairingConfigKey || 'ctox.businessOs.pairingConfig', JSON.stringify(forgedPairing));
+          localStorage.setItem('ctox.businessOs.pairingConfig', JSON.stringify(forgedPairing));
+          localStorage.setItem('ctox.businessOs.sessionToken', 'forged-cross-scope-token');
+          localStorage.setItem('ctox.businessOs.authHeader', 'Basic forged-cross-scope-auth');
+        }, {
+          pairingConfigKey: afterReload.snapshot.pairingConfigKey,
+          forgedTenantScope,
+        });
+        await page.reload({ waitUntil: 'commit', timeout: 10000 });
+        const crossScopeTampered = await waitForAuthenticatedShell('cross-scope storage tamper');
+        const crossScopeTenantScope = crossScopeTampered.snapshot.storageWorkspace
+          || crossScopeTampered.snapshot.instanceId;
+        const crossScopeStorageDenied = Boolean(initialTenantScope)
+          && crossScopeTenantScope === initialTenantScope
+          && crossScopeTenantScope !== forgedTenantScope
+          && crossScopeTampered.snapshot.actorId !== 'forged-cross-scope-user'
+          && crossScopeTampered.snapshot.authenticated === true
+          && crossScopeTampered.snapshot.moduleCount > 0;
+        await clickAccountLogout();
+        const logoutGate = await waitForLoginGate('logout');
+        const logoutVerified = logoutGate.loggedOut === '1' && logoutGate.authState === 'locked';
+        await gotoInstrumentedSmokeUrl('logged-out reload');
+        const loggedOutReload = await waitForLoginGate('logged-out reload');
+        const loggedOutReloadBlocked = loggedOutReload.loggedOut === '1'
+          && loggedOutReload.authState === 'locked'
+          && !loggedOutReload.authenticated;
+        const protectedAccessBlocked = loggedOutReload.hasGate
+          && !loggedOutReload.moduleShell
+          && loggedOutReload.moduleCount === 0
+          && !loggedOutReload.activeModule;
+        await page.evaluate(() => {
+          localStorage.setItem('ctox.businessOs.sessionToken', 'forged-smoke-token');
+          localStorage.setItem('ctox.businessOs.authHeader', 'Basic forged-smoke-auth');
+        });
+        await page.reload({ waitUntil: 'commit', timeout: 10000 });
+        const tampered = await waitForLoginGate('tampered storage reload');
+        const storageCopyDidNotWidenScope = tampered.loggedOut === '1'
+          && !tampered.authenticated
+          && tampered.moduleCount === 0
+          && !tampered.moduleShell
+          && !tampered.activeModule;
+        await page.locator('[data-login-gate-form] input[name="user"]').fill('admin', { timeout: 10000 });
+        await page.locator('[data-login-gate-form] input[name="password"]').fill('admin', { timeout: 10000 });
+        await Promise.all([
+          page.waitForURL((url) => url.pathname === '/' || url.pathname.endsWith('/index.html'), { timeout: 15000 }).catch(() => {}),
+          page.locator('[data-login-gate-form] [data-gate-submit]').click({ timeout: 10000 }),
+        ]);
+        await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
+        await gotoInstrumentedSmokeUrl('login');
+        const afterLogin = await waitForAuthenticatedShell('login');
+        const loginTenantScope = afterLogin.snapshot.storageWorkspace || afterLogin.snapshot.instanceId;
+        const loginVerified = afterLogin.snapshot.authenticated === true
+          && afterLogin.snapshot.moduleCount > 0
+          && afterLogin.snapshot.loggedOut !== '1'
+          && !afterLogin.snapshot.legacySessionToken
+          && !afterLogin.snapshot.legacyAuthHeader;
+        const tenantScopeVerified = Boolean(initialTenantScope)
+          && initialTenantScope === reloadTenantScope
+          && initialTenantScope === loginTenantScope;
+        advancedStatusEvidenceVersion = afterLogin.status.version || advancedStatusEvidenceVersion;
+        advancedStatusEvidenceRuntime = afterLogin.status.rxdbRuntime || advancedStatusEvidenceRuntime;
+        await clickAccountLogout();
+        const finalGate = await waitForLoginGate('final logout');
+        const finalState = finalGate.loggedOut === '1' && finalGate.authState === 'locked'
+          ? 'logged_out'
+          : 'unexpected';
+        const checks = {
+          loginVerified,
+          authenticatedReloadVerified,
+          logoutVerified,
+          loggedOutReloadBlocked,
+          protectedAccessBlocked,
+          tenantScopeVerified,
+          browserContextClean,
+          crossScopeStorageDenied,
+          storageCopyDidNotWidenScope,
+          finalLoggedOut: finalState === 'logged_out',
+        };
+        const failed = Object.entries(checks).filter(([, value]) => value !== true);
+        if (failed.length > 0) {
+          throw new Error(`Business OS auth smoke failed: ${JSON.stringify({
+            failed: failed.map(([key]) => key),
+            initial,
+            afterReload: afterReload.snapshot,
+            crossScopeTampered: crossScopeTampered.snapshot,
+            logoutGate,
+            loggedOutReload,
+            tampered,
+            afterLogin: afterLogin.snapshot,
+            finalGate,
+            initialTenantScope,
+            crossScopeTenantScope,
+            forgedTenantScope,
+            reloadTenantScope,
+            loginTenantScope,
+          }, null, 2)}`);
+        }
+        console.log(`business_os_auth_login_verified=${loginVerified ? 1 : 0}`);
+        console.log(`business_os_auth_authenticated_reload_verified=${authenticatedReloadVerified ? 1 : 0}`);
+        console.log(`business_os_auth_logout_verified=${logoutVerified ? 1 : 0}`);
+        console.log(`business_os_auth_logged_out_reload_blocked=${loggedOutReloadBlocked ? 1 : 0}`);
+        console.log(`business_os_auth_protected_access_blocked=${protectedAccessBlocked ? 1 : 0}`);
+        console.log(`business_os_auth_tenant_scope_verified=${tenantScopeVerified ? 1 : 0}`);
+        console.log(`business_os_auth_browser_context_clean=${browserContextClean ? 1 : 0}`);
+        console.log(`business_os_auth_cross_scope_storage_denied=${crossScopeStorageDenied ? 1 : 0}`);
+        console.log('business_os_auth_tenant_scope_claim=local-workspace-only');
+        console.log(`business_os_auth_storage_copy_did_not_widen_scope=${storageCopyDidNotWidenScope ? 1 : 0}`);
+        console.log(`business_os_auth_final_state=${finalState}`);
+        console.log(`business_os_auth_auth_state=${finalState}`);
+        console.log(`business_os_auth_actor_role=${actorRole}`);
+        console.log(`business_os_auth_browser_context=${browserContextClean ? 'clean' : 'dirty'}`);
+        console.log(`business_os_auth_tenant_scope=${initialTenantScope || ''}`);
+        console.log(`advanced_status=${advancedStatusEvidenceVersion}`);
+        if (advancedStatusEvidenceRuntime) console.log(`rxdb_runtime=${JSON.stringify(advancedStatusEvidenceRuntime)}`);
+        emitBrowserDiagnostics();
+        return;
+      }
+      if (smokeMode === 'business-os-fresh-profile-ui') {
+        const initialStorage = freshProfileInitialStorage || {};
+        await page.setViewportSize({ width: 1280, height: 800 });
+        const desktop = await page.evaluate(async () => {
+          const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+          const waitFor = async (predicate, ms, label) => {
+            const deadline = Date.now() + ms;
+            let last = null;
+            while (Date.now() < deadline) {
+              last = await predicate();
+              if (last?.ok) return last;
+              await delay(100);
+            }
+            throw new Error(`${label} timed out: ${JSON.stringify(last)}`);
+          };
+          const css = (value) => {
+            if (globalThis.CSS?.escape) return globalThis.CSS.escape(String(value));
+            return String(value).replace(/["\\]/g, '\\$&');
+          };
+          const smoke = globalThis.ctoxBusinessOsSmoke;
+          const state = globalThis.CTOX_BUSINESS_OS_APP || smoke?.state;
+          if (!state) throw new Error('Business OS app state is unavailable for fresh-profile UI smoke');
+          if (typeof smoke?.renderTabs !== 'function') throw new Error('Business OS smoke renderTabs hook is unavailable');
+          if (typeof state.openModule !== 'function') throw new Error('Business OS state.openModule is unavailable for fresh-profile UI smoke');
+          const [
+            permissionsMod,
+            lifecycleMod,
+          ] = await Promise.all([
+            import('/shared/permissions.js'),
+            import('/shared/app-lifecycle.js'),
+          ]);
+          const { BusinessOsPermissions } = permissionsMod;
+          const {
+            appLifecycleBadge,
+            canSeeModuleForAppVersion,
+          } = lifecycleMod;
+          const privateModule = {
+            id: 'phase14-fresh-private-app',
+            title: 'Phase 14 Fresh Private App',
+            glyph: 'F14P',
+            version: '0.5.0',
+            source: 'installed',
+            install_scope: 'installed',
+            entry: 'installed-modules/phase14-fresh-private-app/index.js',
+            collections: ['business_commands'],
+            editable: true,
+            deletable: true,
+          };
+          const teamModule = {
+            id: 'phase14-fresh-team-app',
+            title: 'Phase 14 Fresh Team App',
+            glyph: 'F14T',
+            version: '1.0.0',
+            source: 'installed',
+            install_scope: 'installed',
+            entry: 'installed-modules/phase14-fresh-team-app/index.js',
+            collections: ['business_commands'],
+            editable: true,
+            deletable: true,
+          };
+          const restrictedModule = {
+            id: 'phase14-fresh-restricted-app',
+            title: 'Phase 14 Fresh Restricted App',
+            glyph: 'F14R',
+            version: '1.2.0',
+            source: 'installed',
+            install_scope: 'installed',
+            entry: 'installed-modules/phase14-fresh-restricted-app/index.js',
+            collections: ['business_commands'],
+            editable: true,
+            deletable: true,
+            lifecycle: {
+              runtime_installed: true,
+              visibility_state: 'restricted',
+              audience: 'restricted',
+            },
+          };
+          const moduleIds = [privateModule.id, teamModule.id, restrictedModule.id];
+          const allPermissions = Object.values(BusinessOsPermissions);
+          const scaleModuleCount = 32;
+          const scaleModules = Array.from({ length: scaleModuleCount }, (_, index) => {
+            const seq = index + 1;
+            const version = `1.${Math.floor(index / 8)}.${index % 8}`;
+            const moduleId = `phase14-scale-app-${String(seq).padStart(2, '0')}`;
+            const versions = [3, 2, 1].map((versionSeq) => ({
+              version_id: `${moduleId}-v${versionSeq}`,
+              seq: versionSeq,
+              origin: versionSeq === 1 ? 'install' : 'manual_release',
+              label: `Scale Version ${versionSeq}`,
+              sealed: true,
+              file_count: 1,
+              created_at_ms: Date.now() - ((3 - versionSeq) * 1000),
+            }));
+            return {
+              id: moduleId,
+              title: `Phase 14 Scale App ${String(seq).padStart(2, '0')}`,
+              glyph: 'S14',
+              version,
+              source: 'installed',
+              install_scope: 'installed',
+              entry: `installed-modules/${moduleId}/index.js`,
+              collections: ['business_commands'],
+              editable: true,
+              deletable: true,
+              version_state: {
+                version_count: versions.length,
+                versions,
+              },
+              lifecycle: {
+                runtime_installed: true,
+                visibility_state: 'team',
+                audience: 'team',
+                current_semver: version,
+                release_status: 'released',
+                release_state: {
+                  status: 'released',
+                  current: {
+                    version_id: `${moduleId}-v3`,
+                    version: 3,
+                    target_version: version,
+                  },
+                  rollback_target: {
+                    version_id: `${moduleId}-v2`,
+                    version: 2,
+                    target_version: `1.${Math.floor(index / 8)}.${Math.max(0, (index % 8) - 1)}`,
+                  },
+                  history_count: versions.length,
+                },
+                data_access: {
+                  status: 'reviewed',
+                  completed: true,
+                  areas: [
+                    { collection: 'business_commands', read: 'granted', write: 'locked' },
+                    { collection: 'ctox_queue_tasks', read: 'locked', write: 'not_requested' },
+                  ],
+                  granted_collection_ids: ['business_commands'],
+                  locked_collection_ids: ['ctox_queue_tasks'],
+                  review_is_evidence_only: true,
+                  grants_implied: false,
+                },
+              },
+            };
+          });
+          const scaleModuleIds = scaleModules.map((mod) => mod.id);
+          const scaleExplicitGrants = scaleModules.flatMap((mod, index) => [
+            {
+              grant_id: `phase14_scale_${index + 1}_apps_view`,
+              subject_type: 'user',
+              subject_id: 'fresh_team_member',
+              permission: BusinessOsPermissions.AppsView,
+              scope_type: 'module',
+              scope_id: mod.id,
+              active: true,
+            },
+            {
+              grant_id: `phase14_scale_${index + 1}_data_read`,
+              subject_type: 'user',
+              subject_id: 'fresh_team_member',
+              permission: BusinessOsPermissions.DataRead,
+              scope_type: 'collection',
+              scope_id: 'business_commands',
+              active: true,
+            },
+          ]);
+          const scaleModuleAssignments = Object.fromEntries(scaleModules.map((mod) => [
+            mod.id,
+            {
+              fresh_builder: [
+                BusinessOsPermissions.AppsView,
+                BusinessOsPermissions.AppsModify,
+                BusinessOsPermissions.AppsSourceView,
+                BusinessOsPermissions.AppsRelease,
+              ],
+            },
+          ]));
+          const governance = {
+            founders: {
+              [privateModule.id]: [{ user_id: 'fresh_builder', active: true }],
+              [teamModule.id]: [{ user_id: 'fresh_builder', active: true }],
+              [restrictedModule.id]: [{ user_id: 'fresh_builder', active: true }],
+              ...Object.fromEntries(scaleModules.map((mod) => [
+                mod.id,
+                [{ user_id: 'fresh_builder', active: true }],
+              ])),
+            },
+            permission_model: {
+              version: 1,
+              deny_supported: false,
+              role_defaults: {
+                chef: { workspace: allPermissions, module: allPermissions, assigned_module: allPermissions },
+                admin: { workspace: allPermissions, module: allPermissions, assigned_module: allPermissions },
+                founder: {
+                  workspace: [],
+                  module: [],
+                  assigned_module: [
+                    BusinessOsPermissions.AppsView,
+                    BusinessOsPermissions.AppsModify,
+                    BusinessOsPermissions.AppsSourceView,
+                    BusinessOsPermissions.AppsRelease,
+                    BusinessOsPermissions.DataRead,
+                    BusinessOsPermissions.DataWrite,
+                  ],
+                },
+                user: { workspace: [], module: [], assigned_module: [] },
+              },
+              module_assignments: {
+                [privateModule.id]: {
+                  fresh_builder: [
+                    BusinessOsPermissions.AppsView,
+                    BusinessOsPermissions.AppsModify,
+                    BusinessOsPermissions.AppsSourceView,
+                    BusinessOsPermissions.AppsRelease,
+                  ],
+                },
+                [teamModule.id]: {
+                  fresh_builder: [
+                    BusinessOsPermissions.AppsView,
+                    BusinessOsPermissions.AppsModify,
+                    BusinessOsPermissions.AppsSourceView,
+                    BusinessOsPermissions.AppsRelease,
+                  ],
+                },
+                [restrictedModule.id]: {
+                  fresh_builder: [
+                    BusinessOsPermissions.AppsView,
+                    BusinessOsPermissions.AppsModify,
+                    BusinessOsPermissions.AppsSourceView,
+                    BusinessOsPermissions.AppsRelease,
+                  ],
+                },
+                ...scaleModuleAssignments,
+              },
+              explicit_grants: scaleExplicitGrants,
+            },
+          };
+          const builderSession = { user: { id: 'fresh_builder', role: 'founder', name: 'Fresh Builder' } };
+          const teamSession = { user: { id: 'fresh_team_member', role: 'user', name: 'Fresh Team' } };
+          const originalState = {
+            modules: Array.isArray(state.modules) ? [...state.modules] : [],
+            taskbarPins: Array.isArray(state.taskbarPins) ? [...state.taskbarPins] : [],
+            moduleAllowlist: Array.isArray(state.moduleAllowlist) ? [...state.moduleAllowlist] : state.moduleAllowlist,
+            session: state.session,
+            governance: state.governance,
+            activeModule: state.activeModule,
+            globalSession: globalThis.CTOX_BUSINESS_OS_SESSION,
+            taskbarPinsGlobal: localStorage.getItem('ctox.businessOs.taskbarPins'),
+          };
+          let scopedTaskbarPinsKey = '';
+          let scopedTaskbarPinsOriginal = null;
+          globalThis.__ctoxFreshProfileRestore = () => {
+            if (originalState.taskbarPinsGlobal === null) localStorage.removeItem('ctox.businessOs.taskbarPins');
+            else localStorage.setItem('ctox.businessOs.taskbarPins', originalState.taskbarPinsGlobal);
+            if (scopedTaskbarPinsKey) {
+              if (scopedTaskbarPinsOriginal === null) localStorage.removeItem(scopedTaskbarPinsKey);
+              else localStorage.setItem(scopedTaskbarPinsKey, scopedTaskbarPinsOriginal);
+            }
+            localStorage.removeItem('ctox.businessOs.freshProfileFakeLifecycle');
+            state.modules = originalState.modules;
+            state.taskbarPins = originalState.taskbarPins;
+            state.moduleAllowlist = originalState.moduleAllowlist;
+            state.session = originalState.session;
+            state.governance = originalState.governance;
+            state.activeModule = originalState.activeModule;
+            globalThis.CTOX_BUSINESS_OS_SESSION = originalState.globalSession;
+            smoke.renderTabs();
+          };
+          const authoritativeProjectionLoaded = Array.isArray(originalState.modules)
+            && originalState.modules.length >= 10
+            && Boolean(state.syncConfig?.instance_id || state.syncConfig?.instanceId)
+            && Boolean(globalThis.CTOX_BUSINESS_OS_STATUS);
+          const installModules = (session) => {
+            const renderStartedAt = performance.now();
+            state.session = session;
+            state.governance = governance;
+            globalThis.CTOX_BUSINESS_OS_SESSION = session;
+            state.modules = [
+              ...originalState.modules.filter((mod) => ![...moduleIds, ...scaleModuleIds].includes(mod?.id)),
+              privateModule,
+              teamModule,
+              restrictedModule,
+              ...scaleModules,
+            ];
+            state.moduleAllowlist = [...new Set([
+              ...(Array.isArray(originalState.moduleAllowlist)
+                ? originalState.moduleAllowlist.map((id) => String(id || '').trim()).filter(Boolean)
+                : []),
+              ...moduleIds,
+              ...scaleModuleIds,
+            ])];
+            state.taskbarPins = [...moduleIds, ...scaleModuleIds];
+            smoke.renderTabs();
+            return Math.round(performance.now() - renderStartedAt);
+          };
+          globalThis.__ctoxFreshProfileNarrowSetup = async () => {
+            installModules(teamSession);
+            await state.openModule('app-store', { force: true, asModule: true });
+            await waitFor(() => ({
+              ok: Boolean(document.querySelector('[data-app-store-root]')),
+              text: document.querySelector('[data-app-store-root]')?.innerText?.slice(0, 500) || '',
+            }), 10000, 'fresh-profile narrow app store root');
+            document.querySelector('[data-app-store-root] [data-scope="installed"]')?.click();
+            return waitFor(() => {
+              const card = document.querySelector(`[data-app-id="${css(teamModule.id)}"]`);
+              const disabled = card?.querySelector('[data-disabled-reason]');
+              const lifecycle = card?.querySelector('.app-lifecycle-badge');
+              return {
+                ok: Boolean(card && disabled && lifecycle),
+                cardText: card?.innerText || '',
+                disabledReason: disabled?.getAttribute('data-disabled-reason') || '',
+                lifecycleText: lifecycle?.textContent?.trim() || '',
+              };
+            }, 10000, 'fresh-profile narrow app-store disabled reason');
+          };
+          const tabEvidence = () => {
+            const privateBadge = document.querySelector(`[data-app-lifecycle-badge="${css(privateModule.id)}"]`);
+            const teamBadge = document.querySelector(`[data-app-lifecycle-badge="${css(teamModule.id)}"]`);
+            const restrictedBadge = document.querySelector(`[data-app-lifecycle-badge="${css(restrictedModule.id)}"]`);
+            return {
+              privateTab: Boolean(document.querySelector(`.module-tab[data-target="${css(privateModule.id)}"]`)),
+              teamTab: Boolean(document.querySelector(`.module-tab[data-target="${css(teamModule.id)}"]`)),
+              restrictedTab: Boolean(document.querySelector(`.module-tab[data-target="${css(restrictedModule.id)}"]`)),
+              privateText: privateBadge?.textContent?.trim() || '',
+              teamText: teamBadge?.textContent?.trim() || '',
+              restrictedText: restrictedBadge?.textContent?.trim() || '',
+              privateState: privateBadge?.getAttribute('data-state') || '',
+              teamState: teamBadge?.getAttribute('data-state') || '',
+              restrictedState: restrictedBadge?.getAttribute('data-state') || '',
+            };
+          };
+          const openStartMenu = async () => {
+            const startedAt = performance.now();
+            const button = document.querySelector('[data-shell-start]');
+            if (!button) throw new Error('Business OS start menu button is missing for fresh-profile smoke');
+            document.querySelector('.shell-start-menu-panel')?.classList.remove('is-active');
+            button.click();
+            const result = await waitFor(() => {
+              const panel = document.querySelector('.shell-start-menu-panel');
+              const text = panel?.innerText || '';
+              return {
+                ok: Boolean(panel?.classList?.contains('is-active') && /Phase 14 Fresh/.test(text)),
+                text,
+              };
+            }, 5000, 'fresh-profile start menu');
+            return {
+              ...result,
+              ms: Math.round(performance.now() - startedAt),
+            };
+          };
+          try {
+            const renderTimings = [installModules(builderSession)];
+            const builderTabs = await waitFor(() => {
+              const tabs = tabEvidence();
+              return {
+                ok: tabs.privateTab
+                  && tabs.teamTab
+                  && tabs.restrictedTab
+                  && tabs.privateState === 'private'
+                  && tabs.teamState === 'team'
+                  && tabs.restrictedState === 'restricted',
+                ...tabs,
+              };
+            }, 8000, 'fresh-profile lifecycle tabs');
+            const startMenu = await openStartMenu();
+            const startMenuText = startMenu.text || document.querySelector('.shell-start-menu-panel')?.innerText || '';
+            const privateLifecycle = appLifecycleBadge(privateModule, { session: builderSession, governance });
+            const teamLifecycle = appLifecycleBadge(teamModule, { session: teamSession, governance });
+            const restrictedLifecycle = appLifecycleBadge(restrictedModule, { session: builderSession, governance });
+            smoke.openAppLifecycleDrawer(privateModule);
+            const drawer = await waitFor(() => {
+              const el = document.querySelector('.module-lifecycle-drawer');
+              const text = el?.innerText || '';
+              return {
+                ok: Boolean(el && /App-Verantwortliche/.test(text) && /Verwalten erlaubt/.test(text)),
+                text,
+              };
+            }, 5000, 'fresh-profile lifecycle drawer labels');
+            document.querySelector('[data-close-lifecycle]')?.click();
+
+            renderTimings.push(installModules(teamSession));
+            const appStoreStartedAt = performance.now();
+            await state.openModule('app-store', { force: true, asModule: true });
+            await waitFor(() => ({
+              ok: Boolean(document.querySelector('[data-app-store-root]')),
+              text: document.querySelector('[data-app-store-root]')?.innerText?.slice(0, 500) || '',
+            }), 10000, 'fresh-profile app store root');
+            document.querySelector('[data-app-store-root] [data-scope="installed"]')?.click();
+            const appStore = await waitFor(() => {
+              const card = document.querySelector(`[data-app-id="${css(teamModule.id)}"]`);
+              const disabled = card?.querySelector('[data-disabled-reason]');
+              const lifecycle = card?.querySelector('.app-lifecycle-badge');
+              const cards = [...document.querySelectorAll('[data-app-id]')];
+              const scaleCardCount = scaleModuleIds
+                .filter((id) => document.querySelector(`[data-app-id="${css(id)}"]`))
+                .length;
+              return {
+                ok: Boolean(card && disabled && lifecycle),
+                cardText: card?.innerText || '',
+                disabledReason: disabled?.getAttribute('data-disabled-reason') || '',
+                lifecycleText: lifecycle?.textContent?.trim() || '',
+                cardCount: cards.length,
+                scaleCardCount,
+              };
+            }, 10000, 'fresh-profile app-store disabled reason');
+            appStore.ms = Math.round(performance.now() - appStoreStartedAt);
+
+            scopedTaskbarPinsKey = typeof smoke.storageKeys === 'function'
+              ? smoke.storageKeys()?.taskbarPins || ''
+              : '';
+            if (scopedTaskbarPinsKey) scopedTaskbarPinsOriginal = localStorage.getItem(scopedTaskbarPinsKey);
+            const tamperedPins = JSON.stringify(moduleIds);
+            localStorage.setItem('ctox.businessOs.taskbarPins', tamperedPins);
+            if (scopedTaskbarPinsKey) localStorage.setItem(scopedTaskbarPinsKey, tamperedPins);
+            localStorage.setItem('ctox.businessOs.freshProfileFakeLifecycle', JSON.stringify({
+              [privateModule.id]: 'team',
+              [restrictedModule.id]: 'team',
+            }));
+            renderTimings.push(installModules(teamSession));
+            const tamperedTabs = await waitFor(() => {
+              const tabs = tabEvidence();
+              return {
+                ok: tabs.teamTab && !tabs.privateTab && !tabs.restrictedTab,
+                ...tabs,
+              };
+            }, 8000, 'fresh-profile storage tampering');
+            localStorage.removeItem('ctox.businessOs.freshProfileFakeLifecycle');
+            if (scopedTaskbarPinsKey) localStorage.removeItem(scopedTaskbarPinsKey);
+            localStorage.removeItem('ctox.businessOs.taskbarPins');
+
+            const lifecycleLabelsVisible = builderTabs.privateText === 'Privat'
+              && builderTabs.teamText === 'Team'
+              && builderTabs.restrictedText === 'Eingeschränkt'
+              && privateLifecycle.text === 'Privat'
+              && teamLifecycle.text === 'Team'
+              && restrictedLifecycle.text === 'Eingeschränkt';
+            const versionBadgesVisible = privateLifecycle.version === 'v0.5.0'
+              && teamLifecycle.version === 'v1.0.0'
+              && restrictedLifecycle.version === 'v1.2.0'
+              && /v0\.5\.0\s+Privat/.test(startMenuText)
+              && /v1\.0\.0\s+Team/.test(startMenuText)
+              && /v1\.2\.0\s+Eingeschränkt/.test(startMenuText)
+              && /v1\.0\.0\s*·\s*Team/.test(appStore.lifecycleText);
+            const disabledReasonsVisible = /Nur Owner|Admins|App-Freigaberecht/.test(appStore.disabledReason)
+              || /Nur Owner|Admins|App-Freigaberecht/.test(appStore.cardText);
+            const desktopViewportVerified = window.innerWidth >= 1200
+              && window.innerHeight >= 700
+              && lifecycleLabelsVisible
+              && versionBadgesVisible
+              && disabledReasonsVisible;
+            const noStorageWidening = tamperedTabs.teamTab
+              && !tamperedTabs.privateTab
+              && !tamperedTabs.restrictedTab;
+            const authState = state.session?.user?.id ? 'authenticated' : 'unknown';
+            const scaleReleaseVersions = scaleModules.reduce((total, mod) =>
+              total + Number(mod.version_state?.version_count || 0), 0);
+            const scaleCatalogModules = Array.isArray(state.modules) ? state.modules.length : 0;
+            const scaleRenderMs = Math.max(...renderTimings);
+            const scaleStartMenuMs = Number(startMenu.ms || 0);
+            const scaleAppStoreMs = Number(appStore.ms || 0);
+            const scaleBudgetPassed = scaleModules.length >= 32
+              && scaleCatalogModules >= 50
+              && scaleExplicitGrants.length >= 64
+              && scaleReleaseVersions >= 96
+              && Number(appStore.scaleCardCount || 0) >= 20
+              && scaleRenderMs <= 5000
+              && scaleStartMenuMs <= 5000
+              && scaleAppStoreMs <= 15000;
+            const checks = {
+              authoritativeProjectionLoaded,
+              lifecycleLabelsVisible,
+              versionBadgesVisible,
+              disabledReasonsVisible,
+              desktopViewportVerified,
+              noStorageWidening,
+              authState: authState === 'authenticated',
+              scaleBudgetPassed,
+            };
+            const failed = Object.entries(checks).filter(([, value]) => value !== true);
+            if (failed.length) {
+              throw new Error(`fresh-profile UI smoke failed: ${JSON.stringify({
+                failed,
+                builderTabs,
+                startMenuText,
+                drawer,
+                appStore,
+                tamperedTabs,
+                privateLifecycle,
+                teamLifecycle,
+                restrictedLifecycle,
+                authoritativeProjectionLoaded,
+                scale: {
+                  fixtureModules: scaleModules.length,
+                  catalogModules: scaleCatalogModules,
+                  explicitGrants: scaleExplicitGrants.length,
+                  releaseVersions: scaleReleaseVersions,
+                  appStoreCards: appStore.scaleCardCount,
+                  renderMs: scaleRenderMs,
+                  startMenuMs: scaleStartMenuMs,
+                  appStoreMs: scaleAppStoreMs,
+                },
+              }, null, 2)}`);
+            }
+            return {
+              authoritativeProjectionLoaded,
+              lifecycleLabelsVisible,
+              versionBadgesVisible,
+              disabledReasonsVisible,
+              desktopViewportVerified,
+              noStorageWidening,
+              authState,
+              actorRole: state.session?.user?.role || '',
+              tenantScope: state.syncConfig?.instance_id || state.syncConfig?.instanceId || '',
+              targetModuleId: teamModule.id,
+              scaleFixtureModules: scaleModules.length,
+              scaleCatalogModules,
+              scaleExplicitGrants: scaleExplicitGrants.length,
+              scaleReleaseVersions,
+              scaleAppStoreCards: appStore.scaleCardCount,
+              scaleRenderMs,
+              scaleStartMenuMs,
+              scaleAppStoreMs,
+              scaleBudgetPassed,
+            };
+          } finally {
+            localStorage.removeItem('ctox.businessOs.freshProfileFakeLifecycle');
+          }
+        });
+        await page.setViewportSize({ width: 390, height: 844 });
+        let narrowViewport = null;
+        try {
+          narrowViewport = await page.evaluate(async () => {
+            const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+            const waitFor = async (predicate, ms, label) => {
+              const deadline = Date.now() + ms;
+              let last = null;
+              while (Date.now() < deadline) {
+                last = await predicate();
+                if (last?.ok) return last;
+                await delay(100);
+              }
+              throw new Error(`${label} timed out: ${JSON.stringify(last)}`);
+            };
+            await globalThis.__ctoxFreshProfileNarrowSetup?.();
+            await waitFor(() => {
+              const root = document.querySelector('[data-app-store-root]') || document.body;
+              const visibleLifecycle = [...document.querySelectorAll('.module-tab-lifecycle, .app-lifecycle-badge')]
+                .filter((el) => {
+                  const rect = el.getBoundingClientRect();
+                  return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.left < window.innerWidth;
+                });
+              const disabled = document.querySelector('[data-disabled-reason]');
+              const disabledRect = disabled?.getBoundingClientRect?.();
+              return {
+                ok: window.innerWidth <= 430
+                  && Boolean(root)
+                  && visibleLifecycle.length >= 1
+                  && Boolean(disabled && disabledRect?.width > 0 && disabledRect.left < window.innerWidth),
+                width: window.innerWidth,
+                height: window.innerHeight,
+                lifecycleCount: visibleLifecycle.length,
+                disabledReason: disabled?.getAttribute('data-disabled-reason') || '',
+              };
+            }, 5000, 'fresh-profile narrow viewport visible labels');
+            return {
+              width: window.innerWidth,
+              height: window.innerHeight,
+              ok: true,
+            };
+          });
+        } finally {
+          await page.evaluate(() => {
+            globalThis.__ctoxFreshProfileRestore?.();
+            delete globalThis.__ctoxFreshProfileRestore;
+            delete globalThis.__ctoxFreshProfileNarrowSetup;
+          }).catch(() => {});
+        }
+        const status = await waitForHealthyCompleteStatus(page, {
+          timeoutMs: 60000,
+          requiredCollections: [
+            'business_module_catalog',
+            'ctox_runtime_settings',
+            'business_commands',
+            'ctox_queue_tasks',
+            'desktop_files',
+            'desktop_file_chunks',
+          ],
+        });
+        if (!status?.ok) {
+          throw new Error(`Business OS fresh-profile advanced status unhealthy: ${JSON.stringify(status, null, 2)}`);
+        }
+        assertHealthyAdvancedStatusContract(status);
+        advancedStatusEvidenceVersion = status.version || advancedStatusEvidenceVersion;
+        advancedStatusEvidenceRuntime = status.rxdbRuntime || advancedStatusEvidenceRuntime;
+        const cleanIndexedDb = initialStorage.cleanIndexedDb === true && initialStorage.emptyProfile === true;
+        const cleanLocalStorage = initialStorage.cleanLocalStorage === true && initialStorage.emptyProfile === true;
+        const cleanSessionStorage = initialStorage.cleanSessionStorage === true && initialStorage.emptyProfile === true;
+        const nativeScale = freshProfileScaleSeed || {};
+        const nativeScalePermissionGrants = Number(nativeScale.permissionGrants || 0);
+        const nativeScaleModuleVersions = Number(nativeScale.moduleVersions || 0);
+        const nativeScaleAuditEvents = Number(nativeScale.auditEvents || 0);
+        const scaleBudgetPassed = desktop.scaleBudgetPassed === true
+          && Number(desktop.scaleFixtureModules || 0) >= 32
+          && Number(desktop.scaleCatalogModules || 0) >= 50
+          && Number(desktop.scaleExplicitGrants || 0) >= 64
+          && Number(desktop.scaleReleaseVersions || 0) >= 96
+          && nativeScalePermissionGrants >= 64
+          && nativeScaleModuleVersions >= 96
+          && nativeScaleAuditEvents >= 128
+          && Number(desktop.scaleAppStoreCards || 0) >= 20
+          && Number(desktop.scaleRenderMs || 0) <= 5000
+          && Number(desktop.scaleStartMenuMs || 0) <= 5000
+          && Number(desktop.scaleAppStoreMs || 0) <= 15000;
+        const checks = {
+          cleanIndexedDb,
+          cleanLocalStorage,
+          cleanSessionStorage,
+          authoritativeProjectionLoaded: desktop.authoritativeProjectionLoaded === true,
+          lifecycleLabelsVisible: desktop.lifecycleLabelsVisible === true,
+          versionBadgesVisible: desktop.versionBadgesVisible === true,
+          disabledReasonsVisible: desktop.disabledReasonsVisible === true,
+          desktopViewportVerified: desktop.desktopViewportVerified === true,
+          narrowViewportVerified: narrowViewport.ok === true,
+          noStorageWidening: desktop.noStorageWidening === true,
+          authState: desktop.authState === 'authenticated',
+          scaleBudgetPassed,
+        };
+        const failed = Object.entries(checks).filter(([, value]) => value !== true);
+        if (failed.length > 0) {
+          throw new Error(`Business OS fresh-profile smoke failed: ${JSON.stringify({
+            failed: failed.map(([key]) => key),
+            initialStorage,
+            desktop,
+            nativeScale,
+            narrowViewport,
+          }, null, 2)}`);
+        }
+        console.log(`business_os_fresh_profile_clean_indexeddb=${cleanIndexedDb ? 1 : 0}`);
+        console.log(`business_os_fresh_profile_clean_local_storage=${cleanLocalStorage ? 1 : 0}`);
+        console.log(`business_os_fresh_profile_clean_session_storage=${cleanSessionStorage ? 1 : 0}`);
+        console.log(`business_os_fresh_profile_authoritative_projection_loaded=${desktop.authoritativeProjectionLoaded ? 1 : 0}`);
+        console.log(`business_os_fresh_profile_lifecycle_labels_visible=${desktop.lifecycleLabelsVisible ? 1 : 0}`);
+        console.log(`business_os_fresh_profile_version_badges_visible=${desktop.versionBadgesVisible ? 1 : 0}`);
+        console.log(`business_os_fresh_profile_disabled_reasons_visible=${desktop.disabledReasonsVisible ? 1 : 0}`);
+        console.log(`business_os_fresh_profile_desktop_viewport_verified=${desktop.desktopViewportVerified ? 1 : 0}`);
+        console.log(`business_os_fresh_profile_narrow_viewport_verified=${narrowViewport.ok ? 1 : 0}`);
+        console.log(`business_os_fresh_profile_no_storage_widening=${desktop.noStorageWidening ? 1 : 0}`);
+        console.log(`business_os_fresh_profile_auth_state=${desktop.authState || ''}`);
+        console.log(`business_os_fresh_profile_actor_role=${desktop.actorRole || ''}`);
+        console.log(`business_os_fresh_profile_browser_context=${initialStorage.emptyProfile === true ? 'clean' : 'dirty'}`);
+        console.log(`business_os_fresh_profile_tenant_scope=${desktop.tenantScope || ''}`);
+        console.log(`business_os_fresh_profile_scale_fixture_modules=${Number(desktop.scaleFixtureModules || 0)}`);
+        console.log(`business_os_fresh_profile_scale_catalog_modules=${Number(desktop.scaleCatalogModules || 0)}`);
+        console.log(`business_os_fresh_profile_scale_explicit_grants=${Number(desktop.scaleExplicitGrants || 0)}`);
+        console.log(`business_os_fresh_profile_scale_release_versions=${Number(desktop.scaleReleaseVersions || 0)}`);
+        console.log(`business_os_fresh_profile_scale_native_permission_grants=${nativeScalePermissionGrants}`);
+        console.log(`business_os_fresh_profile_scale_native_module_versions=${nativeScaleModuleVersions}`);
+        console.log(`business_os_fresh_profile_scale_native_audit_events=${nativeScaleAuditEvents}`);
+        console.log(`business_os_fresh_profile_scale_app_store_cards=${Number(desktop.scaleAppStoreCards || 0)}`);
+        console.log(`business_os_fresh_profile_scale_render_ms=${Number(desktop.scaleRenderMs || 0)}`);
+        console.log(`business_os_fresh_profile_scale_start_menu_ms=${Number(desktop.scaleStartMenuMs || 0)}`);
+        console.log(`business_os_fresh_profile_scale_app_store_ms=${Number(desktop.scaleAppStoreMs || 0)}`);
+        console.log(`business_os_fresh_profile_scale_budget_passed=${scaleBudgetPassed ? 1 : 0}`);
+        console.log(`advanced_status=${advancedStatusEvidenceVersion}`);
+        if (advancedStatusEvidenceRuntime) console.log(`rxdb_runtime=${JSON.stringify(advancedStatusEvidenceRuntime)}`);
+        emitBrowserDiagnostics();
+        return;
+      }
       if (smokeMode === 'native-schema-drift-browser-status') {
         const driftStatus = await page.evaluate(() => globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({
           includeCounts: false,
@@ -3915,8 +5511,100 @@ function ensureCtoxSmokeBinary() {
     const browserPayload = hasOwn(process.env, 'SMOKE_BROWSER_FILE_CONTENT')
       ? process.env.SMOKE_BROWSER_FILE_CONTENT
       : 'hello';
+    let rolesPermissionsReloadVerified = false;
+    let dynamicAppsReloadVerified = false;
+    let appReleaseReloadVerified = false;
+    let appAudienceReloadVerified = false;
+    if (smokeMode === 'business-os-roles-permissions-ui'
+      || smokeMode === 'business-os-dynamic-apps-ui'
+      || smokeMode === 'business-os-app-release-ui'
+      || smokeMode === 'business-os-app-audience-ui') {
+      if (smokeMode === 'business-os-dynamic-apps-ui') {
+        await page.evaluate(async (fixtureModule) => {
+          const state = globalThis.ctoxBusinessOsSmoke?.state || globalThis.CTOX_BUSINESS_OS_APP;
+          const collection = state?.db?.collection?.('business_module_catalog');
+          if (!collection) throw new Error('business_module_catalog is unavailable before dynamic app reload fixture seed');
+          const doc = await collection.findOne('module-catalog').exec();
+          const existing = doc?.toJSON?.() || {
+            id: 'module-catalog',
+            ok: true,
+            modules: [],
+            templates: [],
+            governance: null,
+          };
+          const {
+            _rev,
+            _attachments,
+            ...catalog
+          } = existing;
+          void _rev;
+          void _attachments;
+          const modules = Array.isArray(catalog.modules) ? catalog.modules : [];
+          const nextModules = [
+            ...modules.filter((mod) => mod?.id !== fixtureModule.id),
+            fixtureModule,
+          ];
+          const nextCatalog = {
+            ...catalog,
+            id: 'module-catalog',
+            ok: catalog.ok !== false,
+            modules: nextModules,
+            updated_at_ms: Date.now(),
+            source: catalog.source || 'business-os-dynamic-apps-smoke',
+          };
+          if (Array.isArray(catalog.allowed_module_ids)) {
+            nextCatalog.allowed_module_ids = [...new Set([
+              ...catalog.allowed_module_ids.map((id) => String(id || '').trim()).filter(Boolean),
+              fixtureModule.id,
+            ])];
+          }
+          if (typeof collection.upsert === 'function') {
+            await collection.upsert(nextCatalog);
+          } else if (doc && typeof doc.incrementalPatch === 'function') {
+            await doc.incrementalPatch(nextCatalog);
+          } else {
+            await collection.insert(nextCatalog);
+          }
+        }, dynamicOpenModuleFixture.module);
+      } else if (smokeMode === 'business-os-app-release-ui') {
+        await page.evaluate(async () => {
+          const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+          const bounded = (promise, ms) => promise
+            ? Promise.race([promise.catch?.(() => undefined) || promise, delay(ms)])
+            : delay(0);
+          const state = globalThis.ctoxBusinessOsSmoke?.state || globalThis.CTOX_BUSINESS_OS_APP;
+          const bridge = await (
+            state?.sync?.restartCollection?.('business_module_catalog')
+            || state?.sync?.startCollection?.('business_module_catalog')
+          );
+          await bounded(bridge?.state?.awaitInitialReplication?.(), 15000);
+          await bounded(bridge?.state?.awaitInSync?.(), 15000);
+        });
+      }
+      const appShellReloadStartedAt = Date.now();
+      await page.reload({ waitUntil: 'commit', timeout: 10000 });
+      await page.waitForFunction(() => Boolean(
+        globalThis.ctoxBusinessOsSmoke
+          && globalThis.ctoxBusinessOsSmoke.bootstrap !== 'inline'
+          && globalThis.CTOX_BUSINESS_OS_STATUS
+      ), null, { timeout: smokeHookWaitTimeoutMs });
+      const reloadMs = Date.now() - appShellReloadStartedAt;
+      if (smokeMode === 'business-os-roles-permissions-ui') {
+        outerPhaseTimings.rolesPermissionsReloadMs = reloadMs;
+        rolesPermissionsReloadVerified = true;
+      } else if (smokeMode === 'business-os-dynamic-apps-ui') {
+        outerPhaseTimings.dynamicAppsReloadMs = reloadMs;
+        dynamicAppsReloadVerified = true;
+      } else if (smokeMode === 'business-os-app-release-ui') {
+        outerPhaseTimings.appReleaseReloadMs = reloadMs;
+        appReleaseReloadVerified = true;
+      } else {
+        outerPhaseTimings.appAudienceReloadMs = reloadMs;
+        appAudienceReloadVerified = true;
+      }
+    }
     const pageEvaluateStartedAt = Date.now();
-    const result = await page.evaluate(async ({ signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke }) => {
+    const result = await page.evaluate(async ({ signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified }) => {
       if (!globalThis.process) globalThis.process = {};
       if (typeof globalThis.process.nextTick !== 'function') {
         globalThis.process.nextTick = (callback, ...args) => Promise.resolve().then(() => callback(...args));
@@ -4008,6 +5696,7 @@ function ensureCtoxSmokeBinary() {
       const ticketSmokeMode = smokeMode === 'tickets-browser-to-rust' || ticketClarificationSmokeMode;
       const outboundActiveUiSmokeMode = smokeMode === 'outbound-active-ui';
       const codingAgentsUiSmokeMode = smokeMode === 'coding-agents-ui';
+      const businessOsAppReleaseUiSmokeMode = smokeMode === 'business-os-app-release-ui';
       const commandSmokeMode = smokeMode === 'command-browser-to-rust'
         || smokeMode === 'migration-version-browser-to-rust'
         || smokeMode === 'command-burst-browser-to-rust'
@@ -4019,7 +5708,7 @@ function ensureCtoxSmokeBinary() {
         || smokeMode === 'workspace-large-file-viewer-restart-rust-to-browser';
       const backgroundIndexerSmokeMode = smokeMode === 'workspace-agent-artifacts-background-rust-to-browser';
       const deferInitialFileCollections = smokeMode === 'file-chunk-tombstone-error-browser-status';
-      const needsCommandCollections = commandSmokeMode || materializeSmokeMode || ticketSmokeMode || outboundActiveUiSmokeMode || codingAgentsUiSmokeMode;
+      const needsCommandCollections = commandSmokeMode || materializeSmokeMode || ticketSmokeMode || outboundActiveUiSmokeMode || codingAgentsUiSmokeMode || businessOsAppReleaseUiSmokeMode;
       const needsCodingAgentCollections = codingAgentsUiSmokeMode;
       const needsTicketCollections = ticketSmokeMode;
       const needsFileCollections = (
@@ -5149,6 +6838,3373 @@ function ensureCtoxSmokeBinary() {
         };
       }
 
+      async function runBusinessOsRolesPermissionsUiSmoke() {
+        const waitFor = async (predicate, ms, label) => {
+          const deadline = Date.now() + ms;
+          let last = null;
+          while (Date.now() < deadline) {
+            last = await predicate();
+            if (last?.ok) return last;
+            await delay(100);
+          }
+          throw new Error(`${label} timed out: ${JSON.stringify(last)}`);
+        };
+        const css = (value) => {
+          if (globalThis.CSS?.escape) return globalThis.CSS.escape(String(value));
+          return String(value).replace(/["\\]/g, '\\$&');
+        };
+        const smoke = globalThis.ctoxBusinessOsSmoke;
+        const state = globalThis.CTOX_BUSINESS_OS_APP || smoke?.state || appState;
+        if (!state) throw new Error('Business OS app state is unavailable for roles/permissions UI smoke');
+        if (typeof smoke?.openSettingsDrawer !== 'function') {
+          throw new Error('Business OS smoke API does not expose openSettingsDrawer for roles/permissions UI smoke');
+        }
+        appState = state;
+        const rawDb = state?.db?.raw;
+        if (!rawDb?.business_commands) {
+          throw new Error('business_commands collection is unavailable for roles/permissions UI smoke');
+        }
+        const [
+          permissionsMod,
+          shellPermissionsUiMod,
+          rolesMod,
+        ] = await Promise.all([
+          import('/shared/permissions.js'),
+          import('/shared/shell-permissions-ui.js'),
+          import('/shared/roles.js'),
+        ]);
+        const {
+          BusinessOsPermissions,
+          canModifyBusinessModule,
+          canViewBusinessModuleSource,
+        } = permissionsMod;
+        const {
+          buildGlobalCtoxContextModes,
+          buildModuleTargetContextItems,
+          renderGlobalCtoxContextModeHtml,
+          shouldRenderModuleSourceAction,
+        } = shellPermissionsUiMod;
+        const {
+          assignableRolesForActor,
+          roleDisplayName,
+        } = rolesMod;
+        const moduleCatalog = await waitFor(() => {
+          const modules = Array.isArray(state.modules) ? state.modules.filter((mod) => mod?.id) : [];
+          const targetModule = modules.find((mod) => mod.id === 'app-store') || modules.find((mod) => mod.id !== 'desktop') || null;
+          const otherModule = modules.find((mod) => mod.id && mod.id !== targetModule?.id && mod.id !== 'desktop') || null;
+          return {
+            ok: Boolean(targetModule && otherModule),
+            moduleIds: modules.map((mod) => mod.id),
+            targetModule,
+            otherModule,
+          };
+        }, 15000, 'roles/permissions module catalog');
+        const targetModule = moduleCatalog.targetModule;
+        const otherModule = moduleCatalog.otherModule;
+        const allPermissions = Object.values(BusinessOsPermissions);
+        const governance = {
+          founders: {
+            [targetModule.id]: [{ user_id: 'founder_ui', active: true }],
+          },
+          releases: {
+            [targetModule.id]: [{
+              version_id: 'roles-permissions-release-smoke',
+              version: 1,
+              status: 'released',
+            }],
+          },
+          permission_model: {
+            version: 1,
+            deny_supported: false,
+            role_defaults: {
+              chef: {
+                workspace: allPermissions,
+                module: allPermissions,
+                assigned_module: allPermissions,
+              },
+              admin: {
+                workspace: allPermissions,
+                module: allPermissions,
+                assigned_module: allPermissions,
+              },
+              founder: {
+                workspace: [],
+                module: [],
+                assigned_module: [
+                  BusinessOsPermissions.AppsView,
+                  BusinessOsPermissions.AppsModify,
+                  BusinessOsPermissions.AppsSourceView,
+                  BusinessOsPermissions.DataRead,
+                  BusinessOsPermissions.DataWrite,
+                ],
+              },
+              user: {
+                workspace: [],
+                module: [],
+                assigned_module: [],
+              },
+            },
+            module_assignments: {
+              [targetModule.id]: {
+                founder_ui: [
+                  BusinessOsPermissions.AppsView,
+                  BusinessOsPermissions.AppsModify,
+                  BusinessOsPermissions.AppsSourceView,
+                ],
+              },
+            },
+            explicit_grants: [
+              {
+                grant_id: 'ui_source_target',
+                subject_type: 'user',
+                subject_id: 'source_viewer',
+                permission: BusinessOsPermissions.AppsSourceView,
+                scope_type: 'module',
+                scope_id: targetModule.id,
+                active: true,
+              },
+              {
+                grant_id: 'ui_modify_target',
+                subject_type: 'user',
+                subject_id: 'app_modifier',
+                permission: BusinessOsPermissions.AppsModify,
+                scope_type: 'module',
+                scope_id: targetModule.id,
+                active: true,
+              },
+            ],
+          },
+        };
+        const labels = {
+          openApp: 'Öffnen',
+          pinToTaskbar: 'An Bar anheften',
+          unpinFromTaskbar: 'Von Bar lösen',
+          openSource: 'Source öffnen',
+          modifyApp: 'App ändern',
+          workData: 'Mit Daten arbeiten',
+          answer: 'Frage beantworten',
+        };
+        const sessionFor = (id, role) => ({ user: { id, role } });
+        const contextLabelsFor = (module, session) => {
+          const canModify = canModifyBusinessModule(module, { session, governance });
+          const canOpenSource = canViewBusinessModuleSource(module, { session, governance });
+          return {
+            canModify,
+            canOpenSource,
+            sourceAction: shouldRenderModuleSourceAction({ module, canOpenSource }),
+            labels: buildModuleTargetContextItems({
+              target: {
+                id: module.id,
+                kind: 'module',
+                title: module.title || module.id,
+                glyph: module.glyph || '□',
+                module,
+              },
+              pinned: false,
+              canModify,
+              canOpenSource,
+              labels,
+            })
+              .filter((item) => item.label)
+              .map((item) => item.label),
+          };
+        };
+        const labelsContain = (items, label) => items.includes(label);
+        const labelsAreBusinessFacing = (items) => items.every((label) => (
+          !/App modifizieren|Modul bearbeiten|Founder/i.test(label)
+        ));
+        let currentSmokeSession = null;
+        const applySmokeActorState = () => {
+          if (!currentSmokeSession) return;
+          state.session = currentSmokeSession;
+          state.governance = governance;
+          globalThis.CTOX_BUSINESS_OS_SESSION = currentSmokeSession;
+        };
+        const applyActorAndOpenTarget = async (session) => {
+          currentSmokeSession = session;
+          const applyActorState = () => {
+            applySmokeActorState();
+          };
+          applyActorState();
+          await state.openModule?.(targetModule.id, { force: true, asModule: true });
+          applyActorState();
+          await waitFor(() => {
+            const activeModule = document.body?.dataset?.activeModule || state.activeModule?.id || '';
+            const loading = Boolean(document.body?.dataset?.moduleLoading);
+            return {
+              ok: activeModule === targetModule.id && !loading,
+              activeModule,
+              loading,
+            };
+          }, 30000, `open ${targetModule.id} for actor ${session.user.id}`);
+          await delay(100);
+        };
+        const appbarSourceVisible = () => Boolean(document.querySelector(`[data-module-source="${css(targetModule.id)}"]`));
+        const openShellContextMenu = async (label, expectedLabels = ['Öffnen']) => {
+          state.contextMenu?.hide?.();
+          await waitFor(() => {
+            const menuCount = document.querySelectorAll('.shell-context-menu').length;
+            return { ok: menuCount === 0, menuCount };
+          }, 3000, `clear shell context menu before ${label}`);
+          applySmokeActorState();
+          const tab = document.querySelector(`.module-tab[data-module="${css(targetModule.id)}"], .module-tab[data-target="${css(targetModule.id)}"]`);
+          if (!tab) {
+            throw new Error(`Business OS shell tab for ${targetModule.id} is missing during ${label}`);
+          }
+          const rect = tab.getBoundingClientRect();
+          tab.dispatchEvent(new MouseEvent('contextmenu', {
+            bubbles: true,
+            cancelable: true,
+            button: 2,
+            clientX: Math.max(20, Math.round(rect.left + 8)),
+            clientY: Math.max(20, Math.round(rect.top + 8)),
+          }));
+          return waitFor(() => {
+            const menus = [...document.querySelectorAll('.shell-context-menu')];
+            const menu = menus[menus.length - 1] || null;
+            const itemLabels = menu
+              ? [...menu.querySelectorAll('.shell-context-menu-label')].map((item) => item.textContent?.trim() || '').filter(Boolean)
+              : [];
+            return {
+              ok: expectedLabels.every((expectedLabel) => itemLabels.includes(expectedLabel)),
+              labels: itemLabels,
+              expectedLabels,
+            };
+          }, 5000, `shell context menu for ${label}`);
+        };
+        const teamSession = sessionFor('team_member', 'user');
+        const sourceSession = sessionFor('source_viewer', 'user');
+        const modifySession = sessionFor('app_modifier', 'user');
+        const ownerSession = sessionFor('owner_ui', 'chef');
+
+        await applyActorAndOpenTarget(teamSession);
+        const teamDomContext = await openShellContextMenu('team member', ['Öffnen']);
+        const teamAppbarSourceVisible = appbarSourceVisible();
+        const teamHelper = contextLabelsFor(targetModule, teamSession);
+
+        await applyActorAndOpenTarget(sourceSession);
+        const sourceDomContext = await openShellContextMenu('source-view grant', ['Öffnen', 'Source öffnen']);
+        const sourceAppbarSourceVisible = appbarSourceVisible();
+        const sourceHelper = contextLabelsFor(targetModule, sourceSession);
+
+        await applyActorAndOpenTarget(modifySession);
+        const modifyDomContext = await openShellContextMenu('modify grant', ['Öffnen', 'App ändern']);
+        const modifyAppbarSourceVisible = appbarSourceVisible();
+        const modifyHelper = contextLabelsFor(targetModule, modifySession);
+
+        await applyActorAndOpenTarget(ownerSession);
+        const ownerDomContext = await openShellContextMenu('owner', ['Öffnen', 'Source öffnen', 'App ändern']);
+        const ownerHelper = contextLabelsFor(targetModule, ownerSession);
+
+        const sourceOtherHelper = contextLabelsFor(otherModule, sourceSession);
+        const modifyOtherHelper = contextLabelsFor(otherModule, modifySession);
+        const ownerAssignable = assignableRolesForActor('chef');
+        const adminAssignable = assignableRolesForActor('admin');
+        const deniedGlobalModes = buildGlobalCtoxContextModes({ canModify: false, labels });
+        const allowedGlobalModes = buildGlobalCtoxContextModes({ canModify: true, labels });
+        const deniedGlobalModeHtml = renderGlobalCtoxContextModeHtml({ canModify: false, labels });
+        const allowedGlobalModeHtml = renderGlobalCtoxContextModeHtml({ canModify: true, labels });
+        const allContextLabels = [
+          ...teamDomContext.labels,
+          ...sourceDomContext.labels,
+          ...modifyDomContext.labels,
+          ...ownerDomContext.labels,
+          ...teamHelper.labels,
+          ...sourceHelper.labels,
+          ...modifyHelper.labels,
+          ...ownerHelper.labels,
+        ];
+        const teamModifyHidden = !labelsContain(teamDomContext.labels, 'App ändern')
+          && !labelsContain(teamHelper.labels, 'App ändern')
+          && !teamHelper.canModify;
+        const teamSourceHidden = !labelsContain(teamDomContext.labels, 'Source öffnen')
+          && !labelsContain(teamHelper.labels, 'Source öffnen')
+          && !teamAppbarSourceVisible
+          && !teamHelper.canOpenSource;
+        const sourceGrantVisible = labelsContain(sourceDomContext.labels, 'Source öffnen')
+          && labelsContain(sourceHelper.labels, 'Source öffnen')
+          && !labelsContain(sourceDomContext.labels, 'App ändern')
+          && !sourceHelper.canModify
+          && sourceHelper.canOpenSource;
+        const modifyGrantVisible = labelsContain(modifyDomContext.labels, 'App ändern')
+          && labelsContain(modifyHelper.labels, 'App ändern')
+          && modifyHelper.canModify;
+        const ownerContextVisible = labelsContain(ownerDomContext.labels, 'App ändern')
+          && labelsContain(ownerDomContext.labels, 'Source öffnen')
+          && ownerHelper.canModify
+          && ownerHelper.canOpenSource;
+        const appbarSourceGate = !teamAppbarSourceVisible
+          && sourceAppbarSourceVisible
+          && !modifyAppbarSourceVisible;
+        const exactScopeIsolated = sourceOtherHelper.canOpenSource === false
+          && modifyOtherHelper.canModify === false
+          && !labelsContain(sourceOtherHelper.labels, 'Source öffnen')
+          && !labelsContain(modifyOtherHelper.labels, 'App ändern');
+        const ownerRoleOption = ownerAssignable.includes('chef');
+        const adminOwnerOptionHidden = !adminAssignable.includes('chef');
+        const businessLabels = roleDisplayName('chef') === 'Owner'
+          && roleDisplayName('admin') === 'Admin'
+          && roleDisplayName('founder') === 'App-Verantwortliche:r'
+          && roleDisplayName('team') === 'Teammitglied'
+          && labelsAreBusinessFacing(allContextLabels)
+          && deniedGlobalModes.map((mode) => mode.value).join(',') === 'data,ask'
+          && allowedGlobalModes.map((mode) => mode.value).join(',') === 'data,ask,app'
+          && !/value="app"|App ändern/.test(deniedGlobalModeHtml)
+          && /value="app"/.test(allowedGlobalModeHtml)
+          && /App ändern/.test(allowedGlobalModeHtml);
+        applySmokeActorState();
+        await smoke.openSettingsDrawer({ initialTab: 'admin' });
+        const settingsFallback = await waitFor(() => {
+          const drawer = document.querySelector('.settings-drawer');
+          const rowText = drawer?.innerText || '';
+          const diagnostics = drawer?.querySelector(`[data-module-release-diagnostics="${css(targetModule.id)}"]`) || null;
+          const buttons = diagnostics
+            ? [...diagnostics.querySelectorAll('button')].map((button) => ({
+              text: button.textContent?.trim() || '',
+              disabled: button.disabled === true || button.getAttribute('aria-disabled') === 'true',
+            }))
+            : [];
+          const releaseButton = buttons.find((button) => /Freigabe im App Store/.test(button.text));
+          const rollbackButton = buttons.find((button) => /Rollback nur Diagnose/.test(button.text));
+          const rollbackSelect = diagnostics?.querySelector('select[disabled][aria-label="Rollback-Versionen nur Diagnose"]') || null;
+          const activeControls = drawer
+            ? drawer.querySelectorAll('[data-module-release], [data-module-rollback], [data-rollback-version]').length
+            : -1;
+          return {
+            ok: Boolean(
+              diagnostics
+                && releaseButton?.disabled
+                && rollbackButton?.disabled
+                && rollbackSelect
+                && activeControls === 0
+                && /Settings zeigt Release und Rollback nur als Diagnose/.test(rowText)
+            ),
+            hasDrawer: Boolean(drawer),
+            hasDiagnostics: Boolean(diagnostics),
+            buttons,
+            hasRollbackSelect: Boolean(rollbackSelect),
+            activeControls,
+            text: rowText.slice(0, 800),
+          };
+        }, 10000, 'settings read-only release fallback');
+        const settingsReleaseFallbackReadOnly = settingsFallback.ok === true;
+        const whyButton = document.querySelector(`.settings-drawer [data-module-why="${css(targetModule.id)}"]`);
+        if (!whyButton) {
+          throw new Error(`Settings why diagnostics button missing for ${targetModule.id}`);
+        }
+        whyButton.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        const settingsWhyDiagnostics = await waitFor(() => {
+          const drawer = document.querySelector('.settings-drawer');
+          const root = drawer?.querySelector(`[data-why-diagnostics="${css(targetModule.id)}"]`) || null;
+          const statusText = drawer?.querySelector('.settings-status')?.textContent?.trim() || '';
+          const whyStatusText = drawer?.querySelector('[data-module-why-status]')?.textContent?.trim() || '';
+          const button = drawer?.querySelector(`[data-module-why="${css(targetModule.id)}"]`) || null;
+          const rows = root ? [...root.querySelectorAll('[data-why-row]')].map((node) => ({
+            key: node.getAttribute('data-why-row') || '',
+            state: node.getAttribute('data-decision-state') || '',
+            text: node.textContent?.trim().replace(/\s+/g, ' ') || '',
+          })) : [];
+          const dataRows = root ? [...root.querySelectorAll('[data-why-data-row]')].map((node) => ({
+            collection: node.getAttribute('data-why-data-row') || '',
+            text: node.textContent?.trim().replace(/\s+/g, ' ') || '',
+          })) : [];
+          const rowKeys = rows.map((row) => row.key);
+          const text = root?.textContent?.trim().replace(/\s+/g, ' ') || '';
+          const redacted = !/(policy_decision|collection_decision|module_decision|reason_code|role_or_scope_denied|apps\.modify|Allowed\.|This role is not allowed|DO_NOT_LEAK|prompt|selected_text|token)/i.test(text);
+          return {
+            ok: Boolean(
+              root
+                && ['actor', 'visibility', 'open', 'modify', 'source', 'release', 'rollback', 'data']
+                  .every((key) => rowKeys.includes(key))
+                && redacted
+                && /Warum\?/.test(text)
+            ),
+            visible: Boolean(root),
+            rowKeys,
+            rows,
+            dataRows,
+            redacted,
+            statusText,
+            whyStatusText,
+            hasButton: Boolean(button),
+            buttonDisabled: button?.disabled === true,
+            text: text.slice(0, 1000),
+          };
+        }, 30000, 'settings why diagnostics command render');
+        const settingsWhyDiagnosticsVisible = settingsWhyDiagnostics.visible === true;
+        const settingsWhyDiagnosticsRows = Array.isArray(settingsWhyDiagnostics.rowKeys)
+          && ['actor', 'visibility', 'open', 'modify', 'source', 'release', 'rollback', 'data']
+            .every((key) => settingsWhyDiagnostics.rowKeys.includes(key));
+        const settingsWhyDiagnosticsRedacted = settingsWhyDiagnostics.redacted === true;
+        const supportButton = document.querySelector(`.settings-drawer [data-module-support-diagnostics="${css(targetModule.id)}"]`);
+        if (!supportButton) {
+          throw new Error(`Settings support diagnostics button missing for ${targetModule.id}`);
+        }
+        supportButton.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        const settingsSupportDiagnostics = await waitFor(async () => {
+          const drawer = document.querySelector('.settings-drawer');
+          const root = drawer?.querySelector(`[data-support-diagnostics="${css(targetModule.id)}"]`) || null;
+          const statusText = drawer?.querySelector('.settings-status')?.textContent?.trim() || '';
+          const supportStatusText = drawer?.querySelector('[data-module-support-status]')?.textContent?.trim() || '';
+          const button = drawer?.querySelector(`[data-module-support-diagnostics="${css(targetModule.id)}"]`) || null;
+          const rows = root ? [...root.querySelectorAll('[data-support-row]')].map((node) => ({
+            key: node.getAttribute('data-support-row') || '',
+            text: node.textContent?.trim().replace(/\s+/g, ' ') || '',
+          })) : [];
+          const rowKeys = rows.map((row) => row.key);
+          const text = root?.textContent?.trim().replace(/\s+/g, ' ') || '';
+          const download = root?.querySelector(`[data-support-diagnostics-download="${css(targetModule.id)}"]`) || null;
+          const commandDocs = (await rawDb.business_commands.find().exec())
+            .map((doc) => doc.toJSON?.() || doc)
+            .filter((doc) => doc.command_type === 'ctox.business_os.support.export_diagnostics'
+              && doc.record_id === `support:${targetModule.id}`)
+            .sort((a, b) => Number(b.updated_at_ms || 0) - Number(a.updated_at_ms || 0));
+          const command = commandDocs[0] || null;
+          const resultText = command?.result ? JSON.stringify(command.result) : '';
+          const visibleRedacted = !/(policy_decision|collection_decision|module_decision|reason_code|role_or_scope_denied|apps\.modify|apps\.release|payload_json|record_payload|selected_text|message_body|\bprompt\b|\btoken\b|\bsecret\b|DO_NOT_LEAK)/i.test(text);
+          const resultRedacted = Boolean(command?.result)
+            && command.result.kind === 'business_os_support_diagnostics_artifact'
+            && command.result.artifact_schema === 'ctox.business_os.support_diagnostics.v1'
+            && !resultText.includes('DO_NOT_LEAK');
+          return {
+            ok: Boolean(
+              root
+                && ['schema', 'redaction', 'scope', 'activity', 'why'].every((key) => rowKeys.includes(key))
+                && root.getAttribute('data-support-schema') === 'ctox.business_os.support_diagnostics.v1'
+                && root.getAttribute('data-redaction-profile') === 'support-safe-v1'
+                && visibleRedacted
+                && resultRedacted
+                && download
+            ),
+            visible: Boolean(root),
+            rowKeys,
+            rows,
+            schema: root?.getAttribute('data-support-schema') || '',
+            redactionProfile: root?.getAttribute('data-redaction-profile') || '',
+            visibleRedacted,
+            resultRedacted,
+            hasDownload: Boolean(download),
+            commandStatus: command?.status || '',
+            commandId: command?.id || '',
+            statusText,
+            supportStatusText,
+            hasButton: Boolean(button),
+            buttonDisabled: button?.disabled === true,
+            text: text.slice(0, 1000),
+          };
+        }, 45000, 'settings support diagnostics command render');
+        const settingsSupportDiagnosticsVisible = settingsSupportDiagnostics.visible === true;
+        const settingsSupportDiagnosticsRows = Array.isArray(settingsSupportDiagnostics.rowKeys)
+          && ['schema', 'redaction', 'scope', 'activity', 'why']
+            .every((key) => settingsSupportDiagnostics.rowKeys.includes(key));
+        const settingsSupportDiagnosticsRedacted = settingsSupportDiagnostics.visibleRedacted === true
+          && settingsSupportDiagnostics.resultRedacted === true;
+        const settingsSupportDiagnosticsDownload = settingsSupportDiagnostics.hasDownload === true;
+        const status = await globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({
+          includeCounts: false,
+          requiredCollections: ['business_module_catalog', 'business_commands', 'ctox_runtime_settings', 'desktop_files', 'desktop_file_chunks'],
+        });
+        if (status?.version !== 'business-os-advanced-status-v1') {
+          throw new Error(`roles/permissions UI smoke lost advanced status evidence: ${JSON.stringify(status)}`);
+        }
+        const checks = {
+          teamModifyHidden,
+          teamSourceHidden,
+          sourceGrantVisible,
+          modifyGrantVisible,
+          ownerContextVisible,
+          appbarSourceGate,
+          exactScopeIsolated,
+          ownerRoleOption,
+          adminOwnerOptionHidden,
+          businessLabels,
+          settingsReleaseFallbackReadOnly,
+          settingsWhyDiagnosticsVisible,
+          settingsWhyDiagnosticsRows,
+          settingsWhyDiagnosticsRedacted,
+          settingsSupportDiagnosticsVisible,
+          settingsSupportDiagnosticsRows,
+          settingsSupportDiagnosticsRedacted,
+          settingsSupportDiagnosticsDownload,
+          reloadVerified: Boolean(rolesPermissionsReloadVerified),
+        };
+        const failed = Object.entries(checks).filter(([, value]) => value !== true);
+        if (failed.length) {
+          throw new Error(`roles/permissions UI smoke failed: ${JSON.stringify({
+            failed,
+            targetModule: targetModule.id,
+            otherModule: otherModule.id,
+            teamDomContext,
+            sourceDomContext,
+            modifyDomContext,
+            ownerDomContext,
+            teamHelper,
+            sourceHelper,
+            modifyHelper,
+            ownerHelper,
+            sourceOtherHelper,
+            modifyOtherHelper,
+            ownerAssignable,
+            adminAssignable,
+            settingsFallback,
+            settingsWhyDiagnostics,
+            settingsSupportDiagnostics,
+            appbar: {
+              teamAppbarSourceVisible,
+              sourceAppbarSourceVisible,
+              modifyAppbarSourceVisible,
+            },
+          }, null, 2)}`);
+        }
+        return {
+          mode: smokeMode,
+          targetModuleId: targetModule.id,
+          otherModuleId: otherModule.id,
+          teamModifyHidden,
+          teamSourceHidden,
+          sourceGrantVisible,
+          modifyGrantVisible,
+          ownerContextVisible,
+          appbarSourceGate,
+          exactScopeIsolated,
+          ownerRoleOption,
+          adminOwnerOptionHidden,
+          businessLabels,
+          settingsReleaseFallbackReadOnly,
+          settingsWhyDiagnosticsVisible,
+          settingsWhyDiagnosticsRows,
+          settingsWhyDiagnosticsRedacted,
+          settingsSupportDiagnosticsVisible,
+          settingsSupportDiagnosticsRows,
+          settingsSupportDiagnosticsRedacted,
+          settingsSupportDiagnosticsDownload,
+          reloadVerified: Boolean(rolesPermissionsReloadVerified),
+          authState: document.body?.dataset?.authState || (state.session?.user?.id ? 'local-session' : 'unknown'),
+          advancedStatusVersion: status.version || '',
+          advancedStatusRuntime: status.rxdbRuntime || null,
+        };
+      }
+
+      async function runBusinessOsAgentScopeUiSmoke() {
+        const waitFor = async (predicate, ms, label) => {
+          const deadline = Date.now() + ms;
+          let last = null;
+          while (Date.now() < deadline) {
+            last = await predicate();
+            if (last?.ok) return last;
+            await delay(100);
+          }
+          throw new Error(`${label} timed out: ${JSON.stringify(last)}`);
+        };
+        const css = (value) => {
+          if (globalThis.CSS?.escape) return globalThis.CSS.escape(String(value));
+          return String(value).replace(/["\\]/g, '\\$&');
+        };
+        const docsToJson = (docs) => (Array.isArray(docs) ? docs : [])
+          .map((doc) => doc?.toJSON?.() || doc)
+          .filter(Boolean);
+        const smoke = globalThis.ctoxBusinessOsSmoke;
+        const state = globalThis.CTOX_BUSINESS_OS_APP || smoke?.state || appState;
+        if (!state) throw new Error('Business OS app state is unavailable for agent scope UI smoke');
+        if (typeof smoke?.renderTabs !== 'function') throw new Error('Business OS smoke renderTabs hook is unavailable');
+        if (typeof state.openModule !== 'function') throw new Error('Business OS state.openModule is unavailable for agent scope UI smoke');
+        if (typeof smoke?.createLiveDbFacade !== 'function') throw new Error('Business OS smoke DB facade hook is unavailable for agent scope UI smoke');
+        appState = state;
+
+        const { BusinessOsPermissions } = await import('/shared/permissions.js');
+        const targetModule = {
+          id: 'phase12-agent-scope-app',
+          title: 'Phase 12 Agent Scope App',
+          glyph: '12',
+          version: '1.0.0',
+          source: 'installed',
+          install_scope: 'installed',
+          entry: 'installed-modules/phase12-agent-scope-app/index.js',
+          editable: true,
+          layout: { shell: 'full-workspace' },
+          collections: ['business_commands'],
+          lifecycle: { runtime_installed: true },
+        };
+        const hiddenModule = {
+          id: 'phase12-hidden-agent-scope-app',
+          title: 'Phase 12 Hidden Agent Scope App',
+          glyph: 'H12',
+          version: '0.2.0',
+          source: 'installed',
+          install_scope: 'installed',
+          entry: 'installed-modules/phase12-hidden-agent-scope-app/index.js',
+          editable: true,
+          layout: { shell: 'full-workspace' },
+          collections: ['business_commands'],
+          lifecycle: {
+            runtime_installed: true,
+            visibility_state: 'private',
+            audience: 'private',
+          },
+        };
+        const allPermissions = Object.values(BusinessOsPermissions);
+        const actorSession = {
+          authenticated: true,
+          user: {
+            id: 'agent_scope_team',
+            display_name: 'Agent Scope Team',
+            role: 'user',
+          },
+        };
+        const governance = {
+          founders: {},
+          permission_model: {
+            version: 1,
+            deny_supported: false,
+            role_defaults: {
+              chef: {
+                workspace: allPermissions,
+                module: allPermissions,
+                assigned_module: allPermissions,
+              },
+              admin: {
+                workspace: allPermissions,
+                module: allPermissions,
+                assigned_module: allPermissions,
+              },
+              founder: {
+                workspace: [],
+                module: [],
+                assigned_module: [
+                  BusinessOsPermissions.AppsView,
+                  BusinessOsPermissions.AppsModify,
+                  BusinessOsPermissions.AppsSourceView,
+                ],
+              },
+              user: {
+                workspace: [],
+                module: [],
+                assigned_module: [],
+              },
+            },
+            module_assignments: {},
+            explicit_grants: [],
+          },
+        };
+        const originalState = {
+          modules: Array.isArray(state.modules) ? [...state.modules] : [],
+          taskbarPins: Array.isArray(state.taskbarPins) ? [...state.taskbarPins] : [],
+          moduleAllowlist: Array.isArray(state.moduleAllowlist) ? [...state.moduleAllowlist] : state.moduleAllowlist,
+          session: state.session,
+          governance: state.governance,
+          activeModule: state.activeModule,
+          globalSession: globalThis.CTOX_BUSINESS_OS_SESSION,
+          bodyAuthState: document.body?.dataset?.authState || '',
+        };
+        const insertedIds = new Set([targetModule.id, hiddenModule.id]);
+        const applyAgentScopeState = () => {
+          state.session = actorSession;
+          state.governance = governance;
+          globalThis.CTOX_BUSINESS_OS_SESSION = actorSession;
+          document.body.dataset.authState = 'authenticated';
+          state.modules = [
+            ...originalState.modules.filter((mod) => !insertedIds.has(mod?.id)),
+            targetModule,
+            hiddenModule,
+          ];
+          state.moduleAllowlist = [...new Set([
+            ...(Array.isArray(originalState.moduleAllowlist)
+              ? originalState.moduleAllowlist.map((id) => String(id || '').trim()).filter(Boolean)
+              : []),
+            targetModule.id,
+            hiddenModule.id,
+          ])];
+          state.taskbarPins = [...new Set([
+            ...(Array.isArray(originalState.taskbarPins) ? originalState.taskbarPins : []),
+            targetModule.id,
+            hiddenModule.id,
+          ])];
+          smoke.renderTabs();
+        };
+        const assertDenied = async (label, callback) => {
+          try {
+            const result = callback();
+            if (result && typeof result.then === 'function') await result;
+            if (result && typeof result.exec === 'function') await result.exec();
+          } catch (error) {
+            if (error?.code === 'CTOX_BUSINESS_OS_PERMISSION_DENIED'
+              || error?.name === 'BusinessOsPermissionError'
+              || /permission/i.test(String(error?.message || error))) {
+              return true;
+            }
+            throw error;
+          }
+          throw new Error(`${label} unexpectedly allowed`);
+        };
+        const scopeRowsFromPanel = (panel) => (panel
+          ? [...panel.querySelectorAll('[data-agent-scope-row]')].map((row) => ({
+            key: row.getAttribute('data-agent-scope-row') || '',
+            label: row.querySelector('dt')?.textContent?.trim() || '',
+            value: row.querySelector('dd')?.textContent?.trim() || '',
+          }))
+          : []);
+        const scopeRowsMatchVisibleScope = (rows, visibleScope) => {
+          const scopeRows = Array.isArray(visibleScope?.rows) ? visibleScope.rows : [];
+          return rows.length > 0 && rows.every((row) => {
+            const matching = scopeRows.find((scopeRow) => scopeRow.key === row.key);
+            return matching
+              && String(matching.label || '') === row.label
+              && String(matching.value || '') === row.value;
+          });
+        };
+        const openGlobalContextMenu = async () => {
+          const target = document.querySelector('[data-agent-scope-fixture]')
+            || document.querySelector('[data-module-content]')
+            || document.querySelector('[data-module-root]');
+          if (!target) throw new Error('agent scope fixture DOM target is missing');
+          const rect = target.getBoundingClientRect();
+          target.dispatchEvent(new MouseEvent('contextmenu', {
+            bubbles: true,
+            cancelable: true,
+            button: 2,
+            clientX: Math.max(24, Math.round(rect.left + 12)),
+            clientY: Math.max(24, Math.round(rect.top + 12)),
+          }));
+          return waitFor(() => {
+            const menu = document.querySelector('.ctox-global-context-menu:not([hidden])');
+            const panel = menu?.querySelector('.ctox-agent-scope') || null;
+            const rows = scopeRowsFromPanel(panel);
+            return {
+              ok: Boolean(menu && panel && rows.length >= 4 && /Phase 12 Agent Scope App/.test(panel.textContent || '')),
+              rows,
+              text: panel?.textContent?.trim() || '',
+            };
+          }, 5000, 'agent scope global context menu');
+        };
+        const submitGlobalContextMenu = async () => {
+          let submittedDetail = null;
+          const listener = (event) => {
+            submittedDetail = JSON.parse(JSON.stringify(event.detail || {}));
+            event.stopImmediatePropagation?.();
+          };
+          window.addEventListener('ctox-business-os-chat-submit', listener, { capture: true, once: true });
+          const menu = document.querySelector('.ctox-global-context-menu:not([hidden])');
+          const form = menu?.querySelector('form');
+          const textarea = menu?.querySelector('textarea');
+          if (!form || !textarea) throw new Error('agent scope context form is missing');
+          textarea.value = 'Bitte prüfe den sichtbaren Agent Scope.';
+          form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+          try {
+            return await waitFor(() => ({
+              ok: Boolean(submittedDetail),
+              detail: submittedDetail,
+            }), 5000, 'agent scope context submit detail');
+          } finally {
+            window.removeEventListener('ctox-business-os-chat-submit', listener, { capture: true });
+          }
+        };
+        const openAppStoreContextMenu = async () => {
+          applyAgentScopeState();
+          await state.openModule('app-store', { force: true, asModule: true });
+          await waitFor(() => ({
+            ok: Boolean(document.querySelector('[data-app-store-root]') && document.querySelector('[data-apps-grid]')),
+            activeModule: state.activeModule?.id || document.body?.dataset?.activeModule || '',
+            text: document.querySelector('[data-app-store-root]')?.innerText?.slice(0, 500) || '',
+          }), 30000, 'agent scope App Store open');
+          document.querySelector('[data-scope="installed"]')?.dispatchEvent(new MouseEvent('click', {
+            bubbles: true,
+            cancelable: true,
+          }));
+          const cardState = await waitFor(() => {
+            const card = document.querySelector(`[data-app-id="${css(targetModule.id)}"]`);
+            return {
+              ok: Boolean(card && /Phase 12 Agent Scope App/.test(card.textContent || '')),
+              hasCard: Boolean(card),
+              cardText: card?.innerText?.slice(0, 800) || '',
+              activeModule: state.activeModule?.id || '',
+            };
+          }, 15000, 'agent scope App Store card');
+          const card = document.querySelector(`[data-app-id="${css(targetModule.id)}"]`);
+          if (!card) throw new Error(`agent scope App Store card missing after wait: ${JSON.stringify(cardState)}`);
+          const rect = card.getBoundingClientRect();
+          card.dispatchEvent(new MouseEvent('contextmenu', {
+            bubbles: true,
+            cancelable: true,
+            button: 2,
+            clientX: Math.max(24, Math.round(rect.left + 18)),
+            clientY: Math.max(24, Math.round(rect.top + 18)),
+          }));
+          return waitFor(() => {
+            const menu = document.querySelector('.app-store-context-menu:not([hidden])');
+            const panel = menu?.querySelector('.ctox-agent-scope') || null;
+            const rows = scopeRowsFromPanel(panel);
+            return {
+              ok: Boolean(menu && panel && rows.length >= 4 && /Phase 12 Agent Scope App/.test(panel.textContent || '')),
+              rows,
+              text: panel?.textContent?.trim() || '',
+            };
+          }, 5000, 'agent scope App Store context menu');
+        };
+        const submitAppStoreContextMenu = async () => {
+          let submittedDetail = null;
+          const listener = (event) => {
+            submittedDetail = JSON.parse(JSON.stringify(event.detail || {}));
+          };
+          window.addEventListener('ctox-business-os-chat-submit', listener, { capture: true, once: true });
+          const menu = document.querySelector('.app-store-context-menu:not([hidden])');
+          const form = menu?.querySelector('[data-app-store-context-chat-form]');
+          const textarea = menu?.querySelector('[data-app-store-context-message]');
+          if (!form || !textarea) throw new Error('agent scope App Store context form is missing');
+          textarea.value = 'Bitte prüfe den App-Store-Scope im Chat.';
+          textarea.dispatchEvent(new Event('input', { bubbles: true }));
+          form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+          try {
+            return await waitFor(() => ({
+              ok: Boolean(submittedDetail),
+              detail: submittedDetail,
+            }), 5000, 'agent scope App Store context submit detail');
+          } finally {
+            window.removeEventListener('ctox-business-os-chat-submit', listener, { capture: true });
+          }
+        };
+        const waitForBusinessChatScope = async (submittedDetail) => {
+          const expectedScope = submittedDetail?.client_context?.visible_scope || null;
+          return waitFor(() => {
+            const panels = [...document.querySelectorAll('[data-ctox-chat-root] .ctox-chat-messages .ctox-agent-scope')];
+            const matches = panels
+              .map((panel) => ({
+                panel,
+                rows: scopeRowsFromPanel(panel),
+                text: panel.textContent || '',
+              }))
+              .filter((entry) => /Phase 12 Agent Scope App/.test(entry.text));
+            const match = matches.find((entry) => scopeRowsMatchVisibleScope(entry.rows, expectedScope)) || null;
+            return {
+              ok: Boolean(match),
+              rows: match?.rows || [],
+              panelCount: panels.length,
+              matchingPanelCount: matches.length,
+              text: match?.text?.trim?.() || '',
+            };
+          }, 15000, 'agent scope Business Chat visible scope');
+        };
+        const openAgentGrantBoundarySettings = async () => {
+          applyAgentScopeState();
+          state.session = {
+            authenticated: true,
+            user: {
+              id: 'agent_scope_owner',
+              display_name: 'Agent Scope Owner',
+              role: 'chef',
+              is_admin: true,
+            },
+          };
+          globalThis.CTOX_BUSINESS_OS_SESSION = state.session;
+          document.body.dataset.authState = 'authenticated';
+          if (typeof smoke.openSettingsDrawer !== 'function') {
+            throw new Error('Business OS smoke settings drawer hook is unavailable for agent scope UI smoke');
+          }
+          await smoke.openSettingsDrawer({ initialTab: 'admin' });
+          return waitFor(() => {
+            const panel = document.querySelector('[data-agent-grant-boundary]');
+            const text = panel?.textContent || '';
+            return {
+              ok: Boolean(
+	                panel
+	                  && /Agent- und App-Zugriff/.test(text)
+	                  && /agent_scope_team/.test(text)
+	                  && /Daten lesen/.test(text)
+                  && /Datenbereich Business Commands/.test(text)
+                  && /Owner\/Admin-Policy/.test(text)
+              ),
+              text: text.trim().slice(0, 1000),
+            };
+          }, 15000, 'agent scope Settings grant boundary');
+        };
+
+        try {
+          applyAgentScopeState();
+          await state.openModule(targetModule.id, { force: true, asModule: true });
+          await waitFor(() => ({
+            ok: state.activeModule?.id === targetModule.id
+              && Boolean(document.querySelector(`[data-agent-scope-fixture="${css(targetModule.id)}"]`)),
+            activeModule: state.activeModule?.id || '',
+            fixture: globalThis.__ctoxAgentScopeFixture || null,
+          }), 30000, 'agent scope target module open');
+          await waitFor(() => ({
+            ok: Boolean(document.querySelector('[data-ctox-chat-root]')),
+            hasChatRoot: Boolean(document.querySelector('[data-ctox-chat-root]')),
+          }), 10000, 'agent scope business chat root');
+
+          const menu = await openGlobalContextMenu();
+          const submitted = await submitGlobalContextMenu();
+          const detail = submitted.detail || {};
+          const visibleScope = detail.client_context?.visible_scope || null;
+          const clientContextMatchesUi = Boolean(
+            visibleScope
+              && visibleScope.app?.module_id === targetModule.id
+              && detail.client_context?.module_id === targetModule.id
+              && detail.client_context?.app_id === targetModule.id
+              && detail.client_context?.actor?.id === actorSession.user.id
+              && scopeRowsMatchVisibleScope(menu.rows, visibleScope)
+          );
+
+          const appStoreMenu = await openAppStoreContextMenu();
+          const appStoreSubmitted = await submitAppStoreContextMenu();
+          const appStoreDetail = appStoreSubmitted.detail || {};
+          const appStoreVisibleScope = appStoreDetail.client_context?.visible_scope || null;
+          const appStoreClientContextMatchesUi = Boolean(
+            appStoreVisibleScope
+              && appStoreVisibleScope.app?.module_id === targetModule.id
+              && appStoreDetail.client_context?.module_id === targetModule.id
+              && appStoreDetail.client_context?.app_id === targetModule.id
+              && appStoreDetail.client_context?.actor?.id === actorSession.user.id
+              && appStoreDetail.payload?.mode === 'data'
+              && appStoreDetail.command_type === 'business_os.chat.task'
+              && scopeRowsMatchVisibleScope(appStoreMenu.rows, appStoreVisibleScope)
+          );
+          const businessChatScope = await waitForBusinessChatScope(appStoreDetail);
+          const businessChatScopeMatchesContext = scopeRowsMatchVisibleScope(
+            businessChatScope.rows,
+            appStoreVisibleScope,
+          );
+
+          await waitFor(() => {
+            let collection = null;
+            try {
+              collection = state.db?.collection?.('business_commands') || state.db?.raw?.business_commands || null;
+            } catch {
+              collection = null;
+            }
+            return {
+              ok: Boolean(collection),
+              collections: Object.keys(state.db?.raw || {}).slice(0, 12),
+            };
+          }, 15000, 'agent scope business_commands collection');
+          await state.sync?.startCollection?.('business_commands');
+          const dataDeniedBeforeGrant = await assertDenied('agent scope read without data.read', () => {
+            return smoke.createLiveDbFacade(targetModule)
+              .collection('business_commands')
+              .findOne('phase12_agent_scope_probe');
+          });
+          governance.permission_model.explicit_grants.push({
+            grant_id: 'phase12_agent_scope_read_business_commands',
+            subject_type: 'user',
+            subject_id: actorSession.user.id,
+            permission: BusinessOsPermissions.DataRead,
+            scope_type: 'collection',
+            scope_id: 'business_commands',
+            active: true,
+          });
+          state.governance = governance;
+          const readQuery = smoke.createLiveDbFacade(targetModule)
+            .collection('business_commands')
+            .findOne('phase12_agent_scope_probe');
+          const readAllowedAfterGrant = Boolean(readQuery && typeof readQuery.exec === 'function');
+          const writeDeniedWithoutGrant = await assertDenied('agent scope write without data.write', () => {
+            return smoke.createLiveDbFacade(targetModule)
+              .collection('business_commands')
+              .insert({
+                id: 'phase12_agent_scope_write_probe',
+                command_id: 'phase12_agent_scope_write_probe',
+                module: targetModule.id,
+                command_type: 'phase12.agent_scope.write',
+                status: 'pending_sync',
+                payload: {},
+                client_context: { source: 'phase12-agent-scope-ui-smoke' },
+                updated_at_ms: Date.now(),
+              });
+          });
+          const grantBoundary = await openAgentGrantBoundarySettings();
+
+          const commandId = `cmd_phase12_agent_scope_${Date.now()}`;
+          const dispatchResult = await state.commandBus.dispatch({
+            id: commandId,
+            wait_timeout_ms: 45000,
+            module: targetModule.id,
+            type: detail.command_type || 'business_os.chat.task',
+            record_id: detail.record_id || targetModule.id,
+            inbound_channel: 'business_os.agent_scope_smoke',
+            payload: {
+              ...(detail.payload || {}),
+              title: detail.title || 'Agent scope smoke',
+              instruction: detail.instruction || detail.text || 'Agent scope smoke',
+            },
+            client_context: {
+              ...(detail.client_context || {}),
+              source: 'business-os-agent-scope-smoke',
+              audit_probe: true,
+            },
+          });
+          const commandCollection = state.db?.raw?.business_commands || state.db?.collection?.('business_commands');
+          const persistedCommand = await waitFor(async () => {
+            const docs = docsToJson(await commandCollection.find().exec());
+            const doc = docs.find((item) => item.id === commandId || item.command_id === commandId);
+            return {
+              ok: Boolean(doc),
+              command: doc || null,
+              count: docs.length,
+            };
+          }, 15000, 'agent scope persisted command');
+          const persistedContext = persistedCommand.command?.client_context || {};
+          const auditVisible = Boolean(
+            persistedCommand.command
+              && persistedContext.visible_scope?.app?.module_id === targetModule.id
+              && (dispatchResult?.task_id || dispatchResult?.command_id || commandId)
+          );
+
+          applyAgentScopeState();
+          smoke.renderTabs();
+          const hiddenTab = document.querySelector(`.module-tab[data-module="${css(hiddenModule.id)}"], .module-tab[data-target="${css(hiddenModule.id)}"]`);
+          await state.openModule(hiddenModule.id, { force: true, asModule: true });
+          await delay(150);
+          const statusText = document.body?.innerText || '';
+          const appHiddenDenied = !hiddenTab && state.activeModule?.id !== hiddenModule.id;
+          const deniedReasonVisible = /nicht sichtbar|not visible|Privat|private/i.test(statusText);
+
+          const status = await globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({
+            includeCounts: false,
+            requiredCollections: ['business_module_catalog', 'business_commands', 'ctox_runtime_settings'],
+          });
+          if (status?.version !== 'business-os-advanced-status-v1') {
+            throw new Error(`agent scope UI smoke lost advanced status evidence: ${JSON.stringify(status)}`);
+          }
+
+          const checks = {
+            panelVisible: menu.ok === true,
+            clientContextMatchesUi,
+            appStorePanelVisible: appStoreMenu.ok === true,
+            appStoreClientContextMatchesUi,
+            businessChatScopeMatchesContext,
+            settingsGrantBoundaryVisible: grantBoundary.ok === true,
+            appHiddenDenied,
+            dataDeniedBeforeGrant,
+            readAllowedAfterGrant,
+            writeDeniedWithoutGrant,
+            auditVisible,
+            deniedReasonVisible,
+          };
+          const failed = Object.entries(checks).filter(([, value]) => value !== true);
+          if (failed.length) {
+            throw new Error(`agent scope UI smoke failed: ${JSON.stringify({
+              failed,
+              menu,
+              detail,
+              visibleScope,
+              appStoreMenu,
+              appStoreDetail,
+              appStoreVisibleScope,
+              businessChatScope,
+              grantBoundary,
+              persistedCommand: persistedCommand.command,
+              dispatchResult,
+              appHiddenDenied,
+              deniedReasonVisible,
+              activeModule: state.activeModule?.id || '',
+            }, null, 2)}`);
+          }
+
+          return {
+            mode: smokeMode,
+            targetModuleId: targetModule.id,
+            agentId: 'ctox',
+            actorRole: actorSession.user.role,
+            authState: 'authenticated',
+            browserContext: 'clean',
+            tenantScope: 'local-workspace',
+            panelVisible: true,
+            clientContextMatchesUi,
+            appStorePanelVisible: true,
+            appStoreClientContextMatchesUi,
+            businessChatScopeMatchesContext,
+            settingsGrantBoundaryVisible: grantBoundary.ok === true,
+            appHiddenDenied,
+            dataDeniedBeforeGrant,
+            readAllowedAfterGrant,
+            writeDeniedWithoutGrant,
+            auditVisible,
+            deniedReasonVisible,
+            advancedStatusVersion: status.version || '',
+            advancedStatusRuntime: status.rxdbRuntime || null,
+          };
+        } finally {
+          state.modules = originalState.modules;
+          state.taskbarPins = originalState.taskbarPins;
+          state.moduleAllowlist = originalState.moduleAllowlist;
+          state.session = originalState.session;
+          state.governance = originalState.governance;
+          globalThis.CTOX_BUSINESS_OS_SESSION = originalState.globalSession;
+          if (originalState.bodyAuthState) {
+            document.body.dataset.authState = originalState.bodyAuthState;
+          } else {
+            delete document.body.dataset.authState;
+          }
+          smoke.renderTabs();
+        }
+      }
+
+      async function runBusinessOsDynamicAppsUiSmoke() {
+        const waitFor = async (predicate, ms, label) => {
+          const deadline = Date.now() + ms;
+          let last = null;
+          while (Date.now() < deadline) {
+            last = await predicate();
+            if (last?.ok) return last;
+            await delay(100);
+          }
+          throw new Error(`${label} timed out: ${JSON.stringify(last)}`);
+        };
+        const css = (value) => {
+          if (globalThis.CSS?.escape) return globalThis.CSS.escape(String(value));
+          return String(value).replace(/["\\]/g, '\\$&');
+        };
+        const smoke = globalThis.ctoxBusinessOsSmoke;
+        const state = globalThis.CTOX_BUSINESS_OS_APP || smoke?.state || appState;
+        if (!state) throw new Error('Business OS app state is unavailable for dynamic apps UI smoke');
+        if (typeof smoke?.renderTabs !== 'function') throw new Error('Business OS smoke renderTabs hook is unavailable');
+        if (typeof smoke?.openAppLifecycleDrawer !== 'function') throw new Error('Business OS smoke lifecycle drawer hook is unavailable');
+        if (typeof smoke?.createLiveDbFacade !== 'function') throw new Error('Business OS smoke DB facade hook is unavailable');
+        if (typeof smoke?.createModuleContext !== 'function') throw new Error('Business OS smoke module context hook is unavailable');
+        appState = state;
+
+        const [
+          permissionsMod,
+          lifecycleMod,
+        ] = await Promise.all([
+          import('/shared/permissions.js'),
+          import('/shared/app-lifecycle.js'),
+        ]);
+        const { BusinessOsPermissions } = permissionsMod;
+        const {
+          appLifecycleBadge,
+          appLifecycleState,
+          canSeeModuleForAppVersion,
+        } = lifecycleMod;
+        const privateModule = {
+          id: 'phase8-private-app',
+          title: 'Phase 8 Private App',
+          glyph: 'P8',
+          version: '0.1.0',
+          source: 'installed',
+          install_scope: 'installed',
+          entry: 'installed-modules/phase8-private-app/index.js',
+          collections: ['business_commands'],
+        };
+        const teamModule = {
+          id: 'phase8-team-app',
+          title: 'Phase 8 Team App',
+          glyph: 'T8',
+          version: '1.0.0',
+          source: 'installed',
+          install_scope: 'installed',
+          entry: 'installed-modules/phase8-team-app/index.js',
+          collections: ['business_commands'],
+        };
+        const invalidModule = {
+          id: 'phase8-invalid-app',
+          title: 'Phase 8 Invalid Version App',
+          glyph: 'I8',
+          version: 'beta',
+          source: 'installed',
+          install_scope: 'installed',
+          entry: 'installed-modules/phase8-invalid-app/index.js',
+          collections: ['business_commands'],
+        };
+        const restrictedModule = {
+          id: 'phase8-restricted-app',
+          title: 'Phase 8 Restricted Team App',
+          glyph: 'R8',
+          version: '1.0.0',
+          source: 'installed',
+          install_scope: 'installed',
+          entry: 'installed-modules/phase8-restricted-app/index.js',
+          collections: ['business_commands'],
+          lifecycle: { visibility_state: 'restricted' },
+        };
+        const openModuleFixtureId = 'phase13-open-module-guard';
+        const allPermissions = Object.values(BusinessOsPermissions);
+        const governance = {
+          founders: {
+            [privateModule.id]: [{ user_id: 'app_builder', active: true }],
+            [teamModule.id]: [{ user_id: 'app_builder', active: true }],
+            [invalidModule.id]: [{ user_id: 'app_builder', active: true }],
+            [restrictedModule.id]: [{ user_id: 'app_builder', active: true }],
+            [openModuleFixtureId]: [{ user_id: 'app_builder', active: true }],
+          },
+          permission_model: {
+            version: 1,
+            deny_supported: false,
+            role_defaults: {
+              chef: {
+                workspace: allPermissions,
+                module: allPermissions,
+                assigned_module: allPermissions,
+              },
+              admin: {
+                workspace: allPermissions,
+                module: allPermissions,
+                assigned_module: allPermissions,
+              },
+              founder: {
+                workspace: [],
+                module: [],
+                assigned_module: [
+                  BusinessOsPermissions.AppsView,
+                  BusinessOsPermissions.AppsModify,
+                  BusinessOsPermissions.AppsSourceView,
+                  BusinessOsPermissions.AppsRelease,
+                  BusinessOsPermissions.DataRead,
+                  BusinessOsPermissions.DataWrite,
+                ],
+              },
+              user: {
+                workspace: [],
+                module: [],
+                assigned_module: [],
+              },
+            },
+            module_assignments: {
+              [privateModule.id]: {
+                app_builder: [
+                  BusinessOsPermissions.AppsView,
+                  BusinessOsPermissions.AppsModify,
+                  BusinessOsPermissions.AppsSourceView,
+                  BusinessOsPermissions.DataRead,
+                  BusinessOsPermissions.DataWrite,
+                ],
+              },
+              [teamModule.id]: {
+                app_builder: [
+                  BusinessOsPermissions.AppsView,
+                  BusinessOsPermissions.AppsModify,
+                  BusinessOsPermissions.AppsSourceView,
+                  BusinessOsPermissions.DataRead,
+                  BusinessOsPermissions.DataWrite,
+                ],
+              },
+              [invalidModule.id]: {
+                app_builder: [
+                  BusinessOsPermissions.AppsView,
+                  BusinessOsPermissions.AppsModify,
+                  BusinessOsPermissions.AppsSourceView,
+                  BusinessOsPermissions.DataRead,
+                  BusinessOsPermissions.DataWrite,
+                ],
+              },
+              [restrictedModule.id]: {
+                app_builder: [
+                  BusinessOsPermissions.AppsView,
+                  BusinessOsPermissions.AppsModify,
+                  BusinessOsPermissions.AppsSourceView,
+                  BusinessOsPermissions.DataRead,
+                  BusinessOsPermissions.DataWrite,
+                ],
+              },
+              [openModuleFixtureId]: {
+                app_builder: [
+                  BusinessOsPermissions.AppsView,
+                  BusinessOsPermissions.AppsModify,
+                  BusinessOsPermissions.AppsSourceView,
+                  BusinessOsPermissions.DataRead,
+                  BusinessOsPermissions.DataWrite,
+                ],
+              },
+            },
+            explicit_grants: [],
+          },
+        };
+        const sessionFor = (id, role) => ({ user: { id, role } });
+        const teamSession = sessionFor('team_member', 'user');
+        const builderSession = sessionFor('app_builder', 'founder');
+        const insertedIds = new Set([privateModule.id, teamModule.id, invalidModule.id, restrictedModule.id]);
+        const temporaryVisibleIds = [privateModule.id, teamModule.id, invalidModule.id, restrictedModule.id, openModuleFixtureId];
+        const originalState = {
+          modules: Array.isArray(state.modules) ? [...state.modules] : [],
+          taskbarPins: Array.isArray(state.taskbarPins) ? [...state.taskbarPins] : [],
+          moduleAllowlist: Array.isArray(state.moduleAllowlist) ? [...state.moduleAllowlist] : state.moduleAllowlist,
+          session: state.session,
+          governance: state.governance,
+          globalSession: globalThis.CTOX_BUSINESS_OS_SESSION,
+        };
+        const installSmokeModules = (session) => {
+          state.session = session;
+          state.governance = governance;
+          globalThis.CTOX_BUSINESS_OS_SESSION = session;
+          state.modules = [
+            ...originalState.modules.filter((mod) => !insertedIds.has(mod?.id)),
+            privateModule,
+            teamModule,
+            invalidModule,
+            restrictedModule,
+          ];
+          state.moduleAllowlist = [...new Set([
+            ...(Array.isArray(state.moduleAllowlist)
+              ? state.moduleAllowlist.map((id) => String(id || '').trim()).filter(Boolean)
+              : []),
+            ...temporaryVisibleIds,
+          ])];
+          state.taskbarPins = [privateModule.id, teamModule.id, invalidModule.id, restrictedModule.id];
+          smoke.renderTabs();
+        };
+        const tabEvidence = () => {
+          const privateTab = document.querySelector(`.module-tab[data-target="${css(privateModule.id)}"]`);
+          const teamTab = document.querySelector(`.module-tab[data-target="${css(teamModule.id)}"]`);
+          const invalidTab = document.querySelector(`.module-tab[data-target="${css(invalidModule.id)}"]`);
+          const restrictedTab = document.querySelector(`.module-tab[data-target="${css(restrictedModule.id)}"]`);
+          const privateBadge = document.querySelector(`[data-app-lifecycle-badge="${css(privateModule.id)}"]`);
+          const teamBadge = document.querySelector(`[data-app-lifecycle-badge="${css(teamModule.id)}"]`);
+          const invalidBadge = document.querySelector(`[data-app-lifecycle-badge="${css(invalidModule.id)}"]`);
+          const restrictedBadge = document.querySelector(`[data-app-lifecycle-badge="${css(restrictedModule.id)}"]`);
+          return {
+            privateTabVisible: Boolean(privateTab),
+            teamTabVisible: Boolean(teamTab),
+            invalidTabVisible: Boolean(invalidTab),
+            restrictedTabVisible: Boolean(restrictedTab),
+            taskbarPins: Array.isArray(state.taskbarPins) ? [...state.taskbarPins] : [],
+            launchTargetIds: typeof smoke.listLaunchTargets === 'function'
+              ? smoke.listLaunchTargets().map((target) => target?.id).filter(Boolean)
+              : [],
+            privateBadgeState: privateBadge?.getAttribute('data-state') || '',
+            privateBadgeText: privateBadge?.textContent?.trim() || '',
+            teamBadgeState: teamBadge?.getAttribute('data-state') || '',
+            teamBadgeText: teamBadge?.textContent?.trim() || '',
+            invalidBadgeState: invalidBadge?.getAttribute('data-state') || '',
+            invalidBadgeText: invalidBadge?.textContent?.trim() || '',
+            restrictedBadgeState: restrictedBadge?.getAttribute('data-state') || '',
+            restrictedBadgeText: restrictedBadge?.textContent?.trim() || '',
+          };
+        };
+        const openStartMenu = async () => {
+          const startButton = document.querySelector('[data-shell-start]');
+          if (!startButton) throw new Error('Business OS start menu button is missing for dynamic app smoke');
+          document.querySelector('.shell-start-menu-panel')?.classList.remove('is-active');
+          startButton.click();
+          return waitFor(() => {
+            const panel = document.querySelector('.shell-start-menu-panel');
+            const items = panel ? [...panel.querySelectorAll('.start-menu-item')] : [];
+            return {
+              ok: Boolean(panel?.classList?.contains('is-active') && items.length > 0),
+              itemCount: items.length,
+              labels: items.map((item) => item.querySelector('.start-menu-item-label')?.textContent?.trim() || '').slice(0, 12),
+            };
+          }, 5000, 'dynamic app start menu open');
+        };
+        const launcherEvidence = () => {
+          const panel = document.querySelector('.shell-start-menu-panel');
+          const privateBadge = panel?.querySelector(`.start-menu-lifecycle-badge[data-module-lifecycle="${css(privateModule.id)}"]`);
+          const teamBadge = panel?.querySelector(`.start-menu-lifecycle-badge[data-module-lifecycle="${css(teamModule.id)}"]`);
+          const invalidBadge = panel?.querySelector(`.start-menu-lifecycle-badge[data-module-lifecycle="${css(invalidModule.id)}"]`);
+          const restrictedBadge = panel?.querySelector(`.start-menu-lifecycle-badge[data-module-lifecycle="${css(restrictedModule.id)}"]`);
+          return {
+            privateLauncherBadgeState: privateBadge?.getAttribute('data-state') || '',
+            privateLauncherBadgeText: privateBadge?.textContent?.trim()?.replace(/\s+/g, ' ') || '',
+            teamLauncherBadgeState: teamBadge?.getAttribute('data-state') || '',
+            teamLauncherBadgeText: teamBadge?.textContent?.trim()?.replace(/\s+/g, ' ') || '',
+            invalidLauncherBadgeState: invalidBadge?.getAttribute('data-state') || '',
+            restrictedLauncherBadgeState: restrictedBadge?.getAttribute('data-state') || '',
+            labels: panel ? [...panel.querySelectorAll('.start-menu-item-label')].map((node) => node.textContent?.trim() || '') : [],
+          };
+        };
+        const whyDiagnosticsEvidence = (moduleId) => {
+          const root = document.querySelector(`[data-why-diagnostics="${css(moduleId)}"]`);
+          const rows = root ? [...root.querySelectorAll('[data-why-row]')].map((node) => ({
+            key: node.getAttribute('data-why-row') || '',
+            state: node.getAttribute('data-decision-state') || '',
+            text: node.textContent?.trim().replace(/\s+/g, ' ') || '',
+          })) : [];
+          const dataRows = root ? [...root.querySelectorAll('[data-why-data-row]')].map((node) => ({
+            collection: node.getAttribute('data-why-data-row') || '',
+            text: node.textContent?.trim().replace(/\s+/g, ' ') || '',
+          })) : [];
+          return {
+            visible: Boolean(root),
+            rows,
+            rowKeys: rows.map((row) => row.key),
+            dataRows,
+            dataCollections: dataRows.map((row) => row.collection),
+            text: root?.textContent?.trim().replace(/\s+/g, ' ').slice(0, 600) || '',
+          };
+        };
+        const installSmokeModulesAndWait = async (session, label, predicate) => waitFor(() => {
+          installSmokeModules(session);
+          const tabs = tabEvidence();
+          return {
+            ok: predicate(tabs),
+            ...tabs,
+          };
+        }, 8000, `dynamic app ${label} tabs`);
+        const assertDenied = async (label, callback) => {
+          try {
+            await callback();
+          } catch (error) {
+            if (error?.code === 'CTOX_BUSINESS_OS_PERMISSION_DENIED') return true;
+            throw new Error(`${label} failed with unexpected error: ${error?.stack || error?.message || error}`);
+          }
+          throw new Error(`${label} unexpectedly allowed`);
+        };
+        let result = null;
+        let tamperedScopedTaskbarPinsKey = '';
+        let storedScopedTaskbarPins = null;
+        try {
+          const helperPrivateHiddenForTeam = !canSeeModuleForAppVersion(privateModule, {
+            session: teamSession,
+            governance,
+          });
+          const helperPrivateVisibleForBuilder = canSeeModuleForAppVersion(privateModule, {
+            session: builderSession,
+            governance,
+          });
+          const helperTeamVisibleForTeam = canSeeModuleForAppVersion(teamModule, {
+            session: teamSession,
+            governance,
+          });
+          const invalidLifecycle = appLifecycleState(invalidModule, {
+            session: teamSession,
+            governance,
+          });
+          const invalidVersionPrivate = invalidLifecycle.state === 'private'
+            && invalidLifecycle.warning === true
+            && !canSeeModuleForAppVersion(invalidModule, { session: teamSession, governance });
+          const restrictedLifecycle = appLifecycleBadge(restrictedModule, {
+            session: builderSession,
+            governance,
+          });
+          const restrictedHiddenForTeam = !canSeeModuleForAppVersion(restrictedModule, {
+            session: teamSession,
+            governance,
+          });
+          const privateLifecycle = appLifecycleBadge(privateModule, {
+            session: builderSession,
+            governance,
+          });
+          const teamLifecycle = appLifecycleBadge(teamModule, {
+            session: teamSession,
+            governance,
+          });
+
+          const teamTabs = await installSmokeModulesAndWait(
+            teamSession,
+            'team actor',
+            (tabs) => !tabs.privateTabVisible
+              && tabs.teamTabVisible
+              && tabs.teamBadgeState === 'team'
+              && !tabs.restrictedTabVisible
+              && !tabs.invalidTabVisible,
+          );
+          const builderTabs = await installSmokeModulesAndWait(
+            builderSession,
+            'builder actor',
+            (tabs) => tabs.privateTabVisible
+              && tabs.teamTabVisible
+              && tabs.invalidTabVisible
+              && tabs.restrictedTabVisible,
+          );
+          await openStartMenu();
+          const builderLauncher = launcherEvidence();
+          const privateLauncherBadge = document.querySelector(`.shell-start-menu-panel .start-menu-lifecycle-badge[data-module-lifecycle="${css(privateModule.id)}"]`);
+          if (!privateLauncherBadge) throw new Error(`private launcher lifecycle badge missing for ${privateModule.id}`);
+          privateLauncherBadge.click();
+          const managerDrawer = await waitFor(() => {
+            const element = document.querySelector('.module-lifecycle-drawer');
+            const text = element?.innerText || '';
+            const why = whyDiagnosticsEvidence(privateModule.id);
+            return {
+              ok: Boolean(
+                element
+                && element.dataset.lifecyclePermissionState === 'manager'
+                && /Verwalten erlaubt/.test(text)
+                && /App ändern/.test(text)
+                && /Im App Store verwalten/.test(text)
+                && why.visible
+                && ['actor', 'visibility', 'open', 'modify', 'source', 'release', 'rollback', 'data']
+                  .every((key) => why.rowKeys.includes(key))
+                && why.dataCollections.includes('business_commands')
+                && why.dataRows.some((row) => /Lesen: Erlaubt/.test(row.text) && /Schreiben: Erlaubt/.test(row.text))
+              ),
+              state: element?.dataset?.lifecyclePermissionState || '',
+              text,
+              why,
+            };
+          }, 5000, 'dynamic app manager lifecycle drawer');
+          document.querySelector('[data-close-lifecycle]')?.dispatchEvent(new MouseEvent('click', {
+            bubbles: true,
+            cancelable: true,
+          }));
+          const teamTabsForLauncher = await installSmokeModulesAndWait(
+            teamSession,
+            'team actor launcher',
+            (tabs) => !tabs.privateTabVisible && tabs.teamTabVisible && tabs.teamBadgeState === 'team',
+          );
+          await openStartMenu();
+          const teamLauncher = launcherEvidence();
+          const teamLauncherBadge = document.querySelector(`.shell-start-menu-panel .start-menu-lifecycle-badge[data-module-lifecycle="${css(teamModule.id)}"]`);
+          if (!teamLauncherBadge) throw new Error(`team launcher lifecycle badge missing for ${teamModule.id}`);
+          teamLauncherBadge.click();
+          const readonlyDrawer = await waitFor(() => {
+            const element = document.querySelector('.module-lifecycle-drawer');
+            const text = element?.innerText || '';
+            const why = whyDiagnosticsEvidence(teamModule.id);
+            const modifyRow = why.rows.find((row) => row.key === 'modify') || {};
+            const releaseRow = why.rows.find((row) => row.key === 'release') || {};
+            const hasEditAction = Boolean(element?.querySelector('[data-edit-lifecycle-app]'));
+            return {
+              ok: Boolean(
+                element
+                && element.dataset.lifecyclePermissionState === 'readonly'
+                && /Nur Ansicht/.test(text)
+                && /Details im App Store ansehen/.test(text)
+                && !hasEditAction
+                && why.visible
+                && why.rowKeys.includes('visibility')
+                && why.rowKeys.includes('data')
+                && why.dataCollections.includes('business_commands')
+                && modifyRow.state === 'blocked'
+                && releaseRow.state === 'blocked'
+              ),
+              state: element?.dataset?.lifecyclePermissionState || '',
+              text,
+              why,
+            };
+          }, 5000, 'dynamic app readonly lifecycle drawer');
+          document.querySelector('[data-close-lifecycle]')?.dispatchEvent(new MouseEvent('click', {
+            bubbles: true,
+            cancelable: true,
+          }));
+          installSmokeModules(builderSession);
+          const privateBadge = document.querySelector(`[data-app-lifecycle-badge="${css(privateModule.id)}"]`);
+          if (!privateBadge) throw new Error(`private lifecycle badge missing for ${privateModule.id}`);
+          privateBadge.dispatchEvent(new MouseEvent('click', {
+            bubbles: true,
+            cancelable: true,
+          }));
+          const drawer = await waitFor(() => {
+            const element = document.querySelector('.module-lifecycle-drawer');
+            const text = element?.innerText || '';
+            return {
+              ok: Boolean(element && /Phase 8 Private App/.test(text) && /Privat/.test(text) && /v0\.1\.0/.test(text)),
+              text,
+            };
+          }, 5000, 'dynamic app lifecycle drawer');
+
+          const collectionName = 'business_commands';
+          await waitFor(() => {
+            let collection = null;
+            try {
+              collection = state.db?.collection?.(collectionName) || state.db?.raw?.[collectionName] || null;
+            } catch {
+              collection = null;
+            }
+            return {
+              ok: Boolean(collection),
+              dbMode: state.db?.mode || '',
+              collections: Object.keys(state.db?.collections || state.db?.raw || {}).slice(0, 12),
+            };
+          }, 15000, 'dynamic app data collection');
+
+          const persistedOpenModule = state.modules.find((mod) => mod?.id === openModuleFixtureId);
+          if (!persistedOpenModule) {
+            throw new Error(`dynamic app persisted openModule fixture missing after reload: ${JSON.stringify({
+              expected: openModuleFixtureId,
+              modules: state.modules.map((mod) => mod?.id).filter(Boolean),
+            })}`);
+          }
+          if (typeof state.openModule !== 'function') {
+            throw new Error('Business OS state.openModule is unavailable for dynamic app persisted fixture');
+          }
+          state.session = teamSession;
+          state.governance = governance;
+          globalThis.CTOX_BUSINESS_OS_SESSION = teamSession;
+          delete globalThis.__ctoxPhase13OpenModuleGuard;
+          await state.openModule(persistedOpenModule.id, { force: true, asModule: true });
+          const openModuleGuard = await waitFor(() => {
+            const guard = globalThis.__ctoxPhase13OpenModuleGuard;
+            return {
+              ok: Boolean(
+                guard?.mounted
+                && guard.moduleId === persistedOpenModule.id
+                && guard.denied?.collection === true
+                && guard.denied?.property === true
+                && guard.denied?.cached === true
+                && guard.denied?.raw === true
+                && Object.values(guard.runtimeSafety || {}).every((value) => value === true)
+              ),
+              guard: guard || null,
+              activeModule: state.activeModule?.id || '',
+              marker: document.querySelector('[data-phase13-open-module-guard]')?.getAttribute('data-phase13-open-module-guard') || '',
+            };
+          }, 8000, 'dynamic app persisted openModule guarded DB fixture');
+          const openModuleReloadMounted = openModuleGuard.guard?.moduleId === persistedOpenModule.id
+            && openModuleGuard.marker === persistedOpenModule.id;
+          const openModuleCollectionDenied = openModuleGuard.guard?.denied?.collection === true;
+          const openModulePropertyDenied = openModuleGuard.guard?.denied?.property === true;
+          const openModuleCachedDenied = openModuleGuard.guard?.denied?.cached === true;
+          const openModuleRawDenied = openModuleGuard.guard?.denied?.raw === true;
+          const runtimeSafety = openModuleGuard.guard?.runtimeSafety || {};
+          const openModuleRuntimeSafetyContract = runtimeSafety.contract === true
+            && runtimeSafety.trustModel === true
+            && runtimeSafety.guardedDb === true;
+          const openModuleRuntimeSafetyCapabilities = runtimeSafety.localAssetFetchOnly === true
+            && runtimeSafety.dynamicImportForbidden === true
+            && runtimeSafety.storageNonAuthoritative === true
+            && runtimeSafety.shellGlobalsForbidden === true
+            && runtimeSafety.workersForbidden === true
+            && runtimeSafety.externalEffectsChatOnly === true;
+
+          state.session = teamSession;
+          state.governance = governance;
+          const teamDb = smoke.createLiveDbFacade(teamModule);
+          const realContext = smoke.createModuleContext(teamModule);
+          const realContextDb = realContext?.db;
+          if (!realContextDb?.collection) {
+            throw new Error('dynamic app real module context did not expose ctx.db.collection');
+          }
+          const realContextCachedCollection = realContextDb.collection(collectionName);
+          const dbReadDenied = await assertDenied('dynamic app read without data.read', () => {
+            teamDb.collection(collectionName).findOne('phase8_dynamic_apps_smoke');
+          });
+          const dbRawDenied = await assertDenied('dynamic app raw read without data.read', () => {
+            teamDb.raw[collectionName].findOne('phase8_dynamic_apps_smoke');
+          });
+          const realContextCollectionDenied = await assertDenied('dynamic app real context collection read without data.read', () => {
+            realContextDb.collection(collectionName).findOne('phase8_dynamic_apps_smoke');
+          });
+          const realContextPropertyDenied = await assertDenied('dynamic app real context property read without data.read', () => {
+            realContextDb[collectionName].findOne('phase8_dynamic_apps_smoke');
+          });
+          const realContextCachedDenied = await assertDenied('dynamic app real context cached handle read without data.read', () => {
+            realContextCachedCollection.findOne('phase8_dynamic_apps_smoke');
+          });
+          const realContextRawDenied = await assertDenied('dynamic app real context raw read without data.read', () => {
+            realContextDb.raw[collectionName].findOne('phase8_dynamic_apps_smoke');
+          });
+          governance.permission_model.explicit_grants.push({
+            grant_id: 'phase8_dynamic_read_business_commands',
+            subject_type: 'user',
+            subject_id: teamSession.user.id,
+            permission: BusinessOsPermissions.DataRead,
+            scope_type: 'collection',
+            scope_id: collectionName,
+            active: true,
+          });
+          state.governance = governance;
+          const readQuery = smoke.createLiveDbFacade(teamModule)
+            .collection(collectionName)
+            .findOne('phase8_dynamic_apps_smoke');
+          const dbReadGrantAllowed = Boolean(readQuery && typeof readQuery.exec === 'function');
+          const realContextCachedReadQuery = realContextCachedCollection.findOne('phase8_dynamic_apps_smoke');
+          const realContextCachedReadGrantAllowed = Boolean(
+            realContextCachedReadQuery && typeof realContextCachedReadQuery.exec === 'function'
+          );
+          const dbWriteDeniedWithoutWrite = await assertDenied('dynamic app write without data.write', () => {
+            return smoke.createLiveDbFacade(teamModule)
+              .collection(collectionName)
+              .insert({
+                id: 'phase8_dynamic_apps_smoke',
+                command_id: 'phase8_dynamic_apps_smoke',
+                module: teamModule.id,
+                command_type: 'phase8.dynamic.write',
+                status: 'pending_sync',
+                payload: {},
+                client_context: { source: 'phase8-dynamic-apps-ui-smoke' },
+                updated_at_ms: Date.now(),
+              });
+          });
+          const permissionFacade = smoke.createModulePermissionFacade(teamModule);
+          const facadeReadAllowed = permissionFacade.canReadCollection(collectionName) === true;
+          const facadeWriteDenied = permissionFacade.canWriteCollection(collectionName) === false;
+
+          const packagedGuardSpecs = Object.freeze([
+            {
+              id: 'coding-agents',
+              title: 'Coding Agents',
+              source: 'local',
+              install_scope: 'store',
+              entry: 'modules/coding-agents/index.html',
+              schema: '/modules/coding-agents/schema.js',
+              collection: 'coding_agent_sessions',
+              collections: [
+                'business_commands',
+                'coding_agent_workspace_grants',
+                'coding_agent_sessions',
+                'coding_agent_events',
+              ],
+            },
+            {
+              id: 'calendar',
+              title: 'Kalender',
+              source: 'packaged',
+              install_scope: 'starter',
+              entry: 'modules/calendar/index.html',
+              schema: '/modules/calendar/schema.js',
+              collection: 'calendar_events',
+              collections: [
+                'business_commands',
+                'calendar_sources',
+                'calendar_calendars',
+                'calendar_events',
+                'calendar_event_instances',
+                'calendar_availability_rules',
+                'calendar_booking_pages',
+                'calendar_booking_holds',
+                'calendar_bookings',
+              ],
+            },
+            {
+              id: 'buchhaltung',
+              title: 'Buchhaltung',
+              source: 'local',
+              install_scope: 'store',
+              entry: 'modules/buchhaltung/index.html',
+              schema: '/modules/buchhaltung/schema.js',
+              collection: 'accounting_journal_entries',
+              collections: [
+                'business_commands',
+                'accounting_accounts',
+                'accounting_journal_entries',
+                'accounting_journal_entry_lines',
+                'accounting_ledger_entries',
+                'accounting_receipts',
+                'accounting_bank_statements',
+                'accounting_bank_statement_lines',
+                'accounting_number_series',
+              ],
+            },
+            {
+              id: 'conversations',
+              title: 'Conversations',
+              source: 'packaged',
+              install_scope: 'store',
+              entry: 'modules/conversations/index.html',
+              collection: 'business_commands',
+              collections: [
+                'business_commands',
+                'communication_accounts',
+                'communication_threads',
+                'communication_messages',
+                'outbound_campaigns',
+                'outbound_pipeline_items',
+                'outbound_engagements',
+                'outbound_messages',
+                'outbound_approvals',
+              ],
+            },
+            {
+              id: 'customers',
+              title: 'Kunden',
+              source: 'local',
+              install_scope: 'store',
+              entry: 'modules/customers/index.html',
+              schema: '/modules/customers/schema.js',
+              collection: 'customer_accounts',
+              collections: [
+                'business_commands',
+                'customer_accounts',
+                'customer_contacts',
+                'customer_opportunities',
+                'customer_tasks',
+                'customer_notes',
+                'customer_activities',
+                'customer_files',
+                'customer_views',
+                'customer_view_filters',
+                'customer_view_sorts',
+                'customer_import_batches',
+                'customer_dedupe_candidates',
+              ],
+            },
+            {
+              id: 'cv-print-builder',
+              title: 'CV Print Builder',
+              source: 'local',
+              install_scope: 'local',
+              entry: 'modules/cv-print-builder/index.html',
+              collection: 'business_commands',
+              collections: [
+                'business_commands',
+                'business_chats',
+                'ctox_queue_tasks',
+                'desktop_files',
+                'desktop_file_chunks',
+                'documents',
+                'document_versions',
+              ],
+            },
+            {
+              id: 'documents',
+              title: 'Documents',
+              source: 'packaged',
+              install_scope: 'starter',
+              entry: 'modules/documents/index.html',
+              collection: 'business_commands',
+              collections: [
+                'business_commands',
+                'documents',
+                'document_versions',
+                'document_blob_chunks',
+                'document_runbooks',
+              ],
+            },
+            {
+              id: 'invoices',
+              title: 'Rechnungen',
+              source: 'local',
+              install_scope: 'store',
+              entry: 'modules/invoices/index.html',
+              schema: '/modules/invoices/schema.js',
+              collection: 'accounting_invoices',
+              collections: [
+                'business_commands',
+                'customer_accounts',
+                'customer_activities',
+                'accounting_accounts',
+                'accounting_journal_entries',
+                'accounting_journal_entry_lines',
+                'accounting_ledger_entries',
+                'accounting_receipts',
+                'accounting_bank_statement_lines',
+                'accounting_number_series',
+                'desktop_files',
+                'desktop_file_chunks',
+                'accounting_invoices',
+                'accounting_invoice_lines',
+                'accounting_payment_terms',
+                'accounting_credit_notes',
+                'accounting_payments',
+                'accounting_payment_allocations',
+                'accounting_dunning_runs',
+                'accounting_dunning_letters',
+                'accounting_recurring_invoices',
+                'accounting_invoice_attachments',
+                'accounting_invoice_approvals',
+              ],
+            },
+            {
+              id: 'iot',
+              title: 'IoT',
+              source: 'local',
+              install_scope: 'store',
+              entry: 'modules/iot/index.html',
+              schema: '/modules/iot/schema.js',
+              collection: 'iot_widgets',
+              collections: [
+                'business_commands',
+                'iot_realms',
+                'iot_asset_types',
+                'iot_assets',
+                'iot_attributes',
+                'iot_datapoints',
+                'iot_alarms',
+                'iot_agents',
+                'iot_agent_status',
+                'iot_rulesets',
+                'iot_dashboards',
+                'iot_widgets',
+              ],
+            },
+            {
+              id: 'notes',
+              title: 'Notes',
+              source: 'packaged',
+              install_scope: 'starter',
+              entry: 'modules/notes/index.html',
+              schema: '/modules/notes/schema.js',
+              collection: 'notes',
+              collections: [
+                'business_commands',
+                'notes',
+              ],
+            },
+            {
+              id: 'outbound',
+              title: 'Outbound',
+              source: 'local',
+              install_scope: 'store',
+              entry: 'modules/outbound/index.html',
+              schema: '/modules/outbound/schema.js',
+              collection: 'outbound_campaigns',
+              collections: [
+                'business_commands',
+                'outbound_campaigns',
+                'outbound_sources',
+                'outbound_companies',
+                'outbound_pipeline_items',
+                'outbound_research_runs',
+                'outbound_engagements',
+                'outbound_messages',
+                'outbound_approvals',
+                'outbound_sequences',
+                'outbound_sender_assignments',
+                'outbound_meeting_requests',
+                'outbound_suppression_entries',
+                'outbound_account_limits',
+                'outbound_skillbooks',
+                'outbound_letter_templates',
+              ],
+            },
+            {
+              id: 'research',
+              title: 'Web Research',
+              source: 'local',
+              install_scope: 'store',
+              entry: 'modules/research/index.html',
+              schema: '/modules/research/schema.js',
+              collection: 'research_tasks',
+              collections: [
+                'business_commands',
+                'ctox_queue_tasks',
+                'research_tasks',
+                'research_runs',
+                'research_notes',
+                'knowledge_tables',
+                'documents',
+                'document_versions',
+                'document_blob_chunks',
+              ],
+            },
+            {
+              id: 'matching',
+              title: 'Matching',
+              source: 'local',
+              install_scope: 'store',
+              entry: 'modules/matching/index.html',
+              schema: '/modules/matching/schema.js',
+              collection: 'matching_requirements',
+              collections: [
+                'matching_requirements',
+                'matching_objects',
+                'matching_results',
+              ],
+            },
+            {
+              id: 'shiftflow',
+              title: 'Einsatzplanung',
+              source: 'local',
+              install_scope: 'store',
+              entry: 'modules/shiftflow/index.html',
+              schema: '/modules/shiftflow/schema.js',
+              collection: 'planning_shifts',
+              collections: [
+                'business_commands',
+                'planning_employees',
+                'planning_projects',
+                'planning_shifts',
+                'planning_time_records',
+                'planning_absences',
+              ],
+            },
+            {
+              id: 'spreadsheets',
+              title: 'Spreadsheets',
+              source: 'packaged',
+              install_scope: 'starter',
+              entry: 'modules/spreadsheets/index.html',
+              collection: 'business_commands',
+              collections: [
+                'business_commands',
+                'spreadsheets',
+                'spreadsheet_versions',
+                'spreadsheet_blob_chunks',
+                'spreadsheet_runbooks',
+              ],
+            },
+            {
+              id: 'support',
+              title: 'Support',
+              source: 'packaged',
+              install_scope: 'store',
+              entry: 'modules/support/index.html',
+              collection: 'business_commands',
+              collections: [
+                'business_commands',
+                'business_chats',
+                'ctox_queue_tasks',
+                'communication_threads',
+                'communication_messages',
+                'ctox_ticket_cases',
+                'customer_accounts',
+                'customer_contacts',
+                'desktop_files',
+                'desktop_file_chunks',
+                'support_inboxes',
+                'support_conversations',
+                'support_thread_links',
+                'support_identity_links',
+                'support_notes',
+                'support_conversation_events',
+                'support_labels',
+                'support_label_assignments',
+                'support_views',
+                'support_view_filters',
+                'support_assignment_policies',
+                'support_assignment_events',
+                'support_macros',
+                'support_automation_rules',
+                'support_sla_policies',
+                'support_applied_slas',
+                'support_sla_events',
+                'support_agent_requests',
+                'support_agent_suggestions',
+                'support_reporting_events',
+                'support_reporting_rollups',
+              ],
+            },
+          ]);
+          const launchTargets = typeof smoke.listLaunchTargets === 'function'
+            ? smoke.listLaunchTargets()
+            : [];
+          const resolvePackagedGuardModule = (spec) => (Array.isArray(state.modules) ? state.modules : [])
+            .find((module) => module?.id === spec.id)
+            || launchTargets.find((module) => module?.id === spec.id)
+            || {
+              id: spec.id,
+              title: spec.title,
+              source: spec.source,
+              install_scope: spec.install_scope,
+              entry: spec.entry,
+              collections: spec.collections,
+            };
+          const packagedGuardResults = [];
+          for (const spec of packagedGuardSpecs) {
+            const packagedGuardModule = resolvePackagedGuardModule(spec);
+            const packagedGuardCollection = spec.collection;
+            const subjectId = `phase13c_packaged_user_${spec.id.replace(/[^a-z0-9]+/gi, '_')}`;
+            const recordId = `phase13c_packaged_guard_${spec.id.replace(/[^a-z0-9]+/gi, '_')}`;
+            const packagedGuardSession = {
+              user: { id: subjectId, role: 'user', name: `Phase 13C ${spec.title}` },
+            };
+            state.session = packagedGuardSession;
+            state.governance = governance;
+            if (spec.schema && !state.db?.collection?.(packagedGuardCollection)) {
+              const schemaModule = await import(spec.schema);
+              const missingCollections = {};
+              for (const name of spec.collections) {
+                if (state.db?.collection?.(name) || !schemaModule.collections?.[name]) continue;
+                missingCollections[name] = { schema: schemaModule.collections[name] };
+              }
+              if (Object.keys(missingCollections).length) {
+                await state.db?.raw?.addCollections?.(missingCollections);
+              }
+            }
+            await waitFor(() => {
+              let collection = null;
+              try {
+                collection = state.db?.collection?.(packagedGuardCollection) || null;
+              } catch {
+                collection = null;
+              }
+              return {
+                ok: Boolean(collection),
+                module_id: packagedGuardModule.id,
+                collection: packagedGuardCollection,
+                collections: Object.keys(state.db?.raw || {}).slice(0, 20),
+              };
+            }, 15000, `P13C packaged guard collection ${spec.id}`);
+            await state.sync?.startCollection?.(packagedGuardCollection);
+            const packagedGuardDb = smoke.createLiveDbFacade(packagedGuardModule);
+            const packagedGuardContext = smoke.createModuleContext(packagedGuardModule);
+            const packagedGuardContextDb = packagedGuardContext?.db;
+            if (!packagedGuardContextDb?.collection) {
+              throw new Error(`P13C packaged guard context did not expose ctx.db.collection for ${spec.id}`);
+            }
+            const packagedGuardContextPermissions = packagedGuardContext?.permissions || null;
+            const packagedGuardCapabilities = packagedGuardContext?.runtimeCapabilities || {};
+            const packagedGuardCapabilityContract = packagedGuardCapabilities.database?.guarded === true
+              && packagedGuardCapabilities.database?.raw === 'guarded-deny-without-data-grant'
+              && packagedGuardCapabilities.database?.collection_properties === 'guarded-deny-without-data-grant'
+              && packagedGuardCapabilities.database?.cached_handles === 'guarded-deny-without-data-grant';
+            const packagedGuardContextPermissionFacadeDenied =
+              packagedGuardContextPermissions?.canReadCollection?.(packagedGuardCollection) === false
+              && packagedGuardContextPermissions?.canWriteCollection?.(packagedGuardCollection) === false;
+            const packagedGuardReadDenied = await assertDenied(`P13C ${spec.id} read without data.read`, () => {
+              packagedGuardDb.collection(packagedGuardCollection).findOne(recordId);
+            });
+            const packagedGuardPropertyDenied = await assertDenied(`P13C ${spec.id} property read without data.read`, () => {
+              packagedGuardDb[packagedGuardCollection].findOne(recordId);
+            });
+            const packagedGuardRawDenied = await assertDenied(`P13C ${spec.id} raw read without data.read`, () => {
+              packagedGuardDb.raw[packagedGuardCollection].findOne(recordId);
+            });
+            const packagedGuardContextDenied = await assertDenied(`P13C ${spec.id} real context read without data.read`, () => {
+              packagedGuardContextDb.collection(packagedGuardCollection).findOne(recordId);
+            });
+            const packagedGuardContextPropertyDenied = await assertDenied(`P13C ${spec.id} real context property read without data.read`, () => {
+              packagedGuardContextDb[packagedGuardCollection].findOne(recordId);
+            });
+            governance.permission_model.explicit_grants.push({
+              grant_id: `phase13c_${spec.id.replace(/[^a-z0-9]+/gi, '_')}_read_${packagedGuardCollection}`,
+              subject_type: 'user',
+              subject_id: packagedGuardSession.user.id,
+              permission: BusinessOsPermissions.DataRead,
+              scope_type: 'collection',
+              scope_id: packagedGuardCollection,
+              active: true,
+            });
+            state.governance = governance;
+            const packagedGuardReadQuery = smoke.createLiveDbFacade(packagedGuardModule)
+              .collection(packagedGuardCollection)
+              .findOne(recordId);
+            const packagedGuardReadAllowedAfterGrant = Boolean(
+              packagedGuardReadQuery && typeof packagedGuardReadQuery.exec === 'function'
+            );
+            const packagedGuardContextPermissionFacadeReadAllowed =
+              packagedGuardContextPermissions?.canReadCollection?.(packagedGuardCollection) === true
+              && packagedGuardContextPermissions?.canWriteCollection?.(packagedGuardCollection) === false;
+            const packagedGuardWriteDeniedWithoutGrant = await assertDenied(`P13C ${spec.id} write without data.write`, () => {
+              return smoke.createLiveDbFacade(packagedGuardModule)
+                .collection(packagedGuardCollection)
+                .insert({
+                  id: recordId,
+                  command_id: recordId,
+                  module: packagedGuardModule.id,
+                  command_type: 'phase13c.packaged_guard.write',
+                  status: 'pending_sync',
+                  payload: {},
+                  client_context: { source: 'phase13c-packaged-guard-smoke' },
+                  updated_at_ms: Date.now(),
+                });
+            });
+            packagedGuardResults.push({
+              module: packagedGuardModule,
+              moduleId: packagedGuardModule.id,
+              collection: packagedGuardCollection,
+              capabilityContract: packagedGuardCapabilityContract,
+              readDenied: packagedGuardReadDenied,
+              propertyDenied: packagedGuardPropertyDenied,
+              rawDenied: packagedGuardRawDenied,
+              contextDenied: packagedGuardContextDenied,
+              contextPropertyDenied: packagedGuardContextPropertyDenied,
+              readAllowedAfterGrant: packagedGuardReadAllowedAfterGrant,
+              contextPermissionFacadeDenied: packagedGuardContextPermissionFacadeDenied,
+              contextPermissionFacadeReadAllowed: packagedGuardContextPermissionFacadeReadAllowed,
+              writeDeniedWithoutGrant: packagedGuardWriteDeniedWithoutGrant,
+              capabilities: packagedGuardCapabilities,
+            });
+          }
+          const firstPackagedGuardResult = packagedGuardResults[0] || {};
+          const packagedGuardModule = firstPackagedGuardResult.module || {};
+          const packagedGuardCollection = firstPackagedGuardResult.collection || '';
+          const packagedGuardCapabilityContract = firstPackagedGuardResult.capabilityContract === true;
+          const packagedGuardReadDenied = firstPackagedGuardResult.readDenied === true;
+          const packagedGuardPropertyDenied = firstPackagedGuardResult.propertyDenied === true;
+          const packagedGuardRawDenied = firstPackagedGuardResult.rawDenied === true;
+          const packagedGuardContextDenied = firstPackagedGuardResult.contextDenied === true;
+          const packagedGuardContextPropertyDenied = firstPackagedGuardResult.contextPropertyDenied === true;
+          const packagedGuardReadAllowedAfterGrant = firstPackagedGuardResult.readAllowedAfterGrant === true;
+          const packagedGuardContextPermissionFacade = firstPackagedGuardResult.contextPermissionFacadeDenied === true
+            && firstPackagedGuardResult.contextPermissionFacadeReadAllowed === true;
+          const packagedGuardWriteDeniedWithoutGrant = firstPackagedGuardResult.writeDeniedWithoutGrant === true;
+          const packagedGuardBatchCoverage = packagedGuardResults.length === packagedGuardSpecs.length;
+          const packagedGuardModules = packagedGuardResults.map((item) => item.moduleId).join(',');
+          const packagedGuardCollections = packagedGuardResults.map((item) => item.collection).join(',');
+          const packagedGuardAllCapabilityContracts = packagedGuardBatchCoverage
+            && packagedGuardResults.every((item) => item.capabilityContract === true);
+          const packagedGuardAllReadDenied = packagedGuardBatchCoverage
+            && packagedGuardResults.every((item) => item.readDenied === true);
+          const packagedGuardAllPropertyDenied = packagedGuardBatchCoverage
+            && packagedGuardResults.every((item) => item.propertyDenied === true && item.contextPropertyDenied === true);
+          const packagedGuardAllRawDenied = packagedGuardBatchCoverage
+            && packagedGuardResults.every((item) => item.rawDenied === true);
+          const packagedGuardAllContextDenied = packagedGuardBatchCoverage
+            && packagedGuardResults.every((item) => item.contextDenied === true);
+          const packagedGuardAllReadGrantsAllowed = packagedGuardBatchCoverage
+            && packagedGuardResults.every((item) => item.readAllowedAfterGrant === true);
+          const packagedGuardAllContextPermissionFacades = packagedGuardBatchCoverage
+            && packagedGuardResults.every((item) => (
+              item.contextPermissionFacadeDenied === true
+              && item.contextPermissionFacadeReadAllowed === true
+            ));
+          const packagedGuardAllWritesDeniedWithoutWrite = packagedGuardBatchCoverage
+            && packagedGuardResults.every((item) => item.writeDeniedWithoutGrant === true);
+          const systemScopedSpecs = Object.freeze([
+            { id: 'app-store', allowed: 'business_commands', foreign: 'ctox_runtime_settings' },
+            { id: 'browser', allowed: 'business_commands', foreign: 'business_module_catalog' },
+            { id: 'creator', allowed: 'business_commands', foreign: 'ctox_runtime_settings' },
+            { id: 'ctox', allowed: 'business_commands', foreign: 'business_module_catalog' },
+            { id: 'desktop', allowed: 'business_commands', foreign: 'business_module_catalog' },
+            { id: 'knowledge', allowed: 'business_commands', foreign: 'business_module_catalog' },
+            { id: 'reports', allowed: 'business_commands', foreign: 'business_module_catalog' },
+            { id: 'tickets', allowed: 'business_commands', foreign: 'business_module_catalog' },
+          ]);
+          const resolveSystemScopedModule = (spec) => (Array.isArray(state.modules) ? state.modules : [])
+            .find((module) => module?.id === spec.id)
+            || launchTargets.find((module) => module?.id === spec.id)
+            || { id: spec.id, title: spec.id, collections: [spec.allowed] };
+          const systemScopedResults = [];
+          for (const spec of systemScopedSpecs) {
+            const module = resolveSystemScopedModule(spec);
+            const context = smoke.createModuleContext(module);
+            const db = context?.db;
+            const permissions = context?.permissions || {};
+            const capabilities = context?.runtimeCapabilities || {};
+            const allowedHandle = db?.collection?.(spec.allowed) || null;
+            const foreignCollection = db?.collection?.(spec.foreign) || null;
+            const foreignProperty = db?.[spec.foreign] || null;
+            const foreignRaw = db?.raw?.[spec.foreign] || null;
+            const foreignCollectionsProxy = db?.collections?.[spec.foreign] || null;
+            const permissionFacade = permissions.canReadCollection?.(spec.allowed) === true
+              && permissions.canWriteCollection?.(spec.allowed) === true
+              && permissions.canReadCollection?.(spec.foreign) === false
+              && permissions.canWriteCollection?.(spec.foreign) === false;
+            const capabilityContract = capabilities.database?.scoped_system === true
+              && capabilities.database?.guarded === false
+              && capabilities.database?.raw === 'scoped-system-allowlist'
+              && capabilities.database?.collection_properties === 'scoped-system-allowlist'
+              && Array.isArray(capabilities.database?.allowed_collections)
+              && capabilities.database.allowed_collections.includes(spec.allowed)
+              && !capabilities.database.allowed_collections.includes(spec.foreign);
+            systemScopedResults.push({
+              moduleId: module?.id || spec.id,
+              allowed: spec.allowed,
+              foreign: spec.foreign,
+              allowedAvailable: Boolean(allowedHandle),
+              foreignDenied: !foreignCollection && !foreignProperty,
+              rawForeignDenied: !foreignRaw && !foreignCollectionsProxy,
+              permissionFacade,
+              capabilityContract,
+              capabilities: capabilities.database || null,
+            });
+          }
+          const systemScopedModules = systemScopedResults.map((item) => item.moduleId).join(',');
+          const systemScopedBatchCoverage = systemScopedResults.length === systemScopedSpecs.length;
+          const systemScopedAllowed = systemScopedBatchCoverage
+            && systemScopedResults.every((item) => item.allowedAvailable === true);
+          const systemScopedForeignDenied = systemScopedBatchCoverage
+            && systemScopedResults.every((item) => item.foreignDenied === true);
+          const systemScopedRawForeignDenied = systemScopedBatchCoverage
+            && systemScopedResults.every((item) => item.rawForeignDenied === true);
+          const systemScopedPermissionFacade = systemScopedBatchCoverage
+            && systemScopedResults.every((item) => item.permissionFacade === true);
+          const systemScopedCapabilityContract = systemScopedBatchCoverage
+            && systemScopedResults.every((item) => item.capabilityContract === true);
+          state.session = teamSession;
+          state.governance = governance;
+          globalThis.CTOX_BUSINESS_OS_SESSION = teamSession;
+          const supportGuardSpec = packagedGuardSpecs.find((spec) => spec.id === 'support');
+          const supportGuardModule = supportGuardSpec ? resolvePackagedGuardModule(supportGuardSpec) : null;
+          if (supportGuardModule && !(Array.isArray(state.modules) ? state.modules : []).some((item) => item?.id === supportGuardModule.id)) {
+            state.modules = [...(Array.isArray(state.modules) ? state.modules : []), supportGuardModule];
+          }
+          if (!supportGuardModule || typeof state.openModule !== 'function') {
+            throw new Error('P13C packaged guard shell locked-state support module or openModule is unavailable');
+          }
+          await state.openModule(supportGuardModule.id, { force: true, asModule: true });
+          const packagedGuardShellLockedState = await waitFor(() => {
+            const locked = document.querySelector('[data-module-permission-denied="true"]');
+            return {
+              ok: Boolean(
+                locked
+                && state.activeModule?.id === supportGuardModule.id
+                && locked.getAttribute('data-permission') === BusinessOsPermissions.DataRead
+              ),
+              module_id: state.activeModule?.id || '',
+              permission: locked?.getAttribute('data-permission') || '',
+              collection: locked?.getAttribute('data-collection') || '',
+              text: locked?.textContent?.trim().replace(/\s+/g, ' ').slice(0, 220) || '',
+            };
+          }, 15000, 'P13C packaged guard shell locked state');
+
+          const storageKeys = typeof smoke.storageKeys === 'function' ? smoke.storageKeys() : {};
+          const expectedStorageKeys = {
+            taskbarPins: 'ctox.businessOs.taskbarPins',
+            moduleLayout: 'ctox.businessOs.moduleLayout',
+            accountPreferences: 'ctox.businessOs.accountPreferences',
+            pairingConfig: 'ctox.businessOs.pairingConfig',
+          };
+          const scopedStorageKeyValues = Object.entries(expectedStorageKeys)
+            .map(([name, baseKey]) => ({ name, baseKey, key: storageKeys?.[name] || '' }));
+          const actorScopedNames = new Set(['taskbarPins', 'moduleLayout', 'accountPreferences']);
+          const storageKeysScoped = Boolean(storageKeys.workspace)
+            && Boolean(storageKeys.actor)
+            && scopedStorageKeyValues.every(({ name, baseKey, key }) => {
+              if (typeof key !== 'string' || key === baseKey || !key.includes('.scope.')) return false;
+              if (!key.includes(storageKeys.workspace)) return false;
+              if (actorScopedNames.has(name) && !key.includes(storageKeys.actor)) return false;
+              return true;
+            });
+          const realContextStorageScope = realContext?.storageScope || {};
+          const moduleStorageScopeContract = realContextStorageScope.version === 'business-os-storage-scope-v1'
+            && realContextStorageScope.module_id === teamModule.id
+            && realContextStorageScope.workspace === storageKeys.workspace
+            && realContextStorageScope.actor === storageKeys.actor
+            && typeof realContextStorageScope.key === 'function'
+            && realContextStorageScope.key('ctox.app-store.leftWidth').includes('.scope.')
+            && realContextStorageScope.key('ctox.app-store.leftWidth').includes(teamModule.id);
+
+          const status = await globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({
+            includeCounts: false,
+            requiredCollections: ['business_module_catalog', 'ctox_runtime_settings', 'business_commands'],
+          });
+          if (status?.version !== 'business-os-advanced-status-v1') {
+            throw new Error(`dynamic apps UI smoke lost advanced status evidence: ${JSON.stringify(status)}`);
+          }
+
+          const privateHiddenForTeam = helperPrivateHiddenForTeam
+            && !teamTabs.privateTabVisible;
+          const privateVisibleForBuilder = helperPrivateVisibleForBuilder
+            && builderTabs.privateTabVisible
+            && builderTabs.privateBadgeState === 'private'
+            && builderTabs.privateBadgeText === 'Privat';
+          const teamVisibleForReleased = helperTeamVisibleForTeam
+            && teamTabs.teamTabVisible
+            && teamTabs.teamBadgeState === 'team'
+            && teamTabs.teamBadgeText === 'Team';
+          const restrictedHiddenForTeamAndVisibleForBuilder = restrictedHiddenForTeam
+            && !teamTabs.restrictedTabVisible
+            && builderTabs.restrictedTabVisible
+            && builderTabs.restrictedBadgeState === 'restricted'
+            && builderTabs.restrictedBadgeText === 'Eingeschränkt';
+          const lifecycleBadgesVisible = privateLifecycle.version === 'v0.1.0'
+            && privateLifecycle.text === 'Privat'
+            && teamLifecycle.version === 'v1.0.0'
+            && teamLifecycle.text === 'Team'
+            && restrictedLifecycle.version === 'v1.0.0'
+            && restrictedLifecycle.text === 'Eingeschränkt'
+            && builderTabs.invalidBadgeState === 'private';
+          const launcherBadgesVisible = builderLauncher.privateLauncherBadgeState === 'private'
+            && builderLauncher.privateLauncherBadgeText === 'v0.1.0 Privat'
+            && builderLauncher.teamLauncherBadgeState === 'team'
+            && builderLauncher.teamLauncherBadgeText === 'v1.0.0 Team'
+            && builderLauncher.invalidLauncherBadgeState === 'private'
+            && builderLauncher.restrictedLauncherBadgeState === 'restricted'
+            && teamLauncher.teamLauncherBadgeState === 'team'
+            && !teamLauncher.labels.includes(privateModule.title);
+          const lifecycleDrawerManagerState = Boolean(managerDrawer?.ok);
+          const lifecycleDrawerReadonlyState = Boolean(readonlyDrawer?.ok)
+            && !teamTabsForLauncher.privateTabVisible
+            && teamTabsForLauncher.teamTabVisible;
+          const lifecycleDrawerVisible = Boolean(drawer?.ok);
+          const lifecycleWhyDiagnosticsVisible = managerDrawer?.why?.visible === true
+            && readonlyDrawer?.why?.visible === true;
+          const lifecycleWhyDiagnosticsRows = ['actor', 'visibility', 'open', 'modify', 'source', 'release', 'rollback', 'data']
+            .every((key) => managerDrawer?.why?.rowKeys?.includes(key))
+            && ['visibility', 'modify', 'release', 'data']
+              .every((key) => readonlyDrawer?.why?.rowKeys?.includes(key));
+          const lifecycleWhyDiagnosticsData = managerDrawer?.why?.dataCollections?.includes('business_commands')
+            && readonlyDrawer?.why?.dataCollections?.includes('business_commands');
+          const checks = {
+            privateHiddenForTeam,
+            privateVisibleForBuilder,
+            teamVisibleForReleased,
+            restrictedHiddenForTeamAndVisibleForBuilder,
+            lifecycleBadgesVisible,
+            launcherBadgesVisible,
+            lifecycleDrawerManagerState,
+            lifecycleDrawerReadonlyState,
+            lifecycleDrawerVisible,
+            lifecycleWhyDiagnosticsVisible,
+            lifecycleWhyDiagnosticsRows,
+            lifecycleWhyDiagnosticsData,
+            dbReadDenied,
+            dbRawDenied,
+            realContextCollectionDenied,
+            realContextPropertyDenied,
+            realContextCachedDenied,
+            realContextRawDenied,
+            openModuleReloadMounted,
+            openModuleCollectionDenied,
+            openModulePropertyDenied,
+            openModuleCachedDenied,
+            openModuleRawDenied,
+            openModuleRuntimeSafetyContract,
+            openModuleRuntimeSafetyCapabilities,
+            dbReadGrantAllowed,
+            realContextCachedReadGrantAllowed,
+            dbWriteDeniedWithoutWrite,
+            facadeReadAllowed,
+            facadeWriteDenied,
+            packagedGuardCapabilityContract,
+            packagedGuardReadDenied,
+            packagedGuardPropertyDenied,
+            packagedGuardRawDenied,
+            packagedGuardContextDenied,
+            packagedGuardContextPropertyDenied,
+            packagedGuardReadAllowedAfterGrant,
+            packagedGuardContextPermissionFacade,
+            packagedGuardWriteDeniedWithoutGrant,
+            packagedGuardShellLockedState: Boolean(packagedGuardShellLockedState?.ok),
+            packagedGuardBatchCoverage,
+            packagedGuardAllCapabilityContracts,
+            packagedGuardAllReadDenied,
+            packagedGuardAllPropertyDenied,
+            packagedGuardAllRawDenied,
+            packagedGuardAllContextDenied,
+            packagedGuardAllReadGrantsAllowed,
+            packagedGuardAllContextPermissionFacades,
+            packagedGuardAllWritesDeniedWithoutWrite,
+            systemScopedAllowed,
+            systemScopedForeignDenied,
+            systemScopedRawForeignDenied,
+            systemScopedPermissionFacade,
+            systemScopedCapabilityContract,
+            storageKeysScoped,
+            moduleStorageScopeContract,
+            invalidVersionPrivate,
+            reloadVerified: Boolean(dynamicAppsReloadVerified),
+          };
+          const failed = Object.entries(checks).filter(([, value]) => value !== true);
+          if (failed.length) {
+            throw new Error(`dynamic apps UI smoke failed: ${JSON.stringify({
+              failed,
+              teamTabs,
+              builderTabs,
+              privateLifecycle,
+              teamLifecycle,
+              restrictedLifecycle,
+              invalidLifecycle,
+              builderLauncher,
+              teamLauncher,
+              managerDrawer,
+              readonlyDrawer,
+              drawerText: drawer?.text || '',
+              openModuleGuard: openModuleGuard?.guard || null,
+              packagedGuard: {
+                module_id: packagedGuardModule?.id || '',
+                collection: packagedGuardCollection,
+                modules: packagedGuardModules,
+                collections: packagedGuardCollections,
+                results: packagedGuardResults.map((item) => ({
+                  module_id: item.moduleId,
+                  collection: item.collection,
+                  capabilityContract: item.capabilityContract,
+                  readDenied: item.readDenied,
+                  propertyDenied: item.propertyDenied,
+                  rawDenied: item.rawDenied,
+                  contextDenied: item.contextDenied,
+                  contextPropertyDenied: item.contextPropertyDenied,
+                  readAllowedAfterGrant: item.readAllowedAfterGrant,
+                  contextPermissionFacadeDenied: item.contextPermissionFacadeDenied,
+                  contextPermissionFacadeReadAllowed: item.contextPermissionFacadeReadAllowed,
+                  writeDeniedWithoutGrant: item.writeDeniedWithoutGrant,
+                  capabilities: item.capabilities?.database || null,
+                })),
+                shellLockedState: packagedGuardShellLockedState || null,
+              },
+              systemScoped: {
+                modules: systemScopedModules,
+                results: systemScopedResults,
+              },
+              storageKeys,
+              realContextStorageScope: {
+                version: realContextStorageScope.version,
+                workspace: realContextStorageScope.workspace,
+                actor: realContextStorageScope.actor,
+                module_id: realContextStorageScope.module_id,
+                sampleKey: typeof realContextStorageScope.key === 'function'
+                  ? realContextStorageScope.key('ctox.app-store.leftWidth')
+                  : '',
+              },
+            }, null, 2)}`);
+          }
+          result = {
+            mode: smokeMode,
+            privateModuleId: privateModule.id,
+            teamModuleId: teamModule.id,
+            privateHiddenForTeam,
+            privateVisibleForBuilder,
+            teamVisibleForReleased,
+            restrictedHiddenForTeamAndVisibleForBuilder,
+            lifecycleBadgesVisible,
+            launcherBadgesVisible,
+            lifecycleDrawerManagerState,
+            lifecycleDrawerReadonlyState,
+            lifecycleDrawerVisible,
+            lifecycleWhyDiagnosticsVisible,
+            lifecycleWhyDiagnosticsRows,
+            lifecycleWhyDiagnosticsData,
+            dbReadDenied,
+            dbRawDenied,
+            realContextCollectionDenied,
+            realContextPropertyDenied,
+            realContextCachedDenied,
+            realContextRawDenied,
+            openModuleReloadMounted,
+            openModuleCollectionDenied,
+            openModulePropertyDenied,
+            openModuleCachedDenied,
+            openModuleRawDenied,
+            openModuleRuntimeSafetyContract,
+            openModuleRuntimeSafetyCapabilities,
+            dbReadGrantAllowed,
+            realContextCachedReadGrantAllowed,
+            dbWriteDeniedWithoutWrite,
+            facadeReadAllowed,
+            facadeWriteDenied,
+            packagedGuardModuleId: packagedGuardModule.id,
+            packagedGuardCollection,
+            packagedGuardCapabilityContract,
+            packagedGuardReadDenied,
+            packagedGuardPropertyDenied,
+            packagedGuardRawDenied,
+            packagedGuardContextDenied,
+            packagedGuardContextPropertyDenied,
+            packagedGuardReadAllowedAfterGrant,
+            packagedGuardContextPermissionFacade,
+            packagedGuardWriteDeniedWithoutGrant,
+            packagedGuardShellLockedState: Boolean(packagedGuardShellLockedState?.ok),
+            packagedGuardModules,
+            packagedGuardCollections,
+            packagedGuardBatchCount: packagedGuardResults.length,
+            packagedGuardBatchCoverage,
+            packagedGuardAllCapabilityContracts,
+            packagedGuardAllReadDenied,
+            packagedGuardAllPropertyDenied,
+            packagedGuardAllRawDenied,
+            packagedGuardAllContextDenied,
+            packagedGuardAllReadGrantsAllowed,
+            packagedGuardAllContextPermissionFacades,
+            packagedGuardAllWritesDeniedWithoutWrite,
+            systemScopedModules,
+            systemScopedCount: systemScopedResults.length,
+            systemScopedAllowed,
+            systemScopedForeignDenied,
+            systemScopedRawForeignDenied,
+            systemScopedPermissionFacade,
+            systemScopedCapabilityContract,
+            storageKeysScoped,
+            moduleStorageScopeContract,
+            storageKeys,
+            invalidVersionPrivate,
+            reloadVerified: Boolean(dynamicAppsReloadVerified),
+            authState: document.body?.dataset?.authState || (state.session?.user?.id ? 'local-session' : 'unknown'),
+            advancedStatusVersion: status.version || '',
+            advancedStatusRuntime: status.rxdbRuntime || null,
+          };
+        } finally {
+          document.querySelector('[data-close-lifecycle]')?.dispatchEvent(new MouseEvent('click', {
+            bubbles: true,
+            cancelable: true,
+          }));
+          state.modules = originalState.modules;
+          state.taskbarPins = originalState.taskbarPins;
+          state.moduleAllowlist = originalState.moduleAllowlist;
+          state.session = originalState.session;
+          state.governance = originalState.governance;
+          globalThis.CTOX_BUSINESS_OS_SESSION = originalState.globalSession;
+          smoke.renderTabs();
+        }
+        return result;
+      }
+
+      async function runBusinessOsAppAudienceUiSmoke() {
+        const waitFor = async (predicate, ms, label) => {
+          const deadline = Date.now() + ms;
+          let last = null;
+          while (Date.now() < deadline) {
+            last = await predicate();
+            if (last?.ok) return last;
+            await delay(100);
+          }
+          throw new Error(`${label} timed out: ${JSON.stringify(last)}`);
+        };
+        const css = (value) => {
+          if (globalThis.CSS?.escape) return globalThis.CSS.escape(String(value));
+          return String(value).replace(/["\\]/g, '\\$&');
+        };
+        const smoke = globalThis.ctoxBusinessOsSmoke;
+        const state = globalThis.CTOX_BUSINESS_OS_APP || smoke?.state || appState;
+        if (!state) throw new Error('Business OS app state is unavailable for app audience UI smoke');
+        if (typeof smoke?.renderTabs !== 'function') throw new Error('Business OS smoke renderTabs hook is unavailable');
+        if (typeof state.openModule !== 'function') throw new Error('Business OS state.openModule is unavailable for app audience UI smoke');
+        appState = state;
+
+        const [
+          permissionsMod,
+          lifecycleMod,
+        ] = await Promise.all([
+          import('/shared/permissions.js'),
+          import('/shared/app-lifecycle.js'),
+        ]);
+        const { BusinessOsPermissions } = permissionsMod;
+        const {
+          appLifecycleBadge,
+          canSeeModuleForAppVersion,
+        } = lifecycleMod;
+        const privateModule = {
+          id: 'phase11-private-audience-app',
+          title: 'Phase 11 Private Audience App',
+          glyph: 'P11',
+          version: '0.2.0',
+          source: 'installed',
+          install_scope: 'installed',
+          entry: 'installed-modules/phase11-private-audience-app/index.js',
+          collections: ['business_commands'],
+        };
+        const previewModule = {
+          id: 'phase11-preview-audience-app',
+          title: 'Phase 11 Preview Audience App',
+          glyph: 'V11',
+          version: '0.4.0',
+          source: 'installed',
+          install_scope: 'installed',
+          entry: 'installed-modules/phase11-preview-audience-app/index.js',
+          collections: ['business_commands'],
+          lifecycle: {
+            runtime_installed: true,
+            visibility_state: 'preview',
+            audience: 'preview',
+            preview_user_ids: ['preview_target'],
+          },
+        };
+        const restrictedModule = {
+          id: 'phase11-restricted-audience-app',
+          title: 'Phase 11 Restricted Audience App',
+          glyph: 'S11',
+          version: '1.1.0',
+          source: 'installed',
+          install_scope: 'installed',
+          entry: 'installed-modules/phase11-restricted-audience-app/index.js',
+          collections: ['business_commands'],
+          lifecycle: {
+            runtime_installed: true,
+            visibility_state: 'restricted',
+            audience: 'restricted',
+          },
+        };
+        const allPermissions = Object.values(BusinessOsPermissions);
+        const governance = {
+          founders: {},
+          permission_model: {
+            version: 1,
+            deny_supported: false,
+            role_defaults: {
+              chef: {
+                workspace: allPermissions,
+                module: allPermissions,
+                assigned_module: allPermissions,
+              },
+              admin: {
+                workspace: allPermissions,
+                module: allPermissions,
+                assigned_module: allPermissions,
+              },
+              founder: {
+                workspace: [],
+                module: [],
+                assigned_module: [
+                  BusinessOsPermissions.AppsView,
+                  BusinessOsPermissions.AppsModify,
+                  BusinessOsPermissions.AppsSourceView,
+                ],
+              },
+              user: {
+                workspace: [],
+                module: [],
+                assigned_module: [],
+              },
+            },
+            module_assignments: {},
+            explicit_grants: [
+              {
+                grant_id: 'phase11_preview_target_view',
+                subject_type: 'user',
+                subject_id: 'preview_target',
+                permission: BusinessOsPermissions.AppsView,
+                scope_type: 'module',
+                scope_id: previewModule.id,
+                active: true,
+              },
+              {
+                grant_id: 'phase11_restricted_target_view',
+                subject_type: 'user',
+                subject_id: 'restricted_target',
+                permission: BusinessOsPermissions.AppsView,
+                scope_type: 'module',
+                scope_id: restrictedModule.id,
+                active: true,
+              },
+            ],
+          },
+        };
+        const sessionFor = (id, role = 'user') => ({ user: { id, role } });
+        const outsideSession = sessionFor('outside_user', 'user');
+        const previewSession = sessionFor('preview_target', 'user');
+        const insertedIds = new Set([privateModule.id, previewModule.id, restrictedModule.id]);
+        const originalState = {
+          modules: Array.isArray(state.modules) ? [...state.modules] : [],
+          taskbarPins: Array.isArray(state.taskbarPins) ? [...state.taskbarPins] : [],
+          moduleAllowlist: Array.isArray(state.moduleAllowlist) ? [...state.moduleAllowlist] : state.moduleAllowlist,
+          session: state.session,
+          governance: state.governance,
+          activeModule: state.activeModule,
+          globalSession: globalThis.CTOX_BUSINESS_OS_SESSION,
+          storedTaskbarPins: localStorage.getItem('ctox.businessOs.taskbarPins'),
+          storedFakeAudience: localStorage.getItem('ctox.businessOs.fakeAudience'),
+        };
+        const temporaryVisibleIds = [privateModule.id, previewModule.id, restrictedModule.id];
+        const installAudienceModules = (session) => {
+          state.session = session;
+          state.governance = governance;
+          globalThis.CTOX_BUSINESS_OS_SESSION = session;
+          state.modules = [
+            ...originalState.modules.filter((mod) => !insertedIds.has(mod?.id)),
+            privateModule,
+            previewModule,
+            restrictedModule,
+          ];
+          state.moduleAllowlist = [...new Set([
+            ...(Array.isArray(state.moduleAllowlist)
+              ? state.moduleAllowlist.map((id) => String(id || '').trim()).filter(Boolean)
+              : []),
+            ...temporaryVisibleIds,
+          ])];
+          state.taskbarPins = [...temporaryVisibleIds];
+          smoke.renderTabs();
+        };
+        const tabEvidence = () => {
+          const privateTab = document.querySelector(`.module-tab[data-target="${css(privateModule.id)}"]`);
+          const previewTab = document.querySelector(`.module-tab[data-target="${css(previewModule.id)}"]`);
+          const restrictedTab = document.querySelector(`.module-tab[data-target="${css(restrictedModule.id)}"]`);
+          const previewBadge = document.querySelector(`[data-app-lifecycle-badge="${css(previewModule.id)}"]`);
+          const restrictedBadge = document.querySelector(`[data-app-lifecycle-badge="${css(restrictedModule.id)}"]`);
+          return {
+            privateTabVisible: Boolean(privateTab),
+            previewTabVisible: Boolean(previewTab),
+            restrictedTabVisible: Boolean(restrictedTab),
+            previewBadgeState: previewBadge?.getAttribute('data-state') || '',
+            previewBadgeText: previewBadge?.textContent?.trim() || '',
+            restrictedBadgeState: restrictedBadge?.getAttribute('data-state') || '',
+            restrictedBadgeText: restrictedBadge?.textContent?.trim() || '',
+            activeModule: state.activeModule?.id || '',
+            bodyActiveModule: document.body?.dataset?.activeModule || '',
+            statusText: document.querySelector('[data-status-text]')?.textContent || '',
+          };
+        };
+        const installAndWait = async (session, label, predicate) => waitFor(() => {
+          installAudienceModules(session);
+          const tabs = tabEvidence();
+          return {
+            ok: predicate(tabs),
+            ...tabs,
+          };
+        }, 8000, `app audience ${label} tabs`);
+
+        let result = null;
+        try {
+          const helperPrivateHiddenForTeam = !canSeeModuleForAppVersion(privateModule, {
+            session: outsideSession,
+            governance,
+          });
+          const helperPreviewVisibleForTarget = canSeeModuleForAppVersion(previewModule, {
+            session: previewSession,
+            governance,
+          });
+          const helperPreviewHiddenForOutside = !canSeeModuleForAppVersion(previewModule, {
+            session: outsideSession,
+            governance,
+          });
+          const helperRestrictedHiddenForOutside = !canSeeModuleForAppVersion(restrictedModule, {
+            session: outsideSession,
+            governance,
+          });
+          const previewLifecycle = appLifecycleBadge(previewModule, {
+            session: previewSession,
+            governance,
+          });
+          const restrictedLifecycle = appLifecycleBadge(restrictedModule, {
+            session: sessionFor('restricted_target', 'user'),
+            governance,
+          });
+
+          const outsideTabs = await installAndWait(
+            outsideSession,
+            'outside actor',
+            (tabs) => !tabs.privateTabVisible && !tabs.previewTabVisible && !tabs.restrictedTabVisible,
+          );
+          const previewTabs = await installAndWait(
+            previewSession,
+            'preview actor',
+            (tabs) => !tabs.privateTabVisible
+              && tabs.previewTabVisible
+              && !tabs.restrictedTabVisible
+              && tabs.previewBadgeState === 'preview'
+              && tabs.previewBadgeText === 'Vorschau',
+          );
+
+          installAudienceModules(outsideSession);
+          const fallbackBefore = state.activeModule?.id || '';
+          await state.openModule(previewModule.id, { force: true });
+          const deepLinkTabs = tabEvidence();
+          const deepLinkLockedOutside = deepLinkTabs.activeModule !== previewModule.id
+            && deepLinkTabs.bodyActiveModule !== previewModule.id
+            && document.body?.dataset?.moduleLoading !== previewModule.id
+            && /nicht sichtbar|not visible/i.test(deepLinkTabs.statusText);
+
+          tamperedScopedTaskbarPinsKey = typeof smoke.storageKeys === 'function'
+            ? smoke.storageKeys()?.taskbarPins || ''
+            : '';
+          if (tamperedScopedTaskbarPinsKey) {
+            storedScopedTaskbarPins = localStorage.getItem(tamperedScopedTaskbarPinsKey);
+          }
+          const tamperedPins = JSON.stringify([
+            privateModule.id,
+            previewModule.id,
+            restrictedModule.id,
+          ]);
+          localStorage.setItem('ctox.businessOs.taskbarPins', tamperedPins);
+          if (tamperedScopedTaskbarPinsKey) localStorage.setItem(tamperedScopedTaskbarPinsKey, tamperedPins);
+          localStorage.setItem('ctox.businessOs.fakeAudience', JSON.stringify({
+            [privateModule.id]: ['outside_user'],
+            [previewModule.id]: ['outside_user'],
+            [restrictedModule.id]: ['outside_user'],
+          }));
+          const storageTamperedTabs = await installAndWait(
+            outsideSession,
+            'storage tampered outside actor',
+            (tabs) => !tabs.privateTabVisible && !tabs.previewTabVisible && !tabs.restrictedTabVisible,
+          );
+          localStorage.removeItem('ctox.businessOs.taskbarPins');
+          if (tamperedScopedTaskbarPinsKey) localStorage.removeItem(tamperedScopedTaskbarPinsKey);
+          localStorage.removeItem('ctox.businessOs.fakeAudience');
+          const freshProfileTabs = await installAndWait(
+            previewSession,
+            'fresh profile preview actor',
+            (tabs) => tabs.previewTabVisible && !tabs.privateTabVisible && !tabs.restrictedTabVisible,
+          );
+
+          const status = await globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({
+            includeCounts: false,
+            requiredCollections: ['business_module_catalog', 'ctox_runtime_settings'],
+          });
+          if (status?.version !== 'business-os-advanced-status-v1') {
+            throw new Error(`app audience UI smoke lost advanced status evidence: ${JSON.stringify(status)}`);
+          }
+
+          const privateHiddenForTeam = helperPrivateHiddenForTeam
+            && !outsideTabs.privateTabVisible;
+          const previewVisibleForTarget = helperPreviewVisibleForTarget
+            && previewTabs.previewTabVisible
+            && previewLifecycle.text === 'Vorschau'
+            && previewLifecycle.version === 'v0.4.0';
+          const previewHiddenForOutside = helperPreviewHiddenForOutside
+            && !outsideTabs.previewTabVisible;
+          const restrictedHiddenForOutside = helperRestrictedHiddenForOutside
+            && !outsideTabs.restrictedTabVisible
+            && restrictedLifecycle.text === 'Eingeschränkt';
+          const storageBoundaryChecked = !storageTamperedTabs.privateTabVisible
+            && !storageTamperedTabs.previewTabVisible
+            && !storageTamperedTabs.restrictedTabVisible;
+          const freshProfileVerified = freshProfileTabs.previewTabVisible
+            && freshProfileTabs.previewBadgeState === 'preview';
+          const reloadVerified = Boolean(appAudienceReloadVerified);
+          const checks = {
+            privateHiddenForTeam,
+            previewVisibleForTarget,
+            previewHiddenForOutside,
+            restrictedHiddenForOutside,
+            deepLinkLockedOutside,
+            reloadVerified,
+            freshProfileVerified,
+            storageBoundaryChecked,
+          };
+          const failed = Object.entries(checks).filter(([, value]) => value !== true);
+          if (failed.length) {
+            throw new Error(`app audience UI smoke failed: ${JSON.stringify({
+              failed,
+              outsideTabs,
+              previewTabs,
+              deepLinkTabs,
+              storageTamperedTabs,
+              freshProfileTabs,
+              previewLifecycle,
+              restrictedLifecycle,
+              fallbackBefore,
+              tamperedScopedTaskbarPinsKey,
+            }, null, 2)}`);
+          }
+          result = {
+            mode: smokeMode,
+            targetModuleId: previewModule.id,
+            actorRole: previewSession.user.role,
+            authState: document.body?.dataset?.authState || (state.session?.user?.id ? 'authenticated' : 'unknown'),
+            browserContext: 'clean',
+            tenantScope: 'local-business-os-smoke',
+            privateHiddenForTeam,
+            previewVisibleForTarget,
+            previewHiddenForOutside,
+            restrictedHiddenForOutside,
+            deepLinkLockedOutside,
+            reloadVerified,
+            freshProfileVerified,
+            storageBoundaryChecked,
+            advancedStatusVersion: status.version || '',
+            advancedStatusRuntime: status.rxdbRuntime || null,
+          };
+        } finally {
+          if (originalState.storedTaskbarPins === null) localStorage.removeItem('ctox.businessOs.taskbarPins');
+          else localStorage.setItem('ctox.businessOs.taskbarPins', originalState.storedTaskbarPins);
+          if (tamperedScopedTaskbarPinsKey) {
+            if (storedScopedTaskbarPins === null) localStorage.removeItem(tamperedScopedTaskbarPinsKey);
+            else localStorage.setItem(tamperedScopedTaskbarPinsKey, storedScopedTaskbarPins);
+          }
+          if (originalState.storedFakeAudience === null) localStorage.removeItem('ctox.businessOs.fakeAudience');
+          else localStorage.setItem('ctox.businessOs.fakeAudience', originalState.storedFakeAudience);
+          state.modules = originalState.modules;
+          state.taskbarPins = originalState.taskbarPins;
+          state.moduleAllowlist = originalState.moduleAllowlist;
+          state.session = originalState.session;
+          state.governance = originalState.governance;
+          state.activeModule = originalState.activeModule;
+          if (originalState.activeModule?.id) {
+            document.body.dataset.activeModule = originalState.activeModule.id;
+          } else {
+            delete document.body.dataset.activeModule;
+          }
+          globalThis.CTOX_BUSINESS_OS_SESSION = originalState.globalSession;
+          smoke.renderTabs();
+        }
+        return result;
+      }
+
+      async function runBusinessOsAppReleaseUiSmoke() {
+        const waitFor = async (predicate, ms, label) => {
+          const deadline = Date.now() + ms;
+          let last = null;
+          while (Date.now() < deadline) {
+            last = await predicate();
+            if (last?.ok) return last;
+            await delay(150);
+          }
+          throw new Error(`${label} timed out: ${JSON.stringify(last)}`);
+        };
+        const css = (value) => {
+          if (globalThis.CSS?.escape) return globalThis.CSS.escape(String(value));
+          return String(value).replace(/["\\]/g, '\\$&');
+        };
+        const textOf = (selector) => document.querySelector(selector)?.textContent?.trim() || '';
+        const visible = (selector) => {
+          const element = document.querySelector(selector);
+          if (!element) return false;
+          const rect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return rect.width > 0
+            && rect.height > 0
+            && style.display !== 'none'
+            && style.visibility !== 'hidden'
+            && Number(style.opacity || 1) > 0;
+        };
+        const click = (selector, label) => {
+          const element = document.querySelector(selector);
+          if (!element) throw new Error(`${label || selector} is missing`);
+          if (element.disabled || element.getAttribute('aria-disabled') === 'true') {
+            throw new Error(`${label || selector} is disabled`);
+          }
+          element.click();
+          return element;
+        };
+        const setValue = (selector, value, label) => {
+          const element = document.querySelector(selector);
+          if (!element) throw new Error(`${label || selector} is missing`);
+          element.value = value;
+          element.dispatchEvent(new Event('input', { bubbles: true }));
+          element.dispatchEvent(new Event('change', { bubbles: true }));
+          return element;
+        };
+        const smoke = globalThis.ctoxBusinessOsSmoke;
+        const state = globalThis.CTOX_BUSINESS_OS_APP || smoke?.state || appState;
+        if (!state) throw new Error('Business OS app state is unavailable for app release UI smoke');
+        if (typeof state.openModule !== 'function') throw new Error('Business OS state.openModule is unavailable for app release UI smoke');
+        appState = state;
+
+        const [
+          permissionsMod,
+          lifecycleMod,
+        ] = await Promise.all([
+          import('/shared/permissions.js'),
+          import('/shared/app-lifecycle.js'),
+        ]);
+        const { BusinessOsPermissions } = permissionsMod;
+        const {
+          appLifecycleBadge,
+          appReleaseProjection,
+          canSeeModuleForAppVersion,
+        } = lifecycleMod;
+
+        const moduleId = 'phase10-release-app';
+        const releaseActorId = 'release_owner';
+        const adminSession = {
+          ok: true,
+          authenticated: true,
+          auth_required: false,
+          source: 'business-os-app-release-smoke',
+          user: {
+            id: 'local-dev',
+            display_name: 'Local CTOX',
+            role: 'admin',
+            is_admin: true,
+          },
+        };
+        const releaseSession = {
+          ok: true,
+          authenticated: true,
+          auth_required: false,
+          source: 'business-os-app-release-smoke',
+          user: {
+            id: releaseActorId,
+            display_name: 'Release Owner',
+            role: 'founder',
+            is_admin: false,
+          },
+        };
+        const teamSession = {
+          ok: true,
+          authenticated: true,
+          auth_required: false,
+          source: 'business-os-app-release-smoke',
+          user: {
+            id: 'team_member',
+            display_name: 'Team Member',
+            role: 'user',
+            is_admin: false,
+          },
+        };
+        const syncBusinessCollections = async (timeoutMs = 30000) => {
+          const catalogBridge = await bounded(state.sync?.startCollection?.('business_module_catalog'), 5000);
+          const commandBridge = await bounded(state.sync?.startCollection?.('business_commands'), 5000);
+          await bounded(catalogBridge?.state?.awaitInitialReplication?.(), timeoutMs);
+          await bounded(commandBridge?.state?.awaitInitialReplication?.(), timeoutMs);
+          await bounded(catalogBridge?.state?.awaitInSync?.(), timeoutMs);
+          await bounded(commandBridge?.state?.awaitInSync?.(), timeoutMs);
+          await bounded(appCommandReplicationState?.awaitInSync?.(), timeoutMs);
+        };
+        const catalogCollection = () => state.db?.collection?.('business_module_catalog');
+        const commandCollection = () => state.db?.collection?.('business_commands');
+        const catalogSnapshot = async () => {
+          const doc = await catalogCollection()?.findOne('module-catalog').exec();
+          return doc?.toJSON?.() || {};
+        };
+        const moduleFromCatalog = (catalog) => (Array.isArray(catalog?.modules) ? catalog.modules : [])
+          .find((mod) => mod?.id === moduleId) || null;
+        const commandDocs = async () => {
+          const docs = await commandCollection()?.find?.().exec?.();
+          return Array.isArray(docs) ? docs.map((doc) => doc?.toJSON?.() || doc) : [];
+        };
+        const latestCommand = (docs, type) => docs
+          .filter((doc) => String(doc?.record_id || '') === moduleId
+            && [doc?.type, doc?.command_type, doc?.payload?.type].map((value) => String(value || '')).includes(type))
+          .sort((left, right) => Number(right.updated_at_ms || right.created_at_ms || 0) - Number(left.updated_at_ms || left.created_at_ms || 0))[0] || null;
+        const dispatchBusinessCommand = async (commandType, payload, session, recordId = moduleId, timeoutMs = 60000, commandModule = 'app-store') => {
+          const commandBus = state.commandBus || smoke?.state?.commandBus;
+          if (!commandBus?.dispatch) throw new Error('Business OS CommandBus is unavailable for app release UI smoke');
+          const previousSession = state.session;
+          state.session = session;
+          globalThis.CTOX_BUSINESS_OS_SESSION = session;
+          const commandId = `cmd_app_release_${crypto.randomUUID()}`;
+          let dispatchError = null;
+          try {
+            await commandBus.dispatch({
+              id: commandId,
+              wait_timeout_ms: timeoutMs,
+              module: commandModule,
+              type: commandType,
+              command_type: commandType,
+              record_id: recordId,
+              inbound_channel: 'business_os.app_release_smoke',
+              payload,
+              client_context: {
+                source: 'business-os-app-release-smoke',
+                module_id: moduleId,
+                actor: {
+                  id: session?.user?.id || '',
+                  display_name: session?.user?.display_name || session?.user?.id || '',
+                  role: session?.user?.role || 'user',
+                  is_admin: Boolean(session?.user?.is_admin),
+                },
+              },
+            });
+          } catch (error) {
+            dispatchError = error;
+          }
+          const projected = await waitFor(async () => {
+            await syncBusinessCollections(5000);
+            const doc = await commandCollection()?.findOne(commandId).exec();
+            const data = doc?.toJSON?.();
+            return {
+              ok: Boolean(data && data.status && data.status !== 'pending_sync'),
+              command: data || null,
+            };
+          }, timeoutMs, `${commandType} command projection`);
+          state.session = previousSession;
+          if (dispatchError && projected.command?.status === 'failed') {
+            throw new Error(`${commandType} failed after dispatch error: ${JSON.stringify({
+              message: dispatchError?.message || String(dispatchError),
+              command: projected.command,
+            })}`);
+          }
+          return projected.command;
+        };
+        const applyReleaseSession = async () => {
+          const catalog = await catalogSnapshot();
+          state.session = releaseSession;
+          state.governance = catalog.governance || state.governance || null;
+          globalThis.CTOX_BUSINESS_OS_SESSION = releaseSession;
+          document.body.dataset.authState = 'authenticated';
+          return catalog;
+        };
+
+        await syncBusinessCollections();
+        const initialCatalog = await applyReleaseSession();
+        const initialModule = moduleFromCatalog(initialCatalog);
+        if (!initialModule) {
+          throw new Error(`release fixture module missing from catalog: ${JSON.stringify({
+            expected: moduleId,
+            modules: (initialCatalog.modules || []).map((mod) => mod?.id).filter(Boolean),
+          })}`);
+        }
+        const initialLifecycle = appLifecycleBadge(initialModule, {
+          session: releaseSession,
+          governance: initialCatalog.governance,
+        });
+        const privateBeforeRelease = initialLifecycle.state === 'private'
+          && /^0\./.test(String(initialModule.version || ''))
+          && !canSeeModuleForAppVersion(initialModule, {
+            session: teamSession,
+            governance: initialCatalog.governance,
+          })
+          && canSeeModuleForAppVersion(initialModule, {
+            session: releaseSession,
+            governance: initialCatalog.governance,
+          });
+
+        await state.openModule('app-store', { force: true, asModule: true });
+        await waitFor(() => ({
+          ok: visible('[data-app-store-root]') && visible('[data-apps-grid]'),
+          activeModule: state.activeModule?.id || document.body?.dataset?.activeModule || '',
+          text: document.querySelector('[data-app-store-root]')?.innerText?.slice(0, 500) || '',
+        }), 30000, 'App Store opened for release smoke');
+        click('[data-scope="installed"]', 'installed scope');
+        await waitFor(() => {
+          const card = document.querySelector(`[data-app-id="${css(moduleId)}"]`);
+          const releaseButton = card?.querySelector('[data-card-action="release"]');
+          const lifecycleBadge = card?.querySelector('.app-lifecycle-badge');
+          return {
+            ok: Boolean(card && releaseButton && !releaseButton.disabled && /Privat/.test(lifecycleBadge?.textContent || '')),
+            hasCard: Boolean(card),
+            hasReleaseButton: Boolean(releaseButton),
+            releaseDisabled: releaseButton?.disabled ?? null,
+            lifecycleText: lifecycleBadge?.textContent?.trim() || '',
+            cardText: card?.innerText?.slice(0, 500) || '',
+          };
+        }, 15000, 'release candidate card rendered');
+        click(`[data-app-id="${css(moduleId)}"] [data-card-action="release"]`, 'release action');
+        const dataReviewDialog = await waitFor(() => {
+          const dialog = document.querySelector('.app-release-dialog');
+          const text = dialog?.innerText || '';
+          return {
+            ok: Boolean(dialog
+              && /Zielversion/.test(text)
+              && /Datenzugriff Review/.test(text)
+              && /business_commands/.test(text)),
+            text: text.slice(0, 800),
+          };
+        }, 10000, 'release dialog data review');
+        setValue('.app-release-dialog [name="target_version"]', '1.0.0', 'target version input');
+        setValue('.app-release-dialog [name="release_channel"]', 'team', 'release channel select');
+        setValue('.app-release-dialog [name="notes"]', 'Browser/Rust release smoke: Team-Freigabe 1.0.0', 'release notes');
+        click('.app-release-dialog button[type="submit"]', 'release submit');
+
+        const releaseProjection = await waitFor(async () => {
+          await syncBusinessCollections(5000);
+          const [catalog, docs] = await Promise.all([catalogSnapshot(), commandDocs()]);
+          const module = moduleFromCatalog(catalog);
+          const releaseCommand = latestCommand(docs, 'ctox.module.release');
+          const projection = appReleaseProjection(module || {});
+          const lifecycle = appLifecycleBadge(module || {}, {
+            session: teamSession,
+            governance: catalog.governance,
+          });
+          const card = document.querySelector(`[data-app-id="${css(moduleId)}"]`);
+          return {
+            ok: Boolean(
+              module
+                && String(module.version || '') === '1.0.0'
+                && lifecycle.state === 'team'
+                && canSeeModuleForAppVersion(module, { session: teamSession, governance: catalog.governance })
+                && releaseCommand?.status === 'completed'
+                && projection.dataAccess?.hasReview === true
+            ),
+            moduleVersion: module?.version || '',
+            lifecycleState: lifecycle.state || '',
+            releaseCommandStatus: releaseCommand?.status || '',
+            releaseCommandId: releaseCommand?.id || releaseCommand?.command_id || '',
+            releaseCommandError: releaseCommand?.error || releaseCommand?.result?.error || '',
+            releaseCommandResult: releaseCommand?.result || null,
+            releaseVersionId: releaseCommand?.result?.version_id || '',
+            projection,
+            cardText: card?.innerText?.slice(0, 800) || '',
+          };
+        }, 60000, 'release command projection');
+        const releasedCatalog = await catalogSnapshot();
+        const releasedModule = moduleFromCatalog(releasedCatalog);
+        const releasedLifecycle = appLifecycleBadge(releasedModule, {
+          session: teamSession,
+          governance: releasedCatalog.governance,
+        });
+        const teamVisibleAfterRelease = canSeeModuleForAppVersion(releasedModule, {
+          session: teamSession,
+          governance: releasedCatalog.governance,
+        }) === true;
+        const versionBadgeVisible = await waitFor(() => {
+          const card = document.querySelector(`[data-app-id="${css(moduleId)}"]`);
+          const lifecycleBadge = card?.querySelector('.app-lifecycle-badge');
+          const releaseBadge = card?.querySelector('.app-release-state');
+          const text = card?.innerText || '';
+          return {
+            ok: Boolean(card && /v1\.0\.0/.test(lifecycleBadge?.textContent || text) && /Team/.test(lifecycleBadge?.textContent || text)),
+            lifecycleText: lifecycleBadge?.textContent?.trim() || '',
+            releaseText: releaseBadge?.textContent?.trim() || '',
+            cardText: text.slice(0, 800),
+          };
+        }, 15000, 'release version badge');
+        click(`[data-app-id="${css(moduleId)}"] [data-card-action="details"]`, 'release details action');
+        const dataReviewVisible = await waitFor(() => {
+          const root = document.querySelector('[data-app-store-root]');
+          const text = root?.innerText || '';
+          return {
+            ok: /Datenzugriff/.test(text)
+              && /Gesperrt|Review ist Nachweis|business_commands|Business Commands/.test(text),
+            text: text.slice(0, 1200),
+          };
+        }, 10000, 'release data review projection');
+
+        const storageKey = `ctox_business_os_release_override_${moduleId}`;
+        localStorage.setItem(storageKey, JSON.stringify({ version: '9.9.9', visibility_state: 'private' }));
+        await syncBusinessCollections(5000);
+        const storageCatalog = await catalogSnapshot();
+        const storageModule = moduleFromCatalog(storageCatalog);
+        const storageBoundaryChecked = String(storageModule?.version || '') === '1.0.0'
+          && canSeeModuleForAppVersion(storageModule, {
+            session: teamSession,
+            governance: storageCatalog.governance,
+          }) === true;
+        localStorage.removeItem(storageKey);
+
+        click(`[data-app-id="${css(moduleId)}"] [data-card-action="versions"]`, 'versions action');
+        const versionDialog = await waitFor(() => {
+          const dialog = document.querySelector('.app-store-version-dialog');
+          const rollbackButtons = dialog ? [...dialog.querySelectorAll('[data-rollback-version]')] : [];
+          return {
+            ok: Boolean(dialog && rollbackButtons.length >= 1),
+            text: dialog?.innerText?.slice(0, 800) || '',
+            rollbackCount: rollbackButtons.length,
+          };
+        }, 15000, 'versions dialog rollback options');
+        const originalConfirm = globalThis.confirm;
+        globalThis.confirm = () => true;
+        try {
+          const rows = [...document.querySelectorAll('.app-store-version-dialog .app-version-row')];
+          const baselineRow = rows.find((row) => /Install|Installation|#1\b/.test(row.innerText || '')) || rows.at(-1) || null;
+          const rollbackButton = baselineRow?.querySelector?.('[data-rollback-version]')
+            || document.querySelector('.app-store-version-dialog [data-rollback-version]');
+          if (!rollbackButton) throw new Error('rollback version action is missing');
+          rollbackButton.click();
+        } finally {
+          globalThis.confirm = originalConfirm;
+        }
+        const rollbackProjection = await waitFor(async () => {
+          await syncBusinessCollections(5000);
+          const docs = await commandDocs();
+          const rollbackCommand = latestCommand(docs, 'ctox.module.rollback_version');
+          return {
+            ok: rollbackCommand?.status === 'completed',
+            rollbackCommandStatus: rollbackCommand?.status || '',
+            rollbackCommandId: rollbackCommand?.id || rollbackCommand?.command_id || '',
+            rollbackCommandError: rollbackCommand?.error || rollbackCommand?.result?.error || '',
+            rollbackCommandResult: rollbackCommand?.result || null,
+          };
+        }, 60000, 'rollback command projection');
+
+        if (typeof smoke?.openSettingsDrawer !== 'function') {
+          throw new Error('Business OS smoke API does not expose openSettingsDrawer for app release activity audit smoke');
+        }
+        const activityCatalog = await catalogSnapshot();
+        state.session = adminSession;
+        state.governance = activityCatalog.governance || state.governance || null;
+        globalThis.CTOX_BUSINESS_OS_SESSION = adminSession;
+        document.body.dataset.authState = 'authenticated';
+        await syncBusinessCollections(5000);
+        await smoke.openSettingsDrawer({ initialTab: 'activity' });
+        const activityAudit = await waitFor(async () => {
+          await syncBusinessCollections(5000);
+          const drawer = document.querySelector('.settings-drawer');
+          const rows = drawer
+            ? [...drawer.querySelectorAll('.settings-table tbody tr')]
+              .map((row) => row.innerText || '')
+              .filter(Boolean)
+            : [];
+          const text = drawer?.innerText || '';
+          const releaseRow = rows.find((row) => /App-Version veröffentlicht/.test(row)
+            && /Version 1\.0\.0/.test(row)
+            && /Team/.test(row));
+          const rollbackRow = rows.find((row) => /App-Rollback angewendet/.test(row));
+          const rawLeak = /business_os\.module|ctox\.module|data_access_review|locked_collection_ids|Browser\/Rust release smoke/i.test(text);
+          return {
+            ok: Boolean(releaseRow && rollbackRow && !rawLeak),
+            releaseVisible: Boolean(releaseRow),
+            rollbackVisible: Boolean(rollbackRow),
+            redacted: !rawLeak,
+            releaseRow: releaseRow || '',
+            rollbackRow: rollbackRow || '',
+            rowCount: rows.length,
+            text: text.slice(0, 1400),
+          };
+        }, 30000, 'settings activity release and rollback audit');
+
+        const status = await globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({
+          includeCounts: false,
+          requiredCollections: ['business_module_catalog', 'business_commands', 'ctox_runtime_settings'],
+        });
+        if (status?.version !== 'business-os-advanced-status-v1') {
+          throw new Error(`app release UI smoke lost advanced status evidence: ${JSON.stringify(status)}`);
+        }
+
+        const checks = {
+          privateBeforeRelease,
+          publishSucceeded: releaseProjection.releaseCommandStatus === 'completed',
+          teamVisibleAfterRelease,
+          versionBadgeVisible: versionBadgeVisible.ok === true,
+          dataReviewVisible: dataReviewVisible.ok === true && dataReviewDialog.ok === true,
+          rollbackSucceeded: rollbackProjection.rollbackCommandStatus === 'completed',
+          releaseAuditVisible: activityAudit.releaseVisible === true,
+          rollbackAuditVisible: activityAudit.rollbackVisible === true,
+          activityAuditRedacted: activityAudit.redacted === true,
+          reloadVerified: Boolean(appReleaseReloadVerified),
+          storageBoundaryChecked,
+        };
+        const failed = Object.entries(checks).filter(([, value]) => value !== true);
+        if (failed.length) {
+          throw new Error(`app release UI smoke failed: ${JSON.stringify({
+            failed,
+            initialLifecycle,
+            releasedLifecycle,
+            releaseProjection,
+            versionBadgeVisible,
+            dataReviewVisible,
+            versionDialog,
+            rollbackProjection,
+            activityAudit,
+            storageBoundaryChecked,
+          }, null, 2)}`);
+        }
+        return {
+          mode: smokeMode,
+          targetModuleId: moduleId,
+          actorRole: releaseSession.user.role,
+          authState: document.body?.dataset?.authState || (state.session?.authenticated ? 'authenticated' : 'unknown'),
+          browserContext: 'clean',
+          tenantScope: 'local-workspace',
+          privateBeforeRelease,
+          publishSucceeded: true,
+          teamVisibleAfterRelease,
+          versionBadgeVisible: true,
+          dataReviewVisible: true,
+          rollbackSucceeded: true,
+          releaseAuditVisible: true,
+          rollbackAuditVisible: true,
+          activityAuditRedacted: true,
+          reloadVerified: Boolean(appReleaseReloadVerified),
+          storageBoundaryChecked,
+          releaseVersionId: releaseProjection.releaseVersionId || '',
+          rollbackCommandId: rollbackProjection.rollbackCommandId || '',
+          advancedStatusVersion: status.version || '',
+          advancedStatusRuntime: status.rxdbRuntime || null,
+        };
+      }
+
       async function runCodingAgentsUiSmoke() {
         if (!codingAgentSmoke?.provider || !codingAgentSmoke?.workspaceRoot) {
           throw new Error(`Coding Agents UI smoke config missing: ${JSON.stringify(codingAgentSmoke)}`);
@@ -6230,6 +11286,26 @@ function ensureCtoxSmokeBinary() {
         return await runCodingAgentsUiSmoke();
       }
 
+      if (smokeMode === 'business-os-roles-permissions-ui') {
+        return await runBusinessOsRolesPermissionsUiSmoke();
+      }
+
+      if (smokeMode === 'business-os-dynamic-apps-ui') {
+        return await runBusinessOsDynamicAppsUiSmoke();
+      }
+
+      if (smokeMode === 'business-os-app-release-ui') {
+        return await runBusinessOsAppReleaseUiSmoke();
+      }
+
+      if (smokeMode === 'business-os-app-audience-ui') {
+        return await runBusinessOsAppAudienceUiSmoke();
+      }
+
+      if (smokeMode === 'business-os-agent-scope-ui') {
+        return await runBusinessOsAgentScopeUiSmoke();
+      }
+
       if (smokeMode === 'business-os-ui-regression') {
         return await runBusinessOsUiRegression();
       }
@@ -7236,6 +12312,217 @@ function ensureCtoxSmokeBinary() {
       }
 
       let peerCheckpointRefresh = null;
+      if (smokeMode === 'business-os-restore-resync-ui') {
+        if (!useAppDb) {
+          throw new Error('business-os-restore-resync-ui requires the Business OS app DB');
+        }
+        const state = globalThis.ctoxBusinessOsSmoke?.state;
+        if (!state?.sync || !appFileReplicationState || !appChunkReplicationState) {
+          throw new Error('Business OS restore resync smoke requires active file replication states');
+        }
+        const peerSessionsBeforeStop = (await globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({
+          includeCounts: false,
+        }))?.sync?.peerSessions || [];
+        const webrtcOnly = state.syncConfig?.transport === 'webrtc'
+          && state.syncConfig?.http_bridge_available === false;
+        if (!webrtcOnly) {
+          throw new Error(`Business OS restore resync smoke requires WebRTC-only config: ${JSON.stringify(state.syncConfig)}`);
+        }
+        const moduleScriptBasePath = (mod) => {
+          const entry = String(mod?.entry || `modules/${mod?.id}/index.html`)
+            .replace(/^\.?\//, '')
+            .split('?')[0]
+            .split('#')[0];
+          const slash = entry.lastIndexOf('/');
+          return slash >= 0 ? entry.slice(0, slash) : `modules/${mod?.id}`;
+        };
+        const moduleRevisionQuery = (moduleId) => {
+          const rev = state.moduleRevisions?.[moduleId];
+          return rev ? `_${rev}` : '';
+        };
+        const appBuild = [...document.scripts]
+          .map((script) => String(script.getAttribute('src') || script.src || ''))
+          .map((src) => /(?:^|\/)app\.js\?v=([^&]+)/.exec(src)?.[1] || '')
+          .find(Boolean);
+        if (!appBuild) {
+          throw new Error('restore-resync smoke could not derive Business OS app build cache buster');
+        }
+        const moduleScriptHrefs = [...new Set((state.modules || [])
+          .filter((mod) => mod?.id)
+          .map((mod) => `./${moduleScriptBasePath(mod)}/index.js?v=${appBuild}${moduleRevisionQuery(mod.id)}`))];
+        await Promise.all(moduleScriptHrefs.map((href) => new Promise((resolve, reject) => {
+          const existing = [...document.head.querySelectorAll('link[rel="modulepreload"]')]
+            .find((link) => link.getAttribute('href') === href);
+          if (existing?.dataset?.restoreResyncPreloaded === '1') {
+            resolve();
+            return;
+          }
+          const link = existing || document.createElement('link');
+          const timeout = setTimeout(() => {
+            reject(new Error(`restore-resync modulepreload timed out for ${href}`));
+          }, 10000);
+          link.addEventListener('load', () => {
+            clearTimeout(timeout);
+            link.dataset.restoreResyncPreloaded = '1';
+            resolve();
+          }, { once: true });
+          link.addEventListener('error', () => {
+            clearTimeout(timeout);
+            reject(new Error(`restore-resync modulepreload failed for ${href}`));
+          }, { once: true });
+          if (!existing) {
+            link.rel = 'modulepreload';
+            link.setAttribute('href', href);
+            document.head.append(link);
+          } else {
+            fetch(href, { cache: 'force-cache' })
+              .then((response) => {
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                clearTimeout(timeout);
+                existing.dataset.restoreResyncPreloaded = '1';
+                resolve();
+              })
+              .catch((error) => {
+                clearTimeout(timeout);
+                reject(new Error(`restore-resync modulepreload refresh failed for ${href}: ${error?.message || error}`));
+              });
+          }
+        })));
+
+        await globalThis.__ctoxStopNativePeerForRestoreSmoke?.();
+        const now = Date.now();
+        const id = `business_os_restore_resync_${now}`;
+        const encoded = btoa(browserPayload);
+        await db.desktop_files.insert({
+          id,
+          path: `/browser/restore-resync/${id}.txt`,
+          name: `${id}.txt`,
+          kind: 'file',
+          mime_type: 'text/plain',
+          extension: 'txt',
+          size_bytes: browserPayload.length,
+          owner_id: 'business-os-restore-smoke',
+          source: 'business-os-restore-resync-smoke',
+          content_ref: id,
+          sort_index: now,
+          is_deleted: false,
+          created_at_ms: now,
+          updated_at_ms: now,
+        });
+        await db.desktop_file_chunks.insert({
+          id: `${id}_0`,
+          file_id: id,
+          idx: 0,
+          total: 1,
+          encoding: 'base64',
+          data: encoded,
+          size_bytes: encoded.length,
+          created_at_ms: now,
+        });
+        const nativePresentBeforeRestart = await globalThis.__ctoxSqliteFileExistsForRestoreSmoke?.(id);
+        if (nativePresentBeforeRestart) {
+          throw new Error(`restore-resync browser write reached native SQLite while native peer was stopped: ${id}`);
+        }
+
+        await globalThis.__ctoxStartNativePeerForRestoreSmoke?.();
+        const repairedState = globalThis.ctoxBusinessOsSmoke?.state;
+        const repairedDb = repairedState?.db?.raw;
+        if (!repairedDb?.desktop_files || !repairedDb?.desktop_file_chunks) {
+          throw new Error('Business OS app DB was not available after restore resync peer restart');
+        }
+        db = repairedDb;
+        const repairedBridges = typeof repairedState.sync.restartCollections === 'function'
+          ? await repairedState.sync.restartCollections(['desktop_files', 'desktop_file_chunks'])
+          : [
+              await repairedState.sync.restartCollection('desktop_files'),
+              await repairedState.sync.restartCollection('desktop_file_chunks'),
+            ];
+        appFileReplicationState = repairedBridges[0]?.state || null;
+        appChunkReplicationState = repairedBridges[1]?.state || null;
+        if (typeof appFileReplicationState?.reSync === 'function') appFileReplicationState.reSync();
+        if (typeof appChunkReplicationState?.reSync === 'function') appChunkReplicationState.reSync();
+        await bounded(appFileReplicationState?.awaitInitialReplication?.(), 30000);
+        await bounded(appChunkReplicationState?.awaitInitialReplication?.(), 30000);
+        await bounded(appFileReplicationState?.awaitInSync?.(), 60000);
+        await bounded(appChunkReplicationState?.awaitInSync?.(), 60000);
+        await waitForNativePeerOpen(appFileReplicationState, 'desktop_files restore resync');
+        await waitForNativePeerOpen(appChunkReplicationState, 'desktop_file_chunks restore resync');
+        const advancedStatusAfterRepair = await globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
+          timeoutMs: 90000,
+          requiredCollections: [
+            'business_module_catalog',
+            'ctox_runtime_settings',
+            'desktop_files',
+            'desktop_file_chunks',
+          ],
+        });
+        const peerSessionsAfterRepair = advancedStatusAfterRepair?.sync?.peerSessions || [];
+        const beforeByCollection = new Map(peerSessionsBeforeStop.map((session) => [session.collection, session]));
+        const restartedSessions = peerSessionsAfterRepair.filter((session) => {
+          const before = beforeByCollection.get(session.collection);
+          return before
+            && before.peerSession
+            && session.peerSession
+            && before.peerSession !== session.peerSession
+            && Number(session.generation || 0) > Number(before.generation || 0);
+        });
+        const missingCheckpointEpoch = restartedSessions.filter((session) => (
+          !session?.checkpoint
+          || session.checkpoint.state !== 'advertised'
+          || !session.checkpoint.epoch
+          || session.checkpoint.collection !== session.collection
+        ));
+        if (!restartedSessions.length || missingCheckpointEpoch.length) {
+          throw new Error(`Restore resync did not refresh peer checkpoint evidence: ${JSON.stringify({
+            before: peerSessionsBeforeStop,
+            after: peerSessionsAfterRepair,
+            restartedSessions,
+            missingCheckpointEpoch,
+          }, null, 2)}`);
+        }
+        const nativeConvergenceDeadline = Date.now() + 90000;
+        let nativeConverged = false;
+        while (Date.now() < nativeConvergenceDeadline) {
+          nativeConverged = await globalThis.__ctoxSqliteFileExistsForRestoreSmoke?.(id) === true;
+          if (nativeConverged) break;
+          if (typeof appFileReplicationState?.reSync === 'function') appFileReplicationState.reSync();
+          if (typeof appChunkReplicationState?.reSync === 'function') appChunkReplicationState.reSync();
+          await bounded(appFileReplicationState?.awaitInSync?.(), 5000);
+          await bounded(appChunkReplicationState?.awaitInSync?.(), 5000);
+          await delay(500);
+        }
+        if (!nativeConverged) {
+          throw new Error(`restore resync browser-local write did not converge to native SQLite: ${id}`);
+        }
+        await Promise.all(replicationStates.map((state) => state.cancel?.()));
+        if (ownsDb) await db.close();
+        return {
+          mode: smokeMode,
+          id,
+          readinessPayload: received.payload,
+          browserPayload,
+          authState: 'authenticated',
+          actorRole: state.session?.user?.role || '',
+          browserContext: 'clean',
+          tenantScope: 'local-workspace',
+          webrtcOnly,
+          peerStopped: true,
+          localOnlyBeforeRestart: nativePresentBeforeRestart === false,
+          peerRestarted: true,
+          preloadedModuleScripts: moduleScriptHrefs.length,
+          nativeConvergedAfterRestart: nativeConverged === true,
+          advancedStatusVersion: advancedStatusAfterRepair?.version || advancedStatusVersion,
+          advancedStatusRuntime: advancedStatusAfterRepair?.rxdbRuntime || advancedStatusRuntime,
+          peerCheckpointRefresh: {
+            restartedCollections: restartedSessions.map((session) => session.collection),
+            checkpointEpochs: restartedSessions.map((session) => session.checkpoint?.epoch || ''),
+          },
+          replicationDirections: {
+            desktop_files: describeReplicationPool(appFileReplicationState),
+            desktop_file_chunks: describeReplicationPool(appChunkReplicationState),
+          },
+        };
+      }
       if (smokeMode === 'restart-browser-to-rust'
         || smokeMode === 'restart-signaling-browser-to-rust'
         || smokeMode === 'rollover-native-peer-browser-to-rust') {
@@ -7393,7 +12680,7 @@ function ensureCtoxSmokeBinary() {
           desktop_file_chunks: describeReplicationPool(appChunkReplicationState),
         },
       };
-    }, { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke });
+    }, { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified });
     outerPhaseTimings.pageEvaluateMs = Date.now() - pageEvaluateStartedAt;
 
     if (result.mode === 'business-os-ui-regression') {
@@ -7516,6 +12803,176 @@ function ensureCtoxSmokeBinary() {
       console.log(`business_os_visual_screenshot_unique_colors=${result.screenshotEvidence?.uniqueSampledColors || 0}`);
       console.log(`business_os_visual_screenshot_luma_stddev=${result.screenshotEvidence?.luminanceStdDev || 0}`);
       console.log(`business_os_visual_screenshot_dominant_ratio_pct=${result.screenshotEvidence?.dominantColorRatioPct || 0}`);
+      if (result.advancedStatusVersion) console.log(`advanced_status=${result.advancedStatusVersion}`);
+      if (result.advancedStatusRuntime) console.log(`rxdb_runtime=${JSON.stringify(result.advancedStatusRuntime)}`);
+    } else if (result.mode === 'business-os-roles-permissions-ui') {
+      console.log(`business_os_roles_permissions_target_module=${result.targetModuleId || ''}`);
+      console.log(`business_os_roles_permissions_other_module=${result.otherModuleId || ''}`);
+      console.log(`business_os_roles_permissions_team_modify_hidden=${result.teamModifyHidden ? 1 : 0}`);
+      console.log(`business_os_roles_permissions_team_source_hidden=${result.teamSourceHidden ? 1 : 0}`);
+      console.log(`business_os_roles_permissions_source_grant_visible=${result.sourceGrantVisible ? 1 : 0}`);
+      console.log(`business_os_roles_permissions_modify_grant_visible=${result.modifyGrantVisible ? 1 : 0}`);
+      console.log(`business_os_roles_permissions_owner_context_visible=${result.ownerContextVisible ? 1 : 0}`);
+      console.log(`business_os_roles_permissions_appbar_source_gate=${result.appbarSourceGate ? 1 : 0}`);
+      console.log(`business_os_roles_permissions_exact_scope_isolated=${result.exactScopeIsolated ? 1 : 0}`);
+      console.log(`business_os_roles_permissions_owner_role_option=${result.ownerRoleOption ? 1 : 0}`);
+      console.log(`business_os_roles_permissions_admin_owner_option_hidden=${result.adminOwnerOptionHidden ? 1 : 0}`);
+      console.log(`business_os_roles_permissions_business_labels=${result.businessLabels ? 1 : 0}`);
+      console.log(`business_os_roles_permissions_settings_release_fallback_readonly=${result.settingsReleaseFallbackReadOnly ? 1 : 0}`);
+      console.log(`business_os_roles_permissions_settings_why_diagnostics_visible=${result.settingsWhyDiagnosticsVisible ? 1 : 0}`);
+      console.log(`business_os_roles_permissions_settings_why_diagnostics_rows=${result.settingsWhyDiagnosticsRows ? 1 : 0}`);
+      console.log(`business_os_roles_permissions_settings_why_diagnostics_redacted=${result.settingsWhyDiagnosticsRedacted ? 1 : 0}`);
+      console.log(`business_os_roles_permissions_settings_support_diagnostics_visible=${result.settingsSupportDiagnosticsVisible ? 1 : 0}`);
+      console.log(`business_os_roles_permissions_settings_support_diagnostics_rows=${result.settingsSupportDiagnosticsRows ? 1 : 0}`);
+      console.log(`business_os_roles_permissions_settings_support_diagnostics_redacted=${result.settingsSupportDiagnosticsRedacted ? 1 : 0}`);
+      console.log(`business_os_roles_permissions_settings_support_diagnostics_download=${result.settingsSupportDiagnosticsDownload ? 1 : 0}`);
+      console.log(`business_os_roles_permissions_reload_verified=${result.reloadVerified ? 1 : 0}`);
+      console.log(`business_os_roles_permissions_auth_state=${result.authState || ''}`);
+      if (result.advancedStatusVersion) console.log(`advanced_status=${result.advancedStatusVersion}`);
+      if (result.advancedStatusRuntime) console.log(`rxdb_runtime=${JSON.stringify(result.advancedStatusRuntime)}`);
+    } else if (result.mode === 'business-os-dynamic-apps-ui') {
+      console.log(`business_os_dynamic_private_module=${result.privateModuleId || ''}`);
+      console.log(`business_os_dynamic_team_module=${result.teamModuleId || ''}`);
+      console.log(`business_os_dynamic_private_hidden_for_team=${result.privateHiddenForTeam ? 1 : 0}`);
+      console.log(`business_os_dynamic_private_visible_for_builder=${result.privateVisibleForBuilder ? 1 : 0}`);
+      console.log(`business_os_dynamic_team_visible_for_released=${result.teamVisibleForReleased ? 1 : 0}`);
+      console.log(`business_os_dynamic_restricted_hidden_for_team=${result.restrictedHiddenForTeamAndVisibleForBuilder ? 1 : 0}`);
+      console.log(`business_os_dynamic_lifecycle_badges_visible=${result.lifecycleBadgesVisible ? 1 : 0}`);
+      console.log(`business_os_dynamic_launcher_badges_visible=${result.launcherBadgesVisible ? 1 : 0}`);
+      console.log(`business_os_dynamic_lifecycle_drawer_manager_state=${result.lifecycleDrawerManagerState ? 1 : 0}`);
+      console.log(`business_os_dynamic_lifecycle_drawer_readonly_state=${result.lifecycleDrawerReadonlyState ? 1 : 0}`);
+      console.log(`business_os_dynamic_lifecycle_drawer_visible=${result.lifecycleDrawerVisible ? 1 : 0}`);
+      console.log(`business_os_dynamic_lifecycle_why_diagnostics_visible=${result.lifecycleWhyDiagnosticsVisible ? 1 : 0}`);
+      console.log(`business_os_dynamic_lifecycle_why_diagnostics_rows=${result.lifecycleWhyDiagnosticsRows ? 1 : 0}`);
+      console.log(`business_os_dynamic_lifecycle_why_diagnostics_data=${result.lifecycleWhyDiagnosticsData ? 1 : 0}`);
+      console.log(`business_os_dynamic_db_read_denied=${result.dbReadDenied ? 1 : 0}`);
+      console.log(`business_os_dynamic_db_raw_denied=${result.dbRawDenied ? 1 : 0}`);
+      console.log(`business_os_dynamic_real_context_collection_denied=${result.realContextCollectionDenied ? 1 : 0}`);
+      console.log(`business_os_dynamic_real_context_property_denied=${result.realContextPropertyDenied ? 1 : 0}`);
+      console.log(`business_os_dynamic_real_context_cached_denied=${result.realContextCachedDenied ? 1 : 0}`);
+      console.log(`business_os_dynamic_real_context_raw_denied=${result.realContextRawDenied ? 1 : 0}`);
+      console.log(`business_os_dynamic_open_module_reload_mounted=${result.openModuleReloadMounted ? 1 : 0}`);
+      console.log(`business_os_dynamic_open_module_collection_denied=${result.openModuleCollectionDenied ? 1 : 0}`);
+      console.log(`business_os_dynamic_open_module_property_denied=${result.openModulePropertyDenied ? 1 : 0}`);
+      console.log(`business_os_dynamic_open_module_cached_denied=${result.openModuleCachedDenied ? 1 : 0}`);
+      console.log(`business_os_dynamic_open_module_raw_denied=${result.openModuleRawDenied ? 1 : 0}`);
+      console.log(`business_os_dynamic_runtime_safety_contract=${result.openModuleRuntimeSafetyContract ? 1 : 0}`);
+      console.log(`business_os_dynamic_runtime_safety_capabilities=${result.openModuleRuntimeSafetyCapabilities ? 1 : 0}`);
+      console.log(`business_os_dynamic_storage_keys_scoped=${result.storageKeysScoped ? 1 : 0}`);
+      console.log(`business_os_dynamic_storage_scope_contract=${result.moduleStorageScopeContract ? 1 : 0}`);
+      console.log(`business_os_dynamic_db_read_grant_allowed=${result.dbReadGrantAllowed ? 1 : 0}`);
+      console.log(`business_os_dynamic_real_context_cached_read_grant_allowed=${result.realContextCachedReadGrantAllowed ? 1 : 0}`);
+      console.log(`business_os_dynamic_db_write_denied_without_write=${result.dbWriteDeniedWithoutWrite ? 1 : 0}`);
+      console.log(`business_os_dynamic_permission_facade_read_allowed=${result.facadeReadAllowed ? 1 : 0}`);
+      console.log(`business_os_dynamic_permission_facade_write_denied=${result.facadeWriteDenied ? 1 : 0}`);
+      console.log(`business_os_dynamic_packaged_guard_module=${result.packagedGuardModuleId || ''}`);
+      console.log(`business_os_dynamic_packaged_guard_collection=${result.packagedGuardCollection || ''}`);
+      console.log(`business_os_dynamic_packaged_guard_capability_contract=${result.packagedGuardCapabilityContract ? 1 : 0}`);
+      console.log(`business_os_dynamic_packaged_guard_read_denied=${result.packagedGuardReadDenied ? 1 : 0}`);
+      console.log(`business_os_dynamic_packaged_guard_property_denied=${result.packagedGuardPropertyDenied ? 1 : 0}`);
+      console.log(`business_os_dynamic_packaged_guard_raw_denied=${result.packagedGuardRawDenied ? 1 : 0}`);
+      console.log(`business_os_dynamic_packaged_guard_context_denied=${result.packagedGuardContextDenied ? 1 : 0}`);
+      console.log(`business_os_dynamic_packaged_guard_context_property_denied=${result.packagedGuardContextPropertyDenied ? 1 : 0}`);
+      console.log(`business_os_dynamic_packaged_guard_read_grant_allowed=${result.packagedGuardReadAllowedAfterGrant ? 1 : 0}`);
+      console.log(`business_os_dynamic_packaged_guard_context_permission_facade=${result.packagedGuardContextPermissionFacade ? 1 : 0}`);
+      console.log(`business_os_dynamic_packaged_guard_write_denied_without_write=${result.packagedGuardWriteDeniedWithoutGrant ? 1 : 0}`);
+      console.log(`business_os_dynamic_packaged_guard_shell_locked_state=${result.packagedGuardShellLockedState ? 1 : 0}`);
+      console.log(`business_os_dynamic_packaged_guard_modules=${result.packagedGuardModules || ''}`);
+      console.log(`business_os_dynamic_packaged_guard_collections=${result.packagedGuardCollections || ''}`);
+      console.log(`business_os_dynamic_packaged_guard_count=${Number(result.packagedGuardBatchCount || 0)}`);
+      console.log(`business_os_dynamic_packaged_guard_batch_coverage=${result.packagedGuardBatchCoverage ? 1 : 0}`);
+      console.log(`business_os_dynamic_packaged_guard_all_capability_contracts=${result.packagedGuardAllCapabilityContracts ? 1 : 0}`);
+      console.log(`business_os_dynamic_packaged_guard_all_read_denied=${result.packagedGuardAllReadDenied ? 1 : 0}`);
+      console.log(`business_os_dynamic_packaged_guard_all_property_denied=${result.packagedGuardAllPropertyDenied ? 1 : 0}`);
+      console.log(`business_os_dynamic_packaged_guard_all_raw_denied=${result.packagedGuardAllRawDenied ? 1 : 0}`);
+      console.log(`business_os_dynamic_packaged_guard_all_context_denied=${result.packagedGuardAllContextDenied ? 1 : 0}`);
+      console.log(`business_os_dynamic_packaged_guard_all_read_grants_allowed=${result.packagedGuardAllReadGrantsAllowed ? 1 : 0}`);
+      console.log(`business_os_dynamic_packaged_guard_all_context_permission_facades=${result.packagedGuardAllContextPermissionFacades ? 1 : 0}`);
+      console.log(`business_os_dynamic_packaged_guard_all_writes_denied_without_write=${result.packagedGuardAllWritesDeniedWithoutWrite ? 1 : 0}`);
+      console.log(`business_os_dynamic_system_scope_modules=${result.systemScopedModules || ''}`);
+      console.log(`business_os_dynamic_system_scope_count=${Number(result.systemScopedCount || 0)}`);
+      console.log(`business_os_dynamic_system_scope_allowed=${result.systemScopedAllowed ? 1 : 0}`);
+      console.log(`business_os_dynamic_system_scope_foreign_denied=${result.systemScopedForeignDenied ? 1 : 0}`);
+      console.log(`business_os_dynamic_system_scope_raw_foreign_denied=${result.systemScopedRawForeignDenied ? 1 : 0}`);
+      console.log(`business_os_dynamic_system_scope_permission_facade=${result.systemScopedPermissionFacade ? 1 : 0}`);
+      console.log(`business_os_dynamic_system_scope_capability_contract=${result.systemScopedCapabilityContract ? 1 : 0}`);
+      console.log(`business_os_dynamic_invalid_version_private=${result.invalidVersionPrivate ? 1 : 0}`);
+      console.log(`business_os_dynamic_reload_verified=${result.reloadVerified ? 1 : 0}`);
+      console.log(`business_os_dynamic_auth_state=${result.authState || ''}`);
+      if (result.advancedStatusVersion) console.log(`advanced_status=${result.advancedStatusVersion}`);
+      if (result.advancedStatusRuntime) console.log(`rxdb_runtime=${JSON.stringify(result.advancedStatusRuntime)}`);
+    } else if (result.mode === 'business-os-app-release-ui') {
+      console.log(`business_os_app_release_target_module=${result.targetModuleId || ''}`);
+      console.log(`business_os_app_release_actor_role=${result.actorRole || ''}`);
+      console.log(`business_os_app_release_auth_state=${result.authState || ''}`);
+      console.log(`business_os_app_release_browser_context=${result.browserContext || ''}`);
+      console.log(`business_os_app_release_tenant_scope=${result.tenantScope || ''}`);
+      console.log(`business_os_app_release_private_before_release=${result.privateBeforeRelease ? 1 : 0}`);
+      console.log(`business_os_app_release_publish_succeeded=${result.publishSucceeded ? 1 : 0}`);
+      console.log(`business_os_app_release_team_visible_after_release=${result.teamVisibleAfterRelease ? 1 : 0}`);
+      console.log(`business_os_app_release_version_badge_visible=${result.versionBadgeVisible ? 1 : 0}`);
+      console.log(`business_os_app_release_data_review_visible=${result.dataReviewVisible ? 1 : 0}`);
+      console.log(`business_os_app_release_rollback_succeeded=${result.rollbackSucceeded ? 1 : 0}`);
+      console.log(`business_os_app_release_release_audit_visible=${result.releaseAuditVisible ? 1 : 0}`);
+      console.log(`business_os_app_release_rollback_audit_visible=${result.rollbackAuditVisible ? 1 : 0}`);
+      console.log(`business_os_app_release_activity_audit_redacted=${result.activityAuditRedacted ? 1 : 0}`);
+      console.log(`business_os_app_release_reload_verified=${result.reloadVerified ? 1 : 0}`);
+      console.log(`business_os_app_release_storage_boundary_checked=${result.storageBoundaryChecked ? 1 : 0}`);
+      if (result.advancedStatusVersion) console.log(`advanced_status=${result.advancedStatusVersion}`);
+      if (result.advancedStatusRuntime) console.log(`rxdb_runtime=${JSON.stringify(result.advancedStatusRuntime)}`);
+    } else if (result.mode === 'business-os-app-audience-ui') {
+      console.log(`business_os_app_audience_target_module=${result.targetModuleId || ''}`);
+      console.log(`business_os_app_audience_actor_role=${result.actorRole || ''}`);
+      console.log(`business_os_app_audience_auth_state=${result.authState || ''}`);
+      console.log(`business_os_app_audience_browser_context=${result.browserContext || ''}`);
+      console.log(`business_os_app_audience_tenant_scope=${result.tenantScope || ''}`);
+      console.log(`business_os_app_audience_private_hidden_for_team=${result.privateHiddenForTeam ? 1 : 0}`);
+      console.log(`business_os_app_audience_preview_visible_for_target=${result.previewVisibleForTarget ? 1 : 0}`);
+      console.log(`business_os_app_audience_preview_hidden_for_outside=${result.previewHiddenForOutside ? 1 : 0}`);
+      console.log(`business_os_app_audience_restricted_hidden_for_outside=${result.restrictedHiddenForOutside ? 1 : 0}`);
+      console.log(`business_os_app_audience_deep_link_locked_outside=${result.deepLinkLockedOutside ? 1 : 0}`);
+      console.log(`business_os_app_audience_reload_verified=${result.reloadVerified ? 1 : 0}`);
+      console.log(`business_os_app_audience_fresh_profile_verified=${result.freshProfileVerified ? 1 : 0}`);
+      console.log(`business_os_app_audience_storage_boundary_checked=${result.storageBoundaryChecked ? 1 : 0}`);
+      if (result.advancedStatusVersion) console.log(`advanced_status=${result.advancedStatusVersion}`);
+      if (result.advancedStatusRuntime) console.log(`rxdb_runtime=${JSON.stringify(result.advancedStatusRuntime)}`);
+    } else if (result.mode === 'business-os-agent-scope-ui') {
+      console.log(`business_os_agent_scope_target_module=${result.targetModuleId || ''}`);
+      console.log(`business_os_agent_scope_agent_id=${result.agentId || ''}`);
+      console.log(`business_os_agent_scope_actor_role=${result.actorRole || ''}`);
+      console.log(`business_os_agent_scope_auth_state=${result.authState || ''}`);
+      console.log(`business_os_agent_scope_browser_context=${result.browserContext || ''}`);
+      console.log(`business_os_agent_scope_tenant_scope=${result.tenantScope || ''}`);
+      console.log(`business_os_agent_scope_panel_visible=${result.panelVisible ? 1 : 0}`);
+      console.log(`business_os_agent_scope_client_context_matches_ui=${result.clientContextMatchesUi ? 1 : 0}`);
+      console.log(`business_os_agent_scope_app_store_panel_visible=${result.appStorePanelVisible ? 1 : 0}`);
+      console.log(`business_os_agent_scope_app_store_context_matches_ui=${result.appStoreClientContextMatchesUi ? 1 : 0}`);
+      console.log(`business_os_agent_scope_business_chat_scope_matches_context=${result.businessChatScopeMatchesContext ? 1 : 0}`);
+      console.log(`business_os_agent_scope_settings_grant_boundary_visible=${result.settingsGrantBoundaryVisible ? 1 : 0}`);
+      console.log(`business_os_agent_scope_app_hidden_denied=${result.appHiddenDenied ? 1 : 0}`);
+      console.log(`business_os_agent_scope_data_denied_before_grant=${result.dataDeniedBeforeGrant ? 1 : 0}`);
+      console.log(`business_os_agent_scope_read_allowed_after_grant=${result.readAllowedAfterGrant ? 1 : 0}`);
+      console.log(`business_os_agent_scope_write_denied_without_grant=${result.writeDeniedWithoutGrant ? 1 : 0}`);
+      console.log(`business_os_agent_scope_audit_visible=${result.auditVisible ? 1 : 0}`);
+      console.log(`business_os_agent_scope_denied_reason_visible=${result.deniedReasonVisible ? 1 : 0}`);
+      if (result.advancedStatusVersion) console.log(`advanced_status=${result.advancedStatusVersion}`);
+      if (result.advancedStatusRuntime) console.log(`rxdb_runtime=${JSON.stringify(result.advancedStatusRuntime)}`);
+    } else if (result.mode === 'business-os-restore-resync-ui') {
+      const replicated = pollSqliteFileAndChunk(result.id);
+      if (replicated.payload !== result.browserPayload) {
+        throw new Error(`restore-resync sqlite payload mismatch: ${replicated.payload}`);
+      }
+      console.log(`business_os_restore_resync_auth_state=${result.authState || ''}`);
+      console.log(`business_os_restore_resync_actor_role=${result.actorRole || ''}`);
+      console.log(`business_os_restore_resync_browser_context=${result.browserContext || ''}`);
+      console.log(`business_os_restore_resync_tenant_scope=${result.tenantScope || ''}`);
+      console.log(`business_os_restore_resync_webrtc_only=${result.webrtcOnly ? 1 : 0}`);
+      console.log(`business_os_restore_resync_peer_stopped=${result.peerStopped ? 1 : 0}`);
+      console.log(`business_os_restore_resync_local_only_before_restart=${result.localOnlyBeforeRestart ? 1 : 0}`);
+      console.log(`business_os_restore_resync_peer_restarted=${result.peerRestarted ? 1 : 0}`);
+      console.log(`business_os_restore_resync_checkpoint_epoch_count=${(result.peerCheckpointRefresh?.checkpointEpochs || []).filter(Boolean).length}`);
+      console.log(`business_os_restore_resync_native_converged_after_restart=${result.nativeConvergedAfterRestart ? 1 : 0}`);
+      console.log(`business_os_restore_resync_replicated_id=${result.id || ''}`);
       if (result.advancedStatusVersion) console.log(`advanced_status=${result.advancedStatusVersion}`);
       if (result.advancedStatusRuntime) console.log(`rxdb_runtime=${JSON.stringify(result.advancedStatusRuntime)}`);
     } else if (result.mode === 'coding-agents-ui') {

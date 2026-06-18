@@ -1033,10 +1033,11 @@ fn openalex_search(root: &Path, request: &ScholarlySearchRequest) -> Result<Vec<
             .get("doi")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
-        let Some(url) = doi
-            .clone()
-            .or_else(|| item.get("id").and_then(Value::as_str).map(ToOwned::to_owned))
-        else {
+        let Some(url) = doi.clone().or_else(|| {
+            item.get("id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        }) else {
             continue;
         };
         let rank = out.len() + 1;
@@ -1182,7 +1183,12 @@ fn semantic_scholar_authors(item: &Value) -> Option<String> {
         .get("authors")
         .and_then(Value::as_array)?
         .iter()
-        .filter_map(|author| author.get("name").and_then(Value::as_str).map(ToOwned::to_owned))
+        .filter_map(|author| {
+            author
+                .get("name")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
         .collect();
     if names.is_empty() {
         None
@@ -1891,7 +1897,11 @@ mod tests {
         let root = unique_test_root("mock-crossref-disabled");
         let db = root.join("runtime/ctox.sqlite3");
         write_runtime_kv(&db, "CTOX_SCHOLARLY_SEARCH_ENABLED", "false");
-        write_runtime_kv(&db, "CTOX_CROSSREF_BASE_URL", &format!("http://127.0.0.1:{port}"));
+        write_runtime_kv(
+            &db,
+            "CTOX_CROSSREF_BASE_URL",
+            &format!("http://127.0.0.1:{port}"),
+        );
         let request = ScholarlySearchRequest {
             query: "anything".to_string(),
             provider: Some(ScholarlySearchProvider::Crossref),

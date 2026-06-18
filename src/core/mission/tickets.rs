@@ -62,6 +62,7 @@ const WORKFLOW_ROLE_REDUCER: &str = "reducer";
 const WORKFLOW_STEP_STATUS_READY: &str = "ready";
 const WORKFLOW_STEP_STATUS_WAITING: &str = "waiting";
 const WORKFLOW_MATERIALIZE_DEFAULT_LIMIT: usize = 16;
+const WORKFLOW_MAX_STEPS_PER_WORKFLOW: usize = 256;
 const REQUIRED_KNOWLEDGE_DOMAINS: &[&str] = &[
     "source_profile",
     "label_catalog",
@@ -3506,6 +3507,28 @@ fn put_ticket_workflow_step(
             object.insert("skill".to_string(), json!(skill));
         }
     }
+    let step_dedupe_key = format!("ticket-workflow-step:{}:{}", workflow_id, step_id);
+    let prospective_work_id = format!(
+        "self-work:{}:{}",
+        case.source_system,
+        stable_digest(&step_dedupe_key)
+    );
+    {
+        let conn = open_ticket_db(root)?;
+        let is_new_step = load_ticket_self_work_item_raw(&conn, &prospective_work_id)?.is_none();
+        if is_new_step {
+            let existing_count = count_ticket_workflow_steps_internal(&conn, &workflow_id)?;
+            if existing_count as usize + 1 > WORKFLOW_MAX_STEPS_PER_WORKFLOW {
+                anyhow::bail!(
+                    "workflow `{}` already has {} steps, at the per-workflow ceiling of {}; refusing to materialize step `{}`",
+                    workflow_id,
+                    existing_count,
+                    WORKFLOW_MAX_STEPS_PER_WORKFLOW,
+                    step_id
+                );
+            }
+        }
+    }
     put_ticket_self_work_item(
         root,
         TicketSelfWorkUpsertInput {
@@ -3871,6 +3894,14 @@ fn list_ticket_workflow_steps_internal(
         .into_iter()
         .map(|item| hydrate_ticket_self_work_item(conn, item))
         .collect()
+}
+fn count_ticket_workflow_steps_internal(conn: &Connection, workflow_id: &str) -> Result<i64> {
+    conn.query_row(
+        r#"SELECT COUNT(*) FROM ticket_self_work_items WHERE kind = ?1 AND json_extract(metadata_json, '$.workflow_id') = ?2"#,
+        params![WORKFLOW_STEP_KIND, workflow_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .map_err(anyhow::Error::from)
 }
 fn locate_workflow_step(
     root: &Path,

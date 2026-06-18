@@ -20,9 +20,11 @@ For CTOX App Creator and runtime-installed app work, follow this short path befo
 3. Inspect exactly three shipped source modules for patterns, preferably `customers`, `shiftflow`, and `outbound`. Use `notes` only as a supplemental simple-CRUD reference; do not treat it as a scaffold-helper template.
 4. Preserve scaffold helper export names such as `buildFollowUpCommand`, `summarizeRecords`, and `visibleRecords` unless you update every import in `index.js` and `tests/*.mjs` in the same edit.
 5. Use direct bounded file edits only. If a shell write fails because of quoting, history expansion, command length, or escaping, do not switch to Python, base64, Node writer scripts, generated writer scripts, or data-URL workarounds. Shorten the file, split helpers, remove fragile punctuation from generated literals, or edit the smaller affected file.
-6. Required artifacts are canonical files, not shell patterns. Write `module.json`, `collections.schema.json`, `schema.js`, `index.html`, `index.css`, `index.js`, `icon.svg`, locales, core helpers, and tests by exact path only. Do not create temporary schema/manifest aliases, do not copy through globs or brace expansion, and do not run `rm` against required artifacts.
-7. Tests must prove useful behavior, not only syntax. At minimum they must cover record visibility/summary logic and a `business_os.chat.task` command payload whose title/instruction/prompt/record_snapshot contain actual facts from the fixture records. All tests in `tests/*.test.mjs` must pass; adding a new green test while an old scaffold test imports a missing export is still red.
-8. Run `ctox business-os app validate <id> --installed` before claiming success, then repair every bullet exactly.
+6. Required artifacts are canonical files, not shell patterns. Write `module.json`, `collections.schema.json`, `schema.js`, `index.html`, `index.css`, `index.js`, `icon.svg`, locales, core helpers, and tests by exact path only. For runtime-installed App Creator apps, the module root may contain only those root files plus `core/`, `locales/`, and `tests/`. Do not create or leave temporary schema/manifest aliases, typo files such as `m` or `modul.json`, scratch notes, copied app roots, glob artifacts, or ad hoc helper directories in the module root.
+7. `schema.js` is invariant. Do not rename it, delete it, replace it with `schema.mjs`, or leave a root-level `schema.mjs`/`schema.cjs` alias next to it. Put reusable schema fragments in `core/*.mjs` and re-export them from `schema.js`.
+8. Tests must prove useful behavior, not only syntax. At minimum they must cover record visibility/summary logic and a `business_os.chat.task` command payload whose title/instruction/prompt/record_snapshot contain actual facts from the fixture records. Do not write negative anti-pattern tests or assertion messages that contain forbidden layout/data/dependency literals; validators own those checks. All tests in `tests/*.test.mjs` must pass; adding a new green test while an old scaffold test imports a missing export is still red.
+9. Run `ctox business-os app validate <id> --installed` before claiming success, then repair every bullet exactly.
+10. Once `ctox business-os app validate ...` is green, stop. Do not run repository-wide conformance scripts, source-wide RxDB scans, broad file dumps, cosmetic rewrites, or extra polishing passes. A green App Creator validator plus the required focused tests is the completion boundary.
 
 ## Priority Order
 
@@ -47,11 +49,12 @@ you are about to run npm, npx, pnpm, yarn, bun, npm install, npm init, npm test,
 you are about to use esbuild, Vite, Rollup, Webpack, node:vm, or new Function as a syntax-check, import, schema-transform, or test workaround
 you are about to mention forbidden package-manager, bundler, or dependency names as tooling, import, config, install, test, or build concepts inside generated app files, tests, comments, or user-visible copy; keep tooling references only in validation/skill context. Domain words that collide with tool names, such as "rollup" for KPI or finance summaries, are allowed when they clearly describe business data and not JavaScript tooling.
 you are about to use IndexedDB directly, localStorage, sessionStorage, Postgres, SQLite from browser code, ctox.db, ctx.db.raw, HTTP data APIs, /rxdb/pull, /commands, or any fallback data path
-you are about to use legacy module patterns as implementation authority instead of translating them to the current contract; examples to reject for new App Creator apps include ctx.db.raw, ctx.collections, manual business_commands inserts/upserts, pending_sync command fallbacks, window.dispatchEvent('ctox-business-os-chat-submit'), esbuild/fake-DOM tests, JSON-module schema wrappers, and default layout.right panes
+you are about to use legacy module patterns as implementation authority instead of translating them to the current contract; examples to reject for new App Creator apps include ctx.db.raw, ctx.collections, manual business_commands inserts/upserts, pending_sync command fallbacks, window.dispatchEvent('ctox-business-os-chat-submit'), esbuild/fake-DOM tests, JSON-module schema wrappers, default layout.right panes, and right-drawer manifest metadata
 you are about to request complete file dumps, delegate a broad subagent sweep, or spend more than a short targeted pass on existing modules before writing the first runnable module files
 you are about to run broad discovery commands over `$HOME`, `/Users`, the whole install root, the whole repo, or validator/checker names; use exact known paths, `MODULE_DIR`, and at most the three selected few-shot modules
 you are about to read or write `$HOME/.local/state/ctox/business-os/installed-modules` directly; use the prompted `runtime/business-os/installed-modules/<id>/` module path only
 you are about to write app files outside the resolved module directory, such as root-level module.json, root-level collections.schema.json, root-level <id>/, src/skills/, or any skill-named path
+you are about to leave any unexpected file or directory directly under the runtime-installed module root; allowed root entries are only module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, core/, locales/, and tests/
 you are building a new runtime-installed App Creator app and neither the CTOX service preflight nor your first explicit action has created a complete validator-clean scaffold under the target directory
 you are about to delete, omit, or replace scaffold invariants such as core/automation.mjs, core/records.mjs, locales/de.json, locales/en.json, or tests/*.test.mjs instead of customizing them in place
 you are about to clean, reset, delete, or rewrite a validator-clean scaffold wholesale because it looks generic; keep it as the baseline and edit the smallest domain-specific parts
@@ -75,7 +78,7 @@ index.js does not load the module fragment with `fetch(new URL('./index.html', i
 index.html is a full browser document or declares document/head resources; App Creator `index.html` must be a shell fragment only, with no `<!doctype>`, `<html>`, `<head>`, `<body>`, `<link>`, `<script>`, `<meta>`, `<title>`, or `<style>` tags
 index.js queries a `data-*` selector that is absent from index.html and from generated markup
 tests under `tests/` read module files with `../../module.json`, `../../collections.schema.json`, or `../../schema.js`; from `tests/*.test.mjs`, the module root is exactly `..`, so sibling files must resolve from `resolve(testDir, '..')`
-the app has a decorative third pane, layout.right by default, right-column resizers by default, decorative controls, fake AI buttons, fake status-only actions, or UI that is not needed for the workflow
+the app has a decorative third pane, layout.right by default, layout.drawers.right/right-drawer metadata by default, right-column resizers by default, decorative controls, fake AI buttons, fake status-only actions, or UI that is not needed for the workflow
 module.json embeds `layout.icon_svg` instead of using the required separate `icon.svg`
 module.json embeds inline SVG in any field such as `icon_svg`, `iconSvg`, `layout.icon`, or `layout.icon_svg`; generated apps must keep all SVG markup only in icon.svg
 index.css defines shell/base tokens such as `--surface` or creates self-referential local tokens such as `--<id>-bg: var(--<id>-bg)`
@@ -85,6 +88,9 @@ the validator reports missing files, right/third-pane layout, schema, manifest, 
 you are about to write a very large app file as one huge tool-call argument or here-doc; keep generated files concise and split large writes into bounded chunks
 you are about to use Python, base64 blobs, Node writer scripts, data URLs, generated writer scripts, or temporary generated file-copy wrappers to create app files; if a file needs that, split/refactor it into smaller ESM helpers and direct bounded edits
 you are about to fix shell quoting, history expansion, command-length, or escaping problems by switching to Python/base64/Node writer scripts instead of shortening or splitting the affected app file
+you are about to continue editing, reading whole generated files, running broad conformance scripts, or polishing after `ctox business-os app validate <id> --installed|--source` is already green
+you are about to run source-wide validation scripts such as `assert-module-conformance.mjs` or `assert-rxdb-only.mjs` as an extra readiness gate for a runtime-installed App Creator app after the app-specific validator is green; use the app-specific validator as the acceptance gate and stop
+you are about to dump complete generated files with `cat`, loops over every app artifact, or broad `find`/`rg` sweeps after the scaffold exists; inspect only targeted snippets needed to repair a concrete failing validator or test bullet
 you are about to patch a large generated JavaScript file with fragile line-number sed edits instead of rewriting the relevant bounded helper/file
 you are about to make a failing test match broken behavior instead of fixing the app contract violation it exposed
 you are about to write or keep generated tests whose fixture expectations are not hand-computed and internally consistent with the helper logic they exercise
@@ -97,6 +103,7 @@ you are spending extra turns reading validator/static-checker implementation int
 you are trying to satisfy or avoid scanner keywords by mentally reconstructing the checker instead of writing the smallest valid Business OS module and then repairing actual validator bullets
 you are about to write tests that contain forbidden legacy strings as negative-proof literals; generated tests must avoid the forbidden literals entirely and assert positive current-contract behavior instead
 you are about to write generated tests that use assert.doesNotMatch, scan source files for forbidden anti-pattern absence, build forbidden tokens from fragments, use String.fromCharCode or regex assembly to bypass validators, or describe validator/checker workarounds; delete that test and write positive contract tests instead
+you are about to assert that a manifest, HTML fragment, CSS file, or source file lacks a forbidden third-pane/right-pane pattern by embedding that forbidden term in a test name, assertion, failure message, regex, comment, property access, or string literal; validators own absence checks. Do not write `manifest.layout?.right`, `manifest.layout.drawers?.right`, or equivalent negative layout access. Test positive layout facts instead, such as `manifest.layout.shell === "full-workspace"`, the expected left/center labels, `Object.keys(manifest.layout).sort()` equalling only the expected keys, and the expected module root class.
 tests and Business OS guards were not run after the last code change
 ```
 
@@ -140,6 +147,8 @@ MODULE_DIR=<resolved target from the prompt>
 required files: module.json, collections.schema.json, schema.js, index.html,
 index.css, index.js, icon.svg, locales/de.json, locales/en.json,
 tests/<id>.test.mjs
+allowed installed-module root entries: module.json, collections.schema.json,
+schema.js, index.html, index.css, index.js, icon.svg, core/, locales/, tests/
 first repair action if red: create missing required files, then remove any
 unjustified right/third pane, then rerun validation
 ```
@@ -186,6 +195,14 @@ commands printed in this skill. Do not run `find`, `rg`, `grep`, or `ls` over
 repo to discover validators, scripts, examples, or guard internals. If you need
 the validator, run `ctox business-os app validate <id> --installed|--source`;
 do not search for validator filenames.
+
+The CTOX execution harness enforces these App Creator constraints. It blocks
+whole-file `cat` dumps of generated module artifacts, Python/Node/base64
+programmatic writers against module files, oversized heredoc rewrites, source
+tree installed-module writes, package-manager side effects, and root-level app
+artifact aliases. Treat such guard output as an instruction to narrow the edit
+or split the app into smaller module-local ESM helpers, not as a shell problem
+to bypass.
 
 After the required reading and tiny analogue map, write the first runnable
 slice immediately. The first write action after the three-module summary must
@@ -411,9 +428,11 @@ Minimum installed-module manifest fields:
 ```
 
 This is also a negative example: do not add `"right": "Details"`,
-`"right": "Inspector"`, or any `layout.right` unless the user explicitly asked
-for a persistent third pane and you also add `layout.third_pane_justification`.
-The default Business OS app surface is one or two panes plus a modal/drawer.
+`"right": "Inspector"`, `layout.drawers.right`, or any `layout.right` unless
+the user explicitly asked for a persistent third pane and you also add
+`layout.third_pane_justification`. The default Business OS app surface is one
+or two panes plus an in-module modal/drawer. Do not use right-drawer manifest
+metadata as a decorative substitute for a third pane.
 Do not embed SVG in `module.json.layout.icon_svg`; keep the icon in the
 required separate `icon.svg` file. Do not put inline SVG markup in any manifest
 field, including `icon_svg`, `iconSvg`, `layout.icon`, or `layout.icon_svg`.
@@ -556,6 +575,15 @@ Do not write tests named "does not use forbidden ...", "anti-patterns", or
 similar. Validators own negative anti-pattern checks. Generated module tests
 must assert positive behavior only: schema parity, reducers/calculations,
 valid command payload shape, and `ctx.commandBus.dispatch` integration hooks.
+For layout tests, assert the expected positive contract, for example
+`manifest.layout.shell`, the left/center labels, the exact expected layout key
+set, and the module root class used by the fragment/CSS. Do not write checks
+or property reads such as `manifest.layout?.right`,
+`manifest.layout.drawers?.right`, `!('right' in manifest.layout)`,
+`!('right_resizer' in manifest.layout)`, or failure messages like "no default
+right-resizer"; those literals make the test file itself fail the static
+checker. A good assertion is
+`assert.deepEqual(Object.keys(manifest.layout).sort(), ['center', 'left', 'shell'])`.
 
 `module.json` must list every collection the module reads/writes. Shell collections such as `business_commands`, `ctox_queue_tasks`, `business_module_catalog`, and `ctox_runtime_settings` may be listed when used, but module-owned collections must be declared in both `schema.js` and `collections.schema.json`.
 
@@ -586,7 +614,7 @@ export function mount(ctx) {
 ## UI Rules
 
 - Start with the smallest work surface that fits the workflow. Two panes plus modals are usually better than three panes.
-- Default to one or two panes plus modals/drawers. Do not create `layout.right`, `.right` sections, right-column resizers, or three-column CSS grids by default.
+- Default to one or two panes plus in-module modals/drawers. Do not create `layout.right`, `layout.drawers.right`, right-drawer manifest metadata, `.right` sections, right-column resizers, or three-column CSS grids by default.
 - Do not assume a shell "right rail" or inspector exists. Only use shell toolbar/event APIs after inspecting an existing module that uses that exact API; otherwise keep the action inside the module's normal one/two-pane surface.
 - Use a third pane only when the user explicitly asked for one or when the workflow has a persistent separate context stream that must remain visible while editing. If you use one, add a short code comment in the module explaining that workflow need. Otherwise use a modal or drawer.
 - Do not add visible controls unless they work end to end.
@@ -605,14 +633,18 @@ export function mount(ctx) {
 - Do not create broad status/filter/export/settings surfaces unless the prompt asked for them and the handlers are implemented.
 - For App Creator/runtime-installed apps, use vanilla DOM and browser APIs only. A local `.mjs` helper is fine; a framework runtime or generated bundle is not.
 - Do not write negative source-scanner tests for forbidden legacy patterns. The validator already performs that role. If validation reports forbidden terms in a test file, remove the negative scanner test instead of splitting or reconstructing the terms.
+- Do not write negative layout/data/dependency absence assertions in generated tests. If validation reports a forbidden term in a test assertion, comment, name, or failure message, delete that negative assertion and replace it with a positive contract assertion.
 - Tests are required app artifacts, not optional documentation. Preserve `tests/*.test.mjs`; if you regenerate domain helpers, regenerate positive helper tests in the same turn and verify `rg --files "$MODULE_DIR/tests"` returns at least one test before final validation.
 - Keep helper exports and all local named imports in lockstep. Every named local import in `index.js`, `core/*.mjs`, and `tests/*.mjs` must exist as a real `export` in the target file. Preserve scaffold helper exports such as `COLLECTION_NAME`, `createRecord`, `normalizeStatus`, `summarizeRecords`, and `visibleRecords` unless every importer is updated in the same turn.
 - For App Creator scaffold modules, prefer keeping the scaffold API stable and changing its implementation: `buildFollowUpCommand` may build the domain-specific follow-up or chat task even when the visible button label is "Create stock action", "Request renewal review", or similar. Rename the export only when `index.js` and all tests are updated in the same edit and validation is rerun.
 - Do not add a replacement test file and leave the scaffold test behind in a broken state. Validation runs every `tests/*.test.mjs`; stale tests with missing named imports, obsolete helper names, or wrong fixture expectations are real failures.
 - Never delete required app artifacts as part of a replacement workflow. Keep `module.json`, `collections.schema.json`, `schema.js`, `index.html`, `index.css`, `index.js`, `icon.svg`, locales, core helpers, and tests present after every edit. If a command would make the module invalid between steps, use a smaller exact edit instead.
+- Never create an alternate root schema file such as `schema.mjs` or `schema.cjs`. If tests need ESM helpers, keep those helpers under `core/*.mjs`; `schema.js` remains the only root schema module.
 - Automation tests must assert concrete fixture facts. A passing test that checks only `type`, `command_type`, or "has record_snapshot" is too weak; also assert that title/instruction/prompt and `record_snapshot` include the selected records, counts, statuses, due dates, or amounts from the fixture.
 - Avoid huge single tool calls. If a file grows large enough to risk malformed tool-call JSON, reduce scope first; otherwise write it in bounded chunks and immediately run syntax checks.
 - Do not use Python, base64, Node one-off writer scripts, data URLs, or temporary generated file-copy wrappers to recover from malformed shell writes. When a direct write is fragile, reduce the app scope, split the file into a smaller local `.mjs` helper, or edit the affected helper directly with simpler literals.
+- Do not dump the whole generated module back into context. Use `sed -n` for small line ranges, `rg -n` for exact selectors/imports, and the validator report for repair targets. Full-file `cat` loops and broad source scans are App Creator failure patterns.
+- Do not keep working after the app-specific validator is green. The final action after a green validator is the final response; extra repo-wide checks or cosmetic rewrites are scope creep and can turn a good app into a failed bench run.
 - Do not inspect shell aliases or write temporary probe files to test the harness. Trust the target block and validator.
 - Do not copy the skill's forbidden tool/dependency names into app comments or test comments. The static checker treats generated-file literals as violations.
 
@@ -636,19 +668,19 @@ phase 4 versioning: new/runtime-installed module.json uses SemVer x.y.z without 
 phase 5 schema: collections.schema.json has schema_format ctox-business-os-module-collections-v1, contains only module-owned collections, and matches schema.js
 phase 6 persistence: all durable records use ctx.db facade collections; no ctox.db, db.raw, Web Storage, HTTP data route, table creation, or manual database file
 phase 7 automation: at least one visible action dispatches a real `business_os.chat.task` command through ctx.commandBus.dispatch and has a testable payload builder
-phase 8 UI layout: default is one/two panes plus modal or drawer; no layout.right, right rail, right-column CSS, right resizer, or three-column grid unless explicitly justified by workflow
+phase 8 UI layout: default is one/two panes plus an in-module modal or drawer; no layout.right, layout.drawers.right/right-drawer manifest metadata, right rail, right-column CSS, right resizer, or three-column grid unless explicitly justified by workflow
 phase 9 UI controls: every visible button, filter, tab, menu, and form action has a real handler and state/persistence/dispatch effect; every `data-*` selector queried in index.js exists in index.html or generated markup
 phase 10 CSS: module CSS is scoped under the module root class; no :root/html/body custom property definitions, shell token redefinitions, self-referential custom properties, decorative resize handles, or layout affordances copied from unrelated modules
 phase 11 dependencies: browser runtime uses only vanilla HTML/CSS/browser ESM and local relative ESM imports; no UI framework, JSX/TSX, package manager, bare package import, remote import, CommonJS, bundler, transpiler, or generated bundle
-phase 12 tests/imports: tests import only local `.mjs` helpers and JSON/text files; every named local import in `index.js`, `core/*.mjs`, and `tests/*.mjs` is exported by that target file; scaffold export names such as buildFollowUpCommand, summarizeRecords, and visibleRecords are preserved unless every importer was updated; tests do not import `index.js`/`schema.js` directly, do not use data: URLs, and cover schema parity, core command builders, and at least one CRUD/automation path; automation assertions include concrete fixture facts in title/instruction/prompt and record_snapshot; fixture totals/counts are hand-computed in comments or small named facts and are consistent with the implementation; scaffold core/locales/tests still exist
-phase 13 validation: node --check, `ctox business-os app validate <id> --installed|--source`, forbidden-pattern scan, and any available shell/browser smoke proof are green
-phase 14 cleanup: no root-level artifacts, source-installed app artifacts, probe files, blocker notes, generated bundles, package files, stale phase rows, temporary schema/manifest files, literal wildcard/brace filenames, or stale failing replacement tests remain
+phase 12 tests/imports: tests import only local `.mjs` helpers and JSON/text files; every named local import in `index.js`, `core/*.mjs`, and `tests/*.mjs` is exported by that target file; scaffold export names such as buildFollowUpCommand, summarizeRecords, and visibleRecords are preserved unless every importer was updated; tests do not import `index.js`/`schema.js` directly, do not use data: URLs, do not contain forbidden anti-pattern literals as negative assertions/messages, and cover schema parity, core command builders, and at least one CRUD/automation path; automation assertions include concrete fixture facts in title/instruction/prompt and record_snapshot; fixture totals/counts are hand-computed in comments or small named facts and are consistent with the implementation; scaffold core/locales/tests still exist
+phase 13 validation: focused node checks, `ctox business-os app validate <id> --installed|--source`, forbidden-pattern scan when needed for a concrete validator bullet, and any available shell/browser smoke proof are green; after the app-specific validator is green, stop instead of running source-wide conformance scripts or polishing
+phase 14 cleanup: no unexpected installed-module root entries remain; runtime-installed module root contains only module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, core/, locales/, and tests/; no root-level artifacts, source-installed app artifacts, probe files, blocker notes, generated bundles, package files, stale phase rows, temporary schema/manifest files, literal wildcard/brace filenames, or stale failing replacement tests remain
 ```
 
 Treat these common findings as automatic rework, not acceptable tradeoffs:
 
 ```text
-module.json has layout.right without layout.third_pane_justification
+module.json has layout.right or layout.drawers.right without layout.third_pane_justification
 module.json embeds layout.icon_svg instead of using icon.svg
 index.html/index.css contains data-*-right, right-pane, right-column, right-resizer, or a three-column grid copied from another app without a real workflow need
 collections.schema.json starts directly with collections and omits schema_format
@@ -661,6 +693,8 @@ automation helper sets only type and omits command_type, or omits record_snapsho
 automation helper hides the required App Creator command shape behind an untested custom payload; tests must prove a builder returns business_os.chat.task with command_type and record_snapshot
 tests import index.js/schema.js directly, or load them through data:text/javascript/base64, instead of testing shared `.mjs` helpers plus JSON/text parity
 module directory contains temporary or literal pattern artifacts such as .tmp_schema.json, .csjson.tmp, co*ions.*json, colle{ctions,ctions}.schema.json, module*.json, or collections*.json
+runtime-installed module root contains any non-canonical direct child such as m, modul.json, scratch manifests, notes/status Markdown, copied app folders, generated bundles, package files, or ad hoc helper directories outside core/, locales/, and tests/
+module directory contains root-level schema.mjs or schema.cjs as an alias, migration workaround, or replacement for schema.js
 any required artifact is deleted during a repair step, even briefly, and validation is not rerun after restoring it
 new tests pass but an older tests/*.test.mjs still imports a missing helper export or asserts stale scaffold behavior
 the phase tracker says done while validator or browser proof is red
@@ -746,7 +780,7 @@ Repair failures in this order. Do not spend time on later items while an
 earlier layer is still red:
 
 ```text
-1. exact target directory and no root/off-target artifacts
+1. exact target directory and no root/off-target artifacts or unexpected installed-module root entries
 2. valid module.json and collections.schema.json JSON
 3. source vs installed manifest fields: entry and install_scope
 4. required file set, including index.css, locales, icon, tests

@@ -43,8 +43,7 @@ const TOKEN_ENDPOINT: &str = "https://plus.dnb.com/v3/token";
 const PROFILE_BASE: &str = "https://plus.dnb.com/data/duns";
 const SECRET_NAME: &str = "DNB_DIRECT_API_KEY";
 const LOGIN_URL: &str = "https://app.dnbhoovers.com/login";
-const VERIFY_SELECTOR: &str =
-    "[data-testid=\"global-search\"], input[type=\"search\"], nav";
+const VERIFY_SELECTOR: &str = "[data-testid=\"global-search\"], input[type=\"search\"], nav";
 const CREDENTIAL_SELECTOR: &str =
     "input[name=\"password\"], input#password, input[type=\"password\"]";
 const CAPTURE_SCRIPT: &str = "dnbhoovers.company_capture.v1";

@@ -68,6 +68,67 @@ const state = {
   uiTestResults: {}
 };
 
+const ACCOUNTING_COLLECTIONS = Object.freeze([
+  'accounting_accounts',
+  'accounting_journal_entries',
+  'accounting_journal_entry_lines',
+  'accounting_ledger_entries',
+  'accounting_receipts',
+  'accounting_bank_statements',
+  'accounting_bank_statement_lines',
+  'accounting_number_series',
+]);
+
+const ACCOUNTING_SEED_WRITE_COLLECTIONS = Object.freeze([
+  'accounting_accounts',
+  'accounting_journal_entries',
+  'accounting_journal_entry_lines',
+  'accounting_receipts',
+  'accounting_bank_statements',
+  'accounting_bank_statement_lines',
+]);
+
+function fibuCollection(name) {
+  const facade = state.ctx?.db;
+  if (!facade || !name) return null;
+  if (!canReadCollection(name)) return null;
+  try {
+    return facade.collection?.(name) || null;
+  } catch (error) {
+    if (!isBusinessOsPermissionDenied(error)) {
+      console.warn(`[fibu] collection ${name} is unavailable`, error);
+    }
+    return null;
+  }
+}
+
+function fibuDb(requiredCollections = ACCOUNTING_COLLECTIONS) {
+  const entries = requiredCollections.map((name) => [name, fibuCollection(name)]);
+  if (entries.some(([, collection]) => !collection)) return null;
+  return Object.fromEntries(entries);
+}
+
+function canReadCollection(name) {
+  const permissionCheck = state.ctx?.permissions?.canReadCollection;
+  return typeof permissionCheck !== 'function' || permissionCheck(name) === true;
+}
+
+function canWriteCollection(name) {
+  const permissionCheck = state.ctx?.permissions?.canWriteCollection;
+  return typeof permissionCheck !== 'function' || permissionCheck(name) === true;
+}
+
+function canWriteSeedData() {
+  return ACCOUNTING_SEED_WRITE_COLLECTIONS.every((name) => canWriteCollection(name));
+}
+
+function isBusinessOsPermissionDenied(error) {
+  const message = String(error?.message || error || '');
+  return error?.code === 'BUSINESS_OS_PERMISSION_DENIED'
+    || error?.name === 'BusinessOsPermissionDeniedError'
+    || /permission denied|keine datenfreigabe|datenzugriff|data\.read|data\.write/i.test(message);
+}
+
 const ASSETS_MOCK = [
   { nr: 'ANL-2026-01', name: 'MacBook Pro 16 M3 Max', date: '2026-01-15', cost: 420000, life: 3, method: 'Lineaer', prev: 58333, book: 361667 },
   { nr: 'ANL-2026-02', name: 'Herman Miller Aeron Chair', date: '2026-02-10', cost: 160000, life: 13, method: 'Lineaer', prev: 4102, book: 155898 },
@@ -125,7 +186,6 @@ async function ensureStyles() {
 export async function mount(ctx) {
   state.ctx = ctx;
   state.lang = ctx.locale === 'en' ? 'en' : 'de';
-  window.ctoxFibuState = state;
 
   await ensureStyles();
 
@@ -334,7 +394,7 @@ function setupResizers(host) {
 // 🔒 GoBD Hook & Security Guards
 // =========================================================================
 function registerGoBDHooks() {
-  const db = state.ctx.db?.raw;
+  const db = fibuDb(['accounting_journal_entries']);
   if (!db) return;
 
   const entriesCol = db.accounting_journal_entries;
@@ -360,8 +420,8 @@ function registerGoBDHooks() {
 // ⚙️ Database Auto-Initialization
 // =========================================================================
 async function ensureRequiredAccountsExist() {
-  const db = state.ctx.db?.raw;
-  if (!db) return;
+  const db = fibuDb(['accounting_accounts']);
+  if (!db || !canWriteCollection('accounting_accounts')) return;
 
   const requiredSKR03 = [
     { code: '1890', name: 'Privateinlage', root_type: 'equity', account_type: 'regular', parent_id: '0800_G', is_group: false },
@@ -427,8 +487,8 @@ async function ensureRequiredAccountsExist() {
 // ⚙️ Database Auto-Initialization
 // =========================================================================
 async function autoInitializeAccounts() {
-  const db = state.ctx.db?.raw;
-  if (!db) return;
+  const db = fibuDb(['accounting_accounts']);
+  if (!db || !canWriteCollection('accounting_accounts')) return;
 
   try {
     const existingAccounts = (await collectionRecords(db.accounting_accounts))
@@ -491,7 +551,13 @@ function accountMatchesCurrentSkr(account) {
 // 📡 Realtime Subscriptions & Aggregations
 // =========================================================================
 function wireRealtimeSubscriptions() {
-  const db = state.ctx.db?.raw;
+  const db = fibuDb([
+    'accounting_accounts',
+    'accounting_journal_entries',
+    'accounting_journal_entry_lines',
+    'accounting_receipts',
+    'accounting_bank_statement_lines',
+  ]);
   if (!db) return null;
 
   const subs = [];
@@ -518,7 +584,14 @@ function wireRealtimeSubscriptions() {
 }
 
 async function loadAllFibuData() {
-  const db = state.ctx.db?.raw;
+  const db = fibuDb([
+    'accounting_accounts',
+    'accounting_journal_entries',
+    'accounting_journal_entry_lines',
+    'accounting_receipts',
+    'accounting_bank_statements',
+    'accounting_bank_statement_lines',
+  ]);
   if (!db) return;
 
   try {
@@ -871,8 +944,8 @@ function filterAccountsView(query) {
 }
 
 async function forceReInitSKR() {
-  const db = state.ctx.db?.raw;
-  if (!db) return;
+  const db = fibuDb(['accounting_accounts']);
+  if (!db || !canWriteCollection('accounting_accounts')) return;
 
   const confirmed = await showBusinessConfirm(
     `Der Kontenrahmen ${state.skrName} wird gelöscht und aus der Vorlage neu aufgebaut.\n\nAlle lokalen Konten dieses Kontenrahmens werden überschrieben. Journalbuchungen bleiben bestehen, können danach aber auf geänderte Konten verweisen.`,
@@ -2013,7 +2086,7 @@ function openManualJournalDrawer() {
     if (!validateManualEntryForm()) return;
 
     const cents = Math.round(valAmount * 100);
-    const db = state.ctx.db?.raw;
+    const db = fibuDb();
 
     const entryId = 'manual-' + Math.random().toString(36).substring(2, 9);
 
@@ -2101,7 +2174,7 @@ async function handleBankStatementImport(e) {
   if (!file) return;
 
   const text = await file.text();
-  const db = state.ctx.db?.raw;
+  const db = fibuDb();
   if (!db) return;
 
   const statementId = 'stmt-' + Date.now();
@@ -2145,7 +2218,7 @@ async function handleBelegeUpload(e) {
   const files = e.target.files;
   if (!files || files.length === 0) return;
 
-  const db = state.ctx.db?.raw;
+  const db = fibuDb();
   if (!db) return;
 
   for (const file of files) {
@@ -2190,7 +2263,7 @@ async function handleBelegeUpload(e) {
 // 🤖 Stateless Business Matcher & Auto Reconciler Heuristics
 // =========================================================================
 async function triggerAutoReconcile() {
-  const db = state.ctx.db?.raw;
+  const db = fibuDb();
   if (!db) return;
 
   let matchCount = 0;
@@ -2338,7 +2411,7 @@ window.updateReceiptDrawerOptions = (receiptId) => {
 };
 
 window.postReceiptWithAdvancedOptions = async (receiptId) => {
-  const db = state.ctx.db?.raw;
+  const db = fibuDb();
   if (!db) return;
 
   const receipt = state.receipts.find(r => r.id === receiptId);
@@ -2483,7 +2556,7 @@ window.deleteBankSplit = (idx) => {
 };
 
 window.postBankSplitReconciliation = async (lineId) => {
-  const db = state.ctx.db?.raw;
+  const db = fibuDb();
   if (!db) return;
 
   const line = state.bankStatementLines.find(l => l.id === lineId);
@@ -2554,7 +2627,7 @@ window.postBankSplitReconciliation = async (lineId) => {
 // ✔️ Action Direct Controllers (GoBD Immutability execution)
 // =========================================================================
 window.postReceiptDirectly = async (receiptId) => {
-  const db = state.ctx.db?.raw;
+  const db = fibuDb();
   if (!db) return;
 
   const receipt = state.receipts.find(r => r.id === receiptId);
@@ -2631,7 +2704,7 @@ window.postReceiptDirectly = async (receiptId) => {
 };
 
 window.matchBankLineDirectly = async (lineId, receiptId) => {
-  const db = state.ctx.db?.raw;
+  const db = fibuDb();
   if (!db) return;
 
   const line = state.bankStatementLines.find(l => l.id === lineId);
@@ -2658,7 +2731,7 @@ window.matchBankLineDirectly = async (lineId, receiptId) => {
 };
 
 window.triggerStorno = async (entryId) => {
-  const db = state.ctx.db?.raw;
+  const db = fibuDb();
   if (!db) return;
 
   const entry = state.journalEntries.find(e => e.id === entryId);
@@ -2797,8 +2870,8 @@ function appendChatMessage(avatar, text, type) {
 // 🧪 Seed Mock Data (Ensure high fidelity first load)
 // =========================================================================
 async function seedMockDataIfEmpty() {
-  const db = state.ctx.db?.raw;
-  if (!db) return;
+  const db = fibuDb(ACCOUNTING_SEED_WRITE_COLLECTIONS);
+  if (!db || !canWriteSeedData()) return;
 
   if (state.accounts.length === 0) {
     await loadAllFibuData();
@@ -3418,7 +3491,7 @@ window.toggleTravelMeal = function(idx, meal) {
 };
 
 window.saveTravelExpenseDraft = async function() {
-  const db = state.ctx.db?.raw;
+  const db = fibuDb();
   if (!db) return;
 
   const purpose = document.getElementById('travel-purpose').value;
@@ -3493,7 +3566,7 @@ window.saveTravelExpenseDraft = async function() {
 };
 
 window.postTravelEntryDirectly = async function(entryId) {
-  const db = state.ctx.db?.raw;
+  const db = fibuDb();
   if (!db || !db.accounting_journal_entries) {
     console.warn('[fibu] accounting_journal_entries collection not ready yet.');
     return;
@@ -3712,7 +3785,7 @@ window.updateMileageReimbursementLive = function() {
 };
 
 window.saveMileageLogDraft = async function() {
-  const db = state.ctx.db?.raw;
+  const db = fibuDb();
   if (!db) return;
 
   const date = document.getElementById('mileage-date').value;
@@ -3799,7 +3872,7 @@ window.saveMileageLogDraft = async function() {
 };
 
 window.postMileageEntryDirectly = async function(entryId) {
-  const db = state.ctx.db?.raw;
+  const db = fibuDb();
   if (!db) return;
 
   const entry = state.journalEntries.find(e => e.id === entryId);
@@ -3906,7 +3979,7 @@ window.updateCarShareLiveCalculations = function() {
 };
 
 window.postAnnualCarShare = async function() {
-  const db = state.ctx.db?.raw;
+  const db = fibuDb();
   if (!db) {
     closeDrawer();
     return;

@@ -8,7 +8,7 @@ use rusqlite::params;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Duration;
 use std::time::SystemTime;
@@ -23,6 +23,9 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
 
+use super::policy::{
+    allow_decision, BusinessOsPermission, BusinessOsScope, BusinessOsScopeType, PolicyDecision,
+};
 use super::store;
 
 const DEFAULT_LIMIT: usize = 25;
@@ -30,6 +33,7 @@ const MAX_LIMIT: usize = 100;
 const MAX_MCP_RESPONSE_BYTES: usize = 256 * 1024;
 const DEFAULT_RATE_LIMIT_PER_MINUTE: usize = 120;
 const DEFAULT_AUDIT_RETENTION_DAYS: usize = 90;
+const MCP_POLICY_PAYLOAD_KEY: &str = "business_os.mcp_policy.v1";
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const DEFAULT_GATEWAY_RECONNECT_MAX_DELAY_MS: u64 = 30_000;
 const DEFAULT_GATEWAY_HEARTBEAT_INTERVAL_MS: u64 = 30_000;
@@ -329,7 +333,7 @@ pub struct BusinessOsMcpToolDescriptor {
     pub annotations: Option<Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BusinessOsMcpPolicy {
     pub enabled: bool,
     pub allow_reads: bool,
@@ -343,6 +347,12 @@ pub struct BusinessOsMcpPolicy {
     pub allowed_modules: Vec<String>,
     pub allowed_collections: Vec<String>,
     pub denied_tools: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BusinessOsMcpPolicyPayload {
+    schema_version: u8,
+    policy: BusinessOsMcpPolicy,
 }
 
 pub fn serve_mcp_channel(root: &Path, options: BusinessOsMcpServeOptions) -> anyhow::Result<()> {
@@ -848,19 +858,17 @@ pub fn list_modules(
         .get("modules")
         .and_then(Value::as_array)
         .cloned()
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let policy = mcp_policy(root);
+    let modules = modules
         .into_iter()
+        .filter(|module| {
+            let module_id = string_field(module, "id").unwrap_or_default();
+            policy.allowed_modules.is_empty() || policy.allowed_modules.contains(&module_id)
+        })
+        .filter(|module| module_value_visible_to_mcp_actor(root, context, module))
         .map(module_descriptor_from_value)
         .collect::<anyhow::Result<Vec<_>>>()?;
-    let policy = mcp_policy(root);
-    let modules = if policy.allowed_modules.is_empty() {
-        modules
-    } else {
-        modules
-            .into_iter()
-            .filter(|module| policy.allowed_modules.contains(&module.id))
-            .collect()
-    };
     Ok(BusinessOsMcpList {
         ok: true,
         count: modules.len(),
@@ -976,7 +984,7 @@ pub fn call_tool(root: &Path, tool_name: &str, arguments: Value) -> anyhow::Resu
     let context = context_from_arguments(tool_name, &arguments)?;
     enforce_tool_policy(root, tool_name)?;
     enforce_context_policy(root, &context)?;
-    enforce_argument_scope_policy(root, tool_name, &arguments)?;
+    enforce_argument_scope_policy(root, &context, tool_name, &arguments)?;
     enforce_rate_limit(root, &context)?;
     let result = match tool_name {
         "business_os.status" => mcp_status(root, &context)?,
@@ -1121,7 +1129,7 @@ pub fn call_tool(root: &Path, tool_name: &str, arguments: Value) -> anyhow::Resu
         &context,
         "completed",
         None,
-        argument_metadata(&arguments),
+        argument_metadata_with_policy(root, &context, tool_name, &arguments),
     )?;
     Ok(result)
 }
@@ -1135,7 +1143,7 @@ pub fn call_tool_audited(root: &Path, tool_name: &str, arguments: Value) -> anyh
             &context,
             "failed",
             Some(error.to_string()),
-            argument_metadata(&arguments),
+            argument_metadata_with_policy(root, &context, tool_name, &arguments),
         );
     }
     result
@@ -1416,6 +1424,7 @@ pub fn record_approval_decision(
             field: Some("_context.confirmation_state".to_string()),
         }));
     }
+    enforce_business_os_mcp_policy(root, context, context.tool.as_str(), arguments)?;
     let approval_id = optional_string_arg(arguments, "approval_id");
     let message_id = resolve_approval_message_id(root, context, arguments, approval_id.as_deref())?;
     let comment = optional_string_arg(arguments, "comment");
@@ -1433,7 +1442,8 @@ pub fn record_approval_decision(
     let client_context = serde_json::json!({
         "channel": &context.channel,
         "surface": &context.surface,
-        "actor": &context.actor,
+        "actor": resolved_mcp_actor_context(root, context)?,
+        "mcp_actor": &context.actor,
         "workspace": &context.workspace,
         "request_id": &context.request_id,
         "confirmation_state": confirmation_state_as_str(&context.confirmation_state),
@@ -1641,6 +1651,35 @@ pub fn list_module_actions(
                 true,
             ),
         ],
+        "support" => vec![
+            action_descriptor(
+                "support.agent.writeback",
+                &module.id,
+                "Write Support suggestion",
+                "Write a structured Support Agent suggestion for human review.",
+                "write",
+                false,
+                false,
+            ),
+            action_descriptor(
+                "support.agent.apply_suggestion",
+                &module.id,
+                "Apply Support suggestion",
+                "Mark a Support Agent suggestion as applied after human review.",
+                "write",
+                false,
+                false,
+            ),
+            action_descriptor(
+                "support.agent.reject_suggestion",
+                &module.id,
+                "Reject Support suggestion",
+                "Mark a Support Agent suggestion as rejected after human review.",
+                "write",
+                false,
+                false,
+            ),
+        ],
         _ => Vec::new(),
     });
     Ok(BusinessOsMcpList {
@@ -1678,6 +1717,30 @@ pub fn propose_action(
         .get("payload")
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
+    if module_id == "support" && action.action_id.starts_with("support.agent.") {
+        let support_payload = support_agent_action_payload(arguments, &record_id, payload);
+        return Ok(BusinessOsActionProposal {
+            ok: true,
+            command_type: action.action_id.clone(),
+            payload: support_payload,
+            client_context: serde_json::json!({
+                "channel": &context.channel,
+                "surface": &context.surface,
+                "actor": resolved_mcp_actor_context(root, context)?,
+                "mcp_actor": &context.actor,
+                "workspace": &context.workspace,
+                "request_id": &context.request_id,
+                "requires_confirmation": action.confirmation_required,
+                "proposal_only": true,
+                "writeback_contract": "support.agent"
+            }),
+            confirmation_required: action.confirmation_required,
+            would_execute: false,
+            module_id: module_id.to_string(),
+            record_id,
+            action,
+        });
+    }
     Ok(BusinessOsActionProposal {
         ok: true,
         command_type: action.action_id.clone(),
@@ -1690,7 +1753,8 @@ pub fn propose_action(
         client_context: serde_json::json!({
             "channel": &context.channel,
             "surface": &context.surface,
-            "actor": &context.actor,
+            "actor": resolved_mcp_actor_context(root, context)?,
+            "mcp_actor": &context.actor,
             "workspace": &context.workspace,
             "request_id": &context.request_id,
             "requires_confirmation": action.confirmation_required,
@@ -1711,6 +1775,13 @@ pub fn execute_action(
     action_id: &str,
     arguments: &Value,
 ) -> anyhow::Result<BusinessOsActionExecution> {
+    let policy_arguments = arguments_with_module_id(arguments, module_id);
+    enforce_business_os_mcp_policy(
+        root,
+        context,
+        "business_os.execute_action",
+        &policy_arguments,
+    )?;
     let proposal = propose_action(root, context, module_id, action_id, arguments)?;
     if proposal.confirmation_required
         && context.confirmation_state != McpConfirmationState::Approved
@@ -1735,7 +1806,8 @@ pub fn execute_action(
     let client_context = serde_json::json!({
         "channel": &context.channel,
         "surface": &context.surface,
-        "actor": &context.actor,
+        "actor": resolved_mcp_actor_context(root, context)?,
+        "mcp_actor": &context.actor,
         "workspace": &context.workspace,
         "request_id": &context.request_id,
         "requires_confirmation": proposal.confirmation_required,
@@ -1777,6 +1849,38 @@ fn ensure_non_empty(field: &str, value: &str) -> Result<(), BusinessOsMcpError> 
         ));
     }
     Ok(())
+}
+
+fn support_agent_action_payload(
+    arguments: &Value,
+    record_id: &Option<String>,
+    payload: Value,
+) -> Value {
+    let mut payload = match payload {
+        Value::Object(map) => Value::Object(map),
+        _ => serde_json::json!({}),
+    };
+    if let Some(object) = payload.as_object_mut() {
+        let conversation_id = object
+            .get("conversation_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                arguments
+                    .get("conversation_id")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .map(str::to_owned)
+            })
+            .or_else(|| record_id.clone());
+        if let Some(conversation_id) = conversation_id {
+            object
+                .entry("conversation_id".to_string())
+                .or_insert(Value::String(conversation_id));
+        }
+    }
+    payload
 }
 
 fn handle_mcp_http_request(root: &Path, mut request: Request) -> anyhow::Result<()> {
@@ -2048,8 +2152,47 @@ fn ensure_mcp_response_size(value: &Value) -> anyhow::Result<()> {
 }
 
 pub fn mcp_policy(root: &Path) -> BusinessOsMcpPolicy {
+    if let Ok(Some(payload)) = crate::persistence::load_json_payload::<BusinessOsMcpPolicyPayload>(
+        root,
+        MCP_POLICY_PAYLOAD_KEY,
+    ) {
+        return normalize_mcp_policy(payload.policy);
+    }
+    legacy_mcp_policy(root)
+}
+
+pub fn save_mcp_policy(root: &Path, policy: &BusinessOsMcpPolicy) -> anyhow::Result<()> {
+    let payload = BusinessOsMcpPolicyPayload {
+        schema_version: 1,
+        policy: normalize_mcp_policy(policy.clone()),
+    };
+    crate::persistence::store_json_payload(root, MCP_POLICY_PAYLOAD_KEY, Some(&payload))
+}
+
+pub fn default_mcp_policy() -> BusinessOsMcpPolicy {
+    BusinessOsMcpPolicy {
+        enabled: true,
+        allow_reads: true,
+        allow_writes: true,
+        allow_approvals: true,
+        allow_external_effects: false,
+        rate_limit_per_minute: DEFAULT_RATE_LIMIT_PER_MINUTE,
+        audit_retention_days: DEFAULT_AUDIT_RETENTION_DAYS,
+        allowed_actors: Vec::new(),
+        allowed_workspaces: Vec::new(),
+        allowed_modules: Vec::new(),
+        allowed_collections: Vec::new(),
+        denied_tools: Vec::new(),
+    }
+}
+
+fn legacy_mcp_policy(root: &Path) -> BusinessOsMcpPolicy {
     let env_map = crate::inference::runtime_env::effective_operator_env_map(root)
         .unwrap_or_else(|_| Default::default());
+    mcp_policy_from_env_map(&env_map)
+}
+
+fn mcp_policy_from_env_map(env_map: &BTreeMap<String, String>) -> BusinessOsMcpPolicy {
     let denied_tools = env_map
         .get("CTOX_BUSINESS_OS_MCP_DENY_TOOLS")
         .map(|value| split_csv(value))
@@ -2092,6 +2235,31 @@ pub fn mcp_policy(root: &Path) -> BusinessOsMcpPolicy {
             .unwrap_or_default(),
         denied_tools,
     }
+}
+
+fn normalize_mcp_policy(mut policy: BusinessOsMcpPolicy) -> BusinessOsMcpPolicy {
+    policy.allowed_actors = dedupe_policy_values(policy.allowed_actors);
+    policy.allowed_workspaces = dedupe_policy_values(policy.allowed_workspaces);
+    policy.allowed_modules = dedupe_policy_values(policy.allowed_modules);
+    policy.allowed_collections = dedupe_policy_values(policy.allowed_collections);
+    policy.denied_tools = dedupe_policy_values(policy.denied_tools);
+    policy
+}
+
+fn dedupe_policy_values(values: Vec<String>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .filter_map(|value| {
+            if seen.insert(value.clone()) {
+                Some(value)
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 fn enforce_tool_policy(root: &Path, tool_name: &str) -> anyhow::Result<()> {
@@ -2151,6 +2319,390 @@ fn policy_denied(message: &str, field: &str) -> anyhow::Error {
     })
 }
 
+fn enforce_business_os_mcp_policy(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    tool_name: &str,
+    arguments: &Value,
+) -> anyhow::Result<()> {
+    let Some(decision) = business_os_mcp_policy_decision(root, context, tool_name, arguments)?
+    else {
+        return Ok(());
+    };
+    if decision.allowed {
+        return Ok(());
+    }
+    Err(anyhow::Error::new(BusinessOsMcpError {
+        code: BusinessOsMcpErrorCode::PermissionDenied,
+        message: decision.display_reason.to_string(),
+        field: Some("business_os_policy".to_string()),
+    }))
+}
+
+fn business_os_mcp_policy_decision(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    tool_name: &str,
+    arguments: &Value,
+) -> anyhow::Result<Option<PolicyDecision>> {
+    match tool_name {
+        "business_os.status" | "business_os.list_mcp_activity" => {
+            Ok(Some(store::trusted_mcp_actor_policy_decision(
+                root,
+                &context.actor,
+                &context.actor,
+                BusinessOsPermission::McpManage,
+                BusinessOsScopeType::Mcp,
+                Some("business_os_mcp"),
+            )?))
+        }
+        "business_os.get_module"
+        | "business_os.list_entities"
+        | "business_os.list_module_actions"
+        | "business_os.propose_action" => {
+            let module_id = required_arg(arguments, "module_id")?;
+            Ok(Some(business_os_mcp_module_data_decision(
+                root,
+                context,
+                &module_id,
+                BusinessOsPermission::DataRead,
+            )?))
+        }
+        "business_os.query_records"
+        | "business_os.search_records"
+        | "business_os.get_record_context"
+        | "business_os.list_record_activity" => {
+            let collection = required_arg(arguments, "collection")?;
+            Ok(Some(business_os_mcp_collection_read_decision(
+                root,
+                context,
+                &collection,
+            )?))
+        }
+        "business_os.get_record" => {
+            let collection = required_arg(arguments, "collection")?;
+            let record_id = required_arg(arguments, "record_id")?;
+            Ok(Some(business_os_mcp_record_read_decision(
+                root,
+                context,
+                &collection,
+                &record_id,
+            )?))
+        }
+        "business_os.list_runs" | "business_os.get_run" => Ok(Some(
+            business_os_mcp_collection_read_decision(root, context, "ctox_queue_tasks")?,
+        )),
+        "business_os.list_artifacts" | "business_os.get_artifact" => {
+            if let Some(collection) = optional_string_arg(arguments, "collection") {
+                Ok(Some(business_os_mcp_collection_read_decision(
+                    root,
+                    context,
+                    &collection,
+                )?))
+            } else {
+                Ok(Some(store::trusted_mcp_actor_policy_decision(
+                    root,
+                    &context.actor,
+                    &context.actor,
+                    BusinessOsPermission::DataRead,
+                    BusinessOsScopeType::Workspace,
+                    None,
+                )?))
+            }
+        }
+        "business_os.list_approvals" => Ok(Some(business_os_mcp_collection_read_decision(
+            root,
+            context,
+            "outbound_approvals",
+        )?)),
+        "business_os.execute_action" => {
+            let module_id = required_arg(arguments, "module_id")?;
+            Ok(Some(business_os_mcp_module_data_decision(
+                root,
+                context,
+                &module_id,
+                BusinessOsPermission::DataWrite,
+            )?))
+        }
+        "business_os.approve" | "business_os.reject" | "business_os.request_changes" => Ok(Some(
+            business_os_mcp_approval_decision(root, context, arguments)?,
+        )),
+        "business_os.get_command_status" => Ok(Some(business_os_mcp_collection_read_decision(
+            root,
+            context,
+            "business_commands",
+        )?)),
+        "business_os.open_link" => {
+            let target = required_arg(arguments, "module_or_collection")?;
+            if string_field(arguments, "kind").as_deref() == Some("module") {
+                Ok(Some(business_os_mcp_module_visibility_decision(
+                    root, context, &target,
+                )?))
+            } else {
+                Ok(Some(business_os_mcp_collection_read_decision(
+                    root, context, &target,
+                )?))
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+fn business_os_mcp_module_data_decision(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    module_id: &str,
+    permission: BusinessOsPermission,
+) -> anyhow::Result<PolicyDecision> {
+    let visibility_decision = business_os_mcp_module_visibility_decision(root, context, module_id)?;
+    if !visibility_decision.allowed {
+        return Ok(visibility_decision);
+    }
+    store::trusted_mcp_actor_policy_decision(
+        root,
+        &context.actor,
+        &context.actor,
+        permission,
+        BusinessOsScopeType::Module,
+        Some(module_id),
+    )
+}
+
+fn business_os_mcp_module_visibility_decision(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    module_id: &str,
+) -> anyhow::Result<PolicyDecision> {
+    if module_public_for_mcp_actor(root, module_id)? {
+        let scope = BusinessOsScope::module(module_id.trim(), false);
+        return Ok(allow_decision(BusinessOsPermission::AppsView, &scope));
+    }
+    store::trusted_mcp_actor_policy_decision(
+        root,
+        &context.actor,
+        &context.actor,
+        BusinessOsPermission::AppsView,
+        BusinessOsScopeType::Module,
+        Some(module_id),
+    )
+}
+
+fn module_public_for_mcp_actor(root: &Path, module_id: &str) -> anyhow::Result<bool> {
+    let catalog = store::module_catalog_for_rxdb(root)?;
+    let modules = catalog
+        .get("modules")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    Ok(modules
+        .iter()
+        .find(|module| string_field(module, "id").as_deref() == Some(module_id.trim()))
+        .is_some_and(module_value_is_public_for_mcp))
+}
+
+fn module_value_visible_to_mcp_actor(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    module: &Value,
+) -> bool {
+    let module_id = string_field(module, "id").unwrap_or_default();
+    if module_id.trim().is_empty() {
+        return false;
+    }
+    if module_value_is_public_for_mcp(module) {
+        return true;
+    }
+    store::trusted_mcp_actor_policy_decision(
+        root,
+        &context.actor,
+        &context.actor,
+        BusinessOsPermission::AppsView,
+        BusinessOsScopeType::Module,
+        Some(module_id.as_str()),
+    )
+    .map(|decision| decision.allowed)
+    .unwrap_or(false)
+}
+
+fn module_value_is_public_for_mcp(module: &Value) -> bool {
+    if let Some(public) = module
+        .get("lifecycle")
+        .and_then(|lifecycle| lifecycle.get("public"))
+        .and_then(Value::as_bool)
+    {
+        return public;
+    }
+    let install_scope = string_field(module, "install_scope").unwrap_or_default();
+    let entry = string_field(module, "entry").unwrap_or_default();
+    module.get("core").and_then(Value::as_bool).unwrap_or(false)
+        || (install_scope.trim() != "installed" && !entry.trim().starts_with("installed-modules/"))
+}
+
+fn business_os_mcp_collection_read_decision(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    collection: &str,
+) -> anyhow::Result<PolicyDecision> {
+    let collection_decision = store::trusted_mcp_actor_policy_decision(
+        root,
+        &context.actor,
+        &context.actor,
+        BusinessOsPermission::DataRead,
+        BusinessOsScopeType::Collection,
+        Some(collection),
+    )?;
+    if collection_decision.allowed {
+        return Ok(collection_decision);
+    }
+
+    for module_id in module_ids_for_collection(root, collection)? {
+        let module_decision = store::trusted_mcp_actor_policy_decision(
+            root,
+            &context.actor,
+            &context.actor,
+            BusinessOsPermission::DataRead,
+            BusinessOsScopeType::Module,
+            Some(module_id.as_str()),
+        )?;
+        if module_decision.allowed {
+            return Ok(module_decision);
+        }
+    }
+
+    Ok(collection_decision)
+}
+
+fn business_os_mcp_record_read_decision(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    collection: &str,
+    record_id: &str,
+) -> anyhow::Result<PolicyDecision> {
+    let scope_id = record_scope_id(collection, record_id);
+    let record_decision = store::trusted_mcp_actor_policy_decision(
+        root,
+        &context.actor,
+        &context.actor,
+        BusinessOsPermission::DataRead,
+        BusinessOsScopeType::Record,
+        Some(scope_id.as_str()),
+    )?;
+    if record_decision.allowed {
+        return Ok(record_decision);
+    }
+
+    let collection_decision = business_os_mcp_collection_read_decision(root, context, collection)?;
+    if collection_decision.allowed {
+        return Ok(collection_decision);
+    }
+
+    Ok(record_decision)
+}
+
+fn business_os_mcp_approval_decision(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<PolicyDecision> {
+    if let Some(approval_id) = optional_string_arg(arguments, "approval_id") {
+        let approval_decision = store::trusted_mcp_actor_policy_decision(
+            root,
+            &context.actor,
+            &context.actor,
+            BusinessOsPermission::ExternalApprove,
+            BusinessOsScopeType::Approval,
+            Some(approval_id.as_str()),
+        )?;
+        if approval_decision.allowed {
+            return Ok(approval_decision);
+        }
+
+        let module_decision = outbound_module_approval_decision(root, context)?;
+        if module_decision.allowed {
+            return Ok(module_decision);
+        }
+        return Ok(approval_decision);
+    }
+
+    outbound_module_approval_decision(root, context)
+}
+
+fn outbound_module_approval_decision(
+    root: &Path,
+    context: &McpChannelRequestContext,
+) -> anyhow::Result<PolicyDecision> {
+    store::trusted_mcp_actor_policy_decision(
+        root,
+        &context.actor,
+        &context.actor,
+        BusinessOsPermission::ExternalApprove,
+        BusinessOsScopeType::Module,
+        Some("outbound"),
+    )
+}
+
+fn record_scope_id(collection: &str, record_id: &str) -> String {
+    format!("{}/{}", collection.trim(), record_id.trim())
+}
+
+fn module_ids_for_collection(root: &Path, collection: &str) -> anyhow::Result<Vec<String>> {
+    let Ok(catalog) = store::module_catalog_for_rxdb(root) else {
+        return Ok(Vec::new());
+    };
+    let modules = catalog
+        .get("modules")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut module_ids = Vec::new();
+    for module in modules {
+        let module_id = string_field(&module, "id").unwrap_or_default();
+        if module_id.trim().is_empty() {
+            continue;
+        }
+        let has_collection = module
+            .get("collections")
+            .and_then(Value::as_array)
+            .map(|collections| {
+                collections
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|candidate| candidate == collection)
+            })
+            .unwrap_or(false);
+        if has_collection {
+            module_ids.push(module_id);
+        }
+    }
+    Ok(module_ids)
+}
+
+fn arguments_with_module_id(arguments: &Value, module_id: &str) -> Value {
+    let mut value = arguments.clone();
+    if let Some(object) = value.as_object_mut() {
+        object
+            .entry("module_id".to_string())
+            .or_insert_with(|| Value::String(module_id.to_string()));
+        return value;
+    }
+    serde_json::json!({ "module_id": module_id })
+}
+
+fn resolved_mcp_actor_context(
+    root: &Path,
+    context: &McpChannelRequestContext,
+) -> anyhow::Result<Value> {
+    let actor = store::trusted_mcp_actor(root, &context.actor, &context.actor)?;
+    Ok(serde_json::json!({
+        "id": actor.id,
+        "display_name": actor.display_name,
+        "role": actor.role,
+        "active": actor.active,
+        "persisted": actor.persisted,
+        "raw_actor": &context.actor
+    }))
+}
+
 fn enforce_context_policy(root: &Path, context: &McpChannelRequestContext) -> anyhow::Result<()> {
     let policy = mcp_policy(root);
     if !policy.allowed_actors.is_empty() && !policy.allowed_actors.contains(&context.actor) {
@@ -2172,6 +2724,7 @@ fn enforce_context_policy(root: &Path, context: &McpChannelRequestContext) -> an
 
 fn enforce_argument_scope_policy(
     root: &Path,
+    context: &McpChannelRequestContext,
     tool_name: &str,
     arguments: &Value,
 ) -> anyhow::Result<()> {
@@ -2203,6 +2756,9 @@ fn enforce_argument_scope_policy(
             }
         }
         _ => {}
+    }
+    if tool_policy_class(tool_name) == McpToolPolicyClass::Read {
+        enforce_business_os_mcp_policy(root, context, tool_name, arguments)?;
     }
     Ok(())
 }
@@ -2363,6 +2919,92 @@ fn argument_metadata(arguments: &Value) -> Value {
     serde_json::json!({
         "argument_keys": arg_keys,
         "has_context": arguments.get("_context").is_some()
+    })
+}
+
+fn argument_metadata_with_policy(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    tool_name: &str,
+    arguments: &Value,
+) -> Value {
+    let mut metadata = argument_metadata(arguments);
+    if let Some(object) = metadata.as_object_mut() {
+        object.insert(
+            "business_scope".to_string(),
+            argument_business_scope_metadata(tool_name, arguments),
+        );
+        if let Ok(actor) = resolved_mcp_actor_context(root, context) {
+            object.insert("resolved_actor".to_string(), actor);
+        }
+        if let Ok(Some(decision)) =
+            business_os_mcp_policy_decision(root, context, tool_name, arguments)
+        {
+            object.insert(
+                "policy_decision".to_string(),
+                policy_decision_json(&decision),
+            );
+        }
+    }
+    metadata
+}
+
+fn argument_business_scope_metadata(tool_name: &str, arguments: &Value) -> Value {
+    let mut scope = serde_json::Map::new();
+    scope.insert("tool".to_string(), Value::String(tool_name.to_string()));
+    if let Some(object) = arguments.as_object() {
+        for key in [
+            "module_id",
+            "action_id",
+            "collection",
+            "record_id",
+            "module_or_collection",
+            "kind",
+            "id",
+            "command_id",
+            "run_id",
+            "artifact_id",
+            "approval_id",
+            "limit",
+        ] {
+            if let Some(value) = object.get(key).and_then(mcp_audit_safe_scalar) {
+                scope.insert(key.to_string(), value);
+            }
+        }
+    }
+    Value::Object(scope)
+}
+
+fn mcp_audit_safe_scalar(value: &Value) -> Option<Value> {
+    match value {
+        Value::String(text) => Some(Value::String(mcp_audit_truncate(text, 160))),
+        Value::Number(_) | Value::Bool(_) | Value::Null => Some(value.clone()),
+        Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+fn mcp_audit_truncate(text: &str, max_chars: usize) -> String {
+    let mut truncated = String::new();
+    for (index, ch) in text.chars().enumerate() {
+        if index >= max_chars {
+            truncated.push_str("...");
+            return truncated;
+        }
+        truncated.push(ch);
+    }
+    truncated
+}
+
+fn policy_decision_json(decision: &PolicyDecision) -> Value {
+    serde_json::json!({
+        "allowed": decision.allowed,
+        "permission": decision.permission,
+        "scope_type": decision.scope_type,
+        "scope_id": decision.scope_id.clone(),
+        "reason_code": decision.reason_code,
+        "display_reason": decision.display_reason,
+        "requires_approval": decision.requires_approval,
+        "audit_level": decision.audit_level,
     })
 }
 
@@ -2891,12 +3533,141 @@ mod tests {
         Ok(())
     }
 
+    fn write_installed_module(
+        root: &Path,
+        id: &str,
+        title: &str,
+        version: &str,
+        collections: &[&str],
+        lifecycle: Option<Value>,
+    ) -> anyhow::Result<()> {
+        std::fs::create_dir_all(root.join("src/apps/business-os"))?;
+        std::fs::write(root.join("src/apps/business-os/index.html"), "")?;
+        let module_root = root.join("runtime/business-os/installed-modules").join(id);
+        std::fs::create_dir_all(&module_root)?;
+        let mut manifest = serde_json::json!({
+            "id": id,
+            "title": title,
+            "description": "Runtime installed test module",
+            "version": version,
+            "install_scope": "installed",
+            "entry": format!("installed-modules/{id}/index.html"),
+            "collections": collections
+        });
+        if let Some(lifecycle) = lifecycle {
+            manifest["lifecycle"] = lifecycle;
+        }
+        std::fs::write(
+            module_root.join("module.json"),
+            serde_json::to_string(&manifest)?,
+        )?;
+        Ok(())
+    }
+
     fn save_mcp_policy_env(root: &Path, entries: &[(&str, &str)]) -> anyhow::Result<()> {
         let mut env_map = std::collections::BTreeMap::new();
         for (key, value) in entries {
             env_map.insert((*key).to_string(), (*value).to_string());
         }
         crate::inference::runtime_env::save_runtime_env_map(root, &env_map)?;
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_policy_uses_legacy_env_until_typed_policy_exists() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        save_mcp_policy_env(
+            root,
+            &[
+                ("CTOX_BUSINESS_OS_MCP_ENABLED", "false"),
+                ("CTOX_BUSINESS_OS_MCP_AUDIT_RETENTION_DAYS", "30"),
+                ("CTOX_BUSINESS_OS_MCP_ALLOWED_MODULES", "legacy,legacy"),
+            ],
+        )?;
+
+        let legacy = mcp_policy(root);
+        assert!(!legacy.enabled);
+        assert_eq!(legacy.audit_retention_days, 30);
+        assert_eq!(legacy.allowed_modules, vec!["legacy".to_string()]);
+
+        let mut typed = default_mcp_policy();
+        typed.enabled = true;
+        typed.audit_retention_days = 1;
+        typed.allowed_modules = vec![
+            "customers".to_string(),
+            " customers ".to_string(),
+            "outbound".to_string(),
+        ];
+        typed.denied_tools = vec![
+            "business_os.execute_action".to_string(),
+            "business_os.execute_action".to_string(),
+        ];
+        save_mcp_policy(root, &typed)?;
+
+        let effective = mcp_policy(root);
+        assert!(effective.enabled);
+        assert_eq!(effective.audit_retention_days, 1);
+        assert_eq!(
+            effective.allowed_modules,
+            vec!["customers".to_string(), "outbound".to_string()]
+        );
+        assert_eq!(
+            effective.denied_tools,
+            vec!["business_os.execute_action".to_string()]
+        );
+        Ok(())
+    }
+
+    fn seed_business_user(root: &Path, id: &str, role: &str) -> anyhow::Result<()> {
+        let conn = store::open_store(root)?;
+        let now = now_ms() as i64;
+        conn.execute(
+            "INSERT INTO business_users
+                (user_id, display_name, role, active, created_at_ms, updated_at_ms)
+             VALUES (?1, ?1, ?2, 1, ?3, ?3)
+             ON CONFLICT(user_id) DO UPDATE SET
+                role = excluded.role,
+                active = 1,
+                updated_at_ms = excluded.updated_at_ms",
+            params![id, crate::business_os::policy::normalize_role(role), now],
+        )?;
+        Ok(())
+    }
+
+    fn seed_default_mcp_admin(root: &Path) -> anyhow::Result<()> {
+        seed_business_user(root, "chatgpt:test-user", "admin")
+    }
+
+    fn seed_business_permission_grant(
+        root: &Path,
+        grant_id: &str,
+        subject_type: &str,
+        subject_id: &str,
+        permission: BusinessOsPermission,
+        scope_type: &str,
+        scope_id: &str,
+    ) -> anyhow::Result<()> {
+        let conn = store::open_store(root)?;
+        let now = now_ms() as i64;
+        conn.execute(
+            "INSERT INTO business_permission_grants
+                (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
+                 active, reason, created_by, created_at_ms, updated_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, 'test grant', 'mcp-test', ?7, ?7)
+             ON CONFLICT(grant_id) DO UPDATE SET
+                active = 1,
+                updated_at_ms = excluded.updated_at_ms",
+            params![
+                grant_id,
+                subject_type,
+                subject_id,
+                permission.as_str(),
+                scope_type,
+                scope_id,
+                now
+            ],
+        )?;
         Ok(())
     }
 
@@ -2912,9 +3683,11 @@ mod tests {
     #[test]
     fn list_modules_reads_business_os_catalog() -> anyhow::Result<()> {
         let temp = tempdir()?;
-        write_module(temp.path(), "tickets", "Tickets", &["ctox_ticket_items"])?;
+        let root = temp.path();
+        write_module(root, "tickets", "Tickets", &["ctox_ticket_items"])?;
+        seed_default_mcp_admin(root)?;
 
-        let modules = list_modules(temp.path(), &test_context("business_os.list_modules"))?;
+        let modules = list_modules(root, &test_context("business_os.list_modules"))?;
 
         assert_eq!(modules.count, 1);
         assert_eq!(modules.items[0].id, "tickets");
@@ -2926,15 +3699,17 @@ mod tests {
     #[test]
     fn list_entities_derives_read_only_entities_from_module_collections() -> anyhow::Result<()> {
         let temp = tempdir()?;
+        let root = temp.path();
         write_module(
-            temp.path(),
+            root,
             "customers",
             "Customers",
             &["customer_accounts", "customer_contacts"],
         )?;
+        seed_default_mcp_admin(root)?;
 
         let entities = list_entities(
-            temp.path(),
+            root,
             &test_context("business_os.list_entities"),
             "customers",
         )?;
@@ -3027,6 +3802,7 @@ mod tests {
     fn call_tool_dispatches_query_records() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
+        seed_business_user(root, "chatgpt:test", "admin")?;
         store::push_collection_records(
             root,
             serde_json::json!({
@@ -3061,6 +3837,7 @@ mod tests {
     fn call_tool_redacts_sensitive_record_fields() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
+        seed_business_user(root, "chatgpt:test", "admin")?;
         store::push_collection_records(
             root,
             serde_json::json!({
@@ -3169,6 +3946,7 @@ mod tests {
     fn call_tool_rejects_oversized_responses() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
+        seed_business_user(root, "chatgpt:test", "admin")?;
         let large_notes = "x".repeat(MAX_MCP_RESPONSE_BYTES + 1024);
         store::push_collection_records(
             root,
@@ -3209,6 +3987,7 @@ mod tests {
     fn mcp_rate_limit_blocks_actor_workspace_after_configured_threshold() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
+        seed_business_user(root, "chatgpt:rate-limited", "admin")?;
         save_mcp_policy_env(root, &[("CTOX_BUSINESS_OS_MCP_RATE_LIMIT_PER_MINUTE", "2")])?;
 
         for index in 0..2 {
@@ -3347,6 +4126,7 @@ mod tests {
             &["customer_accounts", "customer_contacts"],
         )?;
         write_module(root, "outbound", "Outbound", &["outbound_messages"])?;
+        seed_business_user(root, "chatgpt:allowed", "admin")?;
         save_mcp_policy_env(
             root,
             &[
@@ -3480,6 +4260,7 @@ mod tests {
     fn mcp_policy_blocks_external_effect_approval_by_default() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
+        seed_business_user(root, "chatgpt:test", "admin")?;
         let error = call_tool(
             root,
             "business_os.approve",
@@ -3506,9 +4287,1153 @@ mod tests {
     }
 
     #[test]
+    fn mcp_business_os_policy_denies_ungranted_team_action_execution() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "customers", "Customers", &["customer_accounts"])?;
+        seed_business_user(root, "chatgpt:team", "team")?;
+
+        let error = call_tool(
+            root,
+            "business_os.execute_action",
+            serde_json::json!({
+                "module_id": "customers",
+                "action_id": "customers.create_followup",
+                "title": "Follow up",
+                "objective": "Prepare customer follow-up",
+                "payload": { "customer_id": "acct_1" },
+                "_context": {
+                    "actor": "chatgpt:team",
+                    "workspace": "test"
+                }
+            }),
+        )
+        .expect_err("ungranted team user must not execute module writes");
+        let typed = error
+            .downcast_ref::<BusinessOsMcpError>()
+            .expect("typed error");
+
+        assert_eq!(typed.code, BusinessOsMcpErrorCode::PermissionDenied);
+        assert_eq!(typed.field.as_deref(), Some("business_os_policy"));
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_business_os_policy_allows_explicit_module_data_write_grant() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "customers", "Customers", &["customer_accounts"])?;
+        seed_business_user(root, "chatgpt:delegate", "team")?;
+        seed_business_permission_grant(
+            root,
+            "grant_delegate_customers_write",
+            "user",
+            "chatgpt:delegate",
+            BusinessOsPermission::DataWrite,
+            "module",
+            "customers",
+        )?;
+
+        let result = call_tool(
+            root,
+            "business_os.execute_action",
+            serde_json::json!({
+                "module_id": "customers",
+                "action_id": "customers.create_followup",
+                "title": "Follow up",
+                "objective": "Prepare customer follow-up",
+                "payload": { "customer_id": "acct_1" },
+                "_context": {
+                    "actor": "chatgpt:delegate",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+
+        assert_eq!(result.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            result.get("module_id").and_then(Value::as_str),
+            Some("customers")
+        );
+        assert_eq!(
+            result
+                .pointer("/client_context/actor")
+                .and_then(Value::as_str),
+            None
+        );
+        assert_eq!(
+            result
+                .pointer("/client_context/actor/id")
+                .and_then(Value::as_str),
+            Some("chatgpt:delegate")
+        );
+        assert_eq!(
+            result
+                .pointer("/client_context/mcp_actor")
+                .and_then(Value::as_str),
+            Some("chatgpt:delegate")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_business_os_policy_unknown_actor_does_not_inherit_local_admin() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+
+        let error = call_tool(
+            root,
+            "business_os.status",
+            serde_json::json!({
+                "_context": {
+                    "actor": "chatgpt:unmapped",
+                    "workspace": "test"
+                }
+            }),
+        )
+        .expect_err("unmapped MCP actors must not inherit local bootstrap admin rights");
+        let typed = error
+            .downcast_ref::<BusinessOsMcpError>()
+            .expect("typed error");
+
+        assert_eq!(typed.code, BusinessOsMcpErrorCode::PermissionDenied);
+        assert_eq!(typed.field.as_deref(), Some("business_os_policy"));
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_business_os_policy_allows_unpersisted_service_actor_grant_and_audits_identity(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "customers", "Customers", &["customer_accounts"])?;
+        seed_business_permission_grant(
+            root,
+            "grant_service_customers_write",
+            "user",
+            "service:crm-agent",
+            BusinessOsPermission::DataWrite,
+            "module",
+            "customers",
+        )?;
+
+        let result = call_tool_audited(
+            root,
+            "business_os.execute_action",
+            serde_json::json!({
+                "module_id": "customers",
+                "action_id": "customers.create_followup",
+                "title": "Follow up",
+                "objective": "Prepare customer follow-up",
+                "payload": { "customer_id": "acct_1" },
+                "_context": {
+                    "actor": "service:crm-agent",
+                    "workspace": "test",
+                    "request_id": "req_service_actor_write"
+                }
+            }),
+        )?;
+
+        assert_eq!(result.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            result
+                .pointer("/client_context/actor/id")
+                .and_then(Value::as_str),
+            Some("service:crm-agent")
+        );
+        assert_eq!(
+            result
+                .pointer("/client_context/actor/persisted")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            result
+                .pointer("/client_context/mcp_actor")
+                .and_then(Value::as_str),
+            Some("service:crm-agent")
+        );
+
+        let events = list_mcp_activity(
+            root,
+            &test_context("business_os.list_mcp_activity"),
+            Some(1),
+        )?;
+        assert_eq!(events.items[0].actor, "service:crm-agent");
+        assert_eq!(
+            events.items[0]
+                .metadata
+                .pointer("/resolved_actor/id")
+                .and_then(Value::as_str),
+            Some("service:crm-agent")
+        );
+        assert_eq!(
+            events.items[0]
+                .metadata
+                .pointer("/resolved_actor/persisted")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            events.items[0]
+                .metadata
+                .pointer("/policy_decision/allowed")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_business_os_policy_allows_exact_approval_grant_without_outbound_module_grant(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        store::push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": "outbound_approvals",
+                "documents": [{
+                    "id": "approval_1",
+                    "message_id": "msg_1",
+                    "engagement_id": "eng_1",
+                    "decision": "pending",
+                    "created_at_ms": 10,
+                    "updated_at_ms": 10
+                }]
+            }),
+        )?;
+        seed_business_permission_grant(
+            root,
+            "grant_approval_agent_approval_1",
+            "user",
+            "service:approval-agent",
+            BusinessOsPermission::ExternalApprove,
+            "approval",
+            "approval_1",
+        )?;
+
+        let result = call_tool(
+            root,
+            "business_os.reject",
+            serde_json::json!({
+                "approval_id": "approval_1",
+                "comment": "No fit",
+                "_context": {
+                    "actor": "service:approval-agent",
+                    "workspace": "test",
+                    "confirmation_state": "approved"
+                }
+            }),
+        )?;
+
+        assert_eq!(result.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            result.get("approval_id").and_then(Value::as_str),
+            Some("approval_1")
+        );
+        assert_eq!(
+            result
+                .pointer("/client_context/actor/id")
+                .and_then(Value::as_str),
+            Some("service:approval-agent")
+        );
+        assert_eq!(
+            result
+                .pointer("/client_context/actor/persisted")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_business_os_policy_denies_other_approval_for_exact_approval_grant() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        store::push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": "outbound_approvals",
+                "documents": [
+                    {
+                        "id": "approval_1",
+                        "message_id": "msg_1",
+                        "engagement_id": "eng_1",
+                        "decision": "pending",
+                        "created_at_ms": 10,
+                        "updated_at_ms": 10
+                    },
+                    {
+                        "id": "approval_2",
+                        "message_id": "msg_2",
+                        "engagement_id": "eng_2",
+                        "decision": "pending",
+                        "created_at_ms": 11,
+                        "updated_at_ms": 11
+                    }
+                ]
+            }),
+        )?;
+        seed_business_permission_grant(
+            root,
+            "grant_approval_agent_approval_1_only",
+            "user",
+            "service:approval-agent",
+            BusinessOsPermission::ExternalApprove,
+            "approval",
+            "approval_1",
+        )?;
+
+        let error = call_tool(
+            root,
+            "business_os.reject",
+            serde_json::json!({
+                "approval_id": "approval_2",
+                "comment": "No fit",
+                "_context": {
+                    "actor": "service:approval-agent",
+                    "workspace": "test",
+                    "confirmation_state": "approved"
+                }
+            }),
+        )
+        .expect_err("approval_1 grant must not allow approval_2");
+        let typed = error
+            .downcast_ref::<BusinessOsMcpError>()
+            .expect("typed error");
+
+        assert_eq!(typed.code, BusinessOsMcpErrorCode::PermissionDenied);
+        assert_eq!(typed.field.as_deref(), Some("business_os_policy"));
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_approval_actor_user_id_does_not_replace_exact_approval_grant() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        store::push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": "outbound_approvals",
+                "documents": [{
+                    "id": "approval_1",
+                    "message_id": "msg_1",
+                    "engagement_id": "eng_1",
+                    "actor_user_id": "service:approval-agent",
+                    "decision": "pending",
+                    "created_at_ms": 10,
+                    "updated_at_ms": 10
+                }]
+            }),
+        )?;
+
+        let error = call_tool(
+            root,
+            "business_os.reject",
+            serde_json::json!({
+                "approval_id": "approval_1",
+                "comment": "No fit",
+                "_context": {
+                    "actor": "service:approval-agent",
+                    "workspace": "test",
+                    "confirmation_state": "approved"
+                }
+            }),
+        )
+        .expect_err("actor_user_id must not become an implicit approval grant");
+        let typed = error
+            .downcast_ref::<BusinessOsMcpError>()
+            .expect("typed error");
+
+        assert_eq!(typed.code, BusinessOsMcpErrorCode::PermissionDenied);
+        assert_eq!(typed.field.as_deref(), Some("business_os_policy"));
+        Ok(())
+    }
+
+    #[test]
+    fn audited_mcp_policy_denial_records_business_os_policy_decision() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "customers", "Customers", &["customer_accounts"])?;
+        seed_business_user(root, "chatgpt:team", "team")?;
+
+        let error = call_tool_audited(
+            root,
+            "business_os.execute_action",
+            serde_json::json!({
+                "module_id": "customers",
+                "action_id": "customers.create_followup",
+                "title": "Follow up",
+                "objective": "Prepare customer follow-up",
+                "payload": { "customer_id": "acct_1" },
+                "_context": {
+                    "actor": "chatgpt:team",
+                    "workspace": "test",
+                    "request_id": "req_policy_denied"
+                }
+            }),
+        )
+        .expect_err("ungranted write must fail");
+        let typed = error
+            .downcast_ref::<BusinessOsMcpError>()
+            .expect("typed error");
+        assert_eq!(typed.field.as_deref(), Some("business_os_policy"));
+
+        let events = list_mcp_activity(
+            root,
+            &test_context("business_os.list_mcp_activity"),
+            Some(1),
+        )?;
+        let business_scope = events.items[0]
+            .metadata
+            .get("business_scope")
+            .expect("business scope is audited");
+        let policy = events.items[0]
+            .metadata
+            .get("policy_decision")
+            .expect("policy decision is audited");
+
+        assert_eq!(events.items[0].status, "failed");
+        assert_eq!(events.items[0].request_id, "req_policy_denied");
+        assert_eq!(
+            business_scope.get("tool").and_then(Value::as_str),
+            Some("business_os.execute_action")
+        );
+        assert_eq!(
+            business_scope.get("module_id").and_then(Value::as_str),
+            Some("customers")
+        );
+        assert_eq!(
+            business_scope.get("action_id").and_then(Value::as_str),
+            Some("customers.create_followup")
+        );
+        assert_eq!(business_scope.get("title"), None);
+        assert_eq!(business_scope.get("objective"), None);
+        assert_eq!(business_scope.get("payload"), None);
+        assert_eq!(policy.get("allowed").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            policy.get("permission").and_then(Value::as_str),
+            Some("data.write")
+        );
+        assert_eq!(
+            policy.get("scope_type").and_then(Value::as_str),
+            Some("module")
+        );
+        assert_eq!(
+            policy.get("scope_id").and_then(Value::as_str),
+            Some("customers")
+        );
+        assert_eq!(
+            policy.get("reason_code").and_then(Value::as_str),
+            Some("role_or_scope_denied")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_business_os_policy_denies_ungranted_team_module_read() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "customers", "Customers", &["customer_accounts"])?;
+        seed_business_user(root, "chatgpt:team", "team")?;
+
+        let error = call_tool(
+            root,
+            "business_os.get_module",
+            serde_json::json!({
+                "module_id": "customers",
+                "_context": {
+                    "actor": "chatgpt:team",
+                    "workspace": "test"
+                }
+            }),
+        )
+        .expect_err("ungranted team user must not read module details");
+        let typed = error
+            .downcast_ref::<BusinessOsMcpError>()
+            .expect("typed error");
+
+        assert_eq!(typed.code, BusinessOsMcpErrorCode::PermissionDenied);
+        assert_eq!(typed.field.as_deref(), Some("business_os_policy"));
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_business_os_policy_allows_collection_read_via_module_grant() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "customers", "Customers", &["customer_accounts"])?;
+        seed_business_user(root, "chatgpt:reader", "team")?;
+        seed_business_permission_grant(
+            root,
+            "grant_reader_customers_read",
+            "user",
+            "chatgpt:reader",
+            BusinessOsPermission::DataRead,
+            "module",
+            "customers",
+        )?;
+        store::push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": "customer_accounts",
+                "documents": [{
+                    "id": "acct_1",
+                    "name": "Acme",
+                    "updated_at_ms": 10
+                }]
+            }),
+        )?;
+
+        let result = call_tool(
+            root,
+            "business_os.query_records",
+            serde_json::json!({
+                "collection": "customer_accounts",
+                "_context": {
+                    "actor": "chatgpt:reader",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+
+        assert_eq!(result.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(result.get("count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            result.pointer("/items/0/id").and_then(Value::as_str),
+            Some("acct_1")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_business_os_policy_allows_exact_record_grant_without_collection_read(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        store::push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": "customer_accounts",
+                "documents": [{
+                    "id": "acct_1",
+                    "name": "Acme",
+                    "updated_at_ms": 10
+                }, {
+                    "id": "acct_2",
+                    "name": "Globex",
+                    "updated_at_ms": 11
+                }]
+            }),
+        )?;
+        seed_business_permission_grant(
+            root,
+            "grant_record_reader_acct_1",
+            "user",
+            "service:record-reader",
+            BusinessOsPermission::DataRead,
+            "record",
+            &record_scope_id("customer_accounts", "acct_1"),
+        )?;
+
+        let result = call_tool(
+            root,
+            "business_os.get_record",
+            serde_json::json!({
+                "collection": "customer_accounts",
+                "record_id": "acct_1",
+                "_context": {
+                    "actor": "service:record-reader",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+
+        assert_eq!(result.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            result.pointer("/record/id").and_then(Value::as_str),
+            Some("acct_1")
+        );
+
+        let error = call_tool(
+            root,
+            "business_os.query_records",
+            serde_json::json!({
+                "collection": "customer_accounts",
+                "_context": {
+                    "actor": "service:record-reader",
+                    "workspace": "test"
+                }
+            }),
+        )
+        .expect_err("exact record grant must not allow listing the collection");
+        let typed = error
+            .downcast_ref::<BusinessOsMcpError>()
+            .expect("typed error");
+
+        assert_eq!(typed.code, BusinessOsMcpErrorCode::PermissionDenied);
+        assert_eq!(typed.field.as_deref(), Some("business_os_policy"));
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_record_owner_payload_field_does_not_replace_exact_record_grant() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "service:record-owner", "team")?;
+        store::push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": "customer_opportunities",
+                "documents": [{
+                    "id": "opp_1",
+                    "name": "Opportunity",
+                    "owner_id": "service:record-owner",
+                    "updated_at_ms": 10
+                }]
+            }),
+        )?;
+
+        let error = call_tool(
+            root,
+            "business_os.get_record",
+            serde_json::json!({
+                "collection": "customer_opportunities",
+                "record_id": "opp_1",
+                "_context": {
+                    "actor": "service:record-owner",
+                    "workspace": "test"
+                }
+            }),
+        )
+        .expect_err("owner-like payload fields must not become implicit record grants");
+        let typed = error
+            .downcast_ref::<BusinessOsMcpError>()
+            .expect("typed error");
+
+        assert_eq!(typed.code, BusinessOsMcpErrorCode::PermissionDenied);
+        assert_eq!(typed.field.as_deref(), Some("business_os_policy"));
+        Ok(())
+    }
+
+    #[test]
+    fn audited_mcp_read_denial_records_business_os_policy_decision() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "customers", "Customers", &["customer_accounts"])?;
+        seed_business_user(root, "chatgpt:team", "team")?;
+
+        let error = call_tool_audited(
+            root,
+            "business_os.query_records",
+            serde_json::json!({
+                "collection": "customer_accounts",
+                "_context": {
+                    "actor": "chatgpt:team",
+                    "workspace": "test",
+                    "request_id": "req_read_policy_denied"
+                }
+            }),
+        )
+        .expect_err("ungranted read must fail");
+        let typed = error
+            .downcast_ref::<BusinessOsMcpError>()
+            .expect("typed error");
+        assert_eq!(typed.field.as_deref(), Some("business_os_policy"));
+
+        let events = list_mcp_activity(
+            root,
+            &test_context("business_os.list_mcp_activity"),
+            Some(1),
+        )?;
+        let business_scope = events.items[0]
+            .metadata
+            .get("business_scope")
+            .expect("business scope is audited");
+        let policy = events.items[0]
+            .metadata
+            .get("policy_decision")
+            .expect("policy decision is audited");
+
+        assert_eq!(events.items[0].status, "failed");
+        assert_eq!(events.items[0].request_id, "req_read_policy_denied");
+        assert_eq!(
+            business_scope.get("tool").and_then(Value::as_str),
+            Some("business_os.query_records")
+        );
+        assert_eq!(
+            business_scope.get("collection").and_then(Value::as_str),
+            Some("customer_accounts")
+        );
+        assert_eq!(business_scope.get("query"), None);
+        assert_eq!(policy.get("allowed").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            policy.get("permission").and_then(Value::as_str),
+            Some("data.read")
+        );
+        assert_eq!(
+            policy.get("scope_type").and_then(Value::as_str),
+            Some("collection")
+        );
+        assert_eq!(
+            policy.get("scope_id").and_then(Value::as_str),
+            Some("customer_accounts")
+        );
+        assert_eq!(
+            policy.get("reason_code").and_then(Value::as_str),
+            Some("role_or_scope_denied")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_business_os_policy_filters_module_list_by_app_visibility_not_data_read(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_installed_module(
+            root,
+            "private-zero",
+            "Private Zero",
+            "0.2.0",
+            &["private_records"],
+            None,
+        )?;
+        write_installed_module(
+            root,
+            "preview-zero",
+            "Preview Zero",
+            "0.3.0",
+            &["preview_records"],
+            None,
+        )?;
+        write_installed_module(
+            root,
+            "team-one",
+            "Team One",
+            "1.0.0",
+            &["team_records"],
+            None,
+        )?;
+        seed_business_user(root, "chatgpt:reader", "team")?;
+        seed_business_permission_grant(
+            root,
+            "grant_reader_preview_zero_app_view",
+            "user",
+            "chatgpt:reader",
+            BusinessOsPermission::AppsView,
+            "module",
+            "preview-zero",
+        )?;
+        seed_business_permission_grant(
+            root,
+            "grant_reader_private_zero_data_read",
+            "user",
+            "chatgpt:reader",
+            BusinessOsPermission::DataRead,
+            "module",
+            "private-zero",
+        )?;
+
+        let result = call_tool(
+            root,
+            "business_os.list_modules",
+            serde_json::json!({
+                "_context": {
+                    "actor": "chatgpt:reader",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+
+        let ids = result
+            .get("items")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|item| string_field(&item, "id"))
+            .collect::<Vec<_>>();
+        assert!(
+            ids.contains(&"preview-zero".to_string()),
+            "apps.view grant should make preview app visible"
+        );
+        assert!(
+            ids.contains(&"team-one".to_string()),
+            "1.0.0 app should be team-visible by default"
+        );
+        assert!(
+            !ids.contains(&"private-zero".to_string()),
+            "data.read must not make a private app visible"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_business_os_policy_denies_visible_module_details_without_data_read() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_installed_module(
+            root,
+            "preview-zero",
+            "Preview Zero",
+            "0.3.0",
+            &["preview_records"],
+            None,
+        )?;
+        seed_business_user(root, "chatgpt:viewer", "team")?;
+        seed_business_permission_grant(
+            root,
+            "grant_viewer_preview_zero_app_view",
+            "user",
+            "chatgpt:viewer",
+            BusinessOsPermission::AppsView,
+            "module",
+            "preview-zero",
+        )?;
+
+        let error = call_tool(
+            root,
+            "business_os.get_module",
+            serde_json::json!({
+                "module_id": "preview-zero",
+                "_context": {
+                    "actor": "chatgpt:viewer",
+                    "workspace": "test"
+                }
+            }),
+        )
+        .expect_err("visible app details still require data.read");
+        let typed = error
+            .downcast_ref::<BusinessOsMcpError>()
+            .expect("typed error");
+
+        assert_eq!(typed.code, BusinessOsMcpErrorCode::PermissionDenied);
+        assert_eq!(typed.field.as_deref(), Some("business_os_policy"));
+        let decision = business_os_mcp_policy_decision(
+            root,
+            &McpChannelRequestContext {
+                actor: "chatgpt:viewer".to_string(),
+                ..test_context("business_os.get_module")
+            },
+            "business_os.get_module",
+            &serde_json::json!({ "module_id": "preview-zero" }),
+        )?
+        .expect("policy decision");
+        assert!(!decision.allowed);
+        assert_eq!(decision.permission, BusinessOsPermission::DataRead.as_str());
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_business_os_policy_denies_hidden_module_even_with_data_read() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_installed_module(
+            root,
+            "private-zero",
+            "Private Zero",
+            "0.2.0",
+            &["private_records"],
+            None,
+        )?;
+        seed_business_user(root, "chatgpt:reader", "team")?;
+        seed_business_permission_grant(
+            root,
+            "grant_reader_private_zero_data_read",
+            "user",
+            "chatgpt:reader",
+            BusinessOsPermission::DataRead,
+            "module",
+            "private-zero",
+        )?;
+
+        let context = McpChannelRequestContext {
+            actor: "chatgpt:reader".to_string(),
+            ..test_context("business_os.get_module")
+        };
+        let decision = business_os_mcp_policy_decision(
+            root,
+            &context,
+            "business_os.get_module",
+            &serde_json::json!({ "module_id": "private-zero" }),
+        )?
+        .expect("policy decision");
+        assert!(!decision.allowed);
+        assert_eq!(decision.permission, BusinessOsPermission::AppsView.as_str());
+
+        let error = call_tool(
+            root,
+            "business_os.get_module",
+            serde_json::json!({
+                "module_id": "private-zero",
+                "_context": {
+                    "actor": "chatgpt:reader",
+                    "workspace": "test"
+                }
+            }),
+        )
+        .expect_err("data.read must not reveal a private app without apps.view");
+        let typed = error
+            .downcast_ref::<BusinessOsMcpError>()
+            .expect("typed error");
+
+        assert_eq!(typed.code, BusinessOsMcpErrorCode::PermissionDenied);
+        assert_eq!(typed.field.as_deref(), Some("business_os_policy"));
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_business_os_policy_denies_hidden_action_execution_even_with_data_write(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_installed_module(
+            root,
+            "private-zero",
+            "Private Zero",
+            "0.2.0",
+            &["private_records"],
+            None,
+        )?;
+        seed_business_user(root, "chatgpt:writer", "team")?;
+        seed_business_permission_grant(
+            root,
+            "grant_writer_private_zero_data_write",
+            "user",
+            "chatgpt:writer",
+            BusinessOsPermission::DataWrite,
+            "module",
+            "private-zero",
+        )?;
+
+        let context = McpChannelRequestContext {
+            actor: "chatgpt:writer".to_string(),
+            ..test_context("business_os.execute_action")
+        };
+        let decision = business_os_mcp_policy_decision(
+            root,
+            &context,
+            "business_os.execute_action",
+            &serde_json::json!({ "module_id": "private-zero" }),
+        )?
+        .expect("policy decision");
+        assert!(!decision.allowed);
+        assert_eq!(decision.permission, BusinessOsPermission::AppsView.as_str());
+
+        let error = call_tool(
+            root,
+            "business_os.execute_action",
+            serde_json::json!({
+                "module_id": "private-zero",
+                "action_id": "ctox.delegate_task",
+                "title": "Hidden write",
+                "objective": "Should not execute without app visibility",
+                "_context": {
+                    "actor": "chatgpt:writer",
+                    "workspace": "test"
+                }
+            }),
+        )
+        .expect_err("data.write must not execute a hidden app action");
+        let typed = error
+            .downcast_ref::<BusinessOsMcpError>()
+            .expect("typed error");
+
+        assert_eq!(typed.code, BusinessOsMcpErrorCode::PermissionDenied);
+        assert_eq!(typed.field.as_deref(), Some("business_os_policy"));
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_business_os_policy_denies_ungranted_team_status() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "chatgpt:team", "team")?;
+
+        let error = call_tool(
+            root,
+            "business_os.status",
+            serde_json::json!({
+                "_context": {
+                    "actor": "chatgpt:team",
+                    "workspace": "test"
+                }
+            }),
+        )
+        .expect_err("ungranted team user must not read MCP status");
+        let typed = error
+            .downcast_ref::<BusinessOsMcpError>()
+            .expect("typed error");
+
+        assert_eq!(typed.code, BusinessOsMcpErrorCode::PermissionDenied);
+        assert_eq!(typed.field.as_deref(), Some("business_os_policy"));
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_business_os_policy_allows_status_with_mcp_manage_grant() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "chatgpt:mcp-operator", "team")?;
+        seed_business_permission_grant(
+            root,
+            "grant_mcp_operator_status",
+            "user",
+            "chatgpt:mcp-operator",
+            BusinessOsPermission::McpManage,
+            "mcp",
+            "business_os_mcp",
+        )?;
+
+        let result = call_tool(
+            root,
+            "business_os.status",
+            serde_json::json!({
+                "_context": {
+                    "actor": "chatgpt:mcp-operator",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+
+        assert_eq!(result.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            result.get("actor").and_then(Value::as_str),
+            Some("chatgpt:mcp-operator")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_business_os_policy_denies_ungranted_open_link() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_installed_module(
+            root,
+            "private-zero",
+            "Private Zero",
+            "0.2.0",
+            &["private_records"],
+            None,
+        )?;
+        seed_business_user(root, "chatgpt:team", "team")?;
+
+        let error = call_tool(
+            root,
+            "business_os.open_link",
+            serde_json::json!({
+                "kind": "module",
+                "module_or_collection": "private-zero",
+                "_context": {
+                    "actor": "chatgpt:team",
+                    "workspace": "test"
+                }
+            }),
+        )
+        .expect_err("ungranted team user must not create scoped module link");
+        let typed = error
+            .downcast_ref::<BusinessOsMcpError>()
+            .expect("typed error");
+
+        assert_eq!(typed.code, BusinessOsMcpErrorCode::PermissionDenied);
+        assert_eq!(typed.field.as_deref(), Some("business_os_policy"));
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_business_os_policy_allows_module_link_with_app_view_without_data_read(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_installed_module(
+            root,
+            "preview-zero",
+            "Preview Zero",
+            "0.3.0",
+            &["preview_records"],
+            None,
+        )?;
+        seed_business_user(root, "chatgpt:viewer", "team")?;
+        seed_business_permission_grant(
+            root,
+            "grant_viewer_preview_zero_app_view",
+            "user",
+            "chatgpt:viewer",
+            BusinessOsPermission::AppsView,
+            "module",
+            "preview-zero",
+        )?;
+
+        let result = call_tool(
+            root,
+            "business_os.open_link",
+            serde_json::json!({
+                "kind": "module",
+                "module_or_collection": "preview-zero",
+                "_context": {
+                    "actor": "chatgpt:viewer",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+
+        assert_eq!(
+            result.get("url_fragment").and_then(Value::as_str),
+            Some("#module=preview-zero")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_business_os_policy_denies_ungranted_command_status() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "chatgpt:team", "team")?;
+        store::push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": "business_commands",
+                "documents": [{
+                    "id": "cmd_1",
+                    "command_id": "cmd_1",
+                    "module": "tickets",
+                    "command_type": "ctox.delegate_task",
+                    "status": "accepted",
+                    "updated_at_ms": 42
+                }]
+            }),
+        )?;
+
+        let error = call_tool(
+            root,
+            "business_os.get_command_status",
+            serde_json::json!({
+                "command_id": "cmd_1",
+                "_context": {
+                    "actor": "chatgpt:team",
+                    "workspace": "test"
+                }
+            }),
+        )
+        .expect_err("ungranted team user must not read command status");
+        let typed = error
+            .downcast_ref::<BusinessOsMcpError>()
+            .expect("typed error");
+
+        assert_eq!(typed.code, BusinessOsMcpErrorCode::PermissionDenied);
+        assert_eq!(typed.field.as_deref(), Some("business_os_policy"));
+        Ok(())
+    }
+
+    #[test]
     fn audited_call_records_mcp_channel_event() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
+        seed_business_user(root, "chatgpt:test", "admin")?;
         let _ = call_tool_audited(
             root,
             "business_os.open_link",
@@ -3534,6 +5459,13 @@ mod tests {
         assert_eq!(events.items[0].tool, "business_os.open_link");
         assert_eq!(events.items[0].actor, "chatgpt:test");
         assert_eq!(events.items[0].status, "completed");
+        assert_eq!(
+            events.items[0]
+                .metadata
+                .pointer("/resolved_actor/id")
+                .and_then(Value::as_str),
+            Some("chatgpt:test")
+        );
         Ok(())
     }
 
@@ -3541,6 +5473,7 @@ mod tests {
     fn audit_export_supports_jsonl() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
+        seed_business_user(root, "chatgpt:test", "admin")?;
         let _ = call_tool_audited(
             root,
             "business_os.open_link",
@@ -3582,7 +5515,10 @@ mod tests {
     fn audit_retention_prunes_expired_mcp_events() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
-        save_mcp_policy_env(root, &[("CTOX_BUSINESS_OS_MCP_AUDIT_RETENTION_DAYS", "1")])?;
+        seed_business_user(root, "chatgpt:test", "admin")?;
+        let mut policy = default_mcp_policy();
+        policy.audit_retention_days = 1;
+        save_mcp_policy(root, &policy)?;
         let conn = store::open_store(root)?;
         let expired_ms = now_ms().saturating_sub(2 * 24 * 60 * 60 * 1000) as i64;
         conn.execute(
@@ -3619,10 +5555,12 @@ mod tests {
     #[test]
     fn propose_action_returns_non_executing_business_os_command_shape() -> anyhow::Result<()> {
         let temp = tempdir()?;
-        write_module(temp.path(), "outbound", "Outbound", &["outbound_campaigns"])?;
+        let root = temp.path();
+        write_module(root, "outbound", "Outbound", &["outbound_campaigns"])?;
+        seed_default_mcp_admin(root)?;
 
         let proposal = propose_action(
-            temp.path(),
+            root,
             &test_context("business_os.propose_action"),
             "outbound",
             "outbound.request_send_approval",
@@ -3641,6 +5579,13 @@ mod tests {
         assert_eq!(
             proposal
                 .client_context
+                .pointer("/actor/id")
+                .and_then(Value::as_str),
+            Some("chatgpt:test-user")
+        );
+        assert_eq!(
+            proposal
+                .client_context
                 .get("proposal_only")
                 .and_then(Value::as_bool),
             Some(true)
@@ -3649,12 +5594,87 @@ mod tests {
     }
 
     #[test]
+    fn support_module_actions_expose_agent_writeback_contract() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "support", "Support", &["support_conversations"])?;
+        seed_default_mcp_admin(root)?;
+
+        let actions = list_module_actions(
+            root,
+            &test_context("business_os.list_module_actions"),
+            "support",
+        )?;
+        let action_ids = actions
+            .items
+            .iter()
+            .map(|action| action.action_id.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(action_ids.contains(&"support.agent.writeback"));
+        assert!(action_ids.contains(&"support.agent.apply_suggestion"));
+        assert!(action_ids.contains(&"support.agent.reject_suggestion"));
+        Ok(())
+    }
+
+    #[test]
+    fn support_agent_action_proposal_keeps_typed_payload_unwrapped() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "support", "Support", &["support_conversations"])?;
+        seed_default_mcp_admin(root)?;
+
+        let proposal = propose_action(
+            root,
+            &test_context("business_os.propose_action"),
+            "support",
+            "support.agent.writeback",
+            &serde_json::json!({
+                "record_id": "support_conv_1",
+                "payload": {
+                    "source_command_id": "cmd_support_agent_1",
+                    "task_id": "task_1",
+                    "suggestion_kind": "summary",
+                    "summary": "Customer waits for a status update.",
+                    "payload": { "risk": "normal" },
+                    "confidence": 0.82,
+                    "required_human_action": "review"
+                }
+            }),
+        )?;
+
+        assert!(proposal.ok);
+        assert_eq!(proposal.command_type, "support.agent.writeback");
+        assert_eq!(
+            proposal
+                .payload
+                .get("conversation_id")
+                .and_then(Value::as_str),
+            Some("support_conv_1")
+        );
+        assert_eq!(
+            proposal
+                .payload
+                .get("source_command_id")
+                .and_then(Value::as_str),
+            Some("cmd_support_agent_1")
+        );
+        assert!(
+            proposal.payload.get("input").is_none(),
+            "support agent payload must not be wrapped in generic action input"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn execute_action_requires_approval_for_risky_actions() -> anyhow::Result<()> {
         let temp = tempdir()?;
-        write_module(temp.path(), "matching", "Matching", &["business_matches"])?;
+        let root = temp.path();
+        write_module(root, "matching", "Matching", &["business_matches"])?;
+        seed_default_mcp_admin(root)?;
 
         let error = execute_action(
-            temp.path(),
+            root,
             &test_context("business_os.execute_action"),
             "matching",
             "matching.run_match",
@@ -3676,12 +5696,14 @@ mod tests {
     #[test]
     fn execute_action_blocks_external_effects_even_when_approved() -> anyhow::Result<()> {
         let temp = tempdir()?;
-        write_module(temp.path(), "outbound", "Outbound", &["outbound_campaigns"])?;
+        let root = temp.path();
+        write_module(root, "outbound", "Outbound", &["outbound_campaigns"])?;
+        seed_business_user(root, "chatgpt:test-user", "admin")?;
         let mut context = test_context("business_os.execute_action");
         context.confirmation_state = McpConfirmationState::Approved;
 
         let error = execute_action(
-            temp.path(),
+            root,
             &context,
             "outbound",
             "outbound.request_send_approval",
@@ -3705,6 +5727,7 @@ mod tests {
     fn get_command_status_reads_business_command_record() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
+        seed_business_user(root, "chatgpt:test", "admin")?;
         store::push_collection_records(
             root,
             serde_json::json!({
@@ -3866,6 +5889,7 @@ mod tests {
     #[test]
     fn gateway_context_overrides_spoofed_tool_context() -> anyhow::Result<()> {
         let temp = tempdir()?;
+        seed_business_user(temp.path(), "ctox-dev:user:user_1", "admin")?;
 
         let response = handle_gateway_message(
             temp.path(),
@@ -4227,6 +6251,7 @@ mod tests {
     fn approval_decision_enqueues_typed_outbound_command() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
+        seed_business_user(root, "chatgpt:test-user", "admin")?;
         store::push_collection_records(
             root,
             serde_json::json!({
@@ -4285,6 +6310,7 @@ mod tests {
     fn request_changes_enqueues_typed_outbound_command() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
+        seed_business_user(root, "chatgpt:test-user", "admin")?;
         let mut context = test_context("business_os.request_changes");
         context.confirmation_state = McpConfirmationState::Approved;
 

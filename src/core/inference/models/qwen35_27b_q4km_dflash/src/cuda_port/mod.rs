@@ -1,6 +1,6 @@
 //! Bare-metal Rust port of llama.cpp's ggml-cuda host-side dispatcher.
 //!
-//! See CLAUDE.md "Inference-Engine Architecture (HARD rules)" for the
+//! See AGENTS.md "Inference Model Rules" for the
 //! contract: each model crate ports the C++ dispatcher byte-for-byte
 //! into Rust inside its own tree. This module is **the port for the
 //! qwen35_27b_q4km_dflash crate only** — sibling model crates will

@@ -543,7 +543,8 @@ fn browser_assist_tasks_from_source_failures(
     };
     let mut tasks = Vec::new();
     for failure in items {
-        let source_matches = failure.get("source_id").and_then(Value::as_str) == Some(plan.source_id)
+        let source_matches = failure.get("source_id").and_then(Value::as_str)
+            == Some(plan.source_id)
             || failure.get("requested_source").and_then(Value::as_str) == Some(plan.source_id)
             || failure
                 .get("requested_source")
@@ -556,11 +557,16 @@ fn browser_assist_tasks_from_source_failures(
         if !source_matches {
             continue;
         }
-        let kind = failure.get("kind").and_then(Value::as_str).unwrap_or_default();
+        let kind = failure
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if !matches!(kind, "credential_missing" | "blocked") {
             continue;
         }
-        let Some(browser_assist) = failure.get("browser_assist").filter(|value| value.is_object())
+        let Some(browser_assist) = failure
+            .get("browser_assist")
+            .filter(|value| value.is_object())
         else {
             continue;
         };
@@ -667,7 +673,12 @@ fn collect_browser_extract_evidence(
         &db_path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
-    .with_context(|| format!("failed to open Business-OS RxDB store {}", db_path.display()))?;
+    .with_context(|| {
+        format!(
+            "failed to open Business-OS RxDB store {}",
+            db_path.display()
+        )
+    })?;
 
     let table_name: Option<String> = conn
         .query_row(
@@ -717,7 +728,13 @@ fn collect_browser_extract_evidence(
         }
         docs.push(doc);
     }
-    docs.sort_by_key(|doc| Reverse(doc.get("updated_at_ms").and_then(Value::as_u64).unwrap_or(0)));
+    docs.sort_by_key(|doc| {
+        Reverse(
+            doc.get("updated_at_ms")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        )
+    });
     docs.truncate(64);
 
     let mut evidence: BTreeMap<FieldKey, Vec<Value>> = BTreeMap::new();
@@ -743,7 +760,9 @@ fn collect_browser_extract_evidence(
             continue;
         };
         let Some(fields) = extract.get("fields").and_then(Value::as_object) else {
-            runs.push(browser_extract_run_summary(&doc, result, extract, payload, plan, 0));
+            runs.push(browser_extract_run_summary(
+                &doc, result, extract, payload, plan, 0,
+            ));
             continue;
         };
         if !browser_extract_matches_company(company, extract, payload, fields) {
@@ -778,7 +797,13 @@ fn collect_browser_extract_evidence(
             let command_id = first_json_string(&[&doc], "command_id")
                 .or_else(|| first_json_string(&[&doc], "id"))
                 .unwrap_or_default();
-            let dedupe = format!("{}:{}:{}:{}", plan.source_id, field.as_str(), source_url, value);
+            let dedupe = format!(
+                "{}:{}:{}:{}",
+                plan.source_id,
+                field.as_str(),
+                source_url,
+                value
+            );
             if !seen.insert(dedupe) {
                 continue;
             }
@@ -1428,20 +1453,25 @@ mod tests {
             .iter()
             .find(|entry| entry.get("source_id").and_then(Value::as_str) == Some("linkedin.com"))
             .expect("linkedin recommendation");
-        assert_eq!(
-            linkedin.get("stream").and_then(Value::as_str),
-            Some("rxdb")
-        );
+        assert_eq!(linkedin.get("stream").and_then(Value::as_str), Some("rxdb"));
         assert_eq!(
             linkedin.get("required_secret_name").and_then(Value::as_str),
             Some("LINKEDIN_SALES_NAV_TOKEN")
         );
         assert_eq!(
-            linkedin.get("secret_value_in_payload").and_then(Value::as_bool),
+            linkedin
+                .get("secret_value_in_payload")
+                .and_then(Value::as_bool),
             Some(false)
         );
-        assert!(linkedin.get("credential_selector").and_then(Value::as_str).is_some());
-        assert!(linkedin.get("capture_script").and_then(Value::as_str).is_some());
+        assert!(linkedin
+            .get("credential_selector")
+            .and_then(Value::as_str)
+            .is_some());
+        assert!(linkedin
+            .get("capture_script")
+            .and_then(Value::as_str)
+            .is_some());
         assert!(!serde_json::to_string(linkedin)
             .expect("serialize recommendation")
             .contains("secret_value\""));
@@ -1551,7 +1581,10 @@ mod tests {
         });
         conn.execute(
             "INSERT INTO ctox_business_os__business_commands__v1 (id, data) VALUES (?1, ?2)",
-            (&"browser_extract_test", &serde_json::to_string(&doc).unwrap()),
+            (
+                &"browser_extract_test",
+                &serde_json::to_string(&doc).unwrap(),
+            ),
         )
         .unwrap();
 

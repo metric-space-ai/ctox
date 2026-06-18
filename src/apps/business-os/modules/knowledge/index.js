@@ -339,7 +339,7 @@ async function readLocalKnowledgeSnapshot() {
 }
 
 async function loadLocalKnowledgeRecords(collectionName, missingCollections = state.missingCollections) {
-  const collection = state.ctx.db?.raw?.[collectionName];
+  const collection = knowledgeCollection(collectionName);
   if (!collection) {
     missingCollections.push(collectionName);
     return [];
@@ -412,7 +412,7 @@ function wireLocalRealtime() {
     }, KNOWLEDGE_RENDER_DEBOUNCE_MS);
   };
   const subscriptions = collections
-    .map((collectionName) => state.ctx.db?.raw?.[collectionName]?.$?.subscribe?.(schedule) || null)
+    .map((collectionName) => knowledgeCollection(collectionName)?.$?.subscribe?.(schedule) || null)
     .filter(Boolean);
   return () => {
     if (timer) window.clearTimeout(timer);
@@ -421,6 +421,10 @@ function wireLocalRealtime() {
       try { sub.unsubscribe?.(); } catch {}
     }
   };
+}
+
+function knowledgeCollection(collectionName) {
+  return state.ctx?.db?.collection?.(collectionName) || null;
 }
 
 function renderEmptyKnowledgeSelection() {

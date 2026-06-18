@@ -11,7 +11,8 @@
     "accounting_ledger_entries",
     "accounting_receipts",
     "accounting_bank_statements",
-    "accounting_bank_statement_lines"
+    "accounting_bank_statement_lines",
+    "accounting_number_series"
   ],
   "layout": {
     "shell": "full-workspace",

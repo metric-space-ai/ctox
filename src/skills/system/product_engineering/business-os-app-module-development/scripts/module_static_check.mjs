@@ -53,6 +53,20 @@ const shellTokenPattern = new RegExp(
   `--(?:${shellTokenNames.join('|')})(?![\\w-])\\s*:`,
 );
 const semverPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const installedAllowedRootFiles = new Set([
+  'module.json',
+  'collections.schema.json',
+  'schema.js',
+  'index.html',
+  'index.css',
+  'index.js',
+  'icon.svg',
+]);
+const installedAllowedRootDirectories = new Set([
+  'core',
+  'locales',
+  'tests',
+]);
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -370,6 +384,7 @@ for (const file of [
   'icon.svg',
   'locales/de.json',
   'locales/en.json',
+  ...(installedMode ? ['core/automation.mjs', 'core/records.mjs'] : []),
 ]) {
   if (!existsSync(join(moduleDir, file))) {
     fail(`missing ${rel(join(moduleDir, file))}`);
@@ -413,6 +428,15 @@ if (manifest) {
   }
   if (manifest.layout?.right && !manifest.layout?.third_pane_justification) {
     fail('module.json layout.right requires layout.third_pane_justification; use two panes plus modals/drawers by default');
+  }
+  if (
+    manifest.layout?.drawers
+    && typeof manifest.layout.drawers === 'object'
+    && !Array.isArray(manifest.layout.drawers)
+    && Object.prototype.hasOwnProperty.call(manifest.layout.drawers, 'right')
+    && !manifest.layout?.third_pane_justification
+  ) {
+    fail('module.json layout.drawers.right is third/right-panel metadata; remove it and use an in-module modal or focused two-pane flow unless a persistent third pane was explicitly requested');
   }
   if (manifest.layout?.icon_svg) {
     fail('module.json layout.icon_svg is forbidden; keep icons in icon.svg instead of embedding SVG in the manifest');
@@ -490,6 +514,19 @@ const testFiles = files.filter((path) =>
   hasPathSegment(path, 'tests') && path.endsWith('.test.mjs')
 );
 
+if (installedMode && existsSync(moduleDir)) {
+  for (const name of readdirSync(moduleDir)) {
+    const path = join(moduleDir, name);
+    const stats = statSync(path);
+    const allowed = stats.isDirectory()
+      ? installedAllowedRootDirectories.has(name)
+      : installedAllowedRootFiles.has(name);
+    if (!allowed) {
+      fail(`${rel(path)} is an unexpected installed-app root artifact; keep only canonical root files plus core/, locales/, and tests/`);
+    }
+  }
+}
+
 if (testFiles.length === 0) {
   fail(`missing ${rel(join(moduleDir, 'tests'))}/*.test.mjs`);
 }
@@ -511,6 +548,10 @@ for (const path of entries) {
 
 for (const path of files) {
   const name = path.split(sep).at(-1);
+  const moduleRelativePath = relative(moduleDir, path).split(sep).join('/');
+  if (['schema.mjs', 'schema.cjs'].includes(moduleRelativePath)) {
+    fail(`${rel(path)} is a forbidden alternate schema artifact; keep the canonical root schema file as schema.js and put helper ESM in core/*.mjs`);
+  }
   if (
     name === '.DS_Store' ||
     name === 'Thumbs.db' ||

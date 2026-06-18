@@ -143,6 +143,7 @@ const labels = {
     board: 'Board',
     table: 'Tabelle',
     refresh: 'Aktualisieren',
+    linkedDataLimited: 'Verknuepfte Daten eingeschraenkt',
     accounts: 'Kunden',
     contacts: 'Kontakte',
     opportunities: 'Opportunities',
@@ -301,6 +302,7 @@ const labels = {
     board: 'Board',
     table: 'Table',
     refresh: 'Refresh',
+    linkedDataLimited: 'Linked data limited',
     accounts: 'Accounts',
     contacts: 'Contacts',
     opportunities: 'Opportunities',
@@ -457,6 +459,7 @@ const state = {
     error: '',
     lastLoadedAt: 0,
     commandState: '',
+    optionalDeniedCollections: [],
   },
   cleanup: [],
   renderTimer: 0,
@@ -1058,11 +1061,22 @@ async function refreshData(options = {}) {
   }
   try {
     const entries = [];
-    for (const name of CUSTOMERS_COLLECTIONS.concat(OUTBOUND_HANDOFF_COLLECTIONS).concat(OPTIONAL_LINK_COLLECTIONS)) {
+    for (const name of CUSTOMERS_COLLECTIONS) {
       entries.push([name, await readCollection(name)]);
+    }
+    const optionalDeniedCollections = [];
+    for (const name of OUTBOUND_HANDOFF_COLLECTIONS.concat(OPTIONAL_LINK_COLLECTIONS)) {
+      try {
+        entries.push([name, await readCollection(name)]);
+      } catch (error) {
+        if (!isBusinessOsPermissionDenied(error)) throw error;
+        optionalDeniedCollections.push(name);
+        entries.push([name, []]);
+      }
     }
     state.collections = { ...emptyCollections(), ...Object.fromEntries(entries) };
     state.diagnostics.error = '';
+    state.diagnostics.optionalDeniedCollections = optionalDeniedCollections;
     state.diagnostics.lastLoadedAt = Date.now();
     syncSelection();
   } catch (error) {
@@ -1079,6 +1093,11 @@ function reportRefreshError(error) {
   render();
 }
 
+function isBusinessOsPermissionDenied(error) {
+  return error?.code === 'CTOX_BUSINESS_OS_PERMISSION_DENIED'
+    || error?.name === 'BusinessOsPermissionError';
+}
+
 async function readCollection(name) {
   const collection = resolveCollection(name);
   const docs = collection?.find ? await collection.find().exec() : [];
@@ -1089,9 +1108,28 @@ async function readCollection(name) {
 }
 
 function resolveCollection(name) {
-  return state.ctx?.db?.[name]
-    || state.ctx?.db?.collections?.[name]
-    || state.ctx?.db?.collection?.(name);
+  return state.ctx?.db?.collection?.(name) || null;
+}
+
+function canWriteCustomerCollection(name) {
+  const permissionCheck = state.ctx?.permissions?.canWriteCollection;
+  return typeof permissionCheck === 'function' ? permissionCheck(name) : true;
+}
+
+function requireCustomerImportCollections() {
+  const names = [
+    'customer_accounts',
+    'customer_dedupe_candidates',
+    'customer_import_batches',
+  ];
+  const denied = names.filter((name) => !canWriteCustomerCollection(name));
+  if (denied.length) {
+    const error = new Error(`Keine Schreibberechtigung fuer Kundendaten: ${denied.join(', ')}`);
+    error.name = 'BusinessOsPermissionError';
+    error.code = 'CTOX_BUSINESS_OS_PERMISSION_DENIED';
+    throw error;
+  }
+  return Object.fromEntries(names.map((name) => [name, resolveCollection(name)]));
 }
 
 function syncSelection() {
@@ -1270,6 +1308,7 @@ function renderCenter() {
       <span class="customers-badge">${escapeHtml(state.t('visibleCount', labels.de.visibleCount, visibleCenterCount({ accounts, contacts, opportunities, handoffRows, dedupeRows })))}</span>
       ${state.diagnostics.loading ? `<span class="customers-badge">${escapeHtml(state.t('loadingStatus', labels.de.loadingStatus))}</span>` : ''}
       ${state.diagnostics.error ? `<span class="customers-badge">${escapeHtml(state.diagnostics.error)}</span>` : ''}
+      ${state.diagnostics.optionalDeniedCollections?.length ? `<span class="customers-badge">${escapeHtml(state.t('linkedDataLimited', labels.de.linkedDataLimited))}</span>` : ''}
     </div>
     <div class="customers-center-scroll">
       ${state.centerView === 'contacts'
@@ -2367,6 +2406,7 @@ async function openCustomerImporter() {
 }
 
 async function importCustomerRowsFromPayload(payload = {}) {
+  const importCollections = requireCustomerImportCollections();
   const textParts = [];
   if (payload.source?.text) textParts.push(payload.source.text);
   for (const file of payload.source?.files || []) {
@@ -2392,7 +2432,7 @@ async function importCustomerRowsFromPayload(payload = {}) {
     const accountId = `customer_import_${slugId(domain || row.name)}_${row.row_index || imported}_${now}`;
     if (existing) {
       dedupe += 1;
-      await upsertLocalDoc(state.ctx.db.customer_dedupe_candidates, `customer_dedupe_${batchId}_${existing.id}_${row.row_index || dedupe}`, {
+      await upsertLocalDoc(importCollections.customer_dedupe_candidates, `customer_dedupe_${batchId}_${existing.id}_${row.row_index || dedupe}`, {
         id: `customer_dedupe_${batchId}_${existing.id}_${row.row_index || dedupe}`,
         object_type: 'account',
         match_key: domain || row.name,
@@ -2430,11 +2470,11 @@ async function importCustomerRowsFromPayload(payload = {}) {
       updated_at_ms: now,
       last_activity_at_ms: now,
     };
-    await upsertLocalDoc(state.ctx.db.customer_accounts, account.id, account);
+    await upsertLocalDoc(importCollections.customer_accounts, account.id, account);
     if (domain) existingByDomain.set(domain, account);
     imported += 1;
   }
-  await upsertLocalDoc(state.ctx.db.customer_import_batches, batchId, {
+  await upsertLocalDoc(importCollections.customer_import_batches, batchId, {
     id: batchId,
     source: payload.source_type || 'importer',
     source_record_id: payload.record_id || '',
@@ -3936,6 +3976,7 @@ export const __customersTestHooks = {
   groupOpportunitiesByStage,
   isClosedOpportunity,
   isActivationKey,
+  isBusinessOsPermissionDenied,
   moneyToCents,
   nextDetailTab,
   normalizeDomain,

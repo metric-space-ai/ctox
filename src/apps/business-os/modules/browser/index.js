@@ -90,12 +90,12 @@ export async function mount(ctx) {
   }
 
   for (const collection of [
-    ctx.db?.raw?.business_commands,
-    ctx.db?.raw?.browser_sessions,
-    ctx.db?.raw?.browser_tabs,
-    ctx.db?.raw?.browser_frames,
-    ctx.db?.raw?.browser_input_events,
-    ctx.db?.raw?.ctox_queue_tasks,
+    browserCollection(ctx, 'business_commands'),
+    browserCollection(ctx, 'browser_sessions'),
+    browserCollection(ctx, 'browser_tabs'),
+    browserCollection(ctx, 'browser_frames'),
+    browserCollection(ctx, 'browser_input_events'),
+    browserCollection(ctx, 'ctox_queue_tasks'),
   ]) {
     const sub = collection?.$?.subscribe?.(() => scheduleRefresh());
     if (sub?.unsubscribe) cleanups.push(() => sub.unsubscribe());
@@ -174,15 +174,15 @@ export async function mount(ctx) {
   async function loadAndRender() {
     if (!mounted) return;
     const [commands, sessions, tabs, inputs, handoffTasks] = await Promise.all([
-      readCollection(ctx.db?.raw?.business_commands, { limit: 50 }),
-      readCollection(ctx.db?.raw?.browser_sessions, { limit: 20 }),
-      readCollection(ctx.db?.raw?.browser_tabs, { limit: 40 }),
-      readCollection(ctx.db?.raw?.browser_input_events, { limit: 80 }),
-      readCollection(ctx.db?.raw?.ctox_queue_tasks, { limit: 50 }),
+      readCollection(browserCollection(ctx, 'business_commands'), { limit: 50 }),
+      readCollection(browserCollection(ctx, 'browser_sessions'), { limit: 20 }),
+      readCollection(browserCollection(ctx, 'browser_tabs'), { limit: 40 }),
+      readCollection(browserCollection(ctx, 'browser_input_events'), { limit: 80 }),
+      readCollection(browserCollection(ctx, 'ctox_queue_tasks'), { limit: 50 }),
     ]);
     const selectedSession = state.selectedSessionId ? latestSession(sessions, state.selectedSessionId) : null;
     const frameSessionId = selectedSession?.id || state.selectedSessionId || '';
-    const frames = await readCollection(ctx.db?.raw?.browser_frames, {
+    const frames = await readCollection(browserCollection(ctx, 'browser_frames'), {
       limit: frameSessionId ? 20 : 30,
       selector: frameSessionId ? { session_id: frameSessionId } : {},
     });
@@ -247,7 +247,7 @@ async function dispatchBrowserCommand(ctx, state, commandType, payloadPatch = {}
   if (commandType === 'browser.session.stop') {
     await writeOptimisticBrowserSession(ctx, state, commandType, payload);
   }
-  await upsertDoc(ctx.db?.raw?.business_commands, {
+  await upsertDoc(browserCollection(ctx, 'business_commands'), {
     id: commandId,
     command_id: commandId,
     module: 'browser',
@@ -277,13 +277,15 @@ async function writeOptimisticBrowserSession(ctx, state, commandType, payload) {
   const title = state.latestTab?.title || state.latestSession?.title || 'Browser';
   const frameId = state.latestFrame?.id || state.latestSession?.active_frame_id || '';
   const frameSeq = Number(state.latestFrame?.seq || state.latestSession?.last_frame_seq || 0);
-  const existingSession = (await ctx.db?.raw?.browser_sessions?.findOne(sessionId).exec())?.toJSON?.() || {};
-  const existingTab = (await ctx.db?.raw?.browser_tabs?.findOne(tabId).exec())?.toJSON?.() || {};
+  const sessionsCollection = browserCollection(ctx, 'browser_sessions');
+  const tabsCollection = browserCollection(ctx, 'browser_tabs');
+  const existingSession = (await sessionsCollection?.findOne(sessionId).exec())?.toJSON?.() || {};
+  const existingTab = (await tabsCollection?.findOne(tabId).exec())?.toJSON?.() || {};
   const isStop = commandType === 'browser.session.stop';
   const optimisticStatus = isStop ? 'stopped' : 'requested';
   const optimisticRuntimeStatus = isStop ? 'stopped' : 'pending_command';
   await Promise.all([
-    upsertDoc(ctx.db?.raw?.browser_sessions, {
+    upsertDoc(sessionsCollection, {
       ...existingSession,
       id: sessionId,
       owner_user_id: existingSession.owner_user_id || ctx.session?.user?.id || '',
@@ -310,7 +312,7 @@ async function writeOptimisticBrowserSession(ctx, state, commandType, payload) {
       created_at_ms: existingSession.created_at_ms || now,
       updated_at_ms: now,
     }),
-    upsertDoc(ctx.db?.raw?.browser_tabs, {
+    upsertDoc(tabsCollection, {
       ...existingTab,
       id: tabId,
       session_id: sessionId,
@@ -425,7 +427,7 @@ async function sendBrowserContextToCtox(ctx, state, options = {}) {
       },
     });
   } else {
-    await upsertDoc(ctx.db?.raw?.business_commands, {
+    await upsertDoc(browserCollection(ctx, 'business_commands'), {
       id: commandId,
       command_id: commandId,
       module: 'ctox',
@@ -524,7 +526,7 @@ async function extractWebStackFields(ctx, state) {
   if (ctx.commandBus?.dispatch) {
     await ctx.commandBus.dispatch(command);
   } else {
-    await upsertDoc(ctx.db?.raw?.business_commands, {
+    await upsertDoc(browserCollection(ctx, 'business_commands'), {
       ...command,
       status: 'pending_sync',
     });
@@ -569,7 +571,7 @@ async function completeWebStackAuthAssist(ctx, state) {
       },
     });
   } else {
-    await upsertDoc(ctx.db?.raw?.business_commands, {
+    await upsertDoc(browserCollection(ctx, 'business_commands'), {
       id: commandId,
       command_id: commandId,
       module: 'browser',
@@ -631,7 +633,7 @@ async function fillWebStackCredential(ctx, state) {
       },
     });
   } else {
-    await upsertDoc(ctx.db?.raw?.business_commands, {
+    await upsertDoc(browserCollection(ctx, 'business_commands'), {
       id: commandId,
       command_id: commandId,
       module: 'browser',
@@ -767,10 +769,10 @@ async function writeInputEvent(ctx, state, type, patch) {
     updated_at_ms: now,
     ...patch,
   };
-  await upsertDoc(ctx.db?.raw?.browser_input_events, event);
+  await upsertDoc(browserCollection(ctx, 'browser_input_events'), event);
   if (session) {
     const pendingInputCount = await countPendingInputEvents(ctx, session.id);
-    await patchDoc(ctx.db?.raw?.browser_sessions, session.id, {
+    await patchDoc(browserCollection(ctx, 'browser_sessions'), session.id, {
       last_input_seq: Math.max(seq, Number(session.last_input_seq || 0)),
       pending_input_count: pendingInputCount,
       updated_at_ms: now,
@@ -780,7 +782,7 @@ async function writeInputEvent(ctx, state, type, patch) {
 }
 
 async function countPendingInputEvents(ctx, sessionId) {
-  const collection = ctx.db?.raw?.browser_input_events;
+  const collection = browserCollection(ctx, 'browser_input_events');
   if (!collection?.find || !sessionId) return 0;
   const docs = await collection.find().exec();
   return (docs || [])
@@ -797,7 +799,7 @@ async function writeViewerActivity(ctx, state, options = {}) {
   const now = Number(options.atMs || Date.now());
   if (!options.force && now - Number(state.lastViewerHeartbeatAt || 0) < VIEWER_HEARTBEAT_MS) return;
   state.lastViewerHeartbeatAt = now;
-  const collection = ctx.db?.raw?.browser_sessions;
+  const collection = browserCollection(ctx, 'browser_sessions');
   if (!collection?.findOne) return;
   const existing = await collection.findOne(session.id).exec();
   if (!existing?.incrementalPatch) return;
@@ -848,6 +850,10 @@ async function readCollection(collection, options = {}) {
   return docs
     .map((doc) => doc?.toJSON?.() || doc)
     .filter((doc) => doc && doc._deleted !== true);
+}
+
+function browserCollection(ctx, name) {
+  return ctx?.db?.collection?.(name) || null;
 }
 
 function latestFrame(frames, sessionId = '') {
@@ -1239,14 +1245,14 @@ async function seedSyntheticFrame(ctx, requestedUrl) {
     updated_at_ms: now,
   };
   await Promise.all([
-    upsertDoc(ctx.db?.raw?.browser_sessions, session),
-    upsertDoc(ctx.db?.raw?.browser_tabs, tab),
-    upsertDoc(ctx.db?.raw?.browser_frames, frame),
+    upsertDoc(browserCollection(ctx, 'browser_sessions'), session),
+    upsertDoc(browserCollection(ctx, 'browser_tabs'), tab),
+    upsertDoc(browserCollection(ctx, 'browser_frames'), frame),
   ]);
 }
 
 async function clearSyntheticFrames(ctx) {
-  const docs = await ctx.db?.raw?.browser_frames?.find().exec();
+  const docs = await browserCollection(ctx, 'browser_frames')?.find().exec();
   for (const doc of docs || []) {
     const json = doc?.toJSON?.() || {};
     if (json.session_id === SYNTHETIC_SESSION_ID) {

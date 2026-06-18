@@ -21,6 +21,7 @@ const {
   normalizeModuleCatalog,
   normalizeSourceFiles,
   resolveMonacoBaseUrl,
+  sourceCommandErrorMessage,
   sourceEditorActionState,
 } = await import(`data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`);
 
@@ -35,6 +36,34 @@ test('module catalog exposes editable Business OS apps once each', () => {
 
   assert.deepEqual(modules.map((module) => module.id).sort(), ['ctox', 'notes']);
   assert.equal(modules.find((module) => module.id === 'notes').title, 'Notizen');
+});
+
+test('module catalog can filter source-visible apps by projected permissions', () => {
+  const governance = {
+    permission_model: {
+      explicit_grants: [
+        {
+          grant_id: 'viewer_notes_source',
+          subject_type: 'user',
+          subject_id: 'viewer',
+          permission: 'apps.source.view',
+          scope_type: 'module',
+          scope_id: 'notes',
+          active: true,
+        },
+      ],
+    },
+  };
+  const modules = normalizeModuleCatalog([
+    { id: 'ctox', title: 'CTOX' },
+    { id: 'notes', title: 'Notizen' },
+  ], {
+    session: { user: { id: 'viewer', role: 'user' } },
+    governance,
+    requireSourceView: true,
+  });
+
+  assert.deepEqual(modules.map((module) => module.id), ['notes']);
 });
 
 test('source file normalization removes deleted rows and sorts paths', () => {
@@ -97,6 +126,23 @@ test('actions stay disabled until a dirty writable file is selected', () => {
     dirty: false,
     readonly: true,
   }).format, false);
+});
+
+test('failed source commands surface policy denials as hard errors', () => {
+  assert.equal(sourceCommandErrorMessage({
+    status: 'failed',
+    result: {
+      policy_decision: {
+        allowed: false,
+        display_reason: 'Nicht erlaubt',
+      },
+    },
+  }), 'Nicht erlaubt');
+
+  assert.equal(sourceCommandErrorMessage({
+    status: 'completed',
+    result: { count: 1 },
+  }), '');
 });
 
 test('monaco asset path resolves under the Business OS app bundle', () => {

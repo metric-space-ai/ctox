@@ -1,12 +1,12 @@
 // ref: stalwart/src/caldav/mod.rs:1-350
 // ref: ctox-mailserver SQLite-backed native CalDAV server using tiny_http
 
-use crate::store::SqliteStore;
-use crate::config::CalDavConfig;
 use crate::calcard::ICalendar;
+use crate::config::CalDavConfig;
+use crate::store::SqliteStore;
 use crate::util::errors::{StalwartError, StalwartResult};
 use std::sync::Arc;
-use tracing::{info, error};
+use tracing::{error, info};
 
 pub mod scheduler;
 
@@ -48,8 +48,20 @@ impl CalDavServer {
         match method {
             "OPTIONS" => {
                 let response = tiny_http::Response::empty(200)
-                    .with_header(tiny_http::Header::from_bytes(&b"Allow"[..], &b"OPTIONS, GET, HEAD, PUT, DELETE, PROPFIND, PROPPATCH, REPORT"[..]).unwrap())
-                    .with_header(tiny_http::Header::from_bytes(&b"DAV"[..], &b"1, 2, calendar-access, calendar-schedule"[..]).unwrap());
+                    .with_header(
+                        tiny_http::Header::from_bytes(
+                            &b"Allow"[..],
+                            &b"OPTIONS, GET, HEAD, PUT, DELETE, PROPFIND, PROPPATCH, REPORT"[..],
+                        )
+                        .unwrap(),
+                    )
+                    .with_header(
+                        tiny_http::Header::from_bytes(
+                            &b"DAV"[..],
+                            &b"1, 2, calendar-access, calendar-schedule"[..],
+                        )
+                        .unwrap(),
+                    );
                 request.respond(response)?;
             }
             "PROPFIND" => {
@@ -72,7 +84,13 @@ impl CalDavServer {
 </d:multistatus>"#;
                 let response = tiny_http::Response::from_string(xml_body)
                     .with_status_code(207)
-                    .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/xml; charset=utf-8"[..]).unwrap());
+                    .with_header(
+                        tiny_http::Header::from_bytes(
+                            &b"Content-Type"[..],
+                            &b"application/xml; charset=utf-8"[..],
+                        )
+                        .unwrap(),
+                    );
                 request.respond(response)?;
             }
             "GET" => {
@@ -81,7 +99,13 @@ impl CalDavServer {
                     if let Ok(Some((ical_data, _))) = self.store.get_event("main", &uid) {
                         let response = tiny_http::Response::from_string(ical_data)
                             .with_status_code(200)
-                            .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/calendar; charset=utf-8"[..]).unwrap());
+                            .with_header(
+                                tiny_http::Header::from_bytes(
+                                    &b"Content-Type"[..],
+                                    &b"text/calendar; charset=utf-8"[..],
+                                )
+                                .unwrap(),
+                            );
                         request.respond(response)?;
                         return Ok(());
                     }

@@ -24,24 +24,35 @@ async function dispatchRxdbCommand({ db, sync, session, command }) {
 
 function commandDocument(command, commandId, actor) {
   const now = Date.now();
-  const moduleId = String(command.module || command.client_context?.module || 'ctox').trim() || 'ctox';
+  const commandClientContext = command.client_context && typeof command.client_context === 'object'
+    ? command.client_context
+    : {};
+  const moduleId = String(
+    command.module
+      || commandClientContext.module
+      || commandClientContext.module_id
+      || commandClientContext.app_id
+      || commandClientContext.source_module
+      || 'ctox',
+  ).trim() || 'ctox';
   const commandType = String(command.type || command.command_type || 'business_os.chat.task').trim();
   const inboundChannel = String(command.inbound_channel || command.client_context?.inbound_channel || moduleId).trim();
   if (!commandType) throw commandError(commandId, 'command_type is required.');
-  const clientContext = {
-    ...(command.client_context || {}),
-    inbound_channel: inboundChannel,
-    dispatch_transport: 'rxdb-command-bus',
-  };
-  if (actor && !clientContext.actor) {
-    clientContext.actor = actor;
-  }
+  const recordId = command.record_id || '';
+  const clientContext = normalizeCommandClientContext({
+    command,
+    moduleId,
+    commandType,
+    recordId,
+    inboundChannel,
+    actor,
+  });
   return {
     id: commandId,
     command_id: commandId,
     module: moduleId,
     command_type: commandType,
-    record_id: command.record_id || '',
+    record_id: recordId,
     status: 'pending_sync',
     inbound_channel: inboundChannel,
     payload: {
@@ -52,6 +63,120 @@ function commandDocument(command, commandId, actor) {
     created_at_ms: now,
     updated_at_ms: now,
   };
+}
+
+export function normalizeCommandClientContext({
+  command = {},
+  moduleId = '',
+  commandType = '',
+  recordId = '',
+  inboundChannel = '',
+  actor = null,
+} = {}) {
+  const context = command.client_context && typeof command.client_context === 'object'
+    ? { ...command.client_context }
+    : {};
+  const payload = command.payload && typeof command.payload === 'object'
+    ? command.payload
+    : {};
+  const payloadContext = payload.context && typeof payload.context === 'object'
+    ? payload.context
+    : {};
+  const normalizedModule = cleanContextText(
+    context.module || context.module_id || context.app_id || context.source_module || moduleId || command.module || 'ctox',
+  ) || 'ctox';
+  const normalizedCommandType = cleanContextText(commandType || command.type || command.command_type || 'business_os.chat.task');
+  const normalizedRecordId = cleanContextText(context.record_id || recordId || command.record_id || payload.record_id || payloadContext.record_id);
+  const normalizedRecordType = cleanContextText(context.record_type || payloadContext.record_type);
+  const normalizedMode = cleanContextText(context.mode || payload.mode);
+  const normalizedTarget = cleanContextText(context.target || payload.target);
+  const normalizedAction = cleanContextText(context.action || normalizedCommandType);
+
+  context.module = cleanContextText(context.module || normalizedModule) || normalizedModule;
+  context.module_id = cleanContextText(context.module_id || normalizedModule) || normalizedModule;
+  context.source_module = cleanContextText(context.source_module || normalizedModule) || normalizedModule;
+  context.app_id = cleanContextText(context.app_id || normalizedModule) || normalizedModule;
+  context.command_type = cleanContextText(context.command_type || normalizedCommandType) || normalizedCommandType;
+  context.action = normalizedAction;
+  if (normalizedMode) context.mode = normalizedMode;
+  if (normalizedTarget) context.target = normalizedTarget;
+  if (normalizedRecordId) context.record_id = normalizedRecordId;
+  if (normalizedRecordType) context.record_type = normalizedRecordType;
+  context.inbound_channel = cleanContextText(inboundChannel || context.inbound_channel || normalizedModule) || normalizedModule;
+  context.dispatch_transport = 'rxdb-command-bus';
+  if (actor && !context.actor) {
+    context.actor = actor;
+  }
+  context.scope = normalizeCommandScope({
+    context,
+    payloadContext,
+    moduleId: normalizedModule,
+    commandType: normalizedCommandType,
+    recordId: normalizedRecordId,
+    recordType: normalizedRecordType,
+    mode: normalizedMode,
+    target: normalizedTarget,
+    action: normalizedAction,
+  });
+  return context;
+}
+
+function normalizeCommandScope({
+  context,
+  payloadContext,
+  moduleId,
+  commandType,
+  recordId,
+  recordType,
+  mode,
+  target,
+  action,
+}) {
+  const current = context.scope && typeof context.scope === 'object'
+    ? { ...context.scope }
+    : {};
+  if (!current.app || typeof current.app !== 'object') {
+    current.app = {};
+  }
+  current.app.module_id = cleanContextText(current.app.module_id || context.module_id || moduleId);
+  current.app.app_id = cleanContextText(current.app.app_id || context.app_id || moduleId);
+  if (!current.command || typeof current.command !== 'object') {
+    current.command = {};
+  }
+  current.command.type = cleanContextText(current.command.type || commandType);
+  current.command.action = cleanContextText(current.command.action || action || commandType);
+  if (mode) current.command.mode = mode;
+  if (target) current.command.target = target;
+
+  if (!current.selection || typeof current.selection !== 'object') {
+    current.selection = {};
+  }
+  current.selection.module_id = cleanContextText(current.selection.module_id || context.module_id || moduleId);
+  current.selection.column = cleanContextText(current.selection.column || context.column || payloadContext.column || '');
+  current.selection.record_type = cleanContextText(current.selection.record_type || recordType || payloadContext.record_type || '');
+  current.selection.record_id = cleanContextText(current.selection.record_id || recordId || payloadContext.record_id || '');
+  current.selection.label = cleanContextText(current.selection.label || context.label || payloadContext.label || '');
+
+  if (context.visible_scope && typeof context.visible_scope === 'object') {
+    current.visible_scope = context.visible_scope;
+    current.app = {
+      ...current.app,
+      ...(context.visible_scope.app && typeof context.visible_scope.app === 'object' ? context.visible_scope.app : {}),
+    };
+    current.data = context.visible_scope.data && typeof context.visible_scope.data === 'object'
+      ? context.visible_scope.data
+      : current.data;
+    current.external_actions = context.visible_scope.external_actions && typeof context.visible_scope.external_actions === 'object'
+      ? context.visible_scope.external_actions
+      : current.external_actions;
+    current.selection = {
+      ...current.selection,
+      ...(context.visible_scope.selection && typeof context.visible_scope.selection === 'object'
+        ? context.visible_scope.selection
+        : {}),
+    };
+  }
+  return current;
 }
 
 function resolveActorContext(command, session) {
@@ -66,6 +191,10 @@ function resolveActorContext(command, session) {
     role: user.role || (user.is_admin ? 'admin' : 'user'),
     is_admin: Boolean(user.is_admin),
   };
+}
+
+function cleanContextText(value) {
+  return String(value ?? '').trim();
 }
 
 async function resolveCommandDb(db, timeoutMs = COMMAND_SYNC_READY_TIMEOUT_MS) {

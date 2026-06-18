@@ -1,16 +1,16 @@
 // ref: stalwart/src/smtp/client/queue.rs:1-150
 // ref: ctox-mailserver queue runner that periodically pulls pending messages from SQLite and delivers them
 
-use crate::store::SqliteStore;
 use crate::config::SmtpConfig;
 use crate::smtp::client::SmtpOutboundClient;
 use crate::smtp::dkim::DkimSigner;
+use crate::store::SqliteStore;
 use crate::util::errors::{StalwartError, StalwartResult};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
-use tracing::{info, error, warn};
+use tracing::{error, info, warn};
 
 pub struct SmtpOutboundQueue {
     store: SqliteStore,
@@ -43,7 +43,8 @@ impl SmtpOutboundQueue {
 
         // Group pending emails by recipient domain
         use std::collections::HashMap;
-        let mut grouped: HashMap<String, Vec<(String, String, String, String, usize)>> = HashMap::new();
+        let mut grouped: HashMap<String, Vec<(String, String, String, String, usize)>> =
+            HashMap::new();
 
         for item in pending {
             let to = &item.2;
@@ -68,8 +69,14 @@ impl SmtpOutboundQueue {
             // Determine if domain is local or remote
             let is_local_domain = domain == "localhost"
                 || domain == "ctox.local"
-                || self.store.get_domain_dkim(&domain).map(|opt| opt.is_some()).unwrap_or(false)
-                || emails.iter().any(|(_, _, to, _, _)| self.store.user_exists(to).unwrap_or(false));
+                || self
+                    .store
+                    .get_domain_dkim(&domain)
+                    .map(|opt| opt.is_some())
+                    .unwrap_or(false)
+                || emails
+                    .iter()
+                    .any(|(_, _, to, _, _)| self.store.user_exists(to).unwrap_or(false));
 
             let mut target_addr = self.config.bind_address;
             if !is_local_domain {
@@ -86,7 +93,7 @@ impl SmtpOutboundQueue {
                         }
                     }
                 }
-                
+
                 // Fallback to A record lookup if no MX records resolved
                 if resolved_addr.is_none() {
                     let lookup_res = tokio::net::lookup_host((domain.as_str(), 25)).await;
@@ -96,12 +103,15 @@ impl SmtpOutboundQueue {
                         }
                     }
                 }
-                
+
                 if let Some(addr) = resolved_addr {
                     target_addr = addr;
                 } else {
                     for (id, _from, _to, _body, retry_count) in emails {
-                        let err = StalwartError::General(format!("Failed to resolve mail server for domain {}", domain));
+                        let err = StalwartError::General(format!(
+                            "Failed to resolve mail server for domain {}",
+                            domain
+                        ));
                         let _ = self.handle_failure(&id, retry_count, err);
                     }
                     continue;
@@ -124,14 +134,20 @@ impl SmtpOutboundQueue {
                             connected = true;
                         }
                         Err(e) => {
-                            error!("Failed to connect to SMTP server for domain {} at {}: {:?}", domain, target_addr, e);
+                            error!(
+                                "Failed to connect to SMTP server for domain {} at {}: {:?}",
+                                domain, target_addr, e
+                            );
                             let _ = self.handle_failure(&id, retry_count, e);
                             continue;
                         }
                     }
                 }
 
-                match self.deliver_on_connection(&mut client, &from, &to, &body).await {
+                match self
+                    .deliver_on_connection(&mut client, &from, &to, &body)
+                    .await
+                {
                     Ok(_) => {
                         info!("Successfully delivered email {} to {}", id, to);
                         let completed_at = std::time::SystemTime::now()
@@ -156,7 +172,10 @@ impl SmtpOutboundQueue {
                         }
                     }
                     Err(e) => {
-                        error!("Failed to deliver email {} over pooled connection: {:?}", id, e);
+                        error!(
+                            "Failed to deliver email {} over pooled connection: {:?}",
+                            id, e
+                        );
                         let err_text = format!("{:?}", e);
                         let next_retry = retry_count + 1;
                         let _ = self.handle_failure(&id, retry_count, e);
@@ -190,7 +209,13 @@ impl SmtpOutboundQueue {
         Ok(())
     }
 
-    async fn deliver_on_connection(&self, client: &mut SmtpOutboundClient, from: &str, to: &str, body: &str) -> StalwartResult<()> {
+    async fn deliver_on_connection(
+        &self,
+        client: &mut SmtpOutboundClient,
+        from: &str,
+        to: &str,
+        body: &str,
+    ) -> StalwartResult<()> {
         let sender_parts: Vec<&str> = from.split('@').collect();
         let dkim_signer = if sender_parts.len() >= 2 {
             let sender_domain = sender_parts[1];
@@ -203,19 +228,37 @@ impl SmtpOutboundQueue {
             None
         };
 
-        client.send_mail(from, &[to.to_string()], body, dkim_signer.as_ref()).await?;
+        client
+            .send_mail(from, &[to.to_string()], body, dkim_signer.as_ref())
+            .await?;
         Ok(())
     }
 
     fn handle_failure(&self, id: &str, retry_count: usize, e: StalwartError) -> StalwartResult<()> {
         let next_retry = retry_count + 1;
         if next_retry >= 5 {
-            warn!("Email {} failed permanently after {} retries: {:?}", id, next_retry, e);
-            self.store.update_email_status(id, "failed_permanent", crate::util::now_utc_secs() + 86400, next_retry)?;
+            warn!(
+                "Email {} failed permanently after {} retries: {:?}",
+                id, next_retry, e
+            );
+            self.store.update_email_status(
+                id,
+                "failed_permanent",
+                crate::util::now_utc_secs() + 86400,
+                next_retry,
+            )?;
         } else {
             let backoff = 60 * (1 << next_retry);
-            warn!("Email {} failed to deliver, will retry in {} seconds: {:?}", id, backoff, e);
-            self.store.update_email_status(id, "pending", crate::util::now_utc_secs() + backoff, next_retry)?;
+            warn!(
+                "Email {} failed to deliver, will retry in {} seconds: {:?}",
+                id, backoff, e
+            );
+            self.store.update_email_status(
+                id,
+                "pending",
+                crate::util::now_utc_secs() + backoff,
+                next_retry,
+            )?;
         }
         Ok(())
     }
@@ -229,7 +272,9 @@ async fn resolve_mx_records(domain: &str) -> Vec<String> {
     query.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00]); // Answers/Authority/Additional: 0
 
     for part in domain.split('.') {
-        if part.is_empty() { continue; }
+        if part.is_empty() {
+            continue;
+        }
         query.push(part.len() as u8);
         query.extend_from_slice(part.as_bytes());
     }
@@ -286,7 +331,9 @@ async fn resolve_mx_records(domain: &str) -> Vec<String> {
 
     // Parse Answers
     for _ in 0..ancount {
-        if pos >= response.len() { break; }
+        if pos >= response.len() {
+            break;
+        }
         // Skip Name field
         while pos < response.len() {
             let len = response[pos] as usize;
@@ -301,13 +348,18 @@ async fn resolve_mx_records(domain: &str) -> Vec<String> {
             pos += 1 + len;
         }
 
-        if pos + 10 > response.len() { break; }
-        let rtype = ((response[pos] as u16) << 8) | (response[pos+1] as u16);
-        let rdlength = (((response[pos+8] as u16) << 8) | (response[pos+9] as u16)) as usize;
+        if pos + 10 > response.len() {
+            break;
+        }
+        let rtype = ((response[pos] as u16) << 8) | (response[pos + 1] as u16);
+        let rdlength = (((response[pos + 8] as u16) << 8) | (response[pos + 9] as u16)) as usize;
         pos += 10;
 
-        if rtype == 15 { // MX record
-            if pos + rdlength > response.len() { break; }
+        if rtype == 15 {
+            // MX record
+            if pos + rdlength > response.len() {
+                break;
+            }
             let name_pos = pos + 2; // skip preference (2 bytes)
             if let Some((parsed_name, _)) = parse_dns_name(response, name_pos, 0) {
                 mx_servers.push(parsed_name);
@@ -320,37 +372,57 @@ async fn resolve_mx_records(domain: &str) -> Vec<String> {
 }
 
 fn parse_dns_name(response: &[u8], mut p: usize, depth: usize) -> Option<(String, usize)> {
-    if depth > 10 { return None; }
+    if depth > 10 {
+        return None;
+    }
     let mut name = String::new();
     let mut read_bytes = 0;
     let mut jumped = false;
-    
+
     loop {
-        if p >= response.len() { return None; }
+        if p >= response.len() {
+            return None;
+        }
         let len = response[p] as usize;
         if len == 0 {
-            if !jumped { read_bytes += 1; }
+            if !jumped {
+                read_bytes += 1;
+            }
             break;
         }
-        
+
         if len & 0xC0 == 0xC0 {
-            if p + 1 >= response.len() { return None; }
-            let offset = (((len & 0x3F) as usize) << 8) | (response[p+1] as usize);
-            if !jumped { read_bytes += 2; }
+            if p + 1 >= response.len() {
+                return None;
+            }
+            let offset = (((len & 0x3F) as usize) << 8) | (response[p + 1] as usize);
+            if !jumped {
+                read_bytes += 2;
+            }
             jumped = true;
             let (referred_name, _) = parse_dns_name(response, offset, depth + 1)?;
-            if !name.is_empty() { name.push('.'); }
+            if !name.is_empty() {
+                name.push('.');
+            }
             name.push_str(&referred_name);
             break;
         } else {
             p += 1;
-            if !jumped { read_bytes += 1; }
-            if p + len > response.len() { return None; }
-            let label = String::from_utf8_lossy(&response[p..p+len]);
-            if !name.is_empty() { name.push('.'); }
+            if !jumped {
+                read_bytes += 1;
+            }
+            if p + len > response.len() {
+                return None;
+            }
+            let label = String::from_utf8_lossy(&response[p..p + len]);
+            if !name.is_empty() {
+                name.push('.');
+            }
             name.push_str(&label);
             p += len;
-            if !jumped { read_bytes += len; }
+            if !jumped {
+                read_bytes += len;
+            }
         }
     }
     Some((name, read_bytes))

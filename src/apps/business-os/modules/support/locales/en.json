@@ -1,0 +1,11 @@
+{
+  "kicker": "Support Desk",
+  "queueTitle": "Queues",
+  "conversationKicker": "Conversation",
+  "emptyTitle": "No support conversation selected",
+  "contextKicker": "Context",
+  "contextTitle": "Customer and ticket",
+  "notePlaceholder": "Internal note",
+  "noteAction": "Add note",
+  "askCtox": "Ask CTOX"
+}

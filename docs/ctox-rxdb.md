@@ -693,7 +693,7 @@ Each has shipped (or would ship) real production breakage.
    configuration lives in the SQLite runtime store
    (`runtime_env::env_or_config`); env toggles fork behaviour invisibly per
    process and have repeatedly produced unreproducible states (see
-   `CLAUDE.md` operator guardrails).
+   root `AGENTS.md` operator guardrails).
 6. **Never delete or weaken a red test to make the suite pass.** Several of
    the regression smokes exist precisely because their semantics were once
    "cleaned up" out of the code; a red test is a finding
@@ -747,5 +747,6 @@ Each has shipped (or would ship) real production breakage.
   `24a1bf6f` (active-collection gating catch-up), `d53e1010`
   (`collectionCheckpoints` + control-plane allowlist), `ad81aff5`
   (browser LWW gate + demand-loader origin stamps).
-- Directory-local agent rules: `src/apps/business-os/rxdb/CLAUDE.md` /
-  `AGENTS.md` summarise §11 for agents working in that tree.
+- Directory-local agent rules: `AGENTS.md` files summarise §11 for agents
+  working in guarded trees; neighboring `CLAUDE.md` files are import shims for
+  Claude Code.

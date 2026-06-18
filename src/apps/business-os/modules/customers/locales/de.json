@@ -141,6 +141,7 @@
   "commandFailed": "Änderung konnte nicht gespeichert werden: {0}",
   "commandUnavailable": "Änderungen sind gerade nicht verfügbar.",
   "loadingStatus": "Aktualisiert...",
+  "linkedDataLimited": "Verknuepfte Daten eingeschraenkt",
   "permissionReadOnly": "Nur Lesen",
   "permissionReadOnlyBody": "Deine Rolle darf Kundendaten ansehen, aber nicht bearbeiten.",
   "permissionDenied": "Keine Berechtigung für Kunden-Änderungen.",

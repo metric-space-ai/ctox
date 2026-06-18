@@ -4,18 +4,11 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum StalwartError {
     #[error("SMTP protocol error: {code} - {message}")]
-    Smtp {
-        code: u16,
-        message: String,
-    },
+    Smtp { code: u16, message: String },
     #[error("CalDAV scheduling conflict: {message}")]
-    CalDavConflict {
-        message: String,
-    },
+    CalDavConflict { message: String },
     #[error("Directory resolution error: {message}")]
-    Directory {
-        message: String,
-    },
+    Directory { message: String },
     #[error("Database error: {0}")]
     Database(#[from] rusqlite::Error),
     #[error("I/O error: {0}")]

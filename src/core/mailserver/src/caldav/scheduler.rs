@@ -1,8 +1,8 @@
 // ref: stalwart/src/caldav/scheduler.rs:1-120
 // ref: ctox-mailserver SQLite-backed scheduler with conflict checks and automatic email dispatch
 
-use crate::store::SqliteStore;
 use crate::calcard::ICalendar;
+use crate::store::SqliteStore;
 use crate::util::errors::{StalwartError, StalwartResult};
 use tracing::{info, warn};
 
@@ -24,10 +24,17 @@ impl CalDavScheduler {
         let ical = ICalendar::parse(event_ical)?;
         let event = match ical.events.first() {
             Some(e) => e,
-            None => return Err(StalwartError::General("No VEVENT found in iCalendar scheduling request".to_string())),
+            None => {
+                return Err(StalwartError::General(
+                    "No VEVENT found in iCalendar scheduling request".to_string(),
+                ))
+            }
         };
 
-        info!("Scheduling event: {} organized by {}", event.summary, organizer);
+        info!(
+            "Scheduling event: {} organized by {}",
+            event.summary, organizer
+        );
 
         for attendee in attendees {
             // 1. Check for scheduling conflicts for local users
@@ -41,9 +48,13 @@ impl CalDavScheduler {
 
                 // Auto-put the event into the local attendee's main calendar
                 let calendar_id = format!("{}_main", attendee.replace("@", "_"));
-                self.store.create_calendar(&calendar_id, attendee, "Main Calendar")?;
+                self.store
+                    .create_calendar(&calendar_id, attendee, "Main Calendar")?;
                 self.store.put_event(&calendar_id, &event.uid, event_ical)?;
-                info!("Automatically scheduled event {} in local attendee calendar {}", event.uid, calendar_id);
+                info!(
+                    "Automatically scheduled event {} in local attendee calendar {}",
+                    event.uid, calendar_id
+                );
             } else {
                 // 2. Dispatch SMTP invite email for external attendees
                 let mail_subject = format!("Invitation: {}", event.summary);
@@ -52,7 +63,10 @@ impl CalDavScheduler {
                     mail_subject, organizer, attendee, event_ical
                 );
                 self.store.queue_email(organizer, attendee, &mail_body)?;
-                info!("Queued external SMTP invitation to {} for event {}", attendee, event.uid);
+                info!(
+                    "Queued external SMTP invitation to {} for event {}",
+                    attendee, event.uid
+                );
             }
         }
 
@@ -72,7 +86,9 @@ impl CalDavScheduler {
                 if let Some(existing_event) = existing_ical.events.first() {
                     // Basic overlap check:
                     // (StartA <= EndB) and (EndA >= StartB)
-                    if existing_event.dtstart <= dtend.to_string() && existing_event.dtend >= dtstart.to_string() {
+                    if existing_event.dtstart <= dtend.to_string()
+                        && existing_event.dtend >= dtstart.to_string()
+                    {
                         return Ok(true);
                     }
                 }

@@ -4,7 +4,7 @@ import { afterEach, test } from 'node:test';
 import {
   getContactsCollection,
   getMatchingCollectionDiagnostics,
-  setBusinessOsRawDatabase
+  setBusinessOsDatabaseContext
 } from './ui/businessOsDataSource.js';
 
 function row(doc) {
@@ -32,25 +32,29 @@ function collection(rows = []) {
   };
 }
 
-function rawDatabase({ requirements = [], objects = [], matches = [] } = {}) {
-  return {
+function businessOsContext({ requirements = [], objects = [], matches = [] } = {}, permissions = {}) {
+  const collections = {
     matching_requirements: collection(requirements),
     matching_objects: collection(objects),
     matching_results: collection(matches),
-    addCollections(definitions) {
-      for (const key of Object.keys(definitions || {})) {
-        if (!this[key]) this[key] = collection([]);
-      }
+  };
+  return {
+    db: {
+      collection: (name) => collections[name] || null
+    },
+    permissions: {
+      canReadCollection: permissions.canReadCollection || (() => true),
+      canWriteCollection: permissions.canWriteCollection || (() => true)
     }
   };
 }
 
 afterEach(() => {
-  setBusinessOsRawDatabase(null);
+  setBusinessOsDatabaseContext(null);
 });
 
 test('normalizes canonical matching requirement records for UI queries', async () => {
-  setBusinessOsRawDatabase(rawDatabase({
+  setBusinessOsDatabaseContext(businessOsContext({
     requirements: [{
       id: 'row-1',
       kind: 'requirement',
@@ -76,29 +80,30 @@ test('normalizes canonical matching requirement records for UI queries', async (
   assert.equal(sources.length, 0);
 });
 
-test('reports collection diagnostics when pull endpoints return empty', async () => {
-  const previousFetch = globalThis.fetch;
-  globalThis.fetch = async () => ({
-    ok: true,
-    status: 200,
-    statusText: 'OK',
-    json: async () => ({ documents: [] })
-  });
+test('reports shell-facade collection diagnostics', async () => {
+  setBusinessOsDatabaseContext(businessOsContext());
+  const diagnostics = await getMatchingCollectionDiagnostics({ probePull: true });
 
-  try {
-    setBusinessOsRawDatabase(rawDatabase());
-    const diagnostics = await getMatchingCollectionDiagnostics({ probePull: true });
+  assert.equal(diagnostics.databaseName, 'business-os-shell-facade');
+  assert.equal(diagnostics.collections.length, 3);
+  assert.deepEqual(
+    diagnostics.collections.map(item => [item.collection, item.localCount, item.pull.count]),
+    [
+      ['matching_requirements', 0, 0],
+      ['matching_objects', 0, 0],
+      ['matching_results', 0, 0]
+    ]
+  );
+});
 
-    assert.equal(diagnostics.collections.length, 3);
-    assert.deepEqual(
-      diagnostics.collections.map(item => [item.collection, item.localCount, item.pull.count]),
-      [
-        ['matching_requirements', 0, 0],
-        ['matching_objects', 0, 0],
-        ['matching_results', 0, 0]
-      ]
-    );
-  } finally {
-    globalThis.fetch = previousFetch;
-  }
+test('denies writes when the Business OS permission facade denies collection writes', async () => {
+  setBusinessOsDatabaseContext(businessOsContext({}, {
+    canWriteCollection: () => false
+  }));
+
+  const { database } = await getContactsCollection();
+  await assert.rejects(
+    () => database.requirements.insert({ id: 'req-write-denied', title: 'Denied' }),
+    /permission denied/
+  );
 });

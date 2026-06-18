@@ -44,7 +44,11 @@ pub fn parse_dsn_report(body: &str) -> Option<DsnReport> {
         // Fallback: search the email body text using simple regex or split pattern to find recipient
         for word in body.split_whitespace() {
             if word.contains('@') && (word.ends_with('.') || word.len() > 5) {
-                recipient = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '@' && c != '.' && c != '-' && c != '_').to_string();
+                recipient = word
+                    .trim_matches(|c: char| {
+                        !c.is_alphanumeric() && c != '@' && c != '.' && c != '-' && c != '_'
+                    })
+                    .to_string();
                 break;
             }
         }

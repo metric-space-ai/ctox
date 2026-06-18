@@ -222,10 +222,14 @@ function wireUi() {
 }
 
 function wireRealtime() {
-  const subscriptions = REPORT_COLLECTIONS.map((name) => state.ctx.db?.raw?.[name]?.$?.subscribe?.(() => scheduleRefresh())).filter(Boolean);
+  const subscriptions = REPORT_COLLECTIONS.map((name) => reportCollection(name)?.$?.subscribe?.(() => scheduleRefresh())).filter(Boolean);
   return () => subscriptions.forEach((sub) => {
     try { sub.unsubscribe?.(); } catch {}
   });
+}
+
+function reportCollection(name) {
+  return state.ctx?.db?.collection?.(name) || null;
 }
 
 function handleReportsUpdated() {
@@ -304,7 +308,7 @@ async function restartReportSync() {
 }
 
 async function loadCollectionResult(name) {
-  const collection = state.ctx.db?.raw?.[name];
+  const collection = reportCollection(name);
   if (!collection) return { name, items: [], missing: true, error: '' };
   try {
     const docs = await collection.find().exec();

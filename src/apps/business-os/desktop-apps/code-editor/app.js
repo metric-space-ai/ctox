@@ -1,3 +1,8 @@
+import {
+  canModifyBusinessModule,
+  canViewBusinessModuleSource,
+} from '../../shared/permissions.js';
+
 export const manifest = {
   id: 'code-editor',
   title: 'Source Editor',
@@ -26,6 +31,7 @@ export async function mount(container, ctx) {
     model: null,
     usingMonaco: false,
     diffOpen: false,
+    sourceDenied: false,
   };
 
   container.innerHTML = `
@@ -149,6 +155,10 @@ export async function mount(container, ctx) {
   await loadModuleCatalog();
   if (state.moduleId) {
     await loadBundle();
+  } else if (state.sourceDenied) {
+    clearEditor('Source nicht freigegeben', 'Diese App kann mit deinem Zugriff nicht geöffnet werden.');
+    setStatus('Source ist fuer diese App nicht freigegeben.', true);
+    updateActionState();
   } else {
     clearEditor('Modul auswählen', 'Wähle links eine Business-OS App, um ihre Source-Dateien zu laden.');
     setStatus(moduleEmptyStatus());
@@ -196,10 +206,23 @@ export async function mount(container, ctx) {
     state.loadingModules = true;
     renderModuleList();
     try {
-      const modules = await fetchModuleCatalog();
-      state.modules = normalizeModuleCatalog(modules);
+      const modules = Array.isArray(ctx.modules) && ctx.modules.length
+        ? ctx.modules
+        : await fetchModuleCatalog();
+      state.modules = normalizeModuleCatalog(modules, {
+        session: ctx.session,
+        governance: ctx.governance,
+        requireSourceView: true,
+      });
       const selected = state.modules.find((entry) => entry.id === state.moduleId);
-      if (selected) state.moduleTitle = selected.title;
+      if (selected) {
+        state.moduleTitle = selected.title;
+      } else if (state.moduleId) {
+        state.sourceDenied = true;
+        state.moduleId = '';
+        state.moduleTitle = 'Module';
+        setStatus('Source ist fuer diese App nicht freigegeben.', true);
+      }
       renderModuleHeader();
     } catch (error) {
       console.warn('[source-editor] module catalog unavailable:', error);
@@ -219,7 +242,7 @@ export async function mount(container, ctx) {
     state.moduleTitle = module.title || module.id;
     state.files = [];
     state.activePath = '';
-    state.readonly = false;
+    state.readonly = !canModifySelectedModule(module);
     refs.search.value = '';
     state.search = '';
     renderModuleHeader();
@@ -240,7 +263,19 @@ export async function mount(container, ctx) {
       return;
     }
     state.loading = true;
-    state.readonly = false;
+    const selected = selectedModule();
+    if (!canViewSelectedModuleSource(selected)) {
+      state.files = [];
+      state.activePath = '';
+      state.readonly = true;
+      clearEditor('Source nicht freigegeben', `${state.moduleTitle} kann mit deinem Zugriff nicht geöffnet werden.`);
+      renderFileList();
+      setStatus('Source ist fuer diese App nicht freigegeben.', true);
+      updateActionState();
+      state.loading = false;
+      return;
+    }
+    state.readonly = !canModifySelectedModule(selected);
     setStatus('Lade Source...');
     clearEditor('Lade Source...', `${state.moduleTitle} wird geladen.`);
     updateActionState();
@@ -257,7 +292,7 @@ export async function mount(container, ctx) {
       openFile(state.activePath && state.files.some((file) => file.path === state.activePath)
         ? state.activePath
         : preferredInitialPath(state.files));
-      setStatus(`${state.files.length} Source-Dateien geladen.${state.usingMonaco ? ' Monaco aktiv.' : ''}`);
+      setStatus(`${state.files.length} Source-Dateien geladen.${state.usingMonaco ? ' Monaco aktiv.' : ''}${state.readonly ? ' Read-only.' : ''}`);
     } catch (error) {
       console.error('[source-editor] load failed:', error);
       state.files = [];
@@ -638,7 +673,9 @@ export async function mount(container, ctx) {
     while (Date.now() < deadline) {
       const doc = await collection?.findOne(commandId).exec();
       const data = doc?.toJSON?.();
-      if (data && data.status && data.status !== 'pending_sync') return data;
+      if (data && data.status && data.status !== 'pending_sync') {
+        return assertSourceCommandSucceeded(data);
+      }
       await delay(300);
     }
     throw new Error(`Command ${commandId} wurde nicht synchronisiert.`);
@@ -666,6 +703,25 @@ export async function mount(container, ctx) {
     return null;
   }
 
+  function selectedModule() {
+    return state.modules.find((entry) => entry.id === state.moduleId)
+      || (state.moduleId ? { id: state.moduleId, title: state.moduleTitle } : null);
+  }
+
+  function canViewSelectedModuleSource(module) {
+    return canViewBusinessModuleSource(module, {
+      session: ctx.session,
+      governance: ctx.governance,
+    });
+  }
+
+  function canModifySelectedModule(module) {
+    return canModifyBusinessModule(module, {
+      session: ctx.session,
+      governance: ctx.governance,
+    });
+  }
+
   return () => {
     state.editor?.dispose?.();
     state.model?.dispose?.();
@@ -680,7 +736,7 @@ async function fetchModuleCatalog() {
   return payload.modules || payload;
 }
 
-export function normalizeModuleCatalog(modules) {
+export function normalizeModuleCatalog(modules, options = {}) {
   const rows = Array.isArray(modules) ? modules : [];
   const seen = new Set();
   return rows
@@ -696,7 +752,33 @@ export function normalizeModuleCatalog(modules) {
       seen.add(module.id);
       return true;
     })
+    .filter((module) => !options.requireSourceView || canViewBusinessModuleSource(module, {
+      session: options.session,
+      governance: options.governance,
+    }))
     .sort((left, right) => left.title.localeCompare(right.title, undefined, { sensitivity: 'base' }));
+}
+
+export function sourceCommandErrorMessage(projection) {
+  const status = String(projection?.status || '');
+  const result = projection?.result && typeof projection.result === 'object' ? projection.result : {};
+  const decision = result.policy_decision && typeof result.policy_decision === 'object'
+    ? result.policy_decision
+    : null;
+  if (status !== 'failed' && decision?.allowed !== false) return '';
+  return String(
+    decision?.display_reason
+      || decision?.reason_code
+      || result.error
+      || projection?.error
+      || 'Source command was denied'
+  );
+}
+
+function assertSourceCommandSucceeded(projection) {
+  const message = sourceCommandErrorMessage(projection);
+  if (message) throw new Error(message);
+  return projection;
 }
 
 export function normalizeSourceFiles(files) {

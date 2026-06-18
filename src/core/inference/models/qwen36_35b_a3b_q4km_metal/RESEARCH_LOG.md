@@ -492,8 +492,8 @@ latency, and characterized end-to-end on this M5. Next:
 ## 2026-05-08 — Stage 3.2: kernel survey (the user's correction)
 
 The original §3.1 plan was about to spend a turn writing custom MSL
-matmul kernels from scratch — exactly the move CLAUDE.md now (after
-the rule-4/5 fix) flags as not-the-default. Surveyed online sources
+matmul kernels from scratch — exactly the move AGENTS.md now flags as
+not-the-default. Surveyed online sources
 first; full audit in [docs/kernel-dev/KERNEL_SURVEY.md](docs/kernel-dev/KERNEL_SURVEY.md).
 
 Key findings:

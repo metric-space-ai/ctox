@@ -1,0 +1,20 @@
+{
+  "name": "@ctox/business-os-test-bootstrap",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Declared dev dependency bootstrap for CTOX Business OS JS and browser tests. Runtime assets stay package-manager-free.",
+  "type": "module",
+  "scripts": {
+    "check:deps": "node scripts/assert-business-os-js-bootstrap.mjs",
+    "test:shared": "node --test shared/*.test.mjs",
+    "test:app-store": "node modules/app-store/app-store.test.mjs",
+    "test:module-bundles": "node modules/calendar/calendar.test.mjs && node modules/ctox/test.js && node modules/customers/customers.test.mjs && node modules/iot/iot.test.mjs && node modules/notes/notes.test.mjs && node modules/outbound/outbound.test.mjs && node modules/research/test.mjs",
+    "check:release-docs": "node scripts/assert-production-release-docs.mjs",
+    "check:security-signoff": "node scripts/assert-security-privacy-signoff.mjs --self-test && node scripts/assert-security-privacy-signoff.mjs",
+    "test": "npm run check:deps && npm run check:release-docs && npm run check:security-signoff && npm run test:shared && npm run test:app-store"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.1",
+    "playwright": "1.60.0"
+  }
+}

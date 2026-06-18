@@ -15,7 +15,102 @@ env:
   CTOX_BUILD_VERSION: ${{ github.ref_name }}
 
 jobs:
+  business-os-production-gate:
+    runs-on: ubuntu-22.04
+    name: Business OS production gate
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93.0"
+          components: rustfmt
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: src/apps/business-os/package-lock.json
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: business-os-production-gate
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev libcap-dev
+
+      - name: Business OS JS dependency bootstrap
+        run: |
+          npm ci --ignore-scripts --prefix src/apps/business-os
+          npm audit --audit-level=low --prefix src/apps/business-os
+          npm --prefix src/apps/business-os test
+          npm --prefix src/apps/business-os run test:module-bundles
+
+      - name: Business OS production contract checks
+        run: |
+          node --check src/apps/business-os/scripts/assert-rxdb-only.mjs
+          node --check src/core/rxdb/tools/browser_rust_smoke.js
+          node --check src/core/rxdb/tools/browser_rust_smoke_matrix.js
+          node --check src/core/rxdb/tools/business_os_production_smoke_registry.js
+          node --check src/apps/business-os/scripts/assert-module-conformance.mjs
+          node --check src/apps/business-os/scripts/assert-production-release-docs.mjs
+          node --check src/apps/business-os/scripts/assert-security-privacy-signoff.mjs
+          node src/apps/business-os/scripts/assert-rxdb-only.mjs
+          node src/apps/business-os/scripts/assert-module-conformance.mjs
+          node src/apps/business-os/scripts/assert-production-release-docs.mjs
+          node src/apps/business-os/scripts/assert-security-privacy-signoff.mjs --self-test
+          node src/apps/business-os/scripts/assert-security-privacy-signoff.mjs
+          SMOKE_MATRIX_SELF_TEST=1 node src/core/rxdb/tools/browser_rust_smoke_matrix.js
+          node src/apps/business-os/rxdb/tests/run-all.mjs
+          cargo test --locked --bin ctox business_os --quiet
+          cargo test --locked --manifest-path src/core/rxdb/Cargo.toml --quiet
+
+      - name: Business OS production browser gate
+        run: |
+          npm --prefix src/apps/business-os exec playwright install --with-deps chromium
+          cargo build --locked --bin ctox --no-default-features --target-dir runtime/build/core-rxdb-integration-target
+          SMOKE_MODES="$(node -e "const { businessOsProductionSmokeModes } = require('./src/core/rxdb/tools/business_os_production_smoke_registry'); process.stdout.write(businessOsProductionSmokeModes.join(','));")"
+          SMOKE_MODES="$SMOKE_MODES" \
+          SMOKE_MATRIX_ATTEMPTS=2 \
+          SMOKE_PAGE_PATH=/index.html \
+          SMOKE_MODE_TIMEOUT_MS=300000 \
+          SMOKE_BROWSER_WARNING_BUDGET=0 \
+          SMOKE_BROWSER_REQUEST_FAILURE_BUDGET=0 \
+          BUSINESS_PORT=61721 \
+          SIGNALING_PORT=61722 \
+          node src/core/rxdb/tools/browser_rust_smoke_matrix.js
+
+      - name: Business OS release docs dry-run evidence
+        if: always()
+        run: node src/apps/business-os/scripts/assert-production-release-docs.mjs
+
+      - name: Business OS security/privacy release signoff
+        if: always()
+        run: node src/apps/business-os/scripts/assert-security-privacy-signoff.mjs --require-signed-off
+
+      - name: Upload Business OS production smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: business-os-release-production-smoke-evidence
+          path: |
+            runtime/build/business-os-smoke-matrix-summary.json
+            runtime/build/business-os-release-docs-dry-run.json
+            runtime/build/business-os-security-privacy-signoff-validation.json
+            docs/business-os-security-privacy-signoff.json
+            docs/business-os-production-release-signoff.md
+            docs/business-os-app-access-and-roles-guide.md
+            docs/business-os-roles-permissions-operator-guide.md
+          if-no-files-found: error
+
   build-desktop-macos:
+    needs: business-os-production-gate
     strategy:
       fail-fast: false
       matrix:
@@ -91,6 +186,7 @@ jobs:
           path: ${{ matrix.artifact }}.dmg
 
   build-desktop-linux:
+    needs: business-os-production-gate
     runs-on: ubuntu-22.04
     name: Desktop .AppImage — linux-x64
 
@@ -151,6 +247,7 @@ jobs:
           path: ctox-desktop-linux-x64.AppImage
 
   build-desktop-windows:
+    needs: business-os-production-gate
     runs-on: windows-latest
     name: Desktop .msi — windows-x64
 
@@ -208,6 +305,7 @@ jobs:
           path: ctox-desktop-windows-x64.msi
 
   build-business-os-desktop:
+    needs: business-os-production-gate
     strategy:
       fail-fast: false
       matrix:
@@ -355,6 +453,7 @@ jobs:
           if-no-files-found: error
 
   build-ctox:
+    needs: business-os-production-gate
     strategy:
       fail-fast: false
       matrix:
@@ -466,7 +565,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [build-desktop-macos, build-desktop-linux, build-desktop-windows, build-business-os-desktop, build-ctox]
+    needs: [business-os-production-gate, build-desktop-macos, build-desktop-linux, build-desktop-windows, build-business-os-desktop, build-ctox]
     runs-on: ubuntu-latest
     name: Create GitHub Release
 

@@ -5,6 +5,7 @@ import {
   base64ToBytes,
   sha256Hex,
 } from './file-integrity.js?v=20260605-rxdb-cancel1';
+import { renderGlobalCtoxAgentScopeHtml } from './shell-permissions-ui.js';
 
 const CHAT_STYLE_ID = 'ctox-business-chat-style';
 const CHAT_STATE_KEY = 'ctox.businessOs.chat.v1';
@@ -551,7 +552,10 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
       // Update messages container content if it changed
       const messagesContainer = win.querySelector('.ctox-chat-messages');
       if (messagesContainer) {
-        const expectedHtml = (chat.messages.length ? chat.messages.map(messageMarkup).join('') : '<div class="ctox-chat-empty">CTOX Aufgabe eingeben.</div>').trim();
+        const expectedHtml = (renderChatAgentScopeHtml(chat.contextMeta)
+          + (chat.messages.length
+            ? chat.messages.map(messageMarkup).join('')
+            : '<div class="ctox-chat-empty">CTOX Aufgabe eingeben.</div>')).trim();
         if (messagesContainer.innerHTML.trim() !== expectedHtml) {
           messagesContainer.innerHTML = expectedHtml;
           messagesContainer.scrollTop = messagesContainer.scrollHeight;
@@ -1146,10 +1150,45 @@ function attachmentSignature(chat) {
     .join('|');
 }
 
+export function chatAgentScopeViewFromMeta(contextMeta = {}) {
+  const clientContext = contextMeta?.client_context && typeof contextMeta.client_context === 'object'
+    ? contextMeta.client_context
+    : {};
+  const nestedScope = clientContext.scope && typeof clientContext.scope === 'object'
+    ? clientContext.scope
+    : {};
+  const view = clientContext.visible_scope && typeof clientContext.visible_scope === 'object'
+    ? clientContext.visible_scope
+    : nestedScope.visible_scope && typeof nestedScope.visible_scope === 'object'
+      ? nestedScope.visible_scope
+      : nestedScope.rows && Array.isArray(nestedScope.rows)
+        ? nestedScope
+        : null;
+
+  if (!view || !Array.isArray(view.rows) || view.rows.length === 0) return null;
+  const rows = view.rows
+    .filter((row) => row && typeof row === 'object')
+    .map((row) => ({
+      key: row.key || '',
+      label: row.label || '',
+      value: row.value || '',
+    }))
+    .filter((row) => String(row.label || row.value || '').trim());
+  if (!rows.length) return null;
+  return { ...view, rows };
+}
+
+export function renderChatAgentScopeHtml(contextMeta = {}) {
+  const view = chatAgentScopeViewFromMeta(contextMeta);
+  if (!view) return '';
+  return renderGlobalCtoxAgentScopeHtml({ view });
+}
+
 function chatWindow(chat, activeId, relation = 'center') {
   const moduleName = chat.contextMeta?.module || 'ctox';
   const taskState = getTaskState(chat);
   const isFuture = chat.createdAt > Date.now();
+  const agentScopeHtml = renderChatAgentScopeHtml(chat.contextMeta);
 
   const stagedAttachments = chat.attachments || [];
   const attachmentsHtml = stagedAttachments.length ? `
@@ -1352,6 +1391,7 @@ function chatWindow(chat, activeId, relation = 'center') {
       </div>
       ${schedulerBarHtml}
       <div class="ctox-chat-messages">
+        ${agentScopeHtml}
         ${chat.messages.length ? chat.messages.map(messageMarkup).join('') : '<div class="ctox-chat-empty">CTOX Aufgabe eingeben.</div>'}
       </div>
       ${bottomHtml}
@@ -3778,6 +3818,56 @@ function installChatStyles() {
       box-sizing: border-box;
       overflow-wrap: anywhere;
     }
+    .ctox-chat-messages .ctox-agent-scope {
+      flex: 0 0 auto;
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+      max-width: 100%;
+      box-sizing: border-box;
+      border: 1px solid color-mix(in srgb, var(--line) 52%, transparent);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--surface-2) 52%, transparent);
+      padding: 8px;
+      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.08) inset;
+    }
+    .ctox-chat-messages .ctox-agent-scope-title {
+      color: var(--text);
+      font-size: 10px;
+      font-weight: 760;
+      line-height: 1.2;
+    }
+    .ctox-chat-messages .ctox-agent-scope dl {
+      display: grid;
+      gap: 4px;
+      margin: 0;
+      min-width: 0;
+    }
+    .ctox-chat-messages .ctox-agent-scope dl > div {
+      display: grid;
+      grid-template-columns: minmax(74px, 0.34fr) minmax(0, 1fr);
+      align-items: baseline;
+      gap: 8px;
+      min-width: 0;
+    }
+    .ctox-chat-messages .ctox-agent-scope dt,
+    .ctox-chat-messages .ctox-agent-scope dd {
+      min-width: 0;
+      margin: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .ctox-chat-messages .ctox-agent-scope dt {
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .ctox-chat-messages .ctox-agent-scope dd {
+      color: var(--text);
+      font-size: 10.5px;
+      font-weight: 620;
+    }
     .ctox-chat-messages::-webkit-scrollbar {
       width: 4px;
     }
@@ -4874,6 +4964,9 @@ function initSchedulerLoop({ root, state, commandBus, db, sync, getActiveModule 
         const userMessageId = scheduledMsg.userMessageId || originalUserMessage?.id || scheduledMsg.id;
         const now = Date.now();
         const scheduledAttachments = chat.scheduledAttachmentsByCommand?.[commandId] || [];
+        const chatClientContext = chat.contextMeta?.client_context && typeof chat.contextMeta.client_context === 'object'
+          ? chat.contextMeta.client_context
+          : {};
         let attachmentRefs = [];
         const command = {
           id: commandId,
@@ -4899,6 +4992,7 @@ function initSchedulerLoop({ root, state, commandBus, db, sync, getActiveModule 
             source_module: chat.contextMeta?.module || 'ctox',
           },
           client_context: {
+            ...chatClientContext,
             source: 'business-os-chat',
             module: chat.contextMeta?.module || 'ctox',
             source_module: chat.contextMeta?.module || 'ctox',

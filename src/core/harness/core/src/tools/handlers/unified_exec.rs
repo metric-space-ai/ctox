@@ -367,6 +367,21 @@ pub(crate) fn business_os_app_root_artifact_write_guard(
     {
         return Some(module_side_effect_guard_message(&artifact));
     }
+    if let Some(path) =
+        command_reads_business_os_module_whole_file(command, &workspace_root, cwd)
+    {
+        return Some(module_whole_file_read_guard_message(&path));
+    }
+    if let Some(path) =
+        command_uses_forbidden_business_os_module_writer(command, &workspace_root, cwd)
+    {
+        return Some(module_writer_guard_message(&path));
+    }
+    if let Some(path) =
+        command_writes_large_business_os_module_heredoc(command, &workspace_root, cwd)
+    {
+        return Some(module_large_heredoc_guard_message(&path));
+    }
     None
 }
 
@@ -395,6 +410,31 @@ fn module_side_effect_guard_message(artifact: &str) -> String {
 Business OS apps are no-build browser ESM modules. Do not create package.json, lockfiles, \
 node_modules, bundle files, or probe/repair artifacts. Use .mjs tests and local browser-safe ESM \
 helpers instead."
+    )
+}
+
+fn module_whole_file_read_guard_message(path: &str) -> String {
+    format!(
+        "Business OS app module guard blocked a whole-file dump of generated module artifact `{path}`. \
+Do not load entire installed app files into model context. Use targeted `sed -n 'start,endp'`, \
+exact `rg -n` selectors/imports, `wc -l`, or the app validator report instead."
+    )
+}
+
+fn module_writer_guard_message(path: &str) -> String {
+    format!(
+        "Business OS app module guard blocked a programmatic writer against generated module artifact `{path}`. \
+Do not use Python, Node writer scripts, base64 blobs, generated writer scripts, data URLs, or temporary \
+file-copy wrappers for Business OS app files. Use direct bounded shell writes, apply_patch, or smaller \
+local ESM helpers under the module directory."
+    )
+}
+
+fn module_large_heredoc_guard_message(path: &str) -> String {
+    format!(
+        "Business OS app module guard blocked an oversized heredoc rewrite of generated module artifact `{path}`. \
+The App Creator scaffold is already present; make targeted edits, split large behavior into smaller \
+module-local ESM helpers, or patch a narrow range instead of rewriting whole generated files."
     )
 }
 
@@ -719,6 +759,293 @@ fn forbidden_business_os_module_side_effect_name(name: &str) -> bool {
         || name.ends_with(".tmp")
 }
 
+fn command_reads_business_os_module_whole_file(
+    command: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+) -> Option<String> {
+    let compact = command.replace("\\\n", " ").replace('\n', " ");
+    let lower = compact.to_ascii_lowercase();
+    if !command_targets_business_os_module(&lower, workspace_root, cwd) {
+        return None;
+    }
+    if !lower_contains_shell_word(&lower, "cat") {
+        return None;
+    }
+    if lower.contains("<<") {
+        return command_reads_business_os_module_after_heredoc(command, workspace_root, cwd);
+    }
+    if lower.contains("| head")
+        || lower.contains("| tail")
+        || lower.contains("| wc")
+        || lower.contains("| sed -n")
+        || lower.contains("| rg ")
+        || lower.contains("| grep ")
+    {
+        return None;
+    }
+
+    let cwd_is_module_dir = is_business_os_module_dir(workspace_root, cwd);
+    let tokens = shellish_tokens(&compact);
+    let module_cd_target = command_cd_target_business_os_module_dir(&tokens);
+    for (idx, token) in tokens.iter().enumerate() {
+        if token != "cat" {
+            continue;
+        }
+        for target in tokens.iter().skip(idx + 1) {
+            if target.starts_with('-') {
+                continue;
+            }
+            if let Some(path) = business_os_module_artifact_token_name(target, cwd_is_module_dir) {
+                return Some(path);
+            }
+            if let Some(path) =
+                business_os_module_cd_artifact_token_name(target, module_cd_target.as_deref())
+            {
+                return Some(path);
+            }
+            if module_cd_target.is_some() && token_is_shell_variable_reference(target) {
+                return module_cd_target.clone();
+            }
+        }
+    }
+    None
+}
+
+fn command_reads_business_os_module_after_heredoc(
+    command: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+) -> Option<String> {
+    let cwd_is_module_dir = is_business_os_module_dir(workspace_root, cwd);
+    let full_tokens = shellish_tokens(command);
+    let module_cd_target = command_cd_target_business_os_module_dir(&full_tokens);
+    for line in command.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        if !lower_contains_shell_word(&lower, "cat")
+            || lower.contains("<<")
+            || lower.contains('>')
+            || lower.contains("| head")
+            || lower.contains("| tail")
+            || lower.contains("| wc")
+            || lower.contains("| sed -n")
+            || lower.contains("| rg ")
+            || lower.contains("| grep ")
+        {
+            continue;
+        }
+        let tokens = shellish_tokens(trimmed);
+        for (idx, token) in tokens.iter().enumerate() {
+            if token != "cat" {
+                continue;
+            }
+            for target in tokens.iter().skip(idx + 1) {
+                if target.starts_with('-') {
+                    continue;
+                }
+                if let Some(path) =
+                    business_os_module_artifact_token_name(target, cwd_is_module_dir)
+                {
+                    return Some(path);
+                }
+                if let Some(path) =
+                    business_os_module_cd_artifact_token_name(target, module_cd_target.as_deref())
+                {
+                    return Some(path);
+                }
+                if module_cd_target.is_some() && token_is_shell_variable_reference(target) {
+                    return module_cd_target.clone();
+                }
+            }
+        }
+    }
+    None
+}
+
+fn command_uses_forbidden_business_os_module_writer(
+    command: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+) -> Option<String> {
+    let compact = command.replace("\\\n", " ").replace('\n', " ");
+    let lower = compact.to_ascii_lowercase();
+    if !command_targets_business_os_module(&lower, workspace_root, cwd) {
+        return None;
+    }
+    let module_path = first_business_os_module_artifact_reference(&compact, workspace_root, cwd)
+        .unwrap_or_else(|| "module cwd".to_string());
+
+    let python_writer = (lower_contains_shell_word(&lower, "python")
+        || lower_contains_shell_word(&lower, "python3")
+        || lower_contains_shell_word(&lower, "python3.11")
+        || lower_contains_shell_word(&lower, "python3.12"))
+        && (lower.contains("open(")
+            || lower.contains(".write(")
+            || lower.contains("write_text(")
+            || lower.contains("write_bytes(")
+            || lower.contains("'w'")
+            || lower.contains("\"w\""));
+    let node_writer = (lower_contains_shell_word(&lower, "node")
+        || lower_contains_shell_word(&lower, "nodejs"))
+        && (lower.contains("writefilesync")
+            || lower.contains("writefile(")
+            || lower.contains("appendfilesync")
+            || lower.contains("appendfile(")
+            || lower.contains("createwritestream")
+            || lower.contains("fs.promises.writefile")
+            || lower.contains("fs.writefile"));
+    let base64_writer =
+        lower_contains_shell_word(&lower, "base64") && (lower.contains('>') || lower.contains(" tee "));
+
+    if python_writer || node_writer || base64_writer {
+        return Some(module_path);
+    }
+    None
+}
+
+fn command_writes_large_business_os_module_heredoc(
+    command: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+) -> Option<String> {
+    let compact = command.replace("\\\n", " ");
+    let lower = compact.to_ascii_lowercase();
+    if !command_targets_business_os_module(&lower, workspace_root, cwd) || !lower.contains("<<") {
+        return None;
+    }
+    if command.lines().count() <= 180 && command.len() <= 24_000 {
+        return None;
+    }
+    let module_path = first_business_os_module_artifact_reference(command, workspace_root, cwd)
+        .unwrap_or_else(|| "module cwd".to_string());
+    Some(module_path)
+}
+
+fn command_targets_business_os_module(command_lower: &str, workspace_root: &Path, cwd: &Path) -> bool {
+    command_lower.contains("src/apps/business-os/modules/")
+        || command_lower.contains("src/apps/business-os/installed-modules/")
+        || command_lower.contains("runtime/business-os/installed-modules/")
+        || command_lower.contains("business-os/installed-modules/")
+        || is_business_os_module_dir(workspace_root, cwd)
+}
+
+fn first_business_os_module_artifact_reference(
+    command: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+) -> Option<String> {
+    let cwd_is_module_dir = is_business_os_module_dir(workspace_root, cwd);
+    shellish_tokens(command)
+        .iter()
+        .find_map(|token| business_os_module_artifact_token_name(token, cwd_is_module_dir))
+}
+
+fn command_cd_target_business_os_module_dir(tokens: &[String]) -> Option<String> {
+    tokens.windows(2).find_map(|window| {
+        if window.first().map(String::as_str) != Some("cd") {
+            return None;
+        }
+        let target = window.get(1)?;
+        business_os_module_dir_token_name(target)
+    })
+}
+
+fn business_os_module_dir_token_name(token: &str) -> Option<String> {
+    let normalized = token
+        .trim()
+        .trim_start_matches("./")
+        .trim_matches(|ch: char| matches!(ch, '\'' | '"' | '`'))
+        .to_string();
+    let lower = normalized.to_ascii_lowercase();
+    let module_path = lower.contains("src/apps/business-os/modules/")
+        || lower.contains("src/apps/business-os/installed-modules/")
+        || lower.contains("runtime/business-os/installed-modules/")
+        || lower.contains("business-os/installed-modules/")
+        || lower.contains("$module_dir")
+        || lower.contains("${module_dir}");
+    module_path.then_some(normalized)
+}
+
+fn token_is_shell_variable_reference(token: &str) -> bool {
+    let trimmed = token
+        .trim()
+        .trim_matches(|ch: char| matches!(ch, '\'' | '"' | '`'));
+    trimmed.starts_with('$') || trimmed.contains("${") || trimmed.contains("$")
+}
+
+fn business_os_module_cd_artifact_token_name(
+    token: &str,
+    module_cd_target: Option<&str>,
+) -> Option<String> {
+    let module_dir = module_cd_target?;
+    let normalized = token
+        .trim()
+        .trim_start_matches("./")
+        .trim_matches(|ch: char| matches!(ch, '\'' | '"' | '`'))
+        .to_string();
+    if normalized.contains('$') || normalized.contains('/') || normalized.contains('\\') {
+        return None;
+    }
+    let lower = normalized.to_ascii_lowercase();
+    business_os_module_artifact_name(&lower).then(|| format!("{module_dir}/{normalized}"))
+}
+
+fn business_os_module_artifact_token_name(token: &str, cwd_is_module_dir: bool) -> Option<String> {
+    let normalized = token
+        .trim()
+        .trim_start_matches("./")
+        .trim_matches(|ch: char| matches!(ch, '\'' | '"' | '`'))
+        .to_string();
+    let lower = normalized.to_ascii_lowercase();
+    let module_path = lower.contains("src/apps/business-os/modules/")
+        || lower.contains("src/apps/business-os/installed-modules/")
+        || lower.contains("runtime/business-os/installed-modules/")
+        || lower.contains("business-os/installed-modules/")
+        || lower.contains("$module_dir/")
+        || lower.contains("${module_dir}/");
+    let basename = lower
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(lower.as_str())
+        .to_string();
+    if module_path && business_os_module_artifact_name(&basename) {
+        return Some(normalized);
+    }
+    if cwd_is_module_dir && business_os_module_artifact_name(&basename) {
+        return Some(normalized);
+    }
+    None
+}
+
+fn business_os_module_artifact_name(name: &str) -> bool {
+    matches!(
+        name,
+        "module.json"
+            | "collections.schema.json"
+            | "schema.js"
+            | "index.html"
+            | "index.css"
+            | "index.js"
+            | "icon.svg"
+            | "automation.mjs"
+            | "records.mjs"
+            | "en.json"
+            | "de.json"
+    ) || name.ends_with(".test.mjs")
+        || name.ends_with(".mjs")
+}
+
+fn lower_contains_shell_word(command_lower: &str, word: &str) -> bool {
+    command_lower.split(|ch: char| {
+        ch.is_whitespace() || matches!(ch, ';' | '&' | '|' | '(' | ')' | '{' | '}' | '"' | '\'')
+    })
+    .any(|token| token == word || token.rsplit('/').next() == Some(word))
+}
+
 fn is_business_os_module_dir(workspace_root: &Path, cwd: &Path) -> bool {
     let Ok(relative) = cwd.strip_prefix(workspace_root) else {
         return false;
@@ -727,15 +1054,18 @@ fn is_business_os_module_dir(workspace_root: &Path, cwd: &Path) -> bool {
         .components()
         .map(|component| component.as_os_str().to_string_lossy().to_string())
         .collect::<Vec<_>>();
-    segments.len() >= 5
-        && ((segments[0] == "src"
+    (segments.len() >= 5
+        && (segments[0] == "src"
             && segments[1] == "apps"
             && segments[2] == "business-os"
-            && (segments[3] == "modules" || segments[3] == "installed-modules"))
-            || (segments[0] == "runtime"
-                && segments[1] == "business-os"
-                && segments[2] == "installed-modules")
-            || (segments[0] == "business-os" && segments[1] == "installed-modules"))
+            && (segments[3] == "modules" || segments[3] == "installed-modules")))
+        || (segments.len() >= 4
+            && segments[0] == "runtime"
+            && segments[1] == "business-os"
+            && segments[2] == "installed-modules")
+        || (segments.len() >= 3
+            && segments[0] == "business-os"
+            && segments[1] == "installed-modules")
 }
 
 fn command_programmatically_writes_path(command: &str, path: &str) -> bool {

@@ -14,7 +14,7 @@
 //!      tests/fixtures/ — never hand-edit *_contract_generated.rs or the JS
 //!      twins; run the build_webrtc_*_contract.mjs tools instead.
 //!   5. NO new process-env toggles — runtime config flows through the SQLite
-//!      runtime store (CLAUDE.md operator rule).
+//!      runtime store (AGENTS.md operator rule).
 //!   6. Keep `cargo test --manifest-path src/core/rxdb/Cargo.toml` AND
 //!      `node src/apps/business-os/rxdb/tests/run-all.mjs` green. Never
 //!      delete or weaken a failing test to make a change pass.

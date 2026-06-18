@@ -283,7 +283,9 @@ impl RxDatabase {
         let mut created = HashMap::new();
 
         for (name, creator) in collection_creators {
-            let collection = self.add_single_collection(&internal_store, name, creator).await?;
+            let collection = self
+                .add_single_collection(&internal_store, name, creator)
+                .await?;
             created.insert(collection.name.clone(), collection);
         }
 

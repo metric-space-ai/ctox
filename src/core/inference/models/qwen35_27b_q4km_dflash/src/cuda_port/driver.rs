@@ -4,7 +4,7 @@
 //!
 //! Only the OS CUDA runtime (`libcuda.so`, part of the NVIDIA driver
 //! stack) is linked. That is the operating-system boundary, not a
-//! library dependency per CLAUDE.md's Inference-Engine Architecture
+//! library dependency per AGENTS.md's Inference Model Rules
 //! rules.
 //!
 //! Naming follows the upstream CUDA driver API verbatim; Rust error

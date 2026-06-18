@@ -1,12 +1,12 @@
 // ref: stalwart/src/carddav/mod.rs:1-350
 // ref: ctox-mailserver SQLite-backed native CardDAV server using tiny_http
 
-use crate::store::SqliteStore;
-use crate::config::CardDavConfig;
 use crate::calcard::VCard;
+use crate::config::CardDavConfig;
+use crate::store::SqliteStore;
 use crate::util::errors::{StalwartError, StalwartResult};
 use std::sync::Arc;
-use tracing::{info, error};
+use tracing::{error, info};
 
 pub struct CardDavServer {
     store: SqliteStore,
@@ -46,8 +46,17 @@ impl CardDavServer {
         match method {
             "OPTIONS" => {
                 let response = tiny_http::Response::empty(200)
-                    .with_header(tiny_http::Header::from_bytes(&b"Allow"[..], &b"OPTIONS, GET, HEAD, PUT, DELETE, PROPFIND, PROPPATCH, REPORT"[..]).unwrap())
-                    .with_header(tiny_http::Header::from_bytes(&b"DAV"[..], &b"1, 2, addressbook"[..]).unwrap());
+                    .with_header(
+                        tiny_http::Header::from_bytes(
+                            &b"Allow"[..],
+                            &b"OPTIONS, GET, HEAD, PUT, DELETE, PROPFIND, PROPPATCH, REPORT"[..],
+                        )
+                        .unwrap(),
+                    )
+                    .with_header(
+                        tiny_http::Header::from_bytes(&b"DAV"[..], &b"1, 2, addressbook"[..])
+                            .unwrap(),
+                    );
                 request.respond(response)?;
             }
             "PROPFIND" => {
@@ -69,7 +78,13 @@ impl CardDavServer {
 </d:multistatus>"#;
                 let response = tiny_http::Response::from_string(xml_body)
                     .with_status_code(207)
-                    .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/xml; charset=utf-8"[..]).unwrap());
+                    .with_header(
+                        tiny_http::Header::from_bytes(
+                            &b"Content-Type"[..],
+                            &b"application/xml; charset=utf-8"[..],
+                        )
+                        .unwrap(),
+                    );
                 request.respond(response)?;
             }
             "GET" => {
@@ -79,7 +94,13 @@ impl CardDavServer {
                         if contact_uid == uid {
                             let response = tiny_http::Response::from_string(vcard_data)
                                 .with_status_code(200)
-                                .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/vcard; charset=utf-8"[..]).unwrap());
+                                .with_header(
+                                    tiny_http::Header::from_bytes(
+                                        &b"Content-Type"[..],
+                                        &b"text/vcard; charset=utf-8"[..],
+                                    )
+                                    .unwrap(),
+                                );
                             request.respond(response)?;
                             return Ok(());
                         }

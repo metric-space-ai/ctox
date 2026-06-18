@@ -13,7 +13,7 @@
 //! multiply/add). Other norm variants (group_norm, l2_norm,
 //! rms_norm_fused, rms_norm_back, etc.) are intentionally not
 //! ported here — qwen35's forward graph doesn't hit them, and
-//! CLAUDE.md rule 5 demands we port only what the model needs.
+//! AGENTS.md Inference Model Rules demand we port only what the model needs.
 
 use std::ffi::c_void;
 use std::os::raw::c_int;

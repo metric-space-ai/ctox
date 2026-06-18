@@ -6,6 +6,7 @@ use super::UnauthorizedRecoveryExecution;
 use ctox_api::ResponseCreateWsRequest;
 use ctox_api::ResponsesApiRequest;
 use ctox_otel::SessionTelemetry;
+use ctox_protocol::ThreadId;
 use ctox_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use ctox_protocol::models::BaseInstructions;
 use ctox_protocol::models::ContentItem;
@@ -14,9 +15,8 @@ use ctox_protocol::openai_models::ModelInfo;
 use ctox_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use ctox_protocol::protocol::SessionSource;
 use ctox_protocol::protocol::SubAgentSource;
-use ctox_protocol::ThreadId;
 use pretty_assertions::assert_eq;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde_json::json;
 use tokio::sync::oneshot;
 

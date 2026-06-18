@@ -1,0 +1,80 @@
+{
+  "schema": "ctox.business_os.security_privacy_signoff.v1",
+  "status": "pending-signoff",
+  "reviewer": "TBD",
+  "reviewed_at": "TBD",
+  "evidence_revision": "f2cdd6a8d276d3d70f0930ed8d73c4f641ecc9c6",
+  "controls": {
+    "dynamic_app_runtime_boundary": {
+      "status": "pending",
+      "evidence": [
+        "src/apps/business-os/app.js",
+        "src/apps/business-os/scripts/validate-app-module.test.mjs",
+        "docs/business-os-roles-permissions-plan.md#P13-DYNAMIC-RUNTIME-SAFETY"
+      ]
+    },
+    "source_visibility": {
+      "status": "pending",
+      "evidence": [
+        "src/core/business_os/store.rs",
+        "src/apps/business-os/app.js",
+        "docs/business-os-roles-permissions-plan.md#Phase-3E-4F-App-source-visibility"
+      ]
+    },
+    "data_review_locked_state": {
+      "status": "pending",
+      "evidence": [
+        "src/core/business_os/store.rs",
+        "src/apps/business-os/modules/app-store/index.js",
+        "src/core/rxdb/tools/browser_rust_smoke.js"
+      ]
+    },
+    "mcp_agent_scope": {
+      "status": "pending",
+      "evidence": [
+        "src/core/business_os/mcp_channel.rs",
+        "src/core/rxdb/tools/browser_rust_smoke.js",
+        "docs/business-os-mcp-channel-v1-security-admin-guide.md"
+      ]
+    },
+    "audit_support_redaction": {
+      "status": "pending",
+      "evidence": [
+        "src/core/business_os/store.rs",
+        "src/apps/business-os/shared/react-settings.js",
+        "docs/business-os-roles-permissions-plan.md#P15-SUPPORT-ARTIFACT-SCHEMA"
+      ]
+    },
+    "external_effect_boundary": {
+      "status": "pending",
+      "evidence": [
+        "src/core/business_os/mcp_channel.rs",
+        "src/apps/business-os/app.js",
+        "docs/business-os-roles-permissions-plan.md#Phase-5G-accepted-MCP-external-effect-v1-boundary"
+      ]
+    },
+    "release_artifact_integrity": {
+      "status": "pending",
+      "evidence": [
+        ".github/workflows/release.yml",
+        "src/core/rxdb/tools/browser_rust_smoke_matrix.js",
+        "runtime/build/business-os-smoke-matrix-summary.json"
+      ]
+    }
+  },
+  "source_hashes": {
+    "src/apps/business-os/app.js": "ec25ef4fd0ded5994c4aae5f529ad199e73b1da3857098da648807eae4d28ed7",
+    "src/apps/business-os/scripts/validate-app-module.test.mjs": "97c1c809f7e896235fdb2d1185891abb98dfaa92846d299dee31561e72f70944",
+    "src/core/business_os/store.rs": "c73369d7d1c41298eb72322efce7d2f46b7e003f9106af0ef517b7caf7932a4f",
+    "src/core/business_os/mcp_channel.rs": "ed9c03931b8435f99e52735aa7182a60454e2e87150e628b4b69e1ddb246509c",
+    "src/core/rxdb/tools/browser_rust_smoke_matrix.js": "83016eab861f27ae85a84845ccdd905aacae27d6814fb9fac0a3cf0e87655a22",
+    "src/core/rxdb/tools/business_os_production_smoke_registry.js": "e7460061b6ac9c6f1a87d979f8950d217119ca8ee7e54fb5d8f0c741771b036f",
+    ".github/workflows/release.yml": "c3d8255d918a95be999e3b8edaffb2fb3ae69773e0008587a4cd3fcac61639ab"
+  },
+  "notes": [
+    "Runtime-installed apps are same-origin trusted generated apps, not sandboxed iframes.",
+    "MCP external effects remain blocked for the current rollout.",
+    "Pending signoff intentionally blocks release tags.",
+    "Automated evidence hashes were prepared on 2026-06-18; controls remain pending until an explicit release/security reviewer signs off."
+  ]
+}

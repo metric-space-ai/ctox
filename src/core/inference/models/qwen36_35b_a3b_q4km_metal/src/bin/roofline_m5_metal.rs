@@ -14,7 +14,7 @@
 //! SIMD/matrix APIs, storage modes, or kernel layouts."
 //! (method-playbook §4 + §1).
 //!
-//! Why blit not a custom kernel: CLAUDE.md forbids hand-authored
+//! Why blit not a custom kernel: AGENTS.md forbids hand-authored
 //! kernels in this crate. `MTLBlitCommandEncoder` is an Apple
 //! framework primitive, not a kernel — using it does not violate
 //! "vendored kernels only".
