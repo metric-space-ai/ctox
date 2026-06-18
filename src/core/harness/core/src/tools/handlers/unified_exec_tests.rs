@@ -405,6 +405,24 @@ fn business_os_guard_blocks_installed_module_whole_file_cat() -> anyhow::Result<
 }
 
 #[test]
+fn business_os_guard_blocks_installed_module_whole_file_cat_with_stderr_redirect(
+) -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+    let artifact = root
+        .path()
+        .join("runtime/business-os/installed-modules/inventory/module.json");
+    let command = format!("cat {} 2>&1", artifact.display());
+
+    let err = business_os_app_root_artifact_write_guard(&command, root.path())
+        .expect("stderr redirect must not bypass whole-file cat guard");
+
+    assert!(err.contains("whole-file dump"));
+    assert!(err.contains("runtime/business-os/installed-modules/inventory/module.json"));
+    Ok(())
+}
+
+#[test]
 fn business_os_guard_blocks_module_cwd_whole_file_cat() -> anyhow::Result<()> {
     let root = tempdir()?;
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;

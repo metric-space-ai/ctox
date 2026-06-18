@@ -769,7 +769,7 @@ fn command_reads_business_os_module_whole_file(
     if !command_targets_business_os_module(&lower, workspace_root, cwd) {
         return None;
     }
-    if !lower_contains_shell_word(&lower, "cat") || lower.contains('>') || lower.contains("<<") {
+    if !lower_contains_shell_word(&lower, "cat") || lower.contains("<<") {
         return None;
     }
     if lower.contains("| head")
