@@ -16357,8 +16357,9 @@ Business OS app build target:
 - service lifecycle rule: CTOX service owns queue and Business OS command completion after green validation. Do not call ctox queue ack/complete/release/fail/block and do not edit queue, command, runtime-status, or projection rows directly.
 - open-work context rule: queue IDs, current_queue_item_id, and open-work blocks in surrounding context are not your app-build target and must not redirect you to another task. Build only module_id={module_id} under {module_dir}/.
 - required file inventory: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, core/automation.mjs, core/records.mjs, locales/de.json, locales/en.json, and tests/*.test.mjs must exist before you can claim success.
+- mandatory first screen: inspect the scaffold first, preserve core/automation.mjs, core/records.mjs, locales, tests, mount wiring, and helper export names unless every importer is updated in the same edit. Use shipped customers, shiftflow, and outbound as the default three few-shots. Keep the app small, validate early, and repair validator bullets exactly.
 - scaffold preservation rule: CTOX service preflight may already have created a validator-clean scaffold in {module_dir}/. Treat that scaffold as the baseline. Do not clean, delete, reset, replace, or rewrite it wholesale. Customize the smallest necessary scaffold files in place, preserve the mount wiring, core helpers, schema wrappers, locales, and tests, and run `ctox business-os app scaffold {module_id} {mode_flag} --repair-missing` before domain edits if core/automation.mjs or core/records.mjs is missing.
-- few-shot rule: inspect exactly three shipped Business OS modules as short targeted pattern references, preferably notes, customers, shiftflow, outbound, creator, or app-store from the shipped `src/apps/business-os/modules/` tree. Never use generated installed modules, runtime/business-os/installed-modules, ~/.local/state/ctox/business-os/installed-modules, bench_* apps, previous App Creator outputs, or app-creator-bench artifacts as few-shot templates. Do not request complete file dumps, do not delegate a broad module-reading sweep to a subagent, and do not keep reading examples after the three-module summary.
+- few-shot rule: inspect exactly three shipped Business OS modules as short targeted pattern references, preferably customers, shiftflow, and outbound from the shipped `src/apps/business-os/modules/` tree. Use notes only as an optional fourth simple-CRUD reference; it is not a scaffold-helper template and may not contain core/automation.mjs or core/records.mjs. Never use generated installed modules, runtime/business-os/installed-modules, ~/.local/state/ctox/business-os/installed-modules, bench_* apps, previous App Creator outputs, or app-creator-bench artifacts as few-shot templates. Do not request complete file dumps, do not delegate a broad module-reading sweep to a subagent, and do not keep reading examples after the three-module summary.
 - legacy anti-pattern rule: existing modules can contain old compatibility code. For this generated app, reject ctx.db.raw, db.raw, ctx.collections, window.dispatchEvent, ctox-business-os-chat-submit, manual business_commands insert/upsert fallbacks, pending_sync local state, JSON-module schema wrappers, bundler/fake-DOM tests, alternate ticket command types such as ctox.business_os.ticket.followup.create, and default layout.right/right-resizer patterns.
 - current-contract rule: if an existing module conflicts with the required skill, this prompt, `ctox business-os app validate`, or `module_static_check.mjs`, the current contract wins and the existing pattern is an anti-pattern.
 - bounded-shell rule: do not run find/rg/grep/ls over $HOME, /Users, /, ~/.local/state, the whole install root, or the whole repo to discover validators, scripts, examples, or guard internals. Inspect only exact files in {module_dir}/ and exact files in the three chosen shipped few-shot module directories. Do not read or write ~/.local/state/ctox/business-os/installed-modules directly; use the prompt's {module_dir}/ path only. Use `ctox business-os app validate {module_id} {mode_flag}`; do not search for validator filenames.
@@ -16378,11 +16379,11 @@ Business OS app build target:
 - repair order: fix target path, complete required file inventory, valid JSON, manifest mode/version, schema ownership, UI layout, dependency/data-plane patterns, ESM syntax, tests, then shell smoke; do not patch tests to hide earlier failures.
 - persistence: use the Business OS RxDB/WebRTC data plane exposed by the shell context; do not create IndexedDB/Postgres/SQLite/HTTP fallbacks or dependency-managed builds.
 - dependencies: browser-safe ESM only; no package manager, no bundled node_modules, no CommonJS require, no npx, no esbuild/Vite/Rollup/Webpack proof, and no bundler imports in tests; these forbidden names may appear in this prompt but must not appear in generated app files, comments, or tests.
-- tests: put reusable schemas, command builders, reducers, and calculations in local .mjs helpers imported by index.js/schema.js and by tests; keep helper exports and every named local import in lockstep. Node tests must not import ../index.js or ../schema.js directly and must not data-url/base64 transform browser entry files. From tests/*.test.mjs, the module root is exactly `..`; use `dirname(fileURLToPath(import.meta.url))` plus `resolve(testDir, '..')` to read module.json, collections.schema.json, and other sibling files. Do not use `../../module.json`, `../../collections.schema.json`, or `../../schema.js` from tests, because that climbs out of the installed module directory. Tests must prove positive current-contract behavior only: schema parity, reducers/calculations, command payload shape, commandBus dispatch hooks, and fixture labels/messages/counts derived from the helper output being tested. Do not assert invented display labels or names that the helper does not produce. Do not use assert.doesNotMatch, source-text absence checks, forbidden-pattern scans, fragment/character-code/regex token construction, or forbidden examples from this prompt. If validation flags a test for forbidden terms, delete the negative scanner test and replace it with a positive contract assertion.
+- tests: put reusable schemas, command builders, reducers, and calculations in local .mjs helpers imported by index.js/schema.js and by tests; keep helper exports and every named local import in lockstep. Preserve scaffold exports such as buildFollowUpCommand, summarizeRecords, and visibleRecords unless index.js and every tests/*.mjs importer are updated in the same edit. Node tests must not import ../index.js or ../schema.js directly and must not data-url/base64 transform browser entry files. From tests/*.test.mjs, the module root is exactly `..`; use `dirname(fileURLToPath(import.meta.url))` plus `resolve(testDir, '..')` to read module.json, collections.schema.json, and other sibling files. Do not use `../../module.json`, `../../collections.schema.json`, or `../../schema.js` from tests, because that climbs out of the installed module directory. Tests must prove positive current-contract behavior only: schema parity, reducers/calculations, command payload shape, commandBus dispatch hooks, and fixture labels/messages/counts derived from the helper output being tested. Automation tests must assert actual fixture facts in title, instruction/prompt, and record_snapshot, not only type/command_type fields. Do not assert invented display labels or names that the helper does not produce. Do not use assert.doesNotMatch, source-text absence checks, forbidden-pattern scans, fragment/character-code/regex token construction, or forbidden examples from this prompt. If validation flags a test for forbidden terms, delete the negative scanner test and replace it with a positive contract assertion.
 - UI: default to one/two panes plus modals/drawers; do not create layout.right, right-column resizers, or three-column grids unless the user explicitly requested a persistent third pane and you can justify it in a code comment.
 - finalization checklist: mark target, few-shots, scope, manifest, versioning, schema, persistence, automation, UI layout, controls, CSS, dependencies, tests, validation, and cleanup as done/rework/blocked before claiming success; repair every rework item first.
 - scope: build the smallest useful one-pass app; avoid broad decorative status/filter/export/settings surfaces unless all handlers and tests are implemented.
-- tool-call safety: do not generate mammoth single here-doc/tool-call writes, Python file-generation scripts, base64 write wrappers, or other script-generated app-file blobs. If an app file is large enough to need those workarounds, split/refactor the app into smaller ESM helpers and bounded direct edits, then run syntax checks.
+- tool-call safety: do not generate mammoth single here-doc/tool-call writes, Python file-generation scripts, Node writer scripts, data-URL writer scripts, base64 write wrappers, or other script-generated app-file blobs. If a direct write fails because of quoting, history expansion, command length, or escaping, do not switch to those workarounds; split/refactor the app into smaller ESM helpers and bounded direct edits, then run syntax checks.
 - repair hygiene: do not leave .bak/.orig/.rej/.tmp/bundle/probe files; do not line-number sed-patch large generated JavaScript when a bounded helper/file rewrite is safer.
 - automation: include at least one real automation through ctx.commandBus.dispatch only, with both type and command_type set exactly to business_os.chat.task, plus a record_snapshot in the payload. There are no App Creator exceptions for ctox.business_os.ticket.followup.create, ctox.ticket.*, module-specific follow-up command types, or "real ticket" compatibility commands. Do not call ctx.db.collection('business_commands'), do not insert/upsert business_commands directly, do not implement a business_commands fallback, and do not describe such a fallback as valid in tests.
 - stop condition: before claiming success, run module tests and `ctox business-os app validate {module_id} {mode_flag}`; a green custom test does not count while app validation is red.
@@ -17357,10 +17358,16 @@ mod tests {
         assert!(prompt.contains("open-work context rule: queue IDs"));
         assert!(prompt.contains("required file inventory: module.json"));
         assert!(prompt.contains("core/automation.mjs, core/records.mjs"));
+        assert!(prompt.contains("mandatory first screen: inspect the scaffold first"));
+        assert!(prompt.contains(
+            "Use shipped customers, shiftflow, and outbound as the default three few-shots"
+        ));
         assert!(prompt.contains("scaffold preservation rule"));
         assert!(prompt.contains("Do not clean, delete, reset, replace, or rewrite it wholesale"));
         assert!(prompt
             .contains("inspect exactly three shipped Business OS modules as short targeted pattern references"));
+        assert!(prompt.contains("preferably customers, shiftflow, and outbound"));
+        assert!(prompt.contains("Use notes only as an optional fourth simple-CRUD reference"));
         assert!(prompt.contains("Never use generated installed modules"));
         assert!(prompt.contains("bench_* apps"));
         assert!(prompt.contains("Do not request complete file dumps"));
@@ -17403,11 +17410,14 @@ mod tests {
         assert!(prompt.contains("default to one/two panes plus modals/drawers"));
         assert!(prompt.contains("Node tests must not import ../index.js or ../schema.js directly"));
         assert!(prompt.contains("keep helper exports and every named local import in lockstep"));
+        assert!(prompt.contains("Preserve scaffold exports such as buildFollowUpCommand"));
+        assert!(prompt.contains("Automation tests must assert actual fixture facts"));
         assert!(prompt.contains("From tests/*.test.mjs, the module root is exactly `..`"));
         assert!(prompt.contains("Do not use `../../module.json`"));
         assert!(prompt.contains("Do not assert invented display labels or names"));
         assert!(prompt.contains("finalization checklist: mark target, few-shots, scope"));
         assert!(prompt.contains("Python file-generation scripts"));
+        assert!(prompt.contains("Node writer scripts"));
         assert!(prompt.contains("base64 write wrappers"));
         assert!(prompt.contains("include at least one real automation through ctx.commandBus.dispatch"));
         assert!(prompt.contains("Do not call ctx.db.collection('business_commands')"));
@@ -17452,6 +17462,9 @@ mod tests {
         assert!(prompt.contains("scaffold preservation rule"));
         assert!(prompt.contains("Do not clean, delete, reset, replace, or rewrite it wholesale"));
         assert!(prompt.contains("inspect exactly three shipped Business OS modules"));
+        assert!(prompt.contains("mandatory first screen: inspect the scaffold first"));
+        assert!(prompt.contains("customers, shiftflow, and outbound"));
+        assert!(prompt.contains("Use notes only as an optional fourth simple-CRUD reference"));
         assert!(prompt.contains("Never use generated installed modules"));
         assert!(prompt.contains(
             "only_allowed_app_artifact_directory: runtime/business-os/installed-modules/inventory"
@@ -17472,9 +17485,12 @@ mod tests {
         assert!(prompt.contains("CSS scoping rule: index.css must scope module variables"));
         assert!(prompt.contains("Node tests must not import ../index.js or ../schema.js directly"));
         assert!(prompt.contains("keep helper exports and every named local import in lockstep"));
+        assert!(prompt.contains("Preserve scaffold exports such as buildFollowUpCommand"));
+        assert!(prompt.contains("Automation tests must assert actual fixture facts"));
         assert!(prompt.contains("From tests/*.test.mjs, the module root is exactly `..`"));
         assert!(prompt.contains("Do not assert invented display labels or names"));
         assert!(prompt.contains("Python file-generation scripts"));
+        assert!(prompt.contains("Node writer scripts"));
         assert!(prompt.contains("base64 write wrappers"));
         assert_eq!(
             suggested_skill_for_command(&command).as_deref(),
