@@ -2836,7 +2836,7 @@ fn recover_business_os_app_queue_tasks_for_idle_status_snapshot(
         }
     }
     let recovered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        recover_stale_business_os_app_queue_tasks(root, state, 16)
+        recover_stale_business_os_app_queue_task_summary(root, state, 16)
     }));
     {
         let mut shared = lock_shared_state(state);
@@ -2844,12 +2844,22 @@ fn recover_business_os_app_queue_tasks_for_idle_status_snapshot(
         shared.app_recovery_started_epoch_secs = None;
     }
     match recovered {
-        Ok(Ok(updated)) if updated > 0 => push_event(
-            state,
-            format!(
-                "Recovered {updated} stale Business OS app queue task(s) during idle status snapshot"
-            ),
-        ),
+        Ok(Ok(summary)) if summary.total() > 0 => {
+            push_event(
+                state,
+                format!(
+                    "Recovered {} stale Business OS app queue task(s) during idle status snapshot",
+                    summary.total()
+                ),
+            );
+            if summary.only_green() {
+                maybe_queue_next_after_business_os_app_recovery(
+                    root.to_path_buf(),
+                    state.clone(),
+                    "idle status snapshot",
+                );
+            }
+        }
         Ok(Ok(_)) => {}
         Ok(Err(err)) => push_event(
             state,
@@ -2876,7 +2886,6 @@ fn begin_business_os_app_recovery_locked(shared: &mut SharedState, reason: &str)
                 "Bypassed active Business OS app recovery guard during idle status snapshot"
                     .to_string(),
             );
-            shared.app_recovery_started_epoch_secs = Some(current_epoch_secs());
             return true;
         }
         let now = current_epoch_secs();
@@ -3334,6 +3343,25 @@ enum BusinessOsAppValidationQueueRecovery {
     Handled,
     Rework,
     Failed,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct BusinessOsAppQueueRecoverySummary {
+    handled: usize,
+    rework: usize,
+    failed: usize,
+}
+
+impl BusinessOsAppQueueRecoverySummary {
+    fn total(self) -> usize {
+        self.handled
+            .saturating_add(self.rework)
+            .saturating_add(self.failed)
+    }
+
+    fn only_green(self) -> bool {
+        self.handled > 0 && self.rework == 0 && self.failed == 0
+    }
 }
 
 impl PromptWorkerActivity {
@@ -6616,7 +6644,7 @@ fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
         return job.prompt.clone();
     };
     format!(
-        "{}\n\nBusiness OS app module execution rules:\n- Your only deliverable is the runnable Business OS app/module under `{}`. Do not create plans, skill files, trace files, root aliases, or blocker/status notes as substitutes for the app.\n- The CTOX service owns queue and Business OS command lifecycle. Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, `ctox queue block`, or direct SQL against queue/command/runtime status tables. Do not act on queue IDs shown in context or open-work blocks; they are service context, not your completion target.\n- Do not run process-mining, harness self-diagnosis, ticket, skillbook, or queue-cleanup commands unless this app build prompt explicitly asks for that separate operational work.\n- First establish the required file inventory under `{}`: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales/de.json, locales/en.json, and at least one tests/*.test.mjs file. If any required file is missing, create it before optional UI polish.\n- Exact mount rule: index.js must load `./index.html` with `fetch(new URL('./index.html', import.meta.url))`, assign the loaded HTML into `ctx.host.innerHTML`, and attach `./index.css` with `new URL('./index.css', import.meta.url)` before DOM queries or event wiring. Do not build a DOM-only UI while leaving index.html/index.css unused.\n- Use `MODULE_DIR=\"{}\"` and write every generated file as `$MODULE_DIR/<file>`. Do not write root-level app artifacts or `src/apps/business-os/installed-modules` for runtime-installed modules.\n- Use one/two panes plus modals or drawers by default. Remove `layout.right`, right panes, right-column CSS/resizers, and three-column grids unless the user explicitly requested a persistent third pane and the manifest carries a concrete workflow justification.\n- Every visible control must have a real handler that mutates a module-owned collection or dispatches a tested Business OS command payload. Remove decorative controls instead of leaving placeholders.\n- Before claiming success, run the module tests plus `ctox business-os app validate {} {}`. If validation reports any failure, repair the exact bullets and rerun; do not finish on a red validator.\n- Final response should only summarize app files and verification. Do not include queue IDs, command IDs, internal table names, or lifecycle claims.",
+        "{}\n\nBusiness OS app module execution rules:\n- Your only deliverable is the runnable Business OS app/module under `{}`. Do not create plans, skill files, trace files, root aliases, or blocker/status notes as substitutes for the app.\n- The CTOX service owns queue and Business OS command lifecycle. Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, `ctox queue block`, or direct SQL against queue/command/runtime status tables. Do not act on queue IDs shown in context or open-work blocks; they are service context, not your completion target.\n- Do not run process-mining, harness self-diagnosis, ticket, skillbook, or queue-cleanup commands unless this app build prompt explicitly asks for that separate operational work.\n- First establish the required file inventory under `{}`: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales/de.json, locales/en.json, and at least one tests/*.test.mjs file. If any required file is missing, create it before optional UI polish.\n- Exact mount rule: index.js must load `./index.html` with `fetch(new URL('./index.html', import.meta.url))`, assign the loaded HTML into `ctx.host.innerHTML`, and attach `./index.css` with `new URL('./index.css', import.meta.url)` before DOM queries or event wiring. Do not build a DOM-only UI while leaving index.html/index.css unused.\n- Use `MODULE_DIR=\"{}\"` and write every generated file as `$MODULE_DIR/<file>`. Do not write root-level app artifacts or `src/apps/business-os/installed-modules` for runtime-installed modules.\n- Use one/two panes plus modals or drawers by default. Remove `layout.right`, right panes, right-column CSS/resizers, and three-column grids unless the user explicitly requested a persistent third pane and the manifest carries a concrete workflow justification.\n- Every visible control must have a real handler that mutates a module-owned collection or dispatches a tested Business OS command payload. Remove decorative controls instead of leaving placeholders.\n- Tests must prove positive behavior only. Do not write negative source-text scans, forbidden-literal assertions, or tests that quote banned anti-pattern strings such as layout/right-pane keys; validators own those checks.\n- Before claiming success, run the module tests plus `ctox business-os app validate {} {}`. If validation reports any failure, repair the exact bullets and rerun; do not finish on a red validator.\n- Final response should only summarize app files and verification. Do not include queue IDs, command IDs, internal table names, or lifecycle claims.",
         job.prompt,
         target.artifact_directory,
         target.artifact_directory,
@@ -7002,7 +7030,7 @@ fn render_business_os_app_module_validation_feedback(
     report: &str,
 ) -> String {
     format!(
-        "Business OS app artifact validation failed. Continue the same app-build task and repair the generated module before finishing.\n\nTask source: {}\n\nBusiness OS app build target:\n- module_id: {}\n- install_target: {}\n- only_allowed_app_artifact_directory: {}\n\nallowed artifact directory: {}\n\nValidator report:\n{}\n\nImmediate repair order:\n1. Create or repair every missing required file first: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales/de.json, locales/en.json, and tests/*.test.mjs under {}.\n2. If the validator reports the installed mount contract, edit index.js so mount(ctx) loads `./index.html` with `fetch(new URL('./index.html', import.meta.url))`, assigns the loaded HTML into `ctx.host.innerHTML`, and attaches `./index.css` with `new URL('./index.css', import.meta.url)` before DOM queries or event wiring.\n3. If module tests fail, verify the failing fixture by hand: expected counts/totals must be internally consistent with the domain rules and helper logic. Fix app logic when the rule is violated; fix generated test expectations when they are mathematically impossible.\n4. Remove default third/right panes, right-column CSS/resizers, and three-column grids unless the workflow explicitly justifies a persistent third pane.\n5. Re-run the validator and keep repairing exact bullets until it is green.\n\nRepair rules:\n- Edit only files under {}.\n- Do not create root-level module.json, root-level collections.schema.json, src/skills output, package-manager files, node_modules, or HTTP/database fallbacks.\n- Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or direct SQL against queue/command/runtime status rows. CTOX service owns lifecycle completion after green validation.\n- For installed modules, module.json.entry must be installed-modules/{}/index.html and module.json.install_scope must be installed.\n- schema.js and collections.schema.json must export only module-owned collections; shell collections such as business_commands stay dependencies in module.json.collections only.\n- Remove default third/right panes unless there is a concrete persistent workflow justification.\n- Run the validator again before claiming completion:\n  ctox business-os app validate {} {}\n\nOriginal task remains active:\n{}",
+        "Business OS app artifact validation failed. Continue the same app-build task and repair the generated module before finishing.\n\nTask source: {}\n\nBusiness OS app build target:\n- module_id: {}\n- install_target: {}\n- only_allowed_app_artifact_directory: {}\n\nallowed artifact directory: {}\n\nValidator report:\n{}\n\nImmediate repair order:\n1. Create or repair every missing required file first: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales/de.json, locales/en.json, and tests/*.test.mjs under {}.\n2. If the validator reports the installed mount contract, edit index.js so mount(ctx) loads `./index.html` with `fetch(new URL('./index.html', import.meta.url))`, assigns the loaded HTML into `ctx.host.innerHTML`, and attaches `./index.css` with `new URL('./index.css', import.meta.url)` before DOM queries or event wiring.\n3. If module tests fail, verify the failing fixture by hand: expected counts/totals must be internally consistent with the domain rules and helper logic. Fix app logic when the rule is violated; fix generated test expectations when they are mathematically impossible.\n4. Remove default third/right panes, right-column CSS/resizers, and three-column grids unless the workflow explicitly justifies a persistent third pane.\n5. If tests mention forbidden anti-pattern strings only to prove absence, delete those negative source-text tests and replace them with positive behavior/schema/helper assertions.\n6. Re-run the validator and keep repairing exact bullets until it is green.\n\nRepair rules:\n- Edit only files under {}.\n- Do not create root-level module.json, root-level collections.schema.json, src/skills output, package-manager files, node_modules, or HTTP/database fallbacks.\n- Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or direct SQL against queue/command/runtime status rows. CTOX service owns lifecycle completion after green validation.\n- For installed modules, module.json.entry must be installed-modules/{}/index.html and module.json.install_scope must be installed.\n- schema.js and collections.schema.json must export only module-owned collections; shell collections such as business_commands stay dependencies in module.json.collections only.\n- Remove default third/right panes unless there is a concrete persistent workflow justification.\n- Tests must not quote forbidden anti-pattern strings for absence checks; validators own source-text bans.\n- Run the validator again before claiming completion:\n  ctox business-os app validate {} {}\n\nOriginal task remains active:\n{}",
         job.source_label,
         target.module_id,
         target.install_target,
@@ -10185,6 +10213,41 @@ fn maybe_dispatch_after_business_os_app_recovery(
     }
 }
 
+fn maybe_queue_next_after_business_os_app_recovery(
+    root: PathBuf,
+    state: Arc<Mutex<SharedState>>,
+    reason: &'static str,
+) {
+    if active_agent_loop_in_progress(&state) {
+        return;
+    }
+    match maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state) {
+        Ok(Some(prompt)) => {
+            let event = decorate_service_event_with_skill(
+                &format!("Queued durable queue task after Business OS app recovery during {reason}"),
+                prompt.suggested_skill.as_deref(),
+            );
+            let mut shared = lock_shared_state(&state);
+            track_leased_keys_locked(
+                &mut shared,
+                &prompt.leased_message_keys,
+                &prompt.leased_ticket_event_keys,
+            );
+            insert_pending_prompt_ordered(&mut shared.pending_prompts, prompt);
+            let pending = shared.pending_prompts.len();
+            push_event_locked(&mut shared, format!("{event} (queue #{pending})"));
+        }
+        Ok(None) => {}
+        Err(err) => push_event(
+            &state,
+            format!(
+                "Failed to queue next durable queue task after Business OS app recovery during {reason}: {}",
+                clip_text(&err.to_string(), 180)
+            ),
+        ),
+    }
+}
+
 fn start_channel_syncer(root: std::path::PathBuf) {
     thread::spawn(move || loop {
         let settings = live_service_settings(&root);
@@ -10950,8 +11013,17 @@ fn recover_stale_business_os_app_queue_tasks(
     state: &Arc<Mutex<SharedState>>,
     limit: usize,
 ) -> Result<usize> {
+    recover_stale_business_os_app_queue_task_summary(root, state, limit)
+        .map(BusinessOsAppQueueRecoverySummary::total)
+}
+
+fn recover_stale_business_os_app_queue_task_summary(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+    limit: usize,
+) -> Result<BusinessOsAppQueueRecoverySummary> {
     let tasks = channels::list_queue_tasks(root, &["leased".to_string()], limit.max(1))?;
-    let mut updated = 0usize;
+    let mut summary = BusinessOsAppQueueRecoverySummary::default();
     for task in tasks {
         if actively_inflight_leased_message_key(state, &task.message_key)
             || business_os_app_module_target_from_prompt(&task.prompt).is_none()
@@ -10964,15 +11036,19 @@ fn recover_stale_business_os_app_queue_tasks(
             "Business OS app artifacts validated during idle recovery",
             "Business OS app artifact validation failed during idle recovery for queue",
         )? {
-            BusinessOsAppValidationQueueRecovery::Handled
-            | BusinessOsAppValidationQueueRecovery::Rework
-            | BusinessOsAppValidationQueueRecovery::Failed => {
-                updated = updated.saturating_add(1);
+            BusinessOsAppValidationQueueRecovery::Handled => {
+                summary.handled = summary.handled.saturating_add(1);
+            }
+            BusinessOsAppValidationQueueRecovery::Rework => {
+                summary.rework = summary.rework.saturating_add(1);
+            }
+            BusinessOsAppValidationQueueRecovery::Failed => {
+                summary.failed = summary.failed.saturating_add(1);
             }
             BusinessOsAppValidationQueueRecovery::Unchanged => {}
         }
     }
-    Ok(updated)
+    Ok(summary)
 }
 
 fn recover_business_os_app_queue_task_after_worker_finalization(
@@ -21513,6 +21589,63 @@ Business OS command:
     }
 
     #[test]
+    fn status_snapshot_recovery_dispatches_next_app_queue_task_after_green_lease() {
+        let root = temp_root("status-snapshot-green-app-dispatch-next");
+        let script_dir = root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "process.exit(0);\n",
+        )
+        .expect("write green validator script fixture");
+        let completed_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create subscriptions app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/subscriptions".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create completed app queue task");
+        channels::lease_queue_task(&root, &completed_task.message_key, "ctox-service-test")
+            .expect("failed to lease completed app queue task");
+        let next_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create inventory app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/inventory".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create next app queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        status_from_shared_state(&root, &state).expect("status snapshot failed");
+
+        assert_eq!(
+            route_status_for(&root, &completed_task.message_key),
+            "handled"
+        );
+        assert_eq!(route_status_for(&root, &next_task.message_key), "leased");
+        let shared = lock_shared_state(&state);
+        assert_eq!(shared.pending_prompts.len(), 1);
+        assert_eq!(
+            shared.pending_prompts[0].leased_message_keys,
+            vec![next_task.message_key.clone()]
+        );
+    }
+
+    #[test]
     fn status_snapshot_recovery_resets_stale_app_recovery_guard() {
         let root = temp_root("status-snapshot-stale-app-recovery-guard");
         let script_dir = root.join("src/apps/business-os/scripts");
@@ -21554,8 +21687,8 @@ Business OS command:
             shared
                 .recent_events
                 .iter()
-                .any(|event| event.contains("Reset stale Business OS app recovery guard")),
-            "stale recovery guard reset should be observable: {:?}",
+                .any(|event| event.contains("Bypassed active Business OS app recovery guard")),
+            "idle status recovery guard bypass should be observable: {:?}",
             shared.recent_events
         );
     }
@@ -21603,8 +21736,8 @@ Business OS command:
             shared
                 .recent_events
                 .iter()
-                .any(|event| event.contains("Reset stale Business OS app recovery guard")),
-            "idle stale recovery guard reset should be observable: {:?}",
+                .any(|event| event.contains("Bypassed active Business OS app recovery guard")),
+            "idle stale recovery guard bypass should be observable: {:?}",
             shared.recent_events
         );
     }
@@ -21654,6 +21787,21 @@ Business OS command:
             "fresh idle recovery guard bypass should be observable: {:?}",
             shared.recent_events
         );
+    }
+
+    #[test]
+    fn idle_status_recovery_bypass_does_not_extend_active_guard_start_time() {
+        let started = current_epoch_secs().saturating_sub(7);
+        let mut shared = SharedState::default();
+        shared.app_recovery_active = true;
+        shared.app_recovery_started_epoch_secs = Some(started);
+
+        assert!(begin_business_os_app_recovery_locked(
+            &mut shared,
+            "idle status snapshot"
+        ));
+
+        assert_eq!(shared.app_recovery_started_epoch_secs, Some(started));
     }
 
     #[test]
