@@ -111,6 +111,7 @@ const HARNESS_AUDIT_TICK_SECS: u64 = 300;
 const BUSINESS_OS_APP_RECOVERY_POLL_SECS: u64 = 10;
 const BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS: u64 = 30;
 const BUSINESS_OS_APP_RECOVERY_STALE_SECS: u64 = 180;
+const BUSINESS_OS_APP_RECOVERY_SCAN_LIMIT: usize = 128;
 const CHANNEL_ROUTER_LEASE_OWNER: &str = "ctox-service";
 const QUEUE_PRESSURE_GUARD_THRESHOLD: usize = 20;
 const QUEUE_GUARD_SOURCE_LABEL: &str = "queue-guard";
@@ -2846,7 +2847,11 @@ fn recover_business_os_app_queue_tasks_for_idle_status_snapshot(
         }
     }
     let recovered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        recover_stale_business_os_app_queue_task_summary(root, state, 16)
+        recover_stale_business_os_app_queue_task_summary(
+            root,
+            state,
+            BUSINESS_OS_APP_RECOVERY_SCAN_LIMIT,
+        )
     }));
     {
         let mut shared = lock_shared_state(state);
@@ -2862,20 +2867,18 @@ fn recover_business_os_app_queue_tasks_for_idle_status_snapshot(
                     summary.total()
                 ),
             );
-            if summary.only_green() {
-                maybe_queue_next_after_business_os_app_recovery(
-                    root.to_path_buf(),
-                    state.clone(),
-                    "idle status snapshot",
-                );
-            }
+            maybe_queue_next_after_business_os_app_recovery(
+                root.to_path_buf(),
+                state.clone(),
+                "idle status snapshot",
+            );
         }
         Ok(Ok(_)) => {
-            if pending_business_os_app_queue_task_exists(root) {
+            if runnable_business_os_app_queue_task_exists(root) {
                 maybe_queue_next_after_business_os_app_recovery(
                     root.to_path_buf(),
                     state.clone(),
-                    "idle status snapshot pending app queue",
+                    "idle status snapshot runnable app queue",
                 );
             }
         }
@@ -2893,8 +2896,8 @@ fn recover_business_os_app_queue_tasks_for_idle_status_snapshot(
     }
 }
 
-fn pending_business_os_app_queue_task_exists(root: &Path) -> bool {
-    let statuses = ["pending".to_string()];
+fn runnable_business_os_app_queue_task_exists(root: &Path) -> bool {
+    let statuses = ["review_rework".to_string(), "pending".to_string()];
     channels::list_queue_tasks(root, &statuses, 16)
         .map(|tasks| {
             tasks
@@ -3386,10 +3389,6 @@ impl BusinessOsAppQueueRecoverySummary {
         self.handled
             .saturating_add(self.rework)
             .saturating_add(self.failed)
-    }
-
-    fn only_green(self) -> bool {
-        self.handled > 0 && self.rework == 0 && self.failed == 0
     }
 }
 
@@ -10425,7 +10424,11 @@ fn maybe_spawn_business_os_app_recovery(
     }
     thread::spawn(move || {
         let recovered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            recover_stale_business_os_app_queue_tasks(&root, &state, 16)
+            recover_stale_business_os_app_queue_tasks(
+                &root,
+                &state,
+                BUSINESS_OS_APP_RECOVERY_SCAN_LIMIT,
+            )
         }));
         {
             let mut shared = lock_shared_state(&state);
@@ -11251,7 +11254,11 @@ fn maybe_lease_next_durable_queue_prompt_for_idle_dispatch(
             return Ok(None);
         }
     }
-    match recover_stale_business_os_app_queue_tasks(root, state, 8) {
+    match recover_stale_business_os_app_queue_tasks(
+        root,
+        state,
+        BUSINESS_OS_APP_RECOVERY_SCAN_LIMIT,
+    ) {
         Ok(updated) if updated > 0 => {
             push_event(
                 state,
@@ -22056,7 +22063,7 @@ Business OS command:
             vec![task.message_key.clone()]
         );
         assert!(shared.recent_events.iter().any(|event| {
-            event.contains("Queued durable queue task after Business OS app recovery during idle status snapshot pending app queue")
+            event.contains("Queued durable queue task after Business OS app recovery during idle status snapshot runnable app queue")
         }));
     }
 
@@ -22220,7 +22227,7 @@ Business OS command:
     }
 
     #[test]
-    fn status_snapshot_recovery_moves_red_business_os_app_queue_lease_to_rework() {
+    fn status_snapshot_recovery_requeues_red_business_os_app_queue_lease() {
         let root = temp_root("status-snapshot-red-app-recovery");
         let script_dir = root.join("src/apps/business-os/scripts");
         std::fs::create_dir_all(&script_dir).expect("create validator script dir");
@@ -22249,13 +22256,82 @@ Business OS command:
 
         status_from_shared_state(&root, &state).expect("status snapshot failed");
         for _ in 0..40 {
-            if route_status_for(&root, &task.message_key) == "review_rework" {
+            if route_status_for(&root, &task.message_key) == "leased" {
                 break;
             }
             thread::sleep(Duration::from_millis(25));
         }
 
-        assert_eq!(route_status_for(&root, &task.message_key), "review_rework");
+        assert_eq!(route_status_for(&root, &task.message_key), "leased");
+        let shared = lock_shared_state(&state);
+        assert_eq!(shared.pending_prompts.len(), 1);
+        assert_eq!(
+            shared.pending_prompts[0].leased_message_keys,
+            vec![task.message_key.clone()]
+        );
+        assert!(shared.pending_prompts[0]
+            .prompt
+            .contains("Business OS app artifact validation failed."));
+    }
+
+    #[test]
+    fn status_snapshot_recovery_prioritizes_red_app_rework_before_pending_app() {
+        let root = temp_root("status-snapshot-red-app-rework-before-pending");
+        let script_dir = root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "console.error('missing module directory'); process.exit(1);\n",
+        )
+        .expect("write red validator script fixture");
+        let red_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Projects Bench".to_string(),
+                prompt: "Business OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/projects".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create red app queue task");
+        channels::lease_queue_task(&root, &red_task.message_key, "ctox-service-test")
+            .expect("failed to lease red app queue task");
+        let pending_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Quality Bench".to_string(),
+                prompt: "Business OS app build target:\n- module_id: quality\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/quality".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create pending app queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        status_from_shared_state(&root, &state).expect("status snapshot failed");
+
+        assert_eq!(route_status_for(&root, &red_task.message_key), "leased");
+        assert_eq!(
+            route_status_for(&root, &pending_task.message_key),
+            "pending"
+        );
+        let shared = lock_shared_state(&state);
+        assert_eq!(shared.pending_prompts.len(), 1);
+        assert_eq!(
+            shared.pending_prompts[0].leased_message_keys,
+            vec![red_task.message_key.clone()]
+        );
+        assert!(shared.pending_prompts[0]
+            .prompt
+            .contains("Business OS app artifact validation failed."));
     }
 
     #[test]
