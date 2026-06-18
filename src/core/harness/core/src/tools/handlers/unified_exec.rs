@@ -348,6 +348,9 @@ pub(crate) fn business_os_app_root_artifact_write_guard(
     cwd: &Path,
 ) -> Option<String> {
     let workspace_root = business_os_workspace_root(cwd)?;
+    if command_accesses_state_root_installed_modules(command) {
+        return Some(state_root_installed_modules_guard_message());
+    }
     if command_probes_or_invokes_shell_patch_tool(command) {
         return Some(module_shell_patch_tool_guard_message());
     }
@@ -424,6 +427,13 @@ helpers instead."
     )
 }
 
+fn state_root_installed_modules_guard_message() -> String {
+    "Business OS app module guard blocked direct access to the state-root installed-modules directory. \
+Runtime App Creator work must use the prompted `runtime/business-os/installed-modules/<module_id>/` path only; \
+do not inspect or write `$HOME/.local/state/ctox/business-os/installed-modules` directly."
+        .to_string()
+}
+
 fn module_whole_file_read_guard_message(path: &str) -> String {
     format!(
         "Business OS app module guard blocked a whole-file dump of generated module artifact `{path}`. \
@@ -436,7 +446,7 @@ fn module_writer_guard_message(path: &str) -> String {
     format!(
         "Business OS app module guard blocked a programmatic writer or fragile in-place writer against generated module artifact `{path}`. \
 Do not use Python, Node writer scripts, base64 blobs, generated writer scripts, data URLs, temporary \
-file-copy wrappers, shell patch wrappers, or sed/perl in-place line surgery for Business OS app files. Use direct bounded \
+file-copy wrappers, shell patch wrappers, append-chunk rewrites, or sed/perl in-place line surgery for Business OS app files. Use direct bounded \
 exact-path shell writes or smaller local ESM helpers under the module directory."
     )
 }
@@ -784,6 +794,11 @@ fn forbidden_business_os_module_side_effect_name(name: &str) -> bool {
             | "node_modules"
     ) || name.starts_with("_probe_")
         || name.starts_with("_test_")
+        || name.starts_with("_test")
+        || name.starts_with("_scratch")
+        || name.starts_with("_size")
+        || name.contains("scratch")
+        || name.contains("probe")
         || name.ends_with(".bundle.js")
         || name.ends_with(".bundle.mjs")
         || name.ends_with(".bundle.css")
@@ -951,16 +966,26 @@ fn command_uses_forbidden_business_os_module_writer(
             || lower.contains("'/tmp")
             || lower.contains("\"/tmp"))
         && first_business_os_module_artifact_reference(&compact, workspace_root, cwd).is_some();
+    let append_chunk_writer = lower.contains(">>")
+        && first_business_os_module_artifact_reference(&compact, workspace_root, cwd).is_some();
 
     if python_writer
         || node_writer
         || base64_writer
         || fragile_in_place_editor
         || temp_file_copy_wrapper
+        || append_chunk_writer
     {
         return Some(module_path);
     }
     None
+}
+
+fn command_accesses_state_root_installed_modules(command: &str) -> bool {
+    let lower = command.to_ascii_lowercase();
+    lower.contains(".local/state/ctox/business-os/installed-modules")
+        || lower.contains("$home/.local/state/ctox/business-os/installed-modules")
+        || lower.contains("~/.local/state/ctox/business-os/installed-modules")
 }
 
 fn command_probes_or_invokes_shell_patch_tool(command: &str) -> bool {

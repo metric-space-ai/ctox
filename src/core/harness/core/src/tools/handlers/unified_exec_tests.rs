@@ -650,6 +650,61 @@ fn business_os_guard_blocks_large_shell_payload_module_rewrite() -> anyhow::Resu
 }
 
 #[test]
+fn business_os_guard_blocks_state_root_installed_modules_access() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "ls -la /Users/example/.local/state/ctox/business-os/installed-modules/inventory/",
+        root.path(),
+    )
+    .expect("direct state-root installed-modules access should be blocked");
+
+    assert!(err.contains("state-root installed-modules"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_module_scratch_probe_file() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+    let module_dir = root
+        .path()
+        .join("runtime/business-os/installed-modules/inventory");
+    fs::create_dir_all(&module_dir)?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "echo patched > _scratch_test && rm _scratch_test",
+        &module_dir,
+    )
+    .expect("module scratch probe files should be blocked");
+
+    assert!(err.contains("probe/repair artifacts"));
+    assert!(err.contains("_scratch_test"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_module_artifact_append_chunks() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+    let module_dir = root
+        .path()
+        .join("runtime/business-os/installed-modules/inventory");
+    fs::create_dir_all(&module_dir)?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "cat >> index.js <<'JS'\nexport function mount() {}\nJS",
+        &module_dir,
+    )
+    .expect("append chunks against module artifacts should be blocked");
+
+    assert!(err.contains("append-chunk rewrites"));
+    assert!(err.contains("index.js"));
+    Ok(())
+}
+
+#[test]
 fn business_os_guard_allows_node_module_tests() -> anyhow::Result<()> {
     let root = tempdir()?;
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;

@@ -57,7 +57,9 @@ generated app artifact transport. Do not stage `/tmp/*.patch` files, discover
 or inspect shell `apply_patch`, or invoke shell patch wrappers for generated
 module repairs; rewrite the affected bounded file directly or split logic into
 `core/*.mjs`. Do not stream large generated files through giant shell `printf`,
-`echo`, `tee`, or `cat` payload rewrites.
+`echo`, `tee`, or `cat` payload rewrites. Do not use `cat >>`, `tee -a`, or
+temporary module scratch/probe files such as `_scratch*`, `_size*`, or `_test*`
+while verifying or repairing app artifacts.
 
 ## Static Checks
 

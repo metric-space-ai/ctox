@@ -195,8 +195,10 @@ Do not stream large generated files through giant shell `printf`, `echo`,
 `tee`, or `cat` payload rewrites. If quoting or command length becomes
 difficult, shrink the file, move pure logic into `core/*.mjs`, or write the
 smaller affected file directly. Do not repair module files with `sed -i`,
-`gsed -i`, `perl -pi`, or repeated line-number edits; rewrite the smallest
-bounded helper/file and rerun validation.
+`gsed -i`, `perl -pi`, `cat >>`, `tee -a`, or repeated line-number edits; do
+not create scratch/probe files such as `_scratch*`, `_size*`, or `_test*` to
+test write limits. Rewrite the smallest bounded helper/file and rerun
+validation.
 
 When existing source modules show a different pattern, do not treat that as a
 fallback. For new/runtime App Creator apps, these legacy patterns are forbidden
