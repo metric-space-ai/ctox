@@ -799,6 +799,11 @@ fn command_reads_business_os_module_whole_file(
             if let Some(path) = business_os_module_artifact_token_name(target, cwd_is_module_dir) {
                 return Some(path);
             }
+            if let Some(path) =
+                business_os_module_cd_artifact_token_name(target, module_cd_target.as_deref())
+            {
+                return Some(path);
+            }
             if module_cd_target.is_some() && token_is_shell_variable_reference(target) {
                 return module_cd_target.clone();
             }
@@ -844,6 +849,11 @@ fn command_reads_business_os_module_after_heredoc(
                 }
                 if let Some(path) =
                     business_os_module_artifact_token_name(target, cwd_is_module_dir)
+                {
+                    return Some(path);
+                }
+                if let Some(path) =
+                    business_os_module_cd_artifact_token_name(target, module_cd_target.as_deref())
                 {
                     return Some(path);
                 }
@@ -965,6 +975,23 @@ fn token_is_shell_variable_reference(token: &str) -> bool {
         .trim()
         .trim_matches(|ch: char| matches!(ch, '\'' | '"' | '`'));
     trimmed.starts_with('$') || trimmed.contains("${") || trimmed.contains("$")
+}
+
+fn business_os_module_cd_artifact_token_name(
+    token: &str,
+    module_cd_target: Option<&str>,
+) -> Option<String> {
+    let module_dir = module_cd_target?;
+    let normalized = token
+        .trim()
+        .trim_start_matches("./")
+        .trim_matches(|ch: char| matches!(ch, '\'' | '"' | '`'))
+        .to_string();
+    if normalized.contains('$') || normalized.contains('/') || normalized.contains('\\') {
+        return None;
+    }
+    let lower = normalized.to_ascii_lowercase();
+    business_os_module_artifact_name(&lower).then(|| format!("{module_dir}/{normalized}"))
 }
 
 fn business_os_module_artifact_token_name(token: &str, cwd_is_module_dir: bool) -> Option<String> {

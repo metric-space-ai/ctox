@@ -480,6 +480,27 @@ fn business_os_guard_blocks_relative_module_cd_variable_whole_file_cat() -> anyh
 }
 
 #[test]
+fn business_os_guard_blocks_module_cd_direct_artifact_whole_file_cat() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+    let module_dir = root
+        .path()
+        .join("runtime/business-os/installed-modules/inventory");
+    fs::create_dir_all(&module_dir)?;
+    let command = format!(
+        "cd {} && cat module.json collections.schema.json schema.js icon.svg",
+        module_dir.display()
+    );
+
+    let err = business_os_app_root_artifact_write_guard(&command, root.path())
+        .expect("module-local direct artifact cat should be blocked");
+
+    assert!(err.contains("whole-file dump"));
+    assert!(err.contains("runtime/business-os/installed-modules/inventory/module.json"));
+    Ok(())
+}
+
+#[test]
 fn business_os_guard_blocks_heredoc_then_trailing_whole_file_cat() -> anyhow::Result<()> {
     let root = tempdir()?;
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;
