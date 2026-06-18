@@ -193,12 +193,24 @@ files, probe `which apply_patch`, run `apply_patch --help`, inspect shell
 patch-wrapper binaries, or invoke shell `apply_patch` for generated app files.
 Do not stream large generated files through giant shell `printf`, `echo`,
 `tee`, or `cat` payload rewrites. If quoting or command length becomes
-difficult, shrink the file, move pure logic into `core/*.mjs`, or write the
-smaller affected file directly. Do not repair module files with `sed -i`,
+difficult, shrink the file, keep pure record logic in `core/records.mjs`,
+keep command payload logic in `core/automation.mjs`, and write the smaller
+affected file directly. For first-pass runtime-installed App Creator apps, do
+not create extra helper layers such as `core/ui.mjs`, `core/render.mjs`,
+`core/runtime.mjs`, or `core/panel.mjs`; simple DOM wiring belongs in
+`index.js`. Do not repair module files with `sed -i`,
 `gsed -i`, `perl -pi`, `cat >>`, `tee -a`, or repeated line-number edits; do
 not create scratch/probe files such as `_scratch*`, `_size*`, or `_test*` to
 test write limits. Rewrite the smallest bounded helper/file and rerun
 validation.
+
+Do not self-audit generated runtime module files by reading them back
+file-by-file. Avoid `wc -l` over app artifacts, multi-file `sed -n`, multi-file
+`grep`/`rg`, broad globs, and consecutive line-range chunks that reconstruct a
+file in model context. Use `node --check`, `node --test`, and
+`ctox business-os app validate <module> --installed` as the primary feedback
+loop; inspect one exact failing selector/import/snippet only after a concrete
+validator or syntax error.
 
 When existing source modules show a different pattern, do not treat that as a
 fallback. For new/runtime App Creator apps, these legacy patterns are forbidden

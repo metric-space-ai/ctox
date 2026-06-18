@@ -61,6 +61,21 @@ module repairs; rewrite the affected bounded file directly or split logic into
 temporary module scratch/probe files such as `_scratch*`, `_size*`, or `_test*`
 while verifying or repairing app artifacts.
 
+Do not turn verification into a generated-file readback audit. After the file
+inventory is known, do not run `wc -l` over generated app artifacts, multi-file
+`sed -n`, multi-file `grep`/`rg`, broad globs, or consecutive line-range chunks
+against runtime-installed module files. Primary verification is focused
+`node --check`, `node --test`, and
+`ctox business-os app validate <module> --installed`. Read one exact failing
+snippet only when a validator, syntax check, or test output names the concrete
+selector/import/file to inspect.
+
+For first-pass runtime-installed App Creator modules, keep helper files bounded
+to `core/records.mjs` and `core/automation.mjs`. Extra helper layers such as
+`core/ui.mjs`, `core/render.mjs`, `core/runtime.mjs`, or `core/panel.mjs` are a
+refactor smell in the one-shot creation path; reduce scope and keep simple DOM
+wiring in `index.js`.
+
 ## Static Checks
 
 Run the narrow checks that match the touched files. Always set `MODULE_DIR`

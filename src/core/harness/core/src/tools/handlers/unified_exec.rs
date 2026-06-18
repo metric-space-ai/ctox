@@ -378,6 +378,11 @@ pub(crate) fn business_os_app_root_artifact_write_guard(
     {
         return Some(module_side_effect_guard_message(&artifact));
     }
+    if let Some(path) =
+        command_writes_noncanonical_runtime_module_helper(command, &workspace_root, cwd)
+    {
+        return Some(module_noncanonical_helper_guard_message(&path));
+    }
     if let Some(path) = command_reads_business_os_module_whole_file(command, &workspace_root, cwd) {
         return Some(module_whole_file_read_guard_message(&path));
     }
@@ -385,6 +390,9 @@ pub(crate) fn business_os_app_root_artifact_write_guard(
         command_uses_forbidden_business_os_module_writer(command, &workspace_root, cwd)
     {
         return Some(module_writer_guard_message(&path));
+    }
+    if let Some(path) = command_reads_runtime_module_self_audit(command, &workspace_root, cwd) {
+        return Some(module_self_audit_read_guard_message(&path));
     }
     if let Some(path) =
         command_writes_large_business_os_module_payload(command, &workspace_root, cwd)
@@ -438,7 +446,26 @@ fn module_whole_file_read_guard_message(path: &str) -> String {
     format!(
         "Business OS app module guard blocked a whole-file dump of generated module artifact `{path}`. \
 Do not load entire installed app files into model context. Use targeted `sed -n 'start,endp'`, \
-exact `rg -n` selectors/imports, `wc -l`, or the app validator report instead."
+exact `rg -n` selectors/imports, or the app validator report instead."
+    )
+}
+
+fn module_self_audit_read_guard_message(path: &str) -> String {
+    format!(
+        "Business OS app module guard blocked a generated-module self-audit readback `{path}`. \
+Do not inspect runtime-installed App Creator files file-by-file, through broad line ranges, globs, \
+multi-file grep/sed/wc commands, or consecutive readback chunks. Use the scaffold inventory, focused \
+node checks, tests, and `ctox business-os app validate <id> --installed`; inspect only one exact \
+failing selector/import/snippet after a concrete validator or syntax error."
+    )
+}
+
+fn module_noncanonical_helper_guard_message(path: &str) -> String {
+    format!(
+        "Business OS app module guard blocked noncanonical runtime App Creator helper `{path}`. \
+Keep initial runtime-installed apps bounded: use the scaffold helper files `core/records.mjs` and \
+`core/automation.mjs`, with simple DOM wiring in `index.js`. Do not create extra helper layers such \
+as ui/render/runtime/panel modules during one-shot app creation."
     )
 }
 
@@ -808,6 +835,154 @@ fn forbidden_business_os_module_side_effect_name(name: &str) -> bool {
         || name.ends_with(".tmp")
 }
 
+fn command_writes_noncanonical_runtime_module_helper(
+    command: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+) -> Option<String> {
+    let compact = command.replace("\\\n", " ").replace('\n', " ");
+    let lower = compact.to_ascii_lowercase();
+    if !command_targets_runtime_business_os_module(&lower, workspace_root, cwd) {
+        return None;
+    }
+    let tokens = shellish_tokens(&compact);
+    let cwd_is_runtime_core_dir = is_runtime_business_os_module_core_dir(workspace_root, cwd);
+    for (idx, token) in tokens.iter().enumerate() {
+        let normalized = token
+            .trim()
+            .trim_start_matches("./")
+            .trim_matches(|ch: char| matches!(ch, '\'' | '"' | '`'))
+            .to_string();
+        let lower = normalized.to_ascii_lowercase();
+        let basename = lower
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(lower.as_str())
+            .to_string();
+        if !basename.ends_with(".mjs") {
+            continue;
+        }
+        if matches!(basename.as_str(), "records.mjs" | "automation.mjs") {
+            continue;
+        }
+        let explicit_runtime_core_helper =
+            (lower.contains("runtime/business-os/installed-modules/") && lower.contains("/core/"))
+                || lower.contains("$module_dir/core/")
+                || lower.contains("${module_dir}/core/");
+        let relative_runtime_core_helper = lower.starts_with("core/") || cwd_is_runtime_core_dir;
+        if !(explicit_runtime_core_helper || relative_runtime_core_helper) {
+            continue;
+        }
+        if command_writes_path(&compact, &normalized)
+            || command_programmatically_writes_path(&compact, &normalized)
+            || token_is_target_of_write_verb(&tokens, idx)
+        {
+            return Some(normalized);
+        }
+    }
+    None
+}
+
+fn command_reads_runtime_module_self_audit(
+    command: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+) -> Option<String> {
+    let compact = command.replace("\\\n", " ").replace('\n', " ");
+    let lower = compact.to_ascii_lowercase();
+    if !command_targets_runtime_business_os_module(&lower, workspace_root, cwd) {
+        return None;
+    }
+    if lower.contains("ctox business-os app validate")
+        || lower_contains_shell_word(&lower, "node")
+        || lower_contains_shell_word(&lower, "nodejs")
+    {
+        return None;
+    }
+    let read_like = lower_contains_shell_word(&lower, "sed")
+        || lower_contains_shell_word(&lower, "grep")
+        || lower_contains_shell_word(&lower, "rg")
+        || lower_contains_shell_word(&lower, "wc")
+        || lower_contains_shell_word(&lower, "awk");
+    if !read_like {
+        return None;
+    }
+    let module_path = first_business_os_module_artifact_reference(&compact, workspace_root, cwd)
+        .unwrap_or_else(|| "runtime-installed module artifact".to_string());
+    let artifact_refs = business_os_module_artifact_reference_count(&compact, workspace_root, cwd);
+    let broad_module_glob = lower.contains("runtime/business-os/installed-modules/")
+        && (lower.contains("/*.json")
+            || lower.contains("/*.js")
+            || lower.contains("/*.mjs")
+            || lower.contains("/*.html")
+            || lower.contains("/*.css")
+            || lower.contains("/core/")
+            || lower.contains("/locales/")
+            || lower.contains("/tests/"));
+    let multi_readback = artifact_refs > 1
+        || lower.contains(" echo ----")
+        || lower.contains(" echo ---")
+        || lower.contains("; echo")
+        || lower.contains(" && echo")
+        || lower.contains("\\necho");
+    let wc_readback = lower_contains_shell_word(&lower, "wc") && lower.contains("-l");
+    let large_sed_range = command_has_large_sed_read_range(&lower);
+    let grep_audit = (lower_contains_shell_word(&lower, "grep")
+        || lower_contains_shell_word(&lower, "rg"))
+        && (lower.matches('|').count() >= 4 || lower.contains("\\|"));
+
+    if broad_module_glob || multi_readback || wc_readback || large_sed_range || grep_audit {
+        return Some(module_path);
+    }
+    None
+}
+
+fn business_os_module_artifact_reference_count(
+    command: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+) -> usize {
+    let cwd_is_module_dir = is_business_os_module_dir(workspace_root, cwd);
+    shellish_tokens(command)
+        .iter()
+        .filter(|token| business_os_module_artifact_token_name(token, cwd_is_module_dir).is_some())
+        .count()
+}
+
+fn command_has_large_sed_read_range(command_lower: &str) -> bool {
+    let bytes = command_lower.as_bytes();
+    let mut idx = 0;
+    while idx < bytes.len() {
+        if bytes[idx].is_ascii_digit() {
+            let start_idx = idx;
+            while idx < bytes.len() && bytes[idx].is_ascii_digit() {
+                idx += 1;
+            }
+            if idx >= bytes.len() || bytes[idx] != b',' {
+                idx += 1;
+                continue;
+            }
+            let start = command_lower[start_idx..idx].parse::<u32>().unwrap_or(0);
+            idx += 1;
+            let end_idx = idx;
+            while idx < bytes.len() && bytes[idx].is_ascii_digit() {
+                idx += 1;
+            }
+            if end_idx == idx || idx >= bytes.len() || bytes[idx] != b'p' {
+                idx += 1;
+                continue;
+            }
+            let end = command_lower[end_idx..idx].parse::<u32>().unwrap_or(0);
+            if end > start && end - start > 60 {
+                return true;
+            }
+        } else {
+            idx += 1;
+        }
+    }
+    false
+}
+
 fn command_reads_business_os_module_whole_file(
     command: &str,
     workspace_root: &Path,
@@ -1087,6 +1262,15 @@ fn command_targets_business_os_module(
         || is_business_os_module_dir(workspace_root, cwd)
 }
 
+fn command_targets_runtime_business_os_module(
+    command_lower: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+) -> bool {
+    command_lower.contains("runtime/business-os/installed-modules/")
+        || is_runtime_business_os_module_dir(workspace_root, cwd)
+}
+
 fn first_business_os_module_artifact_reference(
     command: &str,
     workspace_root: &Path,
@@ -1221,6 +1405,35 @@ fn is_business_os_module_dir(workspace_root: &Path, cwd: &Path) -> bool {
         || (segments.len() >= 3
             && segments[0] == "business-os"
             && segments[1] == "installed-modules")
+}
+
+fn is_runtime_business_os_module_dir(workspace_root: &Path, cwd: &Path) -> bool {
+    let Ok(relative) = cwd.strip_prefix(workspace_root) else {
+        return false;
+    };
+    let segments = relative
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    segments.len() >= 4
+        && segments[0] == "runtime"
+        && segments[1] == "business-os"
+        && segments[2] == "installed-modules"
+}
+
+fn is_runtime_business_os_module_core_dir(workspace_root: &Path, cwd: &Path) -> bool {
+    let Ok(relative) = cwd.strip_prefix(workspace_root) else {
+        return false;
+    };
+    let segments = relative
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    segments.len() >= 5
+        && segments[0] == "runtime"
+        && segments[1] == "business-os"
+        && segments[2] == "installed-modules"
+        && segments[4] == "core"
 }
 
 fn command_programmatically_writes_path(command: &str, path: &str) -> bool {

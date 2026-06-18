@@ -527,7 +527,7 @@ fn business_os_guard_allows_targeted_installed_module_reads() -> anyhow::Result<
 
     assert!(
         business_os_app_root_artifact_write_guard(
-            "sed -n '1,80p' runtime/business-os/installed-modules/inventory/index.js",
+            "sed -n '1,40p' runtime/business-os/installed-modules/inventory/index.js",
             root.path(),
         )
         .is_none()
@@ -539,6 +539,54 @@ fn business_os_guard_allows_targeted_installed_module_reads() -> anyhow::Result<
         )
         .is_none()
     );
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_runtime_module_wc_readback_audit() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "wc -l runtime/business-os/installed-modules/inventory/*.json runtime/business-os/installed-modules/inventory/*.js runtime/business-os/installed-modules/inventory/*.html runtime/business-os/installed-modules/inventory/core/*.mjs",
+        root.path(),
+    )
+    .expect("broad wc readback audits against generated runtime modules should be blocked");
+
+    assert!(err.contains("self-audit readback"));
+    assert!(err.contains("runtime-installed"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_runtime_module_multi_sed_readback() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "sed -n '1,33p' runtime/business-os/installed-modules/inventory/module.json 2>&1; echo ----; sed -n '1,59p' runtime/business-os/installed-modules/inventory/schema.js 2>&1",
+        root.path(),
+    )
+    .expect("multi-file sed readback audits against generated runtime modules should be blocked");
+
+    assert!(err.contains("self-audit readback"));
+    assert!(err.contains("module.json"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_runtime_module_large_sed_range() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "sed -n '1,120p' runtime/business-os/installed-modules/inventory/index.js 2>&1",
+        root.path(),
+    )
+    .expect("large generated-file sed ranges should be blocked");
+
+    assert!(err.contains("self-audit readback"));
+    assert!(err.contains("index.js"));
     Ok(())
 }
 
@@ -701,6 +749,75 @@ fn business_os_guard_blocks_module_artifact_append_chunks() -> anyhow::Result<()
 
     assert!(err.contains("append-chunk rewrites"));
     assert!(err.contains("index.js"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_noncanonical_runtime_core_helper() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "cat > runtime/business-os/installed-modules/inventory/core/render.mjs <<'EOF'\nexport function render() {}\nEOF",
+        root.path(),
+    )
+    .expect("extra runtime App Creator helper layers should be blocked");
+
+    assert!(err.contains("noncanonical runtime App Creator helper"));
+    assert!(err.contains("core/render.mjs"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_noncanonical_module_dir_core_helper() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "MODULE_DIR=runtime/business-os/installed-modules/inventory && cat > \"$MODULE_DIR/core/render.mjs\" <<'EOF'\nexport function render() {}\nEOF",
+        root.path(),
+    )
+    .expect("extra $MODULE_DIR core helper layers should be blocked");
+
+    assert!(err.contains("noncanonical runtime App Creator helper"));
+    assert!(err.contains("$MODULE_DIR/core/render.mjs"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_allows_scaffold_runtime_core_helpers() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    assert!(
+        business_os_app_root_artifact_write_guard(
+            "cat > runtime/business-os/installed-modules/inventory/core/records.mjs <<'EOF'\nexport const records = [];\nEOF",
+            root.path(),
+        )
+        .is_none()
+    );
+    assert!(
+        business_os_app_root_artifact_write_guard(
+            "cat > runtime/business-os/installed-modules/inventory/core/automation.mjs <<'EOF'\nexport function buildFollowUpCommand() { return {}; }\nEOF",
+            root.path(),
+        )
+        .is_none()
+    );
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_allows_source_module_core_helpers() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    assert!(
+        business_os_app_root_artifact_write_guard(
+            "cat > src/apps/business-os/modules/inventory/core/render.mjs <<'EOF'\nexport function render() {}\nEOF",
+            root.path(),
+        )
+        .is_none()
+    );
     Ok(())
 }
 
