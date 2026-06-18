@@ -354,6 +354,12 @@ pub(crate) fn business_os_app_root_artifact_write_guard(
     if command_probes_or_invokes_shell_patch_tool(command) {
         return Some(module_shell_patch_tool_guard_message());
     }
+    if let Some(path) = command_reads_business_os_validator_internals(command) {
+        return Some(module_validator_internals_guard_message(&path));
+    }
+    if let Some(path) = command_uses_broad_business_os_app_creator_discovery(command) {
+        return Some(module_broad_discovery_guard_message(&path));
+    }
     if let Some(path) =
         command_stages_tmp_patch_for_business_os_module(command, &workspace_root, cwd)
     {
@@ -499,6 +505,23 @@ fn module_shell_patch_tool_guard_message() -> String {
 Do not discover, inspect, or invoke apply_patch from shell while building runtime-installed Business OS apps. \
 Use direct bounded exact-path writes at the final module path, or split behavior into smaller module-local ESM helpers."
         .to_string()
+}
+
+fn module_validator_internals_guard_message(path: &str) -> String {
+    format!(
+        "Business OS app module guard blocked reading validator/checker internals `{path}`. \
+Do not inspect static-checker source while creating runtime-installed apps. Run \
+`ctox business-os app validate <id> --installed`, focused node checks, and tests; repair only concrete \
+reported bullets. If the app validator is green, stop instead of reading validator internals."
+    )
+}
+
+fn module_broad_discovery_guard_message(path: &str) -> String {
+    format!(
+        "Business OS app module guard blocked broad App Creator discovery `{path}`. \
+Use the prompted module directory, the app validator, and exactly the selected shipped few-shot module paths. \
+Do not search the whole source tree, runtime tree, installed-modules root, template store, or prior bench apps."
+    )
 }
 
 fn module_tmp_patch_guard_message(path: &str) -> String {
@@ -1161,6 +1184,80 @@ fn command_accesses_state_root_installed_modules(command: &str) -> bool {
     lower.contains(".local/state/ctox/business-os/installed-modules")
         || lower.contains("$home/.local/state/ctox/business-os/installed-modules")
         || lower.contains("~/.local/state/ctox/business-os/installed-modules")
+}
+
+fn command_reads_business_os_validator_internals(command: &str) -> Option<String> {
+    let compact = command.replace("\\\n", " ").replace('\n', " ");
+    let lower = compact.to_ascii_lowercase();
+    let validator_paths = [
+        "src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs",
+        "src/apps/business-os/scripts/assert-module-conformance.mjs",
+        "src/apps/business-os/scripts/assert-rxdb-only.mjs",
+        "validate-app-module.mjs",
+        "module_static_check.mjs",
+        "assert-module-conformance.mjs",
+        "assert-rxdb-only.mjs",
+    ];
+    let Some(path) = validator_paths
+        .iter()
+        .find(|path| lower.contains(**path))
+        .copied()
+    else {
+        return None;
+    };
+    if lower_contains_shell_word(&lower, "node")
+        || lower_contains_shell_word(&lower, "nodejs")
+        || lower.contains("ctox business-os app validate")
+    {
+        return None;
+    }
+    let reads_internals = lower_contains_shell_word(&lower, "cat")
+        || lower_contains_shell_word(&lower, "sed")
+        || lower_contains_shell_word(&lower, "grep")
+        || lower_contains_shell_word(&lower, "rg")
+        || lower_contains_shell_word(&lower, "wc")
+        || lower_contains_shell_word(&lower, "awk")
+        || lower_contains_shell_word(&lower, "find");
+    reads_internals.then_some(path.to_string())
+}
+
+fn command_uses_broad_business_os_app_creator_discovery(command: &str) -> Option<String> {
+    let compact = command.replace("\\\n", " ").replace('\n', " ");
+    let lower = compact.to_ascii_lowercase();
+    let broad_find = lower_contains_shell_word(&lower, "find")
+        && (lower.starts_with("find .")
+            || lower.starts_with("find ./")
+            || lower.starts_with("find src")
+            || lower.starts_with("find runtime")
+            || lower.contains(" find .")
+            || lower.contains(" find src")
+            || lower.contains(" find runtime"))
+        && (lower.contains("bench_")
+            || lower.contains("installed-modules")
+            || lower.contains("module_static_check.mjs")
+            || lower.contains("validate-app-module.mjs"));
+    if broad_find {
+        return Some("find over source/runtime/install tree".to_string());
+    }
+
+    let lists_installed_root = (lower_contains_shell_word(&lower, "ls")
+        || lower_contains_shell_word(&lower, "tree"))
+        && (lower.contains("runtime/business-os/installed-modules/")
+            || lower.contains("runtime/business-os/installed-modules "))
+        && !lower.contains("runtime/business-os/installed-modules/bench_");
+    if lists_installed_root {
+        return Some("runtime/business-os/installed-modules/".to_string());
+    }
+
+    let lists_business_os_root = lower_contains_shell_word(&lower, "ls")
+        && (lower.contains("runtime/business-os/ ")
+            || lower.contains("runtime/business-os/ 2>")
+            || lower.contains("runtime/business-os/template-store"));
+    if lists_business_os_root {
+        return Some("runtime/business-os/".to_string());
+    }
+
+    None
 }
 
 fn command_probes_or_invokes_shell_patch_tool(command: &str) -> bool {

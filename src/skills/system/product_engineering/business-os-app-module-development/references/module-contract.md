@@ -212,6 +212,12 @@ file in model context. Use `node --check`, `node --test`, and
 loop; inspect one exact failing selector/import/snippet only after a concrete
 validator or syntax error.
 
+When `ctox business-os app validate <module> --installed` reports OK, stop.
+Do not backfill missed few-shot inspection, inspect checker internals, search
+prior `bench_*` apps, list the installed-modules root, or read template-store
+content after a green validator. Post-green exploration is a failed App Creator
+run even when the generated app is valid.
+
 When existing source modules show a different pattern, do not treat that as a
 fallback. For new/runtime App Creator apps, these legacy patterns are forbidden
 implementation choices:

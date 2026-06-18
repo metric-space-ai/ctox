@@ -662,6 +662,69 @@ fn business_os_guard_blocks_shell_apply_patch_probe() -> anyhow::Result<()> {
 }
 
 #[test]
+fn business_os_guard_blocks_validator_internals_read() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "sed -n '1,80p' src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs 2>&1",
+        root.path(),
+    )
+    .expect("reading checker internals should be blocked for App Creator work");
+
+    assert!(err.contains("validator/checker internals"));
+    assert!(err.contains("module_static_check.mjs"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_allows_running_validator_script() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    assert!(
+        business_os_app_root_artifact_write_guard(
+            "node src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs bench_projects --installed",
+            root.path(),
+        )
+        .is_none()
+    );
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_broad_bench_find() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "find . -name \"bench_projects_r29*\" 2>&1 | head -10",
+        root.path(),
+    )
+    .expect("broad bench discovery should be blocked");
+
+    assert!(err.contains("broad App Creator discovery"));
+    assert!(err.contains("source/runtime/install tree"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_installed_modules_root_listing() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "ls runtime/business-os/installed-modules/ 2>&1 | head -40",
+        root.path(),
+    )
+    .expect("installed modules root listing should be blocked");
+
+    assert!(err.contains("broad App Creator discovery"));
+    assert!(err.contains("runtime/business-os/installed-modules/"));
+    Ok(())
+}
+
+#[test]
 fn business_os_guard_blocks_tmp_patch_staging_for_module_artifact() -> anyhow::Result<()> {
     let root = tempdir()?;
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;

@@ -70,6 +70,12 @@ against runtime-installed module files. Primary verification is focused
 snippet only when a validator, syntax check, or test output names the concrete
 selector/import/file to inspect.
 
+If the app-specific validator is green, stop immediately. Do not inspect
+validator/checker source, search the source or runtime tree for prior bench
+apps, list `runtime/business-os/installed-modules/`, list
+`runtime/business-os/template-store`, or run extra source-wide checks to satisfy
+missed process steps. A green App Creator validator is the completion boundary.
+
 For first-pass runtime-installed App Creator modules, keep helper files bounded
 to `core/records.mjs` and `core/automation.mjs`. Extra helper layers such as
 `core/ui.mjs`, `core/render.mjs`, `core/runtime.mjs`, or `core/panel.mjs` are a
