@@ -109,6 +109,8 @@ const CHANNEL_SYNC_POLL_SECS: u64 = 60;
 const MISSION_MAINTENANCE_POLL_SECS: u64 = 15;
 const HARNESS_AUDIT_TICK_SECS: u64 = 300;
 const BUSINESS_OS_APP_RECOVERY_POLL_SECS: u64 = 10;
+const IDLE_QUEUE_DISPATCH_POLL_SECS: u64 = 8;
+const WORKER_IDLE_QUEUE_KICK_DELAY_MS: u64 = 250;
 const BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS: u64 = 30;
 const BUSINESS_OS_APP_RECOVERY_STALE_SECS: u64 = 180;
 const BUSINESS_OS_APP_RECOVERY_SCAN_LIMIT: usize = 128;
@@ -1477,36 +1479,51 @@ fn is_non_work_tui_probe(prompt: &str) -> bool {
 
 fn start_work_hours_dispatcher(root: PathBuf, state: Arc<Mutex<SharedState>>) {
     thread::spawn(move || loop {
-        thread::sleep(Duration::from_secs(60));
-        if !crate::service::working_hours::accepts_work(&root) {
-            continue;
-        }
-        match maybe_next_idle_dispatch_prompt(&root, &state) {
-            Ok(Some(IdleDispatchPrompt::InMemory(queued))) => {
-                push_event(
-                    &state,
-                    "Working-hours window open; resuming queued work".to_string(),
-                );
-                start_prompt_worker(root.clone(), state.clone(), queued);
-            }
-            Ok(Some(IdleDispatchPrompt::Durable(queued))) => {
-                enqueue_prompt(
-                    &root,
-                    &state,
-                    queued,
-                    "Working-hours window open; leasing durable queue task".to_string(),
-                );
-            }
-            Ok(None) => {}
-            Err(err) => push_event(
+        let tick = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_work_hours_dispatch_tick(&root, &state)
+        }));
+        match tick {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => push_event(
                 &state,
                 format!(
                     "Working-hours dispatcher failed to lease durable queue task: {}",
                     clip_text(&err.to_string(), 180)
                 ),
             ),
+            Err(_) => push_event(
+                &state,
+                "Working-hours dispatcher panicked during idle queue dispatch; continuing"
+                    .to_string(),
+            ),
         }
+        thread::sleep(Duration::from_secs(IDLE_QUEUE_DISPATCH_POLL_SECS));
     });
+}
+
+fn run_work_hours_dispatch_tick(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<()> {
+    if !crate::service::working_hours::accepts_work(root) {
+        return Ok(());
+    }
+    match maybe_next_idle_dispatch_prompt(root, state)? {
+        Some(IdleDispatchPrompt::InMemory(queued)) => {
+            push_event(
+                state,
+                "Working-hours window open; resuming queued work".to_string(),
+            );
+            start_prompt_worker(root.to_path_buf(), state.clone(), queued);
+        }
+        Some(IdleDispatchPrompt::Durable(queued)) => {
+            enqueue_prompt(
+                root,
+                state,
+                queued,
+                "Working-hours window open; leasing durable queue task".to_string(),
+            );
+        }
+        None => {}
+    }
+    Ok(())
 }
 
 fn run_plan_routing_repair(root: &Path, state: &Arc<Mutex<SharedState>>, phase: &str) {
@@ -3613,6 +3630,11 @@ impl Drop for PromptWorkerActivity {
             &self.root,
             &self.state,
             "Queued durable queue task after worker activity dropped",
+        );
+        spawn_delayed_worker_idle_queue_kick(
+            self.root.clone(),
+            self.state.clone(),
+            "Queued durable queue task after worker activity settled".to_string(),
         );
     }
 }
@@ -6709,7 +6731,7 @@ fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
         return job.prompt.clone();
     };
     let prompt = format!(
-        "{}\n\nBusiness OS app module execution rules:\n- Your only deliverable is the runnable Business OS app/module under `{}`. Do not create plans, skill files, trace files, root aliases, or blocker/status notes as substitutes for the app.\n- The CTOX service owns queue and Business OS command lifecycle. Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, `ctox queue block`, or direct SQL against queue/command/runtime status tables. Do not act on queue IDs shown in context or open-work blocks; they are service context, not your completion target.\n- CTOX service preflight creates a validator-clean scaffold before this turn when the target directory is missing or empty. Start from the files already under `{}`; do not hand-author module.json, schema.js, collections.schema.json, mount wiring, persistence helpers, automation helpers, or tests from scratch.\n- If `{}` is empty because the preflight explicitly failed, stop and report the scaffold failure. Do not invent a different structure.\n- Preserve scaffold invariants: do not delete `core/automation.mjs`, `core/records.mjs`, `locales/de.json`, `locales/en.json`, or `tests/*.test.mjs`. If you customize domain collections, helpers, or automation, update the matching tests in the same turn.\n- Customize only files under `{}` for the requested domain and workflow. Keep the generated persistence, mount, stylesheet, schema, and automation contracts unless a validator failure demands a specific repair.\n- Exact mount rule: index.js must load `./index.html` with `fetch(new URL('./index.html', import.meta.url))`, assign the loaded HTML into `ctx.host.innerHTML`, and attach `./index.css` with `new URL('./index.css', import.meta.url)` before DOM queries or event wiring. Every `data-*` selector queried in index.js must exist in index.html or in generated markup.\n- CSS token rule: never define custom properties on `:root`, `html`, or `body`. Put module-local custom properties on the module root class from index.html, and never redefine shell token names such as `--surface`, `--text`, or `--line`.\n- Automation command rule: keep an exported command builder that returns `type: 'business_os.chat.task'`, `command_type: 'business_os.chat.task'`, and `payload.record_snapshot`. Use ctx.commandBus.dispatch for the visible automation action.\n- Use `MODULE_DIR=\"{}\"` and write every generated file as `$MODULE_DIR/<file>`. Do not write root-level app artifacts or `src/apps/business-os/installed-modules` for runtime-installed modules.\n- Use one/two panes plus modals or drawers by default. Remove `layout.right`, right panes, right-column CSS/resizers, and three-column grids unless the user explicitly requested a persistent third pane and the manifest carries a concrete workflow justification.\n- Every visible control must have a real handler that mutates a module-owned collection or dispatches a tested Business OS command payload. Remove decorative controls instead of leaving placeholders.\n- Tests are required app artifacts. Keep or replace `tests/*.test.mjs` in the same turn; do not leave the tests directory empty.\n- Tests must prove positive behavior only. Do not write negative source-text scans, forbidden-literal assertions, or tests that quote banned anti-pattern strings such as layout/right-pane keys; validators own those checks.\n- Before claiming success, run the module tests plus `ctox business-os app validate {} {}`. If validation reports any failure, repair the exact bullets and rerun; do not finish on a red validator.\n- Final response should only summarize app files and verification. Do not include queue IDs, command IDs, internal table names, or lifecycle claims.",
+        "{}\n\nBusiness OS app module execution rules:\n- Your only deliverable is the runnable Business OS app/module under `{}`. Do not create plans, skill files, trace files, root aliases, or blocker/status notes as substitutes for the app.\n- The CTOX service owns queue and Business OS command lifecycle. Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, `ctox queue block`, or direct SQL against queue/command/runtime status tables. Do not act on queue IDs shown in context or open-work blocks; they are service context, not your completion target.\n- CTOX service preflight creates a validator-clean scaffold before this turn when the target directory is missing or empty. Start from the files already under `{}`; do not hand-author module.json, schema.js, collections.schema.json, mount wiring, persistence helpers, automation helpers, or tests from scratch.\n- If `{}` is empty because the preflight explicitly failed, stop and report the scaffold failure. Do not invent a different structure.\n- Preserve scaffold invariants: do not delete `core/automation.mjs`, `core/records.mjs`, `locales/de.json`, `locales/en.json`, or `tests/*.test.mjs`. If you customize domain collections, helpers, or automation, update the matching tests in the same turn.\n- Schema artifact rule: keep the canonical root `schema.js`; do not rename it, delete it, replace it with `schema.mjs`, or leave root-level `schema.mjs`/`schema.cjs` aliases. Put reusable ESM schema fragments under `core/*.mjs` and re-export them from `schema.js`.\n- Customize only files under `{}` for the requested domain and workflow. Keep the generated persistence, mount, stylesheet, schema, and automation contracts unless a validator failure demands a specific repair.\n- Exact mount rule: index.js must load `./index.html` with `fetch(new URL('./index.html', import.meta.url))`, assign the loaded HTML into `ctx.host.innerHTML`, and attach `./index.css` with `new URL('./index.css', import.meta.url)` before DOM queries or event wiring. Every `data-*` selector queried in index.js must exist in index.html or in generated markup.\n- CSS token rule: never define custom properties on `:root`, `html`, or `body`. Put module-local custom properties on the module root class from index.html, and never redefine shell token names such as `--surface`, `--text`, or `--line`.\n- Automation command rule: keep an exported command builder that returns `type: 'business_os.chat.task'`, `command_type: 'business_os.chat.task'`, and `payload.record_snapshot`. Use ctx.commandBus.dispatch for the visible automation action.\n- Use `MODULE_DIR=\"{}\"` and write every generated file as `$MODULE_DIR/<file>`. Do not write root-level app artifacts or `src/apps/business-os/installed-modules` for runtime-installed modules.\n- Use one/two panes plus modals or drawers by default. Remove `layout.right`, right panes, right-column CSS/resizers, and three-column grids unless the user explicitly requested a persistent third pane and the manifest carries a concrete workflow justification.\n- Every visible control must have a real handler that mutates a module-owned collection or dispatches a tested Business OS command payload. Remove decorative controls instead of leaving placeholders.\n- Tests are required app artifacts. Keep or replace `tests/*.test.mjs` in the same turn; do not leave the tests directory empty.\n- Tests must prove positive behavior only. Do not write negative source-text scans, forbidden-literal assertions, or tests that quote banned anti-pattern strings such as layout/right-pane keys; validators own those checks.\n- Before claiming success, run the module tests plus `ctox business-os app validate {} {}`. If validation reports any failure, repair the exact bullets and rerun; do not finish on a red validator.\n- Final response should only summarize app files and verification. Do not include queue IDs, command IDs, internal table names, or lifecycle claims.",
         job.prompt,
         target.artifact_directory,
         target.artifact_directory,
@@ -11336,6 +11358,25 @@ fn maybe_enqueue_next_durable_queue_after_worker_idle(
             ),
         ),
     }
+}
+
+fn spawn_delayed_worker_idle_queue_kick(
+    root: PathBuf,
+    state: Arc<Mutex<SharedState>>,
+    event: String,
+) {
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(WORKER_IDLE_QUEUE_KICK_DELAY_MS));
+        let kicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            maybe_enqueue_next_durable_queue_after_worker_idle(&root, &state, &event);
+        }));
+        if kicked.is_err() {
+            push_event(
+                &state,
+                "Delayed worker-idle queue kick panicked; continuing".to_string(),
+            );
+        }
+    });
 }
 
 fn recover_stale_business_os_app_queue_tasks(
@@ -21190,6 +21231,7 @@ Business OS command:
         assert!(prompt.contains("ctx.host.innerHTML"));
         assert!(prompt.contains("new URL('./index.css', import.meta.url)"));
         assert!(prompt.contains("CSS token rule: never define custom properties on `:root`"));
+        assert!(prompt.contains("Schema artifact rule: keep the canonical root `schema.js`"));
         assert!(prompt.contains("Tests are required app artifacts"));
         assert!(prompt.contains("ESM import/export rule"));
         assert!(prompt.contains("ctox business-os app validate contracts --installed"));
