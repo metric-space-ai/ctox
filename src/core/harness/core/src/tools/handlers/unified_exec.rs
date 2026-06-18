@@ -367,9 +367,7 @@ pub(crate) fn business_os_app_root_artifact_write_guard(
     {
         return Some(module_side_effect_guard_message(&artifact));
     }
-    if let Some(path) =
-        command_reads_business_os_module_whole_file(command, &workspace_root, cwd)
-    {
+    if let Some(path) = command_reads_business_os_module_whole_file(command, &workspace_root, cwd) {
         return Some(module_whole_file_read_guard_message(&path));
     }
     if let Some(path) =
@@ -423,10 +421,10 @@ exact `rg -n` selectors/imports, `wc -l`, or the app validator report instead."
 
 fn module_writer_guard_message(path: &str) -> String {
     format!(
-        "Business OS app module guard blocked a programmatic writer against generated module artifact `{path}`. \
-Do not use Python, Node writer scripts, base64 blobs, generated writer scripts, data URLs, or temporary \
-file-copy wrappers for Business OS app files. Use direct bounded shell writes, apply_patch, or smaller \
-local ESM helpers under the module directory."
+        "Business OS app module guard blocked a programmatic writer or fragile in-place writer against generated module artifact `{path}`. \
+Do not use Python, Node writer scripts, base64 blobs, generated writer scripts, data URLs, temporary \
+file-copy wrappers, or sed/perl in-place line surgery for Business OS app files. Use direct bounded \
+exact-path shell writes, apply_patch, or smaller local ESM helpers under the module directory."
     )
 }
 
@@ -898,10 +896,32 @@ fn command_uses_forbidden_business_os_module_writer(
             || lower.contains("createwritestream")
             || lower.contains("fs.promises.writefile")
             || lower.contains("fs.writefile"));
-    let base64_writer =
-        lower_contains_shell_word(&lower, "base64") && (lower.contains('>') || lower.contains(" tee "));
+    let base64_writer = lower_contains_shell_word(&lower, "base64")
+        && (lower.contains('>') || lower.contains(" tee "));
 
-    if python_writer || node_writer || base64_writer {
+    let fragile_in_place_editor = (lower_contains_shell_word(&lower, "sed")
+        || lower_contains_shell_word(&lower, "gsed")
+        || lower_contains_shell_word(&lower, "perl"))
+        && shellish_tokens(&compact).iter().any(|token| {
+            let token = token.trim_matches(|ch: char| matches!(ch, '\'' | '"'));
+            token == "-pi" || token == "-pi.bak" || token.starts_with("-i")
+        });
+
+    let temp_file_copy_wrapper = (lower_contains_shell_word(&lower, "cp")
+        || lower_contains_shell_word(&lower, "mv")
+        || lower_contains_shell_word(&lower, "install"))
+        && (lower.contains("/tmp/")
+            || lower.contains(" /tmp")
+            || lower.contains("'/tmp")
+            || lower.contains("\"/tmp"))
+        && first_business_os_module_artifact_reference(&compact, workspace_root, cwd).is_some();
+
+    if python_writer
+        || node_writer
+        || base64_writer
+        || fragile_in_place_editor
+        || temp_file_copy_wrapper
+    {
         return Some(module_path);
     }
     None
@@ -925,7 +945,11 @@ fn command_writes_large_business_os_module_heredoc(
     Some(module_path)
 }
 
-fn command_targets_business_os_module(command_lower: &str, workspace_root: &Path, cwd: &Path) -> bool {
+fn command_targets_business_os_module(
+    command_lower: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+) -> bool {
     command_lower.contains("src/apps/business-os/modules/")
         || command_lower.contains("src/apps/business-os/installed-modules/")
         || command_lower.contains("runtime/business-os/installed-modules/")
@@ -1040,10 +1064,11 @@ fn business_os_module_artifact_name(name: &str) -> bool {
 }
 
 fn lower_contains_shell_word(command_lower: &str, word: &str) -> bool {
-    command_lower.split(|ch: char| {
-        ch.is_whitespace() || matches!(ch, ';' | '&' | '|' | '(' | ')' | '{' | '}' | '"' | '\'')
-    })
-    .any(|token| token == word || token.rsplit('/').next() == Some(word))
+    command_lower
+        .split(|ch: char| {
+            ch.is_whitespace() || matches!(ch, ';' | '&' | '|' | '(' | ')' | '{' | '}' | '"' | '\'')
+        })
+        .any(|token| token == word || token.rsplit('/').next() == Some(word))
 }
 
 fn is_business_os_module_dir(workspace_root: &Path, cwd: &Path) -> bool {

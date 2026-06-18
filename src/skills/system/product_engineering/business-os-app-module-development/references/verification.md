@@ -35,6 +35,26 @@ expects an impossible count, repair the test; if the helper violates the
 documented business rule, repair the helper. The validator is not green until
 the generated tests and implementation agree on a coherent rule set.
 
+When a helper returns an aggregate object, keep tests synchronized with its
+actual exported shape. If a helper adds legitimate fields such as
+`pick_ready`, `reorder_needed`, `low_stock_ids`, `mrr_cents`, or
+`renewal_due_ids`, update the expected object or assert named fields
+deliberately. Do not keep a stale partial `assert.deepEqual(summary, {...})`
+that fails only because the helper now reports more useful facts.
+
+Do not repair generated JavaScript with repeated `sed -i`, `gsed -i`,
+`perl -pi`, or line-number insert/delete commands. Those edits commonly create
+syntax churn and token-heavy repair loops. If a generated file is malformed,
+rewrite the smallest bounded helper or whole small file directly at its final
+module path, then run `node --check` and the app validator. If `index.js` is
+too large to rewrite cleanly, move pure logic into `core/*.mjs` helpers and
+keep `index.js` as wiring only.
+
+Do not create app files through `/tmp` scratch files copied or moved into the
+module. Write exact target paths under `MODULE_DIR` directly. Scratch output is
+acceptable only for non-app evidence such as command stdout, never as a
+generated app artifact transport.
+
 ## Static Checks
 
 Run the narrow checks that match the touched files. Always set `MODULE_DIR`
