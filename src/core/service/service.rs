@@ -11321,9 +11321,14 @@ fn recover_stale_business_os_app_queue_task_summary(
     let tasks = channels::list_queue_tasks(root, &["leased".to_string()], limit.max(1))?;
     let mut summary = BusinessOsAppQueueRecoverySummary::default();
     for task in tasks {
-        if active_or_pending_leased_message_key(state, &task.message_key)
-            || business_os_app_module_target_from_prompt(&task.prompt).is_none()
-        {
+        if active_or_pending_leased_message_key(state, &task.message_key) {
+            continue;
+        }
+        let Some(target) = business_os_app_module_target_from_prompt(&task.prompt) else {
+            continue;
+        };
+        if requeue_unstarted_business_os_app_queue_task(root, &task, &target)? {
+            summary.rework = summary.rework.saturating_add(1);
             continue;
         }
         match recover_business_os_app_queue_task_from_validation(
@@ -11345,6 +11350,36 @@ fn recover_stale_business_os_app_queue_task_summary(
         }
     }
     Ok(summary)
+}
+
+fn requeue_unstarted_business_os_app_queue_task(
+    root: &Path,
+    task: &channels::QueueTaskView,
+    target: &BusinessOsAppModuleTarget,
+) -> Result<bool> {
+    if task.route_status != "leased" {
+        return Ok(false);
+    }
+    let artifact_dir = root.join(&target.artifact_directory);
+    if business_os_app_artifact_dir_has_user_content(&artifact_dir)? {
+        return Ok(false);
+    }
+    let _updated = channels::update_queue_task(
+        root,
+        channels::QueueTaskUpdateRequest {
+            message_key: task.message_key.clone(),
+            route_status: Some("pending".to_string()),
+            status_note: Some(
+                "business-os:requeued-unstarted-app: app target missing or empty".to_string(),
+            ),
+            ..Default::default()
+        },
+    )?;
+    let _ = crate::business_os::store::refresh_business_command_queue_task_projection(
+        root,
+        &task.message_key,
+    );
+    Ok(true)
 }
 
 fn recover_business_os_app_queue_task_after_worker_finalization(
@@ -21829,6 +21864,47 @@ Business OS command:
 
         assert_eq!(updated, 1);
         assert_eq!(route_status_for(&root, &task.message_key), "handled");
+    }
+
+    #[test]
+    fn stale_app_recovery_requeues_leased_missing_target_before_validation() {
+        let root = temp_root("stale-app-recovery-missing-target-requeue");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create quality app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: quality\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/quality".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        let updated = recover_stale_business_os_app_queue_tasks(&root, &state, 10)
+            .expect("stale app recovery failed");
+
+        assert_eq!(updated, 1);
+        let reloaded = channels::load_queue_task(&root, &task.message_key)
+            .expect("load queue task")
+            .expect("queue task exists");
+        assert_eq!(reloaded.route_status, "pending");
+        assert_eq!(
+            reloaded.status_note.as_deref(),
+            Some("business-os:requeued-unstarted-app: app target missing or empty")
+        );
+        assert!(
+            !root
+                .join("runtime/business-os/installed-modules/quality")
+                .exists(),
+            "requeue must not scaffold or complete the app"
+        );
     }
 
     #[test]

@@ -21,7 +21,7 @@ For CTOX App Creator and runtime-installed app work, follow this short path befo
 4. Preserve scaffold helper export names such as `buildFollowUpCommand`, `summarizeRecords`, and `visibleRecords` unless you update every import in `index.js` and `tests/*.mjs` in the same edit.
 5. Use direct bounded file edits only. If a shell write fails because of quoting, history expansion, command length, or escaping, do not switch to Python, base64, Node writer scripts, generated writer scripts, or data-URL workarounds. Shorten the file, split helpers, remove fragile punctuation from generated literals, or edit the smaller affected file.
 6. Required artifacts are canonical files, not shell patterns. Write `module.json`, `collections.schema.json`, `schema.js`, `index.html`, `index.css`, `index.js`, `icon.svg`, locales, core helpers, and tests by exact path only. Do not create temporary schema/manifest aliases, do not copy through globs or brace expansion, and do not run `rm` against required artifacts.
-7. Tests must prove useful behavior, not only syntax. At minimum they must cover record visibility/summary logic and a `business_os.chat.task` command payload whose title/instruction/prompt/record_snapshot contain actual facts from the fixture records. All tests in `tests/*.test.mjs` must pass; adding a new green test while an old scaffold test imports a missing export is still red.
+7. Tests must prove useful behavior, not only syntax. At minimum they must cover record visibility/summary logic and a `business_os.chat.task` command payload whose title/instruction/prompt/record_snapshot contain actual facts from the fixture records. Do not write negative anti-pattern tests or assertion messages that contain forbidden layout/data/dependency literals; validators own those checks. All tests in `tests/*.test.mjs` must pass; adding a new green test while an old scaffold test imports a missing export is still red.
 8. Run `ctox business-os app validate <id> --installed` before claiming success, then repair every bullet exactly.
 
 ## Priority Order
@@ -97,6 +97,7 @@ you are spending extra turns reading validator/static-checker implementation int
 you are trying to satisfy or avoid scanner keywords by mentally reconstructing the checker instead of writing the smallest valid Business OS module and then repairing actual validator bullets
 you are about to write tests that contain forbidden legacy strings as negative-proof literals; generated tests must avoid the forbidden literals entirely and assert positive current-contract behavior instead
 you are about to write generated tests that use assert.doesNotMatch, scan source files for forbidden anti-pattern absence, build forbidden tokens from fragments, use String.fromCharCode or regex assembly to bypass validators, or describe validator/checker workarounds; delete that test and write positive contract tests instead
+you are about to assert that a manifest, HTML fragment, CSS file, or source file lacks a forbidden third-pane/right-pane pattern by embedding that forbidden term in a test name, assertion, failure message, regex, comment, or string literal; validators own absence checks. Test positive layout facts instead, such as `manifest.layout.shell === "full-workspace"` plus the expected left/center labels and the expected module root class.
 tests and Business OS guards were not run after the last code change
 ```
 
@@ -556,6 +557,13 @@ Do not write tests named "does not use forbidden ...", "anti-patterns", or
 similar. Validators own negative anti-pattern checks. Generated module tests
 must assert positive behavior only: schema parity, reducers/calculations,
 valid command payload shape, and `ctx.commandBus.dispatch` integration hooks.
+For layout tests, assert the expected positive contract, for example
+`manifest.layout.shell`, the left/center labels, the absence of an explicit
+third-pane justification when no third pane exists, and the module root class
+used by the fragment/CSS. Do not write checks such as
+`!('right' in manifest.layout)`, `!('right_resizer' in manifest.layout)`, or
+failure messages like "no default right-resizer"; those literals make the test
+file itself fail the static checker.
 
 `module.json` must list every collection the module reads/writes. Shell collections such as `business_commands`, `ctox_queue_tasks`, `business_module_catalog`, and `ctox_runtime_settings` may be listed when used, but module-owned collections must be declared in both `schema.js` and `collections.schema.json`.
 
@@ -605,6 +613,7 @@ export function mount(ctx) {
 - Do not create broad status/filter/export/settings surfaces unless the prompt asked for them and the handlers are implemented.
 - For App Creator/runtime-installed apps, use vanilla DOM and browser APIs only. A local `.mjs` helper is fine; a framework runtime or generated bundle is not.
 - Do not write negative source-scanner tests for forbidden legacy patterns. The validator already performs that role. If validation reports forbidden terms in a test file, remove the negative scanner test instead of splitting or reconstructing the terms.
+- Do not write negative layout/data/dependency absence assertions in generated tests. If validation reports a forbidden term in a test assertion, comment, name, or failure message, delete that negative assertion and replace it with a positive contract assertion.
 - Tests are required app artifacts, not optional documentation. Preserve `tests/*.test.mjs`; if you regenerate domain helpers, regenerate positive helper tests in the same turn and verify `rg --files "$MODULE_DIR/tests"` returns at least one test before final validation.
 - Keep helper exports and all local named imports in lockstep. Every named local import in `index.js`, `core/*.mjs`, and `tests/*.mjs` must exist as a real `export` in the target file. Preserve scaffold helper exports such as `COLLECTION_NAME`, `createRecord`, `normalizeStatus`, `summarizeRecords`, and `visibleRecords` unless every importer is updated in the same turn.
 - For App Creator scaffold modules, prefer keeping the scaffold API stable and changing its implementation: `buildFollowUpCommand` may build the domain-specific follow-up or chat task even when the visible button label is "Create stock action", "Request renewal review", or similar. Rename the export only when `index.js` and all tests are updated in the same edit and validation is rerun.
@@ -640,7 +649,7 @@ phase 8 UI layout: default is one/two panes plus modal or drawer; no layout.righ
 phase 9 UI controls: every visible button, filter, tab, menu, and form action has a real handler and state/persistence/dispatch effect; every `data-*` selector queried in index.js exists in index.html or generated markup
 phase 10 CSS: module CSS is scoped under the module root class; no :root/html/body custom property definitions, shell token redefinitions, self-referential custom properties, decorative resize handles, or layout affordances copied from unrelated modules
 phase 11 dependencies: browser runtime uses only vanilla HTML/CSS/browser ESM and local relative ESM imports; no UI framework, JSX/TSX, package manager, bare package import, remote import, CommonJS, bundler, transpiler, or generated bundle
-phase 12 tests/imports: tests import only local `.mjs` helpers and JSON/text files; every named local import in `index.js`, `core/*.mjs`, and `tests/*.mjs` is exported by that target file; scaffold export names such as buildFollowUpCommand, summarizeRecords, and visibleRecords are preserved unless every importer was updated; tests do not import `index.js`/`schema.js` directly, do not use data: URLs, and cover schema parity, core command builders, and at least one CRUD/automation path; automation assertions include concrete fixture facts in title/instruction/prompt and record_snapshot; fixture totals/counts are hand-computed in comments or small named facts and are consistent with the implementation; scaffold core/locales/tests still exist
+phase 12 tests/imports: tests import only local `.mjs` helpers and JSON/text files; every named local import in `index.js`, `core/*.mjs`, and `tests/*.mjs` is exported by that target file; scaffold export names such as buildFollowUpCommand, summarizeRecords, and visibleRecords are preserved unless every importer was updated; tests do not import `index.js`/`schema.js` directly, do not use data: URLs, do not contain forbidden anti-pattern literals as negative assertions/messages, and cover schema parity, core command builders, and at least one CRUD/automation path; automation assertions include concrete fixture facts in title/instruction/prompt and record_snapshot; fixture totals/counts are hand-computed in comments or small named facts and are consistent with the implementation; scaffold core/locales/tests still exist
 phase 13 validation: node --check, `ctox business-os app validate <id> --installed|--source`, forbidden-pattern scan, and any available shell/browser smoke proof are green
 phase 14 cleanup: no root-level artifacts, source-installed app artifacts, probe files, blocker notes, generated bundles, package files, stale phase rows, temporary schema/manifest files, literal wildcard/brace filenames, or stale failing replacement tests remain
 ```

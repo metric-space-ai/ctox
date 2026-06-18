@@ -16381,7 +16381,7 @@ Business OS app build target:
 - repair order: fix target path, complete required file inventory, valid JSON, manifest mode/version, schema ownership, UI layout, dependency/data-plane patterns, ESM syntax, tests, then shell smoke; do not patch tests to hide earlier failures.
 - persistence: use the Business OS RxDB/WebRTC data plane exposed by the shell context; do not create IndexedDB/Postgres/SQLite/HTTP fallbacks or dependency-managed builds.
 - dependencies: browser-safe ESM only; no package manager, no bundled node_modules, no CommonJS require, no npx, no esbuild/Vite/Rollup/Webpack proof, and no bundler imports in tests; these forbidden names may appear in this prompt but must not appear in generated app files, comments, or tests.
-- tests: put reusable schemas, command builders, reducers, and calculations in local .mjs helpers imported by index.js/schema.js and by tests; keep helper exports and every named local import in lockstep. Preserve scaffold exports such as buildFollowUpCommand, summarizeRecords, and visibleRecords unless index.js and every tests/*.mjs importer are updated in the same edit. Do not add a replacement test file while leaving an existing tests/*.test.mjs red; validation runs every test file, so stale tests with missing named imports are real failures. Node tests must not import ../index.js or ../schema.js directly and must not data-url/base64 transform browser entry files. From tests/*.test.mjs, the module root is exactly `..`; use `dirname(fileURLToPath(import.meta.url))` plus `resolve(testDir, '..')` to read module.json, collections.schema.json, and other sibling files. Do not use `../../module.json`, `../../collections.schema.json`, or `../../schema.js` from tests, because that climbs out of the installed module directory. Tests must prove positive current-contract behavior only: schema parity, reducers/calculations, command payload shape, commandBus dispatch hooks, and fixture labels/messages/counts derived from the helper output being tested. Automation tests must assert actual fixture facts in title, instruction/prompt, and record_snapshot, not only type/command_type fields. Do not assert invented display labels or names that the helper does not produce. Do not use assert.doesNotMatch, source-text absence checks, forbidden-pattern scans, fragment/character-code/regex token construction, or forbidden examples from this prompt. If validation flags a test for forbidden terms, delete the negative scanner test and replace it with a positive contract assertion.
+- tests: put reusable schemas, command builders, reducers, and calculations in local .mjs helpers imported by index.js/schema.js and by tests; keep helper exports and every named local import in lockstep. Preserve scaffold exports such as buildFollowUpCommand, summarizeRecords, and visibleRecords unless index.js and every tests/*.mjs importer are updated in the same edit. Do not add a replacement test file while leaving an existing tests/*.test.mjs red; validation runs every test file, so stale tests with missing named imports are real failures. Node tests must not import ../index.js or ../schema.js directly and must not data-url/base64 transform browser entry files. From tests/*.test.mjs, the module root is exactly `..`; use `dirname(fileURLToPath(import.meta.url))` plus `resolve(testDir, '..')` to read module.json, collections.schema.json, and other sibling files. Do not use `../../module.json`, `../../collections.schema.json`, or `../../schema.js` from tests, because that climbs out of the installed module directory. Tests must prove positive current-contract behavior only: schema parity, reducers/calculations, command payload shape, commandBus dispatch hooks, and fixture labels/messages/counts derived from the helper output being tested. Automation tests must assert actual fixture facts in title, instruction/prompt, and record_snapshot, not only type/command_type fields. Do not assert invented display labels or names that the helper does not produce. Do not use assert.doesNotMatch, source-text absence checks, forbidden-pattern scans, fragment/character-code/regex token construction, or forbidden examples from this prompt. Do not assert that module.json, HTML, CSS, or source lacks a right/third-pane anti-pattern by embedding forbidden third-pane terms in test names, comments, assertion messages, strings, or regexes; validators own absence checks. Assert positive layout facts instead, such as manifest.layout.shell, expected left/center labels, and the module root class. If validation flags a test for forbidden terms, delete the negative scanner or absence assertion and replace it with a positive contract assertion.
 - UI: default to one/two panes plus modals/drawers; do not create layout.right, right-column resizers, or three-column grids unless the user explicitly requested a persistent third pane and you can justify it in a code comment.
 - finalization checklist: mark target, few-shots, scope, manifest, versioning, schema, persistence, automation, UI layout, controls, CSS, dependencies, tests, validation, and cleanup as done/rework/blocked before claiming success; cleanup includes no temporary schema/manifest files, literal wildcard/brace filenames, or stale failing replacement tests. Repair every rework item first.
 - scope: build the smallest useful one-pass app; avoid broad decorative status/filter/export/settings surfaces unless all handlers and tests are implemented.
@@ -17373,7 +17373,9 @@ mod tests {
         assert!(prompt.contains("Never use generated installed modules"));
         assert!(prompt.contains("bench_* apps"));
         assert!(prompt.contains("Do not request complete file dumps"));
-        assert!(prompt.contains("legacy anti-pattern rule: existing modules can contain old compatibility code"));
+        assert!(prompt.contains(
+            "legacy anti-pattern rule: existing modules can contain old compatibility code"
+        ));
         assert!(prompt.contains("reject ctx.db.raw, db.raw, ctx.collections, window.dispatchEvent"));
         assert!(prompt.contains("ctox-business-os-chat-submit"));
         assert!(prompt.contains("manual business_commands insert/upsert fallbacks"));
@@ -17414,6 +17416,8 @@ mod tests {
         assert!(prompt.contains("keep helper exports and every named local import in lockstep"));
         assert!(prompt.contains("Preserve scaffold exports such as buildFollowUpCommand"));
         assert!(prompt.contains("Automation tests must assert actual fixture facts"));
+        assert!(prompt.contains("validators own absence checks"));
+        assert!(prompt.contains("Assert positive layout facts instead"));
         assert!(prompt.contains("exact artifact rule"));
         assert!(prompt.contains("Do not add a replacement test file while leaving an existing"));
         assert!(prompt.contains("Do not use `cp .tmp_schema.json co*.json`"));
@@ -17426,14 +17430,17 @@ mod tests {
         assert!(prompt.contains("Python file-generation scripts"));
         assert!(prompt.contains("Node writer scripts"));
         assert!(prompt.contains("base64 write wrappers"));
-        assert!(prompt.contains("include at least one real automation through ctx.commandBus.dispatch"));
+        assert!(
+            prompt.contains("include at least one real automation through ctx.commandBus.dispatch")
+        );
         assert!(prompt.contains("Do not call ctx.db.collection('business_commands')"));
         assert!(prompt.contains("Tests must prove positive current-contract behavior only"));
         assert!(prompt.contains("Do not use assert.doesNotMatch"));
         assert!(prompt.contains("replace it with a positive contract assertion"));
         assert!(prompt.contains("never use layout.icon_svg"));
-        assert!(prompt
-            .contains("There are no App Creator exceptions for ctox.business_os.ticket.followup.create"));
+        assert!(prompt.contains(
+            "There are no App Creator exceptions for ctox.business_os.ticket.followup.create"
+        ));
         assert!(prompt.contains("do not implement a business_commands fallback"));
         assert!(
             prompt.contains("not documentation, plans, trace files, blocker notes, or skill files")
@@ -17465,7 +17472,9 @@ mod tests {
         assert!(prompt.contains("Required CTOX skills: business-os-app-module-development"));
         assert!(prompt.contains("- module_id: inventory"));
         assert!(prompt.contains("- install_target: runtime-installed-module"));
-        assert!(prompt.contains("CTOX-native App Creator/runtime app creation is the primary acceptance target"));
+        assert!(prompt.contains(
+            "CTOX-native App Creator/runtime app creation is the primary acceptance target"
+        ));
         assert!(prompt.contains("scaffold preservation rule"));
         assert!(prompt.contains("Do not clean, delete, reset, replace, or rewrite it wholesale"));
         assert!(prompt.contains("inspect exactly three shipped Business OS modules"));
@@ -17488,7 +17497,8 @@ mod tests {
         assert!(prompt.contains("Do not use `fetch('./index.html')`"));
         assert!(prompt.contains("ctx.host.innerHTML"));
         assert!(prompt.contains("new URL('./index.css', import.meta.url)"));
-        assert!(prompt.contains("HTML fragment rule: index.html must be a Business OS shell fragment only"));
+        assert!(prompt
+            .contains("HTML fragment rule: index.html must be a Business OS shell fragment only"));
         assert!(prompt.contains("CSS scoping rule: index.css must scope module variables"));
         assert!(prompt.contains("Node tests must not import ../index.js or ../schema.js directly"));
         assert!(prompt.contains("keep helper exports and every named local import in lockstep"));
