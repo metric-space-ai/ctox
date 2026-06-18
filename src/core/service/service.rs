@@ -2870,7 +2870,15 @@ fn recover_business_os_app_queue_tasks_for_idle_status_snapshot(
                 );
             }
         }
-        Ok(Ok(_)) => {}
+        Ok(Ok(_)) => {
+            if pending_business_os_app_queue_task_exists(root) {
+                maybe_queue_next_after_business_os_app_recovery(
+                    root.to_path_buf(),
+                    state.clone(),
+                    "idle status snapshot pending app queue",
+                );
+            }
+        }
         Ok(Err(err)) => push_event(
             state,
             format!(
@@ -2883,6 +2891,17 @@ fn recover_business_os_app_queue_tasks_for_idle_status_snapshot(
             "Business OS app recovery panicked during idle status snapshot; continuing".to_string(),
         ),
     }
+}
+
+fn pending_business_os_app_queue_task_exists(root: &Path) -> bool {
+    let statuses = ["pending".to_string()];
+    channels::list_queue_tasks(root, &statuses, 16)
+        .map(|tasks| {
+            tasks
+                .iter()
+                .any(|task| business_os_app_module_target_from_prompt(&task.prompt).is_some())
+        })
+        .unwrap_or(false)
 }
 
 fn begin_business_os_app_recovery_locked(shared: &mut SharedState, reason: &str) -> bool {
@@ -22006,6 +22025,39 @@ Business OS command:
             shared.pending_prompts[0].leased_message_keys,
             vec![next_task.message_key.clone()]
         );
+    }
+
+    #[test]
+    fn idle_status_snapshot_queues_pending_business_os_app_task() {
+        let root = temp_root("status-snapshot-pending-app-dispatch");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create inventory app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/inventory".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create pending app queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        recover_business_os_app_queue_tasks_for_idle_status_snapshot(&root, &state);
+
+        assert_eq!(route_status_for(&root, &task.message_key), "leased");
+        let shared = lock_shared_state(&state);
+        assert_eq!(shared.pending_prompts.len(), 1);
+        assert_eq!(
+            shared.pending_prompts[0].leased_message_keys,
+            vec![task.message_key.clone()]
+        );
+        assert!(shared.recent_events.iter().any(|event| {
+            event.contains("Queued durable queue task after Business OS app recovery during idle status snapshot pending app queue")
+        }));
     }
 
     #[test]
