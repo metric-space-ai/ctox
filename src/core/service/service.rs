@@ -4173,6 +4173,7 @@ fn start_prompt_worker(
                     }
                 }
             }
+            let mut app_validation_precompleted = false;
             let app_validation_before_review = if result.is_ok()
                 && business_os_app_module_target_from_prompt(&job.prompt).is_some()
             {
@@ -4189,6 +4190,30 @@ fn start_prompt_worker(
                         Some(false)
                     }
                     Ok(None) => {
+                        match complete_business_os_app_validation_success_to_leased_queue(
+                            &root,
+                            &job,
+                            "Business OS app artifacts validated before completion review",
+                        ) {
+                            Ok(updated) if updated > 0 => {
+                                app_validation_precompleted = true;
+                                push_event(
+                                    &state,
+                                    format!(
+                                        "Marked {updated} app-validation-verified queue task(s) handled before completion review"
+                                    ),
+                                );
+                            }
+                            Ok(_) => {}
+                            Err(err) => push_event(
+                                &state,
+                                format!(
+                                    "Business OS app validation passed before completion review but queue completion failed for {}; retrying during finalization: {}",
+                                    job.source_label,
+                                    clip_text(&err.to_string(), 220)
+                                ),
+                            ),
+                        }
                         push_event(
                             &state,
                             format!(
@@ -4310,11 +4335,12 @@ fn start_prompt_worker(
                             &review_disposition,
                             CompletionReviewDisposition::NoSend { .. }
                         );
-                        let app_validation_should_run = !matches!(
-                            &review_disposition,
-                            CompletionReviewDisposition::NoSend { .. }
-                                | CompletionReviewDisposition::TerminalQueueFailure { .. }
-                        )
+                        let app_validation_should_run = !app_validation_precompleted
+                            && !matches!(
+                                &review_disposition,
+                                CompletionReviewDisposition::NoSend { .. }
+                                    | CompletionReviewDisposition::TerminalQueueFailure { .. }
+                            )
                             && business_os_app_module_target_from_prompt(&job.prompt).is_some();
                         app_validation_rework = false;
                         app_validation_terminal_failure = false;
