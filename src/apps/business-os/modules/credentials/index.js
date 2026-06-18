@@ -1,5 +1,6 @@
 import { CREDENTIAL_TYPES, credentialStatus, daysUntilExpiry } from './core/credential.js';
 
+const MODULE_ID = 'credentials';
 const CREDENTIALS_BUILD = '20260618-credentials1';
 
 export async function mount(ctx) {
