@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 
 const moduleId = process.argv[2];
 const modeArg = process.argv[3] || '';
@@ -122,6 +122,60 @@ function fetchCallSnippet(text, index) {
 
 function isAllowedInstalledModuleFetch(snippet) {
   return /^fetch\s*\(\s*new\s+URL\s*\(\s*['"]\.\/index\.html['"]\s*,\s*import\.meta\.url\s*\)/.test(snippet);
+}
+
+function extractStaticImportSpecs(text) {
+  const specs = [];
+  const importExportFromPattern = /\b(?:import|export)\s+(?:[\s\S]*?\s+from\s*)['"]([^'"]+)['"]/g;
+  for (const match of text.matchAll(importExportFromPattern)) {
+    specs.push(match[1]);
+  }
+  const sideEffectImportPattern = /\bimport\s*['"]([^'"]+)['"]/g;
+  for (const match of text.matchAll(sideEffectImportPattern)) {
+    specs.push(match[1]);
+  }
+  return specs;
+}
+
+function relativeImportExists(baseFile, specifier) {
+  const target = join(dirname(baseFile), specifier);
+  if (/\.[cm]?js$/i.test(specifier) || specifier.endsWith('.css') || specifier.endsWith('.html')) {
+    return existsSync(target);
+  }
+  return [target, `${target}.js`, `${target}.mjs`].some((candidate) => existsSync(candidate));
+}
+
+function hasBusinessOsChatTaskCommandType(text) {
+  if (/(?:command_type\s*:\s*['"]business_os\.chat\.task['"]|["']command_type["']\s*:\s*["']business_os\.chat\.task["'])/.test(text)) {
+    return true;
+  }
+  const constants = new Set();
+  for (const match of text.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*['"]business_os\.chat\.task['"]/g)) {
+    constants.add(match[1]);
+  }
+  return Array.from(constants).some((name) => {
+    const escaped = escapeRegExp(name);
+    return new RegExp(String.raw`(?:command_type\s*:\s*${escaped}\b|["']command_type["']\s*:\s*${escaped}\b)`).test(text);
+  });
+}
+
+function queriedDataAttributes(indexJsText) {
+  const attributes = new Set();
+  const queryPattern = /\b(?:querySelector|querySelectorAll|closest|matches)\s*\(\s*(['"`])([\s\S]*?)\1\s*\)/g;
+  for (const match of indexJsText.matchAll(queryPattern)) {
+    const selector = match[2];
+    for (const attr of selector.matchAll(/\[(data-[A-Za-z0-9_-]+)(?:[\s~|^$*]?=|\])/g)) {
+      attributes.add(attr[1]);
+    }
+  }
+  return attributes;
+}
+
+function removeQuerySelectorArguments(indexJsText) {
+  return indexJsText.replace(
+    /\b(?:querySelector|querySelectorAll|closest|matches)\s*\(\s*(['"`])[\s\S]*?\1\s*\)/g,
+    '',
+  );
 }
 
 function rootModuleDirLooksLikeOnlyCtoxLedger(path) {
@@ -384,6 +438,13 @@ for (const path of files) {
 for (const path of files.filter((file) => /\.(html|css|js|mjs)$/.test(file))) {
   const text = readFileSync(path, 'utf8');
   const isTestFile = hasPathSegment(path, 'tests') || path.endsWith('.test.mjs');
+  if (/\.(js|mjs)$/.test(path)) {
+    for (const specifier of extractStaticImportSpecs(text)) {
+      if ((specifier.startsWith('./') || specifier.startsWith('../')) && !relativeImportExists(path, specifier)) {
+        fail(`${rel(path)} relative import ${specifier} does not exist`);
+      }
+    }
+  }
   if (isTestFile) {
     if (/data:text\/javascript/i.test(text)) {
       fail(`${rel(path)} imports local app source through a data: URL; test shared .mjs helpers and JSON/text parity instead`);
@@ -577,7 +638,7 @@ if (installedMode) {
   if (!/\bbusiness_os\.chat\.task\b/.test(allModuleText)) {
     fail('installed App Creator module must include a business_os.chat.task automation command');
   }
-  if (!/(?:command_type\s*:\s*['"]business_os\.chat\.task['"]|["']command_type["']\s*:\s*["']business_os\.chat\.task["'])/.test(allModuleText)) {
+  if (!hasBusinessOsChatTaskCommandType(allModuleText)) {
     fail('installed App Creator module must preserve command_type: business_os.chat.task in its automation command');
   }
   if (!/\brecord_snapshot\b/.test(allModuleText)) {
@@ -593,6 +654,17 @@ if (installedMode) {
   }
   if (!/new\s+URL\s*\(\s*['"]\.\/index\.css['"]\s*,\s*import\.meta\.url\s*\)/.test(indexJsText)) {
     fail('installed App Creator module index.js must attach ./index.css through a local new URL(\'./index.css\', import.meta.url) stylesheet');
+  }
+  const indexHtmlPath = join(moduleDir, 'index.html');
+  const indexHtmlText = existsSync(indexHtmlPath) ? readFileSync(indexHtmlPath, 'utf8') : '';
+  const selectorProducerText = `${indexHtmlText}\n${removeQuerySelectorArguments(indexJsText)}`;
+  const selectorIgnore = new Set(['data-module-styles']);
+  for (const attribute of queriedDataAttributes(indexJsText)) {
+    if (selectorIgnore.has(attribute)) continue;
+    const attributePattern = new RegExp(String.raw`\b${escapeRegExp(attribute)}\b`);
+    if (!attributePattern.test(selectorProducerText)) {
+      fail(`installed App Creator module index.js queries [${attribute}] but no matching ${attribute} element is present in index.html or generated markup`);
+    }
   }
 }
 

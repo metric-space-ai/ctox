@@ -38,6 +38,7 @@ you are about to request complete file dumps, delegate a broad subagent sweep, o
 you are about to run broad discovery commands over `$HOME`, `/Users`, the whole install root, the whole repo, or validator/checker names; use exact known paths, `MODULE_DIR`, and at most the three selected few-shot modules
 you are about to write app files outside the resolved module directory, such as root-level module.json, root-level collections.schema.json, root-level <id>/, src/skills/, or any skill-named path
 you are building a new runtime-installed App Creator app and neither the CTOX service preflight nor your first explicit action has created a complete validator-clean scaffold under the target directory
+you are about to delete, omit, or replace scaffold invariants such as core/automation.mjs, core/records.mjs, locales/de.json, locales/en.json, or tests/*.test.mjs instead of customizing them in place
 you are about to create or update a runtime-installed App Creator module whose module.json lacks a SemVer version in x.y.z form without a v prefix
 you are about to expose, advertise, or call a module public/user-ready while its app version is below 1.0.0
 you are about to use 2.0.0 or any later x.0.0 as an in-place update of the same app id/icon instead of a new parallel app line
@@ -53,6 +54,7 @@ the module's tests, comments, helper names, or assertions describe a business_co
 the module declares collections in module.json but not in schema.js and collections.schema.json
 the module-owned data model is unclear: central object, collection names, states, commands, and automation payload are not named
 index.js does not load the module fragment with `fetch(new URL('./index.html', import.meta.url))`, assign it into `ctx.host.innerHTML`, and attach `index.css` through a local `new URL('./index.css', import.meta.url)` stylesheet before DOM queries or event wiring
+index.js queries a `data-*` selector that is absent from index.html and from generated markup
 the app has a decorative third pane, layout.right by default, right-column resizers by default, decorative controls, fake AI buttons, fake status-only actions, or UI that is not needed for the workflow
 module.json embeds `layout.icon_svg` instead of using the required separate `icon.svg`
 module.json embeds inline SVG in any field such as `icon_svg`, `iconSvg`, `layout.icon`, or `layout.icon_svg`; generated apps must keep all SVG markup only in icon.svg
@@ -135,6 +137,17 @@ wiring, persistence helpers, automation helpers, or tests from scratch unless a
 validator bullet requires a bounded repair. Do not use `--force` for an
 existing app modification; use `--force` only when intentionally resetting a
 failed new-app scaffold.
+
+If validation reports missing scaffold files after a partial rewrite, repair
+non-destructively before changing domain logic:
+
+```sh
+ctox business-os app scaffold <id> --installed --repair-missing
+```
+
+This command only creates missing scaffold files. It must not be used as a
+reason to delete customized app files. After repair, reconcile the existing
+domain files with the restored core helpers, locales, and tests.
 
 Do not use queue IDs or open-work context as a target selector. The App
 Creator/CTOX service will complete queue and command state after the app
@@ -248,6 +261,13 @@ Attach the stylesheet through a local
 `new URL('./index.css', import.meta.url)` link. Do not leave `ctx.host` empty
 while `mount(ctx)` only registers events against selectors that live in
 `index.html`.
+
+Keep `index.html` and `index.js` synchronized. Every selector passed to
+`querySelector`, `querySelectorAll`, `closest`, or `matches` for a `data-*`
+attribute must point to an element in `index.html` or to markup that `index.js`
+itself creates. If you replace a scaffold form, list, toolbar, tab, or action
+button, update the event wiring in the same edit. Do not leave generic scaffold
+JavaScript querying removed elements such as `[data-form]` or `[data-records]`.
 
 Resolve the target directory before writing any file:
 
@@ -528,10 +548,10 @@ phase 5 schema: collections.schema.json has schema_format ctox-business-os-modul
 phase 6 persistence: all durable records use ctx.db facade collections; no ctox.db, db.raw, Web Storage, HTTP data route, table creation, or manual database file
 phase 7 automation: at least one visible action dispatches a real `business_os.chat.task` command through ctx.commandBus.dispatch and has a testable payload builder
 phase 8 UI layout: default is one/two panes plus modal or drawer; no layout.right, right rail, right-column CSS, right resizer, or three-column grid unless explicitly justified by workflow
-phase 9 UI controls: every visible button, filter, tab, menu, and form action has a real handler and state/persistence/dispatch effect
+phase 9 UI controls: every visible button, filter, tab, menu, and form action has a real handler and state/persistence/dispatch effect; every `data-*` selector queried in index.js exists in index.html or generated markup
 phase 10 CSS: module CSS is scoped under the module root; no :root token definitions, shell token redefinitions, self-referential custom properties, decorative resize handles, or layout affordances copied from unrelated modules
 phase 11 dependencies: browser runtime uses only vanilla HTML/CSS/browser ESM and local relative ESM imports; no UI framework, JSX/TSX, package manager, bare package import, remote import, CommonJS, bundler, transpiler, or generated bundle
-phase 12 tests: tests import only local `.mjs` helpers and JSON/text files; they do not import `index.js`/`schema.js` directly, do not use data: URLs, and cover schema parity, core command builders, and at least one CRUD/automation path; fixture totals/counts are hand-computed in comments or small named facts and are consistent with the implementation
+phase 12 tests: tests import only local `.mjs` helpers and JSON/text files; they do not import `index.js`/`schema.js` directly, do not use data: URLs, and cover schema parity, core command builders, and at least one CRUD/automation path; fixture totals/counts are hand-computed in comments or small named facts and are consistent with the implementation; scaffold core/locales/tests still exist
 phase 13 validation: node --check, `ctox business-os app validate <id> --installed|--source`, forbidden-pattern scan, and any available shell/browser smoke proof are green
 phase 14 cleanup: no root-level artifacts, source-installed app artifacts, probe files, blocker notes, generated bundles, package files, or stale phase rows remain
 ```
@@ -549,6 +569,7 @@ version 2.0.0 or later is used without a new module id/icon for a parallel major
 runtime-installed App Creator app uses React/Vue/Svelte/Angular/Solid/Preact/Lit, JSX/TSX, framework config, or any compile/transpile artifact
 schema.js or collections.schema.json redeclares business_commands
 automation helper sets only type and omits command_type, or omits record_snapshot
+automation helper hides the required App Creator command shape behind an untested custom payload; tests must prove a builder returns business_os.chat.task with command_type and record_snapshot
 tests import index.js/schema.js directly, or load them through data:text/javascript/base64, instead of testing shared `.mjs` helpers plus JSON/text parity
 the phase tracker says done while validator or browser proof is red
 ```

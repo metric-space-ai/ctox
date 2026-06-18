@@ -2,6 +2,7 @@
 import {
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -11,9 +12,9 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 
 function usage() {
   return [
-    'Usage: node src/apps/business-os/scripts/scaffold-app-module.mjs <module> [--installed|--source] [--workspace <path>] [--title <title>] [--collection <name>] [--description <text>] [--force] [--json]',
+    'Usage: node src/apps/business-os/scripts/scaffold-app-module.mjs <module> [--installed|--source] [--workspace <path>] [--title <title>] [--collection <name>] [--description <text>] [--force] [--repair-missing] [--json]',
     '',
-    'Creates a validator-clean CTOX Business OS app module scaffold.',
+    'Creates or repairs a validator-clean CTOX Business OS app module scaffold.',
   ].join('\n');
 }
 
@@ -26,6 +27,7 @@ function parseArgs(argv) {
     collection: null,
     description: null,
     force: false,
+    repairMissing: false,
     json: false,
   };
   for (let idx = 0; idx < argv.length; idx += 1) {
@@ -56,6 +58,8 @@ function parseArgs(argv) {
       idx += 1;
     } else if (arg === '--force') {
       result.force = true;
+    } else if (arg === '--repair-missing') {
+      result.repairMissing = true;
     } else if (arg === '--json') {
       result.json = true;
     } else if (arg.startsWith('-')) {
@@ -74,6 +78,9 @@ function parseArgs(argv) {
   if (result.mode !== 'installed' && result.mode !== 'source') {
     throw new Error('mode must be installed or source');
   }
+  if (result.force && result.repairMissing) {
+    throw new Error('--repair-missing cannot be combined with --force');
+  }
   result.title ||= titleFromId(result.moduleId);
   result.collection ||= `${snakeName(result.moduleId)}_records`;
   if (!/^[a-z][a-z0-9_]*$/.test(result.collection)) {
@@ -82,6 +89,13 @@ function parseArgs(argv) {
   result.description ||= `${result.title} Business OS app for durable records and CTOX follow-up work.`;
   return result;
 }
+
+const shellCollections = new Set([
+  'business_module_catalog',
+  'ctox_runtime_settings',
+  'business_commands',
+  'ctox_queue_tasks',
+]);
 
 function titleFromId(value) {
   return String(value)
@@ -836,9 +850,165 @@ assert.deepEqual(command.payload.record_snapshot, open);
 `;
 }
 
+function contractTestJs(options) {
+  return `import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import * as automation from '../core/automation.mjs';
+
+const shellCollections = new Set([
+  'business_module_catalog',
+  'ctox_runtime_settings',
+  'business_commands',
+  'ctox_queue_tasks',
+]);
+
+const manifest = JSON.parse(readFileSync(new URL('../module.json', import.meta.url), 'utf8'));
+assert.equal(manifest.id, ${JSON.stringify(options.moduleId)});
+assert.equal(manifest.entry, ${JSON.stringify(options.mode === 'installed' ? `installed-modules/${options.moduleId}/index.html` : `modules/${options.moduleId}/index.html`)});
+assert.equal(manifest.install_scope, ${JSON.stringify(options.mode === 'installed' ? 'installed' : 'store')});
+
+const schemaDoc = JSON.parse(readFileSync(new URL('../collections.schema.json', import.meta.url), 'utf8'));
+assert.equal(schemaDoc.schema_format, 'ctox-business-os-module-collections-v1');
+const moduleCollections = (manifest.collections || []).filter((name) => !shellCollections.has(name));
+assert.ok(moduleCollections.length > 0, 'module owns at least one collection');
+for (const name of moduleCollections) {
+  assert.ok(schemaDoc.collections?.[name], 'schema exists for ' + name);
+}
+
+const sample = {
+  id: 'rec_demo',
+  title: 'Demo record',
+  status: 'open',
+  item: { id: 'item_demo', sku: 'SKU-1', name: 'Demo Item', title: 'Demo Item' },
+  lowRows: [],
+  records: [],
+};
+const candidateArgs = [
+  [sample],
+  [sample.item],
+  [sample.item, sample.lowRows],
+  [sample.item, sample.lowRows, sample],
+  [],
+];
+const builders = Object.entries(automation)
+  .filter(([name, value]) => typeof value === 'function' && /command|follow|task|automation/i.test(name));
+let command = null;
+for (const [, build] of builders) {
+  for (const args of candidateArgs) {
+    try {
+      const result = build(...args);
+      if (result && typeof result === 'object' && (result.type === 'business_os.chat.task' || result.command_type === 'business_os.chat.task')) {
+        command = result;
+        break;
+      }
+    } catch {
+      // Try the next candidate shape.
+    }
+  }
+  if (command) break;
+}
+assert.ok(command, 'automation exports a CTOX chat task command builder');
+assert.equal(command.type, 'business_os.chat.task');
+assert.equal(command.command_type, 'business_os.chat.task');
+assert.ok(command.payload && Object.prototype.hasOwnProperty.call(command.payload, 'record_snapshot'));
+`;
+}
+
 function readJson(path, fallback) {
   if (!existsSync(path)) return fallback;
   return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+function existingManifestFor(dir) {
+  return readJson(join(dir, 'module.json'), null) || {};
+}
+
+function existingSchemaDocFor(dir) {
+  return readJson(join(dir, 'collections.schema.json'), null) || {};
+}
+
+function primaryCollectionFor(options, dir) {
+  const manifest = existingManifestFor(dir);
+  const manifestCollection = (Array.isArray(manifest.collections) ? manifest.collections : [])
+    .find((name) => typeof name === 'string' && !shellCollections.has(name));
+  if (manifestCollection) return manifestCollection;
+  const schemaDoc = existingSchemaDocFor(dir);
+  const schemaCollection = Object.keys(schemaDoc.collections || {})
+    .find((name) => !shellCollections.has(name));
+  return schemaCollection || options.collection;
+}
+
+function repairOptionsFor(options, dir) {
+  const manifest = existingManifestFor(dir);
+  return {
+    ...options,
+    title: typeof manifest.title === 'string' && manifest.title.trim() ? manifest.title.trim() : options.title,
+    description: typeof manifest.description === 'string' && manifest.description.trim()
+      ? manifest.description.trim()
+      : options.description,
+    collection: primaryCollectionFor(options, dir),
+  };
+}
+
+function writeAtomicIfMissing(dir, relativePath, content, written) {
+  const path = join(dir, relativePath);
+  if (existsSync(path)) return;
+  writeAtomic(path, content);
+  written.push(relativePath);
+}
+
+function writeJsonIfMissing(dir, relativePath, value, written) {
+  const path = join(dir, relativePath);
+  if (existsSync(path)) return;
+  writeJson(path, value);
+  written.push(relativePath);
+}
+
+function hasTestFile(dir) {
+  const testDir = join(dir, 'tests');
+  if (!existsSync(testDir)) return false;
+  return readdirSync(testDir).some((name) => name.endsWith('.test.mjs'));
+}
+
+function writeRepairMissingScaffold(options) {
+  const dir = moduleDirFor(options);
+  mkdirSync(join(dir, 'core'), { recursive: true });
+  mkdirSync(join(dir, 'locales'), { recursive: true });
+  mkdirSync(join(dir, 'tests'), { recursive: true });
+  const repairOptions = repairOptionsFor(options, dir);
+  const manifest = moduleManifest(repairOptions);
+  const written = [];
+
+  writeJsonIfMissing(dir, 'module.json', manifest, written);
+  writeJsonIfMissing(dir, 'collections.schema.json', {
+    schema_format: 'ctox-business-os-module-collections-v1',
+    collections: {
+      [repairOptions.collection]: schemaFor(repairOptions.collection),
+    },
+  }, written);
+  writeAtomicIfMissing(dir, 'schema.js', schemaJs(repairOptions), written);
+  writeAtomicIfMissing(dir, 'core/automation.mjs', automationJs(repairOptions), written);
+  writeAtomicIfMissing(dir, 'core/records.mjs', recordsJs(repairOptions), written);
+  writeAtomicIfMissing(dir, 'index.html', indexHtml(repairOptions), written);
+  writeAtomicIfMissing(dir, 'index.css', indexCss(repairOptions), written);
+  writeAtomicIfMissing(dir, 'index.js', indexJs(repairOptions), written);
+  writeAtomicIfMissing(dir, 'icon.svg', iconSvg(), written);
+  writeJsonIfMissing(dir, 'locales/de.json', localeDe(repairOptions), written);
+  writeJsonIfMissing(dir, 'locales/en.json', localeEn(repairOptions), written);
+  if (!hasTestFile(dir)) {
+    writeAtomic(join(dir, `tests/${options.moduleId}.contract.test.mjs`), contractTestJs(repairOptions));
+    written.push(`tests/${options.moduleId}.contract.test.mjs`);
+  }
+
+  return {
+    ok: true,
+    repaired: true,
+    module_id: options.moduleId,
+    mode: options.mode,
+    module_dir: rel(options.workspace, dir),
+    collection: repairOptions.collection,
+    files: written,
+  };
 }
 
 function updateRegistry(options, manifest) {
@@ -930,11 +1100,13 @@ function writeScaffold(options) {
 let options;
 try {
   options = parseArgs(process.argv.slice(2));
-  const result = writeScaffold(options);
+  const result = options.repairMissing
+    ? writeRepairMissingScaffold(options)
+    : writeScaffold(options);
   if (options.json) {
     console.log(JSON.stringify(result, null, 2));
   } else {
-    console.log(`Business OS app scaffold OK: ${result.module_id} (${result.mode} mode)`);
+    console.log(`Business OS app scaffold ${result.repaired ? 'repair' : 'OK'}: ${result.module_id} (${result.mode} mode)`);
     console.log(`module_dir: ${result.module_dir}`);
     console.log(`collection: ${result.collection}`);
   }

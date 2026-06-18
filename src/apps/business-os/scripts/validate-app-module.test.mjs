@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -267,6 +267,21 @@ function installedIndexJsWith(extraLines = []) {
 
 {
   const root = makeWorkspace();
+  const scaffoldRun = runScaffold(root, 'repairmissing', '--installed', '--title', 'Repair Missing');
+  assert.equal(scaffoldRun.status, 0, `${scaffoldRun.stderr}\n${scaffoldRun.stdout}`);
+  const dir = join(root, 'runtime/business-os/installed-modules/repairmissing');
+  rmSync(join(dir, 'core'), { recursive: true, force: true });
+  rmSync(join(dir, 'locales'), { recursive: true, force: true });
+  rmSync(join(dir, 'tests'), { recursive: true, force: true });
+  const repairRun = runScaffold(root, 'repairmissing', '--installed', '--repair-missing', '--json');
+  assert.equal(repairRun.status, 0, `${repairRun.stderr}\n${repairRun.stdout}`);
+  assert.match(repairRun.stdout, /"repaired": true/);
+  const validateRun = runValidator(root, 'repairmissing', '--installed');
+  assert.equal(validateRun.status, 0, `${validateRun.stderr}\n${validateRun.stdout}`);
+}
+
+{
+  const root = makeWorkspace();
   const scaffoldRun = runScaffold(root, 'sourcescaffold', '--source', '--title', 'Source Scaffold');
   assert.equal(scaffoldRun.status, 0, `${scaffoldRun.stderr}\n${scaffoldRun.stdout}`);
   const validateRun = runValidator(root, 'sourcescaffold', '--source');
@@ -280,6 +295,59 @@ function installedIndexJsWith(extraLines = []) {
   const run = runValidator(root, 'good', '--installed');
   assert.equal(run.status, 0, `${run.stderr}\n${run.stdout}`);
   assert.match(run.stdout, /validation OK: good \(installed mode\)/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'constantcommand', {
+    automationJs: [
+      "const CHAT_COMMAND_TYPE = 'business_os.chat.task';",
+      'export function buildFollowUpCommand(record = {}) {',
+      '  return {',
+      "    id: `cmd_${record.id || 'demo'}`,",
+      "    module: 'constantcommand',",
+      '    type: CHAT_COMMAND_TYPE,',
+      '    command_type: CHAT_COMMAND_TYPE,',
+      "    record_id: record.id || 'demo',",
+      '    payload: { record_snapshot: record },',
+      "    client_context: { source: 'constantcommand', surface: 'constantcommand.follow-up' },",
+      '  };',
+      '}',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'constantcommand', '--installed');
+  assert.equal(run.status, 0, `${run.stderr}\n${run.stdout}`);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'missingimport', {
+    indexJs: installedIndexJsWith().replace(
+      "import { buildFollowUpCommand } from './core/automation.mjs';",
+      [
+        "import { missingThing } from './core/missing.mjs';",
+        "import { buildFollowUpCommand } from './core/automation.mjs';",
+        'void missingThing;',
+      ].join('\n'),
+    ),
+  });
+  const run = runValidator(root, 'missingimport', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /relative import \.\/core\/missing\.mjs does not exist/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'selectordrift', {
+    indexHtml: '<main class="good-module"><button type="button" data-action="follow-up">Review</button><div data-list></div></main>\n',
+    indexJs: installedIndexJsWith([
+      "  ctx.host.querySelector('[data-form]')?.addEventListener('submit', () => {});",
+    ]),
+  });
+  const run = runValidator(root, 'selectordrift', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /index\.js queries \[data-form\]/);
 }
 
 {
