@@ -79,6 +79,13 @@ const SKILL_APP_BINDINGS: &[SkillAppBinding] = &[
         "business",
         "automation",
     ),
+    binding(
+        "ctox-cv-print-parser",
+        "business",
+        "CTOX CV Print Parser",
+        "business",
+        "automation",
+    ),
     binding("doc", "content", "Documents", "documents", "library"),
     binding("pdf", "content", "PDF", "documents", "library"),
     binding(

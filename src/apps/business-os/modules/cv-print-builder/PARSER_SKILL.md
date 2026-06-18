@@ -1,55 +1,48 @@
-# CTOX CV Print Parser Skill Contract
+# CTOX CV Print Parser — module contract
 
-This module starts parsing through `business_os.chat.task` and expects a CTOX
-skill named `ctox-cv-print-parser`.
+The `cv-print-builder` module starts parsing by dispatching a
+`business_os.chat.task` (`payload.skill = "ctox-cv-print-parser"`). The skill
+runs in the harness, reads the source PDF through the CTOX data plane + PDF
+stack, and returns the structured profile. The native writeback
+`ctox.cv_print.apply_parse` (in `src/core/business_os/store.rs`) persists that
+result — the skill itself does not write RxDB.
 
-The parser must not call the NinjaWorkflowTool services. The Ninja project is a
-local reference for the CV data shape and normalisation rules only:
+The skill must be self-contained: no external services, no HTTP fallbacks, and
+no machine-local reference paths. The data shape below is the canonical
+contract.
 
-- `/Users/michaelwelsch/Documents/NinjaWorkflowTool/NinjaWorkflowTool_Extension/bg/service_worker.js`
-- `buildCandidateDocFromCvJson`
-- `parseCvLanguagesFromSkills`
-- `parseCvSkillsArray`
-- `reclassifyCvEducationExperience`
-
-## Input
-
-The task payload contains:
+## Input (task payload)
 
 - `document_id`
 - `version_id`
-- `source_file_id`
-- `attachments[0].file_id` with `kind = "desktop_file"`
-- `ninja_reference_file`
+- `source_file_id` / `attachments[0].file_id` (`kind = "desktop_file"`) — the
+  source PDF, stored in `desktop_files` + `desktop_file_chunks`
+- `writeback_contract = { command_type: "ctox.cv_print.apply_parse",
+  target_collection: "document_versions", document_id, expected_model_schema:
+  "ctox.cv_print_profile.v1" }`
 
-The source PDF is stored in `desktop_files` plus `desktop_file_chunks`. The
-skill should read it through the CTOX Business OS data plane and the existing
-CTOX PDF stack.
+## Skill output
 
-## Output
+A single JSON object — the complete `model_json` — and nothing else:
 
-Create a new `document_versions` record with:
+- `schema = "ctox.cv_print_profile.v1"`
+- `workflow.phase = "review"`
+- `workflow.diagnostics` — list of `{ level, message }` for uncertain/missing
+  fields
+- `candidate` — `name`, `firstName`, `lastName`, `currentRole`, `location`,
+  `email`, … plus `candidate.additional` keyed:
+  - `cv.education`
+  - `cv.experience`
+  - `cv.skills`
+  - `cv.meta`
 
-- `document_id` unchanged
-- incremented `version`
-- `source_kind = "cv_pdf_parse"`
-- `blob_id` set to the source desktop file id or a parser artifact id
-- `model_json.schema = "ctox.cv_print_profile.v1"`
-- `model_json.workflow.phase = "review"`
+## Native writeback (`ctox.cv_print.apply_parse`)
 
-Then patch the `documents` record:
+The native handler applies the skill's JSON:
 
-- `current_version_id` to the new version id
-- `status = "review"`
-- `display_cache.phase = "review"`
-- `display_cache.candidate_name`
-- `index_text`
-
-The `model_json.candidate` object should stay compatible with the structure
-created by NinjaWorkflowTool's `buildCandidateDocFromCvJson`, especially the
-`additional` entries:
-
-- `cv.education`
-- `cv.experience`
-- `cv.skills`
-- `cv.meta`
+- creates a new `document_versions` record (incremented `version`,
+  `source_kind = "cv_pdf_parse"`, `blob_id` = source desktop file id,
+  `model_json` = the skill output)
+- patches the `documents` record: `current_version_id` → new version,
+  `status = "review"`, `display_cache.phase = "review"`,
+  `display_cache.candidate_name`, `index_text`

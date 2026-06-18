@@ -2,8 +2,6 @@ const BUILD = '20260611-cv-print-builder-v2';
 const MODULE_ID = 'cv-print-builder';
 const PROFILE_MIME = 'application/vnd.ctox.cv-print-profile+json';
 const CHUNK_SIZE = 256000;
-const NINJA_REFERENCE_ROOT = '/Users/michaelwelsch/Documents/NinjaWorkflowTool/';
-const NINJA_CV_REFERENCE = `${NINJA_REFERENCE_ROOT}NinjaWorkflowTool_Extension/bg/service_worker.js`;
 
 const TEMPLATES = [
   { id: 'minimal', label: 'Minimal', description: 'Zeitlos, ruhig, kundentauglich und ohne Anbieteroptik.' },
@@ -702,8 +700,6 @@ async function startParsing(state, item) {
       source_file_id: item.model.source?.desktop_file_id,
       document_id: item.record.id,
       version_id: item.version.id,
-      ninja_reference_root: NINJA_REFERENCE_ROOT,
-      ninja_reference_file: NINJA_CV_REFERENCE,
       writeback_contract: {
         command_type: 'ctox.cv_print.apply_parse',
         target_collection: 'document_versions',
@@ -719,7 +715,6 @@ async function startParsing(state, item) {
       version_id: item.version.id,
       desktop_file_id: item.model.source?.desktop_file_id,
       chat_id: chatId,
-      ninja_reference_file: NINJA_CV_REFERENCE,
     },
   });
 
@@ -747,25 +742,26 @@ function buildParserPrompt(item) {
   return [
     'Du bist der CTOX Business-OS Skill `ctox-cv-print-parser`.',
     '',
-    'Ziel: Strukturiere das angehängte CV-PDF in ein einheitliches Druckprofil und schreibe das Ergebnis als neue `document_versions`-Version zurück.',
+    'Ziel: Lies das angehängte CV-PDF über den CTOX PDF Stack und die Business-OS',
+    'RxDB/WebRTC-Datenebene und strukturiere es in ein einheitliches Druckprofil.',
     '',
-    'Wichtig:',
-    `- Nutze den CTOX PDF Stack und die Business-OS RxDB/WebRTC-Datenebene. Keine HTTP-Fallbacks, keine NinjaWorkflowTool-Services.`,
-    `- Verwende die Datenstruktur und Normalisierungslogik aus ${NINJA_CV_REFERENCE} als Referenz, insbesondere buildCandidateDocFromCvJson, parseCvLanguagesFromSkills, parseCvSkillsArray und reclassifyCvEducationExperience.`,
-    '- Das Ergebnis muss `model_json.schema = "ctox.cv_print_profile.v1"` behalten und die Kandidatenstruktur kompatibel zu `buildCandidateDocFromCvJson` abbilden.',
-    '- Bewahre `additional` Einträge mit den Keys `cv.education`, `cv.experience`, `cv.skills` und `cv.meta`.',
-    '- Schreibe `workflow.phase = "review"`, damit die UI automatisch Original + Print im Korrekturmodus zeigt.',
+    'Strikte Ausgabe-Regeln:',
+    '- Antworte ausschließlich mit einem einzigen JSON-Objekt (kein Markdown, kein Fließtext).',
+    '- Das JSON ist das vollständige `model_json` mit `schema = "ctox.cv_print_profile.v1"`.',
+    '- Setze `workflow.phase = "review"`.',
+    '- Fülle `candidate` (name, firstName, lastName, currentRole, location, email, …) und',
+    '  `candidate.additional` mit den Keys `cv.education`, `cv.experience`, `cv.skills`, `cv.meta`.',
+    '- Notiere unsichere/fehlende Felder in `workflow.diagnostics` (Liste aus {level, message}).',
+    '- Keine HTTP-Fallbacks, keine externen Services.',
     '',
-    'Input:',
+    'Eingaben:',
     `- document_id: ${item.record.id}`,
     `- version_id: ${item.version.id}`,
     `- desktop_file_id: ${source.desktop_file_id || ''}`,
     `- filename: ${source.filename || item.record.filename || ''}`,
     '',
-    'Output-Vertrag:',
-    '- Neue `document_versions` Version mit `source_kind = "cv_pdf_parse"` und vollständigem `model_json`.',
-    '- `documents.current_version_id` auf die neue Version setzen, `documents.status = "review"`, `display_cache.phase = "review"`.',
-    '- Diagnostik und unsichere Felder in `model_json.workflow.diagnostics` notieren.',
+    'Die neue `document_versions`-Version und der `documents`-Patch werden vom nativen',
+    'Writeback `ctox.cv_print.apply_parse` aus deinem JSON erzeugt — gib nur das JSON zurück.',
   ].join('\n');
 }
 
@@ -888,14 +884,6 @@ function createInitialModel(input) {
       size_bytes: input.size,
       sha256: input.sha,
       imported_at_ms: input.now,
-      ninja_reference_root: NINJA_REFERENCE_ROOT,
-      ninja_reference_file: NINJA_CV_REFERENCE,
-      ninja_reference_functions: [
-        'buildCandidateDocFromCvJson',
-        'parseCvLanguagesFromSkills',
-        'parseCvSkillsArray',
-        'reclassifyCvEducationExperience',
-      ],
     },
     candidate: {
       id: input.documentId,

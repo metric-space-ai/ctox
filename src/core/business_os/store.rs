@@ -5208,6 +5208,15 @@ pub fn complete_business_command_from_queue_reply(
             queue_task.as_ref(),
             Some(reply_text),
         )?
+    } else if is_cv_print_parse_command(&command) {
+        process_cv_print_parse_command(
+            root,
+            &conn,
+            &command_id,
+            &command,
+            queue_task.as_ref(),
+            Some(reply_text),
+        )?
     } else if is_business_chat_command(&command) {
         process_business_chat_reply(
             root,
@@ -14628,6 +14637,341 @@ fn is_documents_report_command(command: &BusinessCommand) -> bool {
             .unwrap_or(false)
 }
 
+/// A `cv-print-builder` chat task whose `writeback_contract` asks the daemon to
+/// apply the parsed profile as a new `document_versions` version. Generic shape:
+/// any module can request a versioned-document writeback the same way.
+fn is_cv_print_parse_command(command: &BusinessCommand) -> bool {
+    command.module == "cv-print-builder"
+        && command
+            .payload
+            .get("writeback_contract")
+            .and_then(|value| value.get("command_type"))
+            .and_then(Value::as_str)
+            == Some("ctox.cv_print.apply_parse")
+}
+
+/// Extract the first complete JSON object from a skill reply. The skill is
+/// instructed to return only the profile JSON, but tolerate stray prose or a
+/// code fence around it.
+fn extract_json_object(text: &str) -> Option<Value> {
+    let trimmed = text.trim();
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        if value.is_object() {
+            return Some(value);
+        }
+    }
+    let start = trimmed.find('{')?;
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut end = None;
+    for (offset, ch) in trimmed[start..].char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(start + offset + ch.len_utf8());
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let end = end?;
+    serde_json::from_str::<Value>(&trimmed[start..end])
+        .ok()
+        .filter(Value::is_object)
+}
+
+fn cv_print_index_text(model_json: &Value, candidate_name: &str) -> String {
+    let mut parts = vec![candidate_name.to_string()];
+    if let Some(candidate) = model_json.get("candidate") {
+        for key in ["currentRole", "location", "email"] {
+            if let Some(value) = candidate.get(key).and_then(Value::as_str) {
+                let value = value.trim();
+                if !value.is_empty() {
+                    parts.push(value.to_string());
+                }
+            }
+        }
+    }
+    parts.join(" · ")
+}
+
+struct CvPrintWritebackResult {
+    document_id: String,
+    version_id: String,
+    version: i64,
+    candidate_name: String,
+}
+
+/// Apply a parsed CV profile: create a new `document_versions` version and patch
+/// the `documents` record. Writes the generic `business_records` store; the
+/// `rxdb_peer` projection loop replicates both collections to the browser.
+fn writeback_cv_print_parse(
+    conn: &Connection,
+    command_id: &str,
+    command: &BusinessCommand,
+    reply_text: Option<&str>,
+) -> anyhow::Result<CvPrintWritebackResult> {
+    let reply = reply_text.unwrap_or_default().trim();
+    anyhow::ensure!(!reply.is_empty(), "cv-print parse reply was empty");
+    let mut model_json = extract_json_object(reply)
+        .context("cv-print parse reply did not contain a JSON profile object")?;
+
+    let writeback = command.payload.get("writeback_contract");
+    let document_id = first_string_field(&command.payload, &["document_id"])
+        .or_else(|| {
+            writeback
+                .and_then(|value| value.get("document_id"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .context("cv-print parse command is missing document_id")?;
+    let expected_schema = writeback
+        .and_then(|value| value.get("expected_model_schema"))
+        .and_then(Value::as_str)
+        .unwrap_or("ctox.cv_print_profile.v1")
+        .to_string();
+    let source_file_id =
+        first_string_field(&command.payload, &["source_file_id"]).unwrap_or_default();
+
+    // Normalize the envelope so downstream UI invariants always hold.
+    if let Some(obj) = model_json.as_object_mut() {
+        obj.insert("schema".to_string(), Value::String(expected_schema));
+        let workflow = obj
+            .entry("workflow".to_string())
+            .or_insert_with(|| Value::Object(Default::default()));
+        if let Some(workflow_obj) = workflow.as_object_mut() {
+            workflow_obj.insert("phase".to_string(), Value::String("review".to_string()));
+        }
+    }
+
+    let candidate_name = model_json
+        .get("candidate")
+        .and_then(|candidate| candidate.get("name"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "Unbenanntes Profil".to_string());
+    let index_text = cv_print_index_text(&model_json, &candidate_name);
+
+    let now = now_ms() as i64;
+    let next_version: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(CAST(json_extract(payload_json, '$.version') AS INTEGER)), 0) + 1
+             FROM business_records
+             WHERE collection = 'document_versions'
+               AND deleted = 0
+               AND json_extract(payload_json, '$.document_id') = ?1",
+            params![document_id.as_str()],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or(1);
+    let version_id = format!("{document_id}_v{next_version}");
+    let blob_id = if source_file_id.is_empty() {
+        format!("{version_id}_blob")
+    } else {
+        source_file_id.clone()
+    };
+    let diagnostics = model_json
+        .get("workflow")
+        .and_then(|workflow| workflow.get("diagnostics"))
+        .cloned()
+        .unwrap_or_else(|| Value::Array(Vec::new()));
+
+    let version_payload = serde_json::json!({
+        "id": version_id,
+        "version_id": version_id,
+        "document_id": document_id,
+        "version": next_version,
+        "source_kind": "cv_pdf_parse",
+        "blob_id": blob_id,
+        "diagnostics": diagnostics,
+        "model_json": model_json,
+        "model": Value::Null,
+        "business_command_id": command_id,
+        "created_at_ms": now,
+        "updated_at_ms": now
+    });
+    upsert_business_record(conn, "document_versions", &version_id, now, version_payload)?;
+
+    // Patch the existing document, preserving fields the browser already set.
+    let mut document_payload = conn
+        .query_row(
+            "SELECT payload_json FROM business_records
+             WHERE collection = 'documents' AND record_id = ?1 AND deleted = 0",
+            params![document_id.as_str()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .unwrap_or_else(|| serde_json::json!({ "id": document_id, "document_id": document_id }));
+    if let Some(obj) = document_payload.as_object_mut() {
+        obj.insert(
+            "current_version_id".to_string(),
+            Value::String(version_id.clone()),
+        );
+        obj.insert("status".to_string(), Value::String("review".to_string()));
+        obj.insert("index_text".to_string(), Value::String(index_text));
+        obj.insert("title".to_string(), Value::String(candidate_name.clone()));
+        let display = obj
+            .entry("display_cache".to_string())
+            .or_insert_with(|| Value::Object(Default::default()));
+        if let Some(display_obj) = display.as_object_mut() {
+            display_obj.insert("phase".to_string(), Value::String("review".to_string()));
+            display_obj.insert(
+                "candidate_name".to_string(),
+                Value::String(candidate_name.clone()),
+            );
+        }
+    }
+    upsert_business_record(conn, "documents", &document_id, now, document_payload)?;
+
+    Ok(CvPrintWritebackResult {
+        document_id,
+        version_id,
+        version: next_version,
+        candidate_name,
+    })
+}
+
+fn process_cv_print_parse_command(
+    root: &Path,
+    conn: &Connection,
+    command_id: &str,
+    command: &BusinessCommand,
+    queue_task: Option<&channels::QueueTaskView>,
+    reply_text: Option<&str>,
+) -> anyhow::Result<CommandAccepted> {
+    match writeback_cv_print_parse(conn, command_id, command, reply_text) {
+        Ok(result) => {
+            let completed_at_ms = now_ms() as i64;
+            conn.execute(
+                "UPDATE business_commands SET status = 'completed', observed_at_ms = ?2 WHERE command_id = ?1",
+                params![command_id, completed_at_ms],
+            )?;
+            if let Some(task) = queue_task {
+                let _ = channels::update_queue_task(
+                    root,
+                    channels::QueueTaskUpdateRequest {
+                        message_key: task.message_key.clone(),
+                        route_status: Some("handled".to_string()),
+                        status_note: Some(format!(
+                            "business-os:terminal-success: parsed CV profile {} (v{})",
+                            result.candidate_name, result.version
+                        )),
+                        ..Default::default()
+                    },
+                );
+            }
+            upsert_business_record(
+                conn,
+                "business_commands",
+                command_id,
+                completed_at_ms,
+                serde_json::json!({
+                    "id": command_id,
+                    "command_id": command_id,
+                    "module": command.module.clone(),
+                    "command_type": command.command_type.clone(),
+                    "record_id": command.record_id.clone().unwrap_or_default(),
+                    "status": "completed",
+                    "inbound_channel": command_inbound_channel(command),
+                    "task_id": queue_task.map(|task| task.message_key.clone()),
+                    "task_status": "completed",
+                    "payload": command.payload.clone(),
+                    "client_context": command.client_context.clone(),
+                    "result": {
+                        "document_id": result.document_id,
+                        "version_id": result.version_id,
+                        "version": result.version,
+                        "candidate_name": result.candidate_name
+                    },
+                    "updated_at_ms": completed_at_ms
+                }),
+            )?;
+            refresh_queue_task_projection(
+                root,
+                conn,
+                command_id,
+                command,
+                queue_task,
+                completed_at_ms,
+            )?;
+            Ok(CommandAccepted {
+                ok: true,
+                command_id: command_id.to_string(),
+                status: "completed",
+                task_id: queue_task.map(|task| task.message_key.clone()),
+                task_status: Some("completed".to_string()),
+            })
+        }
+        Err(err) => {
+            let failed_at_ms = now_ms() as i64;
+            conn.execute(
+                "UPDATE business_commands SET status = 'failed', observed_at_ms = ?2 WHERE command_id = ?1",
+                params![command_id, failed_at_ms],
+            )?;
+            if let Some(task) = queue_task {
+                let _ = channels::update_queue_task(
+                    root,
+                    channels::QueueTaskUpdateRequest {
+                        message_key: task.message_key.clone(),
+                        route_status: Some("failed".to_string()),
+                        status_note: Some(err.to_string()),
+                        ..Default::default()
+                    },
+                );
+            }
+            upsert_business_record(
+                conn,
+                "business_commands",
+                command_id,
+                failed_at_ms,
+                serde_json::json!({
+                    "id": command_id,
+                    "command_id": command_id,
+                    "module": command.module.clone(),
+                    "command_type": command.command_type.clone(),
+                    "record_id": command.record_id.clone().unwrap_or_default(),
+                    "status": "failed",
+                    "inbound_channel": command_inbound_channel(command),
+                    "task_id": queue_task.map(|task| task.message_key.clone()),
+                    "task_status": "failed",
+                    "error": err.to_string(),
+                    "payload": command.payload.clone(),
+                    "client_context": command.client_context.clone(),
+                    "updated_at_ms": failed_at_ms
+                }),
+            )?;
+            refresh_queue_task_projection(
+                root,
+                conn,
+                command_id,
+                command,
+                queue_task,
+                failed_at_ms,
+            )?;
+            Err(err)
+        }
+    }
+}
+
 fn is_business_chat_command(command: &BusinessCommand) -> bool {
     command.command_type == "business_os.chat.task"
         || first_string_field(
@@ -16507,7 +16851,9 @@ fn truncate_text_preserve(value: &str, max_chars: usize) -> String {
 }
 
 fn suggested_skill_for_command(command: &BusinessCommand) -> Option<String> {
-    if is_source_parse_command(&command.command_type) {
+    if is_cv_print_parse_command(command) {
+        Some("ctox-cv-print-parser".to_string())
+    } else if is_source_parse_command(&command.command_type) {
         Some("business-os-import-parser".to_string())
     } else if command.command_type == "outbound.pipeline.outreach_draft" {
         Some("business-os-outbound-message-drafting".to_string())
@@ -17373,7 +17719,9 @@ mod tests {
         assert!(prompt.contains("Never use generated installed modules"));
         assert!(prompt.contains("bench_* apps"));
         assert!(prompt.contains("Do not request complete file dumps"));
-        assert!(prompt.contains("legacy anti-pattern rule: existing modules can contain old compatibility code"));
+        assert!(prompt.contains(
+            "legacy anti-pattern rule: existing modules can contain old compatibility code"
+        ));
         assert!(prompt.contains("reject ctx.db.raw, db.raw, ctx.collections, window.dispatchEvent"));
         assert!(prompt.contains("ctox-business-os-chat-submit"));
         assert!(prompt.contains("manual business_commands insert/upsert fallbacks"));
@@ -17426,14 +17774,17 @@ mod tests {
         assert!(prompt.contains("Python file-generation scripts"));
         assert!(prompt.contains("Node writer scripts"));
         assert!(prompt.contains("base64 write wrappers"));
-        assert!(prompt.contains("include at least one real automation through ctx.commandBus.dispatch"));
+        assert!(
+            prompt.contains("include at least one real automation through ctx.commandBus.dispatch")
+        );
         assert!(prompt.contains("Do not call ctx.db.collection('business_commands')"));
         assert!(prompt.contains("Tests must prove positive current-contract behavior only"));
         assert!(prompt.contains("Do not use assert.doesNotMatch"));
         assert!(prompt.contains("replace it with a positive contract assertion"));
         assert!(prompt.contains("never use layout.icon_svg"));
-        assert!(prompt
-            .contains("There are no App Creator exceptions for ctox.business_os.ticket.followup.create"));
+        assert!(prompt.contains(
+            "There are no App Creator exceptions for ctox.business_os.ticket.followup.create"
+        ));
         assert!(prompt.contains("do not implement a business_commands fallback"));
         assert!(
             prompt.contains("not documentation, plans, trace files, blocker notes, or skill files")
@@ -17465,7 +17816,9 @@ mod tests {
         assert!(prompt.contains("Required CTOX skills: business-os-app-module-development"));
         assert!(prompt.contains("- module_id: inventory"));
         assert!(prompt.contains("- install_target: runtime-installed-module"));
-        assert!(prompt.contains("CTOX-native App Creator/runtime app creation is the primary acceptance target"));
+        assert!(prompt.contains(
+            "CTOX-native App Creator/runtime app creation is the primary acceptance target"
+        ));
         assert!(prompt.contains("scaffold preservation rule"));
         assert!(prompt.contains("Do not clean, delete, reset, replace, or rewrite it wholesale"));
         assert!(prompt.contains("inspect exactly three shipped Business OS modules"));
@@ -17488,7 +17841,8 @@ mod tests {
         assert!(prompt.contains("Do not use `fetch('./index.html')`"));
         assert!(prompt.contains("ctx.host.innerHTML"));
         assert!(prompt.contains("new URL('./index.css', import.meta.url)"));
-        assert!(prompt.contains("HTML fragment rule: index.html must be a Business OS shell fragment only"));
+        assert!(prompt
+            .contains("HTML fragment rule: index.html must be a Business OS shell fragment only"));
         assert!(prompt.contains("CSS scoping rule: index.css must scope module variables"));
         assert!(prompt.contains("Node tests must not import ../index.js or ../schema.js directly"));
         assert!(prompt.contains("keep helper exports and every named local import in lockstep"));
