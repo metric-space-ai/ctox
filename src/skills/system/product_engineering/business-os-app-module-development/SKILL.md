@@ -54,6 +54,7 @@ the module's tests, comments, helper names, or assertions describe a business_co
 the module declares collections in module.json but not in schema.js and collections.schema.json
 the module-owned data model is unclear: central object, collection names, states, commands, and automation payload are not named
 index.js does not load the module fragment with `fetch(new URL('./index.html', import.meta.url))`, assign it into `ctx.host.innerHTML`, and attach `index.css` through a local `new URL('./index.css', import.meta.url)` stylesheet before DOM queries or event wiring
+index.html is a full browser document or declares document/head resources; App Creator `index.html` must be a shell fragment only, with no `<!doctype>`, `<html>`, `<head>`, `<body>`, `<link>`, `<script>`, `<meta>`, `<title>`, or `<style>` tags
 index.js queries a `data-*` selector that is absent from index.html and from generated markup
 the app has a decorative third pane, layout.right by default, right-column resizers by default, decorative controls, fake AI buttons, fake status-only actions, or UI that is not needed for the workflow
 module.json embeds `layout.icon_svg` instead of using the required separate `icon.svg`
@@ -206,7 +207,7 @@ CTOX DB is CTOX-owned and RxDB-derived. It is not npm `rxdb`, not `ctox.db`, and
 Generated App Creator apps must be vanilla static Business OS modules:
 
 ```text
-index.html -> static fragment owned by the module
+index.html -> static fragment owned by the module, not a full HTML document
 index.css -> scoped module CSS
 index.js -> browser ESM exporting mount(ctx), loading index.html into ctx.host.innerHTML, attaching index.css, then wiring data, events, and automation
 local .mjs helpers -> optional pure logic, schemas, reducers, and command builders
@@ -261,6 +262,15 @@ Attach the stylesheet through a local
 `new URL('./index.css', import.meta.url)` link. Do not leave `ctx.host` empty
 while `mount(ctx)` only registers events against selectors that live in
 `index.html`.
+
+`index.html` is inserted into an existing shell document through
+`ctx.host.innerHTML`. Therefore it must contain only module UI markup such as
+`<main>`, `<section>`, forms, buttons, tables, dialogs, and lists. It must not
+start with `<!doctype>` and must not contain `<html>`, `<head>`, `<body>`,
+`<link>`, `<script>`, `<meta>`, `<title>`, or `<style>`. A full document may
+appear to render but causes real shell-browser failures such as
+`/business-os/index.css` 404s when relative head resources are parsed after
+injection.
 
 Keep `index.html` and `index.js` synchronized. Every selector passed to
 `querySelector`, `querySelectorAll`, `closest`, or `matches` for a `data-*`

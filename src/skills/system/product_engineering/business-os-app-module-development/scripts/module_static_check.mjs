@@ -753,6 +753,12 @@ if (installedMode) {
   }
   const indexHtmlPath = join(moduleDir, 'index.html');
   const indexHtmlText = existsSync(indexHtmlPath) ? readFileSync(indexHtmlPath, 'utf8') : '';
+  if (/<!doctype\b|<\s*html\b|<\s*head\b|<\s*body\b/i.test(indexHtmlText)) {
+    fail('installed App Creator module index.html must be a shell fragment, not a full HTML document; remove <!doctype>, <html>, <head>, and <body>');
+  }
+  if (/<\s*(?:link|script|meta|title|style)\b/i.test(indexHtmlText)) {
+    fail('installed App Creator module index.html must not include document/head resource tags such as <link>, <script>, <meta>, <title>, or <style>; attach CSS from index.js and let the Business OS shell import index.js');
+  }
   const selectorProducerText = `${indexHtmlText}\n${removeQuerySelectorArguments(indexJsText)}`;
   const selectorIgnore = new Set(['data-module-styles']);
   for (const attribute of queriedDataAttributes(indexJsText)) {

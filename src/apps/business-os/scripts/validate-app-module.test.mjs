@@ -837,6 +837,30 @@ function installedIndexJsWith(extraLines = []) {
 
 {
   const root = makeWorkspace();
+  writeInstalledModule(root, 'fulldocumenthtml', {
+    indexHtml: [
+      '<!doctype html>',
+      '<html lang="de">',
+      '  <head>',
+      '    <meta charset="utf-8" />',
+      '    <title>Full document</title>',
+      '    <link rel="stylesheet" href="index.css" />',
+      '  </head>',
+      '  <body>',
+      '    <main class="good-module"><button type="button" data-action="follow-up">Review</button></main>',
+      '  </body>',
+      '</html>',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'fulldocumenthtml', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /index\.html must be a shell fragment, not a full HTML document/);
+  assert.match(run.stderr, /index\.html must not include document\/head resource tags/);
+}
+
+{
+  const root = makeWorkspace();
   writeInstalledModule(root, 'syntaxbad', {
     indexJs: 'export async function mount(ctx) {\n  ctx.host.textContent = "broken";\n',
   });

@@ -59,6 +59,13 @@ Attach `index.css` through a local stylesheet URL such as
 first assigning `ctx.host.innerHTML` will mount as a blank app even when all
 files exist and `index.html` returns 200.
 
+Because `index.html` is inserted into the already-running Business OS shell, it
+must be a fragment. Do not create a full browser document. The file must not
+contain `<!doctype>`, `<html>`, `<head>`, `<body>`, `<link>`, `<script>`,
+`<meta>`, `<title>`, or `<style>`. Relative head resources from an injected
+document are resolved against `/business-os/` and create real browser failures
+such as `/business-os/index.css` 404s.
+
 `module.json` must list every collection read or written, including
 dependencies such as `business_commands`, `customer_accounts`, `desktop_files`,
 or adjacent module collections.
