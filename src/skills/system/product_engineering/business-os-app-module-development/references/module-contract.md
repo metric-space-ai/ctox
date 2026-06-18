@@ -185,6 +185,15 @@ Store module unless the task explicitly changes the packaged app catalog.
 Runtime-installed modules are discovered by scanning
 `installed-modules/<module>/module.json`.
 
+Generated installed-module artifacts must be written directly to their final
+exact paths under the resolved module directory. Do not build app files in
+`/tmp`, a sibling scratch directory, or a generated writer script and then copy
+or move them into `installed-modules/<module>/`. If quoting or command length
+becomes difficult, shrink the file, move pure logic into `core/*.mjs`, or write
+the smaller affected file directly. Do not repair module files with `sed -i`,
+`gsed -i`, `perl -pi`, or repeated line-number edits; rewrite the smallest
+bounded helper/file and rerun validation.
+
 When existing source modules show a different pattern, do not treat that as a
 fallback. For new/runtime App Creator apps, these legacy patterns are forbidden
 implementation choices:

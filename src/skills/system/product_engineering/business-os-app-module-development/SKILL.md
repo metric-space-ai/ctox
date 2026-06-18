@@ -19,10 +19,10 @@ For CTOX App Creator and runtime-installed app work, follow this short path befo
 2. Inspect the existing scaffold first. Keep its mount wiring, `core/automation.mjs`, `core/records.mjs`, locales, and tests as the baseline.
 3. Inspect exactly three shipped source modules for patterns, preferably `customers`, `shiftflow`, and `outbound`. Use `notes` only as a supplemental simple-CRUD reference; do not treat it as a scaffold-helper template.
 4. Preserve scaffold helper export names such as `buildFollowUpCommand`, `summarizeRecords`, and `visibleRecords` unless you update every import in `index.js` and `tests/*.mjs` in the same edit.
-5. Use direct bounded file edits only. If a shell write fails because of quoting, history expansion, command length, or escaping, do not switch to Python, base64, Node writer scripts, generated writer scripts, or data-URL workarounds. Shorten the file, split helpers, remove fragile punctuation from generated literals, or edit the smaller affected file.
+5. Use direct bounded exact-path file edits only. If a shell write fails because of quoting, history expansion, command length, or escaping, do not switch to Python, base64, Node writer scripts, generated writer scripts, `/tmp` scratch files copied into the module, `sed -i`/`perl -pi` line surgery, or data-URL workarounds. Shorten the file, split helpers, remove fragile punctuation from generated literals, or rewrite the smaller affected helper/file directly at its final module path.
 6. Required artifacts are canonical files, not shell patterns. Write `module.json`, `collections.schema.json`, `schema.js`, `index.html`, `index.css`, `index.js`, `icon.svg`, locales, core helpers, and tests by exact path only. For runtime-installed App Creator apps, the module root may contain only those root files plus `core/`, `locales/`, and `tests/`. Do not create or leave temporary schema/manifest aliases, typo files such as `m` or `modul.json`, scratch notes, copied app roots, glob artifacts, or ad hoc helper directories in the module root.
 7. `schema.js` is invariant. Do not rename it, delete it, replace it with `schema.mjs`, or leave a root-level `schema.mjs`/`schema.cjs` alias next to it. Put reusable schema fragments in `core/*.mjs` and re-export them from `schema.js`.
-8. Tests must prove useful behavior, not only syntax. At minimum they must cover record visibility/summary logic and a `business_os.chat.task` command payload whose title/instruction/prompt/record_snapshot contain actual facts from the fixture records. Do not write negative anti-pattern tests or assertion messages that contain forbidden layout/data/dependency literals; validators own those checks. All tests in `tests/*.test.mjs` must pass; adding a new green test while an old scaffold test imports a missing export is still red.
+8. Tests must prove useful behavior, not only syntax. At minimum they must cover record visibility/summary logic and a `business_os.chat.task` command payload whose title/instruction/prompt/record_snapshot contain actual facts from the fixture records. Keep fixture expectations hand-computed and synchronized with the helper's exported shape. If `summarizeRecords()` or another helper returns extra fields, either assert the full updated shape or assert individual fields intentionally; do not leave a stale partial `deepEqual` that fails only because the helper grew. Do not write negative anti-pattern tests or assertion messages that contain forbidden layout/data/dependency literals; validators own those checks. All tests in `tests/*.test.mjs` must pass; adding a new green test while an old scaffold test imports a missing export is still red.
 9. Run `ctox business-os app validate <id> --installed` before claiming success, then repair every bullet exactly.
 10. Once `ctox business-os app validate ...` is green, stop. Do not run repository-wide conformance scripts, source-wide RxDB scans, broad file dumps, cosmetic rewrites, or extra polishing passes. A green App Creator validator plus the required focused tests is the completion boundary.
 
@@ -86,14 +86,16 @@ module.json or collections.schema.json would be exposed in an invalid or incompl
 any required module file is still missing: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales/de.json, locales/en.json, or tests/*.test.mjs
 the validator reports missing files, right/third-pane layout, schema, manifest, dependency, syntax, or test failures and you are about to finish instead of repairing the exact bullets
 you are about to write a very large app file as one huge tool-call argument or here-doc; keep generated files concise and split large writes into bounded chunks
-you are about to use Python, base64 blobs, Node writer scripts, data URLs, generated writer scripts, or temporary generated file-copy wrappers to create app files; if a file needs that, split/refactor it into smaller ESM helpers and direct bounded edits
+you are about to use Python, base64 blobs, Node writer scripts, data URLs, generated writer scripts, `/tmp` scratch files copied into the module, or temporary generated file-copy wrappers to create app files; if a file needs that, split/refactor it into smaller ESM helpers and direct bounded exact-path edits
 you are about to fix shell quoting, history expansion, command-length, or escaping problems by switching to Python/base64/Node writer scripts instead of shortening or splitting the affected app file
+you are about to patch generated module files with `sed -i`, `gsed -i`, `perl -pi`, repeated line-number insert/delete commands, or a sed script staged in `/tmp`; rewrite the affected bounded helper/file directly instead
 you are about to continue editing, reading whole generated files, running broad conformance scripts, or polishing after `ctox business-os app validate <id> --installed|--source` is already green
 you are about to run source-wide validation scripts such as `assert-module-conformance.mjs` or `assert-rxdb-only.mjs` as an extra readiness gate for a runtime-installed App Creator app after the app-specific validator is green; use the app-specific validator as the acceptance gate and stop
 you are about to dump complete generated files with `cat`, loops over every app artifact, or broad `find`/`rg` sweeps after the scaffold exists; inspect only targeted snippets needed to repair a concrete failing validator or test bullet
-you are about to patch a large generated JavaScript file with fragile line-number sed edits instead of rewriting the relevant bounded helper/file
+you are about to patch any generated JavaScript file with fragile line-number sed edits instead of rewriting the relevant bounded helper/file
 you are about to make a failing test match broken behavior instead of fixing the app contract violation it exposed
 you are about to write or keep generated tests whose fixture expectations are not hand-computed and internally consistent with the helper logic they exercise
+you are about to keep a generated `deepEqual` assertion against a stale partial aggregate object after the helper added legitimate fields; update the expected shape or assert named fields deliberately
 you are about to write or keep tests that assert labels, messages, counts, named imports, or helper exports that the local helper being tested does not actually produce/export
 you are about to rename or remove scaffold helper exports such as buildFollowUpCommand, summarizeRecords, or visibleRecords without updating every importer in index.js and tests/*.mjs in the same edit
 you are about to add a second replacement test file while leaving an existing tests/*.test.mjs file red; every existing test file is part of the acceptance contract and must be updated or removed for a validator-approved reason
@@ -408,11 +410,14 @@ module directory. Generated Business OS module files are the app deliverables;
 helps the source module. For installed modules, do not add Markdown unless the
 target contract explicitly requires it.
 
-Write `module.json` and `collections.schema.json` atomically. Build the full JSON
-content first, write it to a temporary file inside `MODULE_DIR`, parse and check
-the critical fields, then move it into place. Never expose an invalid final
-`module.json` or `collections.schema.json`; the Business OS shell/catalog sync
-may read it immediately.
+Write `module.json` and `collections.schema.json` as small exact-path edits and
+parse them immediately. Do not stage generated JSON in `/tmp` and copy or move it
+into the module. Do not use temp-file copy wrappers as a quoting workaround. Keep
+the JSON concise enough to write directly to `$MODULE_DIR/module.json` or
+`$MODULE_DIR/collections.schema.json`, then parse and check the critical fields
+before continuing. Never intentionally leave an invalid final `module.json` or
+`collections.schema.json`; the Business OS shell/catalog sync may read it
+immediately.
 
 Minimum installed-module manifest fields:
 

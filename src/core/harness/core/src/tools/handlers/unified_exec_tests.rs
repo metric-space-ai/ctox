@@ -405,8 +405,8 @@ fn business_os_guard_blocks_installed_module_whole_file_cat() -> anyhow::Result<
 }
 
 #[test]
-fn business_os_guard_blocks_installed_module_whole_file_cat_with_stderr_redirect(
-) -> anyhow::Result<()> {
+fn business_os_guard_blocks_installed_module_whole_file_cat_with_stderr_redirect()
+-> anyhow::Result<()> {
     let root = tempdir()?;
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;
     let artifact = root
@@ -431,11 +431,8 @@ fn business_os_guard_blocks_module_cwd_whole_file_cat() -> anyhow::Result<()> {
         .join("runtime/business-os/installed-modules/inventory");
     fs::create_dir_all(&module_dir)?;
 
-    let err = business_os_app_root_artifact_write_guard(
-        "cat module.json index.js",
-        &module_dir,
-    )
-    .expect("module cwd whole-file cat should be blocked");
+    let err = business_os_app_root_artifact_write_guard("cat module.json index.js", &module_dir)
+        .expect("module cwd whole-file cat should be blocked");
 
     assert!(err.contains("whole-file dump"));
     assert!(err.contains("module.json"));
@@ -528,16 +525,20 @@ fn business_os_guard_allows_targeted_installed_module_reads() -> anyhow::Result<
     let root = tempdir()?;
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;
 
-    assert!(business_os_app_root_artifact_write_guard(
-        "sed -n '1,80p' runtime/business-os/installed-modules/inventory/index.js",
-        root.path(),
-    )
-    .is_none());
-    assert!(business_os_app_root_artifact_write_guard(
-        "cat runtime/business-os/installed-modules/inventory/index.css | head -30",
-        root.path(),
-    )
-    .is_none());
+    assert!(
+        business_os_app_root_artifact_write_guard(
+            "sed -n '1,80p' runtime/business-os/installed-modules/inventory/index.js",
+            root.path(),
+        )
+        .is_none()
+    );
+    assert!(
+        business_os_app_root_artifact_write_guard(
+            "cat runtime/business-os/installed-modules/inventory/index.css | head -30",
+            root.path(),
+        )
+        .is_none()
+    );
     Ok(())
 }
 
@@ -559,15 +560,55 @@ fn business_os_guard_blocks_python_installed_module_writer() -> anyhow::Result<(
 }
 
 #[test]
+fn business_os_guard_blocks_module_sed_in_place_line_surgery() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+    let module_dir = root
+        .path()
+        .join("runtime/business-os/installed-modules/inventory");
+    fs::create_dir_all(&module_dir)?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "sed -i '' '97,102d' index.js && sed -n '93,105p' index.js",
+        &module_dir,
+    )
+    .expect("sed in-place line surgery inside module cwd should be blocked");
+
+    assert!(err.contains("fragile in-place writer"));
+    assert!(err.contains("sed/perl in-place line surgery"));
+    assert!(err.contains("index.js"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_tmp_file_copy_wrapper_to_module_artifact() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "cat > /tmp/index.html <<'HTML'\n<main></main>\nHTML\ncp /tmp/index.html runtime/business-os/installed-modules/inventory/index.html",
+        root.path(),
+    )
+    .expect("/tmp copy wrapper to module artifact should be blocked");
+
+    assert!(err.contains("temporary"));
+    assert!(err.contains("file-copy wrappers"));
+    assert!(err.contains("runtime/business-os/installed-modules/inventory/index.html"));
+    Ok(())
+}
+
+#[test]
 fn business_os_guard_allows_node_module_tests() -> anyhow::Result<()> {
     let root = tempdir()?;
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;
 
-    assert!(business_os_app_root_artifact_write_guard(
-        "node --test runtime/business-os/installed-modules/inventory/tests/inventory.test.mjs",
-        root.path(),
-    )
-    .is_none());
+    assert!(
+        business_os_app_root_artifact_write_guard(
+            "node --test runtime/business-os/installed-modules/inventory/tests/inventory.test.mjs",
+            root.path(),
+        )
+        .is_none()
+    );
     Ok(())
 }
 
