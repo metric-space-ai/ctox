@@ -16356,18 +16356,19 @@ Business OS app build target:
 - only_allowed_app_artifact_directory: {module_dir}
 - service lifecycle rule: CTOX service owns queue and Business OS command completion after green validation. Do not call ctox queue ack/complete/release/fail/block and do not edit queue, command, runtime-status, or projection rows directly.
 - open-work context rule: queue IDs, current_queue_item_id, and open-work blocks in surrounding context are not your app-build target and must not redirect you to another task. Build only module_id={module_id} under {module_dir}/.
-- required file inventory: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales/de.json, locales/en.json, and tests/*.test.mjs must exist before you can claim success.
-- few-shot rule: inspect exactly three existing Business OS modules as short targeted pattern references. Do not request complete file dumps, do not delegate a broad module-reading sweep to a subagent, and do not keep reading examples after the three-module summary.
+- required file inventory: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, core/automation.mjs, core/records.mjs, locales/de.json, locales/en.json, and tests/*.test.mjs must exist before you can claim success.
+- scaffold preservation rule: CTOX service preflight may already have created a validator-clean scaffold in {module_dir}/. Treat that scaffold as the baseline. Do not clean, delete, reset, replace, or rewrite it wholesale. Customize the smallest necessary scaffold files in place, preserve the mount wiring, core helpers, schema wrappers, locales, and tests, and run `ctox business-os app scaffold {module_id} {mode_flag} --repair-missing` before domain edits if core/automation.mjs or core/records.mjs is missing.
+- few-shot rule: inspect exactly three shipped Business OS modules as short targeted pattern references, preferably notes, customers, shiftflow, outbound, creator, or app-store from the shipped `src/apps/business-os/modules/` tree. Never use generated installed modules, runtime/business-os/installed-modules, ~/.local/state/ctox/business-os/installed-modules, bench_* apps, previous App Creator outputs, or app-creator-bench artifacts as few-shot templates. Do not request complete file dumps, do not delegate a broad module-reading sweep to a subagent, and do not keep reading examples after the three-module summary.
 - legacy anti-pattern rule: existing modules can contain old compatibility code. For this generated app, reject ctx.db.raw, db.raw, ctx.collections, window.dispatchEvent, ctox-business-os-chat-submit, manual business_commands insert/upsert fallbacks, pending_sync local state, JSON-module schema wrappers, bundler/fake-DOM tests, alternate ticket command types such as ctox.business_os.ticket.followup.create, and default layout.right/right-resizer patterns.
 - current-contract rule: if an existing module conflicts with the required skill, this prompt, `ctox business-os app validate`, or `module_static_check.mjs`, the current contract wins and the existing pattern is an anti-pattern.
-- bounded-shell rule: do not run find/rg/grep/ls over $HOME, /Users, /, the whole install root, or the whole repo to discover validators, scripts, examples, or guard internals. Inspect only exact files in {module_dir}/ and the exact three chosen few-shot module directories. Use `ctox business-os app validate {module_id} {mode_flag}`; do not search for validator filenames.
-- sequencing rule: after reading the required skill and inspecting three existing modules, create {module_dir}/ and write the required file inventory before reading validator/checker source files. Do not open validate-app-module.mjs, module_static_check.mjs, assert-module-conformance.mjs, or assert-rxdb-only.mjs until the required files exist and a validation command has reported a concrete failure.
+- bounded-shell rule: do not run find/rg/grep/ls over $HOME, /Users, /, ~/.local/state, the whole install root, or the whole repo to discover validators, scripts, examples, or guard internals. Inspect only exact files in {module_dir}/ and exact files in the three chosen shipped few-shot module directories. Do not read or write ~/.local/state/ctox/business-os/installed-modules directly; use the prompt's {module_dir}/ path only. Use `ctox business-os app validate {module_id} {mode_flag}`; do not search for validator filenames.
+- sequencing rule: after reading the required skill and inspecting three shipped modules, verify {module_dir}/ has the required file inventory before reading validator/checker source files. If the directory is missing or incomplete, repair the scaffold first; do not replace a green scaffold just because it is generic. Do not open validate-app-module.mjs, module_static_check.mjs, assert-module-conformance.mjs, or assert-rxdb-only.mjs until the required files exist and a validation command has reported a concrete failure.
 - validator rule: validators and static checkers are black-box gates. Run `ctox business-os app validate {module_id} {mode_flag}` after the first file pass; repair its output bullets. Do not reconstruct scanner regexes or plan around checker internals before writing the app.
 - cwd warning: shell tools run from the install root, not from the module directory; never use bare redirects like > module.json, > collections.schema.json, > {module_id}/index.js, or mkdir {module_id}.
 - required shell write pattern: set MODULE_DIR="{module_dir}" and write every file as "$MODULE_DIR/<file>"; create "$MODULE_DIR/locales" and "$MODULE_DIR/tests" before writing nested files.
 - path rule: every generated app artifact must be under {module_dir}/; do not write root-level module.json, root-level collections.schema.json, root-level {module_id}/, root-level blocker/status Markdown, src/skills/, or any skill-named path. Ignore stale artifact-contract/review examples that contradict this target block.
 - no guard probing: do not test shell aliases, wrapper behavior, root write behavior, hardlinks, symlinks, or guard behavior; implement only inside {module_dir}/.
-- first file action: create {module_dir}/, then write module.json, index.html, index.css, index.js with mount(ctx), schema.js, collections.schema.json, icon.svg, locales, and tests inside that directory.
+- first file action: inspect the existing scaffold in {module_dir}/. If it is missing, create {module_dir}/ and the required inventory; if it exists, do not clean or reset it. Edit only the bounded domain-specific parts needed for the requested app.
 - exact mount rule: installed App Creator modules must make index.js load `./index.html` with exactly `fetch(new URL('./index.html', import.meta.url))`, assign the result into `ctx.host.innerHTML`, and attach `./index.css` with `new URL('./index.css', import.meta.url)` before DOM queries or event wiring. Do not use `fetch('./index.html')`, helper-wrapped template fetches, or any other runtime network fetch. Do not leave index.html unused while building the whole UI only with document.createElement.
 - HTML fragment rule: index.html must be a Business OS shell fragment only. Do not write a full browser document and do not include `<!doctype>`, `<html>`, `<head>`, `<body>`, `<link>`, `<script>`, `<meta>`, `<title>`, or `<style>` in index.html.
 - CSS scoping rule: index.css must scope module variables and selectors under the module root class. Do not define custom properties on `:root`, `html`, or `body`, do not redefine shell/base tokens such as `--surface`, `--text`, `--line`, or `--accent`, and do not create self-referential token aliases.
@@ -16381,7 +16382,7 @@ Business OS app build target:
 - UI: default to one/two panes plus modals/drawers; do not create layout.right, right-column resizers, or three-column grids unless the user explicitly requested a persistent third pane and you can justify it in a code comment.
 - finalization checklist: mark target, few-shots, scope, manifest, versioning, schema, persistence, automation, UI layout, controls, CSS, dependencies, tests, validation, and cleanup as done/rework/blocked before claiming success; repair every rework item first.
 - scope: build the smallest useful one-pass app; avoid broad decorative status/filter/export/settings surfaces unless all handlers and tests are implemented.
-- tool-call safety: do not generate mammoth single here-doc/tool-call writes; keep files concise or split large writes into bounded chunks, then run syntax checks.
+- tool-call safety: do not generate mammoth single here-doc/tool-call writes, Python file-generation scripts, base64 write wrappers, or other script-generated app-file blobs. If an app file is large enough to need those workarounds, split/refactor the app into smaller ESM helpers and bounded direct edits, then run syntax checks.
 - repair hygiene: do not leave .bak/.orig/.rej/.tmp/bundle/probe files; do not line-number sed-patch large generated JavaScript when a bounded helper/file rewrite is safer.
 - automation: include at least one real automation through ctx.commandBus.dispatch only, with both type and command_type set exactly to business_os.chat.task, plus a record_snapshot in the payload. There are no App Creator exceptions for ctox.business_os.ticket.followup.create, ctox.ticket.*, module-specific follow-up command types, or "real ticket" compatibility commands. Do not call ctx.db.collection('business_commands'), do not insert/upsert business_commands directly, do not implement a business_commands fallback, and do not describe such a fallback as valid in tests.
 - stop condition: before claiming success, run module tests and `ctox business-os app validate {module_id} {mode_flag}`; a green custom test does not count while app validation is red.
@@ -17355,7 +17356,13 @@ mod tests {
         assert!(prompt.contains("service lifecycle rule: CTOX service owns queue"));
         assert!(prompt.contains("open-work context rule: queue IDs"));
         assert!(prompt.contains("required file inventory: module.json"));
-        assert!(prompt.contains("inspect exactly three existing Business OS modules as short targeted pattern references"));
+        assert!(prompt.contains("core/automation.mjs, core/records.mjs"));
+        assert!(prompt.contains("scaffold preservation rule"));
+        assert!(prompt.contains("Do not clean, delete, reset, replace, or rewrite it wholesale"));
+        assert!(prompt
+            .contains("inspect exactly three shipped Business OS modules as short targeted pattern references"));
+        assert!(prompt.contains("Never use generated installed modules"));
+        assert!(prompt.contains("bench_* apps"));
         assert!(prompt.contains("Do not request complete file dumps"));
         assert!(prompt.contains("legacy anti-pattern rule: existing modules can contain old compatibility code"));
         assert!(prompt.contains("reject ctx.db.raw, db.raw, ctx.collections, window.dispatchEvent"));
@@ -17370,6 +17377,9 @@ mod tests {
         assert!(prompt.contains("validators and static checkers are black-box gates"));
         assert!(prompt.contains("cwd warning: shell tools run from the install root"));
         assert!(prompt.contains("bounded-shell rule: do not run find/rg/grep/ls over $HOME"));
+        assert!(prompt.contains(
+            "Do not read or write ~/.local/state/ctox/business-os/installed-modules directly"
+        ));
         assert!(prompt
             .contains("set MODULE_DIR=\"runtime/business-os/installed-modules/subscriptions\""));
         assert!(prompt.contains("exact mount rule: installed App Creator modules must make index.js load `./index.html`"));
@@ -17378,7 +17388,12 @@ mod tests {
         assert!(prompt.contains("or any other runtime network fetch"));
         assert!(prompt.contains("assign the result into `ctx.host.innerHTML`"));
         assert!(prompt.contains("new URL('./index.css', import.meta.url)"));
-        assert!(prompt.contains("HTML fragment rule: index.html must be a Business OS shell fragment only"));
+        assert!(prompt.contains("core/automation.mjs, core/records.mjs"));
+        assert!(prompt.contains(
+            "Do not read or write ~/.local/state/ctox/business-os/installed-modules directly"
+        ));
+        assert!(prompt
+            .contains("HTML fragment rule: index.html must be a Business OS shell fragment only"));
         assert!(prompt.contains("Do not write a full browser document"));
         assert!(prompt.contains("CSS scoping rule: index.css must scope module variables"));
         assert!(prompt.contains("Do not define custom properties on `:root`, `html`, or `body`"));
@@ -17392,6 +17407,8 @@ mod tests {
         assert!(prompt.contains("Do not use `../../module.json`"));
         assert!(prompt.contains("Do not assert invented display labels or names"));
         assert!(prompt.contains("finalization checklist: mark target, few-shots, scope"));
+        assert!(prompt.contains("Python file-generation scripts"));
+        assert!(prompt.contains("base64 write wrappers"));
         assert!(prompt.contains("include at least one real automation through ctx.commandBus.dispatch"));
         assert!(prompt.contains("Do not call ctx.db.collection('business_commands')"));
         assert!(prompt.contains("Tests must prove positive current-contract behavior only"));
@@ -17432,6 +17449,10 @@ mod tests {
         assert!(prompt.contains("- module_id: inventory"));
         assert!(prompt.contains("- install_target: runtime-installed-module"));
         assert!(prompt.contains("CTOX-native App Creator/runtime app creation is the primary acceptance target"));
+        assert!(prompt.contains("scaffold preservation rule"));
+        assert!(prompt.contains("Do not clean, delete, reset, replace, or rewrite it wholesale"));
+        assert!(prompt.contains("inspect exactly three shipped Business OS modules"));
+        assert!(prompt.contains("Never use generated installed modules"));
         assert!(prompt.contains(
             "only_allowed_app_artifact_directory: runtime/business-os/installed-modules/inventory"
         ));
@@ -17453,6 +17474,8 @@ mod tests {
         assert!(prompt.contains("keep helper exports and every named local import in lockstep"));
         assert!(prompt.contains("From tests/*.test.mjs, the module root is exactly `..`"));
         assert!(prompt.contains("Do not assert invented display labels or names"));
+        assert!(prompt.contains("Python file-generation scripts"));
+        assert!(prompt.contains("base64 write wrappers"));
         assert_eq!(
             suggested_skill_for_command(&command).as_deref(),
             Some(BUSINESS_OS_APP_MODULE_SKILL_NAME)

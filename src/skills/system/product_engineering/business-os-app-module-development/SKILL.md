@@ -24,6 +24,7 @@ Stop and report the blocker instead of coding when any hard stop is active:
 
 ```text
 you have not inspected at least 3 existing Business OS modules for concrete patterns
+you are using generated installed modules, runtime/business-os/installed-modules, ~/.local/state/ctox/business-os/installed-modules, bench_* apps, previous App Creator outputs, or app-creator-bench artifacts as few-shot templates instead of shipped Business OS modules
 you are about to create a skill file, skill trace, harness trace, README-only deliverable, or plan-only deliverable
 you are about to build a generic Next.js/React/Vanilla app outside the Business OS module contract
 you are treating a source-checkout or external-CLI bench as the acceptance target while the CTOX-native App Creator installed-module path remains unproven
@@ -36,9 +37,11 @@ you are about to use IndexedDB directly, localStorage, sessionStorage, Postgres,
 you are about to use legacy module patterns as implementation authority instead of translating them to the current contract; examples to reject for new App Creator apps include ctx.db.raw, ctx.collections, manual business_commands inserts/upserts, pending_sync command fallbacks, window.dispatchEvent('ctox-business-os-chat-submit'), esbuild/fake-DOM tests, JSON-module schema wrappers, and default layout.right panes
 you are about to request complete file dumps, delegate a broad subagent sweep, or spend more than a short targeted pass on existing modules before writing the first runnable module files
 you are about to run broad discovery commands over `$HOME`, `/Users`, the whole install root, the whole repo, or validator/checker names; use exact known paths, `MODULE_DIR`, and at most the three selected few-shot modules
+you are about to read or write `$HOME/.local/state/ctox/business-os/installed-modules` directly; use the prompted `runtime/business-os/installed-modules/<id>/` module path only
 you are about to write app files outside the resolved module directory, such as root-level module.json, root-level collections.schema.json, root-level <id>/, src/skills/, or any skill-named path
 you are building a new runtime-installed App Creator app and neither the CTOX service preflight nor your first explicit action has created a complete validator-clean scaffold under the target directory
 you are about to delete, omit, or replace scaffold invariants such as core/automation.mjs, core/records.mjs, locales/de.json, locales/en.json, or tests/*.test.mjs instead of customizing them in place
+you are about to clean, reset, delete, or rewrite a validator-clean scaffold wholesale because it looks generic; keep it as the baseline and edit the smallest domain-specific parts
 you are about to create or update a runtime-installed App Creator module whose module.json lacks a SemVer version in x.y.z form without a v prefix
 you are about to expose, advertise, or call a module public/user-ready while its app version is below 1.0.0
 you are about to use 2.0.0 or any later x.0.0 as an in-place update of the same app id/icon instead of a new parallel app line
@@ -65,6 +68,7 @@ module.json or collections.schema.json would be exposed in an invalid or incompl
 any required module file is still missing: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales/de.json, locales/en.json, or tests/*.test.mjs
 the validator reports missing files, right/third-pane layout, schema, manifest, dependency, syntax, or test failures and you are about to finish instead of repairing the exact bullets
 you are about to write a very large app file as one huge tool-call argument or here-doc; keep generated files concise and split large writes into bounded chunks
+you are about to use Python, base64 blobs, node scripts, or generated writer scripts to create app files; if a file needs that, split/refactor it into smaller ESM helpers and direct bounded edits
 you are about to patch a large generated JavaScript file with fragile line-number sed edits instead of rewriting the relevant bounded helper/file
 you are about to make a failing test match broken behavior instead of fixing the app contract violation it exposed
 you are about to write or keep generated tests whose fixture expectations are not hand-computed and internally consistent with the helper logic they exercise
