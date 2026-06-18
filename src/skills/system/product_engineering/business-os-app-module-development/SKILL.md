@@ -509,8 +509,8 @@ export function mount(ctx) {
 - Use a third pane only when the user explicitly asked for one or when the workflow has a persistent separate context stream that must remain visible while editing. If you use one, add a short code comment in the module explaining that workflow need. Otherwise use a modal or drawer.
 - Do not add visible controls unless they work end to end.
 - Do not add AI buttons, export buttons, filters, batch actions, or settings that only change local text.
-- Prefer existing shell/base classes and local module CSS. Do not redefine shell tokens on `:root`, `html`, `body`, or the module root.
-- Scope module CSS variables under the module root with module-local names and real fallback values, for example `--inventory-bg: var(--surface, #fff)`. Never write a self-referential alias such as `--inventory-bg: var(--inventory-bg)`.
+- Prefer existing shell/base classes and local module CSS. Do not define custom properties on `:root`, `html`, or `body`.
+- Put module-local CSS variables on the module root class with module-local names and real fallback values, for example `.inventory-module { --inventory-bg: var(--surface, #fff); }`. Never redefine shell token names such as `--surface`, `--text`, `--line`, or `--accent`, and never write a self-referential alias such as `--inventory-bg: var(--inventory-bg)`.
 - When fixing a design-token validation failure, edit the exact token declarations. Do not run broad search/replace that turns `--inventory-bg: var(--surface, #fff)` into `--inventory-bg: var(--inventory-bg)`.
 - Use modals/drawers for focused create/edit flows when a third column would be decorative.
 - Keep text and controls compact enough for the Business OS workspace, not a marketing page.
@@ -523,6 +523,7 @@ export function mount(ctx) {
 - Do not create broad status/filter/export/settings surfaces unless the prompt asked for them and the handlers are implemented.
 - For App Creator/runtime-installed apps, use vanilla DOM and browser APIs only. A local `.mjs` helper is fine; a framework runtime or generated bundle is not.
 - Do not write negative source-scanner tests for forbidden legacy patterns. The validator already performs that role. If validation reports forbidden terms in a test file, remove the negative scanner test instead of splitting or reconstructing the terms.
+- Tests are required app artifacts, not optional documentation. Preserve `tests/*.test.mjs`; if you regenerate domain helpers, regenerate positive helper tests in the same turn and verify `rg --files "$MODULE_DIR/tests"` returns at least one test before final validation.
 - Avoid huge single tool calls. If a file grows large enough to risk malformed tool-call JSON, reduce scope first; otherwise write it in bounded chunks and immediately run syntax checks.
 - Do not inspect shell aliases or write temporary probe files to test the harness. Trust the target block and validator.
 - Do not copy the skill's forbidden tool/dependency names into app comments or test comments. The static checker treats generated-file literals as violations.
@@ -549,7 +550,7 @@ phase 6 persistence: all durable records use ctx.db facade collections; no ctox.
 phase 7 automation: at least one visible action dispatches a real `business_os.chat.task` command through ctx.commandBus.dispatch and has a testable payload builder
 phase 8 UI layout: default is one/two panes plus modal or drawer; no layout.right, right rail, right-column CSS, right resizer, or three-column grid unless explicitly justified by workflow
 phase 9 UI controls: every visible button, filter, tab, menu, and form action has a real handler and state/persistence/dispatch effect; every `data-*` selector queried in index.js exists in index.html or generated markup
-phase 10 CSS: module CSS is scoped under the module root; no :root token definitions, shell token redefinitions, self-referential custom properties, decorative resize handles, or layout affordances copied from unrelated modules
+phase 10 CSS: module CSS is scoped under the module root class; no :root/html/body custom property definitions, shell token redefinitions, self-referential custom properties, decorative resize handles, or layout affordances copied from unrelated modules
 phase 11 dependencies: browser runtime uses only vanilla HTML/CSS/browser ESM and local relative ESM imports; no UI framework, JSX/TSX, package manager, bare package import, remote import, CommonJS, bundler, transpiler, or generated bundle
 phase 12 tests: tests import only local `.mjs` helpers and JSON/text files; they do not import `index.js`/`schema.js` directly, do not use data: URLs, and cover schema parity, core command builders, and at least one CRUD/automation path; fixture totals/counts are hand-computed in comments or small named facts and are consistent with the implementation; scaffold core/locales/tests still exist
 phase 13 validation: node --check, `ctox business-os app validate <id> --installed|--source`, forbidden-pattern scan, and any available shell/browser smoke proof are green
