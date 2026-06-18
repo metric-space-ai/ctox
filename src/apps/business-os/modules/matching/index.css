@@ -3650,3 +3650,13 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
   border-color: var(--km-accent) !important;
   box-shadow: 0 0 0 1px var(--km-accent), 0 8px 24px rgba(0,0,0,.4) !important;
 }
+
+/* PIPELINE-1 candidate Kanban board (candidateBoard.js) */
+.candidate-board { display: flex; gap: 10px; overflow-x: auto; padding: 8px 0; align-items: flex-start; }
+.candidate-board .cb-col { min-width: 150px; flex: 0 0 150px; border: 1px solid color-mix(in srgb, currentColor 12%, transparent); border-radius: 10px; background: color-mix(in srgb, currentColor 3%, transparent); }
+.candidate-board .cb-col.cb-terminal { opacity: 0.85; }
+.candidate-board .cb-col-head { font-size: 12px; font-weight: 600; padding: 8px 10px; border-bottom: 1px solid color-mix(in srgb, currentColor 10%, transparent); display: flex; justify-content: space-between; }
+.candidate-board .cb-count { opacity: 0.6; }
+.candidate-board .cb-col-body { min-height: 40px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.candidate-board .cb-card { padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, currentColor 8%, transparent); font-size: 13px; cursor: grab; }
+.candidate-board .cb-card:active { cursor: grabbing; }
