@@ -68,6 +68,7 @@ you are about to write a very large app file as one huge tool-call argument or h
 you are about to patch a large generated JavaScript file with fragile line-number sed edits instead of rewriting the relevant bounded helper/file
 you are about to make a failing test match broken behavior instead of fixing the app contract violation it exposed
 you are about to write or keep generated tests whose fixture expectations are not hand-computed and internally consistent with the helper logic they exercise
+you are about to write or keep tests that assert labels, messages, counts, named imports, or helper exports that the local helper being tested does not actually produce/export
 you are about to import browser entry files such as `index.js` or `schema.js` directly from Node tests, or through `data:text/javascript`, base64, `Buffer.from(source)`, or any generated data URL, instead of testing local `.mjs` helpers and JSON/text parity
 you are spending extra turns reading validator/static-checker implementation internals before the required module file set exists; do not open `validate-app-module.mjs`, `module_static_check.mjs`, `assert-module-conformance.mjs`, or `assert-rxdb-only.mjs` before the required files exist and a validation command reports a concrete failure
 you are trying to satisfy or avoid scanner keywords by mentally reconstructing the checker instead of writing the smallest valid Business OS module and then repairing actual validator bullets

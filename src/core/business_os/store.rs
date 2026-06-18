@@ -16369,13 +16369,15 @@ Business OS app build target:
 - no guard probing: do not test shell aliases, wrapper behavior, root write behavior, hardlinks, symlinks, or guard behavior; implement only inside {module_dir}/.
 - first file action: create {module_dir}/, then write module.json, index.html, index.css, index.js with mount(ctx), schema.js, collections.schema.json, icon.svg, locales, and tests inside that directory.
 - exact mount rule: installed App Creator modules must make index.js load `./index.html` with exactly `fetch(new URL('./index.html', import.meta.url))`, assign the result into `ctx.host.innerHTML`, and attach `./index.css` with `new URL('./index.css', import.meta.url)` before DOM queries or event wiring. Do not use `fetch('./index.html')`, helper-wrapped template fetches, or any other runtime network fetch. Do not leave index.html unused while building the whole UI only with document.createElement.
+- HTML fragment rule: index.html must be a Business OS shell fragment only. Do not write a full browser document and do not include `<!doctype>`, `<html>`, `<head>`, `<body>`, `<link>`, `<script>`, `<meta>`, `<title>`, or `<style>` in index.html.
+- CSS scoping rule: index.css must scope module variables and selectors under the module root class. Do not define custom properties on `:root`, `html`, or `body`, do not redefine shell/base tokens such as `--surface`, `--text`, `--line`, or `--accent`, and do not create self-referential token aliases.
 - installed manifest rule: for runtime-installed-module, module.json must use entry="installed-modules/{module_id}/index.html", install_scope="installed", and version="0.1.0" or another valid SemVer x.y.z without a v prefix; parse module.json and collections.schema.json immediately after editing them. Do not embed inline SVG in module.json; never use layout.icon_svg, icon_svg, iconSvg, or layout.icon.
 - versioning rule: 0.0.x is for UI/UX, feature, and bug-fix work without data-shape changes; 0.x.0 is for schema/database or potentially breaking work before public release; 1.0.0 is the first release visible beyond the developer; 2.0.0+ starts a new parallel app line with its own module id/icon instead of mutating a legacy line in place.
 - schema rule: module.json may list shell collections such as business_commands, but schema.js and collections.schema.json must export only module-owned collections.
 - repair order: fix target path, complete required file inventory, valid JSON, manifest mode/version, schema ownership, UI layout, dependency/data-plane patterns, ESM syntax, tests, then shell smoke; do not patch tests to hide earlier failures.
 - persistence: use the Business OS RxDB/WebRTC data plane exposed by the shell context; do not create IndexedDB/Postgres/SQLite/HTTP fallbacks or dependency-managed builds.
 - dependencies: browser-safe ESM only; no package manager, no bundled node_modules, no CommonJS require, no npx, no esbuild/Vite/Rollup/Webpack proof, and no bundler imports in tests; these forbidden names may appear in this prompt but must not appear in generated app files, comments, or tests.
-- tests: put reusable schemas, command builders, reducers, and calculations in local .mjs helpers imported by index.js/schema.js and by tests; Node tests must not import ../index.js or ../schema.js directly and must not data-url/base64 transform browser entry files. From tests/*.test.mjs, the module root is exactly `..`; use `dirname(fileURLToPath(import.meta.url))` plus `resolve(testDir, '..')` to read module.json, collections.schema.json, and other sibling files. Do not use `../../module.json`, `../../collections.schema.json`, or `../../schema.js` from tests, because that climbs out of the installed module directory. Tests must prove positive current-contract behavior only: schema parity, reducers/calculations, command payload shape, and commandBus dispatch hooks. Do not use assert.doesNotMatch, source-text absence checks, forbidden-pattern scans, fragment/character-code/regex token construction, or forbidden examples from this prompt. If validation flags a test for forbidden terms, delete the negative scanner test and replace it with a positive contract assertion.
+- tests: put reusable schemas, command builders, reducers, and calculations in local .mjs helpers imported by index.js/schema.js and by tests; keep helper exports and every named local import in lockstep. Node tests must not import ../index.js or ../schema.js directly and must not data-url/base64 transform browser entry files. From tests/*.test.mjs, the module root is exactly `..`; use `dirname(fileURLToPath(import.meta.url))` plus `resolve(testDir, '..')` to read module.json, collections.schema.json, and other sibling files. Do not use `../../module.json`, `../../collections.schema.json`, or `../../schema.js` from tests, because that climbs out of the installed module directory. Tests must prove positive current-contract behavior only: schema parity, reducers/calculations, command payload shape, commandBus dispatch hooks, and fixture labels/messages/counts derived from the helper output being tested. Do not assert invented display labels or names that the helper does not produce. Do not use assert.doesNotMatch, source-text absence checks, forbidden-pattern scans, fragment/character-code/regex token construction, or forbidden examples from this prompt. If validation flags a test for forbidden terms, delete the negative scanner test and replace it with a positive contract assertion.
 - UI: default to one/two panes plus modals/drawers; do not create layout.right, right-column resizers, or three-column grids unless the user explicitly requested a persistent third pane and you can justify it in a code comment.
 - finalization checklist: mark target, few-shots, scope, manifest, versioning, schema, persistence, automation, UI layout, controls, CSS, dependencies, tests, validation, and cleanup as done/rework/blocked before claiming success; repair every rework item first.
 - scope: build the smallest useful one-pass app; avoid broad decorative status/filter/export/settings surfaces unless all handlers and tests are implemented.
@@ -17376,13 +17378,19 @@ mod tests {
         assert!(prompt.contains("or any other runtime network fetch"));
         assert!(prompt.contains("assign the result into `ctx.host.innerHTML`"));
         assert!(prompt.contains("new URL('./index.css', import.meta.url)"));
+        assert!(prompt.contains("HTML fragment rule: index.html must be a Business OS shell fragment only"));
+        assert!(prompt.contains("Do not write a full browser document"));
+        assert!(prompt.contains("CSS scoping rule: index.css must scope module variables"));
+        assert!(prompt.contains("Do not define custom properties on `:root`, `html`, or `body`"));
         assert!(prompt.contains(
             "schema.js and collections.schema.json must export only module-owned collections"
         ));
         assert!(prompt.contains("default to one/two panes plus modals/drawers"));
         assert!(prompt.contains("Node tests must not import ../index.js or ../schema.js directly"));
+        assert!(prompt.contains("keep helper exports and every named local import in lockstep"));
         assert!(prompt.contains("From tests/*.test.mjs, the module root is exactly `..`"));
         assert!(prompt.contains("Do not use `../../module.json`"));
+        assert!(prompt.contains("Do not assert invented display labels or names"));
         assert!(prompt.contains("finalization checklist: mark target, few-shots, scope"));
         assert!(prompt.contains("include at least one real automation through ctx.commandBus.dispatch"));
         assert!(prompt.contains("Do not call ctx.db.collection('business_commands')"));
@@ -17439,8 +17447,12 @@ mod tests {
         assert!(prompt.contains("Do not use `fetch('./index.html')`"));
         assert!(prompt.contains("ctx.host.innerHTML"));
         assert!(prompt.contains("new URL('./index.css', import.meta.url)"));
+        assert!(prompt.contains("HTML fragment rule: index.html must be a Business OS shell fragment only"));
+        assert!(prompt.contains("CSS scoping rule: index.css must scope module variables"));
         assert!(prompt.contains("Node tests must not import ../index.js or ../schema.js directly"));
+        assert!(prompt.contains("keep helper exports and every named local import in lockstep"));
         assert!(prompt.contains("From tests/*.test.mjs, the module root is exactly `..`"));
+        assert!(prompt.contains("Do not assert invented display labels or names"));
         assert_eq!(
             suggested_skill_for_command(&command).as_deref(),
             Some(BUSINESS_OS_APP_MODULE_SKILL_NAME)
