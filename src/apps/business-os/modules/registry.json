@@ -630,6 +630,40 @@
       "default_installed": true
     },
     {
+      "id": "credentials",
+      "title": "Zugangsdaten",
+      "description": "Write-only manager for provider credentials and API keys. Values are stored in the encrypted CTOX secret store and are never read back into the browser.",
+      "entry": "modules/credentials/index.html",
+      "collections": [
+        "business_commands"
+      ],
+      "source": "local",
+      "core": false,
+      "editable": true,
+      "deletable": true,
+      "layout": {
+        "shell": "full-workspace",
+        "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-credentials\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-credentials\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#14b8a6\" /><stop offset=\"100%\" stop-color=\"#6366f1\" /></linearGradient></defs><path d=\"M12 2l8 3v6c0 5-3.5 8-8 11-4.5-3-8-6-8-11V5l8-3z\" fill=\"url(#grad-credentials)\" fill-opacity=\"0.12\" stroke=\"url(#grad-credentials)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><circle cx=\"12\" cy=\"10\" r=\"2.4\" stroke=\"url(#grad-credentials)\" stroke-width=\"2\"></circle><path d=\"M12 12.4V16\" stroke=\"url(#grad-credentials)\" stroke-width=\"2\" stroke-linecap=\"round\"></path></svg>",
+        "left": "Credential catalog and status",
+        "center": "Set, rotate and remove credentials",
+        "right": "Security notes"
+      },
+      "category": "Security",
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "store": {
+        "summary": "Write-only credentials manager backed by the encrypted CTOX secret store. Set, rotate and remove provider credentials; values never leave the daemon.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/credentials",
+        "installable": true,
+        "editable_after_install": true,
+        "distribution": "catalog-module"
+      },
+      "install_scope": "local",
+      "default_installed": false
+    },
+    {
       "id": "creator",
       "title": "App Creator",
       "description": "Native standalone code-generator & harness workbench to visualize and test custom Business-OS modules.",

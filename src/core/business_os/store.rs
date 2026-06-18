@@ -13158,6 +13158,139 @@ pub fn fail_business_command_from_queue_error(
     Ok(Some(payload))
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+struct CtoxSecretPutMutation {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    value: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct CtoxSecretDeleteMutation {
+    #[serde(default)]
+    name: String,
+}
+
+/// Validate a credential key is env-var shaped (UPPER_SNAKE_CASE). Keeps the
+/// credentials scope bounded and prevents odd names leaking into the store.
+fn is_valid_credential_key(name: &str) -> bool {
+    let name = name.trim();
+    if name.is_empty() || name.len() > 64 {
+        return false;
+    }
+    let mut chars = name.chars();
+    let first_ok = chars
+        .next()
+        .map(|c| c.is_ascii_uppercase())
+        .unwrap_or(false);
+    first_ok
+        && name
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Metadata-only listing for the Business OS credentials app. NEVER decrypts:
+/// `list_secret_records` reads plaintext metadata columns only, and no secret
+/// value ever appears in the outcome.
+fn list_credentials_command(root: &Path) -> anyhow::Result<Value> {
+    let scope = crate::secrets::credential_scope();
+    let records = crate::secrets::list_secret_records(root, Some(scope))?;
+    let by_name: std::collections::BTreeMap<&str, &crate::secrets::SecretRecordView> = records
+        .iter()
+        .map(|record| (record.secret_name.as_str(), record))
+        .collect();
+    let catalog: Vec<Value> = crate::secrets::known_credential_keys()
+        .iter()
+        .map(|(name, description)| {
+            let record = by_name.get(*name);
+            serde_json::json!({
+                "name": name,
+                "description": description,
+                "is_set": record.is_some(),
+                "updated_at": record.map(|record| record.updated_at.clone()),
+            })
+        })
+        .collect();
+    let known: std::collections::BTreeSet<&str> = crate::secrets::known_credential_keys()
+        .iter()
+        .map(|(name, _)| *name)
+        .collect();
+    let extra: Vec<Value> = records
+        .iter()
+        .filter(|record| !known.contains(record.secret_name.as_str()))
+        .map(|record| {
+            serde_json::json!({
+                "name": record.secret_name,
+                "description": record.description,
+                "is_set": true,
+                "updated_at": record.updated_at,
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({
+        "ok": true,
+        "scope": scope,
+        "catalog": catalog,
+        "extra": extra,
+    }))
+}
+
+/// Store/rotate a credential value in the encrypted secret store. The value is
+/// never echoed back; the caller redacts it from the persisted command record.
+fn put_credential_command(root: &Path, mutation: &CtoxSecretPutMutation) -> anyhow::Result<Value> {
+    let name = mutation.name.trim();
+    anyhow::ensure!(
+        is_valid_credential_key(name),
+        "invalid credential key: expected UPPER_SNAKE_CASE (A-Z, 0-9, _), max 64 chars"
+    );
+    anyhow::ensure!(
+        !mutation.value.is_empty(),
+        "credential value must not be empty"
+    );
+    crate::secrets::set_credential(root, name, &mutation.value)?;
+    Ok(serde_json::json!({ "ok": true, "name": name }))
+}
+
+/// Remove a credential value from the encrypted secret store.
+fn delete_credential_command(
+    root: &Path,
+    mutation: &CtoxSecretDeleteMutation,
+) -> anyhow::Result<Value> {
+    let name = mutation.name.trim();
+    anyhow::ensure!(is_valid_credential_key(name), "invalid credential key");
+    crate::secrets::delete_credential(root, name)?;
+    Ok(serde_json::json!({ "ok": true, "name": name }))
+}
+
+/// Build a redacted copy of a secret command for the persisted command record.
+/// `safe_payload` must contain no secret value; client_context is rebuilt to
+/// the acting actor only.
+fn secret_command_safe_command(
+    command: &BusinessCommand,
+    session: &BusinessOsSession,
+    safe_payload: Value,
+) -> BusinessCommand {
+    BusinessCommand {
+        id: command.id.clone(),
+        module: command.module.clone(),
+        command_type: command.command_type.clone(),
+        record_id: command.record_id.clone(),
+        payload: safe_payload,
+        client_context: serde_json::json!({
+            "actor": {
+                "id": session_user_id(session).unwrap_or("rxdb-command"),
+                "display_name": session
+                    .user
+                    .as_ref()
+                    .map(|user| user.display_name.as_str())
+                    .unwrap_or("rxdb-command"),
+                "role": session_role(session),
+            }
+        }),
+    }
+}
+
 pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Result<Value> {
     let command_id = document
         .get("command_id")
@@ -13488,6 +13621,92 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
                 Some("completed"),
                 outcome,
             );
+        }
+        "ctox.secret.list" => {
+            let session = rxdb_authenticated_session(root, &command)?;
+            let decision =
+                workspace_policy_decision(root, &session, BusinessOsPermission::SecretsManage)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            let outcome = list_credentials_command(root)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.secret.put" => {
+            let session = rxdb_authenticated_session(root, &command)?;
+            let mutation: CtoxSecretPutMutation =
+                serde_json::from_value(command.payload.clone()).unwrap_or_default();
+            // Redact the secret value before ANY persistence path runs: the
+            // business_commands table, the re-projected RxDB document, the
+            // policy-denied outcome, and the policy-decision audit event all
+            // store the command we hand them. The original payload.value would
+            // otherwise be left at rest in the RxDB store and replicated browser
+            // IndexedDB. Build the redacted command up front and use it
+            // everywhere — including the rejection path.
+            let safe_command = secret_command_safe_command(
+                &command,
+                &session,
+                serde_json::json!({ "name": mutation.name.trim() }),
+            );
+            let decision =
+                workspace_policy_decision(root, &session, BusinessOsPermission::SecretsManage)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &safe_command, &decision)?
+            {
+                return Ok(outcome);
+            }
+            return match put_credential_command(root, &mutation) {
+                Ok(outcome) => write_rxdb_control_command_outcome(
+                    root,
+                    &safe_command,
+                    "completed",
+                    None,
+                    Some("completed"),
+                    outcome,
+                ),
+                Err(error) => write_rxdb_control_command_outcome(
+                    root,
+                    &safe_command,
+                    "failed",
+                    None,
+                    Some("failed"),
+                    serde_json::json!({ "outcome": { "ok": false, "error": error.to_string() } }),
+                ),
+            };
+        }
+        "ctox.secret.delete" => {
+            let session = rxdb_authenticated_session(root, &command)?;
+            let decision =
+                workspace_policy_decision(root, &session, BusinessOsPermission::SecretsManage)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            let mutation: CtoxSecretDeleteMutation =
+                serde_json::from_value(command.payload.clone()).unwrap_or_default();
+            return match delete_credential_command(root, &mutation) {
+                Ok(outcome) => write_rxdb_control_command_outcome(
+                    root,
+                    &command,
+                    "completed",
+                    None,
+                    Some("completed"),
+                    outcome,
+                ),
+                Err(error) => write_rxdb_control_command_outcome(
+                    root,
+                    &command,
+                    "failed",
+                    None,
+                    Some("failed"),
+                    serde_json::json!({ "outcome": { "ok": false, "error": error.to_string() } }),
+                ),
+            };
         }
         "ctox.module.repair_lifecycle_projection" => {
             let request: ModuleLifecycleProjectionRepairRequest =
@@ -37374,6 +37593,146 @@ mod tests {
                 .and_then(Value::as_str),
             Some("denied_collection_and_module_policy")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn ctox_secret_put_keeps_value_out_of_command_record_and_lists_metadata() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        fs::create_dir_all(root.join("runtime"))?;
+        seed_business_user(root, "global_admin", "admin")?;
+        seed_business_user(root, "qa", "user")?;
+
+        // Admin stores a credential. The plaintext value must never appear in
+        // the command outcome.
+        let put = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_secret_put",
+                "module": "credentials",
+                "type": "ctox.secret.put",
+                "payload": { "name": "OPENAI_API_KEY", "value": "DO_NOT_LEAK_SECRET_VALUE" },
+                "client_context": {
+                    "actor": { "id": "global_admin", "display_name": "Global Admin" }
+                }
+            }),
+        )?;
+        assert_eq!(put.get("status").and_then(Value::as_str), Some("completed"));
+        assert!(
+            !serde_json::to_string(&put)?.contains("DO_NOT_LEAK_SECRET_VALUE"),
+            "secret value leaked into the command outcome"
+        );
+
+        // The value lands (encrypted) in the secret store and is retrievable
+        // only there — proving the write actually happened.
+        assert_eq!(
+            crate::secrets::read_secret_value(
+                root,
+                crate::secrets::credential_scope(),
+                "OPENAI_API_KEY"
+            )?,
+            "DO_NOT_LEAK_SECRET_VALUE"
+        );
+
+        // Guard: the persisted business_commands projection must be redacted.
+        let conn = open_store(root)?;
+        let stored =
+            outbound_load_required(&conn, "business_commands", "cmd_secret_put", "command")?;
+        drop(conn);
+        assert!(
+            !serde_json::to_string(&stored)?.contains("DO_NOT_LEAK_SECRET_VALUE"),
+            "secret value leaked into the persisted business_commands record"
+        );
+
+        // Listing returns metadata only; the catalog marks the key as set and
+        // no value appears anywhere in the outcome.
+        let list = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_secret_list",
+                "module": "credentials",
+                "type": "ctox.secret.list",
+                "payload": {},
+                "client_context": {
+                    "actor": { "id": "global_admin", "display_name": "Global Admin" }
+                }
+            }),
+        )?;
+        assert_eq!(
+            list.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        let openai_set = list
+            .pointer("/result/catalog")
+            .and_then(Value::as_array)
+            .map(|catalog| {
+                catalog.iter().any(|entry| {
+                    entry.get("name").and_then(Value::as_str) == Some("OPENAI_API_KEY")
+                        && entry.get("is_set").and_then(Value::as_bool) == Some(true)
+                })
+            });
+        assert_eq!(openai_set, Some(true));
+        assert!(!serde_json::to_string(&list)?.contains("DO_NOT_LEAK_SECRET_VALUE"));
+
+        // A non-admin (user role) is denied server-side, regardless of any UI.
+        // The denied command's persisted record must also be redacted — the
+        // rejection path persists the command we hand it.
+        let denied = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_secret_put_denied",
+                "module": "credentials",
+                "type": "ctox.secret.put",
+                "payload": { "name": "ANTHROPIC_API_KEY", "value": "DENIED_LEAK_VALUE" },
+                "client_context": { "actor": { "id": "qa", "display_name": "QA" } }
+            }),
+        )?;
+        assert_eq!(denied.get("status").and_then(Value::as_str), Some("failed"));
+        assert!(!serde_json::to_string(&denied)?.contains("DENIED_LEAK_VALUE"));
+        assert!(
+            crate::secrets::list_secret_records(root, Some(crate::secrets::credential_scope()))?
+                .iter()
+                .all(|record| record.secret_name != "ANTHROPIC_API_KEY"),
+            "denied put must not write a credential"
+        );
+        let conn = open_store(root)?;
+        let stored_denied = outbound_load_required(
+            &conn,
+            "business_commands",
+            "cmd_secret_put_denied",
+            "command",
+        )?;
+        drop(conn);
+        assert!(
+            !serde_json::to_string(&stored_denied)?.contains("DENIED_LEAK_VALUE"),
+            "denied put leaked the secret value into the persisted record"
+        );
+
+        // Delete removes the credential.
+        let delete = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_secret_delete",
+                "module": "credentials",
+                "type": "ctox.secret.delete",
+                "payload": { "name": "OPENAI_API_KEY" },
+                "client_context": {
+                    "actor": { "id": "global_admin", "display_name": "Global Admin" }
+                }
+            }),
+        )?;
+        assert_eq!(
+            delete.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert!(!crate::secrets::secret_exists(
+            root,
+            crate::secrets::credential_scope(),
+            "OPENAI_API_KEY"
+        )?);
         Ok(())
     }
 
