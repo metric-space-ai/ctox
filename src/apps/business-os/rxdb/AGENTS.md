@@ -18,9 +18,10 @@ below exists because an agent broke it in good faith and shipped a regression.
      --outfile=src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs \
      "--banner:js=// CTOX DB app-local bundle. Generated from src/apps/business-os/rxdb/src/index.mjs."
    ```
-   and bump the `?v=` cache-buster in `shared/db.js`, `shared/sync.js` and
-   `modules/matching/ui/businessOsDataSource.js` (all three identical — a
-   mismatch loads a second bundle copy and duplicates peers).
+   and bump the `?v=` cache-buster in `shared/db.js` and `shared/sync.js`
+   (both identical — a mismatch loads a second bundle copy and duplicates
+   peers). App modules import the bundle through the shell facade, not
+   directly, so they carry no buster of their own.
 3. **No npm / bare / `node:` imports** in `src/*.mjs`. The runtime is
    package-manager-free; only relative imports are allowed.
 4. **Never hand-edit `*-contract.generated.mjs`** (or the Rust twins). Wire
