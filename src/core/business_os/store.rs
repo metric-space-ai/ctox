@@ -8067,7 +8067,11 @@ fn list_business_activity_events(
             'business_os.module.release.succeeded',
             'business_os.module.release.failed',
             'business_os.module.rollback.succeeded',
-            'business_os.module.rollback.failed'
+            'business_os.module.rollback.failed',
+            'business_os.ats.candidate_presented',
+            'business_os.ats.candidate_present_denied',
+            'business_os.ats.placement_created',
+            'business_os.ats.placement_denied'
          )
          ORDER BY observed_at_ms DESC, event_id DESC
          LIMIT ?1",
@@ -22065,14 +22069,65 @@ fn load_all_business_records(
 /// Server-authoritative ATS mutations: each writes the generic business_records
 /// store (auto-projected to RxDB by rxdb_peer). Gates that protect a write
 /// (consent, double-submission) run native-side via ats_gates.
+// §5.3 ATS governance: stable rejection reason codes (one source of truth, not
+// inline string literals) used by the present/deployment gates and surfaced to
+// callers + the audit trail.
+const ATS_REASON_CONSENT_MISSING: &str = "consent_to_present_missing";
+const ATS_REASON_DOUBLE_SUBMISSION: &str = "double_submission";
+
+/// §5.3: build the audit actor for an ATS governance event from the
+/// already-authenticated command session (no extra store round-trip).
+fn ats_actor_value(session: &BusinessOsSession) -> Value {
+    match &session.user {
+        Some(user) => serde_json::json!({
+            "id": user.id,
+            "display_name": user.display_name,
+            "role": user.role,
+            "trusted": true
+        }),
+        None => serde_json::json!({ "id": "rxdb-command", "trusted": false }),
+    }
+}
+
+/// §5.3: append a DSGVO governance event to `business_events` recording an ATS
+/// candidate-data decision — who (actor) shared which candidate with which
+/// client, the decision, and any reason codes. This is the accountability trail
+/// a Personalvermittler needs for candidate PII handling.
+fn record_ats_governance_event(
+    conn: &Connection,
+    command: &BusinessCommand,
+    actor: &Value,
+    event_type: &str,
+    summary: Value,
+    observed_at_ms: i64,
+) -> anyhow::Result<()> {
+    let record_id = command.record_id.as_deref().unwrap_or("");
+    insert_business_event(
+        conn,
+        "business_commands",
+        record_id,
+        event_type,
+        serde_json::json!({
+            "event_type": event_type,
+            "command_type": command.command_type.as_str(),
+            "module": command.module.as_str(),
+            "actor": actor,
+            "summary": summary,
+            "observed_at_ms": observed_at_ms
+        }),
+        observed_at_ms,
+    )
+}
+
 fn handle_ats_mutating_command(
     root: &Path,
-    _session: &BusinessOsSession,
+    session: &BusinessOsSession,
     command: &BusinessCommand,
 ) -> anyhow::Result<Value> {
     let conn = open_store(root)?;
     let now = now_ms() as i64;
     let p = &command.payload;
+    let actor = ats_actor_value(session);
     match command.command_type.as_str() {
         "ats.retention.purge" => {
             let collection = p
@@ -22162,14 +22217,29 @@ fn handle_ats_mutating_command(
                     now,
                 );
                 if !readiness.ready {
+                    let blockers = readiness
+                        .blockers
+                        .iter()
+                        .map(|(ty, reason)| serde_json::json!({ "credential_type": ty, "reason": reason }))
+                        .collect::<Vec<_>>();
+                    // §5.3 DSGVO trail: record the blocked deployment attempt.
+                    record_ats_governance_event(
+                        &conn,
+                        command,
+                        &actor,
+                        "business_os.ats.placement_denied",
+                        serde_json::json!({
+                            "candidate_id": candidate_id,
+                            "decision": "denied",
+                            "reason_codes": ["deployment_not_ready"],
+                            "blockers": blockers
+                        }),
+                        now,
+                    )?;
                     return Ok(serde_json::json!({
                         "ok": true,
                         "allowed": false,
-                        "blockers": readiness
-                            .blockers
-                            .iter()
-                            .map(|(ty, reason)| serde_json::json!({ "credential_type": ty, "reason": reason }))
-                            .collect::<Vec<_>>(),
+                        "blockers": blockers,
                     }));
                 }
             }
@@ -22208,6 +22278,21 @@ fn handle_ats_mutating_command(
                 "_deleted": false
             });
             upsert_business_record(&conn, "accounting_invoices", &inv_id, now, invoice)?;
+            // §5.3 DSGVO trail: record the placement lifecycle event.
+            record_ats_governance_event(
+                &conn,
+                command,
+                &actor,
+                "business_os.ats.placement_created",
+                serde_json::json!({
+                    "candidate_id": candidate_id,
+                    "client_account_id": client_account_id,
+                    "placement_id": id,
+                    "fee_invoice_id": inv_id,
+                    "decision": "allowed"
+                }),
+                now,
+            )?;
             Ok(serde_json::json!({ "ok": true, "allowed": true, "placement_id": id, "fee_invoice_id": inv_id }))
         }
         "ats.submission.present" => {
@@ -22235,13 +22320,30 @@ fn handle_ats_mutating_command(
                 now,
             );
             let mut blockers = Vec::new();
+            let mut reason_codes = Vec::new();
             if !has_consent {
-                blockers.push(serde_json::json!({ "reason": "consent_to_present_missing" }));
+                reason_codes.push(ATS_REASON_CONSENT_MISSING);
+                blockers.push(serde_json::json!({ "reason": ATS_REASON_CONSENT_MISSING }));
             }
             if let Some(conflicting) = &conflict {
-                blockers.push(serde_json::json!({ "reason": "double_submission", "conflicting_submission_id": conflicting }));
+                reason_codes.push(ATS_REASON_DOUBLE_SUBMISSION);
+                blockers.push(serde_json::json!({ "reason": ATS_REASON_DOUBLE_SUBMISSION, "conflicting_submission_id": conflicting }));
             }
             if !blockers.is_empty() {
+                // §5.3 DSGVO trail: record the denied data-sharing attempt.
+                record_ats_governance_event(
+                    &conn,
+                    command,
+                    &actor,
+                    "business_os.ats.candidate_present_denied",
+                    serde_json::json!({
+                        "candidate_id": candidate_id,
+                        "client_account_id": client_account_id,
+                        "decision": "denied",
+                        "reason_codes": reason_codes
+                    }),
+                    now,
+                )?;
                 return Ok(
                     serde_json::json!({ "ok": true, "allowed": false, "blockers": blockers }),
                 );
@@ -22260,6 +22362,20 @@ fn handle_ats_mutating_command(
                 "_deleted": false
             });
             upsert_business_record(&conn, "submissions", &id, now, payload)?;
+            // §5.3 DSGVO trail: record which candidate was shared with which client.
+            record_ats_governance_event(
+                &conn,
+                command,
+                &actor,
+                "business_os.ats.candidate_presented",
+                serde_json::json!({
+                    "candidate_id": candidate_id,
+                    "client_account_id": client_account_id,
+                    "submission_id": id,
+                    "decision": "allowed"
+                }),
+                now,
+            )?;
             Ok(serde_json::json!({ "ok": true, "allowed": true, "submission_id": id }))
         }
         "ats.leistungsnachweis.signoff" => {
