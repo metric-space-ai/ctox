@@ -22135,6 +22135,44 @@ fn handle_ats_mutating_command(
         "ats.placement.create" => {
             let candidate_id = first_string_field(p, &["candidate_id"])
                 .context("ats.placement.create requires candidate_id")?;
+            // §5.8 AÜG deployment-readiness gate: when the caller names the
+            // required credential types (temp staffing / Arbeitnehmerüberlassung),
+            // the candidate must be deployment-ready before the placement is
+            // created. Permanent placement (no required_types) skips the gate.
+            let required: Vec<String> = p
+                .get("required_types")
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(ToOwned::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !required.is_empty() {
+                let required_refs: Vec<&str> = required.iter().map(String::as_str).collect();
+                let credentials = load_business_records_by_field(
+                    &conn,
+                    "business_credentials",
+                    "subject_id",
+                    &candidate_id,
+                )?;
+                let readiness = super::ats_gates::evaluate_deployment_readiness(
+                    &credentials,
+                    &required_refs,
+                    now,
+                );
+                if !readiness.ready {
+                    return Ok(serde_json::json!({
+                        "ok": true,
+                        "allowed": false,
+                        "blockers": readiness
+                            .blockers
+                            .iter()
+                            .map(|(ty, reason)| serde_json::json!({ "credential_type": ty, "reason": reason }))
+                            .collect::<Vec<_>>(),
+                    }));
+                }
+            }
             let client_account_id =
                 first_string_field(p, &["client_account_id"]).unwrap_or_default();
             let fee = p.get("fee").and_then(Value::as_f64).unwrap_or(0.0);
@@ -22170,7 +22208,7 @@ fn handle_ats_mutating_command(
                 "_deleted": false
             });
             upsert_business_record(&conn, "accounting_invoices", &inv_id, now, invoice)?;
-            Ok(serde_json::json!({ "ok": true, "placement_id": id, "fee_invoice_id": inv_id }))
+            Ok(serde_json::json!({ "ok": true, "allowed": true, "placement_id": id, "fee_invoice_id": inv_id }))
         }
         "ats.submission.present" => {
             let candidate_id = first_string_field(p, &["candidate_id"])
@@ -22244,10 +22282,94 @@ fn handle_ats_mutating_command(
             if let Some(obj) = payload.as_object_mut() {
                 obj.insert("entleiher_signed".to_string(), Value::Bool(true));
                 obj.insert("signed_at_ms".to_string(), Value::from(now));
-                obj.insert("billing_released".to_string(), Value::Bool(true));
+            }
+            // §5.9 Entleiher sign-off → billing gate. Billing is released only
+            // when the now-signed Nachweis carries time entries; if released, draft
+            // an invoice at the Verrechnungssatz (charge_rate) with the per-category
+            // Nacht/Sonn/Feiertag surcharges applied.
+            let blockers = super::ats_gates::evaluate_billing_gate(&payload);
+            let billing_released = blockers.is_empty();
+            if let Some(obj) = payload.as_object_mut() {
+                obj.insert(
+                    "billing_released".to_string(),
+                    Value::Bool(billing_released),
+                );
+            }
+            let mut invoice_id = String::new();
+            let mut net_total = 0.0;
+            if billing_released {
+                let entries = payload
+                    .get("entries")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let charge_rate = p
+                    .get("charge_rate")
+                    .and_then(Value::as_f64)
+                    .or_else(|| payload.get("charge_rate").and_then(Value::as_f64))
+                    .unwrap_or(0.0);
+                let surcharge = p
+                    .get("surcharge_pct")
+                    .cloned()
+                    .or_else(|| payload.get("surcharge_pct").cloned())
+                    .unwrap_or_else(|| serde_json::json!({}));
+                let billing =
+                    super::ats_gates::compute_nachweis_billing(&entries, charge_rate, &surcharge);
+                net_total = billing.net_total;
+                if net_total > 0.0 {
+                    invoice_id = format!("inv_{now}");
+                    let account_id = payload
+                        .get("entleiher_account_id")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .or_else(|| {
+                            first_string_field(p, &["entleiher_account_id", "client_account_id"])
+                        })
+                        .unwrap_or_default();
+                    let lines: Vec<Value> = billing
+                        .lines
+                        .iter()
+                        .enumerate()
+                        .map(|(i, l)| {
+                            serde_json::json!({
+                                "position": i + 1,
+                                "description": format!("Arbeitsstunden ({})", l.category),
+                                "quantity": l.hours,
+                                "unit_price": l.rate,
+                                "tax_rate": 0.19
+                            })
+                        })
+                        .collect();
+                    let invoice = serde_json::json!({
+                        "id": invoice_id,
+                        "invoice_type": "sale_out",
+                        "account_id": account_id,
+                        "source_nachweis_id": record_id,
+                        "status": "draft",
+                        "net_total": net_total,
+                        "lines": lines,
+                        "created_at_ms": now,
+                        "updated_at_ms": now,
+                        "_deleted": false
+                    });
+                    upsert_business_record(
+                        &conn,
+                        "accounting_invoices",
+                        &invoice_id,
+                        now,
+                        invoice,
+                    )?;
+                }
             }
             upsert_business_record(&conn, collection, &record_id, now, payload)?;
-            Ok(serde_json::json!({ "ok": true, "record_id": record_id, "billing_released": true }))
+            Ok(serde_json::json!({
+                "ok": true,
+                "record_id": record_id,
+                "billing_released": billing_released,
+                "blockers": blockers,
+                "invoice_id": invoice_id,
+                "net_total": net_total
+            }))
         }
         "ats.signature.request" => {
             let document_id = first_string_field(p, &["document_id"])

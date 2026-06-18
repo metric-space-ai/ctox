@@ -257,6 +257,111 @@ pub fn signature_request_status(
     "created"
 }
 
+// ----------------------------------------------------------------------------
+// Leistungsnachweis billing (DISPATCH-2 / §5.9)
+// ----------------------------------------------------------------------------
+
+/// Hour categories carried by a Leistungsnachweis entry. Mirrors
+/// `shiftflow/core/leistungsnachweis.js` HOUR_TYPES so the native invoice math
+/// and the browser tally agree.
+pub const HOUR_TYPES: [&str; 5] = ["regular", "nacht", "sonntag", "feiertag", "mehrarbeit"];
+
+#[derive(Debug, PartialEq)]
+pub struct NachweisLine {
+    pub category: String,
+    pub hours: f64,
+    pub rate: f64,
+    pub amount: f64,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct NachweisBilling {
+    pub total_hours: f64,
+    pub net_total: f64,
+    pub lines: Vec<NachweisLine>,
+}
+
+fn round2(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
+}
+
+fn entry_hours(entry: &Value) -> f64 {
+    entry.get("hours").and_then(Value::as_f64).unwrap_or(0.0)
+}
+
+fn entry_type(entry: &Value) -> &str {
+    match entry.get("type").and_then(Value::as_str) {
+        Some(ty) if HOUR_TYPES.contains(&ty) => ty,
+        _ => "regular",
+    }
+}
+
+/// Tally Leistungsnachweis entries into a billable invoice at `charge_rate` (the
+/// Verrechnungssatz billed to the Entleiher), applying per-category surcharge
+/// percentages. Mirrors computeNachweisTotals + computeNachweisPay but bills at
+/// the charge rate rather than the worker's base pay. One invoice line per
+/// non-empty category; lines are rounded and `net_total` is the sum of lines.
+pub fn compute_nachweis_billing(
+    entries: &[Value],
+    charge_rate: f64,
+    surcharge_pct: &Value,
+) -> NachweisBilling {
+    let mut lines = Vec::new();
+    let mut net_total = 0.0;
+    let mut total_hours = 0.0;
+    for ty in HOUR_TYPES {
+        let hours: f64 = entries
+            .iter()
+            .filter(|e| entry_type(e) == ty)
+            .map(entry_hours)
+            .sum();
+        if hours == 0.0 {
+            continue;
+        }
+        total_hours += hours;
+        let pct = if ty == "regular" {
+            0.0
+        } else {
+            surcharge_pct.get(ty).and_then(Value::as_f64).unwrap_or(0.0)
+        };
+        let rate = round2(charge_rate * (1.0 + pct / 100.0));
+        let amount = round2(hours * rate);
+        net_total += amount;
+        lines.push(NachweisLine {
+            category: ty.to_string(),
+            hours,
+            rate,
+            amount,
+        });
+    }
+    NachweisBilling {
+        total_hours,
+        net_total: round2(net_total),
+        lines,
+    }
+}
+
+/// Billing gate: a Leistungsnachweis may be invoiced only once the Entleiher has
+/// signed it and it carries time entries. Mirrors evaluateBillingGate. Returns
+/// the blocking reasons; empty means billing may be released.
+pub fn evaluate_billing_gate(nachweis: &Value) -> Vec<&'static str> {
+    let mut blockers = Vec::new();
+    let signed = field_bool(nachweis, "entleiher_signed") == Some(true)
+        && field_i64(nachweis, "signed_at_ms").unwrap_or(0) > 0;
+    if !signed {
+        blockers.push("entleiher_signature_missing");
+    }
+    let has_entries = nachweis
+        .get("entries")
+        .and_then(Value::as_array)
+        .map(|a| !a.is_empty())
+        .unwrap_or(false);
+    if !has_entries {
+        blockers.push("no_time_entries");
+    }
+    blockers
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,5 +508,44 @@ mod tests {
             signature_request_status(&[json!({"state": "pending"})], None, None, NOW),
             "created"
         );
+    }
+
+    #[test]
+    fn nachweis_billing_applies_surcharges_per_category() {
+        let entries = vec![
+            json!({"type": "regular", "hours": 40.0}),
+            json!({"type": "nacht", "hours": 8.0}),
+            json!({"type": "sonntag", "hours": 4.0}),
+            json!({"type": "unknown", "hours": 2.0}), // falls back to regular
+        ];
+        let surcharge = json!({"nacht": 25.0, "sonntag": 50.0, "feiertag": 100.0});
+        let billing = compute_nachweis_billing(&entries, 30.0, &surcharge);
+        // regular: (40 + 2) * 30 = 1260; nacht: 8 * 37.5 = 300; sonntag: 4 * 45 = 180
+        assert_eq!(billing.total_hours, 54.0);
+        assert_eq!(billing.net_total, 1740.0);
+        let nacht = billing
+            .lines
+            .iter()
+            .find(|l| l.category == "nacht")
+            .unwrap();
+        assert_eq!(nacht.rate, 37.5);
+        assert_eq!(nacht.amount, 300.0);
+        assert!(!billing.lines.iter().any(|l| l.category == "feiertag")); // zero hours omitted
+    }
+
+    #[test]
+    fn billing_gate_requires_signature_and_entries() {
+        assert!(evaluate_billing_gate(&json!({
+            "entleiher_signed": true,
+            "signed_at_ms": NOW,
+            "entries": [{"type": "regular", "hours": 8.0}]
+        }))
+        .is_empty());
+        assert!(evaluate_billing_gate(&json!({"entries": [{"hours": 8.0}]}))
+            .contains(&"entleiher_signature_missing"));
+        assert!(evaluate_billing_gate(
+            &json!({"entleiher_signed": true, "signed_at_ms": NOW, "entries": []})
+        )
+        .contains(&"no_time_entries"));
     }
 }
