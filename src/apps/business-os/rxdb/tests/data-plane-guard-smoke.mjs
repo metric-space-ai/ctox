@@ -97,13 +97,13 @@ for (const file of readdirSync(rustPluginDir).filter((name) => name.endsWith('.r
 }
 
 // ---------------------------------------------------------------------------
-// Cache-buster parity: every file that imports the bundle must carry an
-// IDENTICAL `?v=` string. The browser module cache keys on the full URL — a
-// mismatch loads a SECOND copy of the bundle with its own SHARED_ROOM_PEERS
-// map, i.e. a duplicate signaling socket + RTCPeerConnection per room (peer
-// storm). matching/ui/businessOsDataSource.js no longer imports the bundle (it
-// reads the shell-injected database via getDatabase()), so it is not a bundle
-// importer and is not checked here.
+// Cache-buster parity: both direct bundle importers must carry an IDENTICAL
+// `?v=` string. The browser module cache keys on the full URL — a mismatch
+// loads a SECOND copy of the bundle with its own SHARED_ROOM_PEERS map, i.e.
+// a duplicate signaling socket + RTCPeerConnection per room (peer storm).
+// App modules (matching included) now receive the database handle from the
+// shell facade (setBusinessOsDatabaseContext) and no longer import the bundle,
+// so they carry no buster of their own. See docs/ctox-rxdb.md §9.
 // ---------------------------------------------------------------------------
 {
   const importers = [

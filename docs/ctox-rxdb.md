@@ -525,17 +525,21 @@ npx -y esbuild@0.28.0 src/apps/business-os/rxdb/src/index.mjs \
 ```
 
 **Cache-buster discipline.** The bundle is imported with a `?v=` query in
-exactly three places, which must always carry the **identical** value:
+exactly two places, which must always carry the **identical** value:
 
 - `src/apps/business-os/shared/db.js` (`RXDB_BUNDLE_URL`)
 - `src/apps/business-os/shared/sync.js` (fallback dynamic import)
-- `src/apps/business-os/modules/matching/ui/businessOsDataSource.js`
+
+App modules do **not** import the bundle directly — they receive the database
+handle from the shell facade (`setBusinessOsDatabaseContext`). The matching
+module's `businessOsDataSource.js` used to be a third importer; it moved to the
+facade, so it carries no buster and is no longer checked by the guard.
 
 A mismatch makes the browser load a **second copy of the bundle** — two
 module graphs, two shared-room-peer registries, duplicate peers in the room.
 After any `src/` change: rebuild dist with the command above **and** bump the
-buster in all three files (current value at the time of writing:
-`20260610-rxdb-lww-origin`).
+buster in both files (current value at the time of writing:
+`20260617-support-schema`).
 
 `src/scripts/vendor-builds/build-ctox-rxdb-js.mjs` does **not** build
 anything: it verifies the manifest identity (name/public name,
