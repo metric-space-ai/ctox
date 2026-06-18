@@ -480,6 +480,29 @@ fn business_os_guard_blocks_relative_module_cd_variable_whole_file_cat() -> anyh
 }
 
 #[test]
+fn business_os_guard_blocks_heredoc_then_trailing_whole_file_cat() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+    let module_dir = root
+        .path()
+        .join("runtime/business-os/installed-modules/subscriptions");
+    fs::create_dir_all(module_dir.join("locales"))?;
+    let locale_path = module_dir.join("locales/en.json");
+    let command = format!(
+        "cat > {} <<'JSON'\n{{\"title\":\"Subscriptions\"}}\nJSON\ncat {}",
+        locale_path.display(),
+        locale_path.display()
+    );
+
+    let err = business_os_app_root_artifact_write_guard(&command, root.path())
+        .expect("trailing cat after heredoc should be blocked");
+
+    assert!(err.contains("whole-file dump"));
+    assert!(err.contains("runtime/business-os/installed-modules/subscriptions/locales/en.json"));
+    Ok(())
+}
+
+#[test]
 fn business_os_guard_allows_targeted_installed_module_reads() -> anyhow::Result<()> {
     let root = tempdir()?;
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;
@@ -571,6 +594,21 @@ fn business_os_guard_allows_module_dir_manifest_write() -> anyhow::Result<()> {
     assert!(
         business_os_app_root_artifact_write_guard(
             "MODULE_DIR=runtime/business-os/installed-modules/inventory && cat > \"$MODULE_DIR/module.json\" <<'JSON'\n{}\nJSON",
+            root.path(),
+        )
+        .is_none()
+    );
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_allows_small_module_heredoc_without_readback() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    assert!(
+        business_os_app_root_artifact_write_guard(
+            "cat > runtime/business-os/installed-modules/subscriptions/locales/en.json <<'JSON'\n{\"title\":\"Subscriptions\"}\nJSON",
             root.path(),
         )
         .is_none()

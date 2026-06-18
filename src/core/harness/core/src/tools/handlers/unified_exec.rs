@@ -769,8 +769,11 @@ fn command_reads_business_os_module_whole_file(
     if !command_targets_business_os_module(&lower, workspace_root, cwd) {
         return None;
     }
-    if !lower_contains_shell_word(&lower, "cat") || lower.contains("<<") {
+    if !lower_contains_shell_word(&lower, "cat") {
         return None;
+    }
+    if lower.contains("<<") {
+        return command_reads_business_os_module_after_heredoc(command, workspace_root, cwd);
     }
     if lower.contains("| head")
         || lower.contains("| tail")
@@ -798,6 +801,55 @@ fn command_reads_business_os_module_whole_file(
             }
             if module_cd_target.is_some() && token_is_shell_variable_reference(target) {
                 return module_cd_target.clone();
+            }
+        }
+    }
+    None
+}
+
+fn command_reads_business_os_module_after_heredoc(
+    command: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+) -> Option<String> {
+    let cwd_is_module_dir = is_business_os_module_dir(workspace_root, cwd);
+    let full_tokens = shellish_tokens(command);
+    let module_cd_target = command_cd_target_business_os_module_dir(&full_tokens);
+    for line in command.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        if !lower_contains_shell_word(&lower, "cat")
+            || lower.contains("<<")
+            || lower.contains('>')
+            || lower.contains("| head")
+            || lower.contains("| tail")
+            || lower.contains("| wc")
+            || lower.contains("| sed -n")
+            || lower.contains("| rg ")
+            || lower.contains("| grep ")
+        {
+            continue;
+        }
+        let tokens = shellish_tokens(trimmed);
+        for (idx, token) in tokens.iter().enumerate() {
+            if token != "cat" {
+                continue;
+            }
+            for target in tokens.iter().skip(idx + 1) {
+                if target.starts_with('-') {
+                    continue;
+                }
+                if let Some(path) =
+                    business_os_module_artifact_token_name(target, cwd_is_module_dir)
+                {
+                    return Some(path);
+                }
+                if module_cd_target.is_some() && token_is_shell_variable_reference(target) {
+                    return module_cd_target.clone();
+                }
             }
         }
     }
