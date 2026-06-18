@@ -6670,9 +6670,11 @@ fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
         return job.prompt.clone();
     };
     format!(
-        "{}\n\nBusiness OS app module execution rules:\n- Your only deliverable is the runnable Business OS app/module under `{}`. Do not create plans, skill files, trace files, root aliases, or blocker/status notes as substitutes for the app.\n- The CTOX service owns queue and Business OS command lifecycle. Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, `ctox queue block`, or direct SQL against queue/command/runtime status tables. Do not act on queue IDs shown in context or open-work blocks; they are service context, not your completion target.\n- Do not run process-mining, harness self-diagnosis, ticket, skillbook, or queue-cleanup commands unless this app build prompt explicitly asks for that separate operational work.\n- First establish the required file inventory under `{}`: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales/de.json, locales/en.json, and at least one tests/*.test.mjs file. If any required file is missing, create it before optional UI polish.\n- Exact mount rule: index.js must load `./index.html` with `fetch(new URL('./index.html', import.meta.url))`, assign the loaded HTML into `ctx.host.innerHTML`, and attach `./index.css` with `new URL('./index.css', import.meta.url)` before DOM queries or event wiring. Do not build a DOM-only UI while leaving index.html/index.css unused.\n- Use `MODULE_DIR=\"{}\"` and write every generated file as `$MODULE_DIR/<file>`. Do not write root-level app artifacts or `src/apps/business-os/installed-modules` for runtime-installed modules.\n- Use one/two panes plus modals or drawers by default. Remove `layout.right`, right panes, right-column CSS/resizers, and three-column grids unless the user explicitly requested a persistent third pane and the manifest carries a concrete workflow justification.\n- Every visible control must have a real handler that mutates a module-owned collection or dispatches a tested Business OS command payload. Remove decorative controls instead of leaving placeholders.\n- Tests must prove positive behavior only. Do not write negative source-text scans, forbidden-literal assertions, or tests that quote banned anti-pattern strings such as layout/right-pane keys; validators own those checks.\n- Before claiming success, run the module tests plus `ctox business-os app validate {} {}`. If validation reports any failure, repair the exact bullets and rerun; do not finish on a red validator.\n- Final response should only summarize app files and verification. Do not include queue IDs, command IDs, internal table names, or lifecycle claims.",
+        "{}\n\nBusiness OS app module execution rules:\n- Your only deliverable is the runnable Business OS app/module under `{}`. Do not create plans, skill files, trace files, root aliases, or blocker/status notes as substitutes for the app.\n- The CTOX service owns queue and Business OS command lifecycle. Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, `ctox queue block`, or direct SQL against queue/command/runtime status tables. Do not act on queue IDs shown in context or open-work blocks; they are service context, not your completion target.\n- Do not run process-mining, harness self-diagnosis, ticket, skillbook, or queue-cleanup commands unless this app build prompt explicitly asks for that separate operational work.\n- For a new app or empty target directory, first create the required file inventory with `ctox business-os app scaffold {} {}` from the workspace root, adding `--title <short app title>` when the requested app title is clear. This creates module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales, helper files, and tests in the correct app directory. Do not hand-author module.json or schema files from scratch before scaffold. Do not use `--force` for an existing app modification.\n- After scaffold, customize only files under `{}` for the requested domain and workflow. Keep the generated persistence, mount, stylesheet, schema, and automation contracts unless a validator failure demands a specific repair.\n- Exact mount rule: index.js must load `./index.html` with `fetch(new URL('./index.html', import.meta.url))`, assign the loaded HTML into `ctx.host.innerHTML`, and attach `./index.css` with `new URL('./index.css', import.meta.url)` before DOM queries or event wiring. Do not build a DOM-only UI while leaving index.html/index.css unused.\n- Use `MODULE_DIR=\"{}\"` and write every generated file as `$MODULE_DIR/<file>`. Do not write root-level app artifacts or `src/apps/business-os/installed-modules` for runtime-installed modules.\n- Use one/two panes plus modals or drawers by default. Remove `layout.right`, right panes, right-column CSS/resizers, and three-column grids unless the user explicitly requested a persistent third pane and the manifest carries a concrete workflow justification.\n- Every visible control must have a real handler that mutates a module-owned collection or dispatches a tested Business OS command payload. Remove decorative controls instead of leaving placeholders.\n- Tests must prove positive behavior only. Do not write negative source-text scans, forbidden-literal assertions, or tests that quote banned anti-pattern strings such as layout/right-pane keys; validators own those checks.\n- Before claiming success, run the module tests plus `ctox business-os app validate {} {}`. If validation reports any failure, repair the exact bullets and rerun; do not finish on a red validator.\n- Final response should only summarize app files and verification. Do not include queue IDs, command IDs, internal table names, or lifecycle claims.",
         job.prompt,
         target.artifact_directory,
+        target.module_id,
+        target.mode_flag,
         target.artifact_directory,
         target.artifact_directory,
         target.module_id,
@@ -7056,13 +7058,15 @@ fn render_business_os_app_module_validation_feedback(
     report: &str,
 ) -> String {
     format!(
-        "Business OS app artifact validation failed. Continue the same app-build task and repair the generated module before finishing.\n\nTask source: {}\n\nBusiness OS app build target:\n- module_id: {}\n- install_target: {}\n- only_allowed_app_artifact_directory: {}\n\nallowed artifact directory: {}\n\nValidator report:\n{}\n\nImmediate repair order:\n1. Create or repair every missing required file first: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales/de.json, locales/en.json, and tests/*.test.mjs under {}.\n2. If the validator reports the installed mount contract, edit index.js so mount(ctx) loads `./index.html` with `fetch(new URL('./index.html', import.meta.url))`, assigns the loaded HTML into `ctx.host.innerHTML`, and attaches `./index.css` with `new URL('./index.css', import.meta.url)` before DOM queries or event wiring.\n3. If module tests fail, verify the failing fixture by hand: expected counts/totals must be internally consistent with the domain rules and helper logic. Fix app logic when the rule is violated; fix generated test expectations when they are mathematically impossible.\n4. Remove default third/right panes, right-column CSS/resizers, and three-column grids unless the workflow explicitly justifies a persistent third pane.\n5. If tests mention forbidden anti-pattern strings only to prove absence, delete those negative source-text tests and replace them with positive behavior/schema/helper assertions.\n6. Re-run the validator and keep repairing exact bullets until it is green.\n\nRepair rules:\n- Edit only files under {}.\n- Do not create root-level module.json, root-level collections.schema.json, src/skills output, package-manager files, node_modules, or HTTP/database fallbacks.\n- Do not run or rely on npm, npx, pnpm, yarn, bun, esbuild, Vite, Rollup, Webpack, bundlers, transpilers, package installs, package.json, or node_modules as syntax, import, test, or readiness proof. Business OS apps are no-build vanilla HTML/CSS/browser ESM.\n- Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or direct SQL against queue/command/runtime status rows. CTOX service owns lifecycle completion after green validation.\n- For installed modules, module.json.entry must be installed-modules/{}/index.html and module.json.install_scope must be installed.\n- schema.js and collections.schema.json must export only module-owned collections; shell collections such as business_commands stay dependencies in module.json.collections only.\n- Remove default third/right panes unless there is a concrete persistent workflow justification.\n- Tests must not quote forbidden anti-pattern strings for absence checks; validators own source-text bans.\n- Run the validator again before claiming completion:\n  ctox business-os app validate {} {}\n\nOriginal task remains active:\n{}",
+        "Business OS app artifact validation failed. Continue the same app-build task and repair the generated module before finishing.\n\nTask source: {}\n\nBusiness OS app build target:\n- module_id: {}\n- install_target: {}\n- only_allowed_app_artifact_directory: {}\n\nallowed artifact directory: {}\n\nValidator report:\n{}\n\nImmediate repair order:\n1. If multiple required files are missing or the module was never scaffolded, run `ctox business-os app scaffold {} {}` from the workspace root. Use `--force` only to reset a failed new-app scaffold, never for an existing app modification.\n2. Create or repair every missing required file first: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales/de.json, locales/en.json, and tests/*.test.mjs under {}.\n3. If the validator reports the installed mount contract, edit index.js so mount(ctx) loads `./index.html` with `fetch(new URL('./index.html', import.meta.url))`, assigns the loaded HTML into `ctx.host.innerHTML`, and attaches `./index.css` with `new URL('./index.css', import.meta.url)` before DOM queries or event wiring.\n4. If module tests fail, verify the failing fixture by hand: expected counts/totals must be internally consistent with the domain rules and helper logic. Fix app logic when the rule is violated; fix generated test expectations when they are mathematically impossible.\n5. Remove default third/right panes, right-column CSS/resizers, and three-column grids unless the workflow explicitly justifies a persistent third pane.\n6. If tests mention forbidden anti-pattern strings only to prove absence, delete those negative source-text tests and replace them with positive behavior/schema/helper assertions.\n7. Re-run the validator and keep repairing exact bullets until it is green.\n\nRepair rules:\n- Edit only files under {}.\n- Do not create root-level module.json, root-level collections.schema.json, src/skills output, package-manager files, node_modules, or HTTP/database fallbacks.\n- Do not run or rely on npm, npx, pnpm, yarn, bun, esbuild, Vite, Rollup, Webpack, bundlers, transpilers, package installs, package.json, or node_modules as syntax, import, test, or readiness proof. Business OS apps are no-build vanilla HTML/CSS/browser ESM.\n- Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or direct SQL against queue/command/runtime status rows. CTOX service owns lifecycle completion after green validation.\n- For installed modules, module.json.entry must be installed-modules/{}/index.html and module.json.install_scope must be installed.\n- schema.js and collections.schema.json must export only module-owned collections; shell collections such as business_commands stay dependencies in module.json.collections only.\n- Remove default third/right panes unless there is a concrete persistent workflow justification.\n- Tests must not quote forbidden anti-pattern strings for absence checks; validators own source-text bans.\n- Run the validator again before claiming completion:\n  ctox business-os app validate {} {}\n\nOriginal task remains active:\n{}",
         job.source_label,
         target.module_id,
         target.install_target,
         target.artifact_directory,
         target.artifact_directory,
         clip_text(report.trim(), 6000),
+        target.module_id,
+        target.mode_flag,
         target.artifact_directory,
         target.artifact_directory,
         target.module_id,
@@ -11051,7 +11055,7 @@ fn recover_stale_business_os_app_queue_task_summary(
     let tasks = channels::list_queue_tasks(root, &["leased".to_string()], limit.max(1))?;
     let mut summary = BusinessOsAppQueueRecoverySummary::default();
     for task in tasks {
-        if actively_inflight_leased_message_key(state, &task.message_key)
+        if active_or_pending_leased_message_key(state, &task.message_key)
             || business_os_app_module_target_from_prompt(&task.prompt).is_none()
         {
             continue;
@@ -16003,12 +16007,18 @@ fn inflight_leased_message_key(state: &Arc<Mutex<SharedState>>, message_key: &st
     shared.leased_message_keys_inflight.contains(message_key)
 }
 
-fn actively_inflight_leased_message_key(
+fn active_or_pending_leased_message_key(
     state: &Arc<Mutex<SharedState>>,
     message_key: &str,
 ) -> bool {
     let shared = lock_shared_state(state);
-    shared.worker_active_count > 0 && shared.leased_message_keys_inflight.contains(message_key)
+    (shared.worker_active_count > 0 && shared.leased_message_keys_inflight.contains(message_key))
+        || shared.pending_prompts.iter().any(|prompt| {
+            prompt
+                .leased_message_keys
+                .iter()
+                .any(|key| key == message_key)
+        })
 }
 
 fn lock_shared_state<'a>(
@@ -20832,7 +20842,8 @@ Business OS command:
         assert!(prompt.contains("The CTOX service owns queue and Business OS command lifecycle"));
         assert!(prompt.contains("`ctox queue complete`"));
         assert!(prompt.contains("Do not act on queue IDs shown in context"));
-        assert!(prompt.contains("First establish the required file inventory"));
+        assert!(prompt.contains("ctox business-os app scaffold contracts --installed"));
+        assert!(prompt.contains("Do not hand-author module.json or schema files from scratch"));
         assert!(prompt.contains("Exact mount rule: index.js must load `./index.html`"));
         assert!(prompt.contains("fetch(new URL('./index.html', import.meta.url))"));
         assert!(prompt.contains("ctx.host.innerHTML"));
@@ -21511,6 +21522,51 @@ Business OS command:
 
         assert_eq!(updated, 1);
         assert_eq!(route_status_for(&root, &task.message_key), "handled");
+    }
+
+    #[test]
+    fn stale_app_validation_recovery_skips_pending_prompt_before_worker_start() {
+        let root = temp_root("stale-app-validation-recovery-pending-skip");
+        let script_dir = root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "console.error('module files not written yet'); process.exit(1);\n",
+        )
+        .expect("write red validator script fixture");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create subscriptions app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/subscriptions".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let job = queued_prompt_from_queue_task(
+            channels::load_queue_task(&root, &task.message_key)
+                .expect("load leased task")
+                .expect("leased task present"),
+        );
+        {
+            let mut shared = lock_shared_state(&state);
+            track_leased_keys_locked(&mut shared, std::slice::from_ref(&task.message_key), &[]);
+            shared.pending_prompts.push_back(job);
+        }
+
+        let updated = recover_stale_business_os_app_queue_tasks(&root, &state, 10)
+            .expect("stale app validation recovery failed");
+
+        assert_eq!(updated, 0);
+        assert_eq!(route_status_for(&root, &task.message_key), "leased");
     }
 
     #[test]

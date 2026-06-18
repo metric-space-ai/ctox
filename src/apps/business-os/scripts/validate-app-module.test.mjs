@@ -7,9 +7,17 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const validator = fileURLToPath(new URL('./validate-app-module.mjs', import.meta.url));
+const scaffold = fileURLToPath(new URL('./scaffold-app-module.mjs', import.meta.url));
 
 function runValidator(workspace, moduleId, ...args) {
   return spawnSync(process.execPath, [validator, moduleId, ...args, '--workspace', workspace], {
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+  });
+}
+
+function runScaffold(workspace, moduleId, ...args) {
+  return spawnSync(process.execPath, [scaffold, moduleId, ...args, '--workspace', workspace], {
     encoding: 'utf8',
     maxBuffer: 16 * 1024 * 1024,
   });
@@ -242,6 +250,28 @@ function installedIndexJsWith(extraLines = []) {
     '}',
     '',
   ].join('\n');
+}
+
+{
+  const root = makeWorkspace();
+  const scaffoldRun = runScaffold(root, 'scaffolded', '--installed', '--title', 'Scaffolded App');
+  assert.equal(scaffoldRun.status, 0, `${scaffoldRun.stderr}\n${scaffoldRun.stdout}`);
+  const validateRun = runValidator(root, 'scaffolded', '--installed');
+  assert.equal(validateRun.status, 0, `${validateRun.stderr}\n${validateRun.stdout}`);
+  assert.match(validateRun.stdout, /validation OK: scaffolded \(installed mode\)/);
+
+  const overwriteRun = runScaffold(root, 'scaffolded', '--installed');
+  assert.notEqual(overwriteRun.status, 0);
+  assert.match(overwriteRun.stderr, /already contains app files/);
+}
+
+{
+  const root = makeWorkspace();
+  const scaffoldRun = runScaffold(root, 'sourcescaffold', '--source', '--title', 'Source Scaffold');
+  assert.equal(scaffoldRun.status, 0, `${scaffoldRun.stderr}\n${scaffoldRun.stdout}`);
+  const validateRun = runValidator(root, 'sourcescaffold', '--source');
+  assert.equal(validateRun.status, 0, `${validateRun.stderr}\n${validateRun.stdout}`);
+  assert.match(validateRun.stdout, /validation OK: sourcescaffold \(source mode\)/);
 }
 
 {

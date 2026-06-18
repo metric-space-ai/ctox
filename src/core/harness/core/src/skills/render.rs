@@ -35,7 +35,7 @@ pub fn render_skills_section(skills: &[SkillMetadata]) -> Option<String> {
 - How to use a skill (progressive disclosure):
   1) After deciding to use a skill, read its injected instructions. Read only enough to follow the workflow.
   2) For file skills, when `SKILL.md` references relative paths (e.g., `scripts/foo.py`), resolve them relative to the skill directory listed above first, and only consider other paths if needed.
-  3) For system skills, use CTOX CLI/API commands referenced by the skill. Do not assume arbitrary bundled scripts are available on disk.
+  3) For system skills, read the body with `ctox skills system show <name> --body` when you need the full instructions. Do not `cat` `/__ctox_system_skills__/.../SKILL.md`; that path is a virtual reference, not a shell-readable file.
   4) If a file skill points to extra folders such as `references/`, load only the specific files needed for the request; don't bulk-load everything.
   5) If a file skill has `scripts/`, prefer running or patching them instead of retyping large code blocks.
   6) If a file skill has `assets/` or templates, reuse them instead of recreating from scratch.
