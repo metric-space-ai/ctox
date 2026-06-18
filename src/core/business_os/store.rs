@@ -7264,6 +7264,23 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
                 }
             }
         }
+        command_type if is_ats_active_command(command_type) => {
+            // Server-authoritative ATS gate checks: the browser asks the daemon
+            // whether a deployment/presentation is allowed; the decision is
+            // computed native-side from business_credentials/business_consents
+            // via ats_gates and returned as the command outcome. Read-only, so
+            // an authenticated peer suffices (no mutation, no projection).
+            let session = rxdb_authenticated_session(root, &command)?;
+            let outcome = handle_ats_active_command(root, &session, &command)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                command.record_id.as_deref(),
+                Some("completed"),
+                outcome,
+            );
+        }
         command_type if command_type.starts_with("ctox.channel.") => {
             let mutation: ChannelCommandRequest = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.channel payload")?;
@@ -14969,6 +14986,101 @@ fn process_cv_print_parse_command(
             )?;
             Err(err)
         }
+    }
+}
+
+pub fn is_ats_active_command(command_type: &str) -> bool {
+    matches!(command_type, "ats.deployment.check" | "ats.consent.check")
+}
+
+/// Load every non-deleted record of `collection` whose JSON `field` equals
+/// `value`, from the generic business_records store.
+fn load_business_records_by_field(
+    conn: &Connection,
+    collection: &str,
+    field: &str,
+    value: &str,
+) -> anyhow::Result<Vec<Value>> {
+    let mut stmt = conn.prepare(
+        "SELECT payload_json FROM business_records
+         WHERE collection = ?1 AND deleted = 0
+           AND json_extract(payload_json, '$.' || ?2) = ?3",
+    )?;
+    let rows = stmt.query_map(params![collection, field, value], |row| {
+        row.get::<_, String>(0)
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        if let Ok(parsed) = serde_json::from_str::<Value>(&row?) {
+            out.push(parsed);
+        }
+    }
+    Ok(out)
+}
+
+/// Server-authoritative ATS gate checks. Reads the subject's credentials/consents
+/// from business_records and returns an allow/deny decision computed by the
+/// native ats_gates primitives.
+fn handle_ats_active_command(
+    root: &Path,
+    _session: &BusinessOsSession,
+    command: &BusinessCommand,
+) -> anyhow::Result<Value> {
+    let conn = open_store(root)?;
+    let now = now_ms() as i64;
+    match command.command_type.as_str() {
+        "ats.deployment.check" => {
+            let subject_id = command
+                .payload
+                .get("subject_id")
+                .and_then(Value::as_str)
+                .context("ats.deployment.check requires subject_id")?;
+            let required: Vec<String> = command
+                .payload
+                .get("required_types")
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(ToOwned::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let required_refs: Vec<&str> = required.iter().map(String::as_str).collect();
+            let credentials = load_business_records_by_field(
+                &conn,
+                "business_credentials",
+                "subject_id",
+                subject_id,
+            )?;
+            let readiness =
+                super::ats_gates::evaluate_deployment_readiness(&credentials, &required_refs, now);
+            Ok(serde_json::json!({
+                "ok": true,
+                "ready": readiness.ready,
+                "blockers": readiness
+                    .blockers
+                    .iter()
+                    .map(|(ty, reason)| serde_json::json!({ "credential_type": ty, "reason": reason }))
+                    .collect::<Vec<_>>(),
+            }))
+        }
+        "ats.consent.check" => {
+            let subject_id = command
+                .payload
+                .get("subject_id")
+                .and_then(Value::as_str)
+                .context("ats.consent.check requires subject_id")?;
+            let purpose = command.payload.get("purpose").and_then(Value::as_str);
+            let consents = load_business_records_by_field(
+                &conn,
+                "business_consents",
+                "subject_id",
+                subject_id,
+            )?;
+            let allowed = super::ats_gates::evaluate_consent_gate(purpose, &consents, now);
+            Ok(serde_json::json!({ "ok": true, "allowed": allowed, "purpose": purpose }))
+        }
+        other => Err(anyhow::anyhow!("unsupported ats command type: {other}")),
     }
 }
 
