@@ -1196,38 +1196,63 @@ fn print_json(value: &Value) -> Result<()> {
 
 const CREDENTIAL_SCOPE: &str = "credentials";
 
-/// Keys that must be stored encrypted (never in plaintext runtime config rows).
-const SECRET_KEYS: &[&str] = &[
-    "OPENAI_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "OPENROUTER_API_KEY",
-    "MISTRAL_API_KEY",
-    "CTOX_MISTRAL_API_KEY",
-    "MINIMAX_API_KEY",
-    "CTOX_LLM_PROXY_API_KEY",
-    "AZURE_FOUNDRY_API_KEY",
-    "DATABASE_URL",
-    "CTO_EMAIL_PASSWORD",
-    "CTO_EMAIL_GRAPH_PASSWORD",
-    "CTO_EMAIL_GRAPH_CLIENT_SECRET",
-    "CTO_EMAIL_GRAPH_ACCESS_TOKEN",
-    "CTO_TEAMS_PASSWORD",
-    "CTO_TEAMS_CLIENT_SECRET",
-    "CTO_TEAMS_GRAPH_ACCESS_TOKEN",
-    "CTOX_WEBRTC_PASSWORD",
+/// Keys that must be stored encrypted (never in plaintext runtime config rows),
+/// paired with a short human-facing description. This is the single source of
+/// truth for the credential catalog: `is_secret_key`,
+/// `merge_credentials_into_env_map`, and the Business OS credentials app
+/// (`known_credential_keys`) all derive from it.
+const CREDENTIAL_CATALOG: &[(&str, &str)] = &[
+    ("OPENAI_API_KEY", "OpenAI API key"),
+    ("ANTHROPIC_API_KEY", "Anthropic (Claude) API key"),
+    ("OPENROUTER_API_KEY", "OpenRouter API key"),
+    ("MISTRAL_API_KEY", "Mistral API key"),
+    ("CTOX_MISTRAL_API_KEY", "Mistral API key (CTOX-scoped)"),
+    ("MINIMAX_API_KEY", "MiniMax API key"),
+    ("CTOX_LLM_PROXY_API_KEY", "CTOX LLM proxy API key"),
+    ("AZURE_FOUNDRY_API_KEY", "Azure AI Foundry API key"),
+    ("DATABASE_URL", "Database connection URL"),
+    ("CTO_EMAIL_PASSWORD", "Email account password"),
+    ("CTO_EMAIL_GRAPH_PASSWORD", "Microsoft Graph email password"),
+    (
+        "CTO_EMAIL_GRAPH_CLIENT_SECRET",
+        "Microsoft Graph email client secret",
+    ),
+    (
+        "CTO_EMAIL_GRAPH_ACCESS_TOKEN",
+        "Microsoft Graph email access token",
+    ),
+    ("CTO_TEAMS_PASSWORD", "Microsoft Teams password"),
+    ("CTO_TEAMS_CLIENT_SECRET", "Microsoft Teams client secret"),
+    (
+        "CTO_TEAMS_GRAPH_ACCESS_TOKEN",
+        "Microsoft Teams Graph access token",
+    ),
+    ("CTOX_WEBRTC_PASSWORD", "Business OS WebRTC room password"),
     // IoT protocol-agent device credentials (gateway.rs MQTT/HTTP/WS specs):
     // password + auth-header values must route to the encrypted secret store, not
     // the plaintext runtime_env_kv table.
-    "CTO_IOT_MQTT_PASSWORD",
-    "CTO_IOT_HTTP_AUTH_HEADER",
-    "CTO_IOT_WS_AUTH_HEADER",
-    "HF_TOKEN",
-    "HUGGINGFACE_HUB_TOKEN",
+    ("CTO_IOT_MQTT_PASSWORD", "IoT MQTT device password"),
+    ("CTO_IOT_HTTP_AUTH_HEADER", "IoT HTTP auth header"),
+    ("CTO_IOT_WS_AUTH_HEADER", "IoT WebSocket auth header"),
+    ("HF_TOKEN", "Hugging Face token"),
+    ("HUGGINGFACE_HUB_TOKEN", "Hugging Face Hub token"),
 ];
 
 /// Returns true if `key` is a credential that must be stored encrypted.
 pub fn is_secret_key(key: &str) -> bool {
-    SECRET_KEYS.contains(&key)
+    CREDENTIAL_CATALOG.iter().any(|(name, _)| *name == key)
+}
+
+/// The known credential catalog (key + short description). Used by the Business
+/// OS credentials app to render "set / unset" slots without ever touching a
+/// value. Listing metadata never decrypts anything (see `list_secret_records`).
+pub fn known_credential_keys() -> &'static [(&'static str, &'static str)] {
+    CREDENTIAL_CATALOG
+}
+
+/// The scope under which managed credentials live in the secret store.
+pub fn credential_scope() -> &'static str {
+    CREDENTIAL_SCOPE
 }
 
 /// Store a credential value in the encrypted secret store.
@@ -1270,9 +1295,9 @@ pub fn merge_credentials_into_env_map(
     root: &Path,
     env_map: &mut std::collections::BTreeMap<String, String>,
 ) {
-    let missing: Vec<&'static str> = SECRET_KEYS
+    let missing: Vec<&'static str> = CREDENTIAL_CATALOG
         .iter()
-        .copied()
+        .map(|(key, _)| *key)
         .filter(|key| !env_map.contains_key(*key))
         .collect();
     if missing.is_empty() {

@@ -598,6 +598,38 @@ fn business_os_guard_blocks_tmp_file_copy_wrapper_to_module_artifact() -> anyhow
 }
 
 #[test]
+fn business_os_guard_blocks_shell_apply_patch_probe() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "which apply_patch 2>/dev/null; apply_patch --help 2>&1 | head -20",
+        root.path(),
+    )
+    .expect("shell apply_patch probing should be blocked for Business OS app work");
+
+    assert!(err.contains("patch-tool probing"));
+    assert!(err.contains("apply_patch"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_tmp_patch_staging_for_module_artifact() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "cat > /tmp/p1.patch <<'PATCH'\n*** Begin Patch\n*** Update File: runtime/business-os/installed-modules/inventory/index.js\n@@\n-console.log('old');\n+console.log('new');\n*** End Patch\nPATCH",
+        root.path(),
+    )
+    .expect("/tmp .patch staging for module artifact should be blocked");
+
+    assert!(err.contains("temporary patch staging"));
+    assert!(err.contains("runtime/business-os/installed-modules/inventory/index.js"));
+    Ok(())
+}
+
+#[test]
 fn business_os_guard_allows_node_module_tests() -> anyhow::Result<()> {
     let root = tempdir()?;
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;

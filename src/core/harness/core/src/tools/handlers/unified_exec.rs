@@ -348,6 +348,14 @@ pub(crate) fn business_os_app_root_artifact_write_guard(
     cwd: &Path,
 ) -> Option<String> {
     let workspace_root = business_os_workspace_root(cwd)?;
+    if command_probes_or_invokes_shell_patch_tool(command) {
+        return Some(module_shell_patch_tool_guard_message());
+    }
+    if let Some(path) =
+        command_stages_tmp_patch_for_business_os_module(command, &workspace_root, cwd)
+    {
+        return Some(module_tmp_patch_guard_message(&path));
+    }
     for artifact in ["module.json", "collections.schema.json"] {
         let absolute = workspace_root.join(artifact);
         if command_writes_path(command, artifact)
@@ -423,8 +431,8 @@ fn module_writer_guard_message(path: &str) -> String {
     format!(
         "Business OS app module guard blocked a programmatic writer or fragile in-place writer against generated module artifact `{path}`. \
 Do not use Python, Node writer scripts, base64 blobs, generated writer scripts, data URLs, temporary \
-file-copy wrappers, or sed/perl in-place line surgery for Business OS app files. Use direct bounded \
-exact-path shell writes, apply_patch, or smaller local ESM helpers under the module directory."
+file-copy wrappers, shell patch wrappers, or sed/perl in-place line surgery for Business OS app files. Use direct bounded \
+exact-path shell writes or smaller local ESM helpers under the module directory."
     )
 }
 
@@ -433,6 +441,21 @@ fn module_large_heredoc_guard_message(path: &str) -> String {
         "Business OS app module guard blocked an oversized heredoc rewrite of generated module artifact `{path}`. \
 The App Creator scaffold is already present; make targeted edits, split large behavior into smaller \
 module-local ESM helpers, or patch a narrow range instead of rewriting whole generated files."
+    )
+}
+
+fn module_shell_patch_tool_guard_message() -> String {
+    "Business OS app module guard blocked shell patch-tool probing or invocation. \
+Do not discover, inspect, or invoke apply_patch from shell while building runtime-installed Business OS apps. \
+Use direct bounded exact-path writes at the final module path, or split behavior into smaller module-local ESM helpers."
+        .to_string()
+}
+
+fn module_tmp_patch_guard_message(path: &str) -> String {
+    format!(
+        "Business OS app module guard blocked temporary patch staging for generated module artifact `{path}`. \
+Do not create .patch files under /tmp or shell wrappers around patch tools for Business OS app files. \
+Rewrite the affected bounded file directly at its final module path, or split behavior into a smaller module-local ESM helper."
     )
 }
 
@@ -925,6 +948,45 @@ fn command_uses_forbidden_business_os_module_writer(
         return Some(module_path);
     }
     None
+}
+
+fn command_probes_or_invokes_shell_patch_tool(command: &str) -> bool {
+    let compact = command.replace("\\\n", " ").replace('\n', " ");
+    let lower = compact.to_ascii_lowercase();
+    lower_contains_shell_word(&lower, "apply_patch")
+        || lower.contains("/apply_patch")
+        || lower.contains("codex-arg0")
+}
+
+fn command_stages_tmp_patch_for_business_os_module(
+    command: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+) -> Option<String> {
+    let compact = command.replace("\\\n", " ");
+    let lower = compact.to_ascii_lowercase();
+    if !lower.contains("/tmp/")
+        || !lower.contains(".patch")
+        || !command_targets_business_os_module(&lower, workspace_root, cwd)
+    {
+        return None;
+    }
+    let writes_tmp_patch = lower.contains("> /tmp/")
+        || lower.contains(">/tmp/")
+        || lower.contains("> '/tmp/")
+        || lower.contains(">'/tmp/")
+        || lower.contains("> \"/tmp/")
+        || lower.contains(">\"/tmp/")
+        || lower.contains("tee /tmp/")
+        || lower.contains("tee '/tmp/")
+        || lower.contains("tee \"/tmp/");
+    if !writes_tmp_patch {
+        return None;
+    }
+    Some(
+        first_business_os_module_artifact_reference(command, workspace_root, cwd)
+            .unwrap_or_else(|| "module artifact".to_string()),
+    )
 }
 
 fn command_writes_large_business_os_module_heredoc(

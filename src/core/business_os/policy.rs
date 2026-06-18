@@ -28,6 +28,7 @@ pub enum BusinessOsPermission {
     RolesManage,
     RuntimeManage,
     IntegrationsManage,
+    SecretsManage,
     McpManage,
     AppsInstall,
     AppsUninstall,
@@ -54,12 +55,13 @@ pub enum BusinessOsPermission {
     SupportAgentApply,
 }
 
-pub const BUSINESS_OS_PERMISSIONS: [BusinessOsPermission; 29] = [
+pub const BUSINESS_OS_PERMISSIONS: [BusinessOsPermission; 30] = [
     BusinessOsPermission::WorkspaceManage,
     BusinessOsPermission::UsersManage,
     BusinessOsPermission::RolesManage,
     BusinessOsPermission::RuntimeManage,
     BusinessOsPermission::IntegrationsManage,
+    BusinessOsPermission::SecretsManage,
     BusinessOsPermission::McpManage,
     BusinessOsPermission::AppsInstall,
     BusinessOsPermission::AppsUninstall,
@@ -98,6 +100,7 @@ impl BusinessOsPermission {
             Self::RolesManage => "roles.manage",
             Self::RuntimeManage => "runtime.manage",
             Self::IntegrationsManage => "integrations.manage",
+            Self::SecretsManage => "secrets.manage",
             Self::McpManage => "mcp.manage",
             Self::AppsInstall => "apps.install",
             Self::AppsUninstall => "apps.uninstall",
@@ -286,6 +289,7 @@ pub fn evaluate(
         | BusinessOsPermission::RolesManage
         | BusinessOsPermission::RuntimeManage
         | BusinessOsPermission::IntegrationsManage
+        | BusinessOsPermission::SecretsManage
         | BusinessOsPermission::McpManage
         | BusinessOsPermission::AppsInstall
         | BusinessOsPermission::AppsUninstall
@@ -479,6 +483,30 @@ mod tests {
                 &team,
                 BusinessOsPermission::ExternalApprove,
                 &assigned_module,
+                false,
+            ),
+            (
+                &owner,
+                BusinessOsPermission::SecretsManage,
+                &workspace,
+                true,
+            ),
+            (
+                &admin,
+                BusinessOsPermission::SecretsManage,
+                &workspace,
+                true,
+            ),
+            (
+                &founder,
+                BusinessOsPermission::SecretsManage,
+                &workspace,
+                false,
+            ),
+            (
+                &team,
+                BusinessOsPermission::SecretsManage,
+                &workspace,
                 false,
             ),
         ];
