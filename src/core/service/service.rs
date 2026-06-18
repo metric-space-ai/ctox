@@ -3932,19 +3932,24 @@ fn start_prompt_worker(
             };
             let execution_prompt =
                 outbound_email_first_execution_prompt(&job, base_execution_prompt);
-            let result = turn_loop::run_chat_turn_with_events_extended_guarded(
-                &root,
-                &db_path,
-                &execution_prompt,
-                workspace_root,
-                conversation_id,
-                job.suggested_skill.as_deref(),
-                force_continuity_refresh,
-                None, // TUI service: per-turn clients (persistent session TODO)
-                |event| {
-                    push_event(&event_state, format!("phase {} {}", event_source, event));
-                },
-            );
+            let preflight_result =
+                ensure_business_os_app_scaffold_before_worker(&root, &state, &job);
+            let result = match preflight_result {
+                Ok(()) => turn_loop::run_chat_turn_with_events_extended_guarded(
+                    &root,
+                    &db_path,
+                    &execution_prompt,
+                    workspace_root,
+                    conversation_id,
+                    job.suggested_skill.as_deref(),
+                    force_continuity_refresh,
+                    None, // TUI service: per-turn clients (persistent session TODO)
+                    |event| {
+                        push_event(&event_state, format!("phase {} {}", event_source, event));
+                    },
+                ),
+                Err(err) => Err(err),
+            };
             let timeout_follow_up_outcome = match &result {
                 Err(err) => maybe_enqueue_timeout_continuation(&root, &job, &err.to_string())
                     .ok()
@@ -6670,11 +6675,11 @@ fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
         return job.prompt.clone();
     };
     format!(
-        "{}\n\nBusiness OS app module execution rules:\n- Your only deliverable is the runnable Business OS app/module under `{}`. Do not create plans, skill files, trace files, root aliases, or blocker/status notes as substitutes for the app.\n- The CTOX service owns queue and Business OS command lifecycle. Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, `ctox queue block`, or direct SQL against queue/command/runtime status tables. Do not act on queue IDs shown in context or open-work blocks; they are service context, not your completion target.\n- Do not run process-mining, harness self-diagnosis, ticket, skillbook, or queue-cleanup commands unless this app build prompt explicitly asks for that separate operational work.\n- For a new app or empty target directory, first create the required file inventory with `ctox business-os app scaffold {} {}` from the workspace root, adding `--title <short app title>` when the requested app title is clear. This creates module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales, helper files, and tests in the correct app directory. Do not hand-author module.json or schema files from scratch before scaffold. Do not use `--force` for an existing app modification.\n- After scaffold, customize only files under `{}` for the requested domain and workflow. Keep the generated persistence, mount, stylesheet, schema, and automation contracts unless a validator failure demands a specific repair.\n- Exact mount rule: index.js must load `./index.html` with `fetch(new URL('./index.html', import.meta.url))`, assign the loaded HTML into `ctx.host.innerHTML`, and attach `./index.css` with `new URL('./index.css', import.meta.url)` before DOM queries or event wiring. Do not build a DOM-only UI while leaving index.html/index.css unused.\n- Use `MODULE_DIR=\"{}\"` and write every generated file as `$MODULE_DIR/<file>`. Do not write root-level app artifacts or `src/apps/business-os/installed-modules` for runtime-installed modules.\n- Use one/two panes plus modals or drawers by default. Remove `layout.right`, right panes, right-column CSS/resizers, and three-column grids unless the user explicitly requested a persistent third pane and the manifest carries a concrete workflow justification.\n- Every visible control must have a real handler that mutates a module-owned collection or dispatches a tested Business OS command payload. Remove decorative controls instead of leaving placeholders.\n- Tests must prove positive behavior only. Do not write negative source-text scans, forbidden-literal assertions, or tests that quote banned anti-pattern strings such as layout/right-pane keys; validators own those checks.\n- Before claiming success, run the module tests plus `ctox business-os app validate {} {}`. If validation reports any failure, repair the exact bullets and rerun; do not finish on a red validator.\n- Final response should only summarize app files and verification. Do not include queue IDs, command IDs, internal table names, or lifecycle claims.",
+        "{}\n\nBusiness OS app module execution rules:\n- Your only deliverable is the runnable Business OS app/module under `{}`. Do not create plans, skill files, trace files, root aliases, or blocker/status notes as substitutes for the app.\n- The CTOX service owns queue and Business OS command lifecycle. Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, `ctox queue block`, or direct SQL against queue/command/runtime status tables. Do not act on queue IDs shown in context or open-work blocks; they are service context, not your completion target.\n- CTOX service preflight creates a validator-clean scaffold before this turn when the target directory is missing or empty. Start from the files already under `{}`; do not hand-author module.json, schema.js, collections.schema.json, mount wiring, persistence helpers, automation helpers, or tests from scratch.\n- If `{}` is empty because the preflight explicitly failed, stop and report the scaffold failure. Do not invent a different structure.\n- Customize only files under `{}` for the requested domain and workflow. Keep the generated persistence, mount, stylesheet, schema, and automation contracts unless a validator failure demands a specific repair.\n- Exact mount rule: index.js must load `./index.html` with `fetch(new URL('./index.html', import.meta.url))`, assign the loaded HTML into `ctx.host.innerHTML`, and attach `./index.css` with `new URL('./index.css', import.meta.url)` before DOM queries or event wiring. Do not build a DOM-only UI while leaving index.html/index.css unused.\n- Use `MODULE_DIR=\"{}\"` and write every generated file as `$MODULE_DIR/<file>`. Do not write root-level app artifacts or `src/apps/business-os/installed-modules` for runtime-installed modules.\n- Use one/two panes plus modals or drawers by default. Remove `layout.right`, right panes, right-column CSS/resizers, and three-column grids unless the user explicitly requested a persistent third pane and the manifest carries a concrete workflow justification.\n- Every visible control must have a real handler that mutates a module-owned collection or dispatches a tested Business OS command payload. Remove decorative controls instead of leaving placeholders.\n- Tests must prove positive behavior only. Do not write negative source-text scans, forbidden-literal assertions, or tests that quote banned anti-pattern strings such as layout/right-pane keys; validators own those checks.\n- Before claiming success, run the module tests plus `ctox business-os app validate {} {}`. If validation reports any failure, repair the exact bullets and rerun; do not finish on a red validator.\n- Final response should only summarize app files and verification. Do not include queue IDs, command IDs, internal table names, or lifecycle claims.",
         job.prompt,
         target.artifact_directory,
-        target.module_id,
-        target.mode_flag,
+        target.artifact_directory,
+        target.artifact_directory,
         target.artifact_directory,
         target.artifact_directory,
         target.module_id,
@@ -6726,6 +6731,146 @@ fn prompt_line_value(prompt: &str, prefix: &str) -> Option<String> {
         let value = line.trim().strip_prefix(prefix)?.trim();
         (!value.is_empty()).then(|| value.to_string())
     })
+}
+
+fn ensure_business_os_app_scaffold_before_worker(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+    job: &QueuedPrompt,
+) -> Result<()> {
+    let Some(target) = business_os_app_module_target_from_prompt(&job.prompt) else {
+        return Ok(());
+    };
+    if business_os_app_required_inventory_complete(root, &target) {
+        return Ok(());
+    }
+    let artifact_dir = root.join(&target.artifact_directory);
+    if business_os_app_artifact_dir_has_user_content(&artifact_dir)? {
+        push_event(
+            state,
+            format!(
+                "Business OS app scaffold preflight skipped non-empty incomplete target {}",
+                target.artifact_directory
+            ),
+        );
+        return Ok(());
+    }
+    run_business_os_app_scaffold_preflight(root, &target, job)?;
+    push_event(
+        state,
+        format!(
+            "Business OS app scaffold preflight created {}",
+            target.artifact_directory
+        ),
+    );
+    Ok(())
+}
+
+fn business_os_app_required_inventory_complete(
+    root: &Path,
+    target: &BusinessOsAppModuleTarget,
+) -> bool {
+    let artifact_dir = root.join(&target.artifact_directory);
+    [
+        "module.json",
+        "collections.schema.json",
+        "schema.js",
+        "index.html",
+        "index.css",
+        "index.js",
+        "icon.svg",
+        "locales/de.json",
+        "locales/en.json",
+    ]
+    .iter()
+    .all(|relative| artifact_dir.join(relative).is_file())
+        && artifact_dir
+            .join("tests")
+            .read_dir()
+            .ok()
+            .into_iter()
+            .flat_map(|entries| entries.filter_map(|entry| entry.ok()))
+            .any(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    == Some("mjs")
+            })
+}
+
+fn business_os_app_artifact_dir_has_user_content(path: &Path) -> Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    if !path.is_dir() {
+        anyhow::bail!(
+            "Business OS app target {} exists but is not a directory",
+            path.display()
+        );
+    }
+    let mut entries = path
+        .read_dir()
+        .with_context(|| format!("failed to read Business OS app target {}", path.display()))?;
+    Ok(entries.next().transpose()?.is_some())
+}
+
+fn run_business_os_app_scaffold_preflight(
+    root: &Path,
+    target: &BusinessOsAppModuleTarget,
+    job: &QueuedPrompt,
+) -> Result<()> {
+    let script = root.join("src/apps/business-os/scripts/scaffold-app-module.mjs");
+    anyhow::ensure!(
+        script.is_file(),
+        "Business OS app scaffold helper is missing at {}",
+        script.display()
+    );
+    let mut command =
+        Command::new(crate::service::business_os::resolve_business_os_validator_node(root));
+    command
+        .current_dir(root)
+        .arg(&script)
+        .arg(&target.module_id)
+        .arg(target.mode_flag)
+        .arg("--workspace")
+        .arg(root)
+        .arg("--title")
+        .arg(business_os_app_scaffold_title(job))
+        .arg("--json");
+    let output = command_output_with_timeout(
+        &mut command,
+        Duration::from_secs(60),
+        "Business OS app scaffold preflight",
+    )?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let detail = if !stderr.is_empty() { stderr } else { stdout };
+    anyhow::bail!(
+        "Business OS app scaffold preflight failed for {}: {}",
+        target.module_id,
+        clip_text(&detail, 500)
+    )
+}
+
+fn business_os_app_scaffold_title(job: &QueuedPrompt) -> String {
+    let title = job
+        .goal
+        .trim()
+        .strip_prefix("Build ")
+        .unwrap_or(job.goal.trim())
+        .strip_suffix(" Bench App")
+        .unwrap_or_else(|| job.goal.trim())
+        .trim();
+    let title = if title.is_empty() {
+        job.preview.trim()
+    } else {
+        title
+    };
+    clip_text(title, 80)
 }
 
 fn business_os_app_validation_repair_attempt_count(prompt: &str) -> usize {
@@ -20842,13 +20987,48 @@ Business OS command:
         assert!(prompt.contains("The CTOX service owns queue and Business OS command lifecycle"));
         assert!(prompt.contains("`ctox queue complete`"));
         assert!(prompt.contains("Do not act on queue IDs shown in context"));
-        assert!(prompt.contains("ctox business-os app scaffold contracts --installed"));
-        assert!(prompt.contains("Do not hand-author module.json or schema files from scratch"));
+        assert!(prompt.contains("CTOX service preflight creates a validator-clean scaffold"));
+        assert!(prompt.contains("Start from the files already under"));
+        assert!(
+            prompt.contains("do not hand-author module.json, schema.js, collections.schema.json")
+        );
         assert!(prompt.contains("Exact mount rule: index.js must load `./index.html`"));
         assert!(prompt.contains("fetch(new URL('./index.html', import.meta.url))"));
         assert!(prompt.contains("ctx.host.innerHTML"));
         assert!(prompt.contains("new URL('./index.css', import.meta.url)"));
         assert!(prompt.contains("ctox business-os app validate contracts --installed"));
+    }
+
+    #[test]
+    fn business_os_app_scaffold_inventory_requires_tests() -> Result<()> {
+        let root = temp_root("business-os-app-scaffold-inventory");
+        let target = BusinessOsAppModuleTarget {
+            module_id: "contracts".to_string(),
+            install_target: "runtime-installed-module".to_string(),
+            mode_flag: "--installed",
+            artifact_directory: "runtime/business-os/installed-modules/contracts".to_string(),
+        };
+        let dir = root.join(&target.artifact_directory);
+        std::fs::create_dir_all(dir.join("locales"))?;
+        std::fs::create_dir_all(dir.join("tests"))?;
+        for relative in [
+            "module.json",
+            "collections.schema.json",
+            "schema.js",
+            "index.html",
+            "index.css",
+            "index.js",
+            "icon.svg",
+            "locales/de.json",
+            "locales/en.json",
+        ] {
+            std::fs::write(dir.join(relative), "{}")?;
+        }
+
+        assert!(!business_os_app_required_inventory_complete(&root, &target));
+        std::fs::write(dir.join("tests/contracts.test.mjs"), "export {};")?;
+        assert!(business_os_app_required_inventory_complete(&root, &target));
+        Ok(())
     }
 
     #[test]

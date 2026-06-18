@@ -37,7 +37,7 @@ you are about to use legacy module patterns as implementation authority instead 
 you are about to request complete file dumps, delegate a broad subagent sweep, or spend more than a short targeted pass on existing modules before writing the first runnable module files
 you are about to run broad discovery commands over `$HOME`, `/Users`, the whole install root, the whole repo, or validator/checker names; use exact known paths, `MODULE_DIR`, and at most the three selected few-shot modules
 you are about to write app files outside the resolved module directory, such as root-level module.json, root-level collections.schema.json, root-level <id>/, src/skills/, or any skill-named path
-you are building a new runtime-installed App Creator app and have not run `ctox business-os app scaffold <id> --installed` or confirmed that the target directory already contains a complete validator-clean scaffold
+you are building a new runtime-installed App Creator app and neither the CTOX service preflight nor your first explicit action has created a complete validator-clean scaffold under the target directory
 you are about to create or update a runtime-installed App Creator module whose module.json lacks a SemVer version in x.y.z form without a v prefix
 you are about to expose, advertise, or call a module public/user-ready while its app version is below 1.0.0
 you are about to use 2.0.0 or any later x.0.0 as an in-place update of the same app id/icon instead of a new parallel app line
@@ -116,8 +116,11 @@ first repair action if red: create missing required files, then remove any
 unjustified right/third pane, then rerun validation
 ```
 
-For a new runtime-installed App Creator app, use the deterministic CTOX scaffold
-before hand-writing app structure:
+For a new runtime-installed App Creator app, start from the deterministic CTOX
+scaffold before changing domain behavior. In CTOX-native App Creator/command
+flows, the CTOX service preflight creates this scaffold before the worker turn
+when the target directory is missing or empty. In external-agent or manual CLI
+flows, run:
 
 ```sh
 ctox business-os app scaffold <id> --installed --title "<short app title>"
@@ -127,8 +130,11 @@ This creates the correct installed module directory, manifest, collection
 schema wrapper, browser ESM mount, scoped CSS, separate `icon.svg`, locales,
 module-owned persistence helper, `ctx.commandBus.dispatch` automation helper,
 and positive `.test.mjs` checks. After scaffold, customize the generated files
-for the requested domain. Do not use `--force` for an existing app modification;
-use `--force` only when intentionally resetting a failed new-app scaffold.
+for the requested domain. Do not rewrite `module.json`, schema files, mount
+wiring, persistence helpers, automation helpers, or tests from scratch unless a
+validator bullet requires a bounded repair. Do not use `--force` for an
+existing app modification; use `--force` only when intentionally resetting a
+failed new-app scaffold.
 
 Do not use queue IDs or open-work context as a target selector. The App
 Creator/CTOX service will complete queue and command state after the app
@@ -155,7 +161,7 @@ is:
 ```text
 1. inspect contracts and 3 modules
 2. choose MODULE_DIR and app scope
-3. for a new runtime-installed app, run ctox business-os app scaffold; otherwise write the required files with a small two-pane/modal app
+3. for a new runtime-installed app, confirm the CTOX service preflight scaffold exists or run `ctox business-os app scaffold`; otherwise write the required files with a small two-pane/modal app
 4. parse JSON and run syntax/test/validator gates
 5. copy exact validator failure bullets into the repair checklist
 6. repair the module files and rerun the same gates
