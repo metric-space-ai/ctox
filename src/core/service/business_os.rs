@@ -563,7 +563,7 @@ fn handle_business_os_app(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 .get(1)
                 .filter(|value| !value.starts_with("--"))
                 .context(
-                    "usage: ctox business-os app scaffold <module-id> [--installed|--source] [--title <title>] [--collection <name>] [--description <text>] [--force] [--json]",
+                    "usage: ctox business-os app scaffold <module-id> [--installed|--source] [--title <title>] [--collection <name>] [--description <text>] [--force] [--repair-missing] [--json]",
                 )?;
             let output = run_business_os_app_scaffold(root, module_id, &args[2..])?;
             print_process_output(&output);
@@ -656,7 +656,7 @@ fn run_business_os_app_scaffold(
     let mut idx = 0;
     while idx < args.len() {
         match args[idx].as_str() {
-            "--installed" | "--source" | "--force" | "--json" => {
+            "--installed" | "--source" | "--force" | "--repair-missing" | "--json" => {
                 command.arg(&args[idx]);
                 idx += 1;
             }
@@ -1633,7 +1633,7 @@ fn print_business_os_help() {
 fn business_os_usage() -> String {
     business_os_usage_base().replace(
         "  ctox business-os app validate <module-id>",
-        "  ctox business-os app scaffold <module-id> [--installed|--source] [--workspace <path>] [--title <title>] [--collection <name>] [--description <text>] [--force] [--json]\n  ctox business-os app validate <module-id>",
+        "  ctox business-os app scaffold <module-id> [--installed|--source] [--workspace <path>] [--title <title>] [--collection <name>] [--description <text>] [--force] [--repair-missing] [--json]\n  ctox business-os app validate <module-id>",
     )
 }
 

@@ -135,7 +135,7 @@ INSTALL / UPGRADE
                                  emit a Desktop pairing invite for this instance
   ctox business-os modules list|enable|disable
                                  manage optional Business OS skill-app modules
-  ctox business-os app scaffold <module-id> [--installed|--source]
+  ctox business-os app scaffold <module-id> [--installed|--source] [--repair-missing]
                                  create a validator-clean Business OS app scaffold
   ctox business-os app validate <module-id> [--installed|--source]
                                  validate a Business OS app module artifact
