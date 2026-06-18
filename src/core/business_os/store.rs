@@ -15151,6 +15151,7 @@ pub fn is_ats_mutating_command(command_type: &str) -> bool {
         "ats.retention.purge"
             | "ats.intake.capture"
             | "ats.placement.create"
+            | "ats.placement.early_leave"
             | "ats.submission.present"
             | "ats.leistungsnachweis.signoff"
             | "ats.signature.request"
@@ -15426,6 +15427,74 @@ fn handle_ats_mutating_command(
             }
             upsert_business_record(&conn, "signature_requests", &request_id, now, payload)?;
             Ok(serde_json::json!({ "ok": true, "request_id": request_id, "status": status }))
+        }
+        "ats.placement.early_leave" => {
+            // Guarantee/replacement: if the candidate leaves within the guarantee
+            // window, draft a pro-rata clawback credit note (§5.11).
+            let placement_id = first_string_field(p, &["placement_id"])
+                .context("ats.placement.early_leave requires placement_id")?;
+            let left_at_ms = p.get("left_at_ms").and_then(Value::as_i64).unwrap_or(now);
+            let raw = conn
+                .query_row(
+                    "SELECT payload_json FROM business_records WHERE collection = 'placements' AND record_id = ?1 AND deleted = 0",
+                    params![placement_id.as_str()],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+                .context("placement not found")?;
+            let mut placement: Value = serde_json::from_str(&raw)?;
+            let start = placement
+                .get("start_ms")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let days = placement
+                .get("guarantee_days")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let fee = placement.get("fee").and_then(Value::as_f64).unwrap_or(0.0);
+            let client_account_id = placement
+                .get("client_account_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let within = start > 0 && days > 0 && left_at_ms < start + days * 86_400_000;
+            let mut clawback = 0.0;
+            let mut credit_note_id = String::new();
+            if within {
+                let served = ((left_at_ms - start) / 86_400_000).clamp(0, days);
+                let remaining_ratio = (days - served) as f64 / days as f64;
+                clawback = (fee * remaining_ratio * 100.0).round() / 100.0;
+                credit_note_id = format!("cn_{now}");
+                let credit = serde_json::json!({
+                    "id": credit_note_id,
+                    "invoice_type": "credit_note_out",
+                    "account_id": client_account_id,
+                    "source_placement_id": placement_id,
+                    "status": "draft",
+                    "net_total": clawback,
+                    "lines": [{ "position": 1, "description": "Anteilige Gutschrift (Garantie/Frühausstieg)", "quantity": 1, "unit_price": clawback, "tax_rate": 0.19 }],
+                    "created_at_ms": now,
+                    "updated_at_ms": now,
+                    "_deleted": false
+                });
+                upsert_business_record(&conn, "accounting_invoices", &credit_note_id, now, credit)?;
+            }
+            if let Some(obj) = placement.as_object_mut() {
+                obj.insert(
+                    "status".to_string(),
+                    Value::String("early_leave".to_string()),
+                );
+                obj.insert("left_at_ms".to_string(), Value::from(left_at_ms));
+                obj.insert("updated_at_ms".to_string(), Value::from(now));
+            }
+            upsert_business_record(&conn, "placements", &placement_id, now, placement)?;
+            Ok(serde_json::json!({
+                "ok": true,
+                "placement_id": placement_id,
+                "within_guarantee": within,
+                "clawback": clawback,
+                "credit_note_id": credit_note_id
+            }))
         }
         other => Err(anyhow::anyhow!(
             "unsupported ats mutating command type: {other}"
