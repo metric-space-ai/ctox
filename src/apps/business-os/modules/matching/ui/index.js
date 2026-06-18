@@ -12,6 +12,7 @@ import {
   shortlistRequirementsForObject
 } from './matchingTools.js';
 import { readViewState, patchViewState } from './viewState.js';
+import { normalizeCandidateStage } from '../core/pipeline.js';
 window.recomputeAllMatchScoresOnce = recomputeAllMatchScoresOnce;
 
 import { CtoxQueuedCommandError, llmChat, queueObjectParseTask, queueRequirementParseTask } from './ctoxCommandAdapter.js';
@@ -1867,7 +1868,8 @@ async function loadFromRxdb(){
         notes: baseNotes,
         active: m.active,
         statuses,
-        status: canonical
+        status: canonical,
+        stage: normalizeCandidateStage(m, canonical)
       });
     });
 
