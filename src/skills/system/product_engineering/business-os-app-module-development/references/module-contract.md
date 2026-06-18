@@ -59,6 +59,30 @@ Attach `index.css` through a local stylesheet URL such as
 first assigning `ctx.host.innerHTML` will mount as a blank app even when all
 files exist and `index.html` returns 200.
 
+For runtime-installed App Creator modules, make the template and stylesheet
+loading boring and literal:
+
+```js
+function attachStylesheetOnce() {
+  const href = new URL('./index.css', import.meta.url).href;
+  if (document.querySelector(`link[href="${href}"]`)) return;
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = href;
+  document.head.append(link);
+}
+
+export async function mount(ctx) {
+  attachStylesheetOnce();
+  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  // Wire selectors only after this line.
+}
+```
+
+Do not hide the template load inside a wrapper, use `fetch('./index.html')`,
+or add any other runtime network fetch. The installed-module validator allows
+only `fetch(new URL('./index.html', import.meta.url))` for the local fragment.
+
 Because `index.html` is inserted into the already-running Business OS shell, it
 must be a fragment. Do not create a full browser document. The file must not
 contain `<!doctype>`, `<html>`, `<head>`, `<body>`, `<link>`, `<script>`,
@@ -454,7 +478,10 @@ const moduleRoot = resolve(testDir, '..');
 const moduleJsonPath = resolve(moduleRoot, 'module.json');
 ```
 
-Do not read `tests/module.json` by accident. A test that fails only because it
+Do not read `tests/module.json` by accident. Also do not use
+`new URL('../../module.json', import.meta.url)` from a test under `tests/`.
+That climbs out of the module directory and fails in installed benches because
+it points at `installed-modules/module.json`. A test that fails only because it
 resolved paths from the wrong directory is not module proof.
 
 ## Reactive Data

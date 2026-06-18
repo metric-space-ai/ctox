@@ -274,7 +274,11 @@ const moduleRoot = resolve(testDir, '..');
 
 Then read `resolve(moduleRoot, 'module.json')`,
 `resolve(moduleRoot, 'collections.schema.json')`, and so on. A test that reads
-`tests/module.json` is wrong.
+`tests/module.json` is wrong. A test under `tests/` that uses
+`new URL('../../module.json', import.meta.url)` is also wrong: it climbs out of
+the module directory and resolves to `installed-modules/module.json` in
+runtime-installed benches. Use `resolve(testDir, '..')` as the single module
+root source of truth.
 
 Do not add optional fake-DOM or mount tests after a green pure-helper and
 conformance pass unless the fake shell is stable and the new test passes. A

@@ -56,6 +56,7 @@ the module-owned data model is unclear: central object, collection names, states
 index.js does not load the module fragment with `fetch(new URL('./index.html', import.meta.url))`, assign it into `ctx.host.innerHTML`, and attach `index.css` through a local `new URL('./index.css', import.meta.url)` stylesheet before DOM queries or event wiring
 index.html is a full browser document or declares document/head resources; App Creator `index.html` must be a shell fragment only, with no `<!doctype>`, `<html>`, `<head>`, `<body>`, `<link>`, `<script>`, `<meta>`, `<title>`, or `<style>` tags
 index.js queries a `data-*` selector that is absent from index.html and from generated markup
+tests under `tests/` read module files with `../../module.json`, `../../collections.schema.json`, or `../../schema.js`; from `tests/*.test.mjs`, the module root is exactly `..`, so sibling files must resolve from `resolve(testDir, '..')`
 the app has a decorative third pane, layout.right by default, right-column resizers by default, decorative controls, fake AI buttons, fake status-only actions, or UI that is not needed for the workflow
 module.json embeds `layout.icon_svg` instead of using the required separate `icon.svg`
 module.json embeds inline SVG in any field such as `icon_svg`, `iconSvg`, `layout.icon`, or `layout.icon_svg`; generated apps must keep all SVG markup only in icon.svg
@@ -263,6 +264,24 @@ Attach the stylesheet through a local
 while `mount(ctx)` only registers events against selectors that live in
 `index.html`.
 
+Use this exact stylesheet helper shape for runtime-installed apps. The only
+allowed `fetch(...)` in `index.js` is the local template fetch above:
+
+```js
+function attachStylesheetOnce() {
+  const href = new URL('./index.css', import.meta.url).href;
+  if (document.querySelector(`link[href="${href}"]`)) return;
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = href;
+  document.head.append(link);
+}
+```
+
+Do not call `fetch('./index.html')`, `fetch('/...')`, `fetch(new Request(...))`,
+or helper-wrapped network fetches in generated App Creator modules. Load the
+fragment exactly with `fetch(new URL('./index.html', import.meta.url))`.
+
 `index.html` is inserted into an existing shell document through
 `ctx.host.innerHTML`. Therefore it must contain only module UI markup such as
 `<main>`, `<section>`, forms, buttons, tables, dialogs, and lists. It must not
@@ -467,6 +486,25 @@ and calculations in local browser-safe `.mjs` helpers, import those helpers from
 import { buildFollowUpCommand } from '../core/automation.mjs';
 import { collectionSchemas } from '../core/schemas.mjs';
 ```
+
+When a test reads sibling module files, derive the module root from the test
+file. From `tests/*.test.mjs`, `..` is the module root and `../..` is wrong:
+
+```js
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const testDir = dirname(fileURLToPath(import.meta.url));
+const moduleRoot = resolve(testDir, '..');
+const manifest = JSON.parse(readFileSync(resolve(moduleRoot, 'module.json'), 'utf8'));
+const collectionSchemaDoc = JSON.parse(
+  readFileSync(resolve(moduleRoot, 'collections.schema.json'), 'utf8')
+);
+```
+
+Do not use `new URL('../../module.json', import.meta.url)` from a test under
+`tests/`; that points outside the module directory in installed benches.
 
 Use JSON/text parity checks for `module.json`, `collections.schema.json`,
 `schema.js`, and `index.js` when needed. Never read `index.js` or `schema.js`
