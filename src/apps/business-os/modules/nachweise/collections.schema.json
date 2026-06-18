@@ -58,6 +58,6 @@
       "version": 0
     }
   },
-  "module_id": "credentials",
+  "module_id": "nachweise",
   "schema_format": "ctox-business-os-module-collections-v1"
 }

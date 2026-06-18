@@ -1,12 +1,12 @@
 import { CREDENTIAL_TYPES, credentialStatus, daysUntilExpiry } from './core/credential.js';
 
-const MODULE_ID = 'credentials';
-const CREDENTIALS_BUILD = '20260618-credentials1';
+const MODULE_ID = 'nachweise';
+const NACHWEISE_BUILD = '20260618-credentials1';
 
 export async function mount(ctx) {
   await ensureStyles();
   ctx.host.innerHTML = await loadModuleMarkup();
-  ctx.host.dataset.credentialsModule = 'native';
+  ctx.host.dataset.nachweiseModule = 'native';
   ctx.left?.replaceChildren?.();
   ctx.right?.replaceChildren?.();
 
@@ -145,12 +145,12 @@ export async function mount(ctx) {
     formEl?.removeEventListener('submit', onSubmit);
     gateForm?.removeEventListener('submit', onGateCheck);
     ctx.host.replaceChildren();
-    delete ctx.host.dataset.credentialsModule;
+    delete ctx.host.dataset.nachweiseModule;
   };
 }
 
 async function ensureStyles() {
-  const href = `${new URL('./index.css', import.meta.url).pathname}?v=${CREDENTIALS_BUILD}`;
+  const href = `${new URL('./index.css', import.meta.url).pathname}?v=${NACHWEISE_BUILD}`;
   if (document.querySelector(`link[href="${href}"]`)) return;
   const link = document.createElement('link');
   link.rel = 'stylesheet';

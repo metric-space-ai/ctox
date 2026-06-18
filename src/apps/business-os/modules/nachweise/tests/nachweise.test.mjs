@@ -9,7 +9,7 @@ const read = (rel) => readFileSync(resolve(moduleRoot, rel), 'utf8');
 
 test('credentials: manifest is consistent and has no inline SVG', () => {
   const manifest = JSON.parse(read('module.json'));
-  assert.equal(manifest.id, 'credentials');
+  assert.equal(manifest.id, 'nachweise');
   assert.ok(manifest.collections.includes('business_credentials'));
   assert.ok(!manifest.layout || !manifest.layout.icon_svg, 'no inline SVG in manifest');
 });

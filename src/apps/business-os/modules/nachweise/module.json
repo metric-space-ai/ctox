@@ -1,8 +1,8 @@
 {
-  "id": "credentials",
+  "id": "nachweise",
   "title": "Nachweise",
   "description": "Generischer Nachweis-/Zertifikats-Tresor: ablaufende, verifizierte Artefakte (Zertifikate, Lizenzen, Arbeitserlaubnis) je Subjekt mit Ablauf-Warnung und Einsatz-Gate.",
-  "entry": "modules/credentials/index.html",
+  "entry": "modules/nachweise/index.html",
   "collections": [
     "business_commands",
     "business_credentials"
@@ -29,7 +29,7 @@
   "store": {
     "summary": "Generischer Nachweis-/Ablauf-Tresor mit Einsatz-Gate.",
     "repository": "metric-space-ai/ctox",
-    "source_path": "modules/credentials",
+    "source_path": "modules/nachweise",
     "installable": true,
     "editable_after_install": true,
     "distribution": "catalog-module"
