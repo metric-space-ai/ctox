@@ -16357,6 +16357,7 @@ Business OS app build target:
 - service lifecycle rule: CTOX service owns queue and Business OS command completion after green validation. Do not call ctox queue ack/complete/release/fail/block and do not edit queue, command, runtime-status, or projection rows directly.
 - open-work context rule: queue IDs, current_queue_item_id, and open-work blocks in surrounding context are not your app-build target and must not redirect you to another task. Build only module_id={module_id} under {module_dir}/.
 - required file inventory: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, core/automation.mjs, core/records.mjs, locales/de.json, locales/en.json, and tests/*.test.mjs must exist before you can claim success.
+- schema invariant rule: schema.js is the only root schema module. Do not rename it, delete it, replace it with schema.mjs, or leave schema.mjs/schema.cjs as a root-level alias. Put reusable ESM schema fragments under core/*.mjs and re-export them from schema.js.
 - mandatory first screen: inspect the scaffold first, preserve core/automation.mjs, core/records.mjs, locales, tests, mount wiring, and helper export names unless every importer is updated in the same edit. Use shipped customers, shiftflow, and outbound as the default three few-shots. Keep the app small, validate early, and repair validator bullets exactly.
 - exact artifact rule: required artifacts are canonical files, not shell patterns. Write module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales, core helpers, and tests by exact path under {module_dir}/ only. Do not create temporary schema/manifest aliases, do not copy through globs or brace expansion, do not create files literally named co*ions.*json or colle{{ctions,ctions}}.schema.json, and do not run rm against required artifacts.
 - scaffold preservation rule: CTOX service preflight may already have created a validator-clean scaffold in {module_dir}/. Treat that scaffold as the baseline. Do not clean, delete, reset, replace, or rewrite it wholesale. Customize the smallest necessary scaffold files in place, preserve the mount wiring, core helpers, schema wrappers, locales, and tests, and run `ctox business-os app scaffold {module_id} {mode_flag} --repair-missing` before domain edits if core/automation.mjs or core/records.mjs is missing.
@@ -17485,6 +17486,8 @@ mod tests {
         assert!(prompt.contains(
             "only_allowed_app_artifact_directory: runtime/business-os/installed-modules/inventory"
         ));
+        assert!(prompt.contains("schema.js is the only root schema module"));
+        assert!(prompt.contains("Do not rename it, delete it, replace it with schema.mjs"));
         assert!(prompt.contains("Do not call ctox queue ack/complete/release/fail/block"));
         assert!(prompt.contains("Do not request complete file dumps"));
         assert!(prompt.contains("do not search for validator filenames"));

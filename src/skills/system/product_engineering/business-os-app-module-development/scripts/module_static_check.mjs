@@ -511,6 +511,10 @@ for (const path of entries) {
 
 for (const path of files) {
   const name = path.split(sep).at(-1);
+  const moduleRelativePath = relative(moduleDir, path).split(sep).join('/');
+  if (['schema.mjs', 'schema.cjs'].includes(moduleRelativePath)) {
+    fail(`${rel(path)} is a forbidden alternate schema artifact; keep the canonical root schema file as schema.js and put helper ESM in core/*.mjs`);
+  }
   if (
     name === '.DS_Store' ||
     name === 'Thumbs.db' ||

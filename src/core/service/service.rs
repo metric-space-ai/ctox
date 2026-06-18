@@ -3608,6 +3608,12 @@ impl Drop for PromptWorkerActivity {
                 );
             }
         }
+
+        maybe_enqueue_next_durable_queue_after_worker_idle(
+            &self.root,
+            &self.state,
+            "Queued durable queue task after worker activity dropped",
+        );
     }
 }
 
@@ -11302,6 +11308,34 @@ fn maybe_lease_next_durable_queue_prompt_for_idle_dispatch(
         }));
     }
     Ok(None)
+}
+
+fn maybe_lease_next_durable_queue_after_worker_idle(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+) -> Result<Option<QueuedPrompt>> {
+    if active_agent_loop_in_progress(state) {
+        return Ok(None);
+    }
+    maybe_lease_next_durable_queue_prompt_for_idle_dispatch(root, state)
+}
+
+fn maybe_enqueue_next_durable_queue_after_worker_idle(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+    event: &str,
+) {
+    match maybe_lease_next_durable_queue_after_worker_idle(root, state) {
+        Ok(Some(queued)) => enqueue_prompt(root, state, queued, event.to_string()),
+        Ok(None) => {}
+        Err(err) => push_event(
+            state,
+            format!(
+                "Failed to lease next durable queue task after worker activity dropped: {}",
+                clip_text(&err.to_string(), 180)
+            ),
+        ),
+    }
 }
 
 fn recover_stale_business_os_app_queue_tasks(
@@ -26076,6 +26110,56 @@ Use shell tools to create or update these files."
             !shared.busy,
             "leasing durable queue work should let enqueue_prompt/start_prompt_worker own busy state"
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn worker_idle_cleanup_leases_next_durable_queue_after_busy_clears() {
+        let root = temp_root("ctox-worker-idle-cleanup-kicks-next");
+        let queue_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Next Business OS app bench task".to_string(),
+                prompt: "Build the next small Business OS app.".to_string(),
+                thread_key: "business-os/apps/bench/next".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed durable queue task");
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.busy = true;
+            shared.worker_active_count = 1;
+        }
+        let skipped = maybe_lease_next_durable_queue_after_worker_idle(&root, &state)
+            .expect("busy worker cleanup probe should not fail");
+        assert!(
+            skipped.is_none(),
+            "worker cleanup must not lease while the active worker still owns the serial slot"
+        );
+        assert_eq!(route_status_for(&root, &queue_task.message_key), "pending");
+
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.busy = false;
+            shared.worker_active_count = 0;
+        }
+        let next = maybe_lease_next_durable_queue_after_worker_idle(&root, &state)
+            .expect("idle worker cleanup lease should not fail")
+            .expect("expected durable queue prompt after worker activity cleared");
+        assert_eq!(
+            next.leased_message_keys,
+            vec![queue_task.message_key.clone()]
+        );
+        assert_eq!(next.source_label, "queue");
+        assert_eq!(route_status_for(&root, &queue_task.message_key), "leased");
 
         let _ = std::fs::remove_dir_all(&root);
     }
