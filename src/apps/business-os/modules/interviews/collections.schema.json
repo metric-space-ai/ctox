@@ -1,0 +1,116 @@
+{
+  "collections": {
+    "interview_meetings": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "_deleted": {
+          "type": "boolean"
+        },
+        "attended": {
+          "type": "boolean"
+        },
+        "candidate_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "end": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "location_mode": {
+          "type": "string"
+        },
+        "parties": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "start": {
+          "type": "number"
+        },
+        "state": {
+          "type": "string"
+        },
+        "transcript_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "vacancy_id": {
+          "type": "string"
+        },
+        "video_link": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "interview_scorecards": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "_deleted": {
+          "type": "boolean"
+        },
+        "candidate_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "criteria": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "interviewer": {
+          "type": "string"
+        },
+        "overall": {
+          "type": "number"
+        },
+        "ratings": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "role_template": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "vacancy_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    }
+  },
+  "module_id": "interviews",
+  "schema_format": "ctox-business-os-module-collections-v1"
+}

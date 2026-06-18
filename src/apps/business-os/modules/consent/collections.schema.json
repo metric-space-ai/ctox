@@ -1,0 +1,57 @@
+{
+  "collections": {
+    "business_consents": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "_deleted": {
+          "type": "boolean"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "expires_at_ms": {
+          "type": "number"
+        },
+        "granted_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "legal_basis": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "subject_id": {
+          "type": "string"
+        },
+        "subject_type": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "withdrawn_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "subject_id",
+        "purpose",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    }
+  },
+  "module_id": "consent",
+  "schema_format": "ctox-business-os-module-collections-v1"
+}

@@ -881,6 +881,236 @@
       },
       "install_scope": "store",
       "default_installed": false
+    },
+    {
+      "id": "consent",
+      "title": "Einwilligungen",
+      "description": "Generisches DSGVO-Einwilligungs-/Rechtsgrundlagen-Register mit Zweck und Löschfrist.",
+      "entry": "modules/consent/index.html",
+      "collections": [
+        "business_commands",
+        "business_consents"
+      ],
+      "source": "local",
+      "core": false,
+      "editable": true,
+      "deletable": true,
+      "layout": {
+        "shell": "full-workspace",
+        "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-consent\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\"/><stop offset=\"100%\" stop-color=\"#3b82f6\"/></linearGradient></defs><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"3\" fill=\"url(#grad-consent)\" fill-opacity=\"0.12\" stroke=\"url(#grad-consent)\" stroke-width=\"2\"/><path d=\"M8 12h8M8 8h8M8 16h5\" stroke=\"url(#grad-consent)\" stroke-width=\"2\" stroke-linecap=\"round\"/></svg>",
+        "left": "Filter",
+        "center": "Einwilligungen"
+      },
+      "category": "Operations",
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "tags": [
+        "consent",
+        "ats"
+      ],
+      "store": {
+        "summary": "Generisches DSGVO-Einwilligungs-/Rechtsgrundlagen-Register mit Zweck und Löschfrist.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/consent",
+        "installable": true,
+        "editable_after_install": true,
+        "distribution": "catalog-module"
+      },
+      "install_scope": "store",
+      "default_installed": false
+    },
+    {
+      "id": "intake",
+      "title": "Bewerbungseingang",
+      "description": "Generischer Mehrkanal-Eingang: normalisierte Bewerbungen aus Karriereseite/Jobbörse/E-Mail/QR.",
+      "entry": "modules/intake/index.html",
+      "collections": [
+        "business_commands",
+        "applications"
+      ],
+      "source": "local",
+      "core": false,
+      "editable": true,
+      "deletable": true,
+      "layout": {
+        "shell": "full-workspace",
+        "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-intake\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#3b82f6\"/><stop offset=\"100%\" stop-color=\"#6366f1\"/></linearGradient></defs><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"3\" fill=\"url(#grad-intake)\" fill-opacity=\"0.12\" stroke=\"url(#grad-intake)\" stroke-width=\"2\"/><path d=\"M8 12h8M8 8h8M8 16h5\" stroke=\"url(#grad-intake)\" stroke-width=\"2\" stroke-linecap=\"round\"/></svg>",
+        "left": "Filter",
+        "center": "Bewerbungseingang"
+      },
+      "category": "Operations",
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "tags": [
+        "intake",
+        "ats"
+      ],
+      "store": {
+        "summary": "Generischer Mehrkanal-Eingang: normalisierte Bewerbungen aus Karriereseite/Jobbörse/E-Mail/QR.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/intake",
+        "installable": true,
+        "editable_after_install": true,
+        "distribution": "catalog-module"
+      },
+      "install_scope": "store",
+      "default_installed": false
+    },
+    {
+      "id": "submissions",
+      "title": "Vorstellungen",
+      "description": "Kandidaten-Vorstellung an Kunden mit Doppel-Vorstellungs- und Consent-Schutz.",
+      "entry": "modules/submissions/index.html",
+      "collections": [
+        "business_commands",
+        "submissions"
+      ],
+      "source": "local",
+      "core": false,
+      "editable": true,
+      "deletable": true,
+      "layout": {
+        "shell": "full-workspace",
+        "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-submissions\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#d4537e\"/><stop offset=\"100%\" stop-color=\"#993556\"/></linearGradient></defs><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"3\" fill=\"url(#grad-submissions)\" fill-opacity=\"0.12\" stroke=\"url(#grad-submissions)\" stroke-width=\"2\"/><path d=\"M8 12h8M8 8h8M8 16h5\" stroke=\"url(#grad-submissions)\" stroke-width=\"2\" stroke-linecap=\"round\"/></svg>",
+        "left": "Filter",
+        "center": "Vorstellungen"
+      },
+      "category": "Recruiting",
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "tags": [
+        "submissions",
+        "ats"
+      ],
+      "store": {
+        "summary": "Kandidaten-Vorstellung an Kunden mit Doppel-Vorstellungs- und Consent-Schutz.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/submissions",
+        "installable": true,
+        "editable_after_install": true,
+        "distribution": "catalog-module"
+      },
+      "install_scope": "store",
+      "default_installed": false
+    },
+    {
+      "id": "placements",
+      "title": "Vermittlungen",
+      "description": "Angebots-/Vermittlungs-Lifecycle mit Garantie-Uhr und Honorar.",
+      "entry": "modules/placements/index.html",
+      "collections": [
+        "business_commands",
+        "offers",
+        "placements"
+      ],
+      "source": "local",
+      "core": false,
+      "editable": true,
+      "deletable": true,
+      "layout": {
+        "shell": "full-workspace",
+        "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-placements\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\"/><stop offset=\"100%\" stop-color=\"#f59e0b\"/></linearGradient></defs><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"3\" fill=\"url(#grad-placements)\" fill-opacity=\"0.12\" stroke=\"url(#grad-placements)\" stroke-width=\"2\"/><path d=\"M8 12h8M8 8h8M8 16h5\" stroke=\"url(#grad-placements)\" stroke-width=\"2\" stroke-linecap=\"round\"/></svg>",
+        "left": "Filter",
+        "center": "Vermittlungen"
+      },
+      "category": "Recruiting",
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "tags": [
+        "placements",
+        "ats"
+      ],
+      "store": {
+        "summary": "Angebots-/Vermittlungs-Lifecycle mit Garantie-Uhr und Honorar.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/placements",
+        "installable": true,
+        "editable_after_install": true,
+        "distribution": "catalog-module"
+      },
+      "install_scope": "store",
+      "default_installed": false
+    },
+    {
+      "id": "interviews",
+      "title": "Interviews",
+      "description": "Mehr-Parteien-Interview-Koordination mit strukturierten Scorecards.",
+      "entry": "modules/interviews/index.html",
+      "collections": [
+        "business_commands",
+        "interview_scorecards",
+        "interview_meetings"
+      ],
+      "source": "local",
+      "core": false,
+      "editable": true,
+      "deletable": true,
+      "layout": {
+        "shell": "full-workspace",
+        "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-interviews\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#7c3aed\"/><stop offset=\"100%\" stop-color=\"#2563eb\"/></linearGradient></defs><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"3\" fill=\"url(#grad-interviews)\" fill-opacity=\"0.12\" stroke=\"url(#grad-interviews)\" stroke-width=\"2\"/><path d=\"M8 12h8M8 8h8M8 16h5\" stroke=\"url(#grad-interviews)\" stroke-width=\"2\" stroke-linecap=\"round\"/></svg>",
+        "left": "Filter",
+        "center": "Interviews"
+      },
+      "category": "Recruiting",
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "tags": [
+        "interviews",
+        "ats"
+      ],
+      "store": {
+        "summary": "Mehr-Parteien-Interview-Koordination mit strukturierten Scorecards.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/interviews",
+        "installable": true,
+        "editable_after_install": true,
+        "distribution": "catalog-module"
+      },
+      "install_scope": "store",
+      "default_installed": false
+    },
+    {
+      "id": "esign",
+      "title": "E-Signatur",
+      "description": "Generische Signatur-Anfragen: Dokument an Unterzeichner routen und Status verfolgen.",
+      "entry": "modules/esign/index.html",
+      "collections": [
+        "business_commands",
+        "signature_requests"
+      ],
+      "source": "local",
+      "core": false,
+      "editable": true,
+      "deletable": true,
+      "layout": {
+        "shell": "full-workspace",
+        "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-esign\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\"/><stop offset=\"100%\" stop-color=\"#64748b\"/></linearGradient></defs><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"3\" fill=\"url(#grad-esign)\" fill-opacity=\"0.12\" stroke=\"url(#grad-esign)\" stroke-width=\"2\"/><path d=\"M8 12h8M8 8h8M8 16h5\" stroke=\"url(#grad-esign)\" stroke-width=\"2\" stroke-linecap=\"round\"/></svg>",
+        "left": "Filter",
+        "center": "E-Signatur"
+      },
+      "category": "Operations",
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "tags": [
+        "esign",
+        "ats"
+      ],
+      "store": {
+        "summary": "Generische Signatur-Anfragen: Dokument an Unterzeichner routen und Status verfolgen.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/esign",
+        "installable": true,
+        "editable_after_install": true,
+        "distribution": "catalog-module"
+      },
+      "install_scope": "store",
+      "default_installed": false
     }
   ]
 }

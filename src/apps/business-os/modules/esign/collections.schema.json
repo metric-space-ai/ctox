@@ -1,0 +1,57 @@
+{
+  "collections": {
+    "signature_requests": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "_deleted": {
+          "type": "boolean"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "document_id": {
+          "type": "string"
+        },
+        "expires_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "sent_at_ms": {
+          "type": "number"
+        },
+        "signed_artifact_id": {
+          "type": "string"
+        },
+        "signers": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "status": {
+          "type": "string"
+        },
+        "subject_kind": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "document_id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    }
+  },
+  "module_id": "esign",
+  "schema_format": "ctox-business-os-module-collections-v1"
+}

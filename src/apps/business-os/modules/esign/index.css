@@ -1,0 +1,6 @@
+.ats-esign { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; height: 100%; overflow: auto; box-sizing: border-box; }
+.ats-esign .ats-head h1 { margin: 0; font-size: 18px; font-weight: 600; }
+.ats-esign .ats-sub { margin: 2px 0 0; font-size: 13px; opacity: .7; }
+.ats-esign .ats-count { font-size: 13px; opacity: .8; }
+.ats-esign .ats-item { padding: 8px 12px; border: 1px solid color-mix(in srgb, currentColor 12%, transparent); border-radius: 8px; margin-bottom: 6px; font-size: 13px; }
+.ats-esign .ats-empty { font-size: 13px; opacity: .6; padding: 20px 0; }

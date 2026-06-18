@@ -1,0 +1,38 @@
+{
+  "id": "consent",
+  "title": "Einwilligungen",
+  "description": "Generisches DSGVO-Einwilligungs-/Rechtsgrundlagen-Register mit Zweck und Löschfrist.",
+  "entry": "modules/consent/index.html",
+  "collections": [
+    "business_commands",
+    "business_consents"
+  ],
+  "source": "local",
+  "core": false,
+  "editable": true,
+  "deletable": true,
+  "layout": {
+    "shell": "full-workspace",
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-consent\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\"/><stop offset=\"100%\" stop-color=\"#3b82f6\"/></linearGradient></defs><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"3\" fill=\"url(#grad-consent)\" fill-opacity=\"0.12\" stroke=\"url(#grad-consent)\" stroke-width=\"2\"/><path d=\"M8 12h8M8 8h8M8 16h5\" stroke=\"url(#grad-consent)\" stroke-width=\"2\" stroke-linecap=\"round\"/></svg>",
+    "left": "Filter",
+    "center": "Einwilligungen"
+  },
+  "category": "Operations",
+  "version": "v0.1",
+  "developer": "CTOX",
+  "license": "AGPL-3.0-only",
+  "tags": [
+    "consent",
+    "ats"
+  ],
+  "store": {
+    "summary": "Generisches DSGVO-Einwilligungs-/Rechtsgrundlagen-Register mit Zweck und Löschfrist.",
+    "repository": "metric-space-ai/ctox",
+    "source_path": "modules/consent",
+    "installable": true,
+    "editable_after_install": true,
+    "distribution": "catalog-module"
+  },
+  "install_scope": "store",
+  "default_installed": false
+}
