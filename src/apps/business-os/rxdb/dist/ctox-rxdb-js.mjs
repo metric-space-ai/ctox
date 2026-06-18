@@ -54,12 +54,14 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   accounting_ledger_entries: "58d17a1089b6591e0a78e3f9f1a093815fa4742f73347bb8c404a099dc9c4461",
   accounting_number_series: "5fe7fda57fb6df74e86432afebd2672ec233140d2de7181a62889d82f8e08bce",
   accounting_receipts: "f0995e7532ead4def819aa6bc554d53c4abbaccc8bee0db89272c0a11a5e43a0",
+  applications: "ef7b52e117777575029346888b1c17412e2f4bda0ef9ca6c5a5e89c54a310e00",
   browser_frames: "89e1c1392d90d9f0ec826ced384f883092ce525f846e4d1c4383047a96673519",
   browser_input_events: "dc79706396f8c59865dc4187947fe925f4b1a1fae6669c4fd7d7d0e507a4dff7",
   browser_sessions: "8f9d925480b6fa11755bb0800e47da9d4b8dca59f510fb5c6bfb3d84cec212d3",
   browser_tabs: "3387a8373cad98f4651b15173cf920568970ad2afa7f14758bbfffe9d77d5004",
   business_chats: "4f7fc2d29ea54ef9cabef037caa01f0ef2567fc2fa156835c952bef2dd2fd456",
   business_commands: "4c273d32175717566fdc42c6f7b5d32e144f9d2ed1c7f5db15d1b9ef04c89d5e",
+  business_consents: "4e0031090f60e466e8d9b2818a73faac41d89adabba5c2f2fd75a4b48cef9d68",
   business_credentials: "5583908188482df5c694d6214ef4f3a250fdcd09d7111a5a859a5976f4a40b7d",
   business_module_acl: "7f2c6c44ffadefb0c9be30dba9f3067fc48e0847424e3f2709638c5ebcd8bedf",
   business_module_catalog: "332763869d93c2bb55fa6b217c36521d1c1f17be4701d8538d686cda89f5cea0",
@@ -120,6 +122,8 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   document_runbooks: "50b126b168c2fbf148da6b8693bbf455f6124c1b798a19e48aaaf5174acc9b7b",
   document_versions: "fca6df9bfa1d0d27f93d41cb7685fd08dacbf9f4843b7c1d95142b4cbe157738",
   documents: "600e0a73160dfaa480dd0ff8b833c85cec8aa60d41a9982a1ecd971e8a291ec1",
+  interview_meetings: "e3e829b1b8b8ab4e5c2f9e3e7af82061125ffadc33cf484858dace36b5e2c62a",
+  interview_scorecards: "126212aa5d37811134a96ca150fd07304eca1242d8de13d534458b9a48bf827a",
   iot_agent_status: "c719592fcc4274060d12567b09013cff8dc11b605b790b349e8efac88cfb6ccd",
   iot_agents: "0bf0fed6ea33be5d475e88b7b913fb1675bb1bf5d4361cc3c5eb6befec6480f8",
   iot_alarms: "978c527550ceb781393bba6e9e886714f7c66f60bc2f7b98be55896bb2ccb149",
@@ -138,6 +142,7 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   matching_requirements: "7a57a57784d58c9898d135a519a8789380742cb5a0de055f19e8f6a279035b50",
   matching_results: "a5260077a1b4e9d5881ff3b265daf8651b8c6be3158cb5eff0d4f78bed21137c",
   notes: "9c02d9c9f4362f7cb9739b5b401eb59528254534fdfd807050a941041304854d",
+  offers: "ee230a74c678a29a209f08b48a98e2bb7d2ddca64c606f89f4cb2af3de7382d3",
   outbound_account_limits: "35d7a40e3e485447e234f72ec898ce57b7f2b7ebc4f01bb748a7e9ea5a3fc68e",
   outbound_approvals: "f7be2c8526ffc3df85e92a56c8e808adebbcd8944be95bd05658bc6f9d7b143a",
   outbound_campaigns: "194e3748c589a9cfc50ed63dccab525028e9bdbd006f20b73c10e29aa865e58d",
@@ -153,6 +158,7 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   outbound_skillbooks: "a896fd1593614940aa223831a949fbda53e8714c9b5086a4f1949db1ace83c35",
   outbound_sources: "241a2673630fb51c06a4e3155465855f299cb56ceeb8ce09ab1ba0d4c460c29a",
   outbound_suppression_entries: "2a894fbfc598d41b81ad7c76466e531d6771c7a9f6e5aa34389dba0e5f2cb329",
+  placements: "638132ba63acb16782721b0d0b0469cf44de077f50e367d1287f5ef27e8a3df0",
   planning_absences: "20263440e5b0fa1d7a3a8c0d95f0753f6f5a30da517dcc208fafe5467ef1870b",
   planning_employees: "36852db8c0acb2b48b653592aeefa1af483843e22a2f400cf411178d7e8377c7",
   planning_projects: "fc558898d1dfe2d9f8cfb925b5fbd304133fcfad7b2e63069770d5f8325e9b6f",
@@ -161,10 +167,12 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   research_notes: "d078cd9b657f5eeb66281eb33e8b912c772fac447a5e60b580901fd4ef82c6dd",
   research_runs: "ba19ca3daec5cd92154b75faa056bbfab95383769dd69b77ce663656d18c282c",
   research_tasks: "502aa089a7498cf17db0bad1bba2d4bda864261b99488a07e783f6c107dc0dd0",
+  signature_requests: "878b66f65173aa1e28f69866ef6f1562a1e564028604c8af68d67616618156bd",
   spreadsheet_blob_chunks: "dc97cfb4feca43442477d88da04528ecda56ab7cb52b38a19306270eddf26168",
   spreadsheet_runbooks: "08bf33d949370df78a4598cc97208212df6944c4feefe291787dad75e8b0d985",
   spreadsheet_versions: "5c569a9152b65e943b047a0419afea200a7c43e83e6c07eb0a0c667282e45842",
-  spreadsheets: "1dfe54101a8efe6ad4d127bc9ac102c74d6b211cda716b1fa5411fc473c24367"
+  spreadsheets: "1dfe54101a8efe6ad4d127bc9ac102c74d6b211cda716b1fa5411fc473c24367",
+  submissions: "30b927ed9ba7168ef4c911db5450e862771dd00cf510eb75a867497010ce2c78"
 });
 function canonicalJson(value) {
   return JSON.stringify(sortCanonical(value));

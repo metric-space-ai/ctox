@@ -383,6 +383,58 @@
     ],
     "additionalProperties": true
   },
+  "applications": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 160
+      },
+      "channel": {
+        "type": "string"
+      },
+      "vacancy_id": {
+        "type": "string"
+      },
+      "candidate": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "documents": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "dedupe_key": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "received_at_ms": {
+        "type": "number"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "channel",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
   "browser_frames": {
     "version": 0,
     "primaryKey": "id",
@@ -816,6 +868,57 @@
       "module",
       "command_type",
       "status",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "business_consents": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 160
+      },
+      "subject_id": {
+        "type": "string"
+      },
+      "subject_type": {
+        "type": "string"
+      },
+      "purpose": {
+        "type": "string"
+      },
+      "legal_basis": {
+        "type": "string"
+      },
+      "granted_at_ms": {
+        "type": "number"
+      },
+      "withdrawn_at_ms": {
+        "type": "number"
+      },
+      "expires_at_ms": {
+        "type": "number"
+      },
+      "source": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "subject_id",
+      "purpose",
       "updated_at_ms"
     ],
     "additionalProperties": true
@@ -4126,6 +4229,116 @@
     ],
     "additionalProperties": true
   },
+  "interview_meetings": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 160
+      },
+      "candidate_id": {
+        "type": "string"
+      },
+      "vacancy_id": {
+        "type": "string"
+      },
+      "parties": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "start": {
+        "type": "number"
+      },
+      "end": {
+        "type": "number"
+      },
+      "location_mode": {
+        "type": "string"
+      },
+      "video_link": {
+        "type": "string"
+      },
+      "state": {
+        "type": "string"
+      },
+      "transcript_id": {
+        "type": "string"
+      },
+      "attended": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "interview_scorecards": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 160
+      },
+      "candidate_id": {
+        "type": "string"
+      },
+      "vacancy_id": {
+        "type": "string"
+      },
+      "role_template": {
+        "type": "string"
+      },
+      "criteria": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "ratings": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "overall": {
+        "type": "number"
+      },
+      "interviewer": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
   "iot_agent_status": {
     "version": 0,
     "primaryKey": "id",
@@ -5233,6 +5446,57 @@
     ],
     "additionalProperties": true
   },
+  "offers": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 160
+      },
+      "candidate_id": {
+        "type": "string"
+      },
+      "vacancy_id": {
+        "type": "string"
+      },
+      "state": {
+        "type": "string"
+      },
+      "salary": {
+        "type": "number"
+      },
+      "start_date": {
+        "type": "string"
+      },
+      "role": {
+        "type": "string"
+      },
+      "package": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "negotiation_notes": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "state",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
   "outbound_account_limits": {
     "version": 0,
     "primaryKey": "id",
@@ -6151,6 +6415,60 @@
     ],
     "additionalProperties": true
   },
+  "placements": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 160
+      },
+      "candidate_id": {
+        "type": "string"
+      },
+      "vacancy_id": {
+        "type": "string"
+      },
+      "client_account_id": {
+        "type": "string"
+      },
+      "offer_id": {
+        "type": "string"
+      },
+      "start_ms": {
+        "type": "number"
+      },
+      "guarantee_days": {
+        "type": "number"
+      },
+      "fee": {
+        "type": "number"
+      },
+      "fee_basis": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "status": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "candidate_id",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
   "planning_absences": {
     "version": 0,
     "primaryKey": "id",
@@ -6630,6 +6948,57 @@
     ],
     "additionalProperties": true
   },
+  "signature_requests": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 160
+      },
+      "document_id": {
+        "type": "string"
+      },
+      "subject_kind": {
+        "type": "string"
+      },
+      "signers": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "sent_at_ms": {
+        "type": "number"
+      },
+      "expires_at_ms": {
+        "type": "number"
+      },
+      "status": {
+        "type": "string"
+      },
+      "signed_artifact_id": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "document_id",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
   "spreadsheet_blob_chunks": {
     "version": 0,
     "primaryKey": "id",
@@ -6861,6 +7230,58 @@
         "is_deleted",
         "updated_at_ms"
       ],
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "submissions": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 160
+      },
+      "candidate_id": {
+        "type": "string"
+      },
+      "vacancy_id": {
+        "type": "string"
+      },
+      "client_account_id": {
+        "type": "string"
+      },
+      "client_contact_id": {
+        "type": "string"
+      },
+      "consent_id": {
+        "type": "string"
+      },
+      "sent_at_ms": {
+        "type": "number"
+      },
+      "status": {
+        "type": "string"
+      },
+      "feedback": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "candidate_id",
+      "client_account_id",
       "updated_at_ms"
     ],
     "additionalProperties": true

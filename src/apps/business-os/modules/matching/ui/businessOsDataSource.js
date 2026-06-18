@@ -436,7 +436,7 @@ function makeId(prefix) {
 }
 
 async function loadRxdb() {
-  const mod = await import('../../../rxdb/dist/ctox-rxdb-js.mjs?v=20260618-business-credentials');
+  const mod = await import('../../../rxdb/dist/ctox-rxdb-js.mjs?v=20260618-ats-collections');
   registerRxdbPlugin(mod, mod.RxDBMigrationSchemaPlugin || mod.RxDBMigrationPlugin);
   const rxdb = typeof mod.rxdbCore === 'function'
     ? mod.rxdbCore()

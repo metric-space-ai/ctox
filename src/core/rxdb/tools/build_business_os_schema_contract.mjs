@@ -24,6 +24,12 @@ const MODULES = [
   'reports',
   'tickets',
   'credentials',
+  'consent',
+  'intake',
+  'submissions',
+  'placements',
+  'interviews',
+  'esign',
 ];
 
 const OUTPUT_PATH = new URL('../../business_os/business_os_schema_contract.json', import.meta.url);
