@@ -6697,7 +6697,7 @@ fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
     );
     prompt.replace(
         "- Tests must prove positive behavior only.",
-        "- Test import/export rule: every named import in every test must be exported by the helper file it imports. If you rename, remove, or replace helper functions, update tests in the same turn and run the exact test file before validator.\n- Tests must prove positive behavior only.",
+        "- ESM import/export rule: every named local import in index.js, core/*.mjs, and tests/*.mjs must be exported by the target file. Preserve scaffold helper exports such as COLLECTION_NAME, createRecord, normalizeStatus, summarizeRecords, and visibleRecords unless every importer is updated in the same turn.\n- Tests must prove positive behavior only.",
     )
 }
 
@@ -7288,7 +7288,7 @@ fn render_business_os_app_module_validation_feedback(
     feedback
         .replace(
             "8. Remove default third/right panes",
-            "8. If module tests report `does not provide an export named`, update the test imports and helper exports together. Do not leave scaffold tests pointing at helpers that were replaced by domain-specific helpers.\n9. Remove default third/right panes",
+            "8. If the validator or module tests report `does not provide an export named`, update every importer and helper export together. Preserve scaffold exports such as COLLECTION_NAME, createRecord, normalizeStatus, summarizeRecords, and visibleRecords unless index.js and tests no longer import them.\n9. Remove default third/right panes",
         )
         .replace(
             "9. If tests mention forbidden anti-pattern strings",
@@ -21096,7 +21096,7 @@ Business OS command:
         assert!(prompt.contains("new URL('./index.css', import.meta.url)"));
         assert!(prompt.contains("CSS token rule: never define custom properties on `:root`"));
         assert!(prompt.contains("Tests are required app artifacts"));
-        assert!(prompt.contains("Test import/export rule"));
+        assert!(prompt.contains("ESM import/export rule"));
         assert!(prompt.contains("ctox business-os app validate contracts --installed"));
     }
 

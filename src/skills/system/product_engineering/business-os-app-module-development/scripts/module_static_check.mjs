@@ -145,6 +145,98 @@ function relativeImportExists(baseFile, specifier) {
   return [target, `${target}.js`, `${target}.mjs`].some((candidate) => existsSync(candidate));
 }
 
+function resolveRelativeJsImport(baseFile, specifier) {
+  if (!specifier.startsWith('.')) return null;
+  const target = join(dirname(baseFile), specifier);
+  const candidates = /\.[cm]?js$/i.test(specifier)
+    ? [target]
+    : [target, `${target}.js`, `${target}.mjs`];
+  return candidates.find((candidate) => existsSync(candidate) && statSync(candidate).isFile()) || null;
+}
+
+function stripJsComments(text) {
+  return String(text || '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+}
+
+function parseNamedImportList(raw) {
+  return stripJsComments(raw)
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => part.replace(/^type\s+/, '').split(/\s+as\s+/i)[0].trim())
+    .filter(Boolean);
+}
+
+function parseNamedImports(text) {
+  const imports = [];
+  const source = stripJsComments(text);
+  const pattern = /\bimport\s*\{([\s\S]*?)\}\s*from\s*['"]([^'"]+)['"]/g;
+  for (const match of source.matchAll(pattern)) {
+    imports.push({
+      specifier: match[2],
+      names: parseNamedImportList(match[1]),
+    });
+  }
+  return imports;
+}
+
+function parseExportedNames(text) {
+  const names = new Set();
+  const source = stripJsComments(text);
+  const declPattern = /\bexport\s+(?:async\s+)?(?:function|class)\s+([A-Za-z_$][\w$]*)/g;
+  for (const match of source.matchAll(declPattern)) {
+    names.add(match[1]);
+  }
+  const variablePattern = /\bexport\s+(?:const|let|var)\s+([^;\n]+)/g;
+  for (const match of source.matchAll(variablePattern)) {
+    for (const part of match[1].split(',')) {
+      const name = part.trim().match(/^([A-Za-z_$][\w$]*)/);
+      if (name) names.add(name[1]);
+    }
+  }
+  const namedPattern = /\bexport\s*\{([\s\S]*?)\}(?:\s*from\s*['"][^'"]+['"])?/g;
+  for (const match of source.matchAll(namedPattern)) {
+    for (const part of stripJsComments(match[1]).split(',')) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      const alias = trimmed.match(/\s+as\s+([A-Za-z_$][\w$]*)$/i);
+      const direct = trimmed.match(/^([A-Za-z_$][\w$]*)/);
+      if (alias) {
+        names.add(alias[1]);
+      } else if (direct) {
+        names.add(direct[1]);
+      }
+    }
+  }
+  return names;
+}
+
+function collectEsmImportExportFailures(moduleFiles) {
+  const failuresOut = [];
+  const exportCache = new Map();
+  for (const importer of moduleFiles) {
+    const imports = parseNamedImports(readFileSync(importer, 'utf8'));
+    for (const imported of imports) {
+      const target = resolveRelativeJsImport(importer, imported.specifier);
+      if (!target) continue;
+      if (!exportCache.has(target)) {
+        exportCache.set(target, parseExportedNames(readFileSync(target, 'utf8')));
+      }
+      const exportedNames = exportCache.get(target);
+      for (const name of imported.names) {
+        if (!exportedNames.has(name)) {
+          failuresOut.push(
+            `${rel(importer)} imports \`${name}\` from ${imported.specifier}, but ${rel(target)} does not provide an export named \`${name}\`. Preserve scaffold exports or update every importer.`,
+          );
+        }
+      }
+    }
+  }
+  return failuresOut;
+}
+
 function hasBusinessOsChatTaskCommandType(text) {
   if (/(?:command_type\s*:\s*['"]business_os\.chat\.task['"]|["']command_type["']\s*:\s*["']business_os\.chat\.task["'])/.test(text)) {
     return true;
@@ -481,6 +573,10 @@ for (const path of files.filter((file) => /\.(html|css|js|mjs)$/.test(file))) {
   ) {
     fail(`${rel(path)} appears to define a third/right pane without an explicit workflow justification`);
   }
+}
+
+for (const message of collectEsmImportExportFailures(files.filter((file) => /\.(?:js|mjs)$/.test(file)))) {
+  fail(`ESM import/export mismatch: ${message}`);
 }
 
 const runtimeRules = [

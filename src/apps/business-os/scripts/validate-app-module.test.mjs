@@ -339,6 +339,25 @@ function installedIndexJsWith(extraLines = []) {
 
 {
   const root = makeWorkspace();
+  const dir = writeInstalledModule(root, 'namedimportmismatch', {
+    indexJs: installedIndexJsWith().replace(
+      "import { buildFollowUpCommand } from './core/automation.mjs';",
+      [
+        "import { createRecord } from './core/records.mjs';",
+        "import { buildFollowUpCommand } from './core/automation.mjs';",
+        'void createRecord;',
+      ].join('\n'),
+    ),
+  });
+  writeFileSync(join(dir, 'core/records.mjs'), 'export function normalizeRecord(record = {}) { return record; }\n');
+  const run = runValidator(root, 'namedimportmismatch', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /does not provide an export named `createRecord`/);
+  assert.match(run.stderr, /Preserve scaffold exports or update every importer/);
+}
+
+{
+  const root = makeWorkspace();
   writeInstalledModule(root, 'selectordrift', {
     indexHtml: '<main class="good-module"><button type="button" data-action="follow-up">Review</button><div data-list></div></main>\n',
     indexJs: installedIndexJsWith([
