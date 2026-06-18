@@ -784,6 +784,7 @@ fn command_reads_business_os_module_whole_file(
 
     let cwd_is_module_dir = is_business_os_module_dir(workspace_root, cwd);
     let tokens = shellish_tokens(&compact);
+    let module_cd_target = command_cd_target_business_os_module_dir(&tokens);
     for (idx, token) in tokens.iter().enumerate() {
         if token != "cat" {
             continue;
@@ -794,6 +795,9 @@ fn command_reads_business_os_module_whole_file(
             }
             if let Some(path) = business_os_module_artifact_token_name(target, cwd_is_module_dir) {
                 return Some(path);
+            }
+            if module_cd_target.is_some() && token_is_shell_variable_reference(target) {
+                return module_cd_target.clone();
             }
         }
     }
@@ -876,6 +880,39 @@ fn first_business_os_module_artifact_reference(
     shellish_tokens(command)
         .iter()
         .find_map(|token| business_os_module_artifact_token_name(token, cwd_is_module_dir))
+}
+
+fn command_cd_target_business_os_module_dir(tokens: &[String]) -> Option<String> {
+    tokens.windows(2).find_map(|window| {
+        if window.first().map(String::as_str) != Some("cd") {
+            return None;
+        }
+        let target = window.get(1)?;
+        business_os_module_dir_token_name(target)
+    })
+}
+
+fn business_os_module_dir_token_name(token: &str) -> Option<String> {
+    let normalized = token
+        .trim()
+        .trim_start_matches("./")
+        .trim_matches(|ch: char| matches!(ch, '\'' | '"' | '`'))
+        .to_string();
+    let lower = normalized.to_ascii_lowercase();
+    let module_path = lower.contains("src/apps/business-os/modules/")
+        || lower.contains("src/apps/business-os/installed-modules/")
+        || lower.contains("runtime/business-os/installed-modules/")
+        || lower.contains("business-os/installed-modules/")
+        || lower.contains("$module_dir")
+        || lower.contains("${module_dir}");
+    module_path.then_some(normalized)
+}
+
+fn token_is_shell_variable_reference(token: &str) -> bool {
+    let trimmed = token
+        .trim()
+        .trim_matches(|ch: char| matches!(ch, '\'' | '"' | '`'));
+    trimmed.starts_with('$') || trimmed.contains("${") || trimmed.contains("$")
 }
 
 fn business_os_module_artifact_token_name(token: &str, cwd_is_module_dir: bool) -> Option<String> {

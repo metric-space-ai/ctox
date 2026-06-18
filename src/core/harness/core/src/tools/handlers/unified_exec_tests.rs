@@ -443,6 +443,43 @@ fn business_os_guard_blocks_module_cwd_whole_file_cat() -> anyhow::Result<()> {
 }
 
 #[test]
+fn business_os_guard_blocks_module_cd_variable_loop_whole_file_cat() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+    let module_dir = root
+        .path()
+        .join("runtime/business-os/installed-modules/inventory");
+    fs::create_dir_all(&module_dir)?;
+    let command = format!(
+        "cd {} && for f in module.json collections.schema.json schema.js index.html index.css index.js icon.svg core/automation.mjs core/records.mjs locales/de.json locales/en.json tests/inventory.test.mjs; do echo \"===== $f =====\"; cat \"$f\"; echo; done",
+        module_dir.display()
+    );
+
+    let err = business_os_app_root_artifact_write_guard(&command, root.path())
+        .expect("module-local variable cat loop should be blocked");
+
+    assert!(err.contains("whole-file dump"));
+    assert!(err.contains("runtime/business-os/installed-modules/inventory"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_relative_module_cd_variable_whole_file_cat() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "cd runtime/business-os/installed-modules/inventory && f=index.js && cat \"$f\"",
+        root.path(),
+    )
+    .expect("relative module cd variable cat should be blocked");
+
+    assert!(err.contains("whole-file dump"));
+    assert!(err.contains("runtime/business-os/installed-modules/inventory"));
+    Ok(())
+}
+
+#[test]
 fn business_os_guard_allows_targeted_installed_module_reads() -> anyhow::Result<()> {
     let root = tempdir()?;
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;
