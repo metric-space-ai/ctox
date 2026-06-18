@@ -191,11 +191,12 @@ exact paths under the resolved module directory. Do not build app files in
 or move them into `installed-modules/<module>/`. Do not create `/tmp/*.patch`
 files, probe `which apply_patch`, run `apply_patch --help`, inspect shell
 patch-wrapper binaries, or invoke shell `apply_patch` for generated app files.
-If quoting or command length becomes difficult, shrink the file, move pure
-logic into `core/*.mjs`, or write the smaller affected file directly. Do not
-repair module files with `sed -i`, `gsed -i`, `perl -pi`, or repeated
-line-number edits; rewrite the smallest bounded helper/file and rerun
-validation.
+Do not stream large generated files through giant shell `printf`, `echo`,
+`tee`, or `cat` payload rewrites. If quoting or command length becomes
+difficult, shrink the file, move pure logic into `core/*.mjs`, or write the
+smaller affected file directly. Do not repair module files with `sed -i`,
+`gsed -i`, `perl -pi`, or repeated line-number edits; rewrite the smallest
+bounded helper/file and rerun validation.
 
 When existing source modules show a different pattern, do not treat that as a
 fallback. For new/runtime App Creator apps, these legacy patterns are forbidden

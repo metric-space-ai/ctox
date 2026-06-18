@@ -384,6 +384,11 @@ pub(crate) fn business_os_app_root_artifact_write_guard(
         return Some(module_writer_guard_message(&path));
     }
     if let Some(path) =
+        command_writes_large_business_os_module_payload(command, &workspace_root, cwd)
+    {
+        return Some(module_large_payload_guard_message(&path));
+    }
+    if let Some(path) =
         command_writes_large_business_os_module_heredoc(command, &workspace_root, cwd)
     {
         return Some(module_large_heredoc_guard_message(&path));
@@ -441,6 +446,14 @@ fn module_large_heredoc_guard_message(path: &str) -> String {
         "Business OS app module guard blocked an oversized heredoc rewrite of generated module artifact `{path}`. \
 The App Creator scaffold is already present; make targeted edits, split large behavior into smaller \
 module-local ESM helpers, or patch a narrow range instead of rewriting whole generated files."
+    )
+}
+
+fn module_large_payload_guard_message(path: &str) -> String {
+    format!(
+        "Business OS app module guard blocked an oversized shell payload rewrite of generated module artifact `{path}`. \
+Do not stream large printf/echo/tee/cat payloads through shell for Business OS app files. Keep edits small, \
+split behavior into module-local ESM helpers, and rewrite only the bounded helper/file that actually changed."
     )
 }
 
@@ -981,6 +994,36 @@ fn command_stages_tmp_patch_for_business_os_module(
         || lower.contains("tee '/tmp/")
         || lower.contains("tee \"/tmp/");
     if !writes_tmp_patch {
+        return None;
+    }
+    Some(
+        first_business_os_module_artifact_reference(command, workspace_root, cwd)
+            .unwrap_or_else(|| "module artifact".to_string()),
+    )
+}
+
+fn command_writes_large_business_os_module_payload(
+    command: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+) -> Option<String> {
+    let compact = command.replace("\\\n", " ");
+    let lower = compact.to_ascii_lowercase();
+    if !command_targets_business_os_module(&lower, workspace_root, cwd) {
+        return None;
+    }
+    if lower.contains("<<") {
+        return None;
+    }
+    if command.len() <= 12_000 && command.lines().count() <= 120 {
+        return None;
+    }
+    let shell_payload_write = (lower_contains_shell_word(&lower, "printf")
+        || lower_contains_shell_word(&lower, "echo")
+        || lower_contains_shell_word(&lower, "cat")
+        || lower_contains_shell_word(&lower, "tee"))
+        && (lower.contains('>') || lower.contains(" tee "));
+    if !shell_payload_write {
         return None;
     }
     Some(

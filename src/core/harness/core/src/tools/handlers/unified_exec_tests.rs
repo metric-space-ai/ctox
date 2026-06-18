@@ -630,6 +630,26 @@ fn business_os_guard_blocks_tmp_patch_staging_for_module_artifact() -> anyhow::R
 }
 
 #[test]
+fn business_os_guard_blocks_large_shell_payload_module_rewrite() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+    let payload = (0..140)
+        .map(|idx| format!("'export const field{idx} = {idx};'"))
+        .collect::<Vec<_>>()
+        .join(" \\\n");
+    let command = format!(
+        "printf '%s\\n' {payload} > runtime/business-os/installed-modules/inventory/core/records.mjs"
+    );
+
+    let err = business_os_app_root_artifact_write_guard(&command, root.path())
+        .expect("large shell payload rewrite should be blocked");
+
+    assert!(err.contains("oversized shell payload"));
+    assert!(err.contains("runtime/business-os/installed-modules/inventory/core/records.mjs"));
+    Ok(())
+}
+
+#[test]
 fn business_os_guard_allows_node_module_tests() -> anyhow::Result<()> {
     let root = tempdir()?;
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;

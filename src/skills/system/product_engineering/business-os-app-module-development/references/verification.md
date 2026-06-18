@@ -56,7 +56,8 @@ acceptable only for non-app evidence such as command stdout, never as a
 generated app artifact transport. Do not stage `/tmp/*.patch` files, discover
 or inspect shell `apply_patch`, or invoke shell patch wrappers for generated
 module repairs; rewrite the affected bounded file directly or split logic into
-`core/*.mjs`.
+`core/*.mjs`. Do not stream large generated files through giant shell `printf`,
+`echo`, `tee`, or `cat` payload rewrites.
 
 ## Static Checks
 
