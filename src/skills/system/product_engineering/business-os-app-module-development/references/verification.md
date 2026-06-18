@@ -53,7 +53,10 @@ keep `index.js` as wiring only.
 Do not create app files through `/tmp` scratch files copied or moved into the
 module. Write exact target paths under `MODULE_DIR` directly. Scratch output is
 acceptable only for non-app evidence such as command stdout, never as a
-generated app artifact transport.
+generated app artifact transport. Do not stage `/tmp/*.patch` files, discover
+or inspect shell `apply_patch`, or invoke shell patch wrappers for generated
+module repairs; rewrite the affected bounded file directly or split logic into
+`core/*.mjs`.
 
 ## Static Checks
 
