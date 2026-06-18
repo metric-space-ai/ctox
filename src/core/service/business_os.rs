@@ -73,7 +73,7 @@ const SKILL_APP_BINDINGS: &[SkillAppBinding] = &[
         "automation",
     ),
     binding(
-        "business-os-matching",
+        "business-os-requirement-matching",
         "business",
         "Business OS Matching",
         "business",
@@ -2363,6 +2363,34 @@ mod tests {
                 .pointer("/frame_data_in_payload")
                 .and_then(serde_json::Value::as_bool),
             Some(false)
+        );
+    }
+
+    #[test]
+    fn matching_skill_binding_resolves_to_on_disk_skill_pack() {
+        // Regression: suggested_skill_for_command + SKILL_APP_BINDINGS once used
+        // "business-os-matching", which names no skill bundle on disk (the dir is
+        // business-os-requirement-matching). A suggested_skill that resolves to
+        // nothing means the LLM matching skill never binds and requirement
+        // scoring silently falls back to the keyword-only native scorer (§5.2).
+        let mut dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        while !dir.join("src/skills/packs").is_dir() {
+            assert!(
+                dir.pop(),
+                "could not locate src/skills/packs from CARGO_MANIFEST_DIR"
+            );
+        }
+        let binding = find_skill_binding("business-os-requirement-matching")
+            .expect("requirement-matching binding present");
+        let skill_md = dir
+            .join("src/skills/packs")
+            .join(binding.pack)
+            .join(binding.skill_id)
+            .join("SKILL.md");
+        assert!(
+            skill_md.is_file(),
+            "matching skill pack missing at {}",
+            skill_md.display()
         );
     }
 

@@ -24398,7 +24398,7 @@ fn suggested_skill_for_command(command: &BusinessCommand) -> Option<String> {
     } else if command.command_type.starts_with("research.systematic.") {
         Some("systematic-research".to_string())
     } else if is_match_command(&command.command_type) || command.command_type.contains("scoring") {
-        Some("business-os-matching".to_string())
+        Some("business-os-requirement-matching".to_string())
     } else if command.command_type.contains("knowledge")
         || command.command_type.contains("runbook")
         || command.command_type.contains("skillbook")
