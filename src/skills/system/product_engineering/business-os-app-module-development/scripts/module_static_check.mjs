@@ -53,6 +53,20 @@ const shellTokenPattern = new RegExp(
   `--(?:${shellTokenNames.join('|')})(?![\\w-])\\s*:`,
 );
 const semverPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const installedAllowedRootFiles = new Set([
+  'module.json',
+  'collections.schema.json',
+  'schema.js',
+  'index.html',
+  'index.css',
+  'index.js',
+  'icon.svg',
+]);
+const installedAllowedRootDirectories = new Set([
+  'core',
+  'locales',
+  'tests',
+]);
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -370,6 +384,7 @@ for (const file of [
   'icon.svg',
   'locales/de.json',
   'locales/en.json',
+  ...(installedMode ? ['core/automation.mjs', 'core/records.mjs'] : []),
 ]) {
   if (!existsSync(join(moduleDir, file))) {
     fail(`missing ${rel(join(moduleDir, file))}`);
@@ -489,6 +504,19 @@ const files = entries.filter((path) => !statSync(path).isDirectory());
 const testFiles = files.filter((path) =>
   hasPathSegment(path, 'tests') && path.endsWith('.test.mjs')
 );
+
+if (installedMode && existsSync(moduleDir)) {
+  for (const name of readdirSync(moduleDir)) {
+    const path = join(moduleDir, name);
+    const stats = statSync(path);
+    const allowed = stats.isDirectory()
+      ? installedAllowedRootDirectories.has(name)
+      : installedAllowedRootFiles.has(name);
+    if (!allowed) {
+      fail(`${rel(path)} is an unexpected installed-app root artifact; keep only canonical root files plus core/, locales/, and tests/`);
+    }
+  }
+}
 
 if (testFiles.length === 0) {
   fail(`missing ${rel(join(moduleDir, 'tests'))}/*.test.mjs`);
