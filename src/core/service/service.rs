@@ -3706,11 +3706,9 @@ fn spawn_delayed_business_os_app_validation_cleanup(
                     }
                 }
             }
-            if !completed.is_empty()
-                || !reworked.is_empty()
-                || !failed.is_empty()
-                || !errors.is_empty()
-            {
+            let terminal_recovery =
+                !completed.is_empty() || !reworked.is_empty() || !failed.is_empty();
+            if terminal_recovery || !errors.is_empty() {
                 let mut shared = lock_shared_state(&state);
                 if !completed.is_empty() {
                     push_event_locked(
@@ -3750,6 +3748,13 @@ fn spawn_delayed_business_os_app_validation_cleanup(
                         ),
                     );
                 }
+            }
+            if terminal_recovery && remaining.is_empty() {
+                maybe_dispatch_after_business_os_app_recovery(
+                    root.clone(),
+                    state.clone(),
+                    "delayed worker lease cleanup",
+                );
             }
             if remaining.is_empty() {
                 break;
@@ -21720,6 +21725,20 @@ Business OS command:
             },
         )
         .expect("failed to create app queue task");
+        let next_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create contracts app".to_string(),
+                prompt: "Build the next small Business OS app.".to_string(),
+                thread_key: "business-os/apps/contracts".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create next app queue task");
         channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
             .expect("failed to lease app queue task");
         let job = QueuedPrompt {
@@ -21740,6 +21759,10 @@ Business OS command:
         {
             let mut shared = lock_shared_state(&state);
             track_leased_keys_locked(&mut shared, &job.leased_message_keys, &[]);
+            shared.last_error = Some(
+                "CTOX chat could not continue because the configured OpenAI API quota is exhausted or billing is unavailable for the selected model.".to_string(),
+            );
+            shared.last_progress_epoch_secs = current_epoch_secs().saturating_sub(15);
         }
         {
             let mut activity = PromptWorkerActivity::start(&root, &state, &job);
@@ -21758,7 +21781,34 @@ Business OS command:
         }
 
         assert_eq!(route_status_for(&root, &task.message_key), "handled");
+        for _ in 0..20 {
+            let next_leased = route_status_for(&root, &next_task.message_key) == "leased";
+            let queued_pending = {
+                let shared = lock_shared_state(&state);
+                shared.pending_prompts.iter().any(|prompt| {
+                    prompt
+                        .leased_message_keys
+                        .iter()
+                        .any(|message_key| message_key == &next_task.message_key)
+                })
+            };
+            if next_leased && queued_pending {
+                break;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(route_status_for(&root, &next_task.message_key), "leased");
         let shared = lock_shared_state(&state);
+        assert!(
+            shared.pending_prompts.iter().any(|prompt| {
+                prompt
+                    .leased_message_keys
+                    .iter()
+                    .any(|message_key| message_key == &next_task.message_key)
+            }),
+            "delayed cleanup should queue the next durable task under runtime backoff: {:?}",
+            shared.pending_prompts
+        );
         assert!(
             shared
                 .recent_events
