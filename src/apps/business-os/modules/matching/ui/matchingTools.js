@@ -1,6 +1,7 @@
 import { getDatabase } from './businessOsDataSource.js';
 import { tool, z } from './ctoxCommandAdapter.js';
 import { getActiveMatchingDefinition } from './matchingDefinition.js';
+import { evaluateKnockouts, rankShortlist } from '../core/screening.js';
 
 function clamp01(value) {
   const num = Number(value);
@@ -208,21 +209,62 @@ export async function generateSyntheticRequirementFromCv() {
   };
 }
 
+// Bulk shortlisting ranks the considered pool by the real, persisted per-pair
+// match score (computeRequirementMatch produces these) and applies optional
+// must-have knock-out rules. Candidates with no match yet rank last as
+// "noch nicht bewertet" instead of the old score:0 stub.
+async function loadRequirementMatchScores(db, requirementId) {
+  const byObject = new Map();
+  if (!db?.matches) return byObject;
+  const docs = await db.matches.find({ selector: { requirementId } }).exec();
+  for (const docRx of docs) {
+    const doc = docRx.toJSON();
+    if (doc.removed) continue;
+    const score = Number.isFinite(doc.score) ? doc.score : computeTotalMatchScoreFromItems(doc.items);
+    byObject.set(doc.objectId, score);
+  }
+  return byObject;
+}
+
+async function loadObjectsByIds(db, ids) {
+  const byId = new Map();
+  if (!db?.objects) return byId;
+  for (const id of ids) {
+    const rx = await db.objects.findOne({ selector: { id } }).exec();
+    if (rx) byId.set(id, rx.toJSON());
+  }
+  return byId;
+}
+
 export async function shortlistObjectsForRequirement({
   requirementId,
   objectIds = [],
-  topN = 5
+  topN = 5,
+  knockoutRules = []
 }) {
   const ids = Array.isArray(objectIds) ? objectIds.filter(Boolean) : [];
+  const db = await getDatabase();
+  const scoreByObject = await loadRequirementMatchScores(db, requirementId);
+  const objectById = knockoutRules.length ? await loadObjectsByIds(db, ids) : new Map();
+
+  const scored = ids.map((objectId) => {
+    const ko = knockoutRules.length
+      ? evaluateKnockouts(objectById.get(objectId) || {}, knockoutRules)
+      : { passed: true, failed: [] };
+    return {
+      objectId,
+      score: scoreByObject.has(objectId) ? scoreByObject.get(objectId) : null,
+      evaluated: scoreByObject.has(objectId),
+      knockoutFailed: !ko.passed,
+      knockoutReasons: ko.failed
+    };
+  });
+
   return {
     requirementId,
     consideredObjectIds: ids,
-    skippedAlreadyMatchedIds: [],
-    shortlist: ids.slice(0, topN).map((objectId) => ({
-      objectId,
-      score: 0,
-      reason: 'Basic mode: bulk scoring is disabled.'
-    }))
+    knockedOut: scored.filter((s) => s.knockoutFailed).map((s) => ({ objectId: s.objectId, reasons: s.knockoutReasons })),
+    shortlist: rankShortlist(scored, { topN })
   };
 }
 
@@ -232,14 +274,32 @@ export async function shortlistRequirementsForObject({
   topN = 5
 }) {
   const ids = Array.isArray(requirementIds) ? requirementIds.filter(Boolean) : [];
+  const db = await getDatabase();
+  const scoreByRequirement = new Map();
+  if (db?.matches) {
+    const docs = await db.matches.find({ selector: { objectId } }).exec();
+    for (const docRx of docs) {
+      const doc = docRx.toJSON();
+      if (doc.removed) continue;
+      const score = Number.isFinite(doc.score) ? doc.score : computeTotalMatchScoreFromItems(doc.items);
+      scoreByRequirement.set(doc.requirementId, score);
+    }
+  }
+
+  const scored = ids.map((requirementId) => ({
+    objectId: requirementId,
+    score: scoreByRequirement.has(requirementId) ? scoreByRequirement.get(requirementId) : null,
+    evaluated: scoreByRequirement.has(requirementId)
+  }));
+
   return {
     objectId,
     consideredRequirementIds: ids,
-    skippedInvalidRequirementIds: [],
-    shortlist: ids.slice(0, topN).map((requirementId) => ({
-      requirementId,
-      score: 0,
-      reason: 'Basic mode: bulk scoring is disabled.'
+    shortlist: rankShortlist(scored, { topN }).map((entry) => ({
+      requirementId: entry.objectId,
+      score: entry.score,
+      rank: entry.rank,
+      reason: entry.reason
     }))
   };
 }
