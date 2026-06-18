@@ -1,12 +1,13 @@
-import { computePlacementFee } from './core/lifecycle.js';
-const MOD_BUILD = '20260618-ats2';
+const MOD_BUILD = '20260618-ats3';
+const MODULE_ID = 'placements';
 const PRIMARY = 'placements';
-const TITLE = "placements";
+const TITLE = 'placements';
+const CREATE_COMMAND = 'ats.placement.create';
 
 export async function mount(ctx) {
   await ensureStyles();
   ctx.host.innerHTML = await loadMarkup();
-  ctx.host.dataset.atsModule = 'placements';
+  ctx.host.dataset.atsModule = MODULE_ID;
   ctx.left?.replaceChildren?.();
   ctx.right?.replaceChildren?.();
   const root = ctx.host.querySelector('[data-ats-root]');
@@ -22,6 +23,12 @@ export async function mount(ctx) {
   let rowsCache = [];
   const collection = () => { try { return ctx.db?.collection?.(PRIMARY) || ctx.db?.[PRIMARY] || null; } catch { return null; } };
 
+  function setGate(html, kind) {
+    if (!gateEl) return;
+    gateEl.className = 'ats-gate' + (kind ? ' ats-gate--' + kind : '');
+    gateEl.innerHTML = html || '';
+  }
+
   async function render() {
     const col = collection();
     let rows = [];
@@ -36,15 +43,60 @@ export async function mount(ctx) {
 
   async function onSubmit(event) {
     event.preventDefault();
-    if (gateEl) gateEl.textContent = '';
-    const col = collection();
-    if (!col?.insert) { ctx.notifications?.show?.({ type: 'error', title: TITLE, message: 'Datenbank nicht verfügbar.' }); return; }
+    setGate('');
+    const dispatch = ctx.commandBus?.dispatch;
+    if (typeof dispatch !== 'function') {
+      setGate('Offline: Befehlsdienst nicht verfügbar.', 'offline');
+      return;
+    }
     const data = new FormData(formEl);
     const f = Object.fromEntries(data.entries());
-    const now = Date.now();
-    const record = Object.assign({ id: 'plac_' + now + '_' + Math.round(now % 1e6), created_at_ms: now, updated_at_ms: now, _deleted: false }, { candidate_id: f.candidate_id, status: 'confirmed', start_ms: now, guarantee_days: Number(f.guarantee_days) || 90, fee: computePlacementFee({ feeType: 'percent', feePercent: Number(f.fee_percent) || 0, annualSalary: Number(f.salary) || 0 }) });
-    try { await col.insert(record); formEl.reset(); await render(); }
-    catch (e) { console.error('[placements] insert failed:', e); if (gateEl) gateEl.textContent = 'Fehler: ' + (e?.message || e); }
+    const candidate_id = String(f.candidate_id || '').trim();
+    if (!candidate_id) { setGate('Kandidat-ID erforderlich.', 'block'); return; }
+    const payload = {
+      candidate_id,
+      client_account_id: String(f.client_account_id || '').trim() || null,
+      fee: f.fee === '' || f.fee == null ? null : Number(f.fee),
+      guarantee_days: f.guarantee_days === '' || f.guarantee_days == null ? null : Number(f.guarantee_days),
+    };
+
+    let result;
+    try {
+      result = await ctx.commandBus?.dispatch?.({
+        module: MODULE_ID,
+        type: CREATE_COMMAND,
+        command_type: CREATE_COMMAND,
+        payload,
+      });
+    } catch (e) {
+      console.error('[placements] dispatch failed:', e);
+      setGate('Offline: Befehl konnte nicht gesendet werden.', 'offline');
+      return;
+    }
+
+    const decision = result?.gate || result?.decision || null;
+    const blockers = result?.blockers || decision?.blockers || result?.errors || null;
+    const blocked = result?.ok === false || result?.status === 'blocked' || decision?.status === 'blocked' || decision?.decision === 'block' || (Array.isArray(blockers) && blockers.length > 0);
+
+    if (blocked) {
+      const items = (Array.isArray(blockers) ? blockers : [blockers])
+        .filter(Boolean)
+        .map((b) => '<li>' + esc(typeof b === 'string' ? b : (b?.message || b?.reason || JSON.stringify(b))) + '</li>')
+        .join('');
+      setGate('<strong>Blockiert.</strong>' + (items ? '<ul class="ats-blockers">' + items + '</ul>' : ''), 'block');
+      return;
+    }
+
+    const placementId = result?.placement_id ?? result?.data?.placement_id ?? null;
+    const feeInvoiceId = result?.fee_invoice_id ?? result?.data?.fee_invoice_id ?? null;
+    setGate(
+      '<strong>Placement angelegt.</strong>'
+      + '<div class="ats-result-row">Placement: ' + esc(placementId ?? '—') + '</div>'
+      + '<div class="ats-result-row">Honorar-Rechnung: ' + esc(feeInvoiceId ?? '—') + '</div>',
+      'ok'
+    );
+    try { formEl.reset(); } catch {}
+    await render();
   }
   formEl?.addEventListener('submit', onSubmit);
 

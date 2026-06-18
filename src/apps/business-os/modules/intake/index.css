@@ -4,3 +4,12 @@
 .ats-intake .ats-count { font-size: 13px; opacity: .8; }
 .ats-intake .ats-item { padding: 8px 12px; border: 1px solid color-mix(in srgb, currentColor 12%, transparent); border-radius: 8px; margin-bottom: 6px; font-size: 13px; }
 .ats-intake .ats-empty { font-size: 13px; opacity: .6; padding: 20px 0; }
+.ats-intake .ats-status { font-size: 13px; min-height: 0; }
+.ats-intake .ats-status:empty { display: none; }
+.ats-intake .ats-status .ats-ok { color: color-mix(in srgb, currentColor 55%, green); }
+.ats-intake .ats-status .ats-offline { color: color-mix(in srgb, currentColor 55%, orange); }
+.ats-intake .ats-status small { opacity: .7; }
+.ats-intake .ats-gate:empty { display: none; }
+.ats-intake .ats-block { color: color-mix(in srgb, currentColor 50%, red); font-size: 13px; }
+.ats-intake .ats-block ul { margin: 4px 0 0; padding-left: 18px; }
+.ats-intake .ats-block li { margin: 2px 0; }

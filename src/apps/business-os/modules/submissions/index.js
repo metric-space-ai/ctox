@@ -1,7 +1,8 @@
-import { evaluateSubmissionGuard } from './core/submission.js';
-const MOD_BUILD = '20260618-ats2';
+const MOD_BUILD = '20260618-ats3';
+const MODULE_ID = 'submissions';
 const PRIMARY = 'submissions';
 const TITLE = "submissions";
+const COMMAND_TYPE = 'ats.submission.present';
 
 export async function mount(ctx) {
   await ensureStyles();
@@ -14,6 +15,7 @@ export async function mount(ctx) {
   const countEl = root?.querySelector('[data-ats-count]');
   const formEl = root?.querySelector('[data-ats-form]');
   const gateEl = root?.querySelector('[data-ats-gate]');
+  const statusEl = root?.querySelector('[data-ats-status]');
   const titleEl = root?.querySelector('[data-ats-title]');
   const subEl = root?.querySelector('[data-ats-sub]');
   if (titleEl) titleEl.textContent = ctx.manifest?.title || TITLE;
@@ -34,33 +36,58 @@ export async function mount(ctx) {
     if (listEl) listEl.innerHTML = rows.length ? rows.map((r) => '<div class="ats-item">' + esc(r.id || '') + '</div>').join('') : '<div class="ats-empty">Noch keine Einträge.</div>';
   }
 
+  function setGate(text) { if (gateEl) { gateEl.textContent = text || ''; gateEl.hidden = !text; } }
+  function setStatus(text) { if (statusEl) { statusEl.textContent = text || ''; statusEl.hidden = !text; } }
+
   async function onSubmit(event) {
     event.preventDefault();
-    if (gateEl) gateEl.textContent = '';
-    const col = collection();
-    if (!col?.insert) { ctx.notifications?.show?.({ type: 'error', title: TITLE, message: 'Datenbank nicht verfügbar.' }); return; }
+    setGate('');
+    setStatus('');
     const data = new FormData(formEl);
     const f = Object.fromEntries(data.entries());
-    const now = Date.now();
+    const candidate_id = String(f.candidate_id || '').trim();
+    const client_account_id = String(f.client_account_id || '').trim();
+    if (!candidate_id || !client_account_id) {
+      setGate('Kandidat-ID und Kunden-ID sind erforderlich.');
+      return;
+    }
 
-    // Server-authoritative consent gate before presenting a candidate.
+    // Server-authoritative present: the native command owns the consent gate and
+    // the double-submission entitlement check. We never write RxDB directly.
+    if (typeof ctx.commandBus?.dispatch !== 'function') {
+      setStatus('Offline: Server nicht erreichbar — bitte später erneut versuchen.');
+      return;
+    }
+
+    setStatus('Wird übermittelt …');
+    let outcome = null;
     try {
-      const decision = await ctx.commandBus?.dispatch?.({
-        module: 'submissions', type: 'ats.consent.check', command_type: 'ats.consent.check',
-        payload: { subject_id: f.candidate_id, purpose: 'present_to_client' },
+      outcome = await ctx.commandBus.dispatch({
+        module: MODULE_ID,
+        type: COMMAND_TYPE,
+        command_type: COMMAND_TYPE,
+        payload: { candidate_id, client_account_id },
       });
-      const allowed = decision?.result?.allowed ?? decision?.allowed;
-      if (allowed === false) {
-        if (gateEl) gateEl.textContent = 'Blockiert: keine gültige Einwilligung (present_to_client).';
-        return;
-      }
-    } catch (e) { console.warn('[submissions] consent gate check skipped:', e); }
-    // Local double-submission guard (mirrors the native check) via the engine core.
-    const guard = evaluateSubmissionGuard({ candidate_id: f.candidate_id, client_account_id: f.client_account_id }, { existingSubmissions: rowsCache, hasConsent: true, nowMs: now });
-    if (!guard.allowed) { if (gateEl) gateEl.textContent = 'Blockiert: ' + guard.blockers.map((b) => b.reason).join(', '); return; }
-    const record = Object.assign({ id: 'subm_' + now + '_' + Math.round(now % 1e6), created_at_ms: now, updated_at_ms: now, _deleted: false }, { candidate_id: f.candidate_id, client_account_id: f.client_account_id, sent_at_ms: now, status: 'sent' });
-    try { await col.insert(record); formEl.reset(); await render(); }
-    catch (e) { console.error('[submissions] insert failed:', e); if (gateEl) gateEl.textContent = 'Fehler: ' + (e?.message || e); }
+    } catch (e) {
+      console.warn('[submissions] present dispatch failed:', e);
+      setStatus('Offline: Befehl konnte nicht zugestellt werden.');
+      return;
+    }
+
+    const result = outcome?.result ?? outcome ?? {};
+    const allowed = result.allowed;
+    const blockers = Array.isArray(result.blockers) ? result.blockers : [];
+    if (allowed === false) {
+      const reasons = blockers.map((b) => String(b?.reason || 'unknown')).join(', ');
+      setGate('Blockiert: ' + (reasons || 'gate_denied'));
+      setStatus('');
+      return; // gate block — keep the form, not a success
+    }
+
+    const submissionId = result.submission_id || '';
+    setStatus(submissionId ? ('Übermittelt — ID: ' + String(submissionId)) : 'Übermittelt.');
+    formEl.reset();
+    await render();
   }
   formEl?.addEventListener('submit', onSubmit);
 

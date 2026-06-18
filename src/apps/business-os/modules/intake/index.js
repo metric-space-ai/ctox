@@ -1,12 +1,13 @@
-import { normalizeApplication } from './core/application.js';
+const MODULE_ID = 'intake';
 const MOD_BUILD = '20260618-ats2';
 const PRIMARY = 'applications';
-const TITLE = "intake";
+const TITLE = 'intake';
+const COMMAND_TYPE = 'ats.intake.capture';
 
 export async function mount(ctx) {
   await ensureStyles();
   ctx.host.innerHTML = await loadMarkup();
-  ctx.host.dataset.atsModule = 'intake';
+  ctx.host.dataset.atsModule = MODULE_ID;
   ctx.left?.replaceChildren?.();
   ctx.right?.replaceChildren?.();
   const root = ctx.host.querySelector('[data-ats-root]');
@@ -14,6 +15,7 @@ export async function mount(ctx) {
   const countEl = root?.querySelector('[data-ats-count]');
   const formEl = root?.querySelector('[data-ats-form]');
   const gateEl = root?.querySelector('[data-ats-gate]');
+  const statusEl = root?.querySelector('[data-ats-status]');
   const titleEl = root?.querySelector('[data-ats-title]');
   const subEl = root?.querySelector('[data-ats-sub]');
   if (titleEl) titleEl.textContent = ctx.manifest?.title || TITLE;
@@ -21,6 +23,13 @@ export async function mount(ctx) {
 
   let rowsCache = [];
   const collection = () => { try { return ctx.db?.collection?.(PRIMARY) || ctx.db?.[PRIMARY] || null; } catch { return null; } };
+
+  function setStatus(html, kind) {
+    if (!statusEl) return;
+    statusEl.innerHTML = html || '';
+    statusEl.dataset.kind = kind || '';
+  }
+  function setGate(html) { if (gateEl) gateEl.innerHTML = html || ''; }
 
   async function render() {
     const col = collection();
@@ -36,15 +45,48 @@ export async function mount(ctx) {
 
   async function onSubmit(event) {
     event.preventDefault();
-    if (gateEl) gateEl.textContent = '';
-    const col = collection();
-    if (!col?.insert) { ctx.notifications?.show?.({ type: 'error', title: TITLE, message: 'Datenbank nicht verfügbar.' }); return; }
+    setGate('');
+    setStatus('');
     const data = new FormData(formEl);
     const f = Object.fromEntries(data.entries());
-    const now = Date.now();
-    const record = Object.assign({ id: 'inta_' + now + '_' + Math.round(now % 1e6), created_at_ms: now, updated_at_ms: now, _deleted: false }, (() => { const a = normalizeApplication({ name: f.name, email: f.email, channel: f.channel, received_at_ms: now }); return { ...a, received_at_ms: now }; })());
-    try { await col.insert(record); formEl.reset(); await render(); }
-    catch (e) { console.error('[intake] insert failed:', e); if (gateEl) gateEl.textContent = 'Fehler: ' + (e?.message || e); }
+    const name = String(f.name == null ? '' : f.name).trim();
+    const email = String(f.email == null ? '' : f.email).trim();
+    const channel = String(f.channel == null ? '' : f.channel).trim();
+    if (!name) { setGate('<span class="ats-block">Name ist erforderlich.</span>'); return; }
+
+    const submitBtn = formEl?.querySelector('button[type="submit"]');
+    if (submitBtn) submitBtn.disabled = true;
+    try {
+      const dispatch = ctx.commandBus?.dispatch;
+      if (typeof dispatch !== 'function') {
+        setStatus('<span class="ats-offline">Offline — Befehl nicht verfügbar.</span>', 'offline');
+        return;
+      }
+      const result = await ctx.commandBus.dispatch({
+        module: MODULE_ID,
+        type: COMMAND_TYPE,
+        command_type: COMMAND_TYPE,
+        payload: { name, email, channel },
+      });
+      const gate = result?.gate || result?.decision || null;
+      const blocked = result?.blocked === true || gate?.decision === 'block' || (Array.isArray(gate?.blockers) && gate.blockers.length > 0) || (Array.isArray(result?.blockers) && result.blockers.length > 0);
+      const blockers = (Array.isArray(gate?.blockers) ? gate.blockers : (Array.isArray(result?.blockers) ? result.blockers : []));
+      if (blocked) {
+        const items = blockers.length ? blockers.map((b) => '<li>' + esc(typeof b === 'string' ? b : (b?.message || b?.reason || JSON.stringify(b))) + '</li>').join('') : '<li>' + esc(gate?.reason || 'Eingang blockiert.') + '</li>';
+        setGate('<div class="ats-block"><strong>Gate blockiert:</strong><ul>' + items + '</ul></div>');
+        return;
+      }
+      const appId = result?.application_id || '';
+      const dedupeKey = result?.dedupe_key || '';
+      setStatus('<span class="ats-ok">Angelegt: ' + esc(appId) + (dedupeKey ? ' <small>(' + esc(dedupeKey) + ')</small>' : '') + '</span>', 'ok');
+      formEl.reset();
+      await render();
+    } catch (e) {
+      console.error('[intake] dispatch failed:', e);
+      setStatus('<span class="ats-offline">Offline — ' + esc(e?.message || String(e)) + '</span>', 'offline');
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
+    }
   }
   formEl?.addEventListener('submit', onSubmit);
 

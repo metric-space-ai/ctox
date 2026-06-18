@@ -1,12 +1,15 @@
 
 const MOD_BUILD = '20260618-ats2';
+const MODULE_ID = 'esign';
 const PRIMARY = 'signature_requests';
 const TITLE = "esign";
+const COMMAND_TYPE = 'ats.signature.request';
+const SUBJECT_KINDS = ['arbeitsvertrag', 'vermittlungsvertrag', 'ueberlassungsvertrag'];
 
 export async function mount(ctx) {
   await ensureStyles();
   ctx.host.innerHTML = await loadMarkup();
-  ctx.host.dataset.atsModule = 'esign';
+  ctx.host.dataset.atsModule = MODULE_ID;
   ctx.left?.replaceChildren?.();
   ctx.right?.replaceChildren?.();
   const root = ctx.host.querySelector('[data-ats-root]');
@@ -34,17 +37,55 @@ export async function mount(ctx) {
     if (listEl) listEl.innerHTML = rows.length ? rows.map((r) => '<div class="ats-item">' + esc(r.id || '') + '</div>').join('') : '<div class="ats-empty">Noch keine Einträge.</div>';
   }
 
+  function setGate(html, kind) {
+    if (!gateEl) return;
+    gateEl.className = 'ats-gate' + (kind ? ' is-' + kind : '');
+    gateEl.innerHTML = html || '';
+  }
+
   async function onSubmit(event) {
     event.preventDefault();
-    if (gateEl) gateEl.textContent = '';
-    const col = collection();
-    if (!col?.insert) { ctx.notifications?.show?.({ type: 'error', title: TITLE, message: 'Datenbank nicht verfügbar.' }); return; }
+    setGate('');
     const data = new FormData(formEl);
     const f = Object.fromEntries(data.entries());
-    const now = Date.now();
-    const record = Object.assign({ id: 'esig_' + now + '_' + Math.round(now % 1e6), created_at_ms: now, updated_at_ms: now, _deleted: false }, { document_id: f.document_id, subject_kind: f.subject_kind || 'arbeitsvertrag', signers: [], status: 'created' });
-    try { await col.insert(record); formEl.reset(); await render(); }
-    catch (e) { console.error('[esign] insert failed:', e); if (gateEl) gateEl.textContent = 'Fehler: ' + (e?.message || e); }
+    const document_id = String(f.document_id || '').trim();
+    const subject_kind = SUBJECT_KINDS.includes(f.subject_kind) ? f.subject_kind : SUBJECT_KINDS[0];
+    if (!document_id) { setGate('Dokument-ID erforderlich.', 'error'); return; }
+
+    const payload = { document_id, subject_kind, signers: [] };
+    let result = null;
+    try {
+      result = await ctx.commandBus?.dispatch?.({
+        module: MODULE_ID,
+        type: COMMAND_TYPE,
+        command_type: COMMAND_TYPE,
+        payload,
+      });
+    } catch (e) {
+      console.error('[esign] dispatch failed:', e);
+      setGate('Offline – Befehl konnte nicht gesendet werden.', 'error');
+      return;
+    }
+
+    if (!result) { setGate('Offline – kein Ergebnis vom Server.', 'error'); return; }
+
+    const blockers = Array.isArray(result.blockers) ? result.blockers
+      : (Array.isArray(result.gate?.blockers) ? result.gate.blockers : []);
+    const status = result.status || result.gate?.decision || '';
+    const blocked = (status === 'blocked' || status === 'denied' || result.gate?.decision === 'block') || blockers.length > 0;
+
+    if (blocked) {
+      const items = blockers.length
+        ? '<ul class="ats-blockers">' + blockers.map((b) => '<li>' + esc(typeof b === 'string' ? b : (b?.reason || b?.message || JSON.stringify(b))) + '</li>').join('') + '</ul>'
+        : '';
+      setGate('Gate blockiert' + (status ? ' (' + esc(status) + ')' : '') + items, 'error');
+      return;
+    }
+
+    const reqId = result.request_id || result.id || '';
+    setGate('Angelegt: ' + esc(reqId) + (status ? ' · ' + esc(status) : ''), 'ok');
+    formEl.reset();
+    await render();
   }
   formEl?.addEventListener('submit', onSubmit);
 

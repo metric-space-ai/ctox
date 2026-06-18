@@ -4,3 +4,9 @@
 .ats-esign .ats-count { font-size: 13px; opacity: .8; }
 .ats-esign .ats-item { padding: 8px 12px; border: 1px solid color-mix(in srgb, currentColor 12%, transparent); border-radius: 8px; margin-bottom: 6px; font-size: 13px; }
 .ats-esign .ats-empty { font-size: 13px; opacity: .6; padding: 20px 0; }
+.ats-esign .ats-gate { font-size: 13px; min-height: 0; }
+.ats-esign .ats-gate:empty { display: none; }
+.ats-esign .ats-gate.is-ok { color: color-mix(in srgb, currentColor 55%, green); }
+.ats-esign .ats-gate.is-error { color: color-mix(in srgb, currentColor 45%, red); }
+.ats-esign .ats-gate .ats-blockers { margin: 6px 0 0; padding-left: 18px; }
+.ats-esign .ats-gate .ats-blockers li { margin: 2px 0; }

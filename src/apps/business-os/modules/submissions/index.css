@@ -2,5 +2,9 @@
 .ats-submissions .ats-head h1 { margin: 0; font-size: 18px; font-weight: 600; }
 .ats-submissions .ats-sub { margin: 2px 0 0; font-size: 13px; opacity: .7; }
 .ats-submissions .ats-count { font-size: 13px; opacity: .8; }
+.ats-submissions .ats-gate { font-size: 13px; padding: 8px 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, #d9534f 50%, transparent); background: color-mix(in srgb, #d9534f 12%, transparent); color: color-mix(in srgb, #d9534f 85%, currentColor); }
+.ats-submissions .ats-gate[hidden] { display: none; }
+.ats-submissions .ats-status { font-size: 13px; padding: 8px 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, currentColor 16%, transparent); background: color-mix(in srgb, currentColor 6%, transparent); }
+.ats-submissions .ats-status[hidden] { display: none; }
 .ats-submissions .ats-item { padding: 8px 12px; border: 1px solid color-mix(in srgb, currentColor 12%, transparent); border-radius: 8px; margin-bottom: 6px; font-size: 13px; }
 .ats-submissions .ats-empty { font-size: 13px; opacity: .6; padding: 20px 0; }
