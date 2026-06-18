@@ -98,6 +98,38 @@ export async function mount(ctx) {
 
   formEl?.addEventListener('submit', onSubmit);
 
+  // Server-authoritative deployment-readiness gate (ats.deployment.check).
+  const gateForm = root?.querySelector('[data-credentials-gate-form]');
+  const gateResult = root?.querySelector('[data-credentials-gate-result]');
+  async function onGateCheck(event) {
+    event.preventDefault();
+    if (gateResult) gateResult.textContent = 'Prüfe…';
+    const data = new FormData(gateForm);
+    const subjectId = String(data.get('subject_id') || '').trim();
+    const requiredTypes = String(data.get('required_types') || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    try {
+      const decision = await ctx.commandBus?.dispatch?.({
+        module: MODULE_ID,
+        type: 'ats.deployment.check',
+        command_type: 'ats.deployment.check',
+        payload: { subject_id: subjectId, required_types: requiredTypes },
+      });
+      const result = decision?.result || decision;
+      if (gateResult) {
+        gateResult.textContent = result?.ready
+          ? '✓ einsatzbereit'
+          : '✗ blockiert: ' + (result?.blockers || []).map((b) => `${b.credential_type} (${b.reason})`).join(', ');
+      }
+    } catch (error) {
+      if (gateResult) gateResult.textContent = 'Prüfung nicht verfügbar (Gate offline).';
+      console.warn('[credentials] deployment gate check failed:', error);
+    }
+  }
+  gateForm?.addEventListener('submit', onGateCheck);
+
   let subscription = null;
   const col = collection();
   if (col?.find) {
@@ -110,6 +142,7 @@ export async function mount(ctx) {
   return () => {
     try { subscription?.unsubscribe?.(); } catch {}
     formEl?.removeEventListener('submit', onSubmit);
+    gateForm?.removeEventListener('submit', onGateCheck);
     ctx.host.replaceChildren();
     delete ctx.host.dataset.credentialsModule;
   };
