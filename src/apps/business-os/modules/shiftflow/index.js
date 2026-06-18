@@ -1,6 +1,7 @@
 /* src/apps/business-os/modules/shiftflow/index.js */
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { CtoxResizer } from '../../shared/resizer.js';
+import { accumulateUeberlassung, checkDailyHours, checkRestPeriods } from './core/arbzg.js';
 
 const MOD_BUILD = '20260605-rxdb-cancel1';
 
@@ -2502,6 +2503,34 @@ async function runConflictsAnalysis(ctx, els) {
           });
         }
       }
+    }
+  }
+
+  // Rule 3: real ArbZG rest periods + daily caps, and AÜG Höchstüberlassungsdauer.
+  // Previously the success message claimed "Ruhezeiten geprüft" while only weekly
+  // hours + double-booking were actually checked.
+  const employeesById = new Map(employees.map(e => [e.id, e]));
+  const empName = (id) => employeesById.get(id)?.name || t('employee', 'Mitarbeiter');
+  const toPlain = (s) => ({ id: s.id, employee_id: s.employee_id, project_id: s.project_id, start_time: s.start_time, end_time: s.end_time });
+  const weekShiftObjs = weekShifts.map(toPlain);
+  for (const v of checkRestPeriods(weekShiftObjs)) {
+    conflicts.push({
+      type: 'rest_period',
+      message: t('conflictRestPeriod', '<strong>{0}</strong>: Ruhezeit unter 11 Std. ({1} Std.) zwischen zwei Schichten.', empName(v.employeeId), v.restHours)
+    });
+  }
+  for (const v of checkDailyHours(weekShiftObjs, { extended: true })) {
+    conflicts.push({
+      type: 'daily_hours',
+      message: t('conflictDailyHours', '<strong>{0}</strong>: Tägliche Höchstarbeitszeit überschritten ({1} Std., max {2} Std.).', empName(v.employeeId), v.hours, v.capHours)
+    });
+  }
+  // Überlassungsdauer accumulates across the whole plan, not just this week.
+  for (const u of accumulateUeberlassung(shifts.map(toPlain))) {
+    if (u.overCap) {
+      conflicts.push({ type: 'ueberlassung', message: t('conflictUeberlassung', '<strong>{0}</strong>: Höchstüberlassungsdauer überschritten ({1} Tage, max {2}).', empName(u.employeeId), u.days, u.capDays) });
+    } else if (u.nearCap) {
+      conflicts.push({ type: 'ueberlassung', message: t('conflictUeberlassungNear', '<strong>{0}</strong>: Höchstüberlassungsdauer fast erreicht ({1} Tage).', empName(u.employeeId), u.days) });
     }
   }
 
