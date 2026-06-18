@@ -100,8 +100,28 @@ function walk(dir, out = []) {
   return out;
 }
 
+function walkEntries(dir, out = []) {
+  if (!existsSync(dir)) return out;
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name);
+    out.push(path);
+    if (statSync(path).isDirectory()) {
+      walkEntries(path, out);
+    }
+  }
+  return out;
+}
+
 function hasPathSegment(path, segment) {
   return path.split(sep).includes(segment);
+}
+
+function fetchCallSnippet(text, index) {
+  return text.slice(index, index + 180).replace(/\s+/g, ' ').trim();
+}
+
+function isAllowedInstalledModuleFetch(snippet) {
+  return /^fetch\s*\(\s*new\s+URL\s*\(\s*['"]\.\/index\.html['"]\s*,\s*import\.meta\.url\s*\)/.test(snippet);
 }
 
 function rootModuleDirLooksLikeOnlyCtoxLedger(path) {
@@ -305,13 +325,29 @@ if (!installedMode && manifest && registry) {
   }
 }
 
-const files = walk(moduleDir);
+const entries = walkEntries(moduleDir);
+const files = entries.filter((path) => !statSync(path).isDirectory());
 const testFiles = files.filter((path) =>
   hasPathSegment(path, 'tests') && path.endsWith('.test.mjs')
 );
 
 if (testFiles.length === 0) {
   fail(`missing ${rel(join(moduleDir, 'tests'))}/*.test.mjs`);
+}
+
+for (const path of entries) {
+  const name = path.split(sep).at(-1);
+  if (!statSync(path).isDirectory()) continue;
+  if (
+    name === 'node_modules' ||
+    name === '.opencode' ||
+    name === '.vite' ||
+    name === '.parcel-cache' ||
+    name === 'dist' ||
+    name === 'build'
+  ) {
+    fail(`forbidden module artifact ${rel(path)}`);
+  }
 }
 
 for (const path of files) {
@@ -510,6 +546,29 @@ if (installedMode) {
   for (const [label, regex] of frameworkRules) {
     if (regex.test(runtimeText)) {
       fail(`installed App Creator module must be vanilla HTML/CSS/browser ESM; found ${label}`);
+    }
+  }
+  const installedRuntimeRules = [
+    ['dynamic import', /\bimport\s*\(/],
+    ['cached ctx.db facade handle', /\b(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*(?:ctx|state\.ctx)\.db\b|\b(?:window|globalThis|this)\.[A-Za-z_$][\w$]*\s*=\s*(?:ctx|state\.ctx)\.db\b/],
+    ['Business OS shell global state access', /\b(?:window|globalThis)\.(?:CTOX_BUSINESS_OS_APP|CTOX_BUSINESS_OS_STATUS|ctoxBusinessOsSmoke|openModuleSourceEditor|setStartupProgress|showStartupError|toggleStartMenu)\b/],
+    ['direct CTOX control command', /\bctox\.(?:module|business_os|task|ticket|approval|runtime|outbound|agent)\b/],
+    ['Worker runtime', /\b(?:new\s+Worker|new\s+SharedWorker|navigator\.serviceWorker)\b/],
+    ['direct browser navigation', /\b(?:window\.open|location\.(?:assign|replace|href))\b/],
+    ['dynamic evaluator', /\b(?:eval\s*\(|new\s+Function\s*\()/],
+  ];
+  for (const path of runtimeTextFiles) {
+    const text = readFileSync(path, 'utf8');
+    for (const match of text.matchAll(/\bfetch\s*\(/g)) {
+      const snippet = fetchCallSnippet(text, match.index);
+      if (!isAllowedInstalledModuleFetch(snippet)) {
+        fail(`${rel(path)} contains forbidden installed-app network fetch; only fetch(new URL('./index.html', import.meta.url)) is allowed for the local template`);
+      }
+    }
+    for (const [label, regex] of installedRuntimeRules) {
+      if (regex.test(text)) {
+        fail(`${rel(path)} contains forbidden installed-app runtime capability: ${label}`);
+      }
     }
   }
   if (!/\b(?:ctx|state\.ctx)\.commandBus\.dispatch\s*\(/.test(runtimeText)) {

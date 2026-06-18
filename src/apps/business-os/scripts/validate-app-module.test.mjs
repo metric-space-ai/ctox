@@ -218,6 +218,32 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   return dir;
 }
 
+function installedIndexJsWith(extraLines = []) {
+  return [
+    "import { buildFollowUpCommand } from './core/automation.mjs';",
+    '',
+    'async function ensureStyles() {',
+    "  if (document.querySelector('link[data-module-styles=\"guard\"]')) return;",
+    "  const link = document.createElement('link');",
+    "  link.rel = 'stylesheet';",
+    "  link.href = new URL('./index.css', import.meta.url).href;",
+    "  link.dataset.moduleStyles = 'guard';",
+    "  document.head.append(link);",
+    '}',
+    '',
+    'export async function mount(ctx) {',
+    '  await ensureStyles();',
+    "  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());",
+    ...extraLines,
+    "  ctx.host.querySelector('[data-action=\"follow-up\"]')?.addEventListener('click', () => {",
+    "    ctx.commandBus.dispatch(buildFollowUpCommand({ id: 'demo', title: 'Demo' }));",
+    '  });',
+    '  return () => { ctx.host.textContent = ""; };',
+    '}',
+    '',
+  ].join('\n');
+}
+
 {
   const root = makeWorkspace();
   writeInstalledModule(root, 'good');
@@ -264,6 +290,17 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   const run = runValidator(root, 'moduleharnessnote', '--installed');
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /forbidden module artifact .*HARNESS_ARTIFACT_CONFLICT\.md/);
+}
+
+{
+  const root = makeWorkspace();
+  const dir = writeInstalledModule(root, 'moduledependencies');
+  writeFileSync(join(dir, 'package.json'), '{"type":"module"}\n');
+  mkdirSync(join(dir, 'node_modules'), { recursive: true });
+  const run = runValidator(root, 'moduledependencies', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /forbidden module artifact .*package\.json/);
+  assert.match(run.stderr, /forbidden module artifact .*node_modules/);
 }
 
 {
@@ -389,6 +426,80 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   const run = runValidator(root, 'webstorage', '--installed');
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /localStorage\/sessionStorage persistence/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'networkfetch', {
+    indexJs: installedIndexJsWith([
+      "  await fetch('/external-service/status');",
+    ]),
+  });
+  const run = runValidator(root, 'networkfetch', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /forbidden installed-app network fetch/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'dynamicimport', {
+    indexJs: installedIndexJsWith([
+      "  await import('./extra.js');",
+    ]),
+  });
+  const run = runValidator(root, 'dynamicimport', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /forbidden installed-app runtime capability: dynamic import/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'shellglobal', {
+    indexJs: installedIndexJsWith([
+      "  window.CTOX_BUSINESS_OS_APP.openModule('ctox');",
+    ]),
+  });
+  const run = runValidator(root, 'shellglobal', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /forbidden installed-app runtime capability: Business OS shell global state access/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'cachedfacade', {
+    indexJs: installedIndexJsWith([
+      '  const db = ctx.db;',
+      "  db.collection('cachedfacade_records').find().exec();",
+    ]),
+  });
+  const run = runValidator(root, 'cachedfacade', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /forbidden installed-app runtime capability: cached ctx\.db facade handle/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'controlcommand', {
+    indexJs: installedIndexJsWith([
+      "  ctx.commandBus.dispatch({ type: 'ctox.module.release', command_type: 'ctox.module.release', payload: {} });",
+    ]),
+  });
+  const run = runValidator(root, 'controlcommand', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /forbidden installed-app runtime capability: direct CTOX control command/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'workerlaunch', {
+    indexJs: installedIndexJsWith([
+      "  const worker = new Worker(new URL('./worker.js', import.meta.url));",
+      '  worker.terminate();',
+    ]),
+  });
+  const run = runValidator(root, 'workerlaunch', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /forbidden installed-app runtime capability: Worker runtime/);
 }
 
 {

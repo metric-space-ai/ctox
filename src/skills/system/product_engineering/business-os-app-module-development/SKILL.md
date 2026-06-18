@@ -29,6 +29,7 @@ you are about to build a generic Next.js/React/Vanilla app outside the Business 
 you are treating a source-checkout or external-CLI bench as the acceptance target while the CTOX-native App Creator installed-module path remains unproven
 you are about to use React, Vue, Svelte, Angular, Solid, Preact, Lit, JSX/TSX, a component framework, a framework runtime, or a compile/transpile step for a generated App Creator app
 you are about to add package.json for any reason, npm/pnpm/yarn, node_modules, lockfiles, a bundler, CommonJS require, or CDN dependency management
+you are about to run npm, npx, pnpm, yarn, bun, npm install, npm init, npm test, esbuild, Vite, Rollup, Webpack, or any package/bundler/transpiler command even as a temporary proof or syntax workaround
 you are about to use esbuild, Vite, Rollup, Webpack, node:vm, or new Function as a syntax-check, import, schema-transform, or test workaround
 you are about to mention forbidden package-manager, bundler, or dependency names as tooling, import, config, install, test, or build concepts inside generated app files, tests, comments, or user-visible copy; keep tooling references only in validation/skill context. Domain words that collide with tool names, such as "rollup" for KPI or finance summaries, are allowed when they clearly describe business data and not JavaScript tooling.
 you are about to use IndexedDB directly, localStorage, sessionStorage, Postgres, SQLite from browser code, ctox.db, ctx.db.raw, HTTP data APIs, /rxdb/pull, /commands, or any fallback data path
