@@ -196,6 +196,14 @@ repo to discover validators, scripts, examples, or guard internals. If you need
 the validator, run `ctox business-os app validate <id> --installed|--source`;
 do not search for validator filenames.
 
+The CTOX execution harness enforces these App Creator constraints. It blocks
+whole-file `cat` dumps of generated module artifacts, Python/Node/base64
+programmatic writers against module files, oversized heredoc rewrites, source
+tree installed-module writes, package-manager side effects, and root-level app
+artifact aliases. Treat such guard output as an instruction to narrow the edit
+or split the app into smaller module-local ESM helpers, not as a shell problem
+to bypass.
+
 After the required reading and tiny analogue map, write the first runnable
 slice immediately. The first write action after the three-module summary must
 create `MODULE_DIR` and the required file inventory. Do not open or inspect

@@ -357,6 +357,7 @@ fn business_os_guard_blocks_module_package_json_write() -> anyhow::Result<()> {
 #[test]
 fn business_os_guard_blocks_module_package_json_write_from_module_cwd() -> anyhow::Result<()> {
     let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
     let module_dir = root
         .path()
         .join("runtime/business-os/installed-modules/inventory");
@@ -383,6 +384,111 @@ fn business_os_guard_allows_installed_module_write_and_reads() -> anyhow::Result
         root.path(),
     )
     .is_none());
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_installed_module_whole_file_cat() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "cat runtime/business-os/installed-modules/inventory/module.json runtime/business-os/installed-modules/inventory/index.js",
+        root.path(),
+    )
+    .expect("whole-file installed module cat should be blocked");
+
+    assert!(err.contains("whole-file dump"));
+    assert!(err.contains("runtime/business-os/installed-modules/inventory/module.json"));
+    assert!(err.contains("sed -n"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_module_cwd_whole_file_cat() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+    let module_dir = root
+        .path()
+        .join("runtime/business-os/installed-modules/inventory");
+    fs::create_dir_all(&module_dir)?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "cat module.json index.js",
+        &module_dir,
+    )
+    .expect("module cwd whole-file cat should be blocked");
+
+    assert!(err.contains("whole-file dump"));
+    assert!(err.contains("module.json"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_allows_targeted_installed_module_reads() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    assert!(business_os_app_root_artifact_write_guard(
+        "sed -n '1,80p' runtime/business-os/installed-modules/inventory/index.js",
+        root.path(),
+    )
+    .is_none());
+    assert!(business_os_app_root_artifact_write_guard(
+        "cat runtime/business-os/installed-modules/inventory/index.css | head -30",
+        root.path(),
+    )
+    .is_none());
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_python_installed_module_writer() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "python3 -c \"path='runtime/business-os/installed-modules/inventory/index.js'; src=open(path).read(); open(path, 'w').write(src)\"",
+        root.path(),
+    )
+    .expect("python writer against installed module should be blocked");
+
+    assert!(err.contains("programmatic writer"));
+    assert!(err.contains("runtime/business-os/installed-modules/inventory/index.js"));
+    assert!(err.contains("Python"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_allows_node_module_tests() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    assert!(business_os_app_root_artifact_write_guard(
+        "node --test runtime/business-os/installed-modules/inventory/tests/inventory.test.mjs",
+        root.path(),
+    )
+    .is_none());
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_oversized_module_heredoc_rewrite() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+    let body = (0..190)
+        .map(|idx| format!("console.log({idx});"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let command = format!(
+        "cat > runtime/business-os/installed-modules/inventory/index.js <<'EOF'\n{body}\nEOF"
+    );
+
+    let err = business_os_app_root_artifact_write_guard(&command, root.path())
+        .expect("oversized module heredoc rewrite should be blocked");
+
+    assert!(err.contains("oversized heredoc rewrite"));
+    assert!(err.contains("runtime/business-os/installed-modules/inventory/index.js"));
     Ok(())
 }
 
