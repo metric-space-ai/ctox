@@ -14,7 +14,6 @@
   "deletable": true,
   "layout": {
     "shell": "full-workspace",
-    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-placements\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\"/><stop offset=\"100%\" stop-color=\"#f59e0b\"/></linearGradient></defs><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"3\" fill=\"url(#grad-placements)\" fill-opacity=\"0.12\" stroke=\"url(#grad-placements)\" stroke-width=\"2\"/><path d=\"M8 12h8M8 8h8M8 16h5\" stroke=\"url(#grad-placements)\" stroke-width=\"2\" stroke-linecap=\"round\"/></svg>",
     "left": "Filter",
     "center": "Vermittlungen"
   },
