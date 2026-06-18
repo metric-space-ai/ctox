@@ -319,7 +319,20 @@ function forbiddenRootAppArtifactName(name) {
 
 function forbiddenModuleArtifactName(name) {
   const lower = String(name || '').toLowerCase();
-  return (lower.endsWith('.md') && lower !== 'readme.md')
+  return lower.includes('*')
+    || lower.includes('?')
+    || lower.includes('{')
+    || lower.includes('}')
+    || lower.includes('[')
+    || lower.includes(']')
+    || /(?:^|[._-])(?:tmp|temp)(?:[._-]|$)/.test(lower)
+    || lower.includes('tmp_schema')
+    || lower.includes('tmp-schema')
+    || lower.includes('schema_tmp')
+    || lower.includes('schema-temp')
+    || lower.includes('manifest_tmp')
+    || lower.includes('manifest-temp')
+    || (lower.endsWith('.md') && lower !== 'readme.md')
     || lower.startsWith('harness_')
     || lower.startsWith('harness-')
     || lower.includes('_harness_')

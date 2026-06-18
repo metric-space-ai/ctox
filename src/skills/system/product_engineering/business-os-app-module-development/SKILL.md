@@ -20,8 +20,9 @@ For CTOX App Creator and runtime-installed app work, follow this short path befo
 3. Inspect exactly three shipped source modules for patterns, preferably `customers`, `shiftflow`, and `outbound`. Use `notes` only as a supplemental simple-CRUD reference; do not treat it as a scaffold-helper template.
 4. Preserve scaffold helper export names such as `buildFollowUpCommand`, `summarizeRecords`, and `visibleRecords` unless you update every import in `index.js` and `tests/*.mjs` in the same edit.
 5. Use direct bounded file edits only. If a shell write fails because of quoting, history expansion, command length, or escaping, do not switch to Python, base64, Node writer scripts, generated writer scripts, or data-URL workarounds. Shorten the file, split helpers, remove fragile punctuation from generated literals, or edit the smaller affected file.
-6. Tests must prove useful behavior, not only syntax. At minimum they must cover record visibility/summary logic and a `business_os.chat.task` command payload whose title/instruction/prompt/record_snapshot contain actual facts from the fixture records.
-7. Run `ctox business-os app validate <id> --installed` before claiming success, then repair every bullet exactly.
+6. Required artifacts are canonical files, not shell patterns. Write `module.json`, `collections.schema.json`, `schema.js`, `index.html`, `index.css`, `index.js`, `icon.svg`, locales, core helpers, and tests by exact path only. Do not create temporary schema/manifest aliases, do not copy through globs or brace expansion, and do not run `rm` against required artifacts.
+7. Tests must prove useful behavior, not only syntax. At minimum they must cover record visibility/summary logic and a `business_os.chat.task` command payload whose title/instruction/prompt/record_snapshot contain actual facts from the fixture records. All tests in `tests/*.test.mjs` must pass; adding a new green test while an old scaffold test imports a missing export is still red.
+8. Run `ctox business-os app validate <id> --installed` before claiming success, then repair every bullet exactly.
 
 ## Priority Order
 
@@ -54,6 +55,8 @@ you are about to write app files outside the resolved module directory, such as 
 you are building a new runtime-installed App Creator app and neither the CTOX service preflight nor your first explicit action has created a complete validator-clean scaffold under the target directory
 you are about to delete, omit, or replace scaffold invariants such as core/automation.mjs, core/records.mjs, locales/de.json, locales/en.json, or tests/*.test.mjs instead of customizing them in place
 you are about to clean, reset, delete, or rewrite a validator-clean scaffold wholesale because it looks generic; keep it as the baseline and edit the smallest domain-specific parts
+you are about to write, copy, rename, delete, or repair required app artifacts through shell globs, wildcard filenames, brace expansion, or fuzzy names such as co*.json, colle{ctions,ctions}.schema.json, *.schema.json, .tmp_schema.json, .csjson.tmp, module*.json, or tests/*.mjs; required artifacts must be exact-path edits only
+you are about to run rm, mv, cp, or install over required artifacts unless every source and destination is an exact path inside MODULE_DIR and the command cannot delete module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales, core helpers, or tests
 you are about to create or update a runtime-installed App Creator module whose module.json lacks a SemVer version in x.y.z form without a v prefix
 you are about to expose, advertise, or call a module public/user-ready while its app version is below 1.0.0
 you are about to use 2.0.0 or any later x.0.0 as an in-place update of the same app id/icon instead of a new parallel app line
@@ -87,6 +90,7 @@ you are about to make a failing test match broken behavior instead of fixing the
 you are about to write or keep generated tests whose fixture expectations are not hand-computed and internally consistent with the helper logic they exercise
 you are about to write or keep tests that assert labels, messages, counts, named imports, or helper exports that the local helper being tested does not actually produce/export
 you are about to rename or remove scaffold helper exports such as buildFollowUpCommand, summarizeRecords, or visibleRecords without updating every importer in index.js and tests/*.mjs in the same edit
+you are about to add a second replacement test file while leaving an existing tests/*.test.mjs file red; every existing test file is part of the acceptance contract and must be updated or removed for a validator-approved reason
 you are about to write an automation test that checks only command type fields but not concrete fixture facts in title, instruction/prompt, and record_snapshot
 you are about to import browser entry files such as `index.js` or `schema.js` directly from Node tests, or through `data:text/javascript`, base64, `Buffer.from(source)`, or any generated data URL, instead of testing local `.mjs` helpers and JSON/text parity
 you are spending extra turns reading validator/static-checker implementation internals before the required module file set exists; do not open `validate-app-module.mjs`, `module_static_check.mjs`, `assert-module-conformance.mjs`, or `assert-rxdb-only.mjs` before the required files exist and a validation command reports a concrete failure
@@ -205,6 +209,16 @@ is:
 Validators and static checkers are gates, not few-shot source material. Read
 their user-facing failure output, not their implementation, unless the checker
 itself crashes or the failure cannot be mapped to a module file.
+
+Required artifact writes must be exact and boring. Do not use shell globs,
+brace expansion, fuzzy path patterns, or temporary schema/manifest copy chains
+for required files. Examples that are always wrong for App Creator modules:
+`cp .tmp_schema.json co*.json`, `cp .csjson.tmp collections*.json`,
+`rm collections.schema.json`, `rm *.json`, and files literally named
+`co*ions.*json` or `colle{ctions,ctions}.schema.json`. If a required file
+needs replacement, write the final content directly to
+`$MODULE_DIR/collections.schema.json` or the exact required target path and
+parse or import it immediately.
 
 ## Architecture Translation Layer
 
@@ -594,6 +608,8 @@ export function mount(ctx) {
 - Tests are required app artifacts, not optional documentation. Preserve `tests/*.test.mjs`; if you regenerate domain helpers, regenerate positive helper tests in the same turn and verify `rg --files "$MODULE_DIR/tests"` returns at least one test before final validation.
 - Keep helper exports and all local named imports in lockstep. Every named local import in `index.js`, `core/*.mjs`, and `tests/*.mjs` must exist as a real `export` in the target file. Preserve scaffold helper exports such as `COLLECTION_NAME`, `createRecord`, `normalizeStatus`, `summarizeRecords`, and `visibleRecords` unless every importer is updated in the same turn.
 - For App Creator scaffold modules, prefer keeping the scaffold API stable and changing its implementation: `buildFollowUpCommand` may build the domain-specific follow-up or chat task even when the visible button label is "Create stock action", "Request renewal review", or similar. Rename the export only when `index.js` and all tests are updated in the same edit and validation is rerun.
+- Do not add a replacement test file and leave the scaffold test behind in a broken state. Validation runs every `tests/*.test.mjs`; stale tests with missing named imports, obsolete helper names, or wrong fixture expectations are real failures.
+- Never delete required app artifacts as part of a replacement workflow. Keep `module.json`, `collections.schema.json`, `schema.js`, `index.html`, `index.css`, `index.js`, `icon.svg`, locales, core helpers, and tests present after every edit. If a command would make the module invalid between steps, use a smaller exact edit instead.
 - Automation tests must assert concrete fixture facts. A passing test that checks only `type`, `command_type`, or "has record_snapshot" is too weak; also assert that title/instruction/prompt and `record_snapshot` include the selected records, counts, statuses, due dates, or amounts from the fixture.
 - Avoid huge single tool calls. If a file grows large enough to risk malformed tool-call JSON, reduce scope first; otherwise write it in bounded chunks and immediately run syntax checks.
 - Do not use Python, base64, Node one-off writer scripts, data URLs, or temporary generated file-copy wrappers to recover from malformed shell writes. When a direct write is fragile, reduce the app scope, split the file into a smaller local `.mjs` helper, or edit the affected helper directly with simpler literals.
@@ -626,7 +642,7 @@ phase 10 CSS: module CSS is scoped under the module root class; no :root/html/bo
 phase 11 dependencies: browser runtime uses only vanilla HTML/CSS/browser ESM and local relative ESM imports; no UI framework, JSX/TSX, package manager, bare package import, remote import, CommonJS, bundler, transpiler, or generated bundle
 phase 12 tests/imports: tests import only local `.mjs` helpers and JSON/text files; every named local import in `index.js`, `core/*.mjs`, and `tests/*.mjs` is exported by that target file; scaffold export names such as buildFollowUpCommand, summarizeRecords, and visibleRecords are preserved unless every importer was updated; tests do not import `index.js`/`schema.js` directly, do not use data: URLs, and cover schema parity, core command builders, and at least one CRUD/automation path; automation assertions include concrete fixture facts in title/instruction/prompt and record_snapshot; fixture totals/counts are hand-computed in comments or small named facts and are consistent with the implementation; scaffold core/locales/tests still exist
 phase 13 validation: node --check, `ctox business-os app validate <id> --installed|--source`, forbidden-pattern scan, and any available shell/browser smoke proof are green
-phase 14 cleanup: no root-level artifacts, source-installed app artifacts, probe files, blocker notes, generated bundles, package files, or stale phase rows remain
+phase 14 cleanup: no root-level artifacts, source-installed app artifacts, probe files, blocker notes, generated bundles, package files, stale phase rows, temporary schema/manifest files, literal wildcard/brace filenames, or stale failing replacement tests remain
 ```
 
 Treat these common findings as automatic rework, not acceptable tradeoffs:
@@ -644,6 +660,9 @@ schema.js or collections.schema.json redeclares business_commands
 automation helper sets only type and omits command_type, or omits record_snapshot
 automation helper hides the required App Creator command shape behind an untested custom payload; tests must prove a builder returns business_os.chat.task with command_type and record_snapshot
 tests import index.js/schema.js directly, or load them through data:text/javascript/base64, instead of testing shared `.mjs` helpers plus JSON/text parity
+module directory contains temporary or literal pattern artifacts such as .tmp_schema.json, .csjson.tmp, co*ions.*json, colle{ctions,ctions}.schema.json, module*.json, or collections*.json
+any required artifact is deleted during a repair step, even briefly, and validation is not rerun after restoring it
+new tests pass but an older tests/*.test.mjs still imports a missing helper export or asserts stale scaffold behavior
 the phase tracker says done while validator or browser proof is red
 ```
 
