@@ -117,6 +117,7 @@ export async function mount(ctx) {
   const layoutCollection = ctx.db?.collection?.('desktop_layout');
   const iconsCollection = ctx.db?.collection?.('desktop_icons');
   const commandsCollection = ctx.db?.collection?.('business_commands');
+  let disposed = false;
 
   const layout = await ensureLayout(layoutCollection, launcher);
   await ensureIcons(iconsCollection, launcher);
@@ -153,6 +154,7 @@ export async function mount(ctx) {
   cleanups.push(() => refs.surface.removeEventListener('drop', onDropSurface));
 
   return () => {
+    disposed = true;
     for (const dispose of cleanups) {
       try { dispose?.(); } catch (error) { console.error('[desktop] cleanup failed:', error); }
     }
@@ -161,7 +163,9 @@ export async function mount(ctx) {
   // ---------- helpers (closures over the mount scope) ----------
 
   async function renderIcons() {
+    if (disposed) return;
     const docs = iconsCollection ? await iconsCollection.find().exec() : [];
+    if (disposed) return;
     refs.icons.innerHTML = '';
     if (!docs.length) {
       const empty = document.createElement('div');
@@ -460,9 +464,18 @@ export async function mount(ctx) {
   function subscribeIcons() {
     if (!iconsCollection?.$) return () => {};
     const sub = iconsCollection.$.subscribe(() => {
-      renderIcons().catch((error) => console.error('[desktop] icon render failed:', error));
+      renderIcons().catch((error) => {
+        if (isDatabaseClosingError(error)) return;
+        console.error('[desktop] icon render failed:', error);
+      });
     });
     return () => sub.unsubscribe?.();
+  }
+
+  function isDatabaseClosingError(error) {
+    const message = String(error?.message || error || '');
+    return error?.name === 'InvalidStateError'
+      && /IDBDatabase.*closing|database connection is closing/i.test(message);
   }
 
   function subscribeCommandStream() {

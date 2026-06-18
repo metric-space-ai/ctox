@@ -22,6 +22,14 @@
  *   SMOKE_MODES=browser-lifecycle-ui SMOKE_PAGE_PATH=/index.html#browser node src/core/rxdb/tools/browser_rust_smoke_matrix.js
  *   SMOKE_MODES=browser-handoff-ui SMOKE_PAGE_PATH=/index.html#browser node src/core/rxdb/tools/browser_rust_smoke_matrix.js
  *   SMOKE_MODES=coding-agents-ui SMOKE_PAGE_PATH=/index.html SMOKE_CODING_AGENT_PROVIDER=codex node src/core/rxdb/tools/browser_rust_smoke_matrix.js
+ *   SMOKE_MODES=business-os-roles-permissions-ui SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke_matrix.js
+ *   SMOKE_MODES=business-os-app-release-ui SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke_matrix.js
+ *   SMOKE_MODES=business-os-app-audience-ui SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke_matrix.js
+ *   SMOKE_MODES=business-os-agent-scope-ui SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke_matrix.js
+ *   SMOKE_MODES=business-os-auth-scope-ui SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke_matrix.js
+ *   SMOKE_MODES=business-os-fresh-profile-ui SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke_matrix.js
+ *   SMOKE_MATRIX_RESULT_PATH=runtime/build/business-os-smoke-matrix-summary.json SMOKE_MODES=business-os-agent-scope-ui SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke_matrix.js
+ *   SMOKE_MATRIX_SELF_TEST=1 node src/core/rxdb/tools/browser_rust_smoke_matrix.js
  *   SMOKE_MODES=command-burst-browser-to-rust node src/core/rxdb/tools/browser_rust_smoke_matrix.js
  *   SMOKE_MODES=command-reload-browser-to-rust node src/core/rxdb/tools/browser_rust_smoke_matrix.js
  *   SMOKE_MODES=command-restart-browser-to-rust node src/core/rxdb/tools/browser_rust_smoke_matrix.js
@@ -44,16 +52,26 @@ const path = require('path');
 const fs = require('fs');
 const { spawnSync } = require('child_process');
 const os = require('os');
+const {
+  assertBusinessOsProductionSmokeRegistry,
+  businessOsProductionSmokeEvidenceRequirements,
+  businessOsProductionSmokeModes,
+  businessOsProductionSmokeModeSet,
+} = require('./business_os_production_smoke_registry');
 
 const toolPath = path.join(__dirname, 'browser_rust_smoke.js');
 const root = path.resolve(__dirname, '../../../..');
 const ctoxBin = process.env.CTOX_BIN || path.join(root, 'runtime/build/core-rxdb-integration-target/debug/ctox');
+const SMOKE_MATRIX_SUMMARY_SCHEMA = 'ctox.business_os.smoke_matrix_summary.v1';
+const defaultResultPath = path.join(root, 'runtime/build/business-os-smoke-matrix-summary.json');
 const defaultModes = [
   'rust-to-browser',
   'browser-to-rust',
   'command-browser-to-rust',
   'tickets-browser-to-rust',
   'business-os-ui-regression',
+  'business-os-roles-permissions-ui',
+  'business-os-dynamic-apps-ui',
   'browser-lifecycle-ui',
   'browser-handoff-ui',
   'migration-version-browser-to-rust',
@@ -167,6 +185,191 @@ const modeEvidenceRequirements = {
       business_os_visual_workspace_visible: 1,
     },
   },
+  'business-os-roles-permissions-ui': {
+    keys: [
+      'business_os_roles_permissions_target_module',
+      'business_os_roles_permissions_other_module',
+      'business_os_roles_permissions_team_modify_hidden',
+      'business_os_roles_permissions_team_source_hidden',
+      'business_os_roles_permissions_source_grant_visible',
+      'business_os_roles_permissions_modify_grant_visible',
+      'business_os_roles_permissions_owner_context_visible',
+      'business_os_roles_permissions_appbar_source_gate',
+      'business_os_roles_permissions_exact_scope_isolated',
+      'business_os_roles_permissions_owner_role_option',
+      'business_os_roles_permissions_admin_owner_option_hidden',
+      'business_os_roles_permissions_business_labels',
+      'business_os_roles_permissions_settings_release_fallback_readonly',
+      'business_os_roles_permissions_settings_why_diagnostics_visible',
+      'business_os_roles_permissions_settings_why_diagnostics_rows',
+      'business_os_roles_permissions_settings_why_diagnostics_redacted',
+      'business_os_roles_permissions_settings_support_diagnostics_visible',
+      'business_os_roles_permissions_settings_support_diagnostics_rows',
+      'business_os_roles_permissions_settings_support_diagnostics_redacted',
+      'business_os_roles_permissions_settings_support_diagnostics_download',
+      'business_os_roles_permissions_reload_verified',
+      'business_os_roles_permissions_auth_state',
+      'advanced_status',
+    ],
+    values: {
+      business_os_roles_permissions_team_modify_hidden: 1,
+      business_os_roles_permissions_team_source_hidden: 1,
+      business_os_roles_permissions_source_grant_visible: 1,
+      business_os_roles_permissions_modify_grant_visible: 1,
+      business_os_roles_permissions_owner_context_visible: 1,
+      business_os_roles_permissions_appbar_source_gate: 1,
+      business_os_roles_permissions_exact_scope_isolated: 1,
+      business_os_roles_permissions_owner_role_option: 1,
+      business_os_roles_permissions_admin_owner_option_hidden: 1,
+      business_os_roles_permissions_business_labels: 1,
+      business_os_roles_permissions_settings_release_fallback_readonly: 1,
+      business_os_roles_permissions_settings_why_diagnostics_visible: 1,
+      business_os_roles_permissions_settings_why_diagnostics_rows: 1,
+      business_os_roles_permissions_settings_why_diagnostics_redacted: 1,
+      business_os_roles_permissions_settings_support_diagnostics_visible: 1,
+      business_os_roles_permissions_settings_support_diagnostics_rows: 1,
+      business_os_roles_permissions_settings_support_diagnostics_redacted: 1,
+      business_os_roles_permissions_settings_support_diagnostics_download: 1,
+      business_os_roles_permissions_reload_verified: 1,
+      advanced_status: 'business-os-advanced-status-v1',
+    },
+  },
+  'business-os-dynamic-apps-ui': {
+    keys: [
+      'business_os_dynamic_private_module',
+      'business_os_dynamic_team_module',
+      'business_os_dynamic_private_hidden_for_team',
+      'business_os_dynamic_private_visible_for_builder',
+      'business_os_dynamic_team_visible_for_released',
+      'business_os_dynamic_restricted_hidden_for_team',
+      'business_os_dynamic_lifecycle_badges_visible',
+      'business_os_dynamic_lifecycle_drawer_visible',
+      'business_os_dynamic_lifecycle_why_diagnostics_visible',
+      'business_os_dynamic_lifecycle_why_diagnostics_rows',
+      'business_os_dynamic_lifecycle_why_diagnostics_data',
+      'business_os_dynamic_db_read_denied',
+      'business_os_dynamic_db_raw_denied',
+      'business_os_dynamic_real_context_collection_denied',
+      'business_os_dynamic_real_context_property_denied',
+      'business_os_dynamic_real_context_cached_denied',
+      'business_os_dynamic_real_context_raw_denied',
+      'business_os_dynamic_open_module_reload_mounted',
+      'business_os_dynamic_open_module_collection_denied',
+      'business_os_dynamic_open_module_property_denied',
+      'business_os_dynamic_open_module_cached_denied',
+      'business_os_dynamic_open_module_raw_denied',
+      'business_os_dynamic_runtime_safety_contract',
+      'business_os_dynamic_runtime_safety_capabilities',
+      'business_os_dynamic_storage_keys_scoped',
+      'business_os_dynamic_storage_scope_contract',
+      'business_os_dynamic_db_read_grant_allowed',
+      'business_os_dynamic_real_context_cached_read_grant_allowed',
+      'business_os_dynamic_db_write_denied_without_write',
+      'business_os_dynamic_permission_facade_read_allowed',
+      'business_os_dynamic_permission_facade_write_denied',
+      'business_os_dynamic_packaged_guard_module',
+      'business_os_dynamic_packaged_guard_collection',
+      'business_os_dynamic_packaged_guard_capability_contract',
+      'business_os_dynamic_packaged_guard_read_denied',
+      'business_os_dynamic_packaged_guard_property_denied',
+      'business_os_dynamic_packaged_guard_raw_denied',
+      'business_os_dynamic_packaged_guard_context_denied',
+      'business_os_dynamic_packaged_guard_context_property_denied',
+      'business_os_dynamic_packaged_guard_read_grant_allowed',
+      'business_os_dynamic_packaged_guard_context_permission_facade',
+      'business_os_dynamic_packaged_guard_write_denied_without_write',
+      'business_os_dynamic_packaged_guard_shell_locked_state',
+      'business_os_dynamic_packaged_guard_modules',
+      'business_os_dynamic_packaged_guard_collections',
+      'business_os_dynamic_packaged_guard_count',
+      'business_os_dynamic_packaged_guard_batch_coverage',
+      'business_os_dynamic_packaged_guard_all_capability_contracts',
+      'business_os_dynamic_packaged_guard_all_read_denied',
+      'business_os_dynamic_packaged_guard_all_property_denied',
+      'business_os_dynamic_packaged_guard_all_raw_denied',
+      'business_os_dynamic_packaged_guard_all_context_denied',
+      'business_os_dynamic_packaged_guard_all_read_grants_allowed',
+      'business_os_dynamic_packaged_guard_all_context_permission_facades',
+      'business_os_dynamic_packaged_guard_all_writes_denied_without_write',
+      'business_os_dynamic_system_scope_modules',
+      'business_os_dynamic_system_scope_count',
+      'business_os_dynamic_system_scope_allowed',
+      'business_os_dynamic_system_scope_foreign_denied',
+      'business_os_dynamic_system_scope_raw_foreign_denied',
+      'business_os_dynamic_system_scope_permission_facade',
+      'business_os_dynamic_system_scope_capability_contract',
+      'business_os_dynamic_invalid_version_private',
+      'business_os_dynamic_reload_verified',
+      'business_os_dynamic_auth_state',
+      'advanced_status',
+    ],
+    values: {
+      business_os_dynamic_private_hidden_for_team: 1,
+      business_os_dynamic_private_visible_for_builder: 1,
+      business_os_dynamic_team_visible_for_released: 1,
+      business_os_dynamic_restricted_hidden_for_team: 1,
+      business_os_dynamic_lifecycle_badges_visible: 1,
+      business_os_dynamic_lifecycle_drawer_visible: 1,
+      business_os_dynamic_lifecycle_why_diagnostics_visible: 1,
+      business_os_dynamic_lifecycle_why_diagnostics_rows: 1,
+      business_os_dynamic_lifecycle_why_diagnostics_data: 1,
+      business_os_dynamic_db_read_denied: 1,
+      business_os_dynamic_db_raw_denied: 1,
+      business_os_dynamic_real_context_collection_denied: 1,
+      business_os_dynamic_real_context_property_denied: 1,
+      business_os_dynamic_real_context_cached_denied: 1,
+      business_os_dynamic_real_context_raw_denied: 1,
+      business_os_dynamic_open_module_reload_mounted: 1,
+      business_os_dynamic_open_module_collection_denied: 1,
+      business_os_dynamic_open_module_property_denied: 1,
+      business_os_dynamic_open_module_cached_denied: 1,
+      business_os_dynamic_open_module_raw_denied: 1,
+      business_os_dynamic_runtime_safety_contract: 1,
+      business_os_dynamic_runtime_safety_capabilities: 1,
+      business_os_dynamic_storage_keys_scoped: 1,
+      business_os_dynamic_storage_scope_contract: 1,
+      business_os_dynamic_db_read_grant_allowed: 1,
+      business_os_dynamic_real_context_cached_read_grant_allowed: 1,
+      business_os_dynamic_db_write_denied_without_write: 1,
+      business_os_dynamic_permission_facade_read_allowed: 1,
+      business_os_dynamic_permission_facade_write_denied: 1,
+      business_os_dynamic_packaged_guard_module: 'coding-agents',
+      business_os_dynamic_packaged_guard_collection: 'coding_agent_sessions',
+      business_os_dynamic_packaged_guard_capability_contract: 1,
+      business_os_dynamic_packaged_guard_read_denied: 1,
+      business_os_dynamic_packaged_guard_property_denied: 1,
+      business_os_dynamic_packaged_guard_raw_denied: 1,
+      business_os_dynamic_packaged_guard_context_denied: 1,
+      business_os_dynamic_packaged_guard_context_property_denied: 1,
+      business_os_dynamic_packaged_guard_read_grant_allowed: 1,
+      business_os_dynamic_packaged_guard_context_permission_facade: 1,
+      business_os_dynamic_packaged_guard_write_denied_without_write: 1,
+      business_os_dynamic_packaged_guard_shell_locked_state: 1,
+      business_os_dynamic_packaged_guard_modules: 'coding-agents,calendar,buchhaltung,conversations,customers,cv-print-builder,documents,invoices,iot,notes,outbound,research,matching,shiftflow,spreadsheets,support',
+      business_os_dynamic_packaged_guard_collections: 'coding_agent_sessions,calendar_events,accounting_journal_entries,business_commands,customer_accounts,business_commands,business_commands,accounting_invoices,iot_widgets,notes,outbound_campaigns,research_tasks,matching_requirements,planning_shifts,business_commands,business_commands',
+      business_os_dynamic_packaged_guard_count: 16,
+      business_os_dynamic_packaged_guard_batch_coverage: 1,
+      business_os_dynamic_packaged_guard_all_capability_contracts: 1,
+      business_os_dynamic_packaged_guard_all_read_denied: 1,
+      business_os_dynamic_packaged_guard_all_property_denied: 1,
+      business_os_dynamic_packaged_guard_all_raw_denied: 1,
+      business_os_dynamic_packaged_guard_all_context_denied: 1,
+      business_os_dynamic_packaged_guard_all_read_grants_allowed: 1,
+      business_os_dynamic_packaged_guard_all_context_permission_facades: 1,
+      business_os_dynamic_packaged_guard_all_writes_denied_without_write: 1,
+      business_os_dynamic_system_scope_modules: 'app-store,browser,creator,ctox,desktop,knowledge,reports,tickets',
+      business_os_dynamic_system_scope_count: 8,
+      business_os_dynamic_system_scope_allowed: 1,
+      business_os_dynamic_system_scope_foreign_denied: 1,
+      business_os_dynamic_system_scope_raw_foreign_denied: 1,
+      business_os_dynamic_system_scope_permission_facade: 1,
+      business_os_dynamic_system_scope_capability_contract: 1,
+      business_os_dynamic_invalid_version_private: 1,
+      business_os_dynamic_reload_verified: 1,
+      advanced_status: 'business-os-advanced-status-v1',
+    },
+  },
+  ...businessOsProductionSmokeEvidenceRequirements,
   'browser-lifecycle-ui': {
     keys: [
       'browser_lifecycle_command_count',
@@ -410,7 +613,7 @@ const modes = (process.env.SMOKE_MODES || defaultModes.join(','))
   .split(/[,\s]+/)
   .map((mode) => mode.trim())
   .filter(Boolean);
-const knownModes = new Set(defaultModes);
+const knownModes = new Set([...defaultModes, ...Object.keys(modeEvidenceRequirements)]);
 const pagePath = process.env.SMOKE_PAGE_PATH || '/index.html';
 const businessPortBaseInput = process.env.BUSINESS_PORT || '8877';
 const signalingPortBaseInput = process.env.SIGNALING_PORT || '18876';
@@ -427,16 +630,27 @@ const networkFlapBrowserWarningBudgetInput = process.env.SMOKE_NETWORK_FLAP_BROW
 const networkFlapRequestFailureBudgetInput = process.env.SMOKE_NETWORK_FLAP_REQUEST_FAILURE_BUDGET;
 const modeDurationBudgetInput = process.env.SMOKE_MODE_DURATION_BUDGET_MS;
 const syncConfigWaitBudgetInput = process.env.SMOKE_SYNC_CONFIG_WAIT_BUDGET_MS;
-const resultPath = process.env.SMOKE_MATRIX_RESULT_PATH || '';
+const resultPath = process.env.SMOKE_MATRIX_RESULT_PATH || defaultResultPath;
 const requireEvidence = process.env.SMOKE_REQUIRE_EVIDENCE !== '0';
 const summary = {
+  schema: SMOKE_MATRIX_SUMMARY_SCHEMA,
+  schemaVersion: 1,
+  repositoryRoot: root,
+  gitRevision: readGitRevision(),
+  ctoxBin,
+  resultPath,
   pagePath,
   requireEvidence,
+  requestedModes: modes,
   modes: [],
   startedAt: new Date().toISOString(),
   endedAt: null,
   ok: false,
 };
+if (process.env.SMOKE_MATRIX_SELF_TEST === '1' || process.argv.includes('--self-test')) {
+  runSmokeMatrixSelfTest();
+  process.exit(0);
+}
 const businessPortBase = parsePositiveIntegerConfig('BUSINESS_PORT', businessPortBaseInput, { max: 65535 });
 const signalingPortBase = parsePositiveIntegerConfig('SIGNALING_PORT', signalingPortBaseInput, { max: 65535 });
 const attempts = parsePositiveIntegerConfig('SMOKE_MATRIX_ATTEMPTS', attemptsInput, { max: 20 });
@@ -496,6 +710,23 @@ const syncConfigWaitBudgetMs = parseOptionalNonNegativeIntegerConfig(
   syncConfigWaitBudgetInput,
   { max: 60 * 60 * 1000 },
 );
+summary.configuration = {
+  attempts,
+  modeTimeoutMs,
+  businessPortBase,
+  signalingPortBase,
+  budgets: {
+    browserWarningBudget,
+    websocketWarningBudget,
+    requestFailureBudget,
+    assetResponseErrorBudget,
+    startupReloadBudget,
+    startupHookWaitBudgetMs,
+    fileChunkStatusStartupHookWaitBudgetMs,
+    modeDurationBudgetMs,
+    syncConfigWaitBudgetMs,
+  },
+};
 
 const unknownModes = modes.filter((mode) => !knownModes.has(mode));
 if (!modes.length) {
@@ -618,11 +849,15 @@ for (const [index, mode] of modes.entries()) {
       signal: result.signal || null,
       timedOut,
       timeoutMs: modeTimeoutMs,
+      pagePath: effectivePagePath,
+      url: `http://127.0.0.1:${env.BUSINESS_PORT}${effectivePagePath}`,
       businessPort: Number(env.BUSINESS_PORT),
       signalingPort: Number(env.SIGNALING_PORT),
       durationMs,
       ok: lastStatus === 0 && !lastSignal,
       error: result.error ? { code: result.error.code || '', message: result.error.message || '' } : null,
+      context: smokeAttemptContextFromEvidence(evidence),
+      evidenceKeys: Object.keys(evidence).sort(),
       evidence,
       warningBudget: {
         browserWarnings: Number(evidence.browser_warning_count || 0),
@@ -668,12 +903,357 @@ for (const [index, mode] of modes.entries()) {
 writeSummary(true);
 console.log(`\nrxdb smoke matrix OK: ${modes.join(', ')}`);
 
+function runSmokeMatrixSelfTest() {
+  const runnerSource = fs.readFileSync(toolPath, 'utf8');
+  const runnerUsesSharedModeList = runnerSource.includes('...businessOsProductionSmokeModes');
+  const runnerBlocksUnimplementedModes = runnerSource.includes('businessOsProductionSmokeModeSet.has(smokeMode)');
+  if (!runnerUsesSharedModeList || !runnerBlocksUnimplementedModes) {
+    throw new Error('Business OS production smoke modes are not wired into browser_rust_smoke.js');
+  }
+  assertBusinessOsProductionSmokeRegistry({
+    runnerModes: businessOsProductionSmokeModes,
+    matrixModes: knownModes,
+    modeEvidenceRequirements,
+  });
+  assertSelfTestThrows('missing runner mode', () => {
+    assertBusinessOsProductionSmokeRegistry({
+      runnerModes: businessOsProductionSmokeModes.slice(1),
+      matrixModes: knownModes,
+      modeEvidenceRequirements,
+    });
+  });
+  assertSelfTestThrows('missing matrix mode', () => {
+    assertBusinessOsProductionSmokeRegistry({
+      runnerModes: businessOsProductionSmokeModes,
+      matrixModes: businessOsProductionSmokeModes.slice(1),
+      modeEvidenceRequirements,
+    });
+  });
+  assertSelfTestThrows('missing evidence requirement', () => {
+    const brokenRequirements = { ...modeEvidenceRequirements };
+    delete brokenRequirements[businessOsProductionSmokeModes[0]];
+    assertBusinessOsProductionSmokeRegistry({
+      runnerModes: businessOsProductionSmokeModes,
+      matrixModes: knownModes,
+      modeEvidenceRequirements: brokenRequirements,
+    });
+  });
+  for (const mode of businessOsProductionSmokeModes) {
+    const missingEvidence = validateModeEvidence(mode, {});
+    const required = evidenceRequirementsForMode(mode);
+    for (const key of required.keys) {
+      if (!missingEvidence.includes(key)) {
+        throw new Error(`Missing-evidence self-test did not require ${mode}:${key}`);
+      }
+    }
+  }
+  assertSelfTestThrows('unsupported evidence mode', () => evidenceRequirementsForMode('__missing_business_os_smoke__'));
+  const validSummary = makeSmokeMatrixSummarySelfTestArtifact();
+  const validProblems = validateSmokeMatrixSummaryArtifact(validSummary, { final: true });
+  if (validProblems.length) {
+    throw new Error(`Valid smoke summary fixture failed schema validation: ${validProblems.join(', ')}`);
+  }
+  assertSelfTestThrows('missing smoke artifact git revision', () => {
+    validateSmokeMatrixSummaryArtifact({ ...validSummary, gitRevision: '' }, { final: true }, { throwOnError: true });
+  });
+  assertSelfTestThrows('missing smoke artifact attempt URL', () => {
+    const broken = JSON.parse(JSON.stringify(validSummary));
+    delete broken.modes[0].attempts[0].url;
+    validateSmokeMatrixSummaryArtifact(broken, { final: true }, { throwOnError: true });
+  });
+  assertSelfTestThrows('missing smoke artifact configuration', () => {
+    const broken = JSON.parse(JSON.stringify(validSummary));
+    delete broken.configuration;
+    validateSmokeMatrixSummaryArtifact(broken, { final: true }, { throwOnError: true });
+  });
+  assertSelfTestThrows('smoke artifact evidence key drift', () => {
+    const broken = JSON.parse(JSON.stringify(validSummary));
+    broken.modes[0].attempts[0].evidenceKeys = ['advanced_status'];
+    validateSmokeMatrixSummaryArtifact(broken, { final: true }, { throwOnError: true });
+  });
+  assertSelfTestThrows('smoke artifact production context drift', () => {
+    const broken = JSON.parse(JSON.stringify(validSummary));
+    broken.modes[0].attempts[0].context.tenantScope = '';
+    validateSmokeMatrixSummaryArtifact(broken, { final: true }, { throwOnError: true });
+  });
+  assertSelfTestThrows('smoke artifact production warning budget drift', () => {
+    const broken = JSON.parse(JSON.stringify(validSummary));
+    broken.modes[0].attempts[0].warningBudget.browserWarnings = 1;
+    validateSmokeMatrixSummaryArtifact(broken, { final: true }, { throwOnError: true });
+  });
+  console.log(`business_os_production_smoke_registry_modes=${businessOsProductionSmokeModes.join(',')}`);
+  console.log('business_os_production_smoke_registry_self_test=1');
+}
+
+function assertSelfTestThrows(label, fn) {
+  try {
+    fn();
+  } catch {
+    return;
+  }
+  throw new Error(`Smoke matrix self-test expected failure for ${label}`);
+}
+
 function writeSummary(ok) {
   summary.ok = ok;
   summary.endedAt = new Date().toISOString();
-  if (!resultPath) return;
+  const schemaProblems = validateSmokeMatrixSummaryArtifact(summary, { final: ok });
+  if (schemaProblems.length) {
+    throw new Error(`Smoke matrix summary artifact failed schema validation: ${schemaProblems.join(', ')}`);
+  }
   fs.mkdirSync(path.dirname(resultPath), { recursive: true });
   fs.writeFileSync(resultPath, `${JSON.stringify(summary, null, 2)}\n`);
+}
+
+function readGitRevision() {
+  try {
+    const result = spawnSync('git', ['-C', root, 'rev-parse', 'HEAD'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const revision = String(result.stdout || '').trim();
+    return result.status === 0 && revision ? revision : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+function smokeAttemptContextFromEvidence(evidence) {
+  const keyValue = (suffix) => {
+    const key = Object.keys(evidence || {}).find((candidate) => candidate.endsWith(suffix));
+    return key ? evidence[key] : null;
+  };
+  return {
+    authState: keyValue('_auth_state'),
+    actorRole: keyValue('_actor_role'),
+    browserContext: keyValue('_browser_context'),
+    tenantScope: keyValue('_tenant_scope'),
+    advancedStatus: evidence?.advanced_status || null,
+  };
+}
+
+function validateSmokeMatrixSummaryArtifact(candidate, options = {}, validationOptions = {}) {
+  const problems = [];
+  const require = (condition, message) => {
+    if (!condition) problems.push(message);
+  };
+  require(candidate && typeof candidate === 'object', 'summary_object');
+  if (!candidate || typeof candidate !== 'object') return finishSummaryValidation(problems, validationOptions);
+  require(candidate.schema === SMOKE_MATRIX_SUMMARY_SCHEMA, 'schema');
+  require(candidate.schemaVersion === 1, 'schemaVersion');
+  require(typeof candidate.repositoryRoot === 'string' && candidate.repositoryRoot.length > 0, 'repositoryRoot');
+  require(typeof candidate.gitRevision === 'string' && candidate.gitRevision.length >= 7, 'gitRevision');
+  require(typeof candidate.ctoxBin === 'string' && candidate.ctoxBin.length > 0, 'ctoxBin');
+  require(typeof candidate.resultPath === 'string' && candidate.resultPath.length > 0, 'resultPath');
+  require(typeof candidate.pagePath === 'string' && candidate.pagePath.startsWith('/'), 'pagePath');
+  require(typeof candidate.requireEvidence === 'boolean', 'requireEvidence');
+  require(Array.isArray(candidate.requestedModes) && candidate.requestedModes.length > 0, 'requestedModes');
+  require(Array.isArray(candidate.modes), 'modes');
+  require(candidate.configuration && typeof candidate.configuration === 'object', 'configuration');
+  if (candidate.configuration && typeof candidate.configuration === 'object') {
+    const config = candidate.configuration;
+    require(Number.isInteger(config.attempts) && config.attempts > 0, 'configuration.attempts');
+    require(Number.isInteger(config.modeTimeoutMs) && config.modeTimeoutMs > 0, 'configuration.modeTimeoutMs');
+    require(Number.isInteger(config.businessPortBase) && config.businessPortBase > 0, 'configuration.businessPortBase');
+    require(Number.isInteger(config.signalingPortBase) && config.signalingPortBase > 0, 'configuration.signalingPortBase');
+    require(config.budgets && typeof config.budgets === 'object', 'configuration.budgets');
+  }
+  require(typeof candidate.startedAt === 'string' && candidate.startedAt.length > 0, 'startedAt');
+  require(typeof candidate.endedAt === 'string' && candidate.endedAt.length > 0, 'endedAt');
+  require(typeof candidate.ok === 'boolean', 'ok');
+  if (options.final) {
+    require(candidate.ok === true, 'ok=true');
+    require(candidate.modes.length === candidate.requestedModes.length, 'modes_complete');
+    const completedModes = new Set(candidate.modes.map((mode) => mode?.mode));
+    for (const requestedMode of candidate.requestedModes) {
+      require(completedModes.has(requestedMode), `requestedModes.${requestedMode}`);
+    }
+  }
+  for (const [modeIndex, mode] of (candidate.modes || []).entries()) {
+    const prefix = `modes[${modeIndex}]`;
+    require(typeof mode.mode === 'string' && mode.mode.length > 0, `${prefix}.mode`);
+    require(Array.isArray(mode.attempts), `${prefix}.attempts`);
+    require(typeof mode.ok === 'boolean', `${prefix}.ok`);
+    if (options.final) require(mode.ok === true, `${prefix}.ok=true`);
+    if (options.final) {
+      require((mode.attempts || []).some((attempt) => attempt?.ok === true), `${prefix}.accepted_attempt`);
+    }
+    for (const [attemptIndex, attempt] of (mode.attempts || []).entries()) {
+      const attemptPrefix = `${prefix}.attempts[${attemptIndex}]`;
+      require(Number.isInteger(attempt.attempt) && attempt.attempt >= 1, `${attemptPrefix}.attempt`);
+      require(typeof attempt.url === 'string' && attempt.url.startsWith('http://127.0.0.1:'), `${attemptPrefix}.url`);
+      require(typeof attempt.pagePath === 'string' && attempt.pagePath.startsWith('/'), `${attemptPrefix}.pagePath`);
+      require(Number.isInteger(attempt.businessPort) && attempt.businessPort > 0, `${attemptPrefix}.businessPort`);
+      require(Number.isInteger(attempt.signalingPort) && attempt.signalingPort > 0, `${attemptPrefix}.signalingPort`);
+      require(Number.isFinite(attempt.durationMs) && attempt.durationMs >= 0, `${attemptPrefix}.durationMs`);
+      require(typeof attempt.ok === 'boolean', `${attemptPrefix}.ok`);
+      require(attempt.evidence && typeof attempt.evidence === 'object', `${attemptPrefix}.evidence`);
+      require(Array.isArray(attempt.evidenceKeys), `${attemptPrefix}.evidenceKeys`);
+      require(attempt.warningBudget && typeof attempt.warningBudget === 'object', `${attemptPrefix}.warningBudget`);
+      require(attempt.context && typeof attempt.context === 'object', `${attemptPrefix}.context`);
+      if (attempt.evidence && typeof attempt.evidence === 'object' && Array.isArray(attempt.evidenceKeys)) {
+        const evidenceKeys = Object.keys(attempt.evidence).sort();
+        require(
+          JSON.stringify(attempt.evidenceKeys) === JSON.stringify(evidenceKeys),
+          `${attemptPrefix}.evidenceKeys_match_evidence`,
+        );
+      }
+      if (attempt.warningBudget && typeof attempt.warningBudget === 'object') {
+        const numericBudgetKeys = [
+          'browserWarnings',
+          'websocketWarnings',
+          'requestFailures',
+          'assetResponseErrors',
+          'startupReloads',
+          'startupHookWaitMs',
+          'syncConfigWaitMs',
+          'durationMs',
+        ];
+        const nullableBudgetKeys = [
+          'maxBrowserWarnings',
+          'maxWebsocketWarnings',
+          'maxRequestFailures',
+          'maxAssetResponseErrors',
+          'maxStartupReloads',
+          'maxStartupHookWaitMs',
+          'maxSyncConfigWaitMs',
+          'maxDurationMs',
+        ];
+        for (const key of numericBudgetKeys) {
+          require(Number.isFinite(attempt.warningBudget[key]) && attempt.warningBudget[key] >= 0, `${attemptPrefix}.warningBudget.${key}`);
+        }
+        for (const key of nullableBudgetKeys) {
+          require(
+            attempt.warningBudget[key] === null
+              || (Number.isFinite(attempt.warningBudget[key]) && attempt.warningBudget[key] >= 0),
+            `${attemptPrefix}.warningBudget.${key}`,
+          );
+        }
+      }
+      if (attempt.context && typeof attempt.context === 'object') {
+        for (const key of ['authState', 'actorRole', 'browserContext', 'tenantScope', 'advancedStatus']) {
+          require(Object.prototype.hasOwnProperty.call(attempt.context, key), `${attemptPrefix}.context.${key}`);
+        }
+      }
+      if (options.final && attempt.ok === true && businessOsProductionSmokeModeSet.has(mode.mode)) {
+        requireProductionAttemptContext(attempt.context, attemptPrefix, require);
+        requireSuccessfulAttemptWithinBudgets(attempt.warningBudget, attemptPrefix, require);
+      }
+    }
+  }
+  return finishSummaryValidation(problems, validationOptions);
+}
+
+function requireProductionAttemptContext(context, attemptPrefix, require) {
+  if (!context || typeof context !== 'object') return;
+  for (const key of ['authState', 'actorRole', 'browserContext', 'tenantScope']) {
+    require(typeof context[key] === 'string' && context[key].length > 0, `${attemptPrefix}.context.${key}.non_empty`);
+  }
+  require(
+    context.advancedStatus === 'business-os-advanced-status-v1',
+    `${attemptPrefix}.context.advancedStatus.business_os_v1`,
+  );
+}
+
+function requireSuccessfulAttemptWithinBudgets(warningBudget, attemptPrefix, require) {
+  if (!warningBudget || typeof warningBudget !== 'object') return;
+  const checks = [
+    ['browserWarnings', 'maxBrowserWarnings'],
+    ['websocketWarnings', 'maxWebsocketWarnings'],
+    ['requestFailures', 'maxRequestFailures'],
+    ['assetResponseErrors', 'maxAssetResponseErrors'],
+    ['startupReloads', 'maxStartupReloads'],
+    ['startupHookWaitMs', 'maxStartupHookWaitMs'],
+    ['syncConfigWaitMs', 'maxSyncConfigWaitMs'],
+    ['durationMs', 'maxDurationMs'],
+  ];
+  for (const [actualKey, maxKey] of checks) {
+    const actual = warningBudget[actualKey];
+    const max = warningBudget[maxKey];
+    if (max === null) continue;
+    if (!Number.isFinite(actual) || !Number.isFinite(max)) continue;
+    require(actual <= max, `${attemptPrefix}.warningBudget.${actualKey}<=${maxKey}`);
+  }
+}
+
+function finishSummaryValidation(problems, validationOptions = {}) {
+  if (problems.length && validationOptions.throwOnError) {
+    throw new Error(`Smoke matrix summary schema problems: ${problems.join(', ')}`);
+  }
+  return problems;
+}
+
+function makeSmokeMatrixSummarySelfTestArtifact() {
+  return {
+    schema: SMOKE_MATRIX_SUMMARY_SCHEMA,
+    schemaVersion: 1,
+    repositoryRoot: root,
+    gitRevision: '0123456789abcdef0123456789abcdef01234567',
+    ctoxBin,
+    resultPath: defaultResultPath,
+    pagePath: '/index.html',
+    requireEvidence: true,
+    requestedModes: ['business-os-agent-scope-ui'],
+    modes: [{
+      mode: 'business-os-agent-scope-ui',
+      attempts: [{
+        attempt: 1,
+        status: 0,
+        signal: null,
+        timedOut: false,
+        timeoutMs: 300000,
+        pagePath: '/index.html',
+        url: 'http://127.0.0.1:61341/index.html',
+        businessPort: 61341,
+        signalingPort: 61342,
+        durationMs: 12000,
+        ok: true,
+        error: null,
+        context: {
+          authState: 'authenticated',
+          actorRole: 'user',
+          browserContext: 'clean',
+          tenantScope: 'local-workspace',
+          advancedStatus: 'business-os-advanced-status-v1',
+        },
+        evidenceKeys: ['advanced_status', 'business_os_agent_scope_auth_state'],
+        evidence: {
+          advanced_status: 'business-os-advanced-status-v1',
+          business_os_agent_scope_auth_state: 'authenticated',
+        },
+        warningBudget: {
+          browserWarnings: 0,
+          maxBrowserWarnings: 0,
+          websocketWarnings: 0,
+          maxWebsocketWarnings: 5,
+          requestFailures: 0,
+          maxRequestFailures: 0,
+          assetResponseErrors: 0,
+          maxAssetResponseErrors: 0,
+          startupReloads: 0,
+          maxStartupReloads: 0,
+          startupHookWaitMs: 50,
+          maxStartupHookWaitMs: 60000,
+          syncConfigWaitMs: 10,
+          maxSyncConfigWaitMs: null,
+          durationMs: 12000,
+          maxDurationMs: null,
+        },
+        evidenceProblems: [],
+      }],
+      ok: true,
+    }],
+    configuration: {
+      attempts: 1,
+      modeTimeoutMs: 300000,
+      businessPortBase: 61341,
+      signalingPortBase: 61342,
+      budgets: {},
+    },
+    startedAt: '2026-06-18T00:00:00.000Z',
+    endedAt: '2026-06-18T00:00:12.000Z',
+    ok: true,
+  };
 }
 
 function failConfiguration(message) {
@@ -768,6 +1348,11 @@ function validateModeEvidence(mode, evidence) {
   for (const [key, minimum] of Object.entries(required.minimums || {})) {
     if (!Number.isFinite(Number(evidence[key])) || Number(evidence[key]) < minimum) {
       problems.push(`${key}>=${minimum}`);
+    }
+  }
+  for (const [key, maximum] of Object.entries(required.maximums || {})) {
+    if (!Number.isFinite(Number(evidence[key])) || Number(evidence[key]) > maximum) {
+      problems.push(`${key}<=${maximum}`);
     }
   }
   return problems;

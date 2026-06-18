@@ -1,11 +1,12 @@
-const assert = require('node:assert/strict');
-const { Buffer } = require('node:buffer');
-const { fileURLToPath } = require('node:url');
-const { build } = require('esbuild');
+import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
+import { fileURLToPath } from 'node:url';
+
+import { build } from 'esbuild';
 
 async function importBrowserBundle(relativePath) {
   const bundledModule = await build({
-    entryPoints: [fileURLToPath(new URL(relativePath, `file://${__dirname}/`))],
+    entryPoints: [fileURLToPath(new URL(relativePath, import.meta.url))],
     bundle: true,
     format: 'esm',
     platform: 'browser',
@@ -16,7 +17,6 @@ async function importBrowserBundle(relativePath) {
   return import(`data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`);
 }
 
-(async () => {
 const { __ctoxTestHooks: hooks } = await importBrowserBundle('./index.js');
 
 const {
@@ -168,8 +168,4 @@ test('Single-event timeline is diagnostic and disabled', () => {
   assert.equal(progressPercent(0, 0), 100);
   assert.equal(clampMetric(999, 0, 10), 10);
   assert.equal(formatRelativeAge(30_000, 'de'), 'unter 1 Min.');
-});
-})().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
 });

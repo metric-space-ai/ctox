@@ -1,7 +1,7 @@
 # Bare-Metal CUDA-Dispatcher Port — Status
 
 Byte-für-byte Port von llama.cpp's ggml-cuda Host-Side Dispatchern
-nach Rust, pro CLAUDE.md Inference-Engine Architecture Rules.
+nach Rust, pro AGENTS.md Inference Model Rules.
 
 ## Stand 2026-04-27
 

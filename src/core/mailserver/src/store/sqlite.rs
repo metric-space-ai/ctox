@@ -1,8 +1,8 @@
 // ref: stalwart/src/store/sqlite/mod.rs:1-120
 // ref: ctox-mailserver new code for campaign & collaboration SQLite store
 
-use crate::util::errors::StalwartResult;
 use crate::store::sqlite_schema::SQLITE_SCHEMA;
+use crate::util::errors::StalwartResult;
 use rusqlite::{params, Connection};
 
 #[derive(Clone, Debug)]
@@ -77,7 +77,9 @@ impl SqliteStore {
         Ok(id)
     }
 
-    pub fn get_pending_emails(&self) -> StalwartResult<Vec<(String, String, String, String, usize)>> {
+    pub fn get_pending_emails(
+        &self,
+    ) -> StalwartResult<Vec<(String, String, String, String, usize)>> {
         let conn = self.connect()?;
         let now = crate::util::now_utc_secs();
         let mut stmt = conn.prepare(
@@ -189,7 +191,10 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub fn get_events(&self, calendar_id: &str) -> StalwartResult<Vec<(String, String, String, u64)>> {
+    pub fn get_events(
+        &self,
+        calendar_id: &str,
+    ) -> StalwartResult<Vec<(String, String, String, u64)>> {
         let conn = self.connect()?;
         let mut stmt = conn.prepare(
             "SELECT id, uid, ical_data, last_modified FROM stalwart_caldav_events WHERE calendar_id = ?1",
@@ -213,9 +218,8 @@ impl SqliteStore {
     pub fn get_event(&self, calendar_id: &str, uid: &str) -> StalwartResult<Option<(String, u64)>> {
         let conn = self.connect()?;
         let id = format!("{}:{}", calendar_id, uid);
-        let mut stmt = conn.prepare(
-            "SELECT ical_data, last_modified FROM stalwart_caldav_events WHERE id = ?1",
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT ical_data, last_modified FROM stalwart_caldav_events WHERE id = ?1")?;
         let mut rows = stmt.query(params![id])?;
         if let Some(row) = rows.next()? {
             Ok(Some((row.get(0)?, row.get(1)?)))
@@ -227,13 +231,21 @@ impl SqliteStore {
     pub fn delete_event(&self, calendar_id: &str, uid: &str) -> StalwartResult<()> {
         let conn = self.connect()?;
         let id = format!("{}:{}", calendar_id, uid);
-        conn.execute("DELETE FROM stalwart_caldav_events WHERE id = ?1", params![id])?;
+        conn.execute(
+            "DELETE FROM stalwart_caldav_events WHERE id = ?1",
+            params![id],
+        )?;
         Ok(())
     }
 
     // --- CardDAV Operations ---
 
-    pub fn create_addressbook(&self, id: &str, owner: &str, display_name: &str) -> StalwartResult<()> {
+    pub fn create_addressbook(
+        &self,
+        id: &str,
+        owner: &str,
+        display_name: &str,
+    ) -> StalwartResult<()> {
         let conn = self.connect()?;
         conn.execute(
             "INSERT OR IGNORE INTO stalwart_carddav_addressbooks (id, owner, display_name, description)
@@ -263,7 +275,12 @@ impl SqliteStore {
         Ok(res)
     }
 
-    pub fn put_contact(&self, addressbook_id: &str, uid: &str, vcard_data: &str) -> StalwartResult<()> {
+    pub fn put_contact(
+        &self,
+        addressbook_id: &str,
+        uid: &str,
+        vcard_data: &str,
+    ) -> StalwartResult<()> {
         let conn = self.connect()?;
         let now = crate::util::now_utc_secs();
         let id = format!("{}:{}", addressbook_id, uid);
@@ -275,7 +292,10 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub fn get_contacts(&self, addressbook_id: &str) -> StalwartResult<Vec<(String, String, String, u64)>> {
+    pub fn get_contacts(
+        &self,
+        addressbook_id: &str,
+    ) -> StalwartResult<Vec<(String, String, String, u64)>> {
         let conn = self.connect()?;
         let mut stmt = conn.prepare(
             "SELECT id, uid, vcard_data, last_modified FROM stalwart_carddav_contacts WHERE addressbook_id = ?1",
@@ -299,7 +319,10 @@ impl SqliteStore {
     pub fn delete_contact(&self, addressbook_id: &str, uid: &str) -> StalwartResult<()> {
         let conn = self.connect()?;
         let id = format!("{}:{}", addressbook_id, uid);
-        conn.execute("DELETE FROM stalwart_carddav_contacts WHERE id = ?1", params![id])?;
+        conn.execute(
+            "DELETE FROM stalwart_carddav_contacts WHERE id = ?1",
+            params![id],
+        )?;
         Ok(())
     }
 
@@ -333,7 +356,8 @@ impl SqliteStore {
 
     pub fn authenticate_user(&self, username: &str, password_hash: &str) -> StalwartResult<bool> {
         let conn = self.connect()?;
-        let mut stmt = conn.prepare("SELECT password_hash FROM stalwart_users WHERE username = ?1")?;
+        let mut stmt =
+            conn.prepare("SELECT password_hash FROM stalwart_users WHERE username = ?1")?;
         let mut rows = stmt.query(params![username])?;
         if let Some(row) = rows.next()? {
             let db_pass: String = row.get(0)?;
@@ -365,7 +389,8 @@ impl SqliteStore {
 
     pub fn get_mailbox_id(&self, owner: &str, name: &str) -> StalwartResult<Option<String>> {
         let conn = self.connect()?;
-        let mut stmt = conn.prepare("SELECT id FROM stalwart_mailboxes WHERE owner = ?1 AND name = ?2")?;
+        let mut stmt =
+            conn.prepare("SELECT id FROM stalwart_mailboxes WHERE owner = ?1 AND name = ?2")?;
         let mut rows = stmt.query(params![owner, name])?;
         if let Some(row) = rows.next()? {
             Ok(Some(row.get(0)?))
@@ -396,7 +421,21 @@ impl SqliteStore {
         Ok(id)
     }
 
-    pub fn get_messages(&self, mailbox_id: &str) -> StalwartResult<Vec<(String, String, String, Option<String>, String, Option<String>, bool, u64)>> {
+    pub fn get_messages(
+        &self,
+        mailbox_id: &str,
+    ) -> StalwartResult<
+        Vec<(
+            String,
+            String,
+            String,
+            Option<String>,
+            String,
+            Option<String>,
+            bool,
+            u64,
+        )>,
+    > {
         let conn = self.connect()?;
         let mut stmt = conn.prepare(
             "SELECT id, from_addr, to_addr, subject, body, headers, is_read, received_at 
@@ -425,7 +464,10 @@ impl SqliteStore {
     pub fn update_message_flags(&self, id: &str, is_read: bool) -> StalwartResult<()> {
         let conn = self.connect()?;
         let is_read_int = if is_read { 1 } else { 0 };
-        conn.execute("UPDATE stalwart_messages SET is_read = ?2 WHERE id = ?1", params![id, is_read_int])?;
+        conn.execute(
+            "UPDATE stalwart_messages SET is_read = ?2 WHERE id = ?1",
+            params![id, is_read_int],
+        )?;
         Ok(())
     }
 
@@ -462,4 +504,3 @@ impl SqliteStore {
         }
     }
 }
-

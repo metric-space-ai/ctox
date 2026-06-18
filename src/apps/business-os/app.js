@@ -1,4 +1,28 @@
 import { CtoxResizer } from './shared/resizer.js';
+import {
+  appLifecycleBadge,
+  appLifecycleState,
+  appReleaseProjection,
+  canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
+  isRuntimeInstalledModule,
+} from './shared/app-lifecycle.js';
+import {
+  BusinessOsPermissions,
+  canModifyBusinessModule,
+  canUseBusinessPermission,
+  canViewBusinessModuleSource,
+} from './shared/permissions.js';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js';
+import {
+  buildLifecyclePermissionView,
+  buildGlobalCtoxAgentScopeView,
+  buildModuleWhyDiagnosticsView,
+  buildModuleTargetContextItems,
+  renderModuleWhyDiagnosticsHtml,
+  renderGlobalCtoxAgentScopeHtml,
+  renderGlobalCtoxContextModeHtml,
+  shouldRenderModuleSourceAction,
+} from './shared/shell-permissions-ui.js';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -274,7 +298,19 @@ installAdvancedStatusInterface();
 
 if (new URLSearchParams(window.location.search).has('rxdbSmoke')) {
   const smokeRoot = typeof globalThis === 'undefined' ? window : globalThis;
-  const smokeApi = { state, openDesktopApp, reportFileIntegrityError };
+  const smokeApi = {
+    state,
+    openDesktopApp,
+    reportFileIntegrityError,
+    createLiveDbFacade,
+    createModuleContext,
+    createModulePermissionFacade,
+    storageKeys: businessOsStorageKeys,
+    renderTabs,
+    listLaunchTargets,
+    openAppLifecycleDrawer,
+    openSettingsDrawer,
+  };
   smokeRoot.ctoxBusinessOsSmoke = smokeApi;
   window.ctoxBusinessOsSmoke = smokeApi;
 }
@@ -283,6 +319,104 @@ const moduleAliases = {
   notizen: 'notes',
 };
 const LEGACY_MODULE_ALIASES = new Map(Object.entries(moduleAliases));
+
+function storageScopeSegment(value, fallback = 'default') {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 96);
+  return normalized || fallback;
+}
+
+function currentWorkspaceStorageScope() {
+  const root = typeof globalThis === 'undefined' ? window : globalThis;
+  const urlConfig = (() => {
+    try { return readUrlPairingConfig(); } catch { return null; }
+  })();
+  const candidates = [
+    state.syncConfig?.instance_id,
+    state.syncConfig?.instanceId,
+    state.sync?.config?.instance_id,
+    state.sync?.config?.instanceId,
+    launchConfigForPageSession?.instance_id,
+    launchConfigForPageSession?.instanceId,
+    urlConfig?.instance_id,
+    urlConfig?.instanceId,
+    root.CTOX_BUSINESS_OS_CONFIG?.instance_id,
+    root.CTOX_BUSINESS_OS_CONFIG?.instanceId,
+    root.ctoxBusinessOsLaunch?.config?.instance_id,
+    root.ctoxBusinessOsLaunch?.config?.instanceId,
+    root.ctoxBusinessOsLaunch?.instance_id,
+    root.ctoxBusinessOsLaunch?.instanceId,
+    location.host || location.origin,
+  ];
+  return storageScopeSegment(candidates.find((value) => String(value || '').trim()), 'local');
+}
+
+function currentActorStorageScope() {
+  const user = state.session?.user || {};
+  return storageScopeSegment(user.id || user.email || user.login || (state.session?.authenticated ? 'authenticated' : 'browser'), 'browser');
+}
+
+function scopedStorageKey(baseKey, options = {}) {
+  const workspace = options.workspace === false ? '' : currentWorkspaceStorageScope();
+  const actor = options.actor === false ? '' : currentActorStorageScope();
+  const moduleId = options.moduleId ? storageScopeSegment(options.moduleId, '') : '';
+  return [
+    String(baseKey || '').trim(),
+    'scope',
+    workspace,
+    actor,
+    moduleId,
+  ].filter(Boolean).join('.');
+}
+
+function readScopedLocalStorage(baseKey, options = {}) {
+  const key = scopedStorageKey(baseKey, options);
+  try {
+    const scoped = localStorage.getItem(key);
+    if (scoped !== null) return scoped;
+    if (options.legacyFallback) return localStorage.getItem(baseKey);
+  } catch {}
+  return null;
+}
+
+function writeScopedLocalStorage(baseKey, value, options = {}) {
+  const key = scopedStorageKey(baseKey, options);
+  try { localStorage.setItem(key, value); } catch {}
+  return key;
+}
+
+function removeScopedLocalStorage(baseKey, options = {}) {
+  try { localStorage.removeItem(scopedStorageKey(baseKey, options)); } catch {}
+}
+
+function businessOsStorageKeys() {
+  return {
+    workspace: currentWorkspaceStorageScope(),
+    actor: currentActorStorageScope(),
+    taskbarPins: scopedStorageKey(TASKBAR_PINS_KEY),
+    moduleLayout: scopedStorageKey(MODULE_LAYOUT_KEY),
+    accountPreferences: scopedStorageKey(ACCOUNT_PREFS_KEY),
+    pairingConfig: scopedStorageKey(PAIRING_CONFIG_KEY, { actor: false }),
+  };
+}
+
+function createStorageScopeFacade(mod) {
+  const moduleId = mod?.id || '';
+  return Object.freeze({
+    version: 'business-os-storage-scope-v1',
+    workspace: currentWorkspaceStorageScope(),
+    actor: currentActorStorageScope(),
+    module_id: moduleId,
+    key: (baseKey, options = {}) => scopedStorageKey(baseKey, {
+      moduleId,
+      ...options,
+    }),
+  });
+}
 
 async function loadShellUiModules() {
   if (!shellUiModulesPromise) {
@@ -451,7 +585,7 @@ const shellMessages = {
     chatToCtox: 'Mit CTOX chatten',
     chatWorkDataLabel: 'Mit Daten arbeiten',
     chatAnswerLabel: 'Frage beantworten',
-    chatModifyAppLabel: 'App modifizieren',
+    chatModifyAppLabel: 'App ändern',
     chatPlaceholder: 'Was soll CTOX hier tun oder prüfen?',
     chatOpening: 'Öffne Chat...',
     send: 'Senden',
@@ -561,7 +695,7 @@ const shellMessages = {
     chatToCtox: 'Chat to CTOX',
     chatWorkDataLabel: 'Work with data',
     chatAnswerLabel: 'Answer question',
-    chatModifyAppLabel: 'Modify app',
+    chatModifyAppLabel: 'Change app',
     chatPlaceholder: 'What should CTOX do or check here?',
     chatOpening: 'Opening Chat...',
     send: 'Send',
@@ -916,6 +1050,10 @@ async function runQueuedCatalogRefresh() {
     console.log('[business-os] Module catalog update detected in database sync.');
     await refreshModules();
   } catch (error) {
+    if (isVolatileSyncTransportError(error) || isClosedRxDbCollectionError(error)) {
+      console.debug('[business-os] Module catalog refresh skipped during data-plane shutdown:', error?.message || error);
+      return;
+    }
     console.warn('[business-os] Module catalog refresh failed:', error);
   } finally {
     state.catalogRefreshRunning = false;
@@ -1299,6 +1437,14 @@ function wireShellActions() {
       event.preventDefault();
       const moduleId = sourceButton.dataset.moduleSource || state.activeModule?.id;
       if (moduleId) openModuleSourceEditor(moduleId);
+      return;
+    }
+    const lifecycleButton = event.target.closest('[data-module-lifecycle]');
+    if (lifecycleButton) {
+      event.preventDefault();
+      const moduleId = lifecycleButton.dataset.moduleLifecycle || state.activeModule?.id;
+      const mod = state.modules.find((item) => item.id === moduleId) || state.activeModule;
+      if (mod) openAppLifecycleDrawer(mod);
     }
   });
   els.host?.addEventListener('change', async (event) => {
@@ -1562,7 +1708,9 @@ function setupModuleResizers(mod) {
     const side = handle.getAttribute('data-resizer') === 'right' ? 'right' : 'left';
     const minWidth = Number.parseFloat(handle.getAttribute('data-resizer-min')) || 200;
     const maxWidth = Number.parseFloat(handle.getAttribute('data-resizer-max')) || 600;
-    const storageKey = `${SHELL_MODULE_RESIZER_KEY_PREFIX}${mod.id}:${cssVar}`;
+    const storageKey = scopedStorageKey(`${SHELL_MODULE_RESIZER_KEY_PREFIX}${mod.id}:${cssVar}`, {
+      moduleId: mod.id,
+    });
 
     // Restore persisted width synchronously (before paint) to avoid a flash.
     let savedWidth = NaN;
@@ -1589,6 +1737,12 @@ function setupModuleResizers(mod) {
 function openModuleSourceEditor(moduleId) {
   const mod = state.modules.find((entry) => entry.id === moduleId) || state.activeModule;
   if (!mod?.id) return;
+  if (!canViewModuleSource(mod)) {
+    setStatus(shellLang() === 'de'
+      ? 'Source ist fuer diese App nicht freigegeben.'
+      : 'Source is not available for this app.', true);
+    return;
+  }
   openDesktopApp('code-editor', {
     title: `${moduleDisplayTitle(mod)} Source`,
     width: 1040,
@@ -1687,7 +1841,7 @@ async function openSettingsDrawer(options = {}) {
     syncConfig: state.sync?.config,
     sync: createLiveSyncFacade(),
     commandBus: createLiveCommandBusFacade(),
-    db: createLiveDbFacade(),
+    db: createScopedSystemDbFacade('settings-drawer-react-settings', SETTINGS_DB_COLLECTIONS),
     initialTab: options.initialTab || 'runtime',
     onAccount: openAccountDrawer,
     onClose: closeDrawers,
@@ -1731,7 +1885,9 @@ function setupShellColumnResizing() {
 
   function layoutKey() {
     return state.activeModule?.id
-      ? `${SHELL_COLUMN_LAYOUT_KEY_PREFIX}${state.activeModule.id}`
+      ? scopedStorageKey(`${SHELL_COLUMN_LAYOUT_KEY_PREFIX}${state.activeModule.id}`, {
+          moduleId: state.activeModule.id,
+        })
       : '';
   }
 
@@ -3016,10 +3172,12 @@ async function openDesktopApp(appId, options = {}) {
     if (moduleDef) await registerModuleSchemas(moduleDef);
     const appModule = await entry.loader();
     teardown = await appModule.mount(win.container, {
-      db: createLiveDbFacade(),
+      db: createScopedSystemDbFacade(`desktop-app:${entry.id}`, DESKTOP_APP_DB_COLLECTIONS[entry.id] || []),
       sync: createLiveSyncFacade(),
       commandBus: createLiveCommandBusFacade(),
       session: state.session,
+      governance: state.governance,
+      modules: state.modules,
       contextMenu: state.contextMenu,
       notifications: state.notifications,
       locale: shellLang(),
@@ -3206,9 +3364,17 @@ function renderModuleTab(target, options = {}) {
     ? shellText('pinned')
     : (button.dataset.running ? shellText('running') : '');
   const svgHtml = getRegisteredSvgIcon(target.id, 16, 1.8);
+  const lifecycle = target.kind === 'module'
+    ? appLifecycleBadge(target.module, {
+      session: state.session,
+      governance: state.governance,
+    })
+    : null;
   button.innerHTML = `
     <span class="module-tab-icon" aria-hidden="true">${svgHtml || escapeHtml(target.glyph || '◻︎')}</span>
     <span class="module-tab-label">${escapeHtml(target.title || target.id)}</span>
+    ${lifecycle?.runtimeInstalled ? `<span class="module-tab-lifecycle" data-app-lifecycle-badge="${escapeHtml(target.id)}" data-state="${escapeHtml(lifecycle.state)}" title="${escapeHtml(lifecycle.title)}" aria-label="${escapeHtml(`${target.title || target.id}: ${lifecycle.version} ${lifecycle.text}`)}">${escapeHtml(lifecycle.text)}</span>` : ''}
+    ${lifecycle?.version && !lifecycle.runtimeInstalled ? `<span class="module-tab-version">${escapeHtml(lifecycle.version)}</span>` : ''}
     ${status ? `<span class="module-tab-state">${escapeHtml(status)}</span>` : ''}
   `;
   button.setAttribute('aria-current', state.activeModule?.id === target.id ? 'page' : 'false');
@@ -3244,6 +3410,11 @@ function renderModuleTab(target, options = {}) {
   button.addEventListener('contextmenu', (event) => {
     event.preventDefault();
     showTargetContextMenu(event, target);
+  });
+  button.querySelector('[data-app-lifecycle-badge]')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (target.kind === 'module') openAppLifecycleDrawer(target.module);
   });
   button.addEventListener('dblclick', () => {
     if (target.kind === 'module') openModuleSourceEditor(target.id);
@@ -3299,6 +3470,13 @@ function moduleAppearsInSwitcher(mod) {
     && mod.install_scope !== 'internal'
     && canSeeModuleForAppVersion(mod)
     && !moduleLaunchesAsDesktopApp(mod);
+}
+
+function canSeeModuleForAppVersion(mod, governance = state.governance) {
+  return lifecycleCanSeeModuleForAppVersion(mod, {
+    session: state.session,
+    governance,
+  });
 }
 
 function listLaunchTargets(kind = '') {
@@ -3359,33 +3537,28 @@ function startMenuItemForTarget(target) {
 function showTargetContextMenu(event, target) {
   if (!state.contextMenu) return;
   const pinned = isTaskbarPinned(target.id);
-  const items = [
-    {
-      label: shellText('openApp') || 'Öffnen',
-      icon: target.glyph || '↗',
-      action: () => openLaunchTarget(target),
+  const items = buildModuleTargetContextItems({
+    target,
+    pinned,
+    canModify: target.kind === 'module' && canModifyModule(target.module),
+    canOpenSource: target.kind === 'module' && canViewBusinessModuleSource(target.module, {
+      session: state.session,
+      governance: state.governance,
+    }),
+    labels: {
+      openApp: shellText('openApp') || 'Öffnen',
+      pinToTaskbar: shellText('pinToTaskbar'),
+      unpinFromTaskbar: shellText('unpinFromTaskbar'),
+      openSource: 'Source öffnen',
+      modifyApp: shellText('chatModifyAppLabel') || 'App ändern',
     },
-    {
-      label: pinned ? shellText('unpinFromTaskbar') : shellText('pinToTaskbar'),
-      icon: pinned ? '−' : '+',
-      action: () => toggleTaskbarPin(target.id, !pinned),
+    actions: {
+      open: () => openLaunchTarget(target),
+      togglePin: () => toggleTaskbarPin(target.id, !pinned),
+      openSource: () => openModuleSourceEditor(target.id),
+      modify: () => openModuleEditDrawer(target.module),
     },
-  ];
-  if (target.kind === 'module') {
-    items.push({ type: 'separator' });
-    items.push({
-      label: 'Source öffnen',
-      icon: '⌘',
-      action: () => openModuleSourceEditor(target.id),
-    });
-    if (canModifyModule(target.module)) {
-      items.push({
-        label: 'Modul bearbeiten',
-        icon: '✎',
-        action: () => openModuleEditDrawer(target.module),
-      });
-    }
-  }
+  });
   state.contextMenu.show(event, items);
 }
 
@@ -3405,6 +3578,23 @@ function openLaunchTarget(targetOrId) {
   }
   location.hash = target.id;
   openModule(target.id);
+}
+
+function visibleModuleFallbackId(blockedModuleId = '') {
+  const activeId = state.activeModule?.id || '';
+  if (activeId && activeId !== blockedModuleId) {
+    const active = state.modules.find((item) => item.id === activeId);
+    if (active && canSeeModuleForAppVersion(active)) return active.id;
+  }
+  const ctox = state.modules.find((item) => item.id === 'ctox');
+  if (ctox && ctox.id !== blockedModuleId && canSeeModuleForAppVersion(ctox)) return ctox.id;
+  const firstVisible = state.modules.find((item) => (
+    item?.id
+    && item.id !== blockedModuleId
+    && !moduleLaunchesAsDesktopApp(item)
+    && canSeeModuleForAppVersion(item)
+  ));
+  return firstVisible?.id || '';
 }
 
 function runningDesktopAppTargets() {
@@ -3469,7 +3659,7 @@ function draggedTaskbarPinId(event) {
 
 function readTaskbarPins() {
   try {
-    const parsed = JSON.parse(localStorage.getItem(TASKBAR_PINS_KEY) || 'null');
+    const parsed = JSON.parse(readScopedLocalStorage(TASKBAR_PINS_KEY) || 'null');
     return Array.isArray(parsed) ? parsed : null;
   } catch {
     return null;
@@ -3477,7 +3667,7 @@ function readTaskbarPins() {
 }
 
 function persistTaskbarPins() {
-  localStorage.setItem(TASKBAR_PINS_KEY, JSON.stringify(state.taskbarPins));
+  writeScopedLocalStorage(TASKBAR_PINS_KEY, JSON.stringify(state.taskbarPins));
   clearTimeout(taskbarPinSaveTimer);
   taskbarPinSaveTimer = window.setTimeout(() => {
     taskbarPinSaveTimer = null;
@@ -3520,7 +3710,7 @@ async function hydrateTaskbarPinsFromDesktopLayout() {
   } else {
     state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules);
   }
-  localStorage.setItem(TASKBAR_PINS_KEY, JSON.stringify(state.taskbarPins));
+  writeScopedLocalStorage(TASKBAR_PINS_KEY, JSON.stringify(state.taskbarPins));
   await syncTaskbarPinsToDesktopLayout();
 }
 
@@ -3597,6 +3787,24 @@ async function openModule(moduleId, options = {}) {
   }
   const mod = state.modules.find((item) => item.id === requestedId) || state.modules[0];
   if (!mod) return;
+  if (!canSeeModuleForAppVersion(mod)) {
+    const lifecycle = appLifecycleState(mod, {
+      session: state.session,
+      governance: state.governance,
+    });
+    const fallbackId = visibleModuleFallbackId(mod.id);
+    setStatus(`${moduleDisplayTitle(mod)} ist für diesen Account nicht sichtbar. ${lifecycle.reason || ''}`.trim());
+    if (currentHashModuleId() === mod.id && fallbackId) {
+      history.replaceState(null, '', `#${fallbackId}`);
+    }
+    if (fallbackId && fallbackId !== mod.id) {
+      await openModule(fallbackId, {
+        isNavHistory: true,
+        force: options.force,
+      });
+    }
+    return;
+  }
   if (moduleLaunchesAsDesktopApp(mod) && !options.asModule) {
     const fallbackId = state.activeModule?.id && state.activeModule.id !== mod.id
       ? state.activeModule.id
@@ -3676,7 +3884,12 @@ async function openModule(moduleId, options = {}) {
         // what tends to fail), and shell-owned wiring below — column resizers,
         // chrome — must still run. Surface the error instead of letting it
         // escape as an unhandled rejection that silently skips the rest.
-        console.error(`[business-os] mount failed for ${mod.id}`, error);
+        if (isBusinessOsPermissionError(error)) {
+          console.log(`[business-os] mount locked for ${mod.id}: ${error?.message || error}`);
+          renderModulePermissionDeniedState(mod, error);
+        } else {
+          console.error(`[business-os] mount failed for ${mod.id}`, error);
+        }
         setStatus(`${moduleDisplayTitle(mod)}: ${error?.message || error}`);
       }
     }
@@ -3945,9 +4158,13 @@ function createModuleContext(mod) {
     host: els.host.querySelector('[data-module-content]') || els.host.querySelector('[data-module-root]'),
     left: els.leftContent,
     right: els.rightContent,
-    db: createLiveDbFacade(),
+    db: createLiveDbFacade(mod),
+    permissions: createModulePermissionFacade(mod),
+    runtimeCapabilities: createRuntimeCapabilityFacade(mod),
+    storageScope: createStorageScopeFacade(mod),
     sync: createLiveSyncFacade(),
     commandBus: createLiveCommandBusFacade(),
+    businessChat: createLiveBusinessChatFacade(mod),
     syncConfig: state.sync?.config,
     session: state.session,
     governance: state.governance,
@@ -3975,6 +4192,71 @@ function createModuleContext(mod) {
   };
 }
 
+function createRuntimeCapabilityFacade(mod) {
+  const runtimeInstalled = isRuntimeInstalledModule(mod);
+  const guardedDataFacade = Boolean(createDynamicAppDataGuard(mod));
+  const scopedSystemCollections = scopedSystemCollectionsForModule(mod);
+  const scopedSystemFacade = Boolean(scopedSystemCollections);
+  return Object.freeze({
+    version: 'business-os-runtime-capabilities-v1',
+    module_id: mod?.id || '',
+    trust_model: runtimeInstalled
+      ? 'same-origin-trusted-generated-app'
+      : 'packaged-core-module',
+    code_origin: runtimeInstalled ? 'runtime-installed-module' : 'packaged-module',
+    database: Object.freeze({
+      facade: 'ctx.db',
+      guarded: guardedDataFacade,
+      scoped_system: scopedSystemFacade,
+      allowed_collections: scopedSystemFacade ? Object.freeze([...scopedSystemCollections]) : Object.freeze([]),
+      raw: guardedDataFacade
+        ? 'guarded-deny-without-data-grant'
+        : (scopedSystemFacade ? 'scoped-system-allowlist' : 'compatibility'),
+      collection_properties: guardedDataFacade
+        ? 'guarded-deny-without-data-grant'
+        : (scopedSystemFacade ? 'scoped-system-allowlist' : 'compatibility'),
+      cached_handles: guardedDataFacade
+        ? 'guarded-deny-without-data-grant'
+        : (scopedSystemFacade ? 'scoped-system-allowlist' : 'compatibility'),
+    }),
+    network: Object.freeze({
+      fetch: runtimeInstalled ? 'local-module-assets-only' : 'packaged-module-compatibility',
+      http_business_data: 'forbidden',
+      remote_origin: runtimeInstalled ? 'forbidden' : 'packaged-module-compatibility',
+    }),
+    imports: Object.freeze({
+      static_relative: 'allowed',
+      dynamic: runtimeInstalled ? 'forbidden' : 'packaged-module-compatibility',
+      bare_package: 'forbidden',
+      remote_url: 'forbidden',
+    }),
+    storage: Object.freeze({
+      local_storage: runtimeInstalled ? 'forbidden' : 'shell-owned-hints-only',
+      session_storage: runtimeInstalled ? 'forbidden' : 'shell-owned-hints-only',
+      indexed_db: 'forbidden',
+      authoritative_permissions: false,
+      authoritative_lifecycle: false,
+      authoritative_audience: false,
+      authoritative_data_grants: false,
+    }),
+    shell_state: Object.freeze({
+      global_state_access: runtimeInstalled ? 'forbidden' : 'shell-owned',
+      direct_navigation: runtimeInstalled ? 'forbidden' : 'shell-owned',
+      global_shell_mutation: runtimeInstalled ? 'forbidden' : 'shell-owned',
+    }),
+    workers: Object.freeze({
+      worker: runtimeInstalled ? 'forbidden' : 'packaged-module-compatibility',
+      service_worker: 'forbidden',
+    }),
+    external_effects: Object.freeze({
+      command_bus: 'allowed',
+      allowed_command_bus: runtimeInstalled ? Object.freeze(['business_os.chat.task']) : Object.freeze([]),
+      direct_control_commands: runtimeInstalled ? 'forbidden' : 'packaged-module-compatibility',
+      approval_boundary: 'server-policy',
+    }),
+  });
+}
+
 // Live DB facade handed to modules as ctx.db. A Proxy forwards unknown
 // property names to the live RxDB collections, so modules get the ergonomic
 // `ctx.db.notes.find()` style WITHOUT unwrapping ctx.db.raw. The indirection
@@ -3983,27 +4265,484 @@ function createModuleContext(mod) {
 // pointing at the live database, while an unwrapped raw handle goes stale.
 // The module conformance guard (scripts/assert-module-conformance.mjs)
 // forbids ctx.db.raw in modules.
-function createLiveDbFacade() {
+const READ_COLLECTION_METHODS = new Set([
+  'find',
+  'findOne',
+  'count',
+  'exportJSON',
+]);
+
+const WRITE_COLLECTION_METHODS = new Set([
+  'insert',
+  'bulkInsert',
+  'upsert',
+  'atomicUpsert',
+  'bulkUpsert',
+  'bulkRemove',
+  'remove',
+]);
+
+const WRITE_QUERY_METHODS = new Set([
+  'remove',
+]);
+
+const WRITE_DOCUMENT_METHODS = new Set([
+  'patch',
+  'incrementalPatch',
+  'atomicPatch',
+  'atomicUpdate',
+  'update',
+  'remove',
+  'incrementalRemove',
+]);
+
+const GUARDED_PACKAGED_DATA_MODULE_IDS = new Set([
+  'buchhaltung',
+  'calendar',
+  'coding-agents',
+  'conversations',
+  'customers',
+  'cv-print-builder',
+  'documents',
+  'invoices',
+  'iot',
+  'matching',
+  'notes',
+  'outbound',
+  'research',
+  'shiftflow',
+  'spreadsheets',
+  'support',
+]);
+
+const SETTINGS_DB_COLLECTIONS = [
+  'business_commands',
+  'business_module_catalog',
+  'business_users',
+  'channel_pairing_state',
+  'communication_accounts',
+  'ctox_runtime_settings',
+];
+
+const BUSINESS_CHAT_DB_COLLECTIONS = [
+  'business_chats',
+  'business_commands',
+  'ctox_queue_tasks',
+  'desktop_file_chunks',
+  'desktop_files',
+];
+
+const BUSINESS_REPORTER_DB_COLLECTIONS = [
+  'business_module_reports',
+  'ctox_bug_reports',
+];
+
+const DESKTOP_APP_DB_COLLECTIONS = {
+  browser: [],
+  'code-editor': [
+    'business_commands',
+    'business_module_source_files',
+  ],
+  creator: [],
+  explorer: [
+    'desktop_file_chunks',
+    'desktop_files',
+  ],
+  'file-viewer': [
+    'business_commands',
+    'desktop_file_chunks',
+    'desktop_files',
+  ],
+};
+
+const SCOPED_SYSTEM_MODULE_DB_COLLECTIONS = Object.freeze({
+  'app-store': Object.freeze([
+    'business_commands',
+    'business_module_catalog',
+  ]),
+  browser: Object.freeze([
+    'browser_frames',
+    'browser_input_events',
+    'browser_sessions',
+    'browser_tabs',
+    'business_commands',
+    'ctox_queue_tasks',
+  ]),
+  creator: Object.freeze([
+    'business_commands',
+    'business_module_catalog',
+  ]),
+  ctox: Object.freeze([
+    'business_commands',
+    'ctox_bug_reports',
+    'ctox_queue_tasks',
+    'ctox_runtime_settings',
+  ]),
+  desktop: Object.freeze([
+    'business_commands',
+    'desktop_icons',
+    'desktop_layout',
+  ]),
+  knowledge: Object.freeze([
+    'business_commands',
+    'knowledge_items',
+    'knowledge_runbooks',
+    'knowledge_tables',
+  ]),
+  reports: Object.freeze([
+    'business_commands',
+    'business_module_releases',
+    'business_module_reports',
+    'ctox_bug_reports',
+    'ctox_queue_tasks',
+  ]),
+  tickets: Object.freeze([
+    'business_commands',
+    'ctox_ticket_approvals',
+    'ctox_ticket_cases',
+    'ctox_ticket_clarification_requests',
+    'ctox_ticket_control_bundles',
+    'ctox_ticket_event_routing_state',
+    'ctox_ticket_events',
+    'ctox_ticket_items',
+    'ctox_ticket_label_assignments',
+    'ctox_ticket_self_work_items',
+    'ctox_ticket_self_work_notes',
+    'ctox_ticket_verifications',
+    'ctox_ticket_writebacks',
+  ]),
+});
+
+function moduleUsesGuardedDataFacade(moduleLike = null) {
+  const moduleId = String(moduleLike?.id || moduleLike?.module_id || '').trim();
+  if (!moduleId) return false;
+  return isRuntimeInstalledModule(moduleLike) || GUARDED_PACKAGED_DATA_MODULE_IDS.has(moduleId);
+}
+
+function scopedSystemCollectionsForModule(moduleLike = null) {
+  const moduleId = String(moduleLike?.id || moduleLike?.module_id || '').trim();
+  const collections = moduleId ? SCOPED_SYSTEM_MODULE_DB_COLLECTIONS[moduleId] : null;
+  return Array.isArray(collections) ? collections : null;
+}
+
+function createLiveDbFacade(contextModule = null) {
+  const scopedSystemCollections = scopedSystemCollectionsForModule(contextModule);
+  if (scopedSystemCollections) {
+    return createScopedSystemDbFacade(`module:${contextModule.id}`, scopedSystemCollections);
+  }
+  const guard = createDynamicAppDataGuard(contextModule);
   const base = {
     get mode() { return state.db?.mode; },
     get rxdb() { return state.db?.rxdb; },
-    get raw() { return state.db?.raw; },
-    get collections() { return state.db?.collections || {}; },
+    get raw() { return guard ? createGuardedRawDbProxy(guard) : state.db?.raw; },
+    get collections() { return guard ? createGuardedCollectionsProxy(guard) : (state.db?.collections || {}); },
     addCollections: (...args) => state.db?.addCollections?.(...args),
-    collection: (...args) => state.db?.collection?.(...args),
+    collection: (name) => guardedCollectionFor(guard, name),
     close: (...args) => state.db?.close?.(...args),
   };
   return new Proxy(base, {
     get(target, prop, receiver) {
       if (prop in target) return Reflect.get(target, prop, receiver);
       if (typeof prop !== 'string') return undefined;
-      return state.db?.collection?.(prop);
+      return guardedCollectionFor(guard, prop);
     },
     has(target, prop) {
       if (prop in target) return true;
       return typeof prop === 'string' && Boolean(state.db?.collection?.(prop));
     },
   });
+}
+
+function createScopedSystemDbFacade(scopeName, collectionNames = []) {
+  const allowed = new Set(
+    (Array.isArray(collectionNames) ? collectionNames : [])
+      .map((name) => String(name || '').trim())
+      .filter(Boolean)
+  );
+  const collectionFor = (name, collection = undefined) => {
+    const normalized = String(name || '').trim();
+    if (!normalized || !allowed.has(normalized)) return null;
+    return collection === undefined ? (state.db?.collection?.(normalized) || null) : (collection || null);
+  };
+  const rawProxy = new Proxy({}, {
+    get(_target, prop) {
+      if (typeof prop !== 'string') return undefined;
+      return collectionFor(prop, state.db?.raw?.[prop]);
+    },
+    has(_target, prop) {
+      return typeof prop === 'string' && allowed.has(prop) && Boolean(state.db?.raw?.[prop]);
+    },
+    ownKeys() {
+      return [...allowed].filter((name) => Boolean(state.db?.raw?.[name]));
+    },
+    getOwnPropertyDescriptor(_target, prop) {
+      if (typeof prop !== 'string' || !allowed.has(prop) || !state.db?.raw?.[prop]) return undefined;
+      return { enumerable: true, configurable: true };
+    },
+  });
+  const collectionsProxy = new Proxy({}, {
+    get(_target, prop) {
+      if (typeof prop !== 'string') return undefined;
+      return collectionFor(prop, state.db?.collections?.[prop]);
+    },
+    has(_target, prop) {
+      return typeof prop === 'string' && allowed.has(prop) && Boolean(state.db?.collections?.[prop]);
+    },
+    ownKeys() {
+      return [...allowed].filter((name) => Boolean(state.db?.collections?.[name]));
+    },
+    getOwnPropertyDescriptor(_target, prop) {
+      if (typeof prop !== 'string' || !allowed.has(prop) || !state.db?.collections?.[prop]) return undefined;
+      return { enumerable: true, configurable: true };
+    },
+  });
+  const base = {
+    scope: scopeName,
+    get mode() { return state.db?.mode; },
+    get rxdb() { return state.db?.rxdb; },
+    get raw() { return rawProxy; },
+    get collections() { return collectionsProxy; },
+    collection: (name) => collectionFor(name),
+  };
+  return new Proxy(base, {
+    get(target, prop, receiver) {
+      if (prop in target) return Reflect.get(target, prop, receiver);
+      if (typeof prop !== 'string') return undefined;
+      return collectionFor(prop);
+    },
+    has(target, prop) {
+      if (prop in target) return true;
+      return typeof prop === 'string' && allowed.has(prop) && Boolean(state.db?.collection?.(prop));
+    },
+  });
+}
+
+function createModulePermissionFacade(moduleLike = null) {
+  const guard = createDynamicAppDataGuard(moduleLike);
+  const scopedSystemCollections = scopedSystemCollectionsForModule(moduleLike);
+  return {
+    canReadCollection: (collectionName) => {
+      if (scopedSystemCollections) return scopedSystemCollections.includes(String(collectionName || '').trim());
+      return !guard || guardAllowsCollectionPermission(
+        guard,
+        collectionName,
+        BusinessOsPermissions.DataRead,
+      );
+    },
+    canWriteCollection: (collectionName) => {
+      if (scopedSystemCollections) return scopedSystemCollections.includes(String(collectionName || '').trim());
+      return !guard || guardAllowsCollectionPermission(
+        guard,
+        collectionName,
+        BusinessOsPermissions.DataWrite,
+      );
+    },
+    canModifyApp: () => canModifyModule(moduleLike),
+    canViewSource: () => canViewModuleSource(moduleLike),
+    lifecycle: () => appLifecycleState(moduleLike, {
+      session: state.session,
+      governance: state.governance,
+    }),
+  };
+}
+
+function createDynamicAppDataGuard(moduleLike = null) {
+  if (!moduleLike?.id || !moduleUsesGuardedDataFacade(moduleLike)) return null;
+  const collections = new Set(
+    (Array.isArray(moduleLike.collections) ? moduleLike.collections : [])
+      .map((name) => String(name || '').trim())
+      .filter(Boolean)
+  );
+  return {
+    moduleId: moduleLike.id,
+    moduleTitle: moduleDisplayTitle(moduleLike),
+    collections,
+  };
+}
+
+function createGuardedRawDbProxy(guard) {
+  const raw = state.db?.raw || {};
+  return new Proxy(raw, {
+    get(target, prop, receiver) {
+      if (typeof prop !== 'string') return Reflect.get(target, prop, receiver);
+      return guardedCollectionFor(guard, prop, target[prop]);
+    },
+    has(target, prop) {
+      return typeof prop === 'string' && prop in target;
+    },
+  });
+}
+
+function createGuardedCollectionsProxy(guard) {
+  const collections = state.db?.collections || {};
+  return new Proxy(collections, {
+    get(target, prop, receiver) {
+      if (typeof prop !== 'string') return Reflect.get(target, prop, receiver);
+      return guardedCollectionFor(guard, prop, target[prop]);
+    },
+    has(target, prop) {
+      return typeof prop === 'string' && prop in target;
+    },
+  });
+}
+
+function guardedCollectionFor(guard, collectionName, collection = undefined) {
+  const name = String(collectionName || '').trim();
+  const realCollection = collection === undefined ? state.db?.collection?.(name) : collection;
+  if (!guard || !name || !realCollection) return realCollection;
+  return createGuardedCollectionProxy(guard, name, realCollection);
+}
+
+function createGuardedCollectionProxy(guard, collectionName, collection) {
+  return new Proxy(collection, {
+    get(target, prop, receiver) {
+      if (typeof prop !== 'string') return Reflect.get(target, prop, receiver);
+      if (prop === '$') {
+        assertGuardedCollectionPermission(guard, collectionName, BusinessOsPermissions.DataRead);
+        return Reflect.get(target, prop, receiver);
+      }
+      if (READ_COLLECTION_METHODS.has(prop)) {
+        return (...args) => {
+          assertGuardedCollectionPermission(guard, collectionName, BusinessOsPermissions.DataRead);
+          return wrapGuardedQueryLike(guard, collectionName, target[prop]?.apply(target, args));
+        };
+      }
+      if (WRITE_COLLECTION_METHODS.has(prop)) {
+        return (...args) => {
+          assertGuardedCollectionPermission(guard, collectionName, BusinessOsPermissions.DataWrite);
+          return wrapGuardedResult(guard, collectionName, target[prop]?.apply(target, args));
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+function wrapGuardedQueryLike(guard, collectionName, query) {
+  if (!query || typeof query !== 'object') return query;
+  return new Proxy(query, {
+    get(target, prop, receiver) {
+      if (prop === '$') {
+        assertGuardedCollectionPermission(guard, collectionName, BusinessOsPermissions.DataRead);
+        return Reflect.get(target, prop, receiver);
+      }
+      if (prop === 'exec') {
+        return (...args) => {
+          assertGuardedCollectionPermission(guard, collectionName, BusinessOsPermissions.DataRead);
+          return wrapGuardedResult(guard, collectionName, target.exec.apply(target, args));
+        };
+      }
+      if (typeof prop === 'string' && WRITE_QUERY_METHODS.has(prop)) {
+        return (...args) => {
+          assertGuardedCollectionPermission(guard, collectionName, BusinessOsPermissions.DataWrite);
+          return target[prop]?.apply(target, args);
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+function wrapGuardedResult(guard, collectionName, result) {
+  if (result && typeof result.then === 'function') {
+    return result.then((value) => wrapGuardedResult(guard, collectionName, value));
+  }
+  if (Array.isArray(result)) {
+    return result.map((item) => wrapGuardedDocumentLike(guard, collectionName, item));
+  }
+  return wrapGuardedDocumentLike(guard, collectionName, result);
+}
+
+function wrapGuardedDocumentLike(guard, collectionName, doc) {
+  if (!doc || typeof doc !== 'object') return doc;
+  return new Proxy(doc, {
+    get(target, prop, receiver) {
+      if (typeof prop === 'string' && WRITE_DOCUMENT_METHODS.has(prop)) {
+        return (...args) => {
+          assertGuardedCollectionPermission(guard, collectionName, BusinessOsPermissions.DataWrite);
+          return target[prop]?.apply(target, args);
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+function assertGuardedCollectionPermission(guard, collectionName, permission) {
+  if (guardAllowsCollectionPermission(guard, collectionName, permission)) return;
+  throw createBusinessOsPermissionError({
+    message: `Kein ${permission === BusinessOsPermissions.DataWrite ? 'Schreib' : 'Lese'}recht für ${collectionName}.`,
+    moduleId: guard.moduleId,
+    collectionName,
+    permission,
+  });
+}
+
+function guardAllowsCollectionPermission(guard, collectionName, permission) {
+  const name = String(collectionName || '').trim();
+  if (!guard || !name) return true;
+  if (canUseBusinessPermission({
+    session: state.session,
+    governance: state.governance,
+    permission,
+    scopeType: 'collection',
+    scopeId: name,
+  })) {
+    return true;
+  }
+  if (!guard.collections.has(name)) return false;
+  return canUseBusinessPermission({
+    session: state.session,
+    governance: state.governance,
+    permission,
+    scopeType: 'module',
+    scopeId: guard.moduleId,
+  });
+}
+
+function createBusinessOsPermissionError({ message, moduleId, collectionName, permission }) {
+  const error = new Error(message);
+  error.name = 'BusinessOsPermissionError';
+  error.code = 'CTOX_BUSINESS_OS_PERMISSION_DENIED';
+  error.details = {
+    module_id: moduleId,
+    collection: collectionName,
+    permission,
+  };
+  return error;
+}
+
+function isBusinessOsPermissionError(error) {
+  return error?.code === 'CTOX_BUSINESS_OS_PERMISSION_DENIED'
+    || error?.name === 'BusinessOsPermissionError';
+}
+
+function renderModulePermissionDeniedState(mod, error) {
+  const host = els.host?.querySelector('[data-module-content]') || els.host;
+  if (!host) return;
+  const de = shellLang() === 'de';
+  const details = error?.details || {};
+  const permission = String(details.permission || '').trim();
+  const collection = String(details.collection || '').trim();
+  const locked = document.createElement('div');
+  locked.className = 'empty-state module-permission-denied-state';
+  locked.dataset.modulePermissionDenied = 'true';
+  if (permission) locked.dataset.permission = permission;
+  if (collection) locked.dataset.collection = collection;
+  locked.innerHTML = `
+    <strong>${escapeHtml(de ? 'Datenzugriff fehlt' : 'Data access required')}</strong>
+    <span>${escapeHtml(de
+      ? 'Diese App ist sichtbar, aber die freigegebenen Daten reichen fuer diesen Bereich noch nicht aus.'
+      : 'This app is visible, but the shared data access is not enough for this area.')}</span>
+    <button class="text-button" type="button" data-open-app-permissions>${escapeHtml(de ? 'App-Rechte ansehen' : 'View app permissions')}</button>
+  `;
+  locked.querySelector('[data-open-app-permissions]')?.addEventListener('click', () => {
+    openAppLifecycleDrawer(mod);
+  });
+  host.replaceChildren(locked);
 }
 
 function createLiveSyncFacade() {
@@ -4025,6 +4764,105 @@ function createLiveCommandBusFacade() {
   return {
     dispatch: (...args) => state.commandBus?.dispatch?.(...args),
   };
+}
+
+function createLiveBusinessChatFacade(moduleLike = null) {
+  return {
+    open: (detail = {}) => openBusinessChat(detail),
+    submitTask: (options = {}) => submitBusinessChatTask(moduleLike, options),
+  };
+}
+
+async function submitBusinessChatTask(moduleLike, options = {}) {
+  if (!state.commandBus?.dispatch) {
+    throw new Error('Business OS command bus is not available.');
+  }
+  const moduleId = cleanBusinessChatValue(
+    options.module || options.source_module || options.sourceModule || moduleLike?.id || 'ctox',
+    'ctox',
+  );
+  const recordId = cleanBusinessChatValue(
+    options.record_id || options.recordId || options.conversationId || options.conversation_id || '',
+    '',
+  );
+  const commandId = cleanBusinessChatValue(
+    options.id || options.command_id || options.commandId || `cmd_${crypto.randomUUID()}`,
+    `cmd_${crypto.randomUUID()}`,
+  );
+  const title = cleanBusinessChatValue(
+    options.title || options.payload?.title || `${moduleDisplayTitle(moduleLike || { id: moduleId })} task`,
+    'CTOX task',
+  );
+  const instruction = cleanBusinessChatValue(
+    options.instruction || options.payload?.instruction || options.prompt || options.user_message || title,
+    title,
+  );
+  const prompt = cleanBusinessChatValue(
+    options.prompt || options.payload?.prompt || options.user_message || instruction,
+    instruction,
+  );
+  const threadKey = cleanBusinessChatValue(
+    options.thread_key || options.threadKey || options.payload?.thread_key || (recordId ? `business-os/${moduleId}/${recordId}` : `business-os/${moduleId}/${commandId}`),
+    `business-os/${moduleId}/${commandId}`,
+  );
+  const payload = options.payload && typeof options.payload === 'object' ? options.payload : {};
+  const clientContext = options.client_context && typeof options.client_context === 'object'
+    ? options.client_context
+    : {};
+  const command = {
+    id: commandId,
+    module: moduleId,
+    type: 'business_os.chat.task',
+    command_type: 'business_os.chat.task',
+    record_id: recordId,
+    inbound_channel: cleanBusinessChatValue(options.inbound_channel || options.inboundChannel || moduleId, moduleId),
+    payload: {
+      ...payload,
+      title,
+      instruction,
+      prompt,
+      user_message: cleanBusinessChatValue(options.user_message || options.userMessage || payload.user_message || prompt, prompt),
+      mode: cleanBusinessChatValue(options.mode || payload.mode || 'data', 'data'),
+      target: cleanBusinessChatValue(options.target || payload.target || 'data', 'data'),
+      priority: cleanBusinessChatValue(options.priority || payload.priority || 'normal', 'normal'),
+      source_module: moduleId,
+      thread_key: threadKey,
+      required_skills: Array.isArray(options.required_skills || options.requiredSkills || payload.required_skills)
+        ? [...(options.required_skills || options.requiredSkills || payload.required_skills)]
+        : [],
+      record_snapshot: options.record_snapshot || options.recordSnapshot || payload.record_snapshot || {},
+      writeback_contract: options.writeback_contract || options.writebackContract || payload.writeback_contract || {},
+      response_channel: 'business_os_chat',
+      outbound_channel: 'business_os_chat',
+    },
+    client_context: {
+      ...clientContext,
+      source: clientContext.source || 'business-os-business-chat-facade',
+      module: moduleId,
+      source_module: moduleId,
+      surface: clientContext.surface || options.surface || `${moduleId}.business_chat.submit_task`,
+      record_id: recordId,
+      thread_key: threadKey,
+      url: location.href,
+      language: document.documentElement.lang || 'de',
+    },
+  };
+  if (options.open !== false) {
+    openBusinessChat({
+      title,
+      module: moduleId,
+      source_module: moduleId,
+      record_id: recordId,
+      thread_key: threadKey,
+      reuseActive: false,
+    });
+  }
+  return state.commandBus.dispatch(command);
+}
+
+function cleanBusinessChatValue(value, fallback) {
+  const text = String(value || '').trim();
+  return text || fallback;
 }
 
 function renderModuleFrame(mod) {
@@ -4118,25 +4956,41 @@ function renderModuleAppBar(mod) {
   if (mod?.id === 'desktop') return '';
   const title = escapeHtml(moduleDisplayTitle(mod));
   const svgHtml = getRegisteredSvgIcon(mod.id, 16, 1.8);
+  const lifecycle = appLifecycleBadge(mod, {
+    session: state.session,
+    governance: state.governance,
+  });
+  const canOpenSource = shouldRenderModuleSourceAction({
+    module: mod,
+    canOpenSource: canViewModuleSource(mod),
+  });
   return `
     <header class="module-appbar" data-module-appbar>
       <div class="module-appbar-title">
         <span class="module-appbar-icon" aria-hidden="true">${svgHtml || escapeHtml(glyphForModule(mod.id))}</span>
         <span>${title}</span>
+        ${lifecycle?.version ? `<button class="module-lifecycle-chip" type="button" data-module-lifecycle="${escapeHtml(mod.id)}" data-state="${escapeHtml(lifecycle.state)}" title="${escapeHtml(lifecycle.title)}" aria-label="${escapeHtml(`${title}: ${lifecycle.version} ${lifecycle.text}`)}"><b>${escapeHtml(lifecycle.version)}</b><span>${escapeHtml(lifecycle.text)}</span></button>` : ''}
       </div>
       <div class="module-appbar-actions">
         <select class="header-select module-appbar-select" style="display: none; width: auto; max-width: 140px; margin-right: 4px;" data-module-version-select="${escapeHtml(mod.id)}" aria-label="${escapeHtml(shellText('selectVersion') || 'Version auswählen')}">
           <option value="" disabled selected>${escapeHtml(shellText('selectVersion') || 'Version...')}</option>
         </select>
+        ${canOpenSource ? `
         <button class="module-appbar-button" type="button" data-module-source="${escapeHtml(mod.id)}" aria-label="Source von ${title} öffnen" title="Source öffnen">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8l-4 4 4 4"></path><path d="M16 8l4 4-4 4"></path><path d="M14 5l-4 14"></path></svg>
         </button>
+        ` : ''}
         <button class="module-appbar-button" type="button" data-module-home aria-label="${escapeHtml(shellText('showDesktop'))}" title="${escapeHtml(shellText('showDesktop'))}">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h16v13H4z"></path><path d="M8 9h8M8 12h8M8 15h5"></path></svg>
         </button>
       </div>
     </header>
   `;
+}
+
+function lifecycleBadgeAriaLabel(title, lifecycle) {
+  const state = [lifecycle?.version, lifecycle?.text].filter(Boolean).join(' ');
+  return [title, state].filter(Boolean).join(': ');
 }
 
 function updateActiveAppChrome(mod) {
@@ -4272,7 +5126,7 @@ function fillEmptyPanes(scope) {
 
 function readModuleLayout() {
   try {
-    return JSON.parse(localStorage.getItem(MODULE_LAYOUT_KEY) || '{}') || {};
+    return JSON.parse(readScopedLocalStorage(MODULE_LAYOUT_KEY) || '{}') || {};
   } catch {
     return {};
   }
@@ -4285,7 +5139,7 @@ function persistModuleLayout() {
     ungrouped: [],
     groups: [],
   };
-  localStorage.setItem(MODULE_LAYOUT_KEY, JSON.stringify(layout));
+  writeScopedLocalStorage(MODULE_LAYOUT_KEY, JSON.stringify(layout));
   clearTimeout(moduleLayoutSaveTimer);
   moduleLayoutSaveTimer = null;
 }
@@ -4420,6 +5274,185 @@ function renameModule(moduleId, label) {
   if (state.activeModule?.id === moduleId) {
     els.host.querySelector('.empty-state strong')?.replaceChildren(document.createTextNode(trimmed || fallback));
   }
+}
+
+function openAppLifecycleDrawer(mod) {
+  if (!mod?.id) return;
+  const lifecycle = appLifecycleState(mod, {
+    session: state.session,
+    governance: state.governance,
+  });
+  const releaseProjection = appReleaseProjection(mod);
+  const canModify = canModifyModule(mod);
+  const canOpenSource = canViewModuleSource(mod);
+  const canRelease = canUseModulePermission(mod, BusinessOsPermissions.AppsRelease);
+  const canRollback = canUseModulePermission(mod, BusinessOsPermissions.AppsRollback);
+  const permissionView = buildLifecyclePermissionView({
+    canManage: Boolean(lifecycle.canManage || canModify),
+    canOpenSource,
+  });
+  const dataAccess = releaseProjection.dataAccess;
+  const whyDiagnostics = buildModuleWhyDiagnosticsView({
+    actor: state.session?.user,
+    module: mod,
+    lifecycle,
+    releaseProjection,
+    dataAccess,
+    permissionView,
+    permissions: {
+      canSee: lifecycle.public === true || lifecycle.canAccessNonPublic === true || lifecycle.state === 'packaged',
+      canOpen: lifecycle.public === true || lifecycle.canAccessNonPublic === true || lifecycle.state === 'packaged',
+      canModify,
+      canOpenSource,
+      canRelease,
+      canRollback,
+    },
+    dataPermissions: buildLifecycleDataPermissionDiagnostics(mod, dataAccess),
+  });
+  const releaseFact = releaseProjection.hasReleaseState
+    ? releaseProjection.releaseLine
+    : 'Noch kein Release projiziert';
+  const rollbackFact = releaseProjection.rollbackLine || 'Noch kein Rollback-Ziel projiziert';
+  const dataAccessFact = dataAccess?.summary || 'Keine Datenbereiche deklariert';
+  const body = document.createElement('div');
+  body.className = 'drawer-body module-lifecycle-drawer';
+  body.dataset.lifecyclePermissionState = permissionView.state;
+  body.innerHTML = `
+    <header class="drawer-header-row">
+      <div>
+        <h2>${escapeHtml(moduleDisplayTitle(mod))}</h2>
+        <p>${escapeHtml(mod.id)}</p>
+      </div>
+      <button class="icon-button" type="button" data-close-lifecycle aria-label="Schließen">×</button>
+    </header>
+    <section class="module-lifecycle-summary" data-state="${escapeHtml(lifecycle.state)}">
+      <div class="module-lifecycle-mark" aria-hidden="true">${escapeHtml(lifecycle.state === 'team' ? 'T' : (lifecycle.state === 'preview' ? 'V' : (lifecycle.state === 'restricted' ? 'S' : 'P')))}</div>
+      <div>
+        <strong>${escapeHtml(lifecycle.label)}</strong>
+        <span>${escapeHtml(lifecycle.versionLabel || 'Version fehlt')}</span>
+      </div>
+    </section>
+    <section class="module-lifecycle-access" data-lifecycle-permission-state="${escapeHtml(permissionView.state)}" aria-label="App-Rechte">
+      <strong>${escapeHtml(permissionView.label)}</strong>
+      <span>${escapeHtml(permissionView.description)}</span>
+    </section>
+    <dl class="module-lifecycle-facts">
+      <div>
+        <dt>Sichtbarkeit</dt>
+        <dd>${escapeHtml(lifecycle.reason)}</dd>
+      </div>
+      <div>
+        <dt>Standard nach Version</dt>
+        <dd>${lifecycle.state === 'restricted' ? 'Eingeschränkte Team-Version' : (lifecycle.public ? 'Team-sichtbar' : 'Privat bis zur Team-Version')}</dd>
+      </div>
+      <div>
+        <dt>Freigabe</dt>
+        <dd>${escapeHtml(releaseFact)}</dd>
+      </div>
+      <div>
+        <dt>Rollback</dt>
+        <dd>${escapeHtml(rollbackFact)}</dd>
+      </div>
+      <div>
+        <dt>Datenzugriff</dt>
+        <dd>${escapeHtml(dataAccessFact)}</dd>
+      </div>
+      ${dataAccess?.reviewNote ? `
+      <div>
+        <dt>Review</dt>
+        <dd>${escapeHtml(dataAccess.reviewNote)}</dd>
+      </div>
+      ` : ''}
+    </dl>
+    <div class="module-lifecycle-actions">
+      <button class="text-button account-primary" type="button" data-open-lifecycle-app>App öffnen</button>
+      ${canModify ? '<button class="text-button" type="button" data-edit-lifecycle-app>App ändern</button>' : ''}
+      ${canOpenSource ? '<button class="text-button" type="button" data-open-lifecycle-source>Source öffnen</button>' : ''}
+      <button class="text-button" type="button" data-open-lifecycle-store>${escapeHtml(permissionView.storeActionLabel)}</button>
+    </div>
+    ${renderModuleWhyDiagnosticsHtml({ view: whyDiagnostics })}
+    <p class="module-lifecycle-note">App-Sichtbarkeit entscheidet, wer die App sieht. Daten bleiben separat über Datenrechte geschützt.</p>
+  `;
+  body.querySelector('[data-close-lifecycle]')?.addEventListener('click', closeDrawers);
+  body.querySelector('[data-open-lifecycle-app]')?.addEventListener('click', () => {
+    closeDrawers();
+    openModule(mod.id);
+  });
+  body.querySelector('[data-edit-lifecycle-app]')?.addEventListener('click', () => {
+    closeDrawers();
+    openModuleEditDrawer(mod);
+  });
+  body.querySelector('[data-open-lifecycle-source]')?.addEventListener('click', () => {
+    closeDrawers();
+    openModuleSourceEditor(mod.id);
+  });
+  body.querySelector('[data-open-lifecycle-store]')?.addEventListener('click', () => {
+    closeDrawers();
+    location.hash = 'app-store';
+    openModule('app-store');
+  });
+  openDrawer('right', body);
+}
+
+function buildLifecycleDataPermissionDiagnostics(mod, dataAccess = {}) {
+  const moduleId = String(mod?.id || mod?.module_id || '').trim();
+  const areas = Array.isArray(dataAccess?.areas) ? dataAccess.areas : [];
+  const collections = new Set([
+    ...cleanStringList(dataAccess?.declared),
+    ...cleanStringList(dataAccess?.granted),
+    ...cleanStringList(dataAccess?.locked),
+    ...areas.map((area) => String(area?.collection || '').trim()).filter(Boolean),
+  ]);
+  if (!moduleId || !collections.size) return [];
+  return [...collections].map((collection) => {
+    const area = areas.find((item) => String(item?.collection || '').trim() === collection) || {};
+    return {
+      collection,
+      readAllowed: canUseModuleDataPermission(mod, collection, BusinessOsPermissions.DataRead),
+      writeAllowed: canUseModuleDataPermission(mod, collection, BusinessOsPermissions.DataWrite),
+      readReviewState: String(area.read || '').trim(),
+      writeReviewState: String(area.write || '').trim(),
+    };
+  });
+}
+
+function cleanStringList(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item || '').trim()).filter(Boolean);
+}
+
+function canUseModulePermission(mod, permission) {
+  const moduleId = String(mod?.id || mod?.module_id || '').trim();
+  if (!moduleId || !permission) return false;
+  return canUseBusinessPermission({
+    session: state.session,
+    governance: state.governance,
+    permission,
+    scopeType: 'module',
+    scopeId: moduleId,
+  });
+}
+
+function canUseModuleDataPermission(mod, collectionName, permission) {
+  const moduleId = String(mod?.id || mod?.module_id || '').trim();
+  const collection = String(collectionName || '').trim();
+  if (!moduleId || !collection || !permission) return false;
+  if (canUseBusinessPermission({
+    session: state.session,
+    governance: state.governance,
+    permission,
+    scopeType: 'collection',
+    scopeId: collection,
+  })) {
+    return true;
+  }
+  return canUseBusinessPermission({
+    session: state.session,
+    governance: state.governance,
+    permission,
+    scopeType: 'module',
+    scopeId: moduleId,
+  });
 }
 
 function openModuleEditDrawer(mod) {
@@ -4755,9 +5788,8 @@ function getInstanceName() {
     }
   } catch (e) {}
   try {
-    const stored = localStorage.getItem('ctox.businessOs.pairingConfig');
-    if (stored) {
-      const parsed = JSON.parse(stored);
+    const parsed = readStoredPairingConfig();
+    if (parsed) {
       if (parsed && parsed.instance_id) {
         if (parsed.instance_id === 'biz_6ca27fe1-0186-49e8-8e30-24ac67b5e9bd') {
           return 'A6000';
@@ -4927,7 +5959,7 @@ function renderProfileDrawer() {
   });
   body.querySelector('[data-logout]')?.addEventListener('click', () => {
     clearStoredBrowserAuth();
-    localStorage.removeItem(LOGGED_OUT_KEY);
+    localStorage.setItem(LOGGED_OUT_KEY, '1');
     location.href = '/logout';
   });
   body.querySelector('[data-password-form]')?.addEventListener('submit', async (event) => {
@@ -4988,7 +6020,7 @@ function renderProfileDrawer() {
 
 function readAccountPrefs() {
   try {
-    return JSON.parse(localStorage.getItem(ACCOUNT_PREFS_KEY) || '{}') || {};
+    return JSON.parse(readScopedLocalStorage(ACCOUNT_PREFS_KEY) || '{}') || {};
   } catch {
     return {};
   }
@@ -4996,7 +6028,7 @@ function readAccountPrefs() {
 
 function writeAccountPrefs(nextPrefs) {
   const prefs = { ...readAccountPrefs(), ...(nextPrefs || {}) };
-  localStorage.setItem(ACCOUNT_PREFS_KEY, JSON.stringify(prefs));
+  writeScopedLocalStorage(ACCOUNT_PREFS_KEY, JSON.stringify(prefs));
   return prefs;
 }
 
@@ -5005,40 +6037,22 @@ function clearStoredBrowserAuth() {
   localStorage.removeItem(AUTH_HEADER_KEY);
 }
 
-function roleDisplayName(role) {
-  const value = normalizeRole(role);
-  return { chef: 'Chef', admin: 'Admin', founder: 'Founder', user: 'User' }[value] || value;
-}
-
-function roleDescription(role) {
-  const value = normalizeRole(role);
-  return {
-    chef: 'Voller Zugriff auf Instanz, Nutzer, Policies und CTOX Steuerung.',
-    admin: 'Verwaltet Module, Nutzer, Runtime und operative Einstellungen.',
-    founder: 'Founder-Sicht mit Zugriff auf Review, Entscheidungen und Business-Kontext.',
-    user: 'Normale Nutzung der freigegebenen Business-OS Module.',
-  }[value] || 'Rolle dieser Business-OS Sitzung.';
-}
-
-function normalizeRole(role) {
-  const value = String(role || '').trim().toLowerCase().replace(/^business_os_/, '');
-  if (value === 'owner') return 'chef';
-  if (['chef', 'admin', 'founder', 'user'].includes(value)) return value;
-  return 'user';
-}
-
 function roleCanAdmin(role) {
-  return ['chef', 'admin'].includes(normalizeRole(role));
+  return roleCanManage(role);
 }
 
 function canModifyModule(mod, governance = state.governance) {
-  if (!mod?.id) return false;
-  const role = normalizeRole(state.session?.user?.role || (state.session?.user?.is_admin ? 'admin' : 'user'));
-  if (['chef', 'admin'].includes(role)) return true;
-  if (role !== 'founder') return false;
-  const userId = state.session?.user?.id || '';
-  const assignments = governance?.founders?.[mod.id] || [];
-  return assignments.some((item) => item.user_id === userId && item.active !== false);
+  return canModifyBusinessModule(mod, {
+    session: state.session,
+    governance,
+  });
+}
+
+function canViewModuleSource(mod, governance = state.governance) {
+  return canViewBusinessModuleSource(mod, {
+    session: state.session,
+    governance,
+  });
 }
 
 async function reportCurrentModule(details = {}) {
@@ -5088,7 +6102,7 @@ function scheduleBusinessCompanions() {
         session: state.session,
         getActiveModule: () => state.activeModule,
         commandBus: createLiveCommandBusFacade(),
-        db: createLiveDbFacade(),
+        db: createScopedSystemDbFacade('business-reporter-companion', BUSINESS_REPORTER_DB_COLLECTIONS),
         sync: createLiveSyncFacade(),
       });
     })
@@ -5100,7 +6114,7 @@ function scheduleBusinessCompanions() {
       initBusinessChat({
         session: state.session,
         commandBus: createLiveCommandBusFacade(),
-        db: createLiveDbFacade(),
+        db: createScopedSystemDbFacade('business-chat-companion', BUSINESS_CHAT_DB_COLLECTIONS),
         sync: createLiveSyncFacade(),
         getActiveModule: () => state.activeModule,
       });
@@ -5486,8 +6500,8 @@ function shellCtoxHealthProblem(status) {
 async function loadSession() {
   const pairedConfig = await readBusinessOsLaunchConfig();
   const explicitLogout = localStorage.getItem(LOGGED_OUT_KEY) === '1';
-  const urlPairingLaunch = pairedConfig && allowsPairingConfigSession(pairedConfig);
-  if (explicitLogout && !urlPairingLaunch) {
+  const freshUrlPairingLaunch = pairedConfig?.source === 'url' && allowsPairingConfigSession(pairedConfig);
+  if (explicitLogout && !freshUrlPairingLaunch) {
     return {
       ok: true,
       authenticated: false,
@@ -5495,7 +6509,7 @@ async function loadSession() {
       reason: 'logged_out',
     };
   }
-  if (explicitLogout && urlPairingLaunch) {
+  if (explicitLogout && freshUrlPairingLaunch) {
     localStorage.removeItem(LOGGED_OUT_KEY);
   }
 
@@ -5636,34 +6650,6 @@ function applyModuleAllowlist(modules, catalogAllowlist) {
 function filterModulesForAppVersionVisibility(modules, governance = state.governance) {
   return normalizeModuleList(modules)
     .filter((mod) => canSeeModuleForAppVersion(mod, governance));
-}
-
-function canSeeModuleForAppVersion(mod, governance = state.governance) {
-  if (!isRuntimeInstalledModule(mod)) return true;
-  if (hasPublicAppVersion(mod)) return true;
-  return canModifyModule(mod, governance);
-}
-
-function isRuntimeInstalledModule(mod) {
-  const entry = String(mod?.entry || '').trim();
-  return mod?.source === 'installed'
-    || mod?.install_scope === 'installed'
-    || entry.startsWith('installed-modules/');
-}
-
-function hasPublicAppVersion(mod) {
-  const parsed = parseBusinessAppSemver(mod?.version);
-  return Boolean(parsed && parsed.major >= 1);
-}
-
-function parseBusinessAppSemver(version) {
-  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(String(version || '').trim());
-  if (!match) return null;
-  return {
-    major: Number(match[1]),
-    minor: Number(match[2]),
-    patch: Number(match[3]),
-  };
 }
 
 function allowsPackagedModuleCatalogSeed() {
@@ -5974,11 +6960,14 @@ function getOfflineFallbackCatalog() {
         "entry": "modules/research/index.html",
         "collections": [
           "business_commands",
-          "business_chats",
           "ctox_queue_tasks",
           "research_tasks",
           "research_runs",
-          "research_notes"
+          "research_notes",
+          "knowledge_tables",
+          "documents",
+          "document_versions",
+          "document_blob_chunks"
         ],
         "source": "local",
         "core": false,
@@ -6056,7 +7045,9 @@ function getOfflineFallbackCatalog() {
           "outbound_sender_assignments",
           "outbound_meeting_requests",
           "outbound_suppression_entries",
-          "outbound_account_limits"
+          "outbound_account_limits",
+          "outbound_skillbooks",
+          "outbound_letter_templates"
         ],
         "source": "local",
         "core": false,
@@ -6191,7 +7182,8 @@ function getOfflineFallbackCatalog() {
           "accounting_ledger_entries",
           "accounting_receipts",
           "accounting_bank_statements",
-          "accounting_bank_statement_lines"
+          "accounting_bank_statement_lines",
+          "accounting_number_series"
         ],
         "source": "local",
         "core": false,
@@ -6479,7 +7471,10 @@ function readUrlPairingConfig() {
 
 function readStoredPairingConfig() {
   try {
-    const raw = localStorage.getItem(PAIRING_CONFIG_KEY);
+    const raw = readScopedLocalStorage(PAIRING_CONFIG_KEY, {
+      actor: false,
+      legacyFallback: true,
+    });
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
@@ -6488,12 +7483,15 @@ function readStoredPairingConfig() {
 
 function writeStoredPairingConfig(config) {
   try {
-    localStorage.setItem(PAIRING_CONFIG_KEY, JSON.stringify({ ...config, source: 'stored' }));
+    writeScopedLocalStorage(PAIRING_CONFIG_KEY, JSON.stringify({ ...config, source: 'stored' }), {
+      actor: false,
+    });
   } catch {}
 }
 
 function clearStoredPairingConfig() {
   try {
+    removeScopedLocalStorage(PAIRING_CONFIG_KEY, { actor: false });
     localStorage.removeItem(PAIRING_CONFIG_KEY);
   } catch {}
 }
@@ -7010,7 +8008,7 @@ function showStartMenu(panel) {
   // Hide default context menu if active
   state.contextMenu?.hide?.();
   panel.classList.add('is-active');
-  
+
   const searchInput = panel.querySelector('.start-menu-search-input');
   if (searchInput) {
     searchInput.value = '';
@@ -7083,7 +8081,7 @@ function createStartMenuElement() {
   searchInput.addEventListener('input', (e) => {
     filterStartMenu(panel, e.target.value);
   });
-  
+
   // Keyboard navigation in search
   searchInput.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
@@ -7103,10 +8101,10 @@ function createStartMenuElement() {
 function filterStartMenu(panel, query) {
   const body = panel.querySelector('.start-menu-body');
   body.innerHTML = '';
-  
+
   const targets = listLaunchTargets();
   const cleanQuery = query.trim().toLowerCase();
-  
+
   const filtered = targets.filter(target => {
     if (!cleanQuery) return true;
     return target.title.toLowerCase().includes(cleanQuery) || target.id.toLowerCase().includes(cleanQuery);
@@ -7173,19 +8171,46 @@ function filterStartMenu(panel, query) {
   }
 }
 
+function renderStartMenuLifecycleBadge(target) {
+  if (target?.kind !== 'module' || !target.module) return '';
+  const lifecycle = appLifecycleBadge(target.module, {
+    session: state.session,
+    governance: state.governance,
+  });
+  if (!lifecycle?.runtimeInstalled) return '';
+  const title = target.title || target.id;
+  return `
+    <button
+      class="start-menu-lifecycle-badge"
+      type="button"
+      data-module-lifecycle="${escapeHtml(target.id)}"
+      data-state="${escapeHtml(lifecycle.state)}"
+      title="${escapeHtml(lifecycle.title)}"
+      aria-label="${escapeHtml(lifecycleBadgeAriaLabel(title, lifecycle))}"
+    >
+      ${lifecycle.version ? `<b>${escapeHtml(lifecycle.version)}</b>` : ''}
+      <span>${escapeHtml(lifecycle.text || lifecycle.label || '')}</span>
+    </button>
+  `;
+}
+
 function buildStartMenuItem(target) {
   const el = document.createElement('div');
   el.className = 'start-menu-item';
-  
+
   const pinned = isTaskbarPinned(target.id);
   const iconMarkup = getLauncherIconSvg(target);
-  
+  const lifecycleBadge = renderStartMenuLifecycleBadge(target);
+
   el.innerHTML = `
     <div class="start-menu-item-left">
       <div class="start-menu-item-icon">
         ${iconMarkup}
       </div>
-      <span class="start-menu-item-label">${target.title || target.id}</span>
+      <div class="start-menu-item-copy">
+        <span class="start-menu-item-label">${escapeHtml(target.title || target.id)}</span>
+        ${lifecycleBadge ? `<span class="start-menu-item-meta">${lifecycleBadge}</span>` : ''}
+      </div>
     </div>
     <button class="start-menu-item-pin-btn ${pinned ? 'is-pinned' : ''}" type="button" title="${pinned ? (shellLang() === 'de' ? 'Von Bar lösen' : 'Unpin') : (shellLang() === 'de' ? 'An Bar anheften' : 'Pin')}">
       ${pinned ? '−' : '+'}
@@ -7194,9 +8219,15 @@ function buildStartMenuItem(target) {
 
   // Clicks
   el.addEventListener('click', (e) => {
-    if (e.target.closest('.start-menu-item-pin-btn')) return;
+    if (e.target.closest('.start-menu-item-pin-btn') || e.target.closest('[data-module-lifecycle]')) return;
     openLaunchTarget(target);
     hideStartMenu();
+  });
+
+  el.querySelector('[data-module-lifecycle]')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (target.kind === 'module') openAppLifecycleDrawer(target.module);
   });
 
   el.querySelector('.start-menu-item-pin-btn').addEventListener('click', (e) => {
@@ -7271,7 +8302,7 @@ function handleGlobalContextMenu(event) {
 
   const mod = state.activeModule;
   const context = extractGlobalCtoxContext(mod, target);
-  
+
   showGlobalCtoxContextMenu(context, event.clientX, event.clientY);
 }
 
@@ -7281,6 +8312,7 @@ function isGlobalCtoxContextSurface(target) {
     '.ctox-global-context-menu',
     '.shell-context-menu',
     '[data-ctox-chat-root]',
+    '[data-ctox-local-context-menu]',
     '[data-shell-taskbar]',
     '.shell-taskbar',
     '.topbar',
@@ -7337,7 +8369,7 @@ function detectColumnFromElement(moduleId, element) {
 
   const leftSelector = '[class*="-left"], [class*="-sidebar"], [class*="-navigation"], [class*="-nav"], [class*="list-pane"], [class*="master-panel"], [id*="left"], [id*="sidebar"], .sidebar, .left-content, [data-left-content], [data-drawer-left]';
   const rightSelector = '[class*="-right"], [class*="-companion"], [class*="-auxiliary"], [class*="aside"], [class*="detail-pane"][class*="right"], [class*="preview"], [id*="right"], .right-content, [data-right-content], [data-drawer-right]';
-  
+
   if (el.closest(leftSelector)) {
     return 'left';
   }
@@ -7350,7 +8382,7 @@ function detectColumnFromElement(moduleId, element) {
 function detectRecordFromElement(moduleId, element) {
   if (!element) return null;
   let current = element.nodeType === Node.ELEMENT_NODE ? element : element.parentElement;
-  
+
   const idAttributePatterns = [
     'data-id', 'data-note-id', 'data-report-id', 'data-account-id', 'data-booking-id',
     'data-document-id', 'data-folder-id', 'data-record-id', 'data-conversation-id',
@@ -7387,7 +8419,7 @@ function detectRecordFromElement(moduleId, element) {
         }
       }
     }
-    
+
     // 2. Fallback to ID with pattern
     const elementId = current.id || '';
     if (elementId && (elementId.includes('_') || elementId.length > 20)) {
@@ -7400,7 +8432,7 @@ function detectRecordFromElement(moduleId, element) {
         };
       }
     }
-    
+
     current = current.parentElement;
   }
   return null;
@@ -7411,13 +8443,13 @@ function deriveLabelFromElement(el) {
   if (el.hasAttribute('data-title')) return el.getAttribute('data-title');
   if (el.hasAttribute('data-label')) return el.getAttribute('data-label');
   if (el.hasAttribute('data-name')) return el.getAttribute('data-name');
-  
+
   const sub = el.querySelector('.title, .name, .label, .header, strong, h1, h2, h3, h4, h5, h6');
   if (sub) {
     const text = String(sub.textContent || sub.innerText).trim();
     if (text) return text;
   }
-  
+
   const text = String(el.innerText || el.textContent).trim();
   if (text) {
     return text.split('\n')[0].slice(0, 60).trim();
@@ -7427,15 +8459,29 @@ function deriveLabelFromElement(el) {
 
 function showGlobalCtoxContextMenu(context, x, y) {
   if (!globalCtoxContextMenuEl) return;
-  
+
   const mod = state.activeModule || { id: 'ctox', title: 'CTOX' };
   const canModify = canModifyModule(mod);
+  const lifecycle = appLifecycleState(mod, {
+    session: state.session,
+    governance: state.governance,
+  });
+  const dataAccess = appReleaseProjection(mod).dataAccess;
+  const agentScope = buildGlobalCtoxAgentScopeView({
+    actor: actorContext(state.session),
+    module: mod,
+    lifecycle,
+    dataAccess,
+    context,
+    canModify,
+    externalActions: 'none',
+  });
   const lang = shellLang();
-  
+
   const titleText = shellText('chatToCtox') || (lang === 'de' ? 'Mit CTOX chatten' : 'Chat to CTOX');
   const workDataLabel = shellText('chatWorkDataLabel') || (lang === 'de' ? 'Mit Daten arbeiten' : 'Work with data');
   const answerLabel = shellText('chatAnswerLabel') || (lang === 'de' ? 'Frage beantworten' : 'Answer question');
-  const modifyAppLabel = shellText('chatModifyAppLabel') || (lang === 'de' ? 'App modifizieren' : 'Modify app');
+  const modifyAppLabel = shellText('chatModifyAppLabel') || (lang === 'de' ? 'App ändern' : 'Change app');
   const placeholderText = shellText('chatPlaceholder') || (lang === 'de' ? 'Was soll CTOX hier tun oder prüfen?' : 'What should CTOX do or check here?');
   const sendLabel = shellText('send') || (lang === 'de' ? 'Senden' : 'Send');
   const closeLabel = lang === 'de' ? 'Schließen' : 'Close';
@@ -7444,7 +8490,7 @@ function showGlobalCtoxContextMenu(context, x, y) {
   const chatOpeningLabel = shellText('chatOpening') || (lang === 'de' ? 'Öffne Chat...' : 'Opening Chat...');
 
   const subtitle = context.label || shellText('moduleTitles')?.[mod.id] || mod.title || mod.id;
-  
+
   globalCtoxContextMenuEl.innerHTML = `
     <form class="ctox-context-chat-form" novalidate>
       <header style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 2px;">
@@ -7455,10 +8501,16 @@ function showGlobalCtoxContextMenu(context, x, y) {
         <button type="button" class="ctox-context-close-btn" aria-label="${escapeHtml(closeLabel)}" style="width: 28px; height: 28px; line-height: 24px; text-align: center; font-size: 20px; border: none; background: none; color: var(--text-muted, var(--muted, #64747c)); cursor: pointer; transition: color 0.2s ease; padding: 0;">×</button>
       </header>
       <div class="ctox-context-mode" role="radiogroup" aria-label="Aktion" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px;">
-        <label class="is-selected"><input type="radio" name="contextMode" value="data" checked style="display:none;" /><span>${escapeHtml(workDataLabel)}</span></label>
-        <label><input type="radio" name="contextMode" value="ask" style="display:none;" /><span>${escapeHtml(answerLabel)}</span></label>
-        ${canModify ? `<label><input type="radio" name="contextMode" value="app" style="display:none;" /><span>${escapeHtml(modifyAppLabel)}</span></label>` : ''}
+        ${renderGlobalCtoxContextModeHtml({
+          canModify,
+          labels: {
+            workData: workDataLabel,
+            answer: answerLabel,
+            modifyApp: modifyAppLabel,
+          },
+        })}
       </div>
+      ${renderGlobalCtoxAgentScopeHtml({ view: agentScope })}
       <textarea class="ctox-context-textarea" placeholder="${escapeHtml(placeholderText)}" style="width: 100%; box-sizing: border-box; min-height: 96px; max-height: 180px; border: 1px solid var(--line, #d8e1e5); border-radius: 8px; background: var(--surface-2, #eef3f7); color: var(--text, #18222d); font-family: inherit; font-size: 12.5px; line-height: 1.4; padding: 10px; resize: vertical; outline: none; transition: border-color 0.2s ease;"></textarea>
       <footer style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
         <span class="ctox-context-status" style="font-size: 11px; color: var(--text-muted, var(--muted, #64747c)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></span>
@@ -7468,7 +8520,7 @@ function showGlobalCtoxContextMenu(context, x, y) {
   `;
 
   globalCtoxContextMenuEl.hidden = false;
-  
+
   // Clamp positioning
   globalCtoxContextMenuEl.style.left = '0px';
   globalCtoxContextMenuEl.style.top = '0px';
@@ -7482,7 +8534,7 @@ function showGlobalCtoxContextMenu(context, x, y) {
   const textarea = globalCtoxContextMenuEl.querySelector('.ctox-context-textarea');
   const statusEl = globalCtoxContextMenuEl.querySelector('.ctox-context-status');
   const closeBtn = globalCtoxContextMenuEl.querySelector('.ctox-context-close-btn');
-  
+
   closeBtn.addEventListener('click', () => {
     hideGlobalCtoxContextMenu();
   });
@@ -7531,8 +8583,8 @@ function showGlobalCtoxContextMenu(context, x, y) {
     let title;
     let instruction;
     if (mode === 'app') {
-      title = `${mod.title || mod.id} App modifizieren`;
-      instruction = `Modifiziere die ${mod.title || mod.id}-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, App-Daten selbst nicht als primäres Ziel verändern.\n\n${prompt}`;
+      title = `${mod.title || mod.id} App ändern`;
+      instruction = `Ändere die ${mod.title || mod.id}-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, App-Daten selbst nicht als primäres Ziel verändern.\n\n${prompt}`;
     } else if (mode === 'ask') {
       title = `Frage · ${subtitle}`;
       instruction = `Beantworte die folgende Frage ausschließlich lesend. Nutze nur vorhandene Daten und Kontext; führe keine Änderungen an Daten, Records, Dateien oder der App aus. Antworte knapp und direkt.\n\n${prompt}`;
@@ -7571,6 +8623,12 @@ function showGlobalCtoxContextMenu(context, x, y) {
         client_context: {
           action: 'context-chat',
           mode,
+          module: mod.id,
+          module_id: mod.id,
+          app_id: mod.id,
+          source_module: mod.id,
+          actor: agentScope.actor,
+          visible_scope: agentScope,
           column: context.column,
           record_type: context.record_type,
           record_id: context.record_id,

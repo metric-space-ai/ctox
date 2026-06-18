@@ -174,7 +174,9 @@ test('mount returns a cleanup function and the cleanup unsubscribes all watchers
   try {
     const mod = await buildInvoicesModule();
     const ctx = {
-      db: allCollections,
+      db: {
+        collection: (name) => allCollections[name] || null,
+      },
       commandBus: { dispatch: async () => ({ status: 'completed' }) },
       eventBus: { on: () => () => {} },
       modules: [

@@ -13,6 +13,22 @@ const RESEARCH_COLLECTIONS = Object.freeze([
   'research_runs',
   'research_notes',
   'knowledge_tables',
+  'documents',
+  'document_versions',
+  'document_blob_chunks',
+]);
+const RESEARCH_REQUIRED_COLLECTIONS = Object.freeze([
+  'research_tasks',
+  'research_runs',
+  'research_notes',
+  'knowledge_tables',
+]);
+const RESEARCH_OPTIONAL_COLLECTIONS = Object.freeze([
+  'business_commands',
+  'ctox_queue_tasks',
+  'documents',
+  'document_versions',
+  'document_blob_chunks',
 ]);
 const STOP_TERMS = new Set(['eine', 'einen', 'einer', 'eines', 'und', 'oder', 'auf', 'basis', 'nutze', 'score', 'quellen', 'source', 'sources', 'dashboard', 'research', 'knowledge', 'base', 'table', 'data', 'fuer', 'from', 'with', 'that', 'this', 'the']);
 
@@ -478,11 +494,11 @@ async function refreshAll({ seed = false } = {}) {
 
 async function loadLocalState() {
   const [tasks, runs, notes, commands, queueTasks] = await Promise.all([
-    findAll(state.ctx.db.research_tasks, 'research_tasks'),
-    findAll(state.ctx.db.research_runs, 'research_runs'),
-    findAll(state.ctx.db.research_notes, 'research_notes'),
-    findAll(state.ctx.db.business_commands, 'business_commands'),
-    findAll(state.ctx.db.ctox_queue_tasks, 'ctox_queue_tasks'),
+    findAll(readableCollection('research_tasks'), 'research_tasks'),
+    findAll(readableCollection('research_runs'), 'research_runs'),
+    findAll(readableCollection('research_notes'), 'research_notes'),
+    findAll(readableCollection('business_commands'), 'business_commands'),
+    findAll(readableCollection('ctox_queue_tasks'), 'ctox_queue_tasks'),
   ]);
   if (tasks.length || !state.tasks.length) {
     state.tasks = tasks
@@ -496,20 +512,18 @@ async function loadLocalState() {
 }
 
 function wireRealtime() {
-  const raw = state.ctx?.db || {};
   const collections = [
-    raw.research_tasks,
-    raw.research_runs,
-    raw.research_notes,
-    raw.business_commands,
-    raw.ctox_queue_tasks,
-    raw.knowledge_tables,
-  ].filter(Boolean);
-  for (const collection of collections.filter((collection) => collection !== raw.knowledge_tables)) {
+    ['research_tasks', readableCollection('research_tasks')],
+    ['research_runs', readableCollection('research_runs')],
+    ['research_notes', readableCollection('research_notes')],
+    ['business_commands', readableCollection('business_commands')],
+    ['ctox_queue_tasks', readableCollection('ctox_queue_tasks')],
+  ].filter(([, collection]) => collection);
+  for (const [, collection] of collections) {
     const subscription = collection.$?.subscribe?.(() => scheduleLocalRefresh(80));
     if (subscription?.unsubscribe) state.cleanup.push(() => subscription.unsubscribe());
   }
-  const knowledgeSubscription = raw.knowledge_tables?.$?.subscribe?.(() => scheduleKnowledgeRefresh(120));
+  const knowledgeSubscription = readableCollection('knowledge_tables')?.$?.subscribe?.(() => scheduleKnowledgeRefresh(120));
   if (knowledgeSubscription?.unsubscribe) state.cleanup.push(() => knowledgeSubscription.unsubscribe());
 }
 
@@ -567,6 +581,7 @@ function isVisibleResearchTask(task) {
 }
 
 async function ensureTasksFromKnowledgeBases() {
+  if (!canWriteCollection('research_tasks')) return;
   for (const base of state.knowledgeBases.filter(isResearchKnowledgeBase)) {
     const existing = state.tasks.find((task) => task.knowledge_domain === base.domain);
     if (existing) continue;
@@ -593,7 +608,7 @@ async function ensureTasksFromKnowledgeBases() {
       created_at_ms: now,
       updated_at_ms: now,
     };
-    await upsertDoc(state.ctx.db.research_tasks, task).catch((error) => {
+    await upsertDoc(writableCollection('research_tasks'), task).catch((error) => {
       console.warn('[research] could not persist seeded task', error);
     });
     state.tasks.push(task);
@@ -637,7 +652,7 @@ function knowledgeBasesFromTables(tables = []) {
 }
 
 async function loadKnowledgeTables() {
-  return findAll(state.ctx?.db?.knowledge_tables, 'knowledge_tables');
+  return findAll(readableCollection('knowledge_tables'), 'knowledge_tables');
 }
 
 function isResearchKnowledgeBase(base) {
@@ -645,6 +660,53 @@ function isResearchKnowledgeBase(base) {
   if (/^outbound(?:_|$)/.test(String(base.domain || ''))) return false;
   const text = [base.domain, base.title, base.description, ...base.tables.flatMap((table) => [table.table_key, table.title, table.description])].join(' ').toLowerCase();
   return /research|source|catalog|load|bearing|measurement|evidence|market|competitive|portfolio/.test(text);
+}
+
+function researchCollection(name) {
+  const db = state.ctx?.db;
+  if (!db || !name) return null;
+  return db.collection?.(name) || null;
+}
+
+function readableCollection(name) {
+  if (!name) return null;
+  const permissionCheck = state.ctx?.permissions?.canReadCollection;
+  if (typeof permissionCheck === 'function' && !permissionCheck(name)) {
+    return null;
+  }
+  return researchCollection(name);
+}
+
+function writableCollection(name) {
+  if (!canWriteCollection(name)) return null;
+  return researchCollection(name);
+}
+
+function canReadCollection(name) {
+  const permissionCheck = state.ctx?.permissions?.canReadCollection;
+  return typeof permissionCheck !== 'function' || permissionCheck(name) === true;
+}
+
+function canWriteCollection(name) {
+  const permissionCheck = state.ctx?.permissions?.canWriteCollection;
+  return typeof permissionCheck !== 'function' || permissionCheck(name) === true;
+}
+
+function canWriteResearchState() {
+  return canWriteCollection('research_tasks') && canWriteCollection('research_runs');
+}
+
+function researchWriteDeniedMessage() {
+  return state.t('researchWriteDenied', 'Du kannst Research-Daten lesen, aber hier keine Research-Aufgaben ändern.');
+}
+
+function isOptionalResearchCollection(collectionName) {
+  return RESEARCH_OPTIONAL_COLLECTIONS.includes(collectionName);
+}
+
+function isBusinessOsPermissionDenied(error) {
+  return error?.code === 'CTOX_BUSINESS_OS_PERMISSION_DENIED'
+    || error?.name === 'BusinessOsPermissionError';
 }
 
 function scoreResearchBase(base) {
@@ -1760,7 +1822,7 @@ function renderScoringModel(task) {
 }
 
 function canRunResearchTask(task) {
-  return validateSelectedResearchTask(task, state.knowledgeBases).valid;
+  return validateSelectedResearchTask(task, state.knowledgeBases).valid && canWriteResearchState();
 }
 
 function validateSelectedResearchTask(task, knowledgeBases = []) {
@@ -1781,7 +1843,10 @@ function runResearchHint(task, runInfo) {
 }
 
 function runDisabledReason(task) {
-  return validateSelectedResearchTask(task, state.knowledgeBases).message;
+  const validation = validateSelectedResearchTask(task, state.knowledgeBases);
+  if (!validation.valid) return validation.message;
+  if (!canWriteResearchState()) return researchWriteDeniedMessage();
+  return '';
 }
 
 function validateResearchTaskInput(values, knowledgeBases = [], { isEdit = false } = {}) {
@@ -1903,6 +1968,7 @@ function closeTaskDialog() {
 }
 
 async function createTaskFromForm(form) {
+  if (!canWriteCollection('research_tasks')) throw new Error(researchWriteDeniedMessage());
   const taskId = String(form.get('task_id') || '').trim();
   const current = taskId ? state.tasks.find((item) => item.id === taskId) : null;
   const validation = validateResearchTaskInput({
@@ -1945,7 +2011,7 @@ async function createTaskFromForm(form) {
     created_at_ms: current?.created_at_ms || now,
     updated_at_ms: now,
   };
-  await upsertDoc(state.ctx.db.research_tasks, task);
+  await upsertDoc(writableCollection('research_tasks'), task);
   await loadLocalState();
   state.selectedTaskId = task.id;
   await loadDashboardData();
@@ -1956,6 +2022,11 @@ async function runSelectedResearch() {
   const task = selectedTask();
   if (!canRunResearchTask(task)) {
     setStatus(runDisabledReason(task));
+    renderRight();
+    return;
+  }
+  if (!canWriteResearchState()) {
+    setStatus(researchWriteDeniedMessage());
     renderRight();
     return;
   }
@@ -2074,10 +2145,10 @@ async function runSelectedResearch() {
     updated_at_ms: now,
   };
   state.runs = [run, ...state.runs.filter((item) => item.id !== run.id)];
-  await upsertDoc(state.ctx.db.research_runs, run).catch((error) => {
+  await upsertDoc(writableCollection('research_runs'), run).catch((error) => {
     console.warn('[research] could not persist run', error);
   });
-  await patchDoc(state.ctx.db.research_tasks, task.id, { status: 'collecting', updated_at_ms: now }).catch((error) => {
+  await patchDoc(writableCollection('research_tasks'), task.id, { status: 'collecting', updated_at_ms: now }).catch((error) => {
     console.warn('[research] could not patch task status', error);
   });
   setStatus(state.t('researchChatQueued', 'Research-Aufgabe im Chat gestartet.'));
@@ -2093,8 +2164,13 @@ function runInfoActionLabel(task) {
 async function updateTaskAxis(axis, value) {
   const task = selectedTask();
   if (!task) return;
+  if (!canWriteCollection('research_tasks')) {
+    setStatus(researchWriteDeniedMessage());
+    renderRight();
+    return;
+  }
   const patch = axis === 'x' ? { x_axis: safeAxis(value, task) } : { y_axis: safeAxis(value, task) };
-  await patchDoc(state.ctx.db.research_tasks, task.id, { ...patch, updated_at_ms: Date.now() });
+  await patchDoc(writableCollection('research_tasks'), task.id, { ...patch, updated_at_ms: Date.now() });
   Object.assign(task, patch);
   renderCenter();
 }
@@ -2599,7 +2675,16 @@ function avgScore() {
 
 async function findAll(collection, collectionName = '') {
   if (!collection?.find) {
-    if (collectionName) markCollectionDiagnostic(collectionName, 'read', 'missing', state.t('collectionMissing', 'Daten nicht verfügbar'));
+    if (collectionName) {
+      markCollectionDiagnostic(
+        collectionName,
+        'read',
+        canReadCollection(collectionName) ? 'missing' : 'denied',
+        canReadCollection(collectionName)
+          ? state.t('collectionMissing', 'Daten nicht verfügbar')
+          : state.t('collectionLocked', 'Keine Datenfreigabe'),
+      );
+    }
     return [];
   }
   try {
@@ -2607,7 +2692,14 @@ async function findAll(collection, collectionName = '') {
     if (collectionName) markCollectionDiagnostic(collectionName, 'read', 'ok', `${docs.length} rows`);
     return docs.map(toJson);
   } catch (error) {
-    if (collectionName) markCollectionDiagnostic(collectionName, 'read', 'failed', errorMessage(error));
+    if (collectionName) {
+      markCollectionDiagnostic(
+        collectionName,
+        'read',
+        isBusinessOsPermissionDenied(error) ? 'denied' : 'failed',
+        isBusinessOsPermissionDenied(error) ? state.t('collectionLocked', 'Keine Datenfreigabe') : errorMessage(error),
+      );
+    }
     return [];
   }
 }
@@ -2645,13 +2737,15 @@ function collectionDiagnosticRows(collections, diagnostics = {}, t = (_key, fall
     if (read?.kind === 'ok') return { collection, kind: 'ok', label: read.message || t('loadedShort', 'geladen') };
     if (sync?.kind === 'ok') return { collection, kind: 'ok', label: t('syncReady', 'Sync bereit') };
     if (sync?.kind === 'local') return { collection, kind: 'local', label: t('localOnly', 'Lokaler Modus') };
-    if (read?.kind === 'missing') return { collection, kind: 'missing', label: read.message };
+    if (read?.kind === 'denied') return { collection, kind: isOptionalResearchCollection(collection) ? 'locked' : 'missing', label: read.message };
+    if (read?.kind === 'missing') return { collection, kind: isOptionalResearchCollection(collection) ? 'pending' : 'missing', label: read.message };
     return { collection, kind: 'pending', label: t('pendingShort', 'wartet') };
   });
 }
 
 function diagnosticFailures() {
   return diagnosticRows()
+    .filter((row) => RESEARCH_REQUIRED_COLLECTIONS.includes(row.collection))
     .filter((row) => row.kind === 'failed' || row.kind === 'missing')
     .map((row) => ({ collection: row.collection, message: row.label }));
 }
@@ -3095,11 +3189,13 @@ function parseMarkdown(md) {
 // documents that replicate into the `documents` collection over RxDB/WebRTC;
 // `index_text` holds the document text, with a blob-chunk fallback — all RxDB.
 async function loadReportContentFromRxdb(filename) {
-  const raw = state.ctx && state.ctx.db;
-  if (!raw || !raw.documents) {
-    throw new Error('RxDB-Dokumente nicht verfügbar');
+  const documents = readableCollection('documents');
+  if (!documents) {
+    throw new Error(canReadCollection('documents')
+      ? 'RxDB-Dokumente nicht verfügbar'
+      : 'Keine Datenfreigabe für Dokumente');
   }
-  const matches = await raw.documents.find({ selector: { filename } }).exec();
+  const matches = await documents.find({ selector: { filename } }).exec();
   const rows = matches.map((d) => (typeof d.toJSON === 'function' ? d.toJSON() : d));
   const json = rows.find((d) => !d.is_deleted) || rows[0];
   if (!json) {
@@ -3109,12 +3205,19 @@ async function loadReportContentFromRxdb(filename) {
     return json.index_text;
   }
   // Fallback: reconstruct from the current version's blob chunks (RxDB only).
+  const versions = readableCollection('document_versions');
+  const blobChunks = readableCollection('document_blob_chunks');
   const versionId = json.current_version_id;
-  if (versionId && raw.document_versions && raw.document_blob_chunks) {
-    const version = await raw.document_versions.findOne(versionId).exec();
+  if (!versions || !blobChunks) {
+    throw new Error(canReadCollection('document_versions') && canReadCollection('document_blob_chunks')
+      ? 'RxDB-Dokumentversionen nicht verfügbar'
+      : 'Keine Datenfreigabe für Dokumentinhalte');
+  }
+  if (versionId) {
+    const version = await versions.findOne(versionId).exec();
     const blobId = version && typeof version.toJSON === 'function' ? version.toJSON().blob_id : null;
     if (blobId) {
-      const chunkDocs = await raw.document_blob_chunks.find({ selector: { blob_id: blobId } }).exec();
+      const chunkDocs = await blobChunks.find({ selector: { blob_id: blobId } }).exec();
       const chunks = chunkDocs
         .map((c) => (typeof c.toJSON === 'function' ? c.toJSON() : c))
         .sort((a, b) => (a.idx || 0) - (b.idx || 0));

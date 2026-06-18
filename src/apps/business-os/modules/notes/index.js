@@ -242,8 +242,18 @@ function createDefaultNotes(now = Date.now()) {
 }
 
 function getCollection() {
-  const isNotizen = state.ctx?.module?.id === 'notizen';
-  return isNotizen ? state.ctx?.db?.raw?.notes_records : state.ctx?.db?.raw?.notes;
+  const db = state.ctx?.db;
+  return db?.collection?.('notes') || null;
+}
+
+function isBusinessOsPermissionDenied(error) {
+  return error?.code === 'CTOX_BUSINESS_OS_PERMISSION_DENIED'
+    || error?.name === 'BusinessOsPermissionError';
+}
+
+function canWriteNotesCollection() {
+  const permissionCheck = state.ctx?.permissions?.canWriteCollection;
+  return typeof permissionCheck === 'function' ? permissionCheck('notes') : true;
 }
 
 export async function mount(ctx) {
@@ -268,9 +278,6 @@ export async function mount(ctx) {
   
   // Apply translation to static labels in mounted DOM
   applyStaticLabels(ctx.host, state.t);
-  
-  // Initial Cache Load so we are functional immediately
-  // loadFromLocalCache();
   
   bindElements(ctx.host);
   normalizeInteractiveLabels(ctx.host);
@@ -579,28 +586,6 @@ function saveToLocalCache() {
   localStorage.setItem(`${cachePrefix}.local_tags`, JSON.stringify(state.tags));
 }
 
-function readLocalCacheData() {
-  const cachePrefix = getCachePrefix();
-  const data = { notes: [], notebooks: [], tags: [] };
-  try {
-    const recs = localStorage.getItem(`${cachePrefix}.local_records`);
-    if (recs) data.notes = JSON.parse(recs);
-    const notebooks = localStorage.getItem(`${cachePrefix}.local_notebooks`);
-    if (notebooks) data.notebooks = JSON.parse(notebooks);
-    const tags = localStorage.getItem(`${cachePrefix}.local_tags`);
-    if (tags) data.tags = JSON.parse(tags);
-  } catch (e) {
-    console.error('Failed to load local cache', e);
-  }
-  return data;
-}
-
-function loadFromLocalCache() {
-  const data = readLocalCacheData();
-  state.notes = data.notes;
-  state.notebooks = data.notebooks;
-  state.tags = data.tags;
-}
 async function decryptLockedNotesInMemory() {
   for (const note of state.notes) {
     if (note.is_locked) {
@@ -624,10 +609,10 @@ async function loadNotesFromLocal() {
   const collection = getCollection();
   const logPrefix = state.ctx.module?.id === 'notizen' ? '[notizen]' : '[notes]';
   if (!collection) {
-    loadFromLocalCache();
-    state.dataDiagnostics = state.notes.length
-      ? { kind: 'local-cache', message: state.t('usingLocalCache') }
-      : { kind: 'missing', message: state.t('dataUnavailable') };
+    state.notes = [];
+    state.notebooks = [];
+    state.tags = [];
+    state.dataDiagnostics = { kind: 'missing', message: state.t('dataUnavailable') };
     syncNotebooksAndTags();
     scheduleRender();
     return;
@@ -638,13 +623,7 @@ async function loadNotesFromLocal() {
     const serverNotes = docs.map(d => d.toJSON()).filter(n => n.id);
 
     if (serverNotes.length === 0) {
-      const cached = readLocalCacheData();
-      if (cached.notes.length > 0) {
-        state.notes = cached.notes.sort((a, b) => b.updated_at_ms - a.updated_at_ms);
-        state.notebooks = cached.notebooks;
-        state.tags = cached.tags;
-        state.dataDiagnostics = { kind: 'local-cache', message: state.t('usingLocalCache') };
-      } else if (localStorage.getItem(`${getCachePrefix()}.defaultSeeded`) !== 'true') {
+      if (canWriteNotesCollection() && localStorage.getItem(`${getCachePrefix()}.defaultSeeded`) !== 'true') {
         const seedNotes = createDefaultNotes();
         state.notes = seedNotes.sort((a, b) => b.updated_at_ms - a.updated_at_ms);
         state.dataDiagnostics = { kind: 'seeded', message: state.t('seededNotes') };
@@ -675,14 +654,18 @@ async function loadNotesFromLocal() {
     saveToLocalCache(); // Passive write-only mirror purely for Playwright E2E tests to read
     scheduleRender();
   } catch (error) {
-    console.error(`${logPrefix} failed to load notes`, error);
-    const cached = readLocalCacheData();
-    state.notes = cached.notes;
-    state.notebooks = cached.notebooks;
-    state.tags = cached.tags;
-    state.dataDiagnostics = cached.notes.length
-      ? { kind: 'local-cache', message: state.t('usingLocalCache') }
-      : { kind: 'error', message: error?.message || state.t('dataUnavailable') };
+    if (isBusinessOsPermissionDenied(error)) {
+      console.log(`${logPrefix} data access locked`, error?.message || error);
+    } else {
+      console.error(`${logPrefix} failed to load notes`, error);
+    }
+    state.notes = [];
+    state.notebooks = [];
+    state.tags = [];
+    state.dataDiagnostics = {
+      kind: isBusinessOsPermissionDenied(error) ? 'missing' : 'error',
+      message: error?.message || state.t('dataUnavailable'),
+    };
     syncNotebooksAndTags();
     scheduleRender();
   }
@@ -2789,7 +2772,7 @@ function noteCommandContextFromElement(state, target) {
   return {
     module: state.ctx.module?.id || 'notizen',
     column: state.ctx.left?.contains?.(element) ? 'folders' : (els.notesList?.contains?.(element) ? 'list' : 'editor'),
-    record_type: activeNote ? (state.ctx.module?.id === 'notizen' ? 'notes_records' : 'notes') : 'module',
+    record_type: activeNote ? 'notes' : 'module',
     record_id: activeNote?.id || '',
     label: activeNote?.title || '',
     body_snippet: bodySnippet,
@@ -3093,5 +3076,6 @@ export const __notesTestHooks = {
   buildNotesEmptyState,
   createDefaultNotes,
   getCachePrefix,
+  isBusinessOsPermissionDenied,
   noteActionAvailability
 };

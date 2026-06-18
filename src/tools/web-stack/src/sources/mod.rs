@@ -651,7 +651,10 @@ mod tests {
             Some("LINKEDIN_SALES_NAV_TOKEN")
         );
         assert!(recipe.allowed_domains.iter().any(|d| d == "linkedin.com"));
-        assert!(recipe.allowed_domains.iter().any(|d| d == "api.linkedin.com"));
+        assert!(recipe
+            .allowed_domains
+            .iter()
+            .any(|d| d == "api.linkedin.com"));
         assert!(recipe.login_url.starts_with("https://"));
         assert!(recipe.credential_selector.is_some());
         assert!(recipe.verify_selector.is_some());

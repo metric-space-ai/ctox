@@ -488,7 +488,7 @@ function wireLocalRealtime(state) {
   };
   const subscriptions = collectionsToWatch
     .map((collectionName) => {
-      const collection = state.ctx.db?.raw?.[collectionName];
+      const collection = ctoxCollection(state.ctx, collectionName);
       return collection?.$?.subscribe?.(scheduleRender) || null;
     })
     .filter(Boolean);
@@ -2870,9 +2870,7 @@ async function loadLocalBugReports(ctx) {
 
 async function loadHarnessFlowSnapshot(ctx) {
   try {
-    const collection = ctx?.db?.raw?.ctox_runtime_settings
-      || ctx?.db?.collections?.ctox_runtime_settings
-      || ctx?.db?.collection?.('ctox_runtime_settings');
+    const collection = ctoxCollection(ctx, 'ctox_runtime_settings');
     if (!collection) return emptyHarnessFlow('rxdb_flow_projection_unavailable');
     const doc = await collection.findOne('runtime-settings').exec();
     const runtimeSettings = doc?.toJSON?.() || null;
@@ -2892,7 +2890,7 @@ function isVolatileLocalRxDbError(error) {
 }
 
 async function loadLocalWebStackOverview(ctx) {
-  const collection = ctx.db?.raw?.ctox_runtime_settings;
+  const collection = ctoxCollection(ctx, 'ctox_runtime_settings');
   if (!collection) return { ok: false, error: 'ctox_runtime_settings collection is not available' };
   const doc = await collection.findOne('runtime-settings').exec();
   const runtimeSettings = doc?.toJSON?.() || null;
@@ -2987,7 +2985,7 @@ async function requestWebStackAuthAssist(state, source) {
 }
 
 async function loadLocalCollection(ctx, collectionName) {
-  const collection = ctx.db?.raw?.[collectionName];
+  const collection = ctoxCollection(ctx, collectionName);
   if (!collection) return [];
   const query = collection.find();
   const previewQuery = typeof query?.limit === 'function' ? query.limit(200) : query;
@@ -2996,6 +2994,10 @@ async function loadLocalCollection(ctx, collectionName) {
     .map((doc) => doc.toJSON())
     .sort((left, right) => (right.updated_at_ms || 0) - (left.updated_at_ms || 0))
     .slice(0, 20);
+}
+
+function ctoxCollection(ctx, collectionName) {
+  return ctx?.db?.collection?.(collectionName) || null;
 }
 
 function isInternalSmokeDoc(doc) {

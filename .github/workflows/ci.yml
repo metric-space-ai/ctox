@@ -166,6 +166,14 @@ jobs:
           sudo apt-get install -y \
             libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev
 
+      - name: Business OS JS dependency bootstrap
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          npm ci --ignore-scripts --prefix src/apps/business-os
+          npm audit --audit-level=low --prefix src/apps/business-os
+          npm --prefix src/apps/business-os test
+          npm --prefix src/apps/business-os run test:module-bundles
+
       - name: Format check
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo fmt --check
@@ -177,6 +185,7 @@ jobs:
           node --check src/core/rxdb/tools/browser_rust_smoke.js
           node --check src/core/rxdb/tools/browser_rust_smoke_matrix.js
           node --check src/core/rxdb/tools/browser_rust_soak.js
+          node --check src/core/rxdb/tools/business_os_production_smoke_registry.js
           node --check src/core/rxdb/tools/print_soak_summary.js
           node --check src/core/rxdb/tools/assert_rxdb_soak_workflow.js
           node --check src/core/rxdb/tools/assert_js_fork_release_evidence.js
@@ -187,14 +196,20 @@ jobs:
           node --check src/apps/business-os/scripts/assert-business-chat-layout.mjs
           node --check src/apps/business-os/scripts/assert-business-chat-behavior.mjs
           node --check src/apps/business-os/scripts/assert-module-conformance.mjs
+          node --check src/apps/business-os/scripts/assert-production-release-docs.mjs
+          node --check src/apps/business-os/scripts/assert-security-privacy-signoff.mjs
           node src/apps/business-os/scripts/assert-rxdb-only.mjs
           node src/apps/business-os/scripts/assert-module-conformance.mjs
+          node src/apps/business-os/scripts/assert-production-release-docs.mjs
+          node src/apps/business-os/scripts/assert-security-privacy-signoff.mjs --self-test
+          node src/apps/business-os/scripts/assert-security-privacy-signoff.mjs
           node src/apps/business-os/scripts/assert-sync-error-classification.mjs
           node src/apps/business-os/scripts/assert-file-viewer-integrity.mjs
           node src/apps/business-os/scripts/assert-business-chat-layout.mjs
           node src/core/rxdb/tools/assert_rxdb_soak_workflow.js
           node src/core/rxdb/tools/assert_js_fork_release_evidence.js
           node src/core/rxdb/tools/assert_js_no_package_manager.js
+          SMOKE_MATRIX_SELF_TEST=1 node src/core/rxdb/tools/browser_rust_smoke_matrix.js
           node src/apps/business-os/rxdb/tests/no-package-manager-import-smoke.mjs
           node src/apps/business-os/rxdb/tests/query-api-smoke.mjs
           node src/apps/business-os/rxdb/tests/storage-index-smoke.mjs
@@ -266,6 +281,30 @@ jobs:
       - name: Business OS file tombstones
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo test --locked --bin ctox sync_desktop_files_from_workspace_root_tombstones_renamed_files
+
+      - name: Business OS production browser gate
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          npm --prefix src/apps/business-os exec playwright install --with-deps chromium
+          cargo build --locked --bin ctox --no-default-features --target-dir runtime/build/core-rxdb-integration-target
+          SMOKE_MODES="$(node -e "const { businessOsProductionSmokeModes } = require('./src/core/rxdb/tools/business_os_production_smoke_registry'); process.stdout.write(businessOsProductionSmokeModes.join(','));")"
+          SMOKE_MODES="$SMOKE_MODES" \
+          SMOKE_MATRIX_ATTEMPTS=2 \
+          SMOKE_PAGE_PATH=/index.html \
+          SMOKE_MODE_TIMEOUT_MS=300000 \
+          SMOKE_BROWSER_WARNING_BUDGET=0 \
+          SMOKE_BROWSER_REQUEST_FAILURE_BUDGET=0 \
+          BUSINESS_PORT=61701 \
+          SIGNALING_PORT=61702 \
+          node src/core/rxdb/tools/browser_rust_smoke_matrix.js
+
+      - name: Upload Business OS production smoke evidence
+        if: matrix.target == 'x86_64-unknown-linux-gnu' && always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: business-os-production-smoke-evidence
+          path: runtime/build/business-os-smoke-matrix-summary.json
+          if-no-files-found: error
 
       - name: Check
         run: cargo check --locked --target ${{ matrix.target }}

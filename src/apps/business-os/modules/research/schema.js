@@ -1,4 +1,5 @@
 import { collections as knowledgeCollections } from '../knowledge/schema.js';
+import { collections as documentCollections } from '../documents/schema.js';
 
 const commandSchema = {
   version: 1,
@@ -145,6 +146,9 @@ export const collections = {
   research_runs: researchRunSchema,
   research_notes: researchNoteSchema,
   knowledge_tables: knowledgeRecordSchema,
+  documents: documentCollections.documents,
+  document_versions: documentCollections.document_versions,
+  document_blob_chunks: documentCollections.document_blob_chunks,
 };
 
 export const migrationStrategies = {

@@ -57,9 +57,13 @@ impl ICalendar {
                 if parts.len() == 2 {
                     let key_part = parts[0];
                     let val = parts[1].to_string();
-                    
+
                     // Strip parameters from key, e.g. "DTSTART;TZID=America/New_York" -> "DTSTART"
-                    let key = key_part.split(';').next().unwrap_or(key_part).to_uppercase();
+                    let key = key_part
+                        .split(';')
+                        .next()
+                        .unwrap_or(key_part)
+                        .to_uppercase();
 
                     match key.as_str() {
                         "UID" => event.uid = val.clone(),

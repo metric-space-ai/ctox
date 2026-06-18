@@ -178,7 +178,7 @@ function wireLocalRealtime(state) {
     }, SPREADSHEET_RENDER_DEBOUNCE_MS);
   };
   const subscriptions = collections
-    .map((collectionName) => state.ctx.db?.[collectionName]?.$?.subscribe?.(schedule) || null)
+    .map((collectionName) => spreadsheetCollection(state.ctx, collectionName)?.$?.subscribe?.(schedule) || null)
     .filter(Boolean);
   return () => {
     if (timer) window.clearTimeout(timer);
@@ -187,6 +187,10 @@ function wireLocalRealtime(state) {
       try { sub.unsubscribe?.(); } catch {}
     }
   };
+}
+
+function spreadsheetCollection(ctx, collectionName) {
+  return ctx?.db?.collection?.(collectionName) || null;
 }
 
 async function refreshSpreadsheetsFromLocal(state) {
@@ -207,7 +211,7 @@ async function refreshSpreadsheetsFromLocal(state) {
 }
 
 async function refreshSpreadsheets(state) {
-  const collection = state.ctx.db?.spreadsheets;
+  const collection = spreadsheetCollection(state.ctx, 'spreadsheets');
   const rawSpreadsheets = collection
     ? await collection.find({ sort: [{ updated_at_ms: 'desc' }] }).exec()
     : [];
@@ -223,7 +227,7 @@ async function refreshSpreadsheets(state) {
 }
 
 async function refreshRunbooks(state) {
-  const collection = state.ctx.db?.spreadsheet_runbooks;
+  const collection = spreadsheetCollection(state.ctx, 'spreadsheet_runbooks');
   const storedRunbooks = collection
     ? (await collection.find({ sort: [{ title: 'asc' }] }).exec()).map((doc) => doc.toJSON())
     : [];
@@ -281,7 +285,7 @@ async function createNewSpreadsheet(state, input = {}) {
     bytes
   });
 
-  await state.ctx.db.spreadsheet_versions.insert({
+  await spreadsheetCollection(state.ctx, 'spreadsheet_versions').insert({
     id: versionId,
     spreadsheet_id: documentId,
     version: 1,
@@ -293,7 +297,7 @@ async function createNewSpreadsheet(state, input = {}) {
     updated_at_ms: now,
   });
 
-  await state.ctx.db.spreadsheets.insert({
+  await spreadsheetCollection(state.ctx, 'spreadsheets').insert({
     id: documentId,
     title,
     filename,
@@ -391,7 +395,7 @@ async function importSpreadsheetFile(state, file, tags = []) {
     bytes
   });
 
-  await state.ctx.db.spreadsheet_versions.insert({
+  await spreadsheetCollection(state.ctx, 'spreadsheet_versions').insert({
     id: versionId,
     spreadsheet_id: documentId,
     version: 1,
@@ -403,7 +407,7 @@ async function importSpreadsheetFile(state, file, tags = []) {
     updated_at_ms: now,
   });
 
-  await state.ctx.db.spreadsheets.insert({
+  await spreadsheetCollection(state.ctx, 'spreadsheets').insert({
     id: documentId,
     title: titleFromFilename(file.name),
     filename: file.name,
@@ -478,14 +482,14 @@ async function loadSelectedVersion(state) {
   try {
     let doc = record.current_version_id
       ? await withTimeout(
-        state.ctx.db.spreadsheet_versions.findOne(record.current_version_id).exec(),
+        spreadsheetCollection(state.ctx, 'spreadsheet_versions').findOne(record.current_version_id).exec(),
         4500,
         `Version ${record.current_version_id} konnte nicht geladen werden.`,
       )
       : null;
     if (!doc) {
       const fallback = await withTimeout(
-        state.ctx.db.spreadsheet_versions.find({
+        spreadsheetCollection(state.ctx, 'spreadsheet_versions').find({
           selector: { spreadsheet_id: record.id },
           sort: [{ updated_at_ms: 'desc' }],
           limit: 1,
@@ -496,7 +500,7 @@ async function loadSelectedVersion(state) {
       doc = fallback[0] || null;
       if (doc) {
         const versionJson = doc.toJSON();
-        const recordDoc = await state.ctx.db.spreadsheets.findOne(record.id).exec();
+        const recordDoc = await spreadsheetCollection(state.ctx, 'spreadsheets').findOne(record.id).exec();
         await recordDoc?.incrementalPatch({ current_version_id: versionJson.id });
         record.current_version_id = versionJson.id;
       }
@@ -1078,7 +1082,7 @@ async function saveActiveSpreadsheetDraft(state) {
     const bytes = new TextEncoder().encode(csvText);
 
     // Delete previous blob chunks first to avoid stacking duplicate indices
-    const chunkCollection = state.ctx.db.spreadsheet_blob_chunks;
+    const chunkCollection = spreadsheetCollection(state.ctx, 'spreadsheet_blob_chunks');
     const oldChunks = await chunkCollection.find({ selector: { blob_id: docBlobId } }).exec();
     await Promise.all(oldChunks.map(chunk => chunk.remove()));
 
@@ -1092,7 +1096,7 @@ async function saveActiveSpreadsheetDraft(state) {
     });
 
     // Update version model JSON
-    const versionDoc = await state.ctx.db.spreadsheet_versions.findOne(docVersionId).exec();
+    const versionDoc = await spreadsheetCollection(state.ctx, 'spreadsheet_versions').findOne(docVersionId).exec();
     if (versionDoc) {
       await versionDoc.incrementalPatch({
         model_json: modelJson,
@@ -1101,7 +1105,7 @@ async function saveActiveSpreadsheetDraft(state) {
     }
 
     // Update parent metadata
-    const sheetDoc = await state.ctx.db.spreadsheets.findOne(state.selectedId).exec();
+    const sheetDoc = await spreadsheetCollection(state.ctx, 'spreadsheets').findOne(state.selectedId).exec();
     if (sheetDoc) {
       await sheetDoc.incrementalPatch({
         row_count: modelJson.data.length,
@@ -1556,7 +1560,7 @@ function openExportModal(state) {
 }
 
 async function openManageDrawer(state, id) {
-  const doc = await state.ctx.db.spreadsheets.findOne(id).exec();
+  const doc = await spreadsheetCollection(state.ctx, 'spreadsheets').findOne(id).exec();
   if (!doc) return;
   const data = doc.toJSON();
 
@@ -1973,7 +1977,7 @@ function ensureCtoxContextMenuStyles() {
 }
 
 async function ensureSeedRunbooks(ctx) {
-  const collection = ctx.db?.spreadsheet_runbooks;
+  const collection = spreadsheetCollection(ctx, 'spreadsheet_runbooks');
   if (!collection) return;
   const existing = await collection.find().exec();
   const now = Date.now();
@@ -1990,8 +1994,9 @@ async function ensureSeedRunbooks(ctx) {
 }
 
 function requireSpreadsheetPersistence(ctx) {
-  const raw = ctx?.db;
-  if (!raw?.spreadsheets || !raw?.spreadsheet_versions || !raw?.spreadsheet_blob_chunks) {
+  if (!spreadsheetCollection(ctx, 'spreadsheets')
+    || !spreadsheetCollection(ctx, 'spreadsheet_versions')
+    || !spreadsheetCollection(ctx, 'spreadsheet_blob_chunks')) {
     throw new Error('CTOX spreadsheet persistence layer is unavailable. Spreadsheet data must be persisted via RxDB collections.');
   }
 }
@@ -2047,7 +2052,7 @@ function saveBlobChunks(ctx, input) {
   const promises = [];
   for (let idx = 0; idx < total; idx += 1) {
     promises.push(
-      ctx.db.spreadsheet_blob_chunks.insert({
+      spreadsheetCollection(ctx, 'spreadsheet_blob_chunks').insert({
         id: `${input.blobId}_${idx}`,
         blob_id: input.blobId,
         spreadsheet_id: input.spreadsheetId,

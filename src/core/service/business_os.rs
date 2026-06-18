@@ -317,6 +317,7 @@ pub fn handle_business_os_command(root: &Path, args: &[String]) -> anyhow::Resul
         Some("rxdb") => handle_business_os_rxdb(root, &args[1..]),
         Some("app") => handle_business_os_app(root, &args[1..]),
         Some("repair") => handle_business_os_repair(root, &args[1..]),
+        Some("backup") => handle_business_os_backup(root, &args[1..]),
         Some("install") => install_business_os(root, &args[1..]),
         Some("commands") => handle_business_os_commands(root, &args[1..]),
         Some("desktop") => handle_business_os_desktop(root, &args[1..]),
@@ -333,6 +334,48 @@ pub fn handle_business_os_command(root: &Path, args: &[String]) -> anyhow::Resul
             "unknown business-os command `{other}`\n\n{}",
             business_os_usage()
         ),
+    }
+}
+
+fn handle_business_os_backup(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    match args.first().map(String::as_str) {
+        Some("restore-drill") => {
+            let result = crate::business_os::store::run_business_os_backup_restore_drill(
+                root,
+                flag_value(args, "--module").or_else(|| flag_value(args, "--module-id")),
+            )?;
+            print_json(&result)
+        }
+        Some("prune-drills") => {
+            let result = crate::business_os::store::prune_business_os_backup_restore_drills(
+                root,
+                args.iter().any(|arg| arg == "--dry-run"),
+            )?;
+            print_json(&result)
+        }
+        Some("inspect-manifest") => {
+            let manifest = flag_value(args, "--manifest")
+                .or_else(|| {
+                    args.get(1)
+                        .map(String::as_str)
+                        .filter(|arg| !arg.starts_with("--"))
+                })
+                .context("usage: ctox business-os backup inspect-manifest --manifest <path>")?;
+            let result = crate::business_os::store::inspect_business_os_backup_manifest(
+                root,
+                std::path::Path::new(manifest),
+            )?;
+            print_json(&result)
+        }
+        Some("key-escrow-status") => {
+            let result = crate::business_os::store::inspect_business_os_backup_key_escrow(root)?;
+            print_json(&result)
+        }
+        Some("--help") | Some("-h") | None => {
+            println!("{}", business_os_usage());
+            Ok(())
+        }
+        Some(other) => anyhow::bail!("unknown business-os backup command `{other}`"),
     }
 }
 
@@ -991,119 +1034,67 @@ fn handle_business_os_mcp(root: &Path, args: &[String]) -> anyhow::Result<()> {
 fn handle_business_os_mcp_policy(root: &Path, args: &[String]) -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
         Some("set") => {
-            let mut env_map = crate::inference::runtime_env::effective_operator_env_map(root)
-                .unwrap_or_else(|_| BTreeMap::new());
-            apply_mcp_policy_flag(
+            let mut policy = crate::business_os::mcp_channel::mcp_policy(root);
+            apply_mcp_policy_bool_arg(args, "--enabled", &mut policy.enabled)?;
+            apply_mcp_policy_bool_arg(args, "--allow-reads", &mut policy.allow_reads)?;
+            apply_mcp_policy_bool_arg(args, "--allow-writes", &mut policy.allow_writes)?;
+            apply_mcp_policy_bool_arg(args, "--allow-approvals", &mut policy.allow_approvals)?;
+            apply_mcp_policy_bool_arg(
                 args,
-                &mut env_map,
-                "--enabled",
-                "CTOX_BUSINESS_OS_MCP_ENABLED",
-            )?;
-            apply_mcp_policy_flag(
-                args,
-                &mut env_map,
-                "--allow-reads",
-                "CTOX_BUSINESS_OS_MCP_ALLOW_READS",
-            )?;
-            apply_mcp_policy_flag(
-                args,
-                &mut env_map,
-                "--allow-writes",
-                "CTOX_BUSINESS_OS_MCP_ALLOW_WRITES",
-            )?;
-            apply_mcp_policy_flag(
-                args,
-                &mut env_map,
-                "--allow-approvals",
-                "CTOX_BUSINESS_OS_MCP_ALLOW_APPROVALS",
-            )?;
-            apply_mcp_policy_flag(
-                args,
-                &mut env_map,
                 "--allow-external-effects",
-                "CTOX_BUSINESS_OS_MCP_ALLOW_EXTERNAL_EFFECTS",
+                &mut policy.allow_external_effects,
             )?;
-            apply_mcp_policy_usize_flag(
+            apply_mcp_policy_usize_arg(
                 args,
-                &mut env_map,
                 "--rate-limit-per-minute",
-                "CTOX_BUSINESS_OS_MCP_RATE_LIMIT_PER_MINUTE",
+                &mut policy.rate_limit_per_minute,
             )?;
-            apply_mcp_policy_usize_flag(
+            apply_mcp_policy_usize_arg(
                 args,
-                &mut env_map,
                 "--audit-retention-days",
-                "CTOX_BUSINESS_OS_MCP_AUDIT_RETENTION_DAYS",
+                &mut policy.audit_retention_days,
             )?;
             if args.iter().any(|arg| arg == "--clear-deny-tools") {
-                env_map.remove("CTOX_BUSINESS_OS_MCP_DENY_TOOLS");
+                policy.denied_tools.clear();
             }
-            for (flag, key) in [
-                (
-                    "--clear-allowed-actors",
-                    "CTOX_BUSINESS_OS_MCP_ALLOWED_ACTORS",
-                ),
-                (
-                    "--clear-allowed-workspaces",
-                    "CTOX_BUSINESS_OS_MCP_ALLOWED_WORKSPACES",
-                ),
-                (
-                    "--clear-allowed-modules",
-                    "CTOX_BUSINESS_OS_MCP_ALLOWED_MODULES",
-                ),
-                (
-                    "--clear-allowed-collections",
-                    "CTOX_BUSINESS_OS_MCP_ALLOWED_COLLECTIONS",
-                ),
-            ] {
-                if args.iter().any(|arg| arg == flag) {
-                    env_map.remove(key);
-                }
+            if args.iter().any(|arg| arg == "--clear-allowed-actors") {
+                policy.allowed_actors.clear();
             }
-            apply_mcp_policy_csv_flag(
+            if args.iter().any(|arg| arg == "--clear-allowed-workspaces") {
+                policy.allowed_workspaces.clear();
+            }
+            if args.iter().any(|arg| arg == "--clear-allowed-modules") {
+                policy.allowed_modules.clear();
+            }
+            if args.iter().any(|arg| arg == "--clear-allowed-collections") {
+                policy.allowed_collections.clear();
+            }
+            apply_mcp_policy_values_arg(args, "--allow-actor", &mut policy.allowed_actors);
+            apply_mcp_policy_values_arg(args, "--allow-workspace", &mut policy.allowed_workspaces);
+            apply_mcp_policy_values_arg(args, "--allow-module", &mut policy.allowed_modules);
+            apply_mcp_policy_values_arg(
                 args,
-                &mut env_map,
-                "--allow-actor",
-                "CTOX_BUSINESS_OS_MCP_ALLOWED_ACTORS",
-            );
-            apply_mcp_policy_csv_flag(
-                args,
-                &mut env_map,
-                "--allow-workspace",
-                "CTOX_BUSINESS_OS_MCP_ALLOWED_WORKSPACES",
-            );
-            apply_mcp_policy_csv_flag(
-                args,
-                &mut env_map,
-                "--allow-module",
-                "CTOX_BUSINESS_OS_MCP_ALLOWED_MODULES",
-            );
-            apply_mcp_policy_csv_flag(
-                args,
-                &mut env_map,
                 "--allow-collection",
-                "CTOX_BUSINESS_OS_MCP_ALLOWED_COLLECTIONS",
+                &mut policy.allowed_collections,
             );
             let deny_tools = mcp_policy_deny_tools_from_args(args)?;
             if !deny_tools.is_empty() {
-                env_map.insert(
-                    "CTOX_BUSINESS_OS_MCP_DENY_TOOLS".to_string(),
-                    deny_tools.join(","),
-                );
+                policy.denied_tools = deny_tools;
             }
-            crate::inference::runtime_env::save_runtime_env_map(root, &env_map)?;
+            crate::business_os::mcp_channel::save_mcp_policy(root, &policy)?;
             print_json(&serde_json::json!({
                 "ok": true,
                 "policy": crate::business_os::mcp_channel::mcp_policy(root),
-                "keys": mcp_policy_env_projection(&env_map)
+                "storage": "business_os.mcp_policy.v1",
+                "keys": mcp_policy_env_projection(&mcp_policy_to_env_map(&policy))
             }))
         }
         Some("keys") => {
-            let env_map = crate::inference::runtime_env::effective_operator_env_map(root)
-                .unwrap_or_else(|_| BTreeMap::new());
+            let policy = crate::business_os::mcp_channel::mcp_policy(root);
             print_json(&serde_json::json!({
                 "ok": true,
-                "keys": mcp_policy_env_projection(&env_map)
+                "storage": "business_os.mcp_policy.v1",
+                "keys": mcp_policy_env_projection(&mcp_policy_to_env_map(&policy))
             }))
         }
         Some("--help") | Some("-h") => {
@@ -1112,12 +1103,12 @@ fn handle_business_os_mcp_policy(root: &Path, args: &[String]) -> anyhow::Result
         }
         Some(other) => anyhow::bail!("unknown business-os mcp policy command `{other}`"),
         None => {
-            let env_map = crate::inference::runtime_env::effective_operator_env_map(root)
-                .unwrap_or_else(|_| BTreeMap::new());
+            let policy = crate::business_os::mcp_channel::mcp_policy(root);
             print_json(&serde_json::json!({
                 "ok": true,
-                "policy": crate::business_os::mcp_channel::mcp_policy(root),
-                "keys": mcp_policy_env_projection(&env_map)
+                "policy": policy,
+                "storage": "business_os.mcp_policy.v1",
+                "keys": mcp_policy_env_projection(&mcp_policy_to_env_map(&policy))
             }))
         }
     }
@@ -1631,14 +1622,19 @@ fn print_business_os_help() {
 }
 
 fn business_os_usage() -> String {
-    business_os_usage_base().replace(
-        "  ctox business-os app validate <module-id>",
-        "  ctox business-os app scaffold <module-id> [--installed|--source] [--workspace <path>] [--title <title>] [--collection <name>] [--description <text>] [--force] [--repair-missing] [--json]\n  ctox business-os app validate <module-id>",
-    )
+    business_os_usage_base()
+        .replace(
+            "  ctox business-os app validate <module-id>",
+            "  ctox business-os app scaffold <module-id> [--installed|--source] [--workspace <path>] [--title <title>] [--collection <name>] [--description <text>] [--force] [--repair-missing] [--json]\n  ctox business-os app validate <module-id>",
+        )
+        .replace(
+            "  ctox business-os backup prune-drills [--dry-run]",
+            "  ctox business-os backup inspect-manifest --manifest <path>\n  ctox business-os backup key-escrow-status\n  ctox business-os backup prune-drills [--dry-run]",
+        )
 }
 
 fn business_os_usage_base() -> &'static str {
-    "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os mcp status\n  ctox business-os mcp tools\n  ctox business-os mcp policy\n  ctox business-os mcp policy keys\n  ctox business-os mcp policy set [--enabled true|false] [--allow-reads true|false] [--allow-writes true|false] [--allow-approvals true|false] [--allow-external-effects true|false] [--rate-limit-per-minute <n>] [--audit-retention-days <n>] [--allow-actor <id>]... [--allow-workspace <id>]... [--allow-module <id>]... [--allow-collection <name>]... [--deny-tool business_os.<tool>]... [--clear-deny-tools]\n  ctox business-os mcp call <tool-name> [--args <json>]\n  ctox business-os mcp audit [--limit <n>] [--format json|jsonl] [--output <path>] [--prune]\n  ctox business-os mcp serve [--addr 127.0.0.1:8788]\n  ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id> [--token <token>] [--once] [--max-reconnect-delay-ms <n>] [--heartbeat-interval-ms <n>] [--max-connection-age-ms <n>]\n  ctox business-os mcp gateway-status --url https://mcp.ctox.dev/status/<instance-id> [--token <token>]\n  ctox business-os peer status\n  ctox business-os peer rotate\n  ctox business-os peer start\n  ctox business-os desktop invite [--display-name <name>] [--ttl-hours <n> | --expires-at <rfc3339>] [--format json|link] [--output <path>]\n  ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]\n  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]\n  ctox business-os app finalize <module-id> --task-id <queue-task-id> [--installed|--source] [--reason <text>]\n  ctox business-os repair queue-projections (--dry-run | --apply)\n  ctox business-os install --target <empty-dir> [--init-git] [--dry-run] [--no-copy-env]\n  ctox business-os commands process <command-id>\n  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os web-stack person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--auto-auth-assist] [--task-id <id>] [--workspace <path>] [--no-workspace]\n  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-status --session-id <id>\n  ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]\n  ctox business-os web-stack context-extract --session-id <id> [--source-id <id>] [--capture-script <id>] [--task-id <id>]\n  ctox business-os web-stack redaction-audit --canary <value> [--canary <value>]... [--path <path>]...\n  ctox business-os web-stack browser-doctor [--dir <path>]\n  ctox business-os files sync <path>\n  ctox business-os files sync-workspace <path>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
+    "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os mcp status\n  ctox business-os mcp tools\n  ctox business-os mcp policy\n  ctox business-os mcp policy keys\n  ctox business-os mcp policy set [--enabled true|false] [--allow-reads true|false] [--allow-writes true|false] [--allow-approvals true|false] [--allow-external-effects true|false] [--rate-limit-per-minute <n>] [--audit-retention-days <n>] [--allow-actor <id>]... [--allow-workspace <id>]... [--allow-module <id>]... [--allow-collection <name>]... [--deny-tool business_os.<tool>]... [--clear-deny-tools]\n  ctox business-os mcp call <tool-name> [--args <json>]\n  ctox business-os mcp audit [--limit <n>] [--format json|jsonl] [--output <path>] [--prune]\n  ctox business-os mcp serve [--addr 127.0.0.1:8788]\n  ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id> [--token <token>] [--once] [--max-reconnect-delay-ms <n>] [--heartbeat-interval-ms <n>] [--max-connection-age-ms <n>]\n  ctox business-os mcp gateway-status --url https://mcp.ctox.dev/status/<instance-id> [--token <token>]\n  ctox business-os peer status\n  ctox business-os peer rotate\n  ctox business-os peer start\n  ctox business-os desktop invite [--display-name <name>] [--ttl-hours <n> | --expires-at <rfc3339>] [--format json|link] [--output <path>]\n  ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]\n  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]\n  ctox business-os app finalize <module-id> --task-id <queue-task-id> [--installed|--source] [--reason <text>]\n  ctox business-os repair queue-projections (--dry-run | --apply)\n  ctox business-os backup restore-drill [--module <module-id>]\n  ctox business-os backup prune-drills [--dry-run]\n  ctox business-os install --target <empty-dir> [--init-git] [--dry-run] [--no-copy-env]\n  ctox business-os commands process <command-id>\n  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os web-stack person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--auto-auth-assist] [--task-id <id>] [--workspace <path>] [--no-workspace]\n  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-status --session-id <id>\n  ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]\n  ctox business-os web-stack context-extract --session-id <id> [--source-id <id>] [--capture-script <id>] [--task-id <id>]\n  ctox business-os web-stack redaction-audit --canary <value> [--canary <value>]... [--path <path>]...\n  ctox business-os web-stack browser-doctor [--dir <path>]\n  ctox business-os files sync <path>\n  ctox business-os files sync-workspace <path>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
 }
 
 fn exists_label(exists: bool) -> &'static str {
@@ -1701,54 +1697,46 @@ fn read_command_document(args: &[String]) -> anyhow::Result<serde_json::Value> {
     serde_json::from_str(&raw).context("command document is not valid JSON")
 }
 
-fn apply_mcp_policy_flag(
-    args: &[String],
-    env_map: &mut BTreeMap<String, String>,
-    flag: &str,
-    key: &str,
-) -> anyhow::Result<()> {
+fn apply_mcp_policy_bool_arg(args: &[String], flag: &str, target: &mut bool) -> anyhow::Result<()> {
     let Some(raw) = flag_value(args, flag) else {
         return Ok(());
     };
-    let value = parse_cli_bool(raw).with_context(|| format!("invalid value for {flag}: {raw}"))?;
-    env_map.insert(key.to_string(), value.to_string());
+    *target = parse_cli_bool(raw).with_context(|| format!("invalid value for {flag}: {raw}"))?;
     Ok(())
 }
 
-fn apply_mcp_policy_usize_flag(
+fn apply_mcp_policy_usize_arg(
     args: &[String],
-    env_map: &mut BTreeMap<String, String>,
     flag: &str,
-    key: &str,
+    target: &mut usize,
 ) -> anyhow::Result<()> {
     let Some(raw) = flag_value(args, flag) else {
         return Ok(());
     };
-    let value = raw
+    *target = raw
         .trim()
         .parse::<usize>()
         .with_context(|| format!("invalid value for {flag}: {raw}"))?;
-    env_map.insert(key.to_string(), value.to_string());
     Ok(())
 }
 
-fn apply_mcp_policy_csv_flag(
-    args: &[String],
-    env_map: &mut BTreeMap<String, String>,
-    flag: &str,
-    key: &str,
-) {
-    let values = flag_values(args, flag)
-        .into_iter()
-        .flat_map(|value| value.split(','))
-        .map(str::trim)
+fn apply_mcp_policy_values_arg(args: &[String], flag: &str, target: &mut Vec<String>) {
+    let mut seen = target
+        .iter()
+        .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    if !values.is_empty() {
-        env_map.insert(key.to_string(), values.join(","));
+        .collect::<BTreeSet<_>>();
+    target.retain(|value| !value.trim().is_empty());
+    for value in flag_values(args, flag) {
+        for item in value
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+        {
+            if seen.insert(item.to_string()) {
+                target.push(item.to_string());
+            }
+        }
     }
 }
 
@@ -1792,6 +1780,83 @@ fn mcp_policy_env_projection(env_map: &BTreeMap<String, String>) -> serde_json::
         }
     }
     serde_json::Value::Object(object)
+}
+
+fn mcp_policy_to_env_map(
+    policy: &crate::business_os::mcp_channel::BusinessOsMcpPolicy,
+) -> BTreeMap<String, String> {
+    let mut env_map = BTreeMap::new();
+    env_map.insert(
+        "CTOX_BUSINESS_OS_MCP_ENABLED".to_string(),
+        policy.enabled.to_string(),
+    );
+    env_map.insert(
+        "CTOX_BUSINESS_OS_MCP_ALLOW_READS".to_string(),
+        policy.allow_reads.to_string(),
+    );
+    env_map.insert(
+        "CTOX_BUSINESS_OS_MCP_ALLOW_WRITES".to_string(),
+        policy.allow_writes.to_string(),
+    );
+    env_map.insert(
+        "CTOX_BUSINESS_OS_MCP_ALLOW_APPROVALS".to_string(),
+        policy.allow_approvals.to_string(),
+    );
+    env_map.insert(
+        "CTOX_BUSINESS_OS_MCP_ALLOW_EXTERNAL_EFFECTS".to_string(),
+        policy.allow_external_effects.to_string(),
+    );
+    env_map.insert(
+        "CTOX_BUSINESS_OS_MCP_RATE_LIMIT_PER_MINUTE".to_string(),
+        policy.rate_limit_per_minute.to_string(),
+    );
+    env_map.insert(
+        "CTOX_BUSINESS_OS_MCP_AUDIT_RETENTION_DAYS".to_string(),
+        policy.audit_retention_days.to_string(),
+    );
+    insert_mcp_policy_csv_value(
+        &mut env_map,
+        "CTOX_BUSINESS_OS_MCP_ALLOWED_ACTORS",
+        &policy.allowed_actors,
+    );
+    insert_mcp_policy_csv_value(
+        &mut env_map,
+        "CTOX_BUSINESS_OS_MCP_ALLOWED_WORKSPACES",
+        &policy.allowed_workspaces,
+    );
+    insert_mcp_policy_csv_value(
+        &mut env_map,
+        "CTOX_BUSINESS_OS_MCP_ALLOWED_MODULES",
+        &policy.allowed_modules,
+    );
+    insert_mcp_policy_csv_value(
+        &mut env_map,
+        "CTOX_BUSINESS_OS_MCP_ALLOWED_COLLECTIONS",
+        &policy.allowed_collections,
+    );
+    insert_mcp_policy_csv_value(
+        &mut env_map,
+        "CTOX_BUSINESS_OS_MCP_DENY_TOOLS",
+        &policy.denied_tools,
+    );
+    env_map
+}
+
+fn insert_mcp_policy_csv_value(
+    env_map: &mut BTreeMap<String, String>,
+    key: &str,
+    values: &[String],
+) {
+    let values = values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if !values.is_empty() {
+        env_map.insert(key.to_string(), values.join(","));
+    }
 }
 
 fn run_web_stack_redaction_audit(
@@ -2328,7 +2393,7 @@ mod tests {
     }
 
     #[test]
-    fn mcp_policy_csv_flags_are_deduplicated() {
+    fn mcp_policy_value_args_are_deduplicated() {
         let args = vec![
             "set".to_string(),
             "--allow-module".to_string(),
@@ -2336,20 +2401,13 @@ mod tests {
             "--allow-module".to_string(),
             "customers".to_string(),
         ];
-        let mut env_map = BTreeMap::new();
+        let mut values = Vec::new();
 
-        apply_mcp_policy_csv_flag(
-            &args,
-            &mut env_map,
-            "--allow-module",
-            "CTOX_BUSINESS_OS_MCP_ALLOWED_MODULES",
-        );
+        apply_mcp_policy_values_arg(&args, "--allow-module", &mut values);
 
         assert_eq!(
-            env_map
-                .get("CTOX_BUSINESS_OS_MCP_ALLOWED_MODULES")
-                .map(String::as_str),
-            Some("customers,outbound")
+            values,
+            vec!["customers".to_string(), "outbound".to_string()]
         );
     }
 
@@ -2401,6 +2459,49 @@ mod tests {
             Some("customers")
         );
         assert!(projection.get("OPENAI_API_KEY").is_none());
+    }
+
+    #[test]
+    fn mcp_policy_set_persists_typed_policy_state() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let mut legacy_env = BTreeMap::new();
+        legacy_env.insert(
+            "CTOX_BUSINESS_OS_MCP_AUDIT_RETENTION_DAYS".to_string(),
+            "30".to_string(),
+        );
+        crate::inference::runtime_env::save_runtime_env_map(root.path(), &legacy_env)?;
+
+        let args = vec![
+            "set".to_string(),
+            "--enabled".to_string(),
+            "true".to_string(),
+            "--audit-retention-days".to_string(),
+            "7".to_string(),
+            "--allow-module".to_string(),
+            "customers,customers,outbound".to_string(),
+            "--deny-tool".to_string(),
+            "business_os.execute_action".to_string(),
+        ];
+        handle_business_os_mcp_policy(root.path(), &args)?;
+
+        let policy = crate::business_os::mcp_channel::mcp_policy(root.path());
+        assert!(policy.enabled);
+        assert_eq!(policy.audit_retention_days, 7);
+        assert_eq!(
+            policy.allowed_modules,
+            vec!["customers".to_string(), "outbound".to_string()]
+        );
+        assert_eq!(
+            policy.denied_tools,
+            vec!["business_os.execute_action".to_string()]
+        );
+        assert_eq!(
+            crate::inference::runtime_env::effective_operator_env_map(root.path())?
+                .get("CTOX_BUSINESS_OS_MCP_AUDIT_RETENTION_DAYS")
+                .map(String::as_str),
+            Some("30")
+        );
+        Ok(())
     }
 
     #[test]

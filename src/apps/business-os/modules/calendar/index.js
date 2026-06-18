@@ -3,6 +3,16 @@ import { CtoxResizer } from '../../shared/resizer.js';
 import { createCalendarView } from './calendar-view-adapter.js';
 
 const RENDER_DEBOUNCE_MS = 50;
+const CALENDAR_COLLECTIONS = [
+  'calendar_sources',
+  'calendar_calendars',
+  'calendar_events',
+  'calendar_event_instances',
+  'calendar_availability_rules',
+  'calendar_booking_pages',
+  'calendar_booking_holds',
+  'calendar_bookings',
+];
 
 const labels = {
   de: {
@@ -73,6 +83,34 @@ const state = {
 };
 
 const els = {};
+
+function calendarCollection(name) {
+  const facade = state.ctx?.db;
+  return facade?.collection?.(name) || null;
+}
+
+function calendarDb() {
+  const entries = CALENDAR_COLLECTIONS.map((name) => [name, calendarCollection(name)]);
+  if (entries.some(([, collection]) => !collection)) return null;
+  return Object.fromEntries(entries);
+}
+
+function canWriteCalendarDefaults() {
+  const permissionCheck = state.ctx?.permissions?.canWriteCollection;
+  return typeof permissionCheck !== 'function'
+    || [
+      'calendar_sources',
+      'calendar_calendars',
+      'calendar_events',
+      'calendar_booking_pages',
+      'calendar_availability_rules',
+    ].every((collectionName) => permissionCheck(collectionName));
+}
+
+function isBusinessOsPermissionDenied(error) {
+  return error?.code === 'CTOX_BUSINESS_OS_PERMISSION_DENIED'
+    || error?.name === 'BusinessOsPermissionError';
+}
 
 export async function mount(ctx) {
   state.ctx = ctx;
@@ -366,11 +404,12 @@ function setupResizers(host) {
 // ----------------------------------------------------
 
 async function seedDefaultDataIfNeeded() {
-  const db = state.ctx.db?.raw;
+  const db = calendarDb();
   if (!db) return;
 
   const calendarsCount = await db.calendar_calendars.count().exec();
   if (calendarsCount > 0) return; // already seeded
+  if (!canWriteCalendarDefaults()) return;
 
   // 1. Seed Local Source
   const sourceId = 'source_local_' + generateUUID();
@@ -483,7 +522,7 @@ async function seedDefaultDataIfNeeded() {
 }
 
 async function loadDataFromDb() {
-  const db = state.ctx.db?.raw;
+  const db = calendarDb();
   if (!db) return;
 
   try {
@@ -519,12 +558,13 @@ async function loadDataFromDb() {
 
     scheduleRender();
   } catch (error) {
+    if (isBusinessOsPermissionDenied(error)) throw error;
     console.error('Failed to load calendar data', error);
   }
 }
 
 function wireRealtimeSync() {
-  const db = state.ctx.db?.raw;
+  const db = calendarDb();
   if (!db) return;
 
   const tables = [
@@ -533,7 +573,7 @@ function wireRealtimeSync() {
     db.calendar_booking_pages,
     db.calendar_booking_holds,
     db.calendar_bookings
-  ];
+  ].filter(Boolean);
 
   tables.forEach(col => {
     const sub = col.$.subscribe(() => {
@@ -564,7 +604,7 @@ function renderAll() {
 
 function renderDataStatus() {
   if (!els.calendarDataStatus) return;
-  if (!state.ctx?.db?.raw) {
+  if (!calendarDb()) {
     els.calendarDataStatus.textContent = state.t('noDatabase', labels[state.lang].noDatabase);
     els.calendarDataStatus.dataset.state = 'error';
     return;
@@ -782,7 +822,7 @@ function initCalendarView() {
       openEventForm(original.id);
     },
     onEventMove: async ({ id, start, end, allDay }) => {
-      const db = state.ctx.db?.raw;
+      const db = calendarDb();
       if (!db) return;
       const doc = await db.calendar_events.findOne(id).exec();
       if (doc) {
@@ -795,7 +835,7 @@ function initCalendarView() {
       }
     },
     onEventResize: async ({ id, start, end }) => {
-      const db = state.ctx.db?.raw;
+      const db = calendarDb();
       if (!db) return;
       const doc = await db.calendar_events.findOne(id).exec();
       if (doc) {
@@ -950,7 +990,7 @@ function openEventForm(eventId = null, defaults = null) {
     const startMs = new Date(data.get('start_time')).getTime();
     const endMs = new Date(data.get('end_time')).getTime();
 
-    const db = state.ctx.db?.raw;
+    const db = calendarDb();
     if (!db) return;
 
     const fields = {
@@ -982,7 +1022,7 @@ function openEventForm(eventId = null, defaults = null) {
 
   els.drawer.querySelector('#btnDeleteEvent')?.addEventListener('click', async () => {
     if (!confirm('Diesen Termin wirklich löschen?')) return;
-    const db = state.ctx.db?.raw;
+    const db = calendarDb();
     if (!db || !dbEvent) return;
     const doc = await db.calendar_events.findOne(dbEvent.id).exec();
     if (doc) {
@@ -1004,7 +1044,7 @@ function wireDrawerCalendarSelectLive(preferredCalendarId) {
     state.activeFormSubscription.unsubscribe();
     state.activeFormSubscription = null;
   }
-  const db = state.ctx?.db?.raw;
+  const db = calendarDb();
   if (!db || !db.calendar_calendars) return;
 
   const renderOptions = (cals) => {
@@ -1133,7 +1173,7 @@ function openBookingPageForm(bpId = null) {
     const validation = updateValidity({ focusFirstInvalid: true });
     if (!validation.valid) return;
     const data = new FormData(form);
-    const db = state.ctx.db?.raw;
+    const db = calendarDb();
     if (!db) return;
 
     // Slug clean up
@@ -1187,7 +1227,7 @@ function openBookingPageForm(bpId = null) {
 
   els.drawer.querySelector('#btnDeleteBp')?.addEventListener('click', async () => {
     if (!confirm('Diese Buchungsseite wirklich löschen?')) return;
-    const db = state.ctx.db?.raw;
+    const db = calendarDb();
     if (!db || !dbBp) return;
     const doc = await db.calendar_booking_pages.findOne(dbBp.id).exec();
     if (doc) {
@@ -1243,7 +1283,7 @@ function openCalendarForm(calId = null) {
     const validation = updateValidity({ focusFirstInvalid: true });
     if (!validation.valid) return;
     const data = new FormData(form);
-    const db = state.ctx.db?.raw;
+    const db = calendarDb();
     if (!db) return;
 
     const fields = {
@@ -1277,7 +1317,7 @@ function openCalendarForm(calId = null) {
 
   els.drawer.querySelector('#btnDeleteCal')?.addEventListener('click', async () => {
     if (!confirm('Diesen Kalender wirklich löschen? Alle zugehörigen Termine gehen verloren.')) return;
-    const db = state.ctx.db?.raw;
+    const db = calendarDb();
     if (!db || !dbCal) return;
 
     // Delete calendar events first
@@ -1352,7 +1392,7 @@ function openBookingDetail(bkId) {
 
   els.drawer.querySelector('#btnCancelBooking')?.addEventListener('click', async () => {
     if (!confirm('Diesen Termin wirklich stornieren?')) return;
-    const db = state.ctx.db?.raw;
+    const db = calendarDb();
     if (!db) return;
 
     // Update booking status

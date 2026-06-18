@@ -22,7 +22,7 @@ exists because an agent broke it in good faith and shipped a regression.
    update both sides' consumers in the same commit.
 5. **No new process-env toggles.** Runtime configuration flows through the
    SQLite runtime store (`runtime_env`), per the operator rules in the root
-   `CLAUDE.md`.
+   `AGENTS.md`.
 6. **This crate is NOT a cargo workspace member.** Its tests only run via
    `cargo test --manifest-path src/core/rxdb/Cargo.toml` — run that (plus
    `node src/apps/business-os/rxdb/tests/run-all.mjs` for the wire-adjacent

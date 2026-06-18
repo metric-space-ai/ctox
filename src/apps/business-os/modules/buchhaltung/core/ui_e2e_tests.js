@@ -2,6 +2,34 @@
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+const E2E_ACCOUNTING_COLLECTIONS = Object.freeze([
+  'accounting_accounts',
+  'accounting_journal_entries',
+  'accounting_journal_entry_lines',
+  'accounting_ledger_entries',
+  'accounting_receipts',
+  'accounting_bank_statements',
+  'accounting_bank_statement_lines',
+]);
+
+function e2eCollection(state, name) {
+  const facade = state?.ctx?.db;
+  if (!facade || !name) return null;
+  const permissionCheck = state?.ctx?.permissions?.canReadCollection;
+  if (typeof permissionCheck === 'function' && permissionCheck(name) !== true) return null;
+  try {
+    return facade.collection?.(name) || null;
+  } catch {
+    return null;
+  }
+}
+
+function e2eDb(state) {
+  const entries = E2E_ACCOUNTING_COLLECTIONS.map((name) => [name, e2eCollection(state, name)]);
+  if (entries.some(([, collection]) => !collection)) return null;
+  return Object.fromEntries(entries);
+}
+
 async function highlight(element, durationMs = 1000) {
   if (typeof element === 'string') {
     element = document.querySelector(element);
@@ -71,7 +99,7 @@ export const uiTestCases = [
       const initBtn = document.querySelector('[data-action="init-skr"]');
       await highlight(initBtn, 800);
       // Programmatically call trigger or click (skip raw prompt confirm for automated E2E run)
-      const db = state.ctx.db?.raw;
+      const db = e2eDb(state);
       if (db) {
         // Delete existing and import template
         const existing = await db.accounting_accounts.find({ selector: { skr: 'SKR03' } }).exec();
@@ -228,7 +256,7 @@ export const uiTestCases = [
       const dropzone = document.querySelector('[data-file-dropzone]');
       await highlight(dropzone, 800);
 
-      const db = state.ctx.db?.raw;
+      const db = e2eDb(state);
       if (db) {
         // Remove prior Hetzner receipt if exists
         const prior = await db.accounting_receipts.find({ selector: { filename: 'hetzner_cloud_invoice.pdf' } }).exec();
@@ -389,7 +417,7 @@ export const uiTestCases = [
       const dropzone = document.querySelector('[data-bank-dropzone]');
       await highlight(dropzone, 800);
 
-      const db = state.ctx.db?.raw;
+      const db = e2eDb(state);
       if (db) {
         // Delete prior E2E bank line if exists
         const prior = await db.accounting_bank_statement_lines.find({ selector: { narration: 'Bezahlung RE-2026-98127 Hetzner' } }).exec();
@@ -530,7 +558,7 @@ export const uiTestCases = [
       await highlight(submitBtn, 800);
 
       // Trigger programmatically to avoid manual submit block
-      const db = state.ctx.db?.raw;
+      const db = e2eDb(state);
       if (db) {
         const nr = 'ANL-2026-' + String(state.assets.length + 1).padStart(2, '0');
 
@@ -541,9 +569,7 @@ export const uiTestCases = [
         // Calculate schedule
         const sched = computeDepreciationSchedule(420000, 0, '2026-01-01', 36);
 
-        // Store asset in localStorage or mock array state
-        const assets = JSON.parse(localStorage.getItem('ctox_fibu_assets') || '[]');
-        assets.push({
+        const asset = {
           nr,
           name: 'MacBook Pro M3',
           date: '2026-01-01',
@@ -552,15 +578,13 @@ export const uiTestCases = [
           type: 'linear',
           depreciated: 0,
           value: 420000
-        });
-        localStorage.setItem('ctox_fibu_assets', JSON.stringify(assets));
+        };
 
         // Close drawer
         document.querySelector('[data-action="close-drawer"]').click();
         await sleep(500);
 
-        // Reload all data (manually update state assets since it resides in localStorage)
-        state.assets = assets;
+        state.assets = [...state.assets.filter((item) => item.name !== asset.name), asset];
         renderActiveView();
       }
 
@@ -664,7 +688,7 @@ export const uiTestCases = [
     ],
     run: async (state, log, switchView) => {
       log('Wähle eine GoBD-festgeschriebene Buchung im RxDB-Speicher aus...');
-      const db = state.ctx.db?.raw;
+      const db = e2eDb(state);
       if (!db) {
         throw new Error('Kein RxDB-Zugriff vorhanden.');
       }

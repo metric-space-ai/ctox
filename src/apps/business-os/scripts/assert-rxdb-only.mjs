@@ -120,6 +120,26 @@ function assertBusinessOsServerHttpDataApisAreGated() {
   if (runtimeSettingsRoute.test(server)) {
     offenders.push('src/core/business_os/server.rs: runtime settings must not be exposed as an HTTP route');
   }
+  for (const route of [
+    '"/api/business-os/modules/source"',
+    '"/api/business-os/modules/release"',
+    '"/api/business-os/modules/rollback"',
+  ]) {
+    if (server.includes(route)) {
+      offenders.push(`src/core/business_os/server.rs: legacy module data route must not exist in server match arms: ${route}`);
+    }
+  }
+  for (const marker of [
+    'load_module_source_bundle',
+    'save_module_source_file',
+    'SaveModuleSourceRequest',
+    'store::record_module_release',
+    'store::rollback_module_release',
+  ]) {
+    if (server.includes(marker)) {
+      offenders.push(`src/core/business_os/server.rs: legacy module HTTP handler marker must not exist: ${marker}`);
+    }
+  }
 }
 
 function assertSubscriptionAuthStartsThroughRxdbCommand() {

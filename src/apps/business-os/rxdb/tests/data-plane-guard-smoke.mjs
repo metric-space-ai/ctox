@@ -68,7 +68,7 @@ const RUST_RULES = [
   // TcpListener is allowed only inside signaling_client.rs tests (the chaos
   // test runs a local WebSocket server).
   { name: 'rust-tcp-listener', pattern: new RegExp('TcpListener'), allow: { 'signaling_client.rs': 2 } },
-  // Runtime config flows through the SQLite runtime store (CLAUDE.md rule),
+  // Runtime config flows through the SQLite runtime store (AGENTS.md rule),
   // not process env. One legacy escape hatch exists (UDP bind addr).
   { name: 'rust-env-read', pattern: new RegExp('std::env::var'), allow: { 'connection_handler_rs.rs': 1 } },
 ];

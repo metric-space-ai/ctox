@@ -406,7 +406,7 @@ async function startCreatorDataStreams(ctx, host) {
 }
 
 function getCollection(ctx, name) {
-  return ctx.db?.collection?.(name) || ctx.db?.[name] || null;
+  return ctx.db?.collection?.(name) || null;
 }
 
 function cleanupSubscription(subscription) {
@@ -1233,9 +1233,7 @@ function applyTranslations(root, t) {
 }
 
 function getCollection(name) {
-  return state.ctx?.db?.collection?.(name)
-    || state.ctx?.db?.collections?.[name]
-    || null;
+  return state.ctx?.db?.collection?.(name) || null;
 }
 
 async function loadInitialData() {

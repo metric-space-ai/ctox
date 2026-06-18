@@ -166,6 +166,10 @@ pub fn read_secret_value(root: &Path, scope: &str, name: &str) -> Result<String>
     get_secret_value(root, scope, name)
 }
 
+pub fn secret_store_path(root: &Path) -> PathBuf {
+    resolve_db_path(root)
+}
+
 pub fn write_secret_record(
     root: &Path,
     scope: &str,

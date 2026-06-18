@@ -57,8 +57,7 @@ use crate::runtime_config;
 const API_BASE: &str = "https://api.leadfeeder.com";
 const SECRET_NAME: &str = "LEADFEEDER_API_KEY";
 const LOGIN_URL: &str = "https://app.leadfeeder.com/login";
-const VERIFY_SELECTOR: &str =
-    "[data-testid=\"account-menu\"], nav, a[href*=\"/leads\"]";
+const VERIFY_SELECTOR: &str = "[data-testid=\"account-menu\"], nav, a[href*=\"/leads\"]";
 const CREDENTIAL_SELECTOR: &str =
     "input[name=\"password\"], input#password, input[type=\"password\"]";
 const CAPTURE_SCRIPT: &str = "leadfeeder.lead_capture.v1";

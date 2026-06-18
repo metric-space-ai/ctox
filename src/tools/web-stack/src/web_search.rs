@@ -1392,11 +1392,7 @@ impl<'a> WebSearchSession<'a> {
     /// from the fetch so the parallel `fetch_evidence` can do all cache
     /// resolution serially (it mutates session state) and then fetch the
     /// misses concurrently.
-    fn resolve_cached_evidence_doc(
-        &mut self,
-        query: &str,
-        hit: &SearchHit,
-    ) -> Option<EvidenceDoc> {
+    fn resolve_cached_evidence_doc(&mut self, query: &str, hit: &SearchHit) -> Option<EvidenceDoc> {
         let original_key = normalize_url_cache_key(&hit.url);
         if let Some(doc) = self.request_docs.get(&original_key).cloned() {
             return Some(doc);
@@ -5204,10 +5200,7 @@ fn render_results_context(
                 .source_id
                 .as_deref()
                 .unwrap_or(failure.requested_source.as_str());
-            lines.push(format!(
-                "- {source}: {} ({})",
-                failure.kind, failure.error
-            ));
+            lines.push(format!("- {source}: {} ({})", failure.kind, failure.error));
             if let Some(secret_name) = failure.secret_name {
                 lines.push(format!("- {source} required credential: {secret_name}"));
             }
@@ -7116,7 +7109,7 @@ mod tests {
                 raw_html: None,
             }],
             executed_queries: vec!["find CTOX_REMOTE_WEB_OK".to_string()],
-        source_failures: Vec::new(),
+            source_failures: Vec::new(),
         };
         let calls = build_web_search_calls("ws_1", &result, true);
         assert_eq!(calls.len(), 4);
@@ -8079,7 +8072,9 @@ mod tests {
         // ContextSize::High fetches 3 evidence docs — all in parallel.
         let docs = session.fetch_evidence("find CTOX_REMOTE_WEB_OK", &hits, ContextSize::High);
         assert_eq!(docs.len(), 3, "every hit yields a doc");
-        assert!(docs.iter().all(|d| d.page_text.contains("CTOX_REMOTE_WEB_OK")));
+        assert!(docs
+            .iter()
+            .all(|d| d.page_text.contains("CTOX_REMOTE_WEB_OK")));
         // Result order matches input hit order (resolved by slot index).
         assert!(docs[0].url.contains("mock-one"));
         assert!(docs[2].url.contains("mock-three"));
@@ -8100,7 +8095,11 @@ mod tests {
         let hits = vec![hit.clone(), hit.clone()];
         let mut session = WebSearchSession::new(&root, &config).expect("session");
         let docs = session.fetch_evidence("q", &hits, ContextSize::Medium);
-        assert_eq!(docs.len(), 2, "both hits resolve even though only one is fetched");
+        assert_eq!(
+            docs.len(),
+            2,
+            "both hits resolve even though only one is fetched"
+        );
         assert_eq!(docs[0].url, docs[1].url);
     }
 

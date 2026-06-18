@@ -148,7 +148,6 @@ impl RxStorageInstanceSqlite {
         }
         Ok(())
     }
-
 }
 
 /// FIX 1: free-standing checkpoint-status computation so it can run inside
@@ -1066,7 +1065,11 @@ mod tests {
             })
             .collect();
         let resp = instance.bulk_write(seed, "seed").await.unwrap();
-        assert!(resp.error.is_empty(), "seed should not error: {:?}", resp.error);
+        assert!(
+            resp.error.is_empty(),
+            "seed should not error: {:?}",
+            resp.error
+        );
 
         // Valid update (correct previous rev) + a fresh insert.
         let resp = instance
@@ -1098,14 +1101,21 @@ mod tests {
             )
             .await
             .unwrap();
-        let by_id = |id: &str| got.iter().find(|d| d.get("id").and_then(Value::as_str) == Some(id));
+        let by_id = |id: &str| {
+            got.iter()
+                .find(|d| d.get("id").and_then(Value::as_str) == Some(id))
+        };
         assert_eq!(
-            by_id("k200").and_then(|d| d.get("age")).and_then(Value::as_i64),
+            by_id("k200")
+                .and_then(|d| d.get("age"))
+                .and_then(Value::as_i64),
             Some(9999),
             "updated row reflects new state"
         );
         assert_eq!(
-            by_id("k100").and_then(|d| d.get("age")).and_then(Value::as_i64),
+            by_id("k100")
+                .and_then(|d| d.get("age"))
+                .and_then(Value::as_i64),
             Some(100),
             "unrelated neighbour untouched"
         );
@@ -1164,7 +1174,11 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            assert!(resp.error.is_empty(), "sequential write {step} must not error: {:?}", resp.error);
+            assert!(
+                resp.error.is_empty(),
+                "sequential write {step} must not error: {:?}",
+                resp.error
+            );
         }
 
         // Spot-check a couple of updated rows reflect the new state.

@@ -4,7 +4,7 @@
 //! Per-op Metal Shading Language kernel ports for Qwen3.6-35B-A3B Q4_K_M.
 //!
 //! This module hosts **two** kernel sources, side by side, per
-//! CLAUDE.md rule 4 + 5:
+//! AGENTS.md Inference Model Rules:
 //!
 //! - `metal_port::ops::*` — Rust dispatchers that call the vendored
 //!   upstream kernels in `vendor/ggml-metal/`. These are the

@@ -7,6 +7,11 @@ module manifests and runtime status replicate ONLY over RxDB/WebRTC and
 persist in the RxDB store opened by `rxdb_peer.rs`. See `docs/ctox-rxdb.md`
 and the root `README.md` "Data Boundary".
 
+This directory also owns server-side Business OS policy, module lifecycle,
+MCP delegation, app/source mutations, command execution, and projections from
+core CTOX state into the RxDB document store. Browser UI helpers may mirror
+permissions for ergonomics, but server-side policy remains authoritative.
+
 Hard rules:
 
 1. **Never add an HTTP fallback/bridge for those records** — not in
@@ -22,7 +27,13 @@ Hard rules:
    registry (`src/apps/business-os/rxdb/src/schema.mjs`) must mirror —
    regenerate both sides together, never edit one side alone.
 4. **No new process-env toggles** — runtime config flows through the SQLite
-   runtime store (root `CLAUDE.md` operator rules).
-5. After changes here run `cargo check`,
+   runtime store (root `AGENTS.md` operator rules).
+5. **Policy-gated mutations stay server-gated.** Any action that installs,
+   uninstalls, releases, rolls back, assigns, edits, views source for, or writes
+   data through a Business OS app must pass through `policy.rs` or an explicit
+   equivalent server-side check. Do not rely on browser-only hiding/disablement.
+6. **Business OS MCP is control/delegation, not sync.** MCP queries/actions must
+   respect local store policy and must not become a backdoor HTTP data bridge.
+7. After changes here run `cargo check`,
    `cargo test --manifest-path src/core/rxdb/Cargo.toml`, and
    `node src/apps/business-os/rxdb/tests/run-all.mjs` — keep all green.

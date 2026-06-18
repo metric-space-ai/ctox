@@ -17,7 +17,7 @@ const INDEXEDDB_PREFLIGHT_TIMEOUT_MS = 8000;
 const RXDB_MODULE_IMPORT_TIMEOUT_MS = 8000;
 const RXDB_CREATE_DATABASE_TIMEOUT_MS = 8000;
 const RXDB_RECOVERY_OPEN_TIMEOUT_MS = 20000;
-const RXDB_BUNDLE_URL = '../rxdb/dist/ctox-rxdb-js.mjs?v=20260614-rxdb-cancel-unregister';
+const RXDB_BUNDLE_URL = '../rxdb/dist/ctox-rxdb-js.mjs?v=20260617-support-schema';
 
 export async function createBusinessDb({ name }) {
   try {

@@ -946,13 +946,13 @@ function createInitialModel(input) {
 }
 
 function getCollection(ctx, name) {
-  const collection = ctx?.db?.[name] || ctx?.db?.collection?.(name);
+  const collection = ctx?.db?.collection?.(name);
   if (!collection) throw new Error(`Business-OS Collection fehlt: ${name}`);
   return collection;
 }
 
 async function findAll(ctx, name) {
-  const collection = ctx?.db?.[name] || ctx?.db?.collection?.(name);
+  const collection = ctx?.db?.collection?.(name);
   if (!collection?.find) return [];
   const docs = await collection.find().exec();
   return docs.map((doc) => doc?.toJSON ? doc.toJSON() : doc);

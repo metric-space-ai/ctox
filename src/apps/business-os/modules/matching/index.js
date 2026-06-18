@@ -3,7 +3,7 @@ const MATCHING_BUILD = '20260606-load-sync-feedback1';
 export async function mount(ctx) {
   await ensureStyles();
   const dataSource = await import('./ui/businessOsDataSource.js');
-  dataSource.setBusinessOsRawDatabase?.(ctx.db?.raw || null);
+  dataSource.setBusinessOsDatabaseContext?.(ctx);
   ctx.host.innerHTML = await loadModuleMarkup();
   ctx.host.dataset.matchingModule = 'native';
   ctx.left?.replaceChildren?.();

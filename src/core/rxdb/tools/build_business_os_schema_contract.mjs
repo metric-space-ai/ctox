@@ -22,6 +22,7 @@ const MODULES = [
   'iot',
   'matching',
   'reports',
+  'support',
   'tickets',
 ];
 

@@ -286,9 +286,13 @@ function writeLayout(next) {
   localStorage.setItem(LAYOUT_KEY, JSON.stringify(next));
 }
 
+function ticketCollection(name) {
+  return state.ctx?.db?.collection?.(name) || null;
+}
+
 function wireRealtime() {
   const subscriptions = collectionNames
-    .map((name) => state.ctx.db?.raw?.[name]?.$?.subscribe?.(() => scheduleRefresh()))
+    .map((name) => ticketCollection(name)?.$?.subscribe?.(() => scheduleRefresh()))
     .filter(Boolean);
   return () => subscriptions.forEach((sub) => {
     try { sub.unsubscribe?.(); } catch {}
@@ -315,7 +319,7 @@ async function refreshTickets() {
 }
 
 async function loadCollection(name) {
-  const collection = state.ctx.db?.raw?.[name];
+  const collection = ticketCollection(name);
   if (!collection) return [];
   const docs = await collection.find().exec();
   return docs.map((doc) => doc.toJSON()).filter((doc) => !doc.is_deleted && !doc._deleted);
@@ -324,7 +328,7 @@ async function loadCollection(name) {
 async function startTicketCollections() {
   const sync = state.ctx.sync;
   if (typeof sync?.startCollection !== 'function') return;
-  const available = collectionNames.filter((name) => state.ctx.db?.raw?.[name]);
+  const available = collectionNames.filter((name) => ticketCollection(name));
   if (!available.length) return;
   const primary = available.includes(TICKET_PRIMARY_COLLECTION) ? TICKET_PRIMARY_COLLECTION : available[0];
   try {
@@ -387,7 +391,7 @@ function isCollectionDiagnosticsReady(diagnostics) {
 function shouldShowTicketSyncState() {
   if (state.data.ctox_ticket_items.length) return false;
   if (typeof state.ctx.sync?.startCollection !== 'function') return false;
-  return !state.ctx.db?.raw?.[TICKET_PRIMARY_COLLECTION] || !isCollectionSyncReady(TICKET_PRIMARY_COLLECTION);
+  return !ticketCollection(TICKET_PRIMARY_COLLECTION) || !isCollectionSyncReady(TICKET_PRIMARY_COLLECTION);
 }
 
 function filteredTickets() {

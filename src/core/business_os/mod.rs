@@ -4,9 +4,11 @@
 mod browser_runtime;
 mod importer;
 pub mod mcp_channel;
+pub mod policy;
 mod rxdb_peer;
 pub mod server;
 pub mod store;
+mod support;
 
 pub use rxdb_peer::browser_context_capture;
 pub use rxdb_peer::browser_session_status;

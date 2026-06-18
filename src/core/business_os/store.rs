@@ -1,10 +1,17 @@
 // Origin: CTOX
 // License: Apache-2.0
 
+use super::policy::{
+    self, BusinessOsActor, BusinessOsPermission, BusinessOsScope, BusinessOsScopeType,
+    PolicyDecision,
+};
 use crate::mission::channels;
 use anyhow::Context;
 use base64::Engine;
 use ctox_app_server_protocol::AuthMode as ApiAuthMode;
+use ring::aead;
+use ring::hmac;
+use ring::rand::{SecureRandom, SystemRandom};
 use rusqlite::params;
 use rusqlite::params_from_iter;
 use rusqlite::types::Value as SqlValue;
@@ -16,7 +23,7 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::io;
@@ -59,6 +66,13 @@ const CHATGPT_AUTH_SECRET_SCOPE: &str = "ctox-auth";
 const CHATGPT_AUTH_SECRET_NAME: &str = "chatgpt_subscription_auth_json";
 const BUSINESS_OS_SECRET_SCOPE: &str = "business-os";
 const BUSINESS_OS_ROOM_PASSWORD_SECRET_NAME: &str = "webrtc_room_password";
+const BUSINESS_OS_BACKUP_MANIFEST_SIGNING_SECRET_NAME: &str = "backup_manifest_signing_key_v1";
+const BUSINESS_OS_BACKUP_PORTABLE_ENCRYPTION_SECRET_NAME: &str =
+    "portable_backup_encryption_key_v1";
+const BUSINESS_OS_BACKUP_MANIFEST_SCHEMA_VERSION: i64 = 1;
+const BUSINESS_OS_BACKUP_RAW_RETENTION_DAYS: i64 = 14;
+const BUSINESS_OS_BACKUP_PORTABLE_CHUNK_SIZE: usize = 4 * 1024 * 1024;
+const BUSINESS_OS_BACKUP_PORTABLE_MAGIC: &[u8] = b"CTOX-BOS-PORTABLE-BACKUP-V1\n";
 const BUSINESS_OS_QUEUE_PROMPT_MAX_CHARS: usize = 96_000;
 const BUSINESS_OS_QUEUE_PROMPT_JSON_PREVIEW_CHARS: usize = 18_000;
 const BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS: usize = 8_000;
@@ -66,6 +80,12 @@ const BUSINESS_OS_QUEUE_ORPHAN_REPAIR_AGE_MS: i64 = 10 * 60 * 1_000;
 const BUSINESS_OS_CHAT_ATTACHMENT_CHUNK_SIZE: usize = 16 * 1024;
 const BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME: &str = "sha256-bytes-v1";
 const BUSINESS_OS_CHAT_ATTACHMENT_CHUNK_HASH_SCHEME: &str = "sha256-base64-chunk-v1";
+const DEFAULT_BUSINESS_AUDIT_RETENTION_DAYS: i64 = 90;
+const BUSINESS_AUDIT_EXPORT_DIR: &str = "runtime/business-os/audit-exports";
+const BUSINESS_RESTORE_DRILL_EXPORT_DIR: &str = "runtime/business-os/restore-drills";
+const BUSINESS_OS_MCP_POLICY_PAYLOAD_KEY: &str = "business_os.mcp_policy.v1";
+const BUSINESS_OS_AUDIT_RETENTION_POLICY_PAYLOAD_KEY: &str =
+    "business_os.audit_retention_policy.v1";
 
 #[derive(Debug, Clone, Default)]
 struct ChatgptSubscriptionAuthStatus {
@@ -144,6 +164,15 @@ pub struct BusinessOsUser {
     pub updated_at_ms: i64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct BusinessOsTrustedActor {
+    pub id: String,
+    pub display_name: String,
+    pub role: String,
+    pub active: bool,
+    pub persisted: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct BusinessOsUserMutation {
     pub id: String,
@@ -151,6 +180,8 @@ pub struct BusinessOsUserMutation {
     pub role: String,
     #[serde(default = "default_true")]
     pub active: bool,
+    #[serde(default)]
+    pub accept_recovery_responsibility: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,6 +197,52 @@ pub struct BusinessCommand {
     pub payload: Value,
     #[serde(default)]
     pub client_context: Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct BusinessOsWhyDiagnosticsRequest {
+    pub module_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct BusinessActivityListRequest {
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct BusinessAuditRetentionRequest {
+    #[serde(default)]
+    retention_days: Option<i64>,
+    #[serde(default)]
+    prune: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct BusinessAuditRetentionPolicySetRequest {
+    retention_days: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct BusinessAuditRetentionPolicyPayload {
+    schema_version: u32,
+    retention_days: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct BusinessBackupRestoreDrillRequest {
+    #[serde(default)]
+    module_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct BusinessSupportDiagnosticsExportRequest {
+    #[serde(default)]
+    module_id: Option<String>,
+    #[serde(default)]
+    limit: Option<i64>,
+    #[serde(default = "default_true")]
+    include_why: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -249,6 +326,8 @@ pub struct ModuleFounderAssignment {
     pub user_id: String,
     #[serde(default = "default_true")]
     pub active: bool,
+    #[serde(default)]
+    pub accept_recovery_responsibility: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -315,6 +394,18 @@ pub struct ChannelCommandRequest {
 pub struct ModuleReleaseRequest {
     pub module_id: String,
     #[serde(default)]
+    pub target_version: String,
+    #[serde(default)]
+    pub release_channel: String,
+    #[serde(default)]
+    pub source_version_id: String,
+    #[serde(default)]
+    pub rollback_version_id: String,
+    #[serde(default)]
+    pub responsible_user_ids: Vec<String>,
+    #[serde(default)]
+    pub data_access_review: Value,
+    #[serde(default, alias = "release_notes")]
     pub notes: String,
 }
 
@@ -327,6 +418,20 @@ pub struct ModuleRollbackRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModuleVersionListRequest {
     pub module_id: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ModuleLifecycleProjectionRepairRequest {
+    #[serde(default)]
+    pub module_id: String,
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default)]
+    pub repair_stale_grants: bool,
+    #[serde(default)]
+    pub repair_invalid_version_refs: bool,
+    #[serde(default)]
+    pub repair_orphan_private_apps: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -395,6 +500,16 @@ struct ModuleManifest {
     collections: Vec<String>,
     #[serde(default)]
     layout: Value,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    lifecycle: Value,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    visibility_state: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    audience: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    release_channel: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    creator_user_id: String,
     #[serde(default)]
     source: String,
     #[serde(default)]
@@ -1138,17 +1253,11 @@ fn seed_configured_business_users(conn: &Connection) -> anyhow::Result<()> {
 }
 
 fn normalize_business_role(role: &str) -> String {
-    match role.trim().to_ascii_lowercase().as_str() {
-        "owner" | "chef" => "chef".to_owned(),
-        "admin" | "business_os_admin" => "admin".to_owned(),
-        "founder" => "founder".to_owned(),
-        "user" | "business_os_user" => "user".to_owned(),
-        _ => "user".to_owned(),
-    }
+    policy::normalize_role(role)
 }
 
 fn role_can_manage(role: &str) -> bool {
-    matches!(normalize_business_role(role).as_str(), "chef" | "admin")
+    policy::role_can_manage(role)
 }
 
 fn session_user_id(session: &BusinessOsSession) -> Option<&str> {
@@ -1163,8 +1272,149 @@ fn session_role(session: &BusinessOsSession) -> &str {
         .unwrap_or("user")
 }
 
+fn policy_actor_from_session(session: &BusinessOsSession) -> BusinessOsActor {
+    BusinessOsActor::new(
+        session_user_id(session).map(str::to_owned),
+        session_role(session),
+    )
+}
+
+fn module_policy_decision(
+    root: &Path,
+    session: &BusinessOsSession,
+    permission: BusinessOsPermission,
+    module_id: &str,
+) -> anyhow::Result<PolicyDecision> {
+    let actor = policy_actor_from_session(session);
+    let conn = open_store(root)?;
+    let assigned_to_actor = if actor.role.as_str() == "founder" {
+        if let Some(user_id) = session_user_id(session) {
+            founder_owns_module(&conn, module_id, user_id)?
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    let scope = BusinessOsScope::module(module_id.trim(), assigned_to_actor);
+    evaluate_policy_with_explicit_grants(&conn, &actor, permission, &scope)
+}
+
+fn scoped_policy_decision(
+    root: &Path,
+    session: &BusinessOsSession,
+    permission: BusinessOsPermission,
+    scope: BusinessOsScope,
+) -> anyhow::Result<PolicyDecision> {
+    let actor = policy_actor_from_session(session);
+    let conn = open_store(root)?;
+    evaluate_policy_with_explicit_grants(&conn, &actor, permission, &scope)
+}
+
+pub fn trusted_mcp_actor_policy_decision(
+    root: &Path,
+    actor_id: &str,
+    actor_display_name: &str,
+    permission: BusinessOsPermission,
+    scope_type: BusinessOsScopeType,
+    scope_id: Option<&str>,
+) -> anyhow::Result<PolicyDecision> {
+    let conn = open_store(root)?;
+    let actor = trusted_mcp_actor_with_conn(&conn, actor_id, actor_display_name)?;
+    trusted_actor_policy_decision_with_conn(
+        &conn,
+        &actor.id,
+        &actor.role,
+        permission,
+        scope_type,
+        scope_id,
+    )
+}
+
+pub fn trusted_mcp_actor(
+    root: &Path,
+    actor_id: &str,
+    actor_display_name: &str,
+) -> anyhow::Result<BusinessOsTrustedActor> {
+    let conn = open_store(root)?;
+    trusted_mcp_actor_with_conn(&conn, actor_id, actor_display_name)
+}
+
+fn trusted_mcp_actor_with_conn(
+    conn: &Connection,
+    actor_id: &str,
+    actor_display_name: &str,
+) -> anyhow::Result<BusinessOsTrustedActor> {
+    let actor_id = actor_id.trim();
+    seed_configured_business_users(conn)?;
+    if let Some(user) = active_business_user(conn, actor_id)? {
+        return Ok(BusinessOsTrustedActor {
+            id: user.id,
+            display_name: user.display_name,
+            role: user.role,
+            active: user.active,
+            persisted: true,
+        });
+    }
+    let id = if actor_id.is_empty() {
+        "mcp:local".to_owned()
+    } else {
+        actor_id.to_owned()
+    };
+    Ok(BusinessOsTrustedActor {
+        id: id.clone(),
+        display_name: if actor_display_name.trim().is_empty() {
+            id
+        } else {
+            actor_display_name.trim().to_owned()
+        },
+        role: "user".to_owned(),
+        active: true,
+        persisted: false,
+    })
+}
+
+fn trusted_actor_policy_decision_with_conn(
+    conn: &Connection,
+    actor_id: &str,
+    actor_role: &str,
+    permission: BusinessOsPermission,
+    scope_type: BusinessOsScopeType,
+    scope_id: Option<&str>,
+) -> anyhow::Result<PolicyDecision> {
+    let actor = BusinessOsActor::new(Some(actor_id.to_owned()), actor_role);
+    let scope = match scope_type {
+        BusinessOsScopeType::Workspace => BusinessOsScope::workspace(),
+        BusinessOsScopeType::Module => {
+            let module_id = scope_id.unwrap_or("").trim();
+            let assigned_to_actor =
+                actor.role.as_str() == "founder" && founder_owns_module(conn, module_id, actor_id)?;
+            BusinessOsScope::module(module_id, assigned_to_actor)
+        }
+        BusinessOsScopeType::Task => {
+            BusinessOsScope::task(scope_id.unwrap_or("").trim(), false, false)
+        }
+        other => BusinessOsScope {
+            scope_type: other,
+            scope_id: scope_id
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
+            assigned_to_actor: false,
+            owned_by_actor: false,
+        },
+    };
+    evaluate_policy_with_explicit_grants(conn, &actor, permission, &scope)
+}
+
 pub fn session_can_manage_all(session: &BusinessOsSession) -> bool {
-    role_can_manage(session_role(session))
+    let actor = policy_actor_from_session(session);
+    policy::evaluate(
+        &actor,
+        BusinessOsPermission::UsersManage,
+        &BusinessOsScope::workspace(),
+    )
+    .allowed
 }
 
 pub fn session_can_modify_module(
@@ -1172,37 +1422,1191 @@ pub fn session_can_modify_module(
     session: &BusinessOsSession,
     module_id: &str,
 ) -> anyhow::Result<bool> {
-    if session_can_manage_all(session) {
-        return Ok(true);
-    }
-    if normalize_business_role(session_role(session)) != "founder" {
-        return Ok(false);
-    }
-    let Some(user_id) = session_user_id(session) else {
-        return Ok(false);
-    };
-    let conn = open_store(root)?;
-    Ok(founder_owns_module(&conn, module_id, user_id)?)
+    Ok(module_policy_decision(root, session, BusinessOsPermission::AppsModify, module_id)?.allowed)
+}
+
+fn session_has_workspace_permission(
+    root: &Path,
+    session: &BusinessOsSession,
+    permission: BusinessOsPermission,
+) -> anyhow::Result<bool> {
+    Ok(scoped_policy_decision(root, session, permission, BusinessOsScope::workspace())?.allowed)
+}
+
+fn session_can_manage_task(
+    root: &Path,
+    session: &BusinessOsSession,
+    task_id: &str,
+) -> anyhow::Result<bool> {
+    Ok(task_policy_decision(root, session, task_id)?.allowed)
 }
 
 fn founder_owns_module(conn: &Connection, module_id: &str, user_id: &str) -> anyhow::Result<bool> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*)
-         FROM business_module_acl
-         WHERE module_id = ?1 AND user_id = ?2 AND role = 'founder' AND active = 1",
+         FROM business_module_acl acl
+         LEFT JOIN business_users user ON user.user_id = acl.user_id
+         WHERE acl.module_id = ?1
+           AND acl.user_id = ?2
+           AND acl.role = 'founder'
+           AND acl.active = 1
+           AND COALESCE(user.active, 1) = 1",
         params![module_id.trim(), user_id.trim()],
         |row| row.get(0),
     )?;
     Ok(count > 0)
 }
 
+fn evaluate_policy_with_explicit_grants(
+    conn: &Connection,
+    actor: &BusinessOsActor,
+    permission: BusinessOsPermission,
+    scope: &BusinessOsScope,
+) -> anyhow::Result<PolicyDecision> {
+    let decision = policy::evaluate(actor, permission, scope);
+    if decision.allowed {
+        return Ok(decision);
+    }
+    if active_permission_grant_allows(conn, actor, permission, scope)? {
+        return Ok(policy::allow_decision(permission, scope));
+    }
+    Ok(decision)
+}
+
+fn active_permission_grant_allows(
+    conn: &Connection,
+    actor: &BusinessOsActor,
+    permission: BusinessOsPermission,
+    scope: &BusinessOsScope,
+) -> anyhow::Result<bool> {
+    let actor_id = actor.id.as_deref().unwrap_or("").trim();
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*)
+         FROM business_permission_grants
+         WHERE active = 1
+           AND permission = ?1
+           AND scope_type = ?2
+           AND scope_id = ?3
+           AND (
+                (subject_type = 'role' AND subject_id = ?4)
+                OR (subject_type = 'user' AND subject_id = ?5)
+           )",
+        params![
+            permission.as_str(),
+            scope.scope_type.as_str(),
+            scope.scope_id.as_deref().unwrap_or(""),
+            actor.role.as_str(),
+            actor_id,
+        ],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn allowed_permissions_for_projection(
+    actor: &BusinessOsActor,
+    scope: &BusinessOsScope,
+) -> Vec<Value> {
+    BusinessOsPermission::all()
+        .iter()
+        .copied()
+        .filter(|permission| policy::evaluate(actor, *permission, scope).allowed)
+        .map(|permission| Value::String(permission.as_str().to_owned()))
+        .collect()
+}
+
+fn default_permission_projection() -> Value {
+    let roles = ["chef", "admin", "founder", "user"];
+    let mut role_defaults = serde_json::Map::new();
+    for role in roles {
+        let actor = BusinessOsActor::new(None, role);
+        role_defaults.insert(
+            role.to_owned(),
+            serde_json::json!({
+                "workspace": allowed_permissions_for_projection(
+                    &actor,
+                    &BusinessOsScope::workspace()
+                ),
+                "module": allowed_permissions_for_projection(
+                    &actor,
+                    &BusinessOsScope::module("__module__", false)
+                ),
+                "assigned_module": allowed_permissions_for_projection(
+                    &actor,
+                    &BusinessOsScope::module("__module__", true)
+                ),
+                "owned_task": allowed_permissions_for_projection(
+                    &actor,
+                    &BusinessOsScope::task("__task__", true, false)
+                )
+            }),
+        );
+    }
+    Value::Object(role_defaults)
+}
+
+fn founder_assignment_permission_projection(founders: &HashMap<String, Vec<Value>>) -> Value {
+    let mut modules = serde_json::Map::new();
+    for (module_id, assignments) in founders {
+        let mut users = serde_json::Map::new();
+        for assignment in assignments {
+            if assignment.get("active").and_then(Value::as_bool) == Some(false) {
+                continue;
+            }
+            if assignment.get("user_active").and_then(Value::as_bool) == Some(false) {
+                continue;
+            }
+            let Some(user_id) = assignment.get("user_id").and_then(Value::as_str) else {
+                continue;
+            };
+            let actor = BusinessOsActor::new(Some(user_id.to_owned()), "founder");
+            users.insert(
+                user_id.to_owned(),
+                Value::Array(allowed_permissions_for_projection(
+                    &actor,
+                    &BusinessOsScope::module(module_id.as_str(), true),
+                )),
+            );
+        }
+        if !users.is_empty() {
+            modules.insert(module_id.clone(), Value::Object(users));
+        }
+    }
+    Value::Object(modules)
+}
+
+fn explicit_permission_grants_projection(conn: &Connection) -> anyhow::Result<Value> {
+    let mut stmt = conn.prepare(
+        "SELECT grant_id, subject_type, subject_id, permission, scope_type,
+                scope_id, active, reason, created_by, created_at_ms, updated_at_ms
+         FROM business_permission_grants
+         ORDER BY scope_type ASC, scope_id ASC, permission ASC, subject_type ASC, subject_id ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(serde_json::json!({
+            "grant_id": row.get::<_, String>(0)?,
+            "subject_type": row.get::<_, String>(1)?,
+            "subject_id": row.get::<_, String>(2)?,
+            "permission": row.get::<_, String>(3)?,
+            "scope_type": row.get::<_, String>(4)?,
+            "scope_id": row.get::<_, String>(5)?,
+            "active": row.get::<_, i64>(6)? != 0,
+            "reason": row.get::<_, String>(7)?,
+            "created_by": row.get::<_, String>(8)?,
+            "created_at_ms": row.get::<_, i64>(9)?,
+            "updated_at_ms": row.get::<_, i64>(10)?,
+        }))
+    })?;
+    let grants = rows.collect::<Result<Vec<_>, _>>()?;
+    Ok(Value::Array(grants))
+}
+
+fn permission_model_projection(
+    conn: &Connection,
+    founders: &HashMap<String, Vec<Value>>,
+) -> anyhow::Result<Value> {
+    Ok(serde_json::json!({
+        "version": 1,
+        "source": "business_permission_grants+business_module_acl",
+        "deny_supported": false,
+        "permissions": BusinessOsPermission::all()
+            .iter()
+            .map(|permission| Value::String(permission.as_str().to_owned()))
+            .collect::<Vec<_>>(),
+        "role_defaults": default_permission_projection(),
+        "module_assignments": founder_assignment_permission_projection(founders),
+        "explicit_grants": explicit_permission_grants_projection(conn)?,
+    }))
+}
+
+#[derive(Debug, Default)]
+struct ModuleLifecycleProjectionContext {
+    responsible_user_ids: BTreeMap<String, Vec<String>>,
+    preview_grant_ids: BTreeMap<String, Vec<String>>,
+    preview_user_ids: BTreeMap<String, Vec<String>>,
+    creator_user_ids: BTreeMap<String, String>,
+    latest_releases: BTreeMap<String, Value>,
+    release_history: BTreeMap<String, Vec<Value>>,
+}
+
+fn module_lifecycle_projection_context(
+    root: &Path,
+) -> anyhow::Result<ModuleLifecycleProjectionContext> {
+    let conn = open_store(root)?;
+    let mut context = ModuleLifecycleProjectionContext::default();
+
+    let mut founder_stmt = conn.prepare(
+        "SELECT acl.module_id, acl.user_id
+         FROM business_module_acl acl
+         LEFT JOIN business_users user ON user.user_id = acl.user_id
+         WHERE acl.role = 'founder'
+           AND acl.active = 1
+           AND COALESCE(user.active, 1) = 1
+         ORDER BY acl.module_id ASC, acl.user_id ASC",
+    )?;
+    let founder_rows = founder_stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for row in founder_rows {
+        let (module_id, user_id) = row?;
+        context
+            .responsible_user_ids
+            .entry(module_id)
+            .or_default()
+            .push(user_id);
+    }
+    drop(founder_stmt);
+
+    let mut grant_stmt = conn.prepare(
+        "SELECT scope_id, grant_id, subject_type, subject_id
+         FROM business_permission_grants
+         WHERE active = 1
+           AND scope_type = 'module'
+           AND permission = ?1
+         ORDER BY scope_id ASC, grant_id ASC",
+    )?;
+    let grant_rows =
+        grant_stmt.query_map(params![BusinessOsPermission::AppsView.as_str()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+    for row in grant_rows {
+        let (module_id, grant_id, subject_type, subject_id) = row?;
+        context
+            .preview_grant_ids
+            .entry(module_id.clone())
+            .or_default()
+            .push(grant_id);
+        if subject_type == "user" && !subject_id.trim().is_empty() {
+            context
+                .preview_user_ids
+                .entry(module_id)
+                .or_default()
+                .push(subject_id);
+        }
+    }
+    drop(grant_stmt);
+
+    let mut version_stmt = conn.prepare(
+        "SELECT module_id, created_by
+         FROM business_module_versions
+         WHERE TRIM(created_by) <> ''
+         ORDER BY module_id ASC, seq ASC",
+    )?;
+    let version_rows = version_stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for row in version_rows {
+        let (module_id, created_by) = row?;
+        context
+            .creator_user_ids
+            .entry(module_id)
+            .or_insert(created_by);
+    }
+    drop(version_stmt);
+
+    let mut release_stmt = conn.prepare(
+        "SELECT module_id, version_id, version, status, created_by, created_at_ms, notes, snapshot_json
+         FROM business_module_releases
+         ORDER BY module_id ASC, version DESC",
+    )?;
+    let release_rows = release_stmt.query_map([], |row| {
+        let snapshot_json = row.get::<_, String>(7)?;
+        let snapshot = serde_json::from_str::<Value>(&snapshot_json).unwrap_or(Value::Null);
+        Ok((
+            row.get::<_, String>(0)?,
+            serde_json::json!({
+                "version_id": row.get::<_, String>(1)?,
+                "version": row.get::<_, i64>(2)?,
+                "status": row.get::<_, String>(3)?,
+                "created_by": row.get::<_, String>(4)?,
+                "created_at_ms": row.get::<_, i64>(5)?,
+                "notes": row.get::<_, String>(6)?,
+                "snapshot": snapshot,
+            }),
+        ))
+    })?;
+    for row in release_rows {
+        let (module_id, release) = row?;
+        if let Some(created_by) = release.get("created_by").and_then(Value::as_str) {
+            if !created_by.trim().is_empty() {
+                context
+                    .creator_user_ids
+                    .entry(module_id.clone())
+                    .or_insert_with(|| created_by.to_owned());
+            }
+        }
+        if release.get("status").and_then(Value::as_str) == Some("released") {
+            context
+                .latest_releases
+                .entry(module_id.clone())
+                .or_insert_with(|| release.clone());
+        }
+        context
+            .release_history
+            .entry(module_id)
+            .or_default()
+            .push(release);
+    }
+
+    Ok(context)
+}
+
+fn parse_business_app_semver_major(version: &str) -> Option<u64> {
+    let version = version.trim();
+    if version.is_empty() {
+        return None;
+    }
+    let mut parts = version.split('.');
+    let major = parts.next()?;
+    let minor = parts.next()?;
+    let patch = parts.next()?;
+    if parts.next().is_some()
+        || [major, minor, patch]
+            .iter()
+            .any(|part| !is_plain_semver_number(part))
+    {
+        return None;
+    }
+    major.parse::<u64>().ok()
+}
+
+fn is_plain_semver_number(part: &str) -> bool {
+    !part.is_empty()
+        && part.chars().all(|ch| ch.is_ascii_digit())
+        && (part == "0" || !part.starts_with('0'))
+}
+
+fn normalized_module_release_channel(raw: &str) -> anyhow::Result<String> {
+    let value = raw.trim().to_ascii_lowercase();
+    if value.is_empty() {
+        return Ok("team".to_owned());
+    }
+    match value.as_str() {
+        "team" | "restricted" => Ok(value),
+        _ => anyhow::bail!("release_channel must be team or restricted"),
+    }
+}
+
+fn manifest_value_is_runtime_installed(manifest: &Value) -> bool {
+    let source = manifest
+        .get("source")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let install_scope = manifest
+        .get("install_scope")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let entry = manifest
+        .get("entry")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    source == "installed" || install_scope == "installed" || entry.starts_with("installed-modules/")
+}
+
+fn module_manifest_collection_ids(manifest: &Value) -> Vec<String> {
+    let mut collections = manifest
+        .get("collections")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    collections.sort();
+    collections.dedup();
+    collections
+}
+
+fn module_release_review_completed(review: &Value) -> bool {
+    review.get("completed").and_then(Value::as_bool) == Some(true)
+        || matches!(
+            review
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase()
+                .as_str(),
+            "completed" | "approved" | "reviewed"
+        )
+}
+
+fn module_release_review_collection_ids(review: &Value) -> Vec<String> {
+    let Some(values) = review.get("collections").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut collections = values
+        .iter()
+        .filter_map(|value| {
+            value.as_str().or_else(|| {
+                value
+                    .get("collection")
+                    .or_else(|| value.get("collection_id"))
+                    .or_else(|| value.get("id"))
+                    .or_else(|| value.get("name"))
+                    .and_then(Value::as_str)
+            })
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    collections.sort();
+    collections.dedup();
+    collections
+}
+
+fn module_release_data_access_review_summary(
+    conn: &Connection,
+    module_id: &str,
+    review: &Value,
+    expected_collections: &[String],
+    reviewed_at_ms: i64,
+) -> anyhow::Result<Value> {
+    anyhow::ensure!(
+        review.is_object(),
+        "data_access_review is required before publishing a Team release"
+    );
+    anyhow::ensure!(
+        module_release_review_completed(review),
+        "data_access_review must be completed before publishing a Team release"
+    );
+    let reviewed_collections = module_release_review_collection_ids(review);
+    anyhow::ensure!(
+        reviewed_collections == expected_collections,
+        "data_access_review collections must match the module manifest collections"
+    );
+    let expected = expected_collections
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let read_collections = release_review_access_collection_ids(review, "read_collections");
+    let write_collections = release_review_access_collection_ids(review, "write_collections");
+    let locked_read_collections =
+        release_review_access_collection_ids(review, "locked_read_collections");
+    let locked_write_collections =
+        release_review_access_collection_ids(review, "locked_write_collections");
+    let unknown_read = read_collections
+        .iter()
+        .find(|collection| !expected.contains(collection.as_str()));
+    anyhow::ensure!(
+        unknown_read.is_none(),
+        "data_access_review read_collections must be declared in the module manifest"
+    );
+    let unknown_write = write_collections
+        .iter()
+        .find(|collection| !expected.contains(collection.as_str()));
+    anyhow::ensure!(
+        unknown_write.is_none(),
+        "data_access_review write_collections must be declared in the module manifest"
+    );
+    let unknown_locked_read = locked_read_collections
+        .iter()
+        .find(|collection| !expected.contains(collection.as_str()));
+    anyhow::ensure!(
+        unknown_locked_read.is_none(),
+        "data_access_review locked_read_collections must be declared in the module manifest"
+    );
+    let unknown_locked_write = locked_write_collections
+        .iter()
+        .find(|collection| !expected.contains(collection.as_str()));
+    anyhow::ensure!(
+        unknown_locked_write.is_none(),
+        "data_access_review locked_write_collections must be declared in the module manifest"
+    );
+    let locked_state_behavior = release_review_locked_state_behavior(review);
+    let read_reconciliation = release_review_access_reconciliation(
+        conn,
+        module_id,
+        BusinessOsPermission::DataRead,
+        &read_collections,
+        &locked_read_collections,
+        &locked_state_behavior,
+    )?;
+    let write_reconciliation = release_review_access_reconciliation(
+        conn,
+        module_id,
+        BusinessOsPermission::DataWrite,
+        &write_collections,
+        &locked_write_collections,
+        &locked_state_behavior,
+    )?;
+    Ok(serde_json::json!({
+        "completed": true,
+        "status": review
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("completed"),
+        "reviewed_by": review
+            .get("reviewed_by")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        "reviewed_at_ms": review
+            .get("reviewed_at_ms")
+            .and_then(Value::as_i64)
+            .unwrap_or(reviewed_at_ms),
+        "collections": reviewed_collections,
+        "read_collections": read_collections,
+        "write_collections": write_collections,
+        "locked_read_collections": locked_read_collections,
+        "locked_write_collections": locked_write_collections,
+        "locked_state_behavior": locked_state_behavior,
+        "grant_reconciliation": {
+            "audience": "team",
+            "role": "user",
+            "read": read_reconciliation,
+            "write": write_reconciliation
+        },
+        "review_is_evidence_only": true,
+        "grants_implied": false,
+        "notes": review
+            .get("notes")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+    }))
+}
+
+fn ensure_module_version_ref_exists(
+    conn: &Connection,
+    module_id: &str,
+    version_id: &str,
+    field_name: &str,
+) -> anyhow::Result<()> {
+    let version_id = version_id.trim();
+    if version_id.is_empty() {
+        return Ok(());
+    }
+    let exists = module_version_ref_exists(conn, module_id, version_id)?;
+    anyhow::ensure!(
+        exists,
+        "{field_name} must reference an existing module version for this module"
+    );
+    Ok(())
+}
+
+fn module_version_ref_exists(
+    conn: &Connection,
+    module_id: &str,
+    version_id: &str,
+) -> anyhow::Result<bool> {
+    let version_id = version_id.trim();
+    if version_id.is_empty() {
+        return Ok(false);
+    }
+    Ok(conn
+        .query_row(
+            "SELECT 1
+             FROM business_module_versions
+             WHERE module_id = ?1 AND version_id = ?2
+             LIMIT 1",
+            params![module_id, version_id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
+fn release_review_locked_state_behavior(review: &Value) -> String {
+    review
+        .get("locked_state_behavior")
+        .or_else(|| review.pointer("/locked_state/behavior"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_owned()
+}
+
+fn release_review_access_reconciliation(
+    conn: &Connection,
+    module_id: &str,
+    permission: BusinessOsPermission,
+    collections: &[String],
+    locked_collections: &[String],
+    locked_state_behavior: &str,
+) -> anyhow::Result<Vec<Value>> {
+    let locked = locked_collections
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let mut reconciled = Vec::new();
+    for collection in collections {
+        if let Some(grant_scope) =
+            active_team_data_grant_scope(conn, module_id, collection, permission)?
+        {
+            reconciled.push(serde_json::json!({
+                "collection": collection,
+                "permission": permission.as_str(),
+                "status": "granted",
+                "grant_subject_type": "role",
+                "grant_subject_id": "user",
+                "grant_scope": grant_scope,
+            }));
+            continue;
+        }
+        anyhow::ensure!(
+            locked.contains(collection.as_str()) && !locked_state_behavior.is_empty(),
+            "data_access_review {} collection '{}' must have an explicit Team grant or locked-state behavior",
+            permission.as_str(),
+            collection
+        );
+        reconciled.push(serde_json::json!({
+            "collection": collection,
+            "permission": permission.as_str(),
+            "status": "locked",
+            "locked_state_behavior": locked_state_behavior,
+        }));
+    }
+    Ok(reconciled)
+}
+
+fn active_team_data_grant_scope(
+    conn: &Connection,
+    module_id: &str,
+    collection: &str,
+    permission: BusinessOsPermission,
+) -> anyhow::Result<Option<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT scope_type
+         FROM business_permission_grants
+         WHERE active = 1
+           AND subject_type = 'role'
+           AND subject_id = 'user'
+           AND permission = ?1
+           AND (
+                (scope_type = 'collection' AND scope_id = ?2)
+                OR (scope_type = 'module' AND scope_id = ?3)
+           )
+         ORDER BY CASE scope_type WHEN 'collection' THEN 0 ELSE 1 END
+         LIMIT 1",
+    )?;
+    let scope = stmt
+        .query_row(params![permission.as_str(), collection, module_id], |row| {
+            row.get::<_, String>(0)
+        })
+        .optional()?;
+    Ok(scope)
+}
+
+fn release_review_access_collection_ids(review: &Value, key: &str) -> Vec<String> {
+    let mut collections = review
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    collections.sort();
+    collections.dedup();
+    collections
+}
+
+fn data_access_review_from_release_snapshot(snapshot: &Value) -> Value {
+    snapshot
+        .get("data_access_review")
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+fn release_snapshot_string(release: &Value, key: &str) -> String {
+    release
+        .get("snapshot")
+        .and_then(|snapshot| snapshot.get(key))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_owned()
+}
+
+fn module_release_lifecycle_summary(release: &Value) -> Value {
+    serde_json::json!({
+        "version_id": release
+            .get("version_id")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "version": release
+            .get("version")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "status": release
+            .get("status")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "target_version": release_snapshot_string(release, "target_version"),
+        "release_channel": release_snapshot_string(release, "release_channel"),
+        "source_version_id": release_snapshot_string(release, "source_version_id"),
+        "rollback_version_id": release_snapshot_string(release, "rollback_version_id"),
+        "created_by": release
+            .get("created_by")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "created_at_ms": release
+            .get("created_at_ms")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "notes": release
+            .get("notes")
+            .cloned()
+            .unwrap_or(Value::Null),
+    })
+}
+
+fn release_review_reconciliation_statuses(review: &Value, side: &str) -> BTreeMap<String, String> {
+    let Some(rows) = review
+        .get("grant_reconciliation")
+        .and_then(|reconciliation| reconciliation.get(side))
+        .and_then(Value::as_array)
+    else {
+        return BTreeMap::new();
+    };
+    let mut statuses = BTreeMap::new();
+    for row in rows {
+        let Some(collection) = row
+            .get("collection")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let status = row
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .trim()
+            .to_owned();
+        statuses.insert(collection.to_owned(), status);
+    }
+    statuses
+}
+
+fn release_review_data_access_projection(review: &Value) -> Value {
+    if !review.is_object() {
+        return serde_json::json!({
+            "status": "not_reviewed",
+            "completed": false,
+            "areas": [],
+            "granted_collection_ids": [],
+            "locked_collection_ids": [],
+            "locked_state_behavior": ""
+        });
+    }
+
+    let read_statuses = release_review_reconciliation_statuses(review, "read");
+    let write_statuses = release_review_reconciliation_statuses(review, "write");
+    let mut collections = BTreeSet::new();
+    for collection in module_release_review_collection_ids(review) {
+        collections.insert(collection);
+    }
+    for collection in read_statuses.keys() {
+        collections.insert(collection.clone());
+    }
+    for collection in write_statuses.keys() {
+        collections.insert(collection.clone());
+    }
+
+    let mut areas = Vec::new();
+    let mut granted_collection_ids = BTreeSet::new();
+    let mut locked_collection_ids = BTreeSet::new();
+    for collection in collections {
+        let read = read_statuses
+            .get(&collection)
+            .map(String::as_str)
+            .unwrap_or("not_requested");
+        let write = write_statuses
+            .get(&collection)
+            .map(String::as_str)
+            .unwrap_or("not_requested");
+        if read == "granted" || write == "granted" {
+            granted_collection_ids.insert(collection.clone());
+        }
+        if read == "locked" || write == "locked" {
+            locked_collection_ids.insert(collection.clone());
+        }
+        areas.push(serde_json::json!({
+            "collection": collection,
+            "read": read,
+            "write": write,
+            "locked": read == "locked" || write == "locked",
+            "granted": read == "granted" || write == "granted",
+        }));
+    }
+
+    serde_json::json!({
+        "status": if module_release_review_completed(review) { "reviewed" } else { "incomplete" },
+        "completed": module_release_review_completed(review),
+        "reviewed_by": review
+            .get("reviewed_by")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        "reviewed_at_ms": review
+            .get("reviewed_at_ms")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "areas": areas,
+        "granted_collection_ids": granted_collection_ids.into_iter().map(Value::String).collect::<Vec<_>>(),
+        "locked_collection_ids": locked_collection_ids.into_iter().map(Value::String).collect::<Vec<_>>(),
+        "locked_state_behavior": release_review_locked_state_behavior(review),
+        "review_is_evidence_only": review
+            .get("review_is_evidence_only")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        "grants_implied": review
+            .get("grants_implied")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
+fn module_is_runtime_installed(manifest: &ModuleManifest) -> bool {
+    manifest.source == "installed"
+        || manifest.install_scope == "installed"
+        || manifest.entry.trim().starts_with("installed-modules/")
+}
+
+fn lifecycle_declared_string(module: &Value, key: &str) -> Option<String> {
+    module
+        .get("lifecycle")
+        .and_then(|lifecycle| lifecycle.get(key))
+        .and_then(Value::as_str)
+        .or_else(|| module.get(key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn lifecycle_declared_string_array(module: &Value, key: &str) -> Vec<String> {
+    module
+        .get("lifecycle")
+        .and_then(|lifecycle| lifecycle.get(key))
+        .or_else(|| module.get(key))
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn legacy_preview_audience_grant_id(module_id: &str, user_id: &str) -> String {
+    let digest = Sha256::digest(format!("{}:{}", module_id.trim(), user_id.trim()).as_bytes());
+    let suffix = digest
+        .iter()
+        .take(12)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let module_slug = source_sanitize_slug(module_id);
+    format!("legacy_preview_app_view_{module_slug}_{suffix}")
+}
+
+fn backfill_manifest_preview_audience_grants(
+    root: &Path,
+    modules: &[ModuleManifest],
+) -> anyhow::Result<usize> {
+    let conn = open_store(root)?;
+    let now = now_ms() as i64;
+    let mut inserted = 0usize;
+
+    for manifest in modules {
+        if !module_is_runtime_installed(manifest) {
+            continue;
+        }
+        let module_value = serde_json::to_value(manifest)?;
+        let mut preview_user_ids =
+            lifecycle_declared_string_array(&module_value, "preview_user_ids");
+        if preview_user_ids.is_empty() {
+            continue;
+        }
+        preview_user_ids.sort();
+        preview_user_ids.dedup();
+
+        let semver_major = parse_business_app_semver_major(&manifest.version);
+        let explicit_state = normalized_lifecycle_state(lifecycle_declared_string(
+            &module_value,
+            "visibility_state",
+        ));
+        let explicit_audience = lifecycle_declared_string(&module_value, "audience")
+            .map(|value| value.to_ascii_lowercase());
+        let migrate_audience = semver_major == Some(0)
+            || matches!(explicit_state.as_deref(), Some("restricted"))
+            || matches!(explicit_audience.as_deref(), Some("restricted"));
+        if !migrate_audience {
+            continue;
+        }
+
+        let module_id = manifest.id.trim();
+        if module_id.is_empty() {
+            continue;
+        }
+        for user_id in preview_user_ids {
+            let user_id = user_id.trim();
+            if user_id.is_empty() {
+                continue;
+            }
+            let grant_id = legacy_preview_audience_grant_id(module_id, user_id);
+            inserted += conn.execute(
+                "INSERT OR IGNORE INTO business_permission_grants
+                    (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
+                     active, reason, created_by, created_at_ms, updated_at_ms)
+                 SELECT ?1, 'user', ?2, ?3, 'module', ?4, 1, ?5, ?6, ?7, ?7
+                 WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM business_permission_grants
+                    WHERE active = 1
+                      AND subject_type = 'user'
+                      AND subject_id = ?2
+                      AND permission = ?3
+                      AND scope_type = 'module'
+                      AND scope_id = ?4
+                 )",
+                params![
+                    grant_id,
+                    user_id,
+                    BusinessOsPermission::AppsView.as_str(),
+                    module_id,
+                    "Migrated from legacy lifecycle.preview_user_ids",
+                    "ctox.lifecycle.preview_user_ids.backfill",
+                    now
+                ],
+            )?;
+        }
+    }
+
+    Ok(inserted)
+}
+
+fn normalized_lifecycle_state(value: Option<String>) -> Option<String> {
+    let normalized = value?.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "private" | "preview" | "team" | "restricted" | "packaged" => Some(normalized),
+        _ => None,
+    }
+}
+
+fn projected_module_lifecycle(
+    manifest: &ModuleManifest,
+    module_value: &Value,
+    context: &ModuleLifecycleProjectionContext,
+    version_states: &Value,
+) -> Value {
+    let module_id = manifest.id.as_str();
+    let runtime_installed = module_is_runtime_installed(manifest);
+    let semver_major = parse_business_app_semver_major(&manifest.version);
+    let valid_semver = semver_major.is_some();
+    let explicit_state =
+        normalized_lifecycle_state(lifecycle_declared_string(module_value, "visibility_state"));
+    let explicit_audience =
+        lifecycle_declared_string(module_value, "audience").map(|value| value.to_ascii_lowercase());
+    let release = context.latest_releases.get(module_id);
+    let release_history = context
+        .release_history
+        .get(module_id)
+        .cloned()
+        .unwrap_or_default();
+    let responsible_user_ids = context
+        .responsible_user_ids
+        .get(module_id)
+        .cloned()
+        .unwrap_or_default();
+    let preview_grant_ids = context
+        .preview_grant_ids
+        .get(module_id)
+        .cloned()
+        .unwrap_or_default();
+    let mut preview_user_ids = context
+        .preview_user_ids
+        .get(module_id)
+        .cloned()
+        .unwrap_or_default();
+    preview_user_ids.sort();
+    preview_user_ids.dedup();
+    let creator_user_id = context
+        .creator_user_ids
+        .get(module_id)
+        .cloned()
+        .or_else(|| lifecycle_declared_string(module_value, "creator_user_id"))
+        .unwrap_or_default();
+
+    let (visibility_state, audience, release_channel, warning_code) = if !runtime_installed {
+        ("packaged", "system", "system", Value::Null)
+    } else if !valid_semver {
+        (
+            "private",
+            "app_responsible",
+            "private",
+            Value::String("invalid_semver".to_owned()),
+        )
+    } else if explicit_state.as_deref() == Some("restricted")
+        || explicit_audience.as_deref() == Some("restricted")
+    {
+        ("restricted", "restricted", "restricted", Value::Null)
+    } else if semver_major.unwrap_or(0) >= 1 {
+        ("team", "team", "team", Value::Null)
+    } else if explicit_state.as_deref() == Some("preview")
+        || explicit_audience.as_deref() == Some("preview")
+        || !preview_user_ids.is_empty()
+    {
+        ("preview", "preview", "preview", Value::Null)
+    } else {
+        ("private", "app_responsible", "private", Value::Null)
+    };
+
+    let version_state = version_states.get(module_id);
+    let has_source_snapshot = version_state
+        .and_then(|state| state.get("version_count"))
+        .and_then(Value::as_i64)
+        .is_some_and(|count| count > 0);
+    let last_release_id = release
+        .and_then(|item| item.get("version_id"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let release_review = release
+        .and_then(|item| item.get("snapshot"))
+        .map(data_access_review_from_release_snapshot)
+        .unwrap_or(Value::Null);
+    let data_access = release_review_data_access_projection(&release_review);
+    let release_review_completed = release_review
+        .get("completed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let last_reviewed_at_ms = release_review
+        .get("reviewed_at_ms")
+        .cloned()
+        .or_else(|| release.and_then(|item| item.get("created_at_ms")).cloned())
+        .unwrap_or(Value::Null);
+    let last_released_at_ms = release
+        .and_then(|item| item.get("created_at_ms"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let current_release = release
+        .map(module_release_lifecycle_summary)
+        .unwrap_or(Value::Null);
+    let rollback_target = release_history
+        .iter()
+        .find(|item| item.get("status").and_then(Value::as_str) == Some("rolled_back"))
+        .map(module_release_lifecycle_summary)
+        .unwrap_or(Value::Null);
+    let released_count = release_history
+        .iter()
+        .filter(|item| item.get("status").and_then(Value::as_str) == Some("released"))
+        .count();
+    let rolled_back_count = release_history
+        .iter()
+        .filter(|item| item.get("status").and_then(Value::as_str) == Some("rolled_back"))
+        .count();
+    let release_status = if release.is_some() {
+        "released"
+    } else if release_history.is_empty() {
+        "unreleased"
+    } else {
+        "rolled_back"
+    };
+    let release_state = serde_json::json!({
+        "status": release_status,
+        "current": current_release,
+        "rollback_target": rollback_target.clone(),
+        "history_count": release_history.len(),
+        "released_count": released_count,
+        "rolled_back_count": rolled_back_count,
+    });
+
+    serde_json::json!({
+        "source": "native_catalog_projection",
+        "visibility_state": visibility_state,
+        "audience": audience,
+        "release_channel": release_channel,
+        "current_semver": if valid_semver { Value::String(manifest.version.trim().to_owned()) } else { Value::Null },
+        "runtime_installed": runtime_installed,
+        "public": !runtime_installed || visibility_state == "team",
+        "creator_user_id": creator_user_id,
+        "responsible_user_ids": responsible_user_ids,
+        "preview_grant_ids": preview_grant_ids,
+        "preview_user_ids": preview_user_ids,
+        "release_required_checks": {
+            "valid_semver": !runtime_installed || valid_semver,
+            "source_snapshot": !runtime_installed || has_source_snapshot,
+            "data_access_review": !runtime_installed || release_review_completed,
+            "release_recorded": !runtime_installed || release.is_some(),
+        },
+        "last_release_id": last_release_id,
+        "last_released_at_ms": last_released_at_ms,
+        "last_reviewed_at_ms": last_reviewed_at_ms,
+        "release_status": release_status,
+        "release_state": release_state,
+        "rollback_target": rollback_target,
+        "data_access": data_access,
+        "release_review": release_review,
+        "warning_code": warning_code,
+    })
+}
+
+fn modules_with_projected_lifecycle(
+    root: &Path,
+    modules: Vec<ModuleManifest>,
+    version_states: &Value,
+) -> anyhow::Result<(Vec<Value>, Value)> {
+    let context = module_lifecycle_projection_context(root)?;
+    let mut lifecycle_by_module = serde_json::Map::new();
+    let mut projected = Vec::with_capacity(modules.len());
+    for manifest in modules {
+        let mut module_value = serde_json::to_value(&manifest)?;
+        let lifecycle =
+            projected_module_lifecycle(&manifest, &module_value, &context, version_states);
+        if let Some(object) = module_value.as_object_mut() {
+            object.insert("lifecycle".to_owned(), lifecycle.clone());
+            object.insert(
+                "visibility_state".to_owned(),
+                lifecycle
+                    .get("visibility_state")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            );
+            object.insert(
+                "audience".to_owned(),
+                lifecycle.get("audience").cloned().unwrap_or(Value::Null),
+            );
+            object.insert(
+                "release_channel".to_owned(),
+                lifecycle
+                    .get("release_channel")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            );
+        }
+        lifecycle_by_module.insert(manifest.id, lifecycle);
+        projected.push(module_value);
+    }
+    Ok((projected, Value::Object(lifecycle_by_module)))
+}
+
 pub fn module_governance_map(root: &Path, session: &BusinessOsSession) -> anyhow::Result<Value> {
     let conn = open_store(root)?;
     let mut founder_stmt = conn.prepare(
-        "SELECT module_id, user_id, active, updated_at_ms
-         FROM business_module_acl
-         WHERE role = 'founder'
-         ORDER BY module_id ASC, user_id ASC",
+        "SELECT acl.module_id, acl.user_id, acl.active, acl.updated_at_ms, COALESCE(user.active, 1)
+         FROM business_module_acl acl
+         LEFT JOIN business_users user ON user.user_id = acl.user_id
+         WHERE acl.role = 'founder'
+         ORDER BY acl.module_id ASC, acl.user_id ASC",
     )?;
     let mut founders: HashMap<String, Vec<Value>> = HashMap::new();
     let founder_rows = founder_stmt.query_map([], |row| {
@@ -1213,6 +2617,7 @@ pub fn module_governance_map(root: &Path, session: &BusinessOsSession) -> anyhow
                 "role": "founder",
                 "active": row.get::<_, i64>(2)? != 0,
                 "updated_at_ms": row.get::<_, i64>(3)?,
+                "user_active": row.get::<_, i64>(4)? != 0,
             }),
         ))
     })?;
@@ -1222,12 +2627,15 @@ pub fn module_governance_map(root: &Path, session: &BusinessOsSession) -> anyhow
     }
 
     let mut release_stmt = conn.prepare(
-        "SELECT module_id, version_id, version, status, created_by, created_at_ms, notes, manifest_json
+        "SELECT module_id, version_id, version, status, created_by, created_at_ms, notes, manifest_json, snapshot_json
          FROM business_module_releases
          ORDER BY module_id ASC, version DESC",
     )?;
     let mut releases: HashMap<String, Vec<Value>> = HashMap::new();
     let release_rows = release_stmt.query_map([], |row| {
+        let snapshot_json = row.get::<_, String>(8)?;
+        let snapshot = serde_json::from_str::<Value>(&snapshot_json).unwrap_or(Value::Null);
+        let data_access_review = data_access_review_from_release_snapshot(&snapshot);
         Ok((
             row.get::<_, String>(0)?,
             serde_json::json!({
@@ -1238,6 +2646,24 @@ pub fn module_governance_map(root: &Path, session: &BusinessOsSession) -> anyhow
                 "created_at_ms": row.get::<_, i64>(5)?,
                 "notes": row.get::<_, String>(6)?,
                 "manifest_sha256": hex_sha256(row.get::<_, String>(7)?.as_bytes()),
+                "target_version": snapshot
+                    .get("target_version")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                "release_channel": snapshot
+                    .get("release_channel")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                "source_version_id": snapshot
+                    .get("source_version_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                "rollback_version_id": snapshot
+                    .get("rollback_version_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                "data_access_review": data_access_review,
+                "data_access": release_review_data_access_projection(&data_access_review),
             }),
         ))
     })?;
@@ -1253,6 +2679,7 @@ pub fn module_governance_map(root: &Path, session: &BusinessOsSession) -> anyhow
         "user_id": session_user_id(session).unwrap_or(""),
         "founders": founders,
         "releases": releases,
+        "permission_model": permission_model_projection(&conn, &founders)?,
     }))
 }
 
@@ -1637,9 +3064,10 @@ pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
     let app_root = resolve_business_os_app_root(root)?;
     let installed_app_root = resolve_business_os_installed_app_root(root);
     let modules = load_module_manifests(&app_root, &installed_app_root)?;
+    backfill_manifest_preview_audience_grants(root, &modules)?;
     let marketplace = load_marketplace_module_manifests(&app_root)?;
     let templates = load_template_manifests(&app_root)?;
-    let governance = module_governance_map(
+    let mut governance = module_governance_map(
         root,
         &BusinessOsSession {
             ok: true,
@@ -1656,6 +3084,10 @@ pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         },
     )?;
     let version_states = module_version_states(root, &app_root).unwrap_or(Value::Null);
+    let (modules, lifecycle) = modules_with_projected_lifecycle(root, modules, &version_states)?;
+    if let Some(object) = governance.as_object_mut() {
+        object.insert("lifecycle".to_owned(), lifecycle);
+    }
     Ok(serde_json::json!({
         "id": "module-catalog",
         "ok": true,
@@ -1670,6 +3102,449 @@ pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         "updated_at_ms": now_ms(),
         "_deleted": false,
     }))
+}
+
+fn business_os_why_diagnostics(
+    root: &Path,
+    session: &BusinessOsSession,
+    request: &BusinessOsWhyDiagnosticsRequest,
+) -> anyhow::Result<Value> {
+    let module_id = source_sanitize_slug(&request.module_id);
+    anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+
+    let catalog = module_catalog_for_rxdb(root)?;
+    let module = catalog
+        .get("modules")
+        .and_then(Value::as_array)
+        .and_then(|modules| {
+            modules
+                .iter()
+                .find(|module| {
+                    module
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| id == module_id)
+                })
+                .cloned()
+        })
+        .with_context(|| format!("module '{module_id}' was not found"))?;
+    let lifecycle = module.get("lifecycle").cloned().unwrap_or(Value::Null);
+    let conn = open_store(root)?;
+    let actor_id = session_user_id(session)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("rxdb-command")
+        .to_owned();
+    let actor_role = session_role(session).to_owned();
+    let actor_display_name = session
+        .user
+        .as_ref()
+        .map(|user| user.display_name.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(actor_id.as_str())
+        .to_owned();
+
+    let visibility = business_os_why_visibility_decision(
+        &conn,
+        actor_id.as_str(),
+        actor_role.as_str(),
+        module_id.as_str(),
+        &lifecycle,
+    )?;
+    let open = business_os_why_open_decision(&visibility);
+    let modify = business_os_why_module_policy_decision(
+        &conn,
+        actor_id.as_str(),
+        actor_role.as_str(),
+        BusinessOsPermission::AppsModify,
+        module_id.as_str(),
+        "policy_engine",
+    )?;
+    let source = business_os_why_module_policy_decision(
+        &conn,
+        actor_id.as_str(),
+        actor_role.as_str(),
+        BusinessOsPermission::AppsSourceView,
+        module_id.as_str(),
+        "policy_engine",
+    )?;
+    let release = business_os_why_module_policy_decision(
+        &conn,
+        actor_id.as_str(),
+        actor_role.as_str(),
+        BusinessOsPermission::AppsRelease,
+        module_id.as_str(),
+        "policy_engine",
+    )?;
+    let rollback = business_os_why_module_policy_decision(
+        &conn,
+        actor_id.as_str(),
+        actor_role.as_str(),
+        BusinessOsPermission::AppsRollback,
+        module_id.as_str(),
+        "policy_engine",
+    )?;
+    let data_areas = business_os_why_data_area_diagnostics(
+        &conn,
+        actor_id.as_str(),
+        actor_role.as_str(),
+        module_id.as_str(),
+        &module,
+        &lifecycle,
+    )?;
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "schema_version": 1,
+        "kind": "business_os_why_diagnostics",
+        "actor": {
+            "id": actor_id,
+            "display_name": actor_display_name,
+            "role": actor_role,
+        },
+        "module": {
+            "id": module_id,
+            "title": module.get("title").and_then(Value::as_str).unwrap_or_default(),
+            "version": lifecycle
+                .get("current_semver")
+                .and_then(Value::as_str)
+                .or_else(|| module.get("version").and_then(Value::as_str))
+                .unwrap_or_default(),
+            "runtime_installed": lifecycle
+                .get("runtime_installed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        },
+        "lifecycle": {
+            "visibility_state": lifecycle
+                .get("visibility_state")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            "audience": lifecycle
+                .get("audience")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            "release_channel": lifecycle
+                .get("release_channel")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            "current_semver": lifecycle.get("current_semver").cloned().unwrap_or(Value::Null),
+            "public": lifecycle.get("public").and_then(Value::as_bool).unwrap_or(false),
+            "warning_code": lifecycle.get("warning_code").cloned().unwrap_or(Value::Null),
+            "release_state": lifecycle.get("release_state").cloned().unwrap_or(Value::Null),
+        },
+        "decisions": {
+            "visibility": visibility,
+            "open": open,
+            "modify": modify,
+            "source": source,
+            "release": release,
+            "rollback": rollback,
+        },
+        "data_access": {
+            "status": lifecycle
+                .pointer("/data_access/status")
+                .and_then(Value::as_str)
+                .unwrap_or("not_reviewed"),
+            "completed": lifecycle
+                .pointer("/data_access/completed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            "areas": data_areas,
+        },
+    }))
+}
+
+fn business_os_why_safe_command(
+    command: &BusinessCommand,
+    request: &BusinessOsWhyDiagnosticsRequest,
+    session: &BusinessOsSession,
+) -> BusinessCommand {
+    BusinessCommand {
+        id: command.id.clone(),
+        module: command.module.clone(),
+        command_type: command.command_type.clone(),
+        record_id: command.record_id.clone(),
+        payload: serde_json::json!({
+            "module_id": source_sanitize_slug(&request.module_id),
+        }),
+        client_context: serde_json::json!({
+            "actor": {
+                "id": session_user_id(session).unwrap_or("rxdb-command"),
+                "display_name": session
+                    .user
+                    .as_ref()
+                    .map(|user| user.display_name.as_str())
+                    .unwrap_or("rxdb-command"),
+                "role": session_role(session),
+            }
+        }),
+    }
+}
+
+fn business_os_why_visibility_decision(
+    conn: &Connection,
+    actor_id: &str,
+    actor_role: &str,
+    module_id: &str,
+    lifecycle: &Value,
+) -> anyhow::Result<Value> {
+    let visibility_state = lifecycle
+        .get("visibility_state")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let public = lifecycle.get("public").and_then(Value::as_bool) == Some(true);
+    let packaged = visibility_state == "packaged"
+        || lifecycle.get("runtime_installed").and_then(Value::as_bool) == Some(false);
+    let explicit_or_assigned = business_os_explicit_or_assigned_module_permission_allows(
+        conn,
+        actor_id,
+        actor_role,
+        BusinessOsPermission::AppsView,
+        module_id,
+    )?;
+    let (allowed, reason_code, display_reason, source) = if packaged {
+        (
+            true,
+            "packaged_app",
+            "System-Apps sind außerhalb des Runtime-App-Lifecycle sichtbar.",
+            "lifecycle_packaged",
+        )
+    } else if public {
+        (
+            true,
+            "team_visible_version",
+            "Apps ab Version 1.0.0 sind standardmäßig für das Team sichtbar.",
+            "lifecycle_public_team_version",
+        )
+    } else if explicit_or_assigned {
+        (
+            true,
+            "explicit_or_responsible_app_view",
+            "Diese nicht öffentliche App ist durch App-Verantwortung oder explizite App-Freigabe sichtbar.",
+            "explicit_app_view_or_app_responsibility",
+        )
+    } else {
+        (
+            false,
+            "non_public_without_app_view",
+            "Diese App ist nicht team-sichtbar; es fehlt App-Verantwortung oder eine explizite App-Freigabe.",
+            "lifecycle_non_public",
+        )
+    };
+
+    Ok(serde_json::json!({
+        "allowed": allowed,
+        "permission": BusinessOsPermission::AppsView.as_str(),
+        "scope_type": BusinessOsScopeType::Module.as_str(),
+        "scope_id": module_id,
+        "reason_code": reason_code,
+        "display_reason": display_reason,
+        "requires_approval": false,
+        "audit_level": "decision",
+        "source": source,
+        "lifecycle_state": visibility_state,
+    }))
+}
+
+fn business_os_why_open_decision(visibility: &Value) -> Value {
+    serde_json::json!({
+        "allowed": visibility.get("allowed").and_then(Value::as_bool).unwrap_or(false),
+        "permission": BusinessOsPermission::AppsView.as_str(),
+        "scope_type": BusinessOsScopeType::Module.as_str(),
+        "scope_id": visibility.get("scope_id").cloned().unwrap_or(Value::Null),
+        "reason_code": visibility
+            .get("reason_code")
+            .and_then(Value::as_str)
+            .unwrap_or("visibility_decision"),
+        "display_reason": visibility
+            .get("display_reason")
+            .and_then(Value::as_str)
+            .unwrap_or("App öffnen folgt der App-Sichtbarkeit."),
+        "requires_approval": false,
+        "audit_level": "decision",
+        "source": "visibility_decision",
+    })
+}
+
+fn business_os_why_module_policy_decision(
+    conn: &Connection,
+    actor_id: &str,
+    actor_role: &str,
+    permission: BusinessOsPermission,
+    module_id: &str,
+    source: &str,
+) -> anyhow::Result<Value> {
+    let decision = trusted_actor_policy_decision_with_conn(
+        conn,
+        actor_id,
+        actor_role,
+        permission,
+        BusinessOsScopeType::Module,
+        Some(module_id),
+    )?;
+    Ok(business_os_why_policy_payload(&decision, source))
+}
+
+fn business_os_why_data_area_diagnostics(
+    conn: &Connection,
+    actor_id: &str,
+    actor_role: &str,
+    module_id: &str,
+    module: &Value,
+    lifecycle: &Value,
+) -> anyhow::Result<Vec<Value>> {
+    let data_access = lifecycle.get("data_access").unwrap_or(&Value::Null);
+    let mut collections = BTreeSet::new();
+    business_os_collect_json_string_array(module.get("collections"), &mut collections);
+    business_os_collect_json_string_array(
+        data_access.get("granted_collection_ids"),
+        &mut collections,
+    );
+    business_os_collect_json_string_array(
+        data_access.get("locked_collection_ids"),
+        &mut collections,
+    );
+    if let Some(areas) = data_access.get("areas").and_then(Value::as_array) {
+        for area in areas {
+            if let Some(collection) = area.get("collection").and_then(Value::as_str) {
+                let collection = collection.trim();
+                if !collection.is_empty() {
+                    collections.insert(collection.to_owned());
+                }
+            }
+        }
+    }
+
+    let mut areas = Vec::new();
+    for collection in collections {
+        areas.push(serde_json::json!({
+            "collection": collection,
+            "read_review_state": business_os_data_review_state(data_access, collection.as_str(), "read"),
+            "write_review_state": business_os_data_review_state(data_access, collection.as_str(), "write"),
+            "read_decision": business_os_why_data_permission_decision(
+                conn,
+                actor_id,
+                actor_role,
+                module_id,
+                collection.as_str(),
+                BusinessOsPermission::DataRead,
+            )?,
+            "write_decision": business_os_why_data_permission_decision(
+                conn,
+                actor_id,
+                actor_role,
+                module_id,
+                collection.as_str(),
+                BusinessOsPermission::DataWrite,
+            )?,
+        }));
+    }
+    Ok(areas)
+}
+
+fn business_os_why_data_permission_decision(
+    conn: &Connection,
+    actor_id: &str,
+    actor_role: &str,
+    module_id: &str,
+    collection: &str,
+    permission: BusinessOsPermission,
+) -> anyhow::Result<Value> {
+    let collection_decision = trusted_actor_policy_decision_with_conn(
+        conn,
+        actor_id,
+        actor_role,
+        permission,
+        BusinessOsScopeType::Collection,
+        Some(collection),
+    )?;
+    let module_decision = trusted_actor_policy_decision_with_conn(
+        conn,
+        actor_id,
+        actor_role,
+        permission,
+        BusinessOsScopeType::Module,
+        Some(module_id),
+    )?;
+    let (effective, source) = if collection_decision.allowed {
+        (&collection_decision, "collection_policy")
+    } else if module_decision.allowed {
+        (&module_decision, "declared_module_data_policy")
+    } else {
+        (&module_decision, "denied_collection_and_module_policy")
+    };
+    let mut payload = business_os_why_policy_payload(effective, source);
+    if let Some(object) = payload.as_object_mut() {
+        object.insert(
+            "collection_decision".to_owned(),
+            policy_decision_payload(&collection_decision),
+        );
+        object.insert(
+            "module_decision".to_owned(),
+            policy_decision_payload(&module_decision),
+        );
+    }
+    Ok(payload)
+}
+
+fn business_os_explicit_or_assigned_module_permission_allows(
+    conn: &Connection,
+    actor_id: &str,
+    actor_role: &str,
+    permission: BusinessOsPermission,
+    module_id: &str,
+) -> anyhow::Result<bool> {
+    let actor = BusinessOsActor::new(Some(actor_id.to_owned()), actor_role);
+    let unassigned_scope = BusinessOsScope::module(module_id, false);
+    if active_permission_grant_allows(conn, &actor, permission, &unassigned_scope)? {
+        return Ok(true);
+    }
+    if founder_owns_module(conn, module_id, actor_id)? {
+        let assigned_actor = BusinessOsActor::new(Some(actor_id.to_owned()), "founder");
+        let assigned_scope = BusinessOsScope::module(module_id, true);
+        return Ok(policy::evaluate(&assigned_actor, permission, &assigned_scope).allowed);
+    }
+    Ok(false)
+}
+
+fn business_os_collect_json_string_array(value: Option<&Value>, output: &mut BTreeSet<String>) {
+    if let Some(items) = value.and_then(Value::as_array) {
+        for item in items {
+            if let Some(text) = item.as_str() {
+                let text = text.trim();
+                if !text.is_empty() {
+                    output.insert(text.to_owned());
+                }
+            }
+        }
+    }
+}
+
+fn business_os_data_review_state(data_access: &Value, collection: &str, key: &str) -> String {
+    data_access
+        .get("areas")
+        .and_then(Value::as_array)
+        .and_then(|areas| {
+            areas.iter().find(|area| {
+                area.get("collection")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| value == collection)
+            })
+        })
+        .and_then(|area| area.get(key))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_owned()
+}
+
+fn business_os_why_policy_payload(decision: &PolicyDecision, source: &str) -> Value {
+    let mut payload = policy_decision_payload(decision);
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("source".to_owned(), Value::String(source.to_owned()));
+    }
+    payload
 }
 
 pub fn write_module_catalog_projection_to_rxdb(root: &Path) -> anyhow::Result<()> {
@@ -1723,28 +3598,235 @@ pub fn write_module_catalog_projection_to_rxdb(root: &Path) -> anyhow::Result<()
     Ok(())
 }
 
+fn module_requires_active_responsibility(root: &Path, module_id: &str) -> anyhow::Result<bool> {
+    let Ok(app_root) = resolve_business_os_app_root(root) else {
+        return Ok(false);
+    };
+    let installed_app_root = resolve_business_os_installed_app_root(root);
+    let module_id = module_id.trim();
+    if module_id.is_empty() {
+        return Ok(false);
+    }
+    let manifests = load_module_manifests(&app_root, &installed_app_root)?;
+    let Some(manifest) = manifests.iter().find(|manifest| manifest.id == module_id) else {
+        return Ok(false);
+    };
+    if !module_is_runtime_installed(manifest) {
+        return Ok(false);
+    }
+    let module_value = serde_json::to_value(manifest)?;
+    let explicit_state =
+        normalized_lifecycle_state(lifecycle_declared_string(&module_value, "visibility_state"));
+    let explicit_audience = lifecycle_declared_string(&module_value, "audience")
+        .map(|value| value.to_ascii_lowercase());
+    if explicit_state.as_deref() == Some("restricted")
+        || explicit_audience.as_deref() == Some("restricted")
+    {
+        return Ok(true);
+    }
+    Ok(!matches!(
+        parse_business_app_semver_major(&manifest.version),
+        Some(major) if major >= 1
+    ))
+}
+
+fn active_module_founder_count_excluding(
+    conn: &Connection,
+    module_id: &str,
+    excluded_user_id: &str,
+) -> anyhow::Result<i64> {
+    conn.query_row(
+        "SELECT COUNT(*)
+         FROM business_module_acl acl
+         LEFT JOIN business_users user ON user.user_id = acl.user_id
+         WHERE acl.module_id = ?1
+           AND acl.user_id <> ?2
+           AND acl.role = 'founder'
+           AND acl.active = 1
+           AND COALESCE(user.active, 1) = 1",
+        params![module_id.trim(), excluded_user_id.trim()],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
+}
+
+fn module_founder_assignment_is_active(
+    conn: &Connection,
+    module_id: &str,
+    user_id: &str,
+) -> anyhow::Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*)
+         FROM business_module_acl acl
+         LEFT JOIN business_users user ON user.user_id = acl.user_id
+         WHERE acl.module_id = ?1
+           AND acl.user_id = ?2
+           AND acl.role = 'founder'
+           AND acl.active = 1
+           AND COALESCE(user.active, 1) = 1",
+        params![module_id.trim(), user_id.trim()],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn sole_responsibility_module_ids_for_user(
+    root: &Path,
+    conn: &Connection,
+    user_id: &str,
+) -> anyhow::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT acl.module_id
+         FROM business_module_acl acl
+         LEFT JOIN business_users user ON user.user_id = acl.user_id
+         WHERE acl.user_id = ?1
+           AND acl.role = 'founder'
+           AND acl.active = 1
+           AND COALESCE(user.active, 1) = 1
+         ORDER BY acl.module_id ASC",
+    )?;
+    let rows = stmt.query_map(params![user_id.trim()], |row| row.get::<_, String>(0))?;
+    let mut module_ids = Vec::new();
+    for row in rows {
+        let module_id = row?;
+        if module_requires_active_responsibility(root, &module_id)?
+            && active_module_founder_count_excluding(conn, &module_id, user_id)? == 0
+        {
+            module_ids.push(module_id);
+        }
+    }
+    Ok(module_ids)
+}
+
+fn upsert_module_founder_assignment_record(
+    conn: &Connection,
+    session: &BusinessOsSession,
+    module_id: &str,
+    user_id: &str,
+    active: bool,
+    observed_at_ms: i64,
+) -> anyhow::Result<String> {
+    let previous_assignment = module_founder_audit_snapshot(conn, module_id, user_id)?;
+    conn.execute(
+        "INSERT INTO business_module_acl
+            (module_id, user_id, role, active, created_at_ms, updated_at_ms)
+         VALUES (?1, ?2, 'founder', ?3, ?4, ?4)
+         ON CONFLICT(module_id, user_id, role) DO UPDATE SET
+            active = excluded.active,
+            updated_at_ms = excluded.updated_at_ms",
+        params![module_id, user_id, active as i64, observed_at_ms],
+    )?;
+    let record_id = format!("{module_id}:founder:{user_id}");
+    let current_assignment = serde_json::json!({
+        "id": record_id.as_str(),
+        "module_id": module_id,
+        "user_id": user_id,
+        "role": "founder",
+        "active": active
+    });
+    record_module_founder_change_event(
+        conn,
+        session,
+        previous_assignment.as_ref(),
+        &current_assignment,
+        observed_at_ms,
+    )?;
+    upsert_business_record(
+        conn,
+        "business_module_acl",
+        &record_id,
+        observed_at_ms,
+        serde_json::json!({
+            "id": record_id,
+            "module_id": module_id,
+            "user_id": user_id,
+            "role": "founder",
+            "active": active,
+            "updated_at_ms": observed_at_ms
+        }),
+    )?;
+    Ok(record_id)
+}
+
+fn accept_recovery_responsibility_for_modules(
+    conn: &Connection,
+    session: &BusinessOsSession,
+    removed_user_id: &str,
+    module_ids: &[String],
+    accept_recovery_responsibility: bool,
+    observed_at_ms: i64,
+) -> anyhow::Result<Vec<String>> {
+    if module_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    if !accept_recovery_responsibility {
+        anyhow::bail!(
+            "App responsibility cannot be left empty for private apps; choose another responsible user or confirm that you take responsibility."
+        );
+    }
+    let recovery_user_id = session_user_id(session)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .context("authenticated recovery user is required")?;
+    anyhow::ensure!(
+        recovery_user_id != removed_user_id.trim(),
+        "A user cannot deactivate their own last app responsibility; choose another responsible user first."
+    );
+
+    let mut record_ids = Vec::new();
+    for module_id in module_ids {
+        if active_module_founder_count_excluding(conn, module_id, removed_user_id)? > 0 {
+            continue;
+        }
+        record_ids.push(upsert_module_founder_assignment_record(
+            conn,
+            session,
+            module_id,
+            recovery_user_id,
+            true,
+            observed_at_ms,
+        )?);
+    }
+    Ok(record_ids)
+}
+
 pub fn upsert_user(
     root: &Path,
     session: &BusinessOsSession,
     mutation: BusinessOsUserMutation,
 ) -> anyhow::Result<Value> {
-    anyhow::ensure!(
-        session
-            .user
-            .as_ref()
-            .map(|user| user.is_admin)
-            .unwrap_or(false),
-        "admin role required"
-    );
     anyhow::ensure!(!mutation.id.trim().is_empty(), "user id is required");
     let role = normalize_business_role(&mutation.role);
     anyhow::ensure!(
         matches!(role.as_str(), "chef" | "admin" | "founder" | "user"),
         "role must be chef, admin, founder, or user"
     );
+    let decision = user_upsert_policy_decision(root, session, &role)?;
+    anyhow::ensure!(
+        decision.allowed,
+        if role == "chef" {
+            "owner role required to assign owner"
+        } else {
+            "admin role required"
+        }
+    );
     let conn = open_store(root)?;
     seed_session_user(&conn, session)?;
     let now = now_ms() as i64;
+    let user_id = mutation.id.trim().to_owned();
+    let display_name = mutation.display_name.trim().to_owned();
+    let previous_user = business_user_audit_snapshot(&conn, &user_id)?;
+    if !mutation.active {
+        let orphaning_module_ids = sole_responsibility_module_ids_for_user(root, &conn, &user_id)?;
+        accept_recovery_responsibility_for_modules(
+            &conn,
+            session,
+            &user_id,
+            &orphaning_module_ids,
+            mutation.accept_recovery_responsibility,
+            now,
+        )?;
+    }
     conn.execute(
         "INSERT INTO business_users
             (user_id, display_name, role, active, created_at_ms, updated_at_ms)
@@ -1755,13 +3837,20 @@ pub fn upsert_user(
             active = excluded.active,
             updated_at_ms = excluded.updated_at_ms",
         params![
-            mutation.id.trim(),
-            mutation.display_name.trim(),
-            role,
+            user_id.as_str(),
+            display_name.as_str(),
+            role.as_str(),
             mutation.active as i64,
             now
         ],
     )?;
+    let current_user = serde_json::json!({
+        "id": user_id,
+        "display_name": display_name,
+        "role": role,
+        "active": mutation.active
+    });
+    record_business_user_change_event(&conn, session, previous_user.as_ref(), &current_user, now)?;
     Ok(serde_json::json!({
         "ok": true,
         "users": query_users(&conn)?
@@ -1773,46 +3862,52 @@ pub fn assign_module_founder(
     session: &BusinessOsSession,
     assignment: ModuleFounderAssignment,
 ) -> anyhow::Result<Value> {
-    anyhow::ensure!(
-        session_can_manage_all(session),
-        "chef or admin role required"
-    );
-    let module_id = assignment.module_id.trim();
-    let user_id = assignment.user_id.trim();
+    let module_id = assignment.module_id.trim().to_owned();
+    let user_id = assignment.user_id.trim().to_owned();
     anyhow::ensure!(!module_id.is_empty(), "module_id is required");
     anyhow::ensure!(!user_id.is_empty(), "user_id is required");
+    anyhow::ensure!(
+        module_policy_decision(
+            root,
+            session,
+            BusinessOsPermission::AppsAssignOwner,
+            &module_id
+        )?
+        .allowed,
+        "chef or admin role required"
+    );
     let conn = open_store(root)?;
     seed_session_user(&conn, session)?;
     let now = now_ms() as i64;
-    conn.execute(
-        "INSERT INTO business_module_acl
-            (module_id, user_id, role, active, created_at_ms, updated_at_ms)
-         VALUES (?1, ?2, 'founder', ?3, ?4, ?4)
-         ON CONFLICT(module_id, user_id, role) DO UPDATE SET
-            active = excluded.active,
-            updated_at_ms = excluded.updated_at_ms",
-        params![module_id, user_id, assignment.active as i64, now],
-    )?;
-    let record_id = format!("{module_id}:founder:{user_id}");
-    upsert_business_record(
+    let mut changed_record_ids = Vec::new();
+    if !assignment.active
+        && module_requires_active_responsibility(root, &module_id)?
+        && module_founder_assignment_is_active(&conn, &module_id, &user_id)?
+        && active_module_founder_count_excluding(&conn, &module_id, &user_id)? == 0
+    {
+        changed_record_ids.extend(accept_recovery_responsibility_for_modules(
+            &conn,
+            session,
+            &user_id,
+            std::slice::from_ref(&module_id),
+            assignment.accept_recovery_responsibility,
+            now,
+        )?);
+    }
+    let record_id = upsert_module_founder_assignment_record(
         &conn,
-        "business_module_acl",
-        &record_id,
+        session,
+        &module_id,
+        &user_id,
+        assignment.active,
         now,
-        serde_json::json!({
-            "id": record_id,
-            "module_id": module_id,
-            "user_id": user_id,
-            "role": "founder",
-            "active": assignment.active,
-            "updated_at_ms": now
-        }),
     )?;
+    changed_record_ids.push(record_id);
     let mut governance = module_governance_map(root, session)?;
     if let Some(map) = governance.as_object_mut() {
         map.insert(
             "business_module_acl_ids".to_string(),
-            Value::Array(vec![Value::String(record_id)]),
+            Value::Array(changed_record_ids.into_iter().map(Value::String).collect()),
         );
     }
     Ok(governance)
@@ -1847,7 +3942,7 @@ pub fn install_template_module_command(
     request: ModuleInstallTemplateRequest,
 ) -> anyhow::Result<Value> {
     anyhow::ensure!(
-        session_can_manage_all(session),
+        session_has_workspace_permission(root, session, BusinessOsPermission::AppsInstall)?,
         "chef or admin role required"
     );
     let manifest = install_template_module(source_app_root, installed_app_root, request)?;
@@ -1899,7 +3994,7 @@ pub fn save_runtime_settings_command(
     request: RuntimeSettingsRequest,
 ) -> anyhow::Result<Value> {
     anyhow::ensure!(
-        session_can_manage_all(session),
+        session_has_workspace_permission(root, session, BusinessOsPermission::RuntimeManage)?,
         "chef or admin role required"
     );
     save_runtime_settings(root, request)?;
@@ -1915,7 +4010,7 @@ pub fn start_subscription_auth_command(
     request: SubscriptionAuthStartCommandRequest,
 ) -> anyhow::Result<Value> {
     anyhow::ensure!(
-        session_can_manage_all(session),
+        session_has_workspace_permission(root, session, BusinessOsPermission::IntegrationsManage)?,
         "chef or admin role required"
     );
     subscription_auth_start_payload(root, request.use_device_code())
@@ -1962,7 +4057,7 @@ pub fn run_channel_command(
     request: ChannelCommandRequest,
 ) -> anyhow::Result<Value> {
     anyhow::ensure!(
-        session_can_manage_all(session),
+        session_has_workspace_permission(root, session, BusinessOsPermission::IntegrationsManage)?,
         "chef or admin role required"
     );
     match command_type {
@@ -2679,57 +4774,160 @@ pub fn record_module_release(
 ) -> anyhow::Result<Value> {
     let module_id = request.module_id.trim();
     anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+    let release_decision =
+        module_policy_decision(root, session, BusinessOsPermission::AppsRelease, module_id)?;
     anyhow::ensure!(
-        session_can_modify_module(root, session, module_id)?,
-        "module modification rights required"
+        release_decision.allowed,
+        "{}",
+        release_decision.display_reason
     );
-    let manifest_path = module_manifest_path(app_root, module_id)?;
+    let manifest_path = module_manifest_path(root, app_root, module_id)?;
+    let version_app_root = app_root_for_module_manifest(app_root, &manifest_path);
     let manifest_json = std::fs::read_to_string(&manifest_path)
         .with_context(|| format!("failed to read {}", manifest_path.display()))?;
-    let manifest_value: Value = serde_json::from_str(&manifest_json)
+    let original_manifest_json = manifest_json.clone();
+    let mut manifest_value: Value = serde_json::from_str(&manifest_json)
         .with_context(|| format!("failed to parse {}", manifest_path.display()))?;
+    let runtime_installed = manifest_value_is_runtime_installed(&manifest_value);
+    let release_channel = normalized_module_release_channel(&request.release_channel)?;
+    let requested_target_version = request.target_version.trim().to_owned();
+    let source_version_id = request.source_version_id.trim().to_owned();
+    let rollback_version_id = request.rollback_version_id.trim().to_owned();
+    let notes = request.notes.trim().to_owned();
+    let responsible_user_ids = request.responsible_user_ids;
+    let target_version = if requested_target_version.is_empty() {
+        manifest_value
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_owned()
+    } else {
+        requested_target_version
+    };
+    let now = now_ms() as i64;
+    let mut conn = open_store(root)?;
+    ensure_module_version_ref_exists(&conn, module_id, &source_version_id, "source_version_id")?;
+    ensure_module_version_ref_exists(
+        &conn,
+        module_id,
+        &rollback_version_id,
+        "rollback_version_id",
+    )?;
+    let data_access_review = if runtime_installed {
+        let semver_major = parse_business_app_semver_major(&target_version);
+        anyhow::ensure!(
+            semver_major.is_some(),
+            "target_version must be plain SemVer x.y.z"
+        );
+        anyhow::ensure!(
+            semver_major.unwrap_or(0) >= 1,
+            "Team release requires target_version >= 1.0.0"
+        );
+        module_release_data_access_review_summary(
+            &conn,
+            module_id,
+            &request.data_access_review,
+            &module_manifest_collection_ids(&manifest_value),
+            now,
+        )?
+    } else {
+        Value::Null
+    };
+    if runtime_installed {
+        if let Some(object) = manifest_value.as_object_mut() {
+            object.insert("version".to_owned(), Value::String(target_version.clone()));
+            let lifecycle = object
+                .entry("lifecycle".to_owned())
+                .or_insert_with(|| serde_json::json!({}));
+            if !lifecycle.is_object() {
+                *lifecycle = serde_json::json!({});
+            }
+            if let Some(lifecycle_object) = lifecycle.as_object_mut() {
+                lifecycle_object.insert(
+                    "visibility_state".to_owned(),
+                    Value::String(release_channel.clone()),
+                );
+                lifecycle_object.insert(
+                    "audience".to_owned(),
+                    Value::String(release_channel.clone()),
+                );
+                lifecycle_object.insert(
+                    "release_channel".to_owned(),
+                    Value::String(release_channel.clone()),
+                );
+            }
+        }
+        std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest_value)?)
+            .with_context(|| format!("failed to write {}", manifest_path.display()))?;
+    }
     let snapshot = serde_json::json!({
         "module_json": manifest_value,
-        "path": manifest_path.display().to_string()
+        "path": manifest_path.display().to_string(),
+        "target_version": target_version,
+        "release_channel": release_channel,
+        "source_version_id": source_version_id,
+        "rollback_version_id": rollback_version_id,
+        "responsible_user_ids": responsible_user_ids,
+        "data_access_review": data_access_review
     });
-    let conn = open_store(root)?;
-    seed_session_user(&conn, session)?;
-    let next_version: i64 = conn.query_row(
-        "SELECT COALESCE(MAX(version), 0) + 1 FROM business_module_releases WHERE module_id = ?1",
-        params![module_id],
-        |row| row.get(0),
-    )?;
-    let version_id = format!("modrel_{}_{}_{}", module_id, next_version, Uuid::new_v4());
-    let now = now_ms() as i64;
-    let created_by = session_user_id(session).unwrap_or("");
-    conn.execute(
-        "UPDATE business_module_releases SET status = 'rolled_back' WHERE module_id = ?1 AND status = 'released'",
-        params![module_id],
-    )?;
-    conn.execute(
-        "INSERT INTO business_module_releases
-            (version_id, module_id, version, status, manifest_json, snapshot_json, created_by, created_at_ms, notes)
-         VALUES (?1, ?2, ?3, 'released', ?4, ?5, ?6, ?7, ?8)",
-        params![
-            version_id,
+    let created_by = session_user_id(session).unwrap_or("").to_owned();
+    let db_result = (|| -> anyhow::Result<(String, Vec<String>)> {
+        let tx = conn.transaction()?;
+        seed_session_user(&tx, session)?;
+        let next_version: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(version), 0) + 1 FROM business_module_releases WHERE module_id = ?1",
+            params![module_id],
+            |row| row.get(0),
+        )?;
+        let version_id = format!("modrel_{}_{}_{}", module_id, next_version, Uuid::new_v4());
+        tx.execute(
+            "UPDATE business_module_releases SET status = 'rolled_back' WHERE module_id = ?1 AND status = 'released'",
+            params![module_id],
+        )?;
+        tx.execute(
+            "INSERT INTO business_module_releases
+                (version_id, module_id, version, status, manifest_json, snapshot_json, created_by, created_at_ms, notes)
+             VALUES (?1, ?2, ?3, 'released', ?4, ?5, ?6, ?7, ?8)",
+            params![
+                version_id,
+                module_id,
+                next_version,
+                serde_json::to_string(&manifest_value)?,
+                serde_json::to_string(&snapshot)?,
+                created_by,
+                now,
+                notes
+            ],
+        )?;
+        let release_ids = sync_module_release_records(&tx, module_id, now)?;
+        record_module_version_with_conn(
+            &tx,
+            &version_app_root,
             module_id,
-            next_version,
-            serde_json::to_string(&manifest_value)?,
-            serde_json::to_string(&snapshot)?,
-            created_by,
-            now,
-            request.notes.trim()
-        ],
-    )?;
-    let release_ids = sync_module_release_records(&conn, module_id, now)?;
-    record_module_version(
-        root,
-        app_root,
-        module_id,
-        "manual_release",
-        &format!("Release v{next_version}"),
-        created_by,
-    )?;
+            "manual_release",
+            &format!("Release v{next_version}"),
+            &created_by,
+        )?;
+        tx.commit()?;
+        Ok((version_id, release_ids))
+    })();
+    let (version_id, release_ids) = match db_result {
+        Ok(result) => result,
+        Err(error) => {
+            if runtime_installed {
+                if let Err(restore_error) =
+                    std::fs::write(&manifest_path, original_manifest_json.as_bytes())
+                {
+                    anyhow::bail!(
+                        "{error}; additionally failed to restore {} after release failure: {restore_error}",
+                        manifest_path.display()
+                    );
+                }
+            }
+            return Err(error);
+        }
+    };
     let mut governance = module_governance_map(root, session)?;
     if let Some(object) = governance.as_object_mut() {
         object.insert(
@@ -2755,28 +4953,51 @@ pub fn rollback_module_release(
     let version_id = request.version_id.trim();
     anyhow::ensure!(!module_id.is_empty(), "module_id is required");
     anyhow::ensure!(!version_id.is_empty(), "version_id is required");
+    let rollback_decision =
+        module_policy_decision(root, session, BusinessOsPermission::AppsRollback, module_id)?;
     anyhow::ensure!(
-        session_can_modify_module(root, session, module_id)?,
-        "module modification rights required"
+        rollback_decision.allowed,
+        "{}",
+        rollback_decision.display_reason
     );
-    let conn = open_store(root)?;
+    let mut conn = open_store(root)?;
     let manifest_json: String = conn.query_row(
         "SELECT manifest_json FROM business_module_releases WHERE module_id = ?1 AND version_id = ?2",
         params![module_id, version_id],
         |row| row.get(0),
     )?;
-    let manifest_path = module_manifest_path(app_root, module_id)?;
+    let manifest_path = module_manifest_path(root, app_root, module_id)?;
+    let original_manifest_json = std::fs::read_to_string(&manifest_path)
+        .with_context(|| format!("failed to read {}", manifest_path.display()))?;
     std::fs::write(
         &manifest_path,
         serde_json::to_vec_pretty(&serde_json::from_str::<Value>(&manifest_json)?)?,
     )
     .with_context(|| format!("failed to write {}", manifest_path.display()))?;
     let now = now_ms() as i64;
-    conn.execute(
-        "UPDATE business_module_releases SET status = CASE WHEN version_id = ?2 THEN 'released' ELSE 'rolled_back' END WHERE module_id = ?1",
-        params![module_id, version_id],
-    )?;
-    let release_ids = sync_module_release_records(&conn, module_id, now)?;
+    let release_ids = match (|| -> anyhow::Result<Vec<String>> {
+        let tx = conn.transaction()?;
+        tx.execute(
+            "UPDATE business_module_releases SET status = CASE WHEN version_id = ?2 THEN 'released' ELSE 'rolled_back' END WHERE module_id = ?1",
+            params![module_id, version_id],
+        )?;
+        let release_ids = sync_module_release_records(&tx, module_id, now)?;
+        tx.commit()?;
+        Ok(release_ids)
+    })() {
+        Ok(release_ids) => release_ids,
+        Err(error) => {
+            if let Err(restore_error) =
+                std::fs::write(&manifest_path, original_manifest_json.as_bytes())
+            {
+                anyhow::bail!(
+                    "{error}; additionally failed to restore {} after rollback failure: {restore_error}",
+                    manifest_path.display()
+                );
+            }
+            return Err(error);
+        }
+    };
     let mut governance = module_governance_map(root, session)?;
     if let Some(object) = governance.as_object_mut() {
         object.insert(
@@ -2802,7 +5023,7 @@ fn sync_module_release_records(
     updated_at_ms: i64,
 ) -> anyhow::Result<Vec<String>> {
     let mut stmt = conn.prepare(
-        "SELECT version_id, module_id, version, status, created_by, created_at_ms, notes
+        "SELECT version_id, module_id, version, status, created_by, created_at_ms, notes, snapshot_json
          FROM business_module_releases
          WHERE module_id = ?1
          ORDER BY version DESC",
@@ -2816,12 +5037,17 @@ fn sync_module_release_records(
             row.get::<_, String>(4)?,
             row.get::<_, i64>(5)?,
             row.get::<_, String>(6)?,
+            row.get::<_, String>(7)?,
         ))
     })?;
     let release_rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
     drop(stmt);
     let mut release_ids = Vec::new();
-    for (version_id, module_id, version, status, created_by, created_at_ms, notes) in release_rows {
+    for (version_id, module_id, version, status, created_by, created_at_ms, notes, snapshot_json) in
+        release_rows
+    {
+        let snapshot = serde_json::from_str::<Value>(&snapshot_json).unwrap_or(Value::Null);
+        let data_access_review = data_access_review_from_release_snapshot(&snapshot);
         let record_updated_at = next_business_record_updated_at(
             conn,
             "business_module_releases",
@@ -2842,12 +5068,410 @@ fn sync_module_release_records(
                 "created_by": created_by,
                 "created_at_ms": created_at_ms,
                 "notes": notes,
+                "target_version": snapshot
+                    .get("target_version")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                "release_channel": snapshot
+                    .get("release_channel")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                "source_version_id": snapshot
+                    .get("source_version_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                "rollback_version_id": snapshot
+                    .get("rollback_version_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                "data_access_review": data_access_review,
+                "data_access": release_review_data_access_projection(&data_access_review),
                 "updated_at_ms": record_updated_at
             }),
         )?;
         release_ids.push(version_id);
     }
     Ok(release_ids)
+}
+
+fn module_release_ids_for_projection_repair(
+    conn: &Connection,
+    module_id: &str,
+) -> anyhow::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT version_id
+         FROM business_module_releases
+         WHERE module_id = ?1
+         ORDER BY version DESC",
+    )?;
+    let rows = stmt.query_map(params![module_id], |row| row.get::<_, String>(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+fn repair_invalid_module_release_version_refs(
+    conn: &Connection,
+    module_ids: &[String],
+    dry_run: bool,
+) -> anyhow::Result<Vec<Value>> {
+    let mut actions = Vec::new();
+    for module_id in module_ids {
+        let mut stmt = conn.prepare(
+            "SELECT version_id, snapshot_json
+             FROM business_module_releases
+             WHERE module_id = ?1
+             ORDER BY version DESC",
+        )?;
+        let rows = stmt
+            .query_map(params![module_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(stmt);
+
+        for (release_id, snapshot_json) in rows {
+            let mut snapshot = serde_json::from_str::<Value>(&snapshot_json)
+                .unwrap_or_else(|_| serde_json::json!({}));
+            let mut changed = false;
+            for field_name in ["source_version_id", "rollback_version_id"] {
+                let version_id = snapshot
+                    .get(field_name)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_owned();
+                if version_id.is_empty() || module_version_ref_exists(conn, module_id, &version_id)?
+                {
+                    continue;
+                }
+                actions.push(serde_json::json!({
+                    "kind": "invalid_module_version_reference",
+                    "release_id": release_id,
+                    "module_id": module_id,
+                    "field": field_name,
+                    "invalid_version_id": version_id,
+                    "action": "clear_snapshot_field",
+                    "apply": !dry_run,
+                }));
+                if !dry_run {
+                    let object = snapshot
+                        .as_object_mut()
+                        .context("release snapshot must be a JSON object")?;
+                    object.insert(field_name.to_owned(), Value::String(String::new()));
+                    changed = true;
+                }
+            }
+            if changed {
+                conn.execute(
+                    "UPDATE business_module_releases
+                     SET snapshot_json = ?2
+                     WHERE version_id = ?1",
+                    params![release_id, serde_json::to_string(&snapshot)?],
+                )?;
+            }
+        }
+    }
+    Ok(actions)
+}
+
+fn module_has_active_responsibility(conn: &Connection, module_id: &str) -> anyhow::Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*)
+         FROM business_module_acl acl
+         LEFT JOIN business_users user ON user.user_id = acl.user_id
+         WHERE acl.module_id = ?1
+           AND acl.role = 'founder'
+           AND acl.active = 1
+           AND COALESCE(user.active, 1) = 1",
+        params![module_id.trim()],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn orphan_private_module_ids(
+    root: &Path,
+    conn: &Connection,
+    module_filter: &str,
+) -> anyhow::Result<Vec<String>> {
+    let module_ids = current_business_os_module_ids(root)?;
+    let mut orphan_ids = Vec::new();
+    for module_id in module_ids {
+        if !module_filter.is_empty() && module_id != module_filter {
+            continue;
+        }
+        if module_requires_active_responsibility(root, &module_id)?
+            && !module_has_active_responsibility(conn, &module_id)?
+        {
+            orphan_ids.push(module_id);
+        }
+    }
+    Ok(orphan_ids)
+}
+
+fn repair_orphan_private_app_responsibility(
+    root: &Path,
+    conn: &Connection,
+    session: &BusinessOsSession,
+    module_filter: &str,
+    dry_run: bool,
+    now: i64,
+) -> anyhow::Result<Vec<Value>> {
+    let recovery_user_id = session_user_id(session)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .context("authenticated recovery user is required")?
+        .to_owned();
+    let orphan_ids = orphan_private_module_ids(root, conn, module_filter)?;
+    if !dry_run && !orphan_ids.is_empty() {
+        seed_session_user(conn, session)?;
+    }
+    let mut actions = Vec::new();
+    for module_id in orphan_ids {
+        actions.push(serde_json::json!({
+            "kind": "orphan_private_app_responsibility",
+            "module_id": module_id.as_str(),
+            "recovery_user_id": recovery_user_id.as_str(),
+            "action": "assign_recovery_responsibility",
+            "apply": !dry_run,
+        }));
+        if !dry_run {
+            upsert_module_founder_assignment_record(
+                conn,
+                session,
+                &module_id,
+                &recovery_user_id,
+                true,
+                now,
+            )?;
+        }
+    }
+    Ok(actions)
+}
+
+fn current_business_os_module_ids(root: &Path) -> anyhow::Result<BTreeSet<String>> {
+    let app_root = resolve_business_os_app_root(root)?;
+    let installed_app_root = resolve_business_os_installed_app_root(root);
+    let modules = load_module_manifests(&app_root, &installed_app_root)?;
+    Ok(modules.into_iter().map(|manifest| manifest.id).collect())
+}
+
+fn repair_stale_module_permission_grants(
+    conn: &Connection,
+    module_ids: &BTreeSet<String>,
+    module_filter: &str,
+    dry_run: bool,
+    now: i64,
+) -> anyhow::Result<Vec<Value>> {
+    let mut query = String::from(
+        "SELECT grant_id, subject_type, subject_id, permission, scope_id, reason
+         FROM business_permission_grants
+         WHERE active = 1 AND scope_type = 'module'",
+    );
+    if !module_filter.is_empty() {
+        query.push_str(" AND scope_id = ?1");
+    }
+    query.push_str(" ORDER BY scope_id ASC, permission ASC, subject_type ASC, subject_id ASC");
+    let mut stmt = conn.prepare(&query)?;
+    let rows = if module_filter.is_empty() {
+        stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+    } else {
+        stmt.query_map(params![module_filter], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    drop(stmt);
+
+    let mut actions = Vec::new();
+    for (grant_id, subject_type, subject_id, permission, scope_id, reason) in rows {
+        if module_ids.contains(&scope_id) {
+            continue;
+        }
+        actions.push(serde_json::json!({
+            "kind": "stale_module_permission_grant",
+            "grant_id": grant_id,
+            "scope_id": scope_id,
+            "permission": permission,
+            "subject_type": subject_type,
+            "subject_id": subject_id,
+            "action": "deactivate",
+            "apply": !dry_run,
+        }));
+        if !dry_run {
+            let repaired_reason = if reason.trim().is_empty() {
+                "deactivated by lifecycle projection repair: module scope no longer exists"
+                    .to_owned()
+            } else {
+                format!(
+                    "{}; deactivated by lifecycle projection repair: module scope no longer exists",
+                    reason.trim()
+                )
+            };
+            conn.execute(
+                "UPDATE business_permission_grants
+                 SET active = 0, reason = ?2, updated_at_ms = ?3
+                 WHERE grant_id = ?1",
+                params![grant_id, repaired_reason, now],
+            )?;
+        }
+    }
+    Ok(actions)
+}
+
+pub fn repair_module_lifecycle_projections(
+    root: &Path,
+    session: &BusinessOsSession,
+    request: ModuleLifecycleProjectionRepairRequest,
+) -> anyhow::Result<Value> {
+    let module_filter = source_sanitize_slug(&request.module_id);
+    let now = now_ms() as i64;
+    let conn = open_store(root)?;
+    let module_ids = if module_filter.is_empty() {
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT module_id
+             FROM business_module_releases
+             ORDER BY module_id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    } else {
+        vec![module_filter.clone()]
+    };
+    let version_ref_actions = if request.repair_invalid_version_refs {
+        repair_invalid_module_release_version_refs(&conn, &module_ids, request.dry_run)?
+    } else {
+        Vec::new()
+    };
+    let orphan_private_app_actions = if request.repair_orphan_private_apps {
+        repair_orphan_private_app_responsibility(
+            root,
+            &conn,
+            session,
+            &module_filter,
+            request.dry_run,
+            now,
+        )?
+    } else {
+        Vec::new()
+    };
+    let mut release_ids = Vec::new();
+    for module_id in &module_ids {
+        if request.dry_run {
+            release_ids.extend(module_release_ids_for_projection_repair(&conn, module_id)?);
+        } else {
+            release_ids.extend(sync_module_release_records(&conn, module_id, now)?);
+        }
+    }
+    let mut actions = Vec::new();
+    for release_id in &release_ids {
+        actions.push(serde_json::json!({
+            "kind": "business_module_release_projection",
+            "record_id": release_id,
+            "apply": !request.dry_run,
+        }));
+        if !request.dry_run {
+            if let Some(payload) =
+                outbound_load_record(&conn, "business_module_releases", release_id)?
+            {
+                upsert_rxdb_collection_record(
+                    root,
+                    "business_module_releases",
+                    release_id,
+                    now,
+                    payload,
+                )?;
+            }
+        }
+    }
+    let permission_grant_actions = if request.repair_stale_grants {
+        let current_module_ids = current_business_os_module_ids(root)?;
+        repair_stale_module_permission_grants(
+            &conn,
+            &current_module_ids,
+            &module_filter,
+            request.dry_run,
+            now,
+        )?
+    } else {
+        Vec::new()
+    };
+    actions.push(serde_json::json!({
+        "kind": "business_module_catalog_projection",
+        "record_id": "module-catalog",
+        "apply": !request.dry_run,
+    }));
+    drop(conn);
+    if !request.dry_run {
+        write_module_catalog_projection_to_rxdb(root)?;
+    }
+    let release_projection_count = release_ids.len();
+    let version_ref_repair_count = version_ref_actions.len();
+    let orphan_private_app_repair_count = orphan_private_app_actions.len();
+    let permission_grant_repair_count = permission_grant_actions.len();
+    Ok(serde_json::json!({
+        "ok": true,
+        "check": if request.dry_run { "dry_run" } else { "completed" },
+        "dry_run": request.dry_run,
+        "module_ids": module_ids,
+        "business_module_release_ids": release_ids,
+        "actions": actions,
+        "release_projection_count": release_projection_count,
+        "version_ref_actions": version_ref_actions,
+        "version_ref_repair_count": version_ref_repair_count,
+        "orphan_private_app_actions": orphan_private_app_actions,
+        "orphan_private_app_repair_count": orphan_private_app_repair_count,
+        "permission_grant_actions": permission_grant_actions,
+        "permission_grant_repair_count": permission_grant_repair_count,
+        "module_catalog_projected": !request.dry_run
+    }))
+}
+
+fn module_lifecycle_projection_repair_safe_command(
+    command: &BusinessCommand,
+    request: &ModuleLifecycleProjectionRepairRequest,
+    session: &BusinessOsSession,
+) -> BusinessCommand {
+    BusinessCommand {
+        id: command.id.clone(),
+        module: command.module.clone(),
+        command_type: command.command_type.clone(),
+        record_id: command.record_id.clone(),
+        payload: serde_json::json!({
+            "module_id": source_sanitize_slug(&request.module_id),
+            "dry_run": request.dry_run,
+            "repair_stale_grants": request.repair_stale_grants,
+            "repair_invalid_version_refs": request.repair_invalid_version_refs,
+            "repair_orphan_private_apps": request.repair_orphan_private_apps,
+        }),
+        client_context: serde_json::json!({
+            "actor": {
+                "id": session_user_id(session).unwrap_or("rxdb-command"),
+                "display_name": session
+                    .user
+                    .as_ref()
+                    .map(|user| user.display_name.as_str())
+                    .unwrap_or("rxdb-command"),
+                "role": session_role(session),
+            }
+        }),
+    }
 }
 
 fn next_business_record_updated_at(
@@ -3017,7 +5641,7 @@ pub fn load_module_source_records(
     let app_root = resolve_business_os_app_root(root)?;
     let module_id = source_sanitize_slug(&mutation.module_id);
     anyhow::ensure!(!module_id.is_empty(), "module_id is required");
-    let module_root = resolve_module_source_root(&app_root, &module_id)?;
+    let (module_root, _) = resolve_module_source_root_for_root(root, &app_root, &module_id)?;
     let mut files = Vec::new();
     collect_module_source_files(&module_id, &module_root, &module_root, &mut files)?;
     files.sort_by(|left, right| {
@@ -3053,7 +5677,8 @@ pub fn save_module_source_record(
     let app_root = resolve_business_os_app_root(root)?;
     let module_id = source_sanitize_slug(&mutation.module_id);
     anyhow::ensure!(!module_id.is_empty(), "module_id is required");
-    let module_root = resolve_module_source_root(&app_root, &module_id)?;
+    let (module_root, source_app_root) =
+        resolve_module_source_root_for_root(root, &app_root, &module_id)?;
     let rel = normalize_source_relative_path(&mutation.path)?;
     anyhow::ensure!(
         is_allowed_source_path(&rel),
@@ -3117,7 +5742,7 @@ pub fn save_module_source_record(
     )?;
     drop(conn);
     if changed {
-        record_module_version(root, &app_root, &module_id, "edit", "", "")?;
+        record_module_version(root, &source_app_root, &module_id, "edit", "", "")?;
     }
     Ok(serde_json::json!({
         "ok": true,
@@ -3930,6 +6555,17 @@ fn resolve_module_source_root(app_root: &Path, module_id: &str) -> anyhow::Resul
     anyhow::bail!("module `{module_id}` was not found")
 }
 
+fn resolve_module_source_root_for_root(
+    root: &Path,
+    app_root: &Path,
+    module_id: &str,
+) -> anyhow::Result<(PathBuf, PathBuf)> {
+    let manifest_path = module_manifest_path(root, app_root, module_id)?;
+    let source_app_root = app_root_for_module_manifest(app_root, &manifest_path);
+    let module_root = resolve_module_source_root(&source_app_root, module_id)?;
+    Ok((module_root, source_app_root))
+}
+
 fn normalize_source_relative_path(path: &str) -> anyhow::Result<PathBuf> {
     let rel = Path::new(path);
     if rel.is_absolute() {
@@ -4265,12 +6901,23 @@ fn record_module_version(
     label: &str,
     created_by: &str,
 ) -> anyhow::Result<Option<Value>> {
+    let conn = open_store(root)?;
+    record_module_version_with_conn(&conn, app_root, module_id, origin, label, created_by)
+}
+
+fn record_module_version_with_conn(
+    conn: &Connection,
+    app_root: &Path,
+    module_id: &str,
+    origin: &str,
+    label: &str,
+    created_by: &str,
+) -> anyhow::Result<Option<Value>> {
     let module_id = source_sanitize_slug(module_id);
     if module_id.is_empty() {
         return Ok(None);
     }
     let bundle = compute_module_bundle(app_root, &module_id)?;
-    let conn = open_store(root)?;
     let now = now_ms() as i64;
     let is_boundary = origin != "edit";
 
@@ -4443,9 +7090,16 @@ pub fn rollback_module_to_version(
     let version_id = request.version_id.trim().to_string();
     anyhow::ensure!(!module_id.is_empty(), "module_id is required");
     anyhow::ensure!(!version_id.is_empty(), "version_id is required");
+    let rollback_decision = module_policy_decision(
+        root,
+        session,
+        BusinessOsPermission::AppsRollback,
+        &module_id,
+    )?;
     anyhow::ensure!(
-        session_can_modify_module(root, session, &module_id)?,
-        "module modification rights required"
+        rollback_decision.allowed,
+        "{}",
+        rollback_decision.display_reason
     );
 
     let files_json: String = {
@@ -4460,6 +7114,7 @@ pub fn rollback_module_to_version(
         .context("version not found for module")?
     };
     let target_files: Vec<Value> = serde_json::from_str(&files_json).unwrap_or_default();
+    let (_, source_app_root) = resolve_module_source_root_for_root(root, app_root, &module_id)?;
 
     let mut target_paths = std::collections::BTreeSet::new();
     let mut restored = 0usize;
@@ -4487,8 +7142,8 @@ pub fn rollback_module_to_version(
     // Remove editable source files that were added after the target version,
     // snapshotting each one first so the removal is itself reversible.
     let mut removed = 0usize;
-    let current = compute_module_bundle(app_root, &module_id)?;
-    let module_root = resolve_module_source_root(app_root, &module_id)?;
+    let current = compute_module_bundle(&source_app_root, &module_id)?;
+    let module_root = resolve_module_source_root(&source_app_root, &module_id)?;
     for file in &current.files {
         let path = file.get("path").and_then(Value::as_str).unwrap_or_default();
         if path.is_empty() || target_paths.contains(path) {
@@ -4514,7 +7169,7 @@ pub fn rollback_module_to_version(
     let created_by = session_user_id(session).unwrap_or("").to_string();
     record_module_version(
         root,
-        app_root,
+        &source_app_root,
         &module_id,
         "rollback",
         &format!("Rolled back to {version_id}"),
@@ -4635,12 +7290,13 @@ pub fn install_app_module(
     session: &BusinessOsSession,
     request: AppStoreInstallRequest,
 ) -> anyhow::Result<Value> {
-    anyhow::ensure!(
-        session_can_manage_all(session),
-        "chef or admin role required to install modules"
-    );
     let module_id = source_sanitize_slug(&request.module_id);
     anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+    anyhow::ensure!(
+        module_policy_decision(root, session, BusinessOsPermission::AppsInstall, &module_id)?
+            .allowed,
+        "chef or admin role required to install modules"
+    );
 
     // Download the ZIP archive
     let response = ureq::get(&request.download_url)
@@ -4775,12 +7431,18 @@ pub fn uninstall_app_module(
     session: &BusinessOsSession,
     request: AppStoreUninstallRequest,
 ) -> anyhow::Result<Value> {
-    anyhow::ensure!(
-        session_can_manage_all(session),
-        "chef or admin role required to uninstall modules"
-    );
     let module_id = source_sanitize_slug(&request.module_id);
     anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+    anyhow::ensure!(
+        module_policy_decision(
+            root,
+            session,
+            BusinessOsPermission::AppsUninstall,
+            &module_id
+        )?
+        .allowed,
+        "chef or admin role required to uninstall modules"
+    );
 
     if is_core_module(&module_id) {
         anyhow::bail!("Core modules cannot be uninstalled");
@@ -4842,20 +7504,51 @@ fn source_sanitize_slug(value: &str) -> String {
     out.trim_matches('-').to_owned()
 }
 
-fn module_manifest_path(app_root: &Path, module_id: &str) -> anyhow::Result<std::path::PathBuf> {
+fn module_manifest_path(
+    root: &Path,
+    app_root: &Path,
+    module_id: &str,
+) -> anyhow::Result<std::path::PathBuf> {
     let module_id = module_id.trim();
-    let core_path = app_root.join("modules").join(module_id).join("module.json");
-    if core_path.is_file() {
-        return Ok(core_path);
-    }
-    let installed_path = app_root
-        .join("installed-modules")
-        .join(module_id)
-        .join("module.json");
-    if installed_path.is_file() {
-        return Ok(installed_path);
+    let installed_app_root = resolve_business_os_installed_app_root(root);
+    let mut candidates = vec![
+        app_root.join("modules").join(module_id).join("module.json"),
+        app_root
+            .join("installed-modules")
+            .join(module_id)
+            .join("module.json"),
+        installed_app_root
+            .join("installed-modules")
+            .join(module_id)
+            .join("module.json"),
+    ];
+    candidates.dedup();
+    for candidate in candidates {
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
     }
     anyhow::bail!("module manifest not found: {module_id}")
+}
+
+fn app_root_for_module_manifest(default_app_root: &Path, manifest_path: &Path) -> PathBuf {
+    let Some(module_dir) = manifest_path.parent() else {
+        return default_app_root.to_path_buf();
+    };
+    let Some(collection_dir) = module_dir.parent() else {
+        return default_app_root.to_path_buf();
+    };
+    if collection_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| matches!(name, "modules" | "installed-modules"))
+    {
+        return collection_dir
+            .parent()
+            .unwrap_or(default_app_root)
+            .to_path_buf();
+    }
+    default_app_root.to_path_buf()
 }
 
 fn normalize_report_kind(kind: &str) -> String {
@@ -4928,12 +7621,25 @@ fn default_true() -> bool {
     true
 }
 
-pub fn record_command(root: &Path, command: BusinessCommand) -> anyhow::Result<CommandAccepted> {
-    let conn = open_store(root)?;
+pub fn record_command(
+    root: &Path,
+    mut command: BusinessCommand,
+) -> anyhow::Result<CommandAccepted> {
     let command_id = command
         .id
         .clone()
         .unwrap_or_else(|| format!("cmd_{}", Uuid::new_v4()));
+    command.id = Some(command_id.clone());
+    if let Some(_decision) = reject_app_build_command_if_denied(root, &command)? {
+        return Ok(CommandAccepted {
+            ok: false,
+            command_id,
+            status: "failed",
+            task_id: None,
+            task_status: Some("failed".to_owned()),
+        });
+    }
+    let conn = open_store(root)?;
     let observed_at_ms = now_ms() as i64;
     let queue_task = create_ctox_queue_task(root, &command_id, &command)?;
     let inbound_channel = command_inbound_channel(&command);
@@ -4997,6 +7703,3482 @@ pub fn record_command(root: &Path, command: BusinessCommand) -> anyhow::Result<C
         task_id: queue_task.as_ref().map(|task| task.message_key.clone()),
         task_status: queue_task.map(|task| normalize_queue_status(&task.route_status).to_string()),
     })
+}
+
+fn reject_app_build_command_if_denied(
+    root: &Path,
+    command: &BusinessCommand,
+) -> anyhow::Result<Option<PolicyDecision>> {
+    let Some((permission, module_id)) = app_build_command_policy_target(command) else {
+        return Ok(None);
+    };
+    let session = rxdb_authenticated_session(root, command)?;
+    let decision = match permission {
+        BusinessOsPermission::AppsModify => {
+            module_policy_decision(root, &session, permission, &module_id)?
+        }
+        _ => scoped_policy_decision(
+            root,
+            &session,
+            permission,
+            BusinessOsScope::module(module_id.clone(), false),
+        )?,
+    };
+    if decision.allowed {
+        record_business_policy_decision_event(root, command, &decision)?;
+        return Ok(None);
+    }
+    reject_command_if_policy_denied(root, command, &decision)?;
+    Ok(Some(decision))
+}
+
+fn app_build_command_policy_target(
+    command: &BusinessCommand,
+) -> Option<(BusinessOsPermission, String)> {
+    let (module_id, _install_target, _module_dir) =
+        business_os_app_command_target_metadata(command)?;
+    let permission = if command.command_type == "ctox.business_os.app.modify" {
+        BusinessOsPermission::AppsModify
+    } else {
+        BusinessOsPermission::AppsInstall
+    };
+    Some((permission, module_id))
+}
+
+fn write_rxdb_policy_denied_command_outcome(
+    root: &Path,
+    command: &BusinessCommand,
+    decision: &PolicyDecision,
+) -> anyhow::Result<Value> {
+    let mut outcome = write_rxdb_control_command_outcome(
+        root,
+        command,
+        "failed",
+        None,
+        Some("failed"),
+        serde_json::json!({
+            "error": decision.display_reason,
+            "policy_decision": policy_decision_payload(decision)
+        }),
+    )?;
+    if let Some(object) = outcome.as_object_mut() {
+        object.insert("ok".to_string(), Value::Bool(false));
+    }
+    record_business_policy_decision_event(root, command, decision)?;
+    Ok(outcome)
+}
+
+fn write_rxdb_failed_control_command_outcome(
+    root: &Path,
+    command: &BusinessCommand,
+    operation: &str,
+    error: anyhow::Error,
+) -> anyhow::Result<Value> {
+    let mut result = serde_json::json!({
+        "ok": false,
+        "error": error.to_string(),
+        "operation": operation,
+        "check": "failed"
+    });
+    if let Some(object) = result.as_object_mut() {
+        if operation == "release" {
+            object.insert(
+                "release_check".to_string(),
+                Value::String("failed".to_string()),
+            );
+        }
+        if operation.starts_with("rollback") {
+            object.insert(
+                "rollback_check".to_string(),
+                Value::String("failed".to_string()),
+            );
+        }
+    }
+    let mut outcome =
+        write_rxdb_control_command_outcome(root, command, "failed", None, Some("failed"), result)?;
+    if let Some(object) = outcome.as_object_mut() {
+        object.insert("ok".to_string(), Value::Bool(false));
+    }
+    Ok(outcome)
+}
+
+fn module_version_timeline_policy_decision(
+    root: &Path,
+    session: &BusinessOsSession,
+    module_id: &str,
+) -> anyhow::Result<PolicyDecision> {
+    let permissions = [
+        BusinessOsPermission::AppsSourceView,
+        BusinessOsPermission::AppsRelease,
+        BusinessOsPermission::AppsRollback,
+    ];
+    let mut denied: Option<PolicyDecision> = None;
+    for permission in permissions {
+        let decision = module_policy_decision(root, session, permission, module_id)?;
+        if decision.allowed {
+            return Ok(decision);
+        }
+        denied.get_or_insert(decision);
+    }
+    denied.context("failed to evaluate module version timeline policy")
+}
+
+fn policy_decision_payload(decision: &PolicyDecision) -> Value {
+    serde_json::json!({
+        "allowed": decision.allowed,
+        "permission": decision.permission,
+        "scope_type": decision.scope_type,
+        "scope_id": decision.scope_id,
+        "reason_code": decision.reason_code,
+        "display_reason": decision.display_reason,
+        "requires_approval": decision.requires_approval,
+        "audit_level": decision.audit_level
+    })
+}
+
+fn record_business_policy_decision_event(
+    root: &Path,
+    command: &BusinessCommand,
+    decision: &PolicyDecision,
+) -> anyhow::Result<()> {
+    let command_id = command.id.as_deref().context("command id is required")?;
+    let event_type = if decision.allowed {
+        "business_os.policy.allowed"
+    } else {
+        "business_os.policy.denied"
+    };
+    let observed_at_ms = now_ms() as i64;
+    let actor = policy_audit_actor_context(root, command);
+    let client_context = policy_audit_client_context(command);
+    let conn = open_store(root)?;
+    insert_business_event(
+        &conn,
+        "business_commands",
+        command_id,
+        event_type,
+        serde_json::json!({
+            "event_type": event_type,
+            "command_id": command_id,
+            "module": command.module.as_str(),
+            "command_type": command.command_type.as_str(),
+            "record_id": command.record_id.as_deref(),
+            "actor": actor,
+            "client_context": client_context,
+            "policy_decision": policy_decision_payload(decision),
+            "observed_at_ms": observed_at_ms
+        }),
+        observed_at_ms,
+    )
+}
+
+fn insert_business_event(
+    conn: &Connection,
+    collection: &str,
+    record_id: &str,
+    command_type: &str,
+    payload: Value,
+    observed_at_ms: i64,
+) -> anyhow::Result<()> {
+    conn.execute(
+        "INSERT INTO business_events
+            (event_id, collection, record_id, command_type, payload_json, observed_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            format!("evt_{}", Uuid::new_v4()),
+            collection,
+            record_id,
+            command_type,
+            serde_json::to_string(&payload)?,
+            observed_at_ms
+        ],
+    )?;
+    Ok(())
+}
+
+fn module_lifecycle_audit_event_type(command_type: &str, status: &str) -> Option<&'static str> {
+    match (command_type, status) {
+        ("ctox.module.release", "completed") => Some("business_os.module.release.succeeded"),
+        ("ctox.module.release", "failed") => Some("business_os.module.release.failed"),
+        ("ctox.module.rollback", "completed") => Some("business_os.module.rollback.succeeded"),
+        ("ctox.module.rollback", "failed") => Some("business_os.module.rollback.failed"),
+        ("ctox.module.rollback_version", "completed") => {
+            Some("business_os.module.rollback.succeeded")
+        }
+        ("ctox.module.rollback_version", "failed") => Some("business_os.module.rollback.failed"),
+        _ => None,
+    }
+}
+
+fn lifecycle_audit_string(value: Option<&Value>) -> Value {
+    value
+        .and_then(Value::as_str)
+        .map(|raw| Value::String(raw.trim().to_owned()))
+        .unwrap_or(Value::Null)
+}
+
+fn release_audit_review_from_result(result: &Value, module_id: &str, version_id: &str) -> Value {
+    result
+        .get("releases")
+        .and_then(|releases| releases.get(module_id))
+        .and_then(Value::as_array)
+        .and_then(|releases| {
+            releases.iter().find(|release| {
+                release
+                    .get("version_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|candidate| candidate == version_id)
+            })
+        })
+        .and_then(|release| release.get("data_access_review"))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+fn module_lifecycle_audit_summary(command: &BusinessCommand, result: &Value) -> Value {
+    let payload = &command.payload;
+    let module_id = result
+        .get("module_id")
+        .or_else(|| payload.get("module_id"))
+        .and_then(Value::as_str)
+        .or(command.record_id.as_deref())
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    let version_id = result
+        .get("version_id")
+        .or_else(|| payload.get("version_id"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    let data_access_review = if command.command_type == "ctox.module.release" {
+        let from_result = release_audit_review_from_result(result, &module_id, &version_id);
+        if from_result.is_null() {
+            payload
+                .get("data_access_review")
+                .cloned()
+                .unwrap_or(Value::Null)
+        } else {
+            from_result
+        }
+    } else {
+        Value::Null
+    };
+    serde_json::json!({
+        "ok": result
+            .get("ok")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        "module_id": module_id,
+        "version_id": version_id,
+        "target_version": lifecycle_audit_string(
+            result.get("target_version").or_else(|| payload.get("target_version"))
+        ),
+        "release_channel": lifecycle_audit_string(
+            result.get("release_channel").or_else(|| payload.get("release_channel"))
+        ),
+        "source_version_id": lifecycle_audit_string(
+            result.get("source_version_id").or_else(|| payload.get("source_version_id"))
+        ),
+        "rollback_version_id": lifecycle_audit_string(
+            result.get("rollback_version_id").or_else(|| payload.get("rollback_version_id"))
+        ),
+        "business_module_release_ids": result
+            .get("business_module_release_ids")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "rolled_back_at_ms": result
+            .get("rolled_back_at_ms")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "release_check": result
+            .get("release_check")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "rollback_check": result
+            .get("rollback_check")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "check": result
+            .get("check")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "operation": result
+            .get("operation")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "error": result
+            .get("error")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "data_access_review": data_access_review
+    })
+}
+
+fn record_business_module_lifecycle_event(
+    root: &Path,
+    command: &BusinessCommand,
+    status: &str,
+    result: &Value,
+) -> anyhow::Result<()> {
+    let Some(event_type) = module_lifecycle_audit_event_type(&command.command_type, status) else {
+        return Ok(());
+    };
+    let command_id = command.id.as_deref().context("command id is required")?;
+    let observed_at_ms = now_ms() as i64;
+    let actor = policy_audit_actor_context(root, command);
+    let summary = module_lifecycle_audit_summary(command, result);
+    let conn = open_store(root)?;
+    insert_business_event(
+        &conn,
+        "business_commands",
+        command_id,
+        event_type,
+        serde_json::json!({
+            "event_type": event_type,
+            "command_id": command_id,
+            "module": command.module.as_str(),
+            "command_type": command.command_type.as_str(),
+            "record_id": command.record_id.as_deref(),
+            "actor": actor,
+            "status": status,
+            "summary": summary,
+            "observed_at_ms": observed_at_ms
+        }),
+        observed_at_ms,
+    )
+}
+
+fn list_business_activity_events(
+    root: &Path,
+    request: BusinessActivityListRequest,
+) -> anyhow::Result<Value> {
+    let limit = request.limit.unwrap_or(25).clamp(1, 100);
+    let conn = open_store(root)?;
+    let mut stmt = conn.prepare(
+        "SELECT event_id, collection, record_id, command_type, payload_json, observed_at_ms
+         FROM business_events
+         WHERE command_type IN (
+            'business_os.policy.allowed',
+            'business_os.policy.denied',
+            'business_os.user.changed',
+            'business_os.app_responsibility.changed',
+            'business_os.external_approval.decided',
+            'business_os.module.release.succeeded',
+            'business_os.module.release.failed',
+            'business_os.module.rollback.succeeded',
+            'business_os.module.rollback.failed'
+         )
+         ORDER BY observed_at_ms DESC, event_id DESC
+         LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, i64>(5)?,
+        ))
+    })?;
+    let mut events = Vec::new();
+    for row in rows {
+        let (event_id, collection, record_id, command_type, payload_json, observed_at_ms) = row?;
+        let payload: Value = serde_json::from_str(&payload_json).unwrap_or_else(|_| {
+            serde_json::json!({
+                "raw": payload_json
+            })
+        });
+        let event_type = payload
+            .get("event_type")
+            .and_then(Value::as_str)
+            .unwrap_or(command_type.as_str())
+            .to_owned();
+        events.push(serde_json::json!({
+            "id": event_id.clone(),
+            "event_id": event_id,
+            "collection": collection,
+            "record_id": record_id,
+            "type": event_type,
+            "command_type": command_type,
+            "observed_at_ms": observed_at_ms,
+            "payload": payload
+        }));
+    }
+    let count = events.len();
+    Ok(serde_json::json!({
+        "ok": true,
+        "can_manage": true,
+        "events": events,
+        "count": count
+    }))
+}
+
+fn business_os_support_diagnostics_export(
+    root: &Path,
+    session: &BusinessOsSession,
+    request: &BusinessSupportDiagnosticsExportRequest,
+) -> anyhow::Result<Value> {
+    let module_id = request
+        .module_id
+        .as_deref()
+        .map(source_sanitize_slug)
+        .filter(|value| !value.is_empty());
+    let activity = support_diagnostics_activity_summary(root, request.limit)?;
+    let why = if request.include_why {
+        if let Some(module_id) = module_id.as_deref() {
+            let diagnostics = business_os_why_diagnostics(
+                root,
+                session,
+                &BusinessOsWhyDiagnosticsRequest {
+                    module_id: module_id.to_owned(),
+                },
+            )?;
+            support_diagnostics_why_summary(&diagnostics)
+        } else {
+            Value::Null
+        }
+    } else {
+        Value::Null
+    };
+    let artifact = serde_json::json!({
+        "ok": true,
+        "kind": "business_os_support_diagnostics_artifact",
+        "schema_version": 1,
+        "artifact_schema": "ctox.business_os.support_diagnostics.v1",
+        "generated_at_ms": now_ms(),
+        "product": "ctox-business-os",
+        "redaction": {
+            "profile": "support-safe-v1",
+            "raw_payloads_included": false,
+            "prompt_bodies_included": false,
+            "message_bodies_included": false,
+            "record_payloads_included": false,
+            "secrets_included": false,
+            "excluded_fields": [
+                "prompt",
+                "selected_text",
+                "message_body",
+                "body",
+                "record_payload",
+                "payload_json",
+                "raw",
+                "token",
+                "secret"
+            ]
+        },
+        "actor": {
+            "id": session_user_id(session).unwrap_or("rxdb-command"),
+            "display_name": session
+                .user
+                .as_ref()
+                .map(|user| user.display_name.as_str())
+                .unwrap_or("rxdb-command"),
+            "role": session_role(session)
+        },
+        "scope": {
+            "module_id": module_id,
+        },
+        "diagnostics": {
+            "why": why,
+        },
+        "activity": activity,
+    });
+    let forbidden = support_artifact_forbidden_paths(&artifact);
+    anyhow::ensure!(
+        forbidden.is_empty(),
+        "support diagnostics artifact contains forbidden fields: {}",
+        forbidden.join(", ")
+    );
+    Ok(artifact)
+}
+
+fn business_os_support_diagnostics_safe_command(
+    command: &BusinessCommand,
+    request: &BusinessSupportDiagnosticsExportRequest,
+    session: &BusinessOsSession,
+) -> BusinessCommand {
+    let module_id = request
+        .module_id
+        .as_deref()
+        .map(source_sanitize_slug)
+        .unwrap_or_default();
+    BusinessCommand {
+        id: command.id.clone(),
+        module: command.module.clone(),
+        command_type: command.command_type.clone(),
+        record_id: command.record_id.clone(),
+        payload: serde_json::json!({
+            "module_id": module_id,
+            "limit": request.limit,
+            "include_why": request.include_why,
+        }),
+        client_context: serde_json::json!({
+            "actor": {
+                "id": session_user_id(session).unwrap_or("rxdb-command"),
+                "display_name": session
+                    .user
+                    .as_ref()
+                    .map(|user| user.display_name.as_str())
+                    .unwrap_or("rxdb-command"),
+                "role": session_role(session),
+            }
+        }),
+    }
+}
+
+fn support_diagnostics_activity_summary(root: &Path, limit: Option<i64>) -> anyhow::Result<Value> {
+    let activity = list_business_activity_events(root, BusinessActivityListRequest { limit })?;
+    let events = activity
+        .get("events")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(support_diagnostics_event_summary)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Ok(serde_json::json!({
+        "schema_version": 1,
+        "source": "business_events",
+        "count": events.len(),
+        "events": events
+    }))
+}
+
+fn support_diagnostics_event_summary(event: &Value) -> Value {
+    let payload = event.get("payload").unwrap_or(&Value::Null);
+    serde_json::json!({
+        "id": support_string(event.get("id")),
+        "type": support_string(event.get("type")),
+        "command_type": support_string(event.get("command_type")),
+        "collection": support_string(event.get("collection")),
+        "record_id": support_string(event.get("record_id")),
+        "observed_at_ms": event.get("observed_at_ms").cloned().unwrap_or(Value::Null),
+        "module": support_string(payload.get("module")),
+        "status": support_string(payload.get("status")),
+        "actor": support_actor_summary(payload.get("actor")),
+        "policy_decision": support_policy_decision_summary(payload.get("policy_decision")),
+        "client_scope": support_client_scope_summary(payload.get("client_context")),
+    })
+}
+
+fn validate_business_audit_retention_days(retention_days: i64) -> anyhow::Result<i64> {
+    anyhow::ensure!(
+        (1..=3650).contains(&retention_days),
+        "retention_days must be between 1 and 3650"
+    );
+    Ok(retention_days)
+}
+
+fn business_os_effective_audit_retention_days(
+    root: &Path,
+    request_retention_days: Option<i64>,
+) -> anyhow::Result<i64> {
+    if let Some(retention_days) = request_retention_days {
+        return validate_business_audit_retention_days(retention_days);
+    }
+    if let Some(payload) = crate::persistence::load_json_payload::<
+        BusinessAuditRetentionPolicyPayload,
+    >(root, BUSINESS_OS_AUDIT_RETENTION_POLICY_PAYLOAD_KEY)?
+    {
+        return validate_business_audit_retention_days(payload.retention_days)
+            .context("invalid persisted Business-OS audit retention policy");
+    }
+    Ok(DEFAULT_BUSINESS_AUDIT_RETENTION_DAYS)
+}
+
+fn save_business_os_audit_retention_policy(
+    root: &Path,
+    retention_days: i64,
+) -> anyhow::Result<i64> {
+    let retention_days = validate_business_audit_retention_days(retention_days)?;
+    let payload = BusinessAuditRetentionPolicyPayload {
+        schema_version: 1,
+        retention_days,
+    };
+    crate::persistence::store_json_payload(
+        root,
+        BUSINESS_OS_AUDIT_RETENTION_POLICY_PAYLOAD_KEY,
+        Some(&payload),
+    )?;
+    Ok(retention_days)
+}
+
+fn business_os_audit_retention_policy_set(
+    root: &Path,
+    session: &BusinessOsSession,
+    request: &BusinessAuditRetentionPolicySetRequest,
+) -> anyhow::Result<Value> {
+    let retention_days = save_business_os_audit_retention_policy(root, request.retention_days)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "schema_version": 1,
+        "artifact_schema": "ctox.business_os.audit_retention_policy.v1",
+        "storage_key": BUSINESS_OS_AUDIT_RETENTION_POLICY_PAYLOAD_KEY,
+        "retention_days": retention_days,
+        "actor": {
+            "id": session_user_id(session).unwrap_or("rxdb-command"),
+            "display_name": session
+                .user
+                .as_ref()
+                .map(|user| user.display_name.as_str())
+                .unwrap_or("rxdb-command"),
+            "role": session_role(session)
+        }
+    }))
+}
+
+fn business_os_audit_retention_export(
+    root: &Path,
+    session: &BusinessOsSession,
+    request: &BusinessAuditRetentionRequest,
+) -> anyhow::Result<Value> {
+    let retention_days = business_os_effective_audit_retention_days(root, request.retention_days)?;
+    let now = now_ms() as i64;
+    let retention_ms = retention_days.saturating_mul(24 * 60 * 60 * 1000);
+    let cutoff_ms = now.saturating_sub(retention_ms);
+    let expired_events = business_events_before(root, cutoff_ms)?;
+    let events = expired_events
+        .iter()
+        .map(support_diagnostics_event_summary)
+        .collect::<Vec<_>>();
+    let artifact = serde_json::json!({
+        "ok": true,
+        "kind": "business_os_audit_retention_export",
+        "schema_version": 1,
+        "artifact_schema": "ctox.business_os.audit_retention_export.v1",
+        "generated_at_ms": now,
+        "product": "ctox-business-os",
+        "source": {
+            "table": "business_events",
+            "expired_count": events.len(),
+            "cutoff_ms": cutoff_ms,
+            "retention_days": retention_days,
+        },
+        "redaction": {
+            "profile": "support-safe-v1",
+            "raw_payloads_included": false,
+            "prompt_bodies_included": false,
+            "message_bodies_included": false,
+            "record_payloads_included": false,
+            "secrets_included": false,
+            "excluded_fields": [
+                "prompt",
+                "selected_text",
+                "message_body",
+                "body",
+                "record_payload",
+                "payload_json",
+                "raw",
+                "token",
+                "secret"
+            ]
+        },
+        "actor": {
+            "id": session_user_id(session).unwrap_or("rxdb-command"),
+            "display_name": session
+                .user
+                .as_ref()
+                .map(|user| user.display_name.as_str())
+                .unwrap_or("rxdb-command"),
+            "role": session_role(session)
+        },
+        "events": events
+    });
+    let forbidden = support_artifact_forbidden_paths(&artifact);
+    anyhow::ensure!(
+        forbidden.is_empty(),
+        "audit retention export contains forbidden fields: {}",
+        forbidden.join(", ")
+    );
+    let artifact_bytes = serde_json::to_vec_pretty(&artifact)?;
+    let artifact_sha256 = hex_sha256(&artifact_bytes);
+    let file_name = format!(
+        "business-events-retention-{}-{}.json",
+        now,
+        &artifact_sha256[..12]
+    );
+    let relative_path = format!("{BUSINESS_AUDIT_EXPORT_DIR}/{file_name}");
+    let artifact_path = root.join(&relative_path);
+    if let Some(parent) = artifact_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&artifact_path, artifact_bytes)?;
+
+    let deleted = if request.prune {
+        prune_business_events_before(root, cutoff_ms)?
+    } else {
+        0
+    };
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "artifact_schema": "ctox.business_os.audit_retention_export.v1",
+        "retention_days": retention_days,
+        "cutoff_ms": cutoff_ms,
+        "prune_requested": request.prune,
+        "exported_count": expired_events.len(),
+        "deleted_count": deleted,
+        "artifact_path": relative_path,
+        "artifact_sha256": artifact_sha256,
+        "artifact": artifact
+    }))
+}
+
+fn business_os_audit_retention_safe_command(
+    root: &Path,
+    command: &BusinessCommand,
+    request: &BusinessAuditRetentionRequest,
+    session: &BusinessOsSession,
+) -> anyhow::Result<BusinessCommand> {
+    let retention_days = business_os_effective_audit_retention_days(root, request.retention_days)?;
+    Ok(BusinessCommand {
+        id: command.id.clone(),
+        module: command.module.clone(),
+        command_type: command.command_type.clone(),
+        record_id: command.record_id.clone(),
+        payload: serde_json::json!({
+            "retention_days": retention_days,
+            "prune": request.prune,
+        }),
+        client_context: serde_json::json!({
+            "actor": {
+                "id": session_user_id(session).unwrap_or("rxdb-command"),
+                "display_name": session
+                    .user
+                    .as_ref()
+                    .map(|user| user.display_name.as_str())
+                    .unwrap_or("rxdb-command"),
+                "role": session_role(session),
+            }
+        }),
+    })
+}
+
+fn business_os_audit_retention_policy_safe_command(
+    command: &BusinessCommand,
+    request: &BusinessAuditRetentionPolicySetRequest,
+    session: &BusinessOsSession,
+) -> BusinessCommand {
+    BusinessCommand {
+        id: command.id.clone(),
+        module: command.module.clone(),
+        command_type: command.command_type.clone(),
+        record_id: command.record_id.clone(),
+        payload: serde_json::json!({
+            "retention_days": request.retention_days,
+        }),
+        client_context: serde_json::json!({
+            "actor": {
+                "id": session_user_id(session).unwrap_or("rxdb-command"),
+                "display_name": session
+                    .user
+                    .as_ref()
+                    .map(|user| user.display_name.as_str())
+                    .unwrap_or("rxdb-command"),
+                "role": session_role(session),
+            }
+        }),
+    }
+}
+
+fn business_os_backup_restore_drill_export(
+    root: &Path,
+    session: &BusinessOsSession,
+    request: &BusinessBackupRestoreDrillRequest,
+) -> anyhow::Result<Value> {
+    let now = now_ms() as i64;
+    let module_id = source_sanitize_slug(&request.module_id);
+    let module_scope = if module_id.is_empty() {
+        None
+    } else {
+        Some(module_id.as_str())
+    };
+    let conn = open_store(root)?;
+    let native_tables = business_os_restore_drill_native_tables(&conn)?;
+    let releases = business_os_restore_drill_release_summary(&conn, module_scope)?;
+    drop(conn);
+    let service_state = business_os_restore_drill_service_state(root)?;
+    let installed_modules = business_os_restore_drill_installed_modules(root, module_scope)?;
+    let source_snapshots = business_os_restore_drill_source_snapshots(root, module_scope)?;
+    let audit_exports = business_os_restore_drill_json_dir_summary(
+        root,
+        Path::new(BUSINESS_AUDIT_EXPORT_DIR),
+        "audit_retention_exports",
+    )?;
+    let rxdb = business_os_restore_drill_rxdb_summary(root)?;
+    let required_tables_present = native_tables
+        .get("required_tables_present")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let release_count = releases
+        .get("release_count")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let release_record_count = releases
+        .get("business_record_projection_count")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let module_manifest_count = installed_modules
+        .get("manifest_count")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let rxdb_catalog_present = rxdb
+        .get("module_catalog_present")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let typed_mcp_policy_present = service_state
+        .get("typed_mcp_policy_present")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let typed_audit_retention_policy_present = service_state
+        .get("typed_audit_retention_policy_present")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let typed_audit_retention_policy_valid = service_state
+        .get("typed_audit_retention_policy_valid")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let native_audit_retention_days = service_state
+        .get("native_audit_retention_days")
+        .and_then(Value::as_i64)
+        .unwrap_or(DEFAULT_BUSINESS_AUDIT_RETENTION_DAYS);
+    let source_snapshot_count = source_snapshots
+        .get("file_count")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let audit_export_count = audit_exports
+        .get("file_count")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+
+    let checks = vec![
+        business_os_restore_drill_check(
+            "native_store_tables",
+            "Native Business-OS Tabellen sind vorhanden",
+            required_tables_present,
+            "blocking",
+            "Restore kann Rollen, Grants, Commands, Releases und Audit nur pruefen, wenn die Kern-Tabellen existieren.",
+        ),
+        business_os_restore_drill_check(
+            "release_business_record_projection",
+            "Release-Projektionen in business_records sind vollstaendig",
+            release_record_count >= release_count,
+            "blocking",
+            "Release-Rows muessen nach Restore auch in business_records fuer Sync/Support sichtbar sein.",
+        ),
+        business_os_restore_drill_check(
+            "rxdb_module_catalog_projection",
+            "RxDB Modul-Katalog-Projektion ist vorhanden",
+            rxdb_catalog_present || release_count == 0,
+            "blocking",
+            "Die Shell liest App-Sichtbarkeit und Lifecycle ueber die RxDB-Katalogprojektion.",
+        ),
+        business_os_restore_drill_check(
+            "installed_module_manifests",
+            "Installierte App-Manifeste sind sichtbar",
+            module_manifest_count > 0,
+            if module_scope.is_some() { "blocking" } else { "warning" },
+            "Dynamische Apps brauchen ihre runtime/business-os/installed-modules Manifeste und Assets.",
+        ),
+        business_os_restore_drill_check(
+            "typed_mcp_policy_state",
+            "Typisierte MCP-Policy ist im Service-State vorhanden",
+            typed_mcp_policy_present,
+            "warning",
+            "MCP-Retention und Scope-Policy sind produktiv als business_os.mcp_policy.v1 gedacht; Legacy-Env ist nur Migration.",
+        ),
+        business_os_restore_drill_check(
+            "typed_audit_retention_policy_state",
+            "Typisierte native Audit-Retention-Policy ist im Service-State vorhanden",
+            typed_audit_retention_policy_present && typed_audit_retention_policy_valid,
+            "warning",
+            "Native Audit-Retention darf nach Restore nicht nur von einzelnen Export-Commands oder Defaults abhaengen.",
+        ),
+        business_os_restore_drill_check(
+            "source_snapshot_files",
+            "Source-Snapshot-Dateien sind in der Backup-Oberflaeche sichtbar",
+            source_snapshot_count > 0,
+            "warning",
+            "Source-Snapshots sind fuer manuelle App-Quellcode-Wiederherstellung relevant.",
+        ),
+        business_os_restore_drill_check(
+            "audit_export_files",
+            "Audit-Export-Artefakte sind in der Backup-Oberflaeche sichtbar",
+            audit_export_count > 0,
+            "warning",
+            "Retention-Pruning schreibt support-safe Audit-Exports, die mitgesichert werden sollen.",
+        ),
+    ];
+    let blocking_failures = checks
+        .iter()
+        .filter(|check| {
+            check.get("severity").and_then(Value::as_str) == Some("blocking")
+                && check.get("passed").and_then(Value::as_bool) != Some(true)
+        })
+        .count();
+    let warning_count = checks
+        .iter()
+        .filter(|check| {
+            check.get("severity").and_then(Value::as_str) == Some("warning")
+                && check.get("passed").and_then(Value::as_bool) != Some(true)
+        })
+        .count();
+    let artifact = serde_json::json!({
+        "ok": blocking_failures == 0,
+        "kind": "business_os_backup_restore_drill",
+        "schema_version": 1,
+        "artifact_schema": "ctox.business_os.backup_restore_drill.v1",
+        "generated_at_ms": now,
+        "product": "ctox-business-os",
+        "mode": "restore-readiness-dry-run",
+        "redaction": {
+            "profile": "support-safe-v1",
+            "raw_payloads_included": false,
+            "prompt_bodies_included": false,
+            "message_bodies_included": false,
+            "record_payloads_included": false,
+            "secrets_included": false,
+            "excluded_fields": [
+                "prompt",
+                "selected_text",
+                "message_body",
+                "body",
+                "record_payload",
+                "payload_json",
+                "raw",
+                "token",
+                "secret"
+            ]
+        },
+        "actor": {
+            "id": session_user_id(session).unwrap_or("rxdb-command"),
+            "display_name": session
+                .user
+                .as_ref()
+                .map(|user| user.display_name.as_str())
+                .unwrap_or("rxdb-command"),
+            "role": session_role(session)
+        },
+        "scope": {
+            "module_id": module_scope,
+        },
+        "checks": {
+            "blocking_failures": blocking_failures,
+            "warnings": warning_count,
+            "items": checks
+        },
+        "surfaces": {
+            "native_store": {
+                "path": business_os_restore_drill_relative_path(root, &root.join("runtime").join(STORE_FILE)),
+                "tables": native_tables,
+                "releases": releases
+            },
+            "rxdb_store": rxdb,
+            "service_state_store": service_state,
+            "installed_modules": installed_modules,
+            "source_snapshots": source_snapshots,
+            "audit_exports": audit_exports,
+            "retention": {
+                "business_events_default_days": DEFAULT_BUSINESS_AUDIT_RETENTION_DAYS,
+                "business_events_effective_days": native_audit_retention_days,
+                "native_policy_storage": BUSINESS_OS_AUDIT_RETENTION_POLICY_PAYLOAD_KEY,
+                "typed_native_policy_present": typed_audit_retention_policy_present,
+                "typed_native_policy_valid": typed_audit_retention_policy_valid,
+                "mcp_policy_storage": BUSINESS_OS_MCP_POLICY_PAYLOAD_KEY,
+                "typed_mcp_policy_present": typed_mcp_policy_present
+            }
+        },
+        "restore_validation": {
+            "validates_app_visibility_inputs": true,
+            "validates_data_grant_inputs": true,
+            "validates_release_state_inputs": true,
+            "validates_rollback_target_inputs": true,
+            "destructive_restore_performed": false,
+            "active_root_restore_runbook": business_os_active_root_restore_runbook(
+                root,
+                None,
+                None,
+                None,
+                module_scope
+            )
+        }
+    });
+    let forbidden = support_artifact_forbidden_paths(&artifact);
+    anyhow::ensure!(
+        forbidden.is_empty(),
+        "backup/restore drill artifact contains forbidden fields: {}",
+        forbidden.join(", ")
+    );
+    let artifact_bytes = serde_json::to_vec_pretty(&artifact)?;
+    let artifact_sha256 = hex_sha256(&artifact_bytes);
+    let file_name = format!(
+        "business-os-restore-drill-{}-{}.json",
+        now,
+        &artifact_sha256[..12]
+    );
+    let relative_path = format!("{BUSINESS_RESTORE_DRILL_EXPORT_DIR}/{file_name}");
+    let artifact_path = root.join(&relative_path);
+    if let Some(parent) = artifact_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&artifact_path, artifact_bytes)?;
+    Ok(serde_json::json!({
+        "ok": blocking_failures == 0,
+        "artifact_schema": "ctox.business_os.backup_restore_drill.v1",
+        "mode": "restore-readiness-dry-run",
+        "module_id": module_scope,
+        "blocking_failures": blocking_failures,
+        "warnings": warning_count,
+        "artifact_path": relative_path,
+        "artifact_sha256": artifact_sha256,
+        "artifact": artifact
+    }))
+}
+
+fn business_os_backup_restore_drill_safe_command(
+    command: &BusinessCommand,
+    request: &BusinessBackupRestoreDrillRequest,
+    session: &BusinessOsSession,
+) -> BusinessCommand {
+    BusinessCommand {
+        id: command.id.clone(),
+        module: command.module.clone(),
+        command_type: command.command_type.clone(),
+        record_id: command.record_id.clone(),
+        payload: serde_json::json!({
+            "module_id": source_sanitize_slug(&request.module_id),
+        }),
+        client_context: serde_json::json!({
+            "actor": {
+                "id": session_user_id(session).unwrap_or("rxdb-command"),
+                "display_name": session
+                    .user
+                    .as_ref()
+                    .map(|user| user.display_name.as_str())
+                    .unwrap_or("rxdb-command"),
+                "role": session_role(session),
+            }
+        }),
+    }
+}
+
+struct BusinessOsBackupManifestSigningKey {
+    bytes: Vec<u8>,
+    key_id: String,
+    source: &'static str,
+}
+
+struct BusinessOsBackupPortableEncryptionKey {
+    bytes: Vec<u8>,
+    key_id: String,
+    source: &'static str,
+}
+
+struct BusinessOsPortableZipSummary {
+    size_bytes: u64,
+    sha256: String,
+    entry_count: usize,
+    file_count: usize,
+}
+
+struct BusinessOsPortableEncryptedSummary {
+    size_bytes: u64,
+    sha256: String,
+    chunk_count: u64,
+    nonce_base_b64: String,
+}
+
+fn business_os_backup_manifest_signing_key(
+    root: &Path,
+) -> anyhow::Result<BusinessOsBackupManifestSigningKey> {
+    if let Some(key) = business_os_read_backup_manifest_signing_key(root)? {
+        return Ok(key);
+    }
+
+    let mut bytes = vec![0u8; 32];
+    SystemRandom::new()
+        .fill(&mut bytes)
+        .map_err(|_| anyhow::anyhow!("failed to generate backup manifest signing key"))?;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    crate::secrets::write_secret_record(
+        root,
+        BUSINESS_OS_SECRET_SCOPE,
+        BUSINESS_OS_BACKUP_MANIFEST_SIGNING_SECRET_NAME,
+        &encoded,
+        Some("Business OS backup manifest signing key".to_owned()),
+        serde_json::json!({
+            "source": "business_os_backup_restore_drill",
+            "algorithm": "HMAC-SHA256",
+            "secret_value_in_manifest": false
+        }),
+    )?;
+    Ok(BusinessOsBackupManifestSigningKey {
+        bytes,
+        key_id: short_hash(&encoded),
+        source: "generated_secret_store",
+    })
+}
+
+fn business_os_read_backup_manifest_signing_key(
+    root: &Path,
+) -> anyhow::Result<Option<BusinessOsBackupManifestSigningKey>> {
+    let Ok(raw) = crate::secrets::read_secret_value(
+        root,
+        BUSINESS_OS_SECRET_SCOPE,
+        BUSINESS_OS_BACKUP_MANIFEST_SIGNING_SECRET_NAME,
+    ) else {
+        return Ok(None);
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(trimmed)
+        .context("failed to decode Business OS backup manifest signing key")?;
+    anyhow::ensure!(
+        bytes.len() == 32,
+        "Business OS backup manifest signing key must be 32 bytes"
+    );
+    Ok(Some(BusinessOsBackupManifestSigningKey {
+        bytes,
+        key_id: short_hash(trimmed),
+        source: "secret_store",
+    }))
+}
+
+fn business_os_backup_portable_encryption_key(
+    root: &Path,
+) -> anyhow::Result<BusinessOsBackupPortableEncryptionKey> {
+    if let Some(key) = business_os_read_backup_portable_encryption_key(root)? {
+        return Ok(key);
+    }
+
+    let mut bytes = vec![0u8; 32];
+    SystemRandom::new()
+        .fill(&mut bytes)
+        .map_err(|_| anyhow::anyhow!("failed to generate portable backup encryption key"))?;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    crate::secrets::write_secret_record(
+        root,
+        BUSINESS_OS_SECRET_SCOPE,
+        BUSINESS_OS_BACKUP_PORTABLE_ENCRYPTION_SECRET_NAME,
+        &encoded,
+        Some("Business OS portable backup encryption key".to_owned()),
+        serde_json::json!({
+            "source": "business_os_backup_restore_drill",
+            "algorithm": "AES-256-GCM",
+            "secret_value_in_manifest": false,
+            "escrow_required_for_disaster_restore": true
+        }),
+    )?;
+    Ok(BusinessOsBackupPortableEncryptionKey {
+        bytes,
+        key_id: short_hash(&encoded),
+        source: "generated_secret_store",
+    })
+}
+
+fn business_os_read_backup_portable_encryption_key(
+    root: &Path,
+) -> anyhow::Result<Option<BusinessOsBackupPortableEncryptionKey>> {
+    let Ok(raw) = crate::secrets::read_secret_value(
+        root,
+        BUSINESS_OS_SECRET_SCOPE,
+        BUSINESS_OS_BACKUP_PORTABLE_ENCRYPTION_SECRET_NAME,
+    ) else {
+        return Ok(None);
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(trimmed)
+        .context("failed to decode Business OS portable backup encryption key")?;
+    anyhow::ensure!(
+        bytes.len() == 32,
+        "Business OS portable backup encryption key must be 32 bytes"
+    );
+    Ok(Some(BusinessOsBackupPortableEncryptionKey {
+        bytes,
+        key_id: short_hash(trimmed),
+        source: "secret_store",
+    }))
+}
+
+fn business_os_backup_manifest_integrity(
+    signing_key: &BusinessOsBackupManifestSigningKey,
+    payload_bytes: &[u8],
+) -> Value {
+    let hmac_key = hmac::Key::new(hmac::HMAC_SHA256, &signing_key.bytes);
+    let signature = hmac::sign(&hmac_key, payload_bytes);
+    let verified = hmac::verify(&hmac_key, payload_bytes, signature.as_ref()).is_ok();
+    serde_json::json!({
+        "status": "signed",
+        "algorithm": "HMAC-SHA256",
+        "signed_payload_sha256": hex_sha256(payload_bytes),
+        "signature_b64": base64::engine::general_purpose::STANDARD.encode(signature.as_ref()),
+        "signature_verified_before_write": verified,
+        "signing_key": {
+            "scope": BUSINESS_OS_SECRET_SCOPE,
+            "name": BUSINESS_OS_BACKUP_MANIFEST_SIGNING_SECRET_NAME,
+            "key_id": signing_key.key_id,
+            "source": signing_key.source,
+            "secret_value_in_manifest": false
+        }
+    })
+}
+
+fn business_os_backup_restore_compatibility() -> Value {
+    serde_json::json!({
+        "schema_version": 1,
+        "ctox_version": env!("CARGO_PKG_VERSION"),
+        "manifest_schema": "ctox.business_os.backup_restore_snapshot_manifest.v1",
+        "supported_manifest_schema_versions": {
+            "min": BUSINESS_OS_BACKUP_MANIFEST_SCHEMA_VERSION,
+            "max": BUSINESS_OS_BACKUP_MANIFEST_SCHEMA_VERSION
+        },
+        "same_version_restore_supported": true,
+        "automatic_cross_version_restore_supported": false,
+        "downgrade_restore_supported": false,
+        "downgrade_restore_policy": "blocked_without_explicit_release_level_evidence",
+        "cross_version_restore_policy": "run_restore_drill_with_target_version_before_active_root_restore"
+    })
+}
+
+fn business_os_raw_backup_security(now_ms: i64, portable_export: Option<&Value>) -> Value {
+    let retention_ms = BUSINESS_OS_BACKUP_RAW_RETENTION_DAYS * 24 * 60 * 60 * 1_000;
+    let portable_export_created = portable_export
+        .and_then(|export| export.get("encrypted"))
+        .and_then(Value::as_bool)
+        == Some(true);
+    let portable_export_path = portable_export
+        .and_then(|export| export.pointer("/ciphertext/path"))
+        .and_then(Value::as_str);
+    let portable_export_sha256 = portable_export
+        .and_then(|export| export.pointer("/ciphertext/sha256"))
+        .and_then(Value::as_str);
+    let encryption = if portable_export_created {
+        serde_json::json!({
+            "status": "portable_encrypted_export_created",
+            "required_before_off_machine_transfer": true,
+            "portable_export_encrypted": true,
+            "portable_export_required_for_off_machine_transfer": true,
+            "portable_export_path": portable_export_path,
+            "portable_export_sha256": portable_export_sha256,
+            "algorithm": "AES-256-GCM",
+            "key_escrow_required_for_disaster_restore": true
+        })
+    } else {
+        serde_json::json!({
+            "status": "not_encrypted_by_restore_drill",
+            "required_before_off_machine_transfer": true,
+            "portable_export_encrypted": false,
+            "reason": "The local drill validates backup completeness and restore readiness; portable/off-machine backup encryption is an infrastructure gate."
+        })
+    };
+    serde_json::json!({
+        "schema_version": 1,
+        "classification": "sensitive-local-raw-backup",
+        "raw_payloads_included": true,
+        "contains_sensitive_data": true,
+        "support_attachment_allowed": false,
+        "plaintext_restore_workspace": true,
+        "encryption": encryption,
+        "retention": {
+            "policy": "ctox.business_os.local_raw_backup_retention.v1",
+            "retention_days": BUSINESS_OS_BACKUP_RAW_RETENTION_DAYS,
+            "created_at_ms": now_ms,
+            "expires_at_ms": now_ms + retention_ms,
+            "operator_delete_after_drill": true,
+            "applies_to": [
+                "runtime/backup/business-os-drill-*"
+            ]
+        }
+    })
+}
+
+fn business_os_create_portable_backup_export(
+    root: &Path,
+    backup_root: &Path,
+    snapshot_root: &Path,
+    drill_id: &str,
+    files: &[Value],
+) -> anyhow::Result<Value> {
+    let portable_dir = backup_root.join("portable");
+    fs::create_dir_all(&portable_dir)?;
+    let plaintext_zip_path = portable_dir.join(format!("{drill_id}.snapshot.zip.tmp"));
+    let verify_zip_path = portable_dir.join(format!("{drill_id}.verify.zip.tmp"));
+    let ciphertext_path = portable_dir.join(format!("{drill_id}.snapshot.zip.aes256gcm"));
+    let result = (|| -> anyhow::Result<Value> {
+        let zip_summary =
+            business_os_write_snapshot_zip(snapshot_root, &plaintext_zip_path, files)?;
+        let expected_entries = backup_file_manifest_paths(files);
+        let encryption_key = business_os_backup_portable_encryption_key(root)?;
+        let mut nonce_base = [0u8; 12];
+        SystemRandom::new()
+            .fill(&mut nonce_base)
+            .map_err(|_| anyhow::anyhow!("failed to generate portable backup nonce"))?;
+        let encrypted_summary = business_os_encrypt_portable_backup_zip(
+            &plaintext_zip_path,
+            &ciphertext_path,
+            drill_id,
+            &encryption_key,
+            nonce_base,
+        )?;
+        let verification = business_os_verify_portable_backup_export(
+            &ciphertext_path,
+            &verify_zip_path,
+            drill_id,
+            &encryption_key,
+            nonce_base,
+            encrypted_summary.chunk_count,
+            zip_summary.size_bytes,
+            &zip_summary.sha256,
+            &expected_entries,
+        )?;
+        Ok(serde_json::json!({
+            "ok": true,
+            "schema_version": 1,
+            "artifact_schema": "ctox.business_os.portable_backup_export.v1",
+            "status": "encrypted",
+            "encrypted": true,
+            "created_at_ms": now_ms() as i64,
+            "format": "snapshot-zip-chunked-aes-gcm",
+            "algorithm": "AES-256-GCM",
+            "framing": "ctox.business_os.portable_backup_frame.v1",
+            "aad_prefix": format!("ctox.business_os.portable_backup_export.v1:{drill_id}:"),
+            "chunk_size_bytes": BUSINESS_OS_BACKUP_PORTABLE_CHUNK_SIZE as i64,
+            "key": {
+                "scope": BUSINESS_OS_SECRET_SCOPE,
+                "name": BUSINESS_OS_BACKUP_PORTABLE_ENCRYPTION_SECRET_NAME,
+                "key_id": encryption_key.key_id,
+                "source": encryption_key.source,
+                "secret_value_in_manifest": false,
+                "escrow_required_for_disaster_restore": true
+            },
+            "nonce_base_b64": encrypted_summary.nonce_base_b64,
+            "plaintext": {
+                "format": "zip",
+                "zip64_large_file_enabled": true,
+                "source": "snapshot",
+                "size_bytes": zip_summary.size_bytes,
+                "sha256": zip_summary.sha256,
+                "file_count": zip_summary.file_count,
+                "zip_entry_count": zip_summary.entry_count,
+                "temp_plaintext_path": business_os_restore_drill_relative_path(root, &plaintext_zip_path)
+            },
+            "ciphertext": {
+                "path": business_os_restore_drill_relative_path(root, &ciphertext_path),
+                "size_bytes": encrypted_summary.size_bytes,
+                "sha256": encrypted_summary.sha256,
+                "chunk_count": encrypted_summary.chunk_count
+            },
+            "verification": verification,
+            "off_machine_transfer": {
+                "allowed_when_encrypted": true,
+                "raw_snapshot_transfer_allowed": false,
+                "key_must_not_travel_with_artifact": true,
+                "requires_incident_owner_approval": true,
+                "requires_separate_key_escrow": true
+            }
+        }))
+    })();
+    let plaintext_deleted = remove_file_if_present(&plaintext_zip_path)?;
+    let verify_deleted = remove_file_if_present(&verify_zip_path)?;
+    let mut export = result?;
+    if let Some(plaintext) = export.get_mut("plaintext").and_then(Value::as_object_mut) {
+        plaintext.insert(
+            "temp_plaintext_deleted".to_owned(),
+            Value::Bool(plaintext_deleted),
+        );
+    }
+    if let Some(verification) = export
+        .get_mut("verification")
+        .and_then(Value::as_object_mut)
+    {
+        verification.insert(
+            "temp_verify_zip_deleted".to_owned(),
+            Value::Bool(verify_deleted),
+        );
+    }
+    Ok(export)
+}
+
+fn business_os_write_snapshot_zip(
+    snapshot_root: &Path,
+    zip_path: &Path,
+    files: &[Value],
+) -> anyhow::Result<BusinessOsPortableZipSummary> {
+    if let Some(parent) = zip_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if zip_path.exists() {
+        fs::remove_file(zip_path)?;
+    }
+    let file = fs::File::create(zip_path).with_context(|| {
+        format!(
+            "failed to create portable backup zip {}",
+            zip_path.display()
+        )
+    })?;
+    let mut zip = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .large_file(true);
+    let mut entry_count = 0usize;
+    for relative in backup_file_manifest_paths(files) {
+        let source = snapshot_root.join(&relative);
+        if !source.is_file() {
+            continue;
+        }
+        zip.start_file(&relative, options)
+            .with_context(|| format!("failed to start portable backup zip entry {relative}"))?;
+        let mut input = fs::File::open(&source).with_context(|| {
+            format!("failed to open portable backup source {}", source.display())
+        })?;
+        io::copy(&mut input, &mut zip)
+            .with_context(|| format!("failed to write portable backup zip entry {relative}"))?;
+        entry_count += 1;
+    }
+    zip.finish()?;
+    let (size_bytes, sha256) = file_sha256(zip_path)?;
+    Ok(BusinessOsPortableZipSummary {
+        size_bytes,
+        sha256,
+        entry_count,
+        file_count: backup_file_manifest_paths(files).len(),
+    })
+}
+
+fn backup_file_manifest_paths(files: &[Value]) -> BTreeSet<String> {
+    files
+        .iter()
+        .filter_map(|file| file.get("path").and_then(Value::as_str))
+        .map(|path| path.replace('\\', "/"))
+        .filter(|path| !path.is_empty() && !path.starts_with('/') && !path.contains(".."))
+        .collect()
+}
+
+fn business_os_encrypt_portable_backup_zip(
+    plaintext_zip_path: &Path,
+    ciphertext_path: &Path,
+    drill_id: &str,
+    encryption_key: &BusinessOsBackupPortableEncryptionKey,
+    nonce_base: [u8; 12],
+) -> anyhow::Result<BusinessOsPortableEncryptedSummary> {
+    if let Some(parent) = ciphertext_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if ciphertext_path.exists() {
+        fs::remove_file(ciphertext_path)?;
+    }
+    let unbound = aead::UnboundKey::new(&aead::AES_256_GCM, &encryption_key.bytes)
+        .map_err(|_| anyhow::anyhow!("failed to construct portable backup encryption key"))?;
+    let key = aead::LessSafeKey::new(unbound);
+    let mut input = fs::File::open(plaintext_zip_path).with_context(|| {
+        format!(
+            "failed to open portable backup plaintext zip {}",
+            plaintext_zip_path.display()
+        )
+    })?;
+    let mut output = fs::File::create(ciphertext_path).with_context(|| {
+        format!(
+            "failed to create portable backup ciphertext {}",
+            ciphertext_path.display()
+        )
+    })?;
+    let mut ciphertext_hasher = Sha256::new();
+    output.write_all(BUSINESS_OS_BACKUP_PORTABLE_MAGIC)?;
+    ciphertext_hasher.update(BUSINESS_OS_BACKUP_PORTABLE_MAGIC);
+    let mut ciphertext_size = BUSINESS_OS_BACKUP_PORTABLE_MAGIC.len() as u64;
+    let mut chunk_count = 0u64;
+    let mut buffer = vec![0u8; BUSINESS_OS_BACKUP_PORTABLE_CHUNK_SIZE];
+    loop {
+        let read = input.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        let mut chunk = buffer[..read].to_vec();
+        let nonce = business_os_portable_backup_nonce(nonce_base, chunk_count)?;
+        let aad = business_os_portable_backup_aad(drill_id, chunk_count);
+        key.seal_in_place_append_tag(nonce, aead::Aad::from(aad.as_bytes()), &mut chunk)
+            .map_err(|_| anyhow::anyhow!("failed to encrypt portable backup chunk"))?;
+        let len_bytes = (chunk.len() as u64).to_be_bytes();
+        output.write_all(&len_bytes)?;
+        output.write_all(&chunk)?;
+        ciphertext_hasher.update(len_bytes);
+        ciphertext_hasher.update(&chunk);
+        ciphertext_size += len_bytes.len() as u64 + chunk.len() as u64;
+        chunk_count += 1;
+    }
+    output.flush()?;
+    let digest = ciphertext_hasher.finalize();
+    let sha256 = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    Ok(BusinessOsPortableEncryptedSummary {
+        size_bytes: ciphertext_size,
+        sha256,
+        chunk_count,
+        nonce_base_b64: base64::engine::general_purpose::STANDARD.encode(nonce_base),
+    })
+}
+
+fn business_os_verify_portable_backup_export(
+    ciphertext_path: &Path,
+    verify_zip_path: &Path,
+    drill_id: &str,
+    encryption_key: &BusinessOsBackupPortableEncryptionKey,
+    nonce_base: [u8; 12],
+    chunk_count: u64,
+    expected_plaintext_size_bytes: u64,
+    expected_plaintext_sha256: &str,
+    expected_entries: &BTreeSet<String>,
+) -> anyhow::Result<Value> {
+    if let Some(parent) = verify_zip_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if verify_zip_path.exists() {
+        fs::remove_file(verify_zip_path)?;
+    }
+    let unbound = aead::UnboundKey::new(&aead::AES_256_GCM, &encryption_key.bytes)
+        .map_err(|_| anyhow::anyhow!("failed to construct portable backup decryption key"))?;
+    let key = aead::LessSafeKey::new(unbound);
+    let mut input = fs::File::open(ciphertext_path).with_context(|| {
+        format!(
+            "failed to open portable backup ciphertext {}",
+            ciphertext_path.display()
+        )
+    })?;
+    let mut magic = vec![0u8; BUSINESS_OS_BACKUP_PORTABLE_MAGIC.len()];
+    input.read_exact(&mut magic)?;
+    anyhow::ensure!(
+        magic == BUSINESS_OS_BACKUP_PORTABLE_MAGIC,
+        "portable backup ciphertext has invalid frame magic"
+    );
+    let mut output = fs::File::create(verify_zip_path).with_context(|| {
+        format!(
+            "failed to create portable backup verify zip {}",
+            verify_zip_path.display()
+        )
+    })?;
+    let mut plaintext_hasher = Sha256::new();
+    let mut plaintext_size = 0u64;
+    for chunk_index in 0..chunk_count {
+        let mut len_bytes = [0u8; 8];
+        input.read_exact(&mut len_bytes)?;
+        let ciphertext_len = u64::from_be_bytes(len_bytes);
+        anyhow::ensure!(
+            ciphertext_len
+                <= (BUSINESS_OS_BACKUP_PORTABLE_CHUNK_SIZE + aead::AES_256_GCM.tag_len()) as u64,
+            "portable backup encrypted chunk is larger than the declared chunk frame"
+        );
+        let mut chunk = vec![0u8; ciphertext_len as usize];
+        input.read_exact(&mut chunk)?;
+        let nonce = business_os_portable_backup_nonce(nonce_base, chunk_index)?;
+        let aad = business_os_portable_backup_aad(drill_id, chunk_index);
+        let plaintext = key
+            .open_in_place(nonce, aead::Aad::from(aad.as_bytes()), &mut chunk)
+            .map_err(|_| anyhow::anyhow!("failed to decrypt portable backup chunk"))?;
+        output.write_all(plaintext)?;
+        plaintext_hasher.update(&*plaintext);
+        plaintext_size += plaintext.len() as u64;
+    }
+    let mut trailing = [0u8; 1];
+    let trailing_read = input.read(&mut trailing)?;
+    anyhow::ensure!(
+        trailing_read == 0,
+        "portable backup ciphertext has trailing bytes after declared chunks"
+    );
+    output.flush()?;
+    let digest = plaintext_hasher.finalize();
+    let plaintext_sha256 = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let mut archive = zip::ZipArchive::new(fs::File::open(verify_zip_path)?)
+        .context("failed to open verified portable backup zip")?;
+    let mut zip_entries = BTreeSet::new();
+    for index in 0..archive.len() {
+        let entry = archive.by_index(index)?;
+        if entry.is_file() {
+            zip_entries.insert(entry.name().replace('\\', "/"));
+        }
+    }
+    let missing_entries = expected_entries
+        .difference(&zip_entries)
+        .cloned()
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({
+        "status": "decrypted-and-validated",
+        "plaintext_sha256": plaintext_sha256,
+        "plaintext_sha256_matches": plaintext_sha256 == expected_plaintext_sha256,
+        "plaintext_size_bytes": plaintext_size,
+        "plaintext_size_matches": plaintext_size == expected_plaintext_size_bytes,
+        "zip_opened": true,
+        "zip_entry_count": zip_entries.len(),
+        "expected_zip_entry_count": expected_entries.len(),
+        "zip_entries_match_manifest": missing_entries.is_empty() && zip_entries.len() == expected_entries.len(),
+        "missing_entries": missing_entries
+    }))
+}
+
+fn business_os_portable_backup_nonce(
+    nonce_base: [u8; 12],
+    chunk_index: u64,
+) -> anyhow::Result<aead::Nonce> {
+    let mut nonce = nonce_base;
+    let mut suffix = [0u8; 8];
+    suffix.copy_from_slice(&nonce[4..12]);
+    let next = u64::from_be_bytes(suffix)
+        .checked_add(chunk_index)
+        .context("portable backup nonce counter overflow")?;
+    nonce[4..12].copy_from_slice(&next.to_be_bytes());
+    Ok(aead::Nonce::assume_unique_for_key(nonce))
+}
+
+fn business_os_portable_backup_aad(drill_id: &str, chunk_index: u64) -> String {
+    format!("ctox.business_os.portable_backup_export.v1:{drill_id}:{chunk_index}")
+}
+
+fn remove_file_if_present(path: &Path) -> anyhow::Result<bool> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(true),
+        Err(err) => Err(err)
+            .with_context(|| format!("failed to remove temporary backup file {}", path.display())),
+    }
+}
+
+pub fn run_business_os_backup_restore_drill(
+    root: &Path,
+    module_id: Option<&str>,
+) -> anyhow::Result<Value> {
+    let now = now_ms() as i64;
+    let signing_key = business_os_backup_manifest_signing_key(root)?;
+    let drill_id = format!("business-os-drill-{}-{}", now, Uuid::new_v4());
+    let backup_root = crate::paths::backup_dir(root).join(&drill_id);
+    let snapshot_root = backup_root.join("snapshot");
+    let restore_root = backup_root.join("restore-root");
+    fs::create_dir_all(&snapshot_root)?;
+    fs::create_dir_all(&restore_root)?;
+
+    let sqlite_sources = [
+        (
+            "core_service_state",
+            crate::persistence::sqlite_path(root),
+            PathBuf::from("runtime/ctox.sqlite3"),
+        ),
+        (
+            "ctox_secret_store",
+            crate::secrets::secret_store_path(root),
+            PathBuf::from("runtime/ctox-secrets.sqlite3"),
+        ),
+        (
+            "business_os_native_store",
+            root.join("runtime").join(STORE_FILE),
+            PathBuf::from(format!("runtime/{STORE_FILE}")),
+        ),
+        (
+            "business_os_rxdb_store",
+            rxdb_store_path(root),
+            PathBuf::from(format!("runtime/{RXDB_STORE_FILE}")),
+        ),
+    ];
+    let mut sqlite_snapshots = Vec::new();
+    let mut sqlite_integrity = Vec::new();
+    for (kind, source, relative) in sqlite_sources {
+        let backup_target = snapshot_root.join(&relative);
+        let copied = sqlite_vacuum_into(&source, &backup_target)?;
+        if copied {
+            let restore_target = restore_root.join(&relative);
+            if let Some(parent) = restore_target.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(&backup_target, &restore_target)?;
+            sqlite_integrity.push(sqlite_integrity_summary(&restore_target, kind, &relative)?);
+        }
+        sqlite_snapshots.push(serde_json::json!({
+            "kind": kind,
+            "source_path": business_os_restore_drill_relative_path(root, &source),
+            "backup_path": business_os_restore_drill_relative_path(root, &backup_target),
+            "restore_path": business_os_restore_drill_relative_path(root, &restore_root.join(&relative)),
+            "copied": copied
+        }));
+    }
+
+    let directory_sources = [
+        (
+            "installed_modules",
+            resolve_business_os_installed_app_root(root).join("installed-modules"),
+            PathBuf::from("runtime/business-os/installed-modules"),
+        ),
+        (
+            "source_snapshots",
+            root.join("runtime").join("business-os-source-snapshots"),
+            PathBuf::from("runtime/business-os-source-snapshots"),
+        ),
+        (
+            "audit_exports",
+            root.join(BUSINESS_AUDIT_EXPORT_DIR),
+            PathBuf::from(BUSINESS_AUDIT_EXPORT_DIR),
+        ),
+    ];
+    let mut copied_directories = Vec::new();
+    for (kind, source, relative) in directory_sources {
+        let backup_target = snapshot_root.join(&relative);
+        let copied = copy_directory_if_exists(&source, &backup_target)?;
+        if copied {
+            copy_directory_if_exists(&backup_target, &restore_root.join(&relative))?;
+        }
+        copied_directories.push(serde_json::json!({
+            "kind": kind,
+            "source_path": business_os_restore_drill_relative_path(root, &source),
+            "backup_path": business_os_restore_drill_relative_path(root, &backup_target),
+            "restore_path": business_os_restore_drill_relative_path(root, &restore_root.join(&relative)),
+            "copied": copied,
+            "file_count": count_files_recursive(&backup_target)? as i64
+        }));
+    }
+
+    let files = backup_file_manifest(&snapshot_root)?;
+    let portable_encrypted_export = business_os_create_portable_backup_export(
+        root,
+        &backup_root,
+        &snapshot_root,
+        &drill_id,
+        &files,
+    )?;
+    let raw_backup_security =
+        business_os_raw_backup_security(now, Some(&portable_encrypted_export));
+    let restore_compatibility = business_os_backup_restore_compatibility();
+    let manifest_payload = serde_json::json!({
+        "schema_version": BUSINESS_OS_BACKUP_MANIFEST_SCHEMA_VERSION,
+        "artifact_schema": "ctox.business_os.backup_restore_snapshot_manifest.v1",
+        "generated_at_ms": now,
+        "drill_id": drill_id,
+        "product": "ctox-business-os",
+        "raw_backup_contains_sensitive_data": true,
+        "raw_backup_security": raw_backup_security,
+        "portable_encrypted_export": portable_encrypted_export,
+        "restore_compatibility": restore_compatibility,
+        "sqlite_snapshots": sqlite_snapshots,
+        "copied_directories": copied_directories,
+        "files": files
+    });
+    let manifest_payload_bytes = serde_json::to_vec_pretty(&manifest_payload)?;
+    let manifest_integrity =
+        business_os_backup_manifest_integrity(&signing_key, &manifest_payload_bytes);
+    let mut manifest = manifest_payload;
+    if let Some(object) = manifest.as_object_mut() {
+        object.insert("manifest_integrity".to_owned(), manifest_integrity);
+    }
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
+    let manifest_sha256 = hex_sha256(&manifest_bytes);
+    let manifest_path = backup_root.join("manifest.json");
+    fs::write(&manifest_path, manifest_bytes)?;
+
+    let request = BusinessBackupRestoreDrillRequest {
+        module_id: module_id.unwrap_or_default().to_owned(),
+    };
+    let session = BusinessOsSession {
+        ok: true,
+        authenticated: true,
+        auth_required: false,
+        user: Some(BusinessOsSessionUser {
+            id: "backup-restore-drill".to_owned(),
+            display_name: "Backup Restore Drill".to_owned(),
+            role: "admin".to_owned(),
+            is_admin: true,
+        }),
+        login_url: None,
+        reason: None,
+    };
+    let restore_readiness =
+        business_os_backup_restore_drill_export(&restore_root, &session, &request)?;
+    let integrity_ok = sqlite_integrity
+        .iter()
+        .all(|item| item.get("ok").and_then(Value::as_bool) == Some(true));
+    let restore_ok = restore_readiness
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let ok = integrity_ok && restore_ok;
+    Ok(serde_json::json!({
+        "ok": ok,
+        "schema_version": 1,
+        "artifact_schema": "ctox.business_os.backup_restore_drill_run.v1",
+        "mode": "backup-copy-isolated-restore-validate",
+        "drill_id": drill_id,
+        "backup_path": business_os_restore_drill_relative_path(root, &backup_root),
+        "restore_root": business_os_restore_drill_relative_path(root, &restore_root),
+        "manifest_path": business_os_restore_drill_relative_path(root, &manifest_path),
+        "manifest_sha256": manifest_sha256,
+        "raw_backup_contains_sensitive_data": true,
+        "raw_backup_security": manifest
+            .get("raw_backup_security")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "portable_encrypted_export": manifest
+            .get("portable_encrypted_export")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "restore_compatibility": manifest
+            .get("restore_compatibility")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "manifest_integrity": manifest
+            .get("manifest_integrity")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "sqlite_snapshots": sqlite_snapshots,
+        "copied_directories": copied_directories,
+        "restore_validation": {
+            "isolated_root": true,
+            "sqlite_integrity": sqlite_integrity,
+            "readiness": restore_readiness,
+            "active_root_restore_runbook": business_os_active_root_restore_runbook(
+                root,
+                Some(&restore_root),
+                Some(&manifest_path),
+                Some(&manifest_sha256),
+                module_id
+            )
+        },
+        "remaining_boundaries": [
+            "browser IndexedDB unsynced local state is not backed up by this native drill",
+            "hosted WebRTC resync after restore still needs browser-level proof",
+            "cross-version downgrade/upgrade restore compatibility still needs release-level evidence",
+            "portable backup restore requires the encryption key to be escrowed outside the encrypted artifact"
+        ]
+    }))
+}
+
+pub fn prune_business_os_backup_restore_drills(
+    root: &Path,
+    dry_run: bool,
+) -> anyhow::Result<Value> {
+    let now = now_ms() as i64;
+    let backup_dir = crate::paths::backup_dir(root);
+    let mut items = Vec::new();
+    let mut scanned = 0usize;
+    let mut expired = 0usize;
+    let mut deleted = 0usize;
+    if backup_dir.is_dir() {
+        for entry in fs::read_dir(&backup_dir)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            if !file_type.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with("business-os-drill-") {
+                continue;
+            }
+            scanned += 1;
+            let path = entry.path();
+            let manifest_path = path.join("manifest.json");
+            let manifest = fs::read_to_string(&manifest_path)
+                .ok()
+                .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+            let expires_at_ms = manifest.as_ref().and_then(|value| {
+                value
+                    .pointer("/raw_backup_security/retention/expires_at_ms")
+                    .and_then(Value::as_i64)
+            });
+            let retention_policy_present = expires_at_ms.is_some();
+            let is_expired = expires_at_ms.is_some_and(|expires_at| expires_at <= now);
+            let mut item_deleted = false;
+            if is_expired {
+                expired += 1;
+                if !dry_run {
+                    fs::remove_dir_all(&path)?;
+                    deleted += 1;
+                    item_deleted = true;
+                }
+            }
+            items.push(serde_json::json!({
+                "drill_id": name,
+                "path": business_os_restore_drill_relative_path(root, &path),
+                "manifest_path": business_os_restore_drill_relative_path(root, &manifest_path),
+                "retention_policy_present": retention_policy_present,
+                "expires_at_ms": expires_at_ms,
+                "expired": is_expired,
+                "deleted": item_deleted
+            }));
+        }
+    }
+    items.sort_by(|a, b| {
+        a.get("path")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .cmp(b.get("path").and_then(Value::as_str).unwrap_or_default())
+    });
+    Ok(serde_json::json!({
+        "ok": true,
+        "schema_version": 1,
+        "artifact_schema": "ctox.business_os.backup_restore_drill_prune.v1",
+        "mode": if dry_run { "dry-run" } else { "prune-expired" },
+        "backup_path": business_os_restore_drill_relative_path(root, &backup_dir),
+        "now_ms": now,
+        "dry_run": dry_run,
+        "scanned_drill_count": scanned,
+        "expired_drill_count": expired,
+        "deleted_drill_count": deleted,
+        "items": items
+    }))
+}
+
+pub fn inspect_business_os_backup_manifest(
+    root: &Path,
+    manifest_path: &Path,
+) -> anyhow::Result<Value> {
+    let raw = fs::read(manifest_path)
+        .with_context(|| format!("failed to read backup manifest {}", manifest_path.display()))?;
+    let manifest: Value = serde_json::from_slice(&raw).with_context(|| {
+        format!(
+            "failed to parse backup manifest {}",
+            manifest_path.display()
+        )
+    })?;
+    let artifact_schema_ok = manifest.get("artifact_schema").and_then(Value::as_str)
+        == Some("ctox.business_os.backup_restore_snapshot_manifest.v1");
+    let integrity = business_os_inspect_backup_manifest_integrity(root, &manifest)?;
+    let compatibility = business_os_backup_restore_manifest_compatibility(&manifest);
+    let portable_export =
+        business_os_inspect_portable_backup_export(root, manifest_path, &manifest)?;
+    let ok = artifact_schema_ok
+        && integrity
+            .get("signature_valid")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && compatibility
+            .get("allowed")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && portable_export
+            .get("ciphertext_sha256_matches")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    Ok(serde_json::json!({
+        "ok": ok,
+        "schema_version": 1,
+        "artifact_schema": "ctox.business_os.backup_manifest_preflight.v1",
+        "mode": "backup-manifest-restore-preflight",
+        "manifest_path": business_os_restore_drill_relative_path(root, manifest_path),
+        "artifact_schema_ok": artifact_schema_ok,
+        "integrity": integrity,
+        "compatibility": compatibility,
+        "portable_encrypted_export": portable_export,
+        "requires_operator_confirmation": true,
+        "destructive_restore_performed": false
+    }))
+}
+
+pub fn inspect_business_os_backup_key_escrow(root: &Path) -> anyhow::Result<Value> {
+    let key = business_os_read_backup_portable_encryption_key(root)?;
+    let key_exists = key.is_some();
+    let key_id = key.as_ref().map(|key| key.key_id.as_str());
+    Ok(serde_json::json!({
+        "schema_version": 1,
+        "artifact_schema": "ctox.business_os.backup_key_escrow_status.v1",
+        "ok": key_exists,
+        "status": if key_exists {
+            "ready_for_external_escrow_confirmation"
+        } else {
+            "portable_backup_key_missing"
+        },
+        "generated_at_ms": now_ms() as i64,
+        "key": {
+            "scope": BUSINESS_OS_SECRET_SCOPE,
+            "name": BUSINESS_OS_BACKUP_PORTABLE_ENCRYPTION_SECRET_NAME,
+            "algorithm": "AES-256-GCM",
+            "key_id": key_id,
+            "source": key.as_ref().map(|key| key.source),
+            "exists_in_secret_store": key_exists,
+            "secret_value_revealed": false,
+            "secret_value_in_report": false
+        },
+        "external_escrow": {
+            "required_for_disaster_restore": true,
+            "status": if key_exists {
+                "operator_confirmation_required"
+            } else {
+                "blocked_until_restore_drill_or_key_generation"
+            },
+            "key_must_not_travel_with_backup_artifact": true,
+            "artifact_channel_must_be_separate_from_key_channel": true,
+            "acceptable_targets": [
+                "organisation secret manager",
+                "hardware security module",
+                "approved break-glass credential vault"
+            ],
+            "non_goal": "CTOX does not export the raw key in this status command."
+        },
+        "operator_actions": [
+            "Run a restore-drill so the portable backup key exists before release evidence is captured.",
+            "Escrow the key material from the CTOX Secret Store into an approved organisation secret manager through the operator's secret-handling process.",
+            "Record reviewer, date and evidence revision in docs/business-os-security-privacy-signoff.json after confirming escrow."
+        ]
+    }))
+}
+
+fn business_os_inspect_backup_manifest_integrity(
+    root: &Path,
+    manifest: &Value,
+) -> anyhow::Result<Value> {
+    let integrity = manifest.get("manifest_integrity").unwrap_or(&Value::Null);
+    let mut signed_payload = manifest.clone();
+    if let Some(object) = signed_payload.as_object_mut() {
+        object.remove("manifest_integrity");
+    }
+    let signed_payload_bytes = serde_json::to_vec_pretty(&signed_payload)?;
+    let signed_payload_sha256 = hex_sha256(&signed_payload_bytes);
+    let expected_payload_sha256 = integrity
+        .get("signed_payload_sha256")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let payload_sha256_matches =
+        !expected_payload_sha256.is_empty() && expected_payload_sha256 == signed_payload_sha256;
+    let signature_b64 = integrity
+        .get("signature_b64")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let signing_key = business_os_read_backup_manifest_signing_key(root)?;
+    let signature_valid = if let (Some(signing_key), Ok(signature)) = (
+        signing_key.as_ref(),
+        base64::engine::general_purpose::STANDARD.decode(signature_b64),
+    ) {
+        let hmac_key = hmac::Key::new(hmac::HMAC_SHA256, &signing_key.bytes);
+        hmac::verify(&hmac_key, &signed_payload_bytes, &signature).is_ok()
+    } else {
+        false
+    };
+    Ok(serde_json::json!({
+        "status": if signature_valid { "valid" } else { "invalid" },
+        "algorithm": integrity.get("algorithm").cloned().unwrap_or(Value::Null),
+        "payload_sha256_matches": payload_sha256_matches,
+        "signed_payload_sha256": signed_payload_sha256,
+        "expected_signed_payload_sha256": expected_payload_sha256,
+        "signature_present": !signature_b64.is_empty(),
+        "signing_key_present": signing_key.is_some(),
+        "signature_valid": signature_valid,
+        "signing_secret_scope": BUSINESS_OS_SECRET_SCOPE,
+        "signing_secret_name": BUSINESS_OS_BACKUP_MANIFEST_SIGNING_SECRET_NAME,
+        "secret_value_in_manifest": false
+    }))
+}
+
+fn business_os_backup_restore_manifest_compatibility(manifest: &Value) -> Value {
+    let schema_version = manifest.get("schema_version").and_then(Value::as_i64);
+    let backup_ctox_version = manifest
+        .pointer("/restore_compatibility/ctox_version")
+        .and_then(Value::as_str);
+    business_os_backup_restore_version_compatibility(schema_version, backup_ctox_version)
+}
+
+fn business_os_backup_restore_version_compatibility(
+    schema_version: Option<i64>,
+    backup_ctox_version: Option<&str>,
+) -> Value {
+    let current_version = env!("CARGO_PKG_VERSION");
+    let schema_supported = schema_version == Some(BUSINESS_OS_BACKUP_MANIFEST_SCHEMA_VERSION);
+    let backup_ctox_version = backup_ctox_version.unwrap_or_default();
+    let version_relation = compare_semverish_versions(backup_ctox_version, current_version)
+        .unwrap_or_else(|| "unknown".to_owned());
+    let same_version = backup_ctox_version == current_version;
+    let downgrade_restore = version_relation == "newer_than_runtime";
+    let cross_version_restore = !same_version && !backup_ctox_version.is_empty();
+    let allowed = schema_supported && same_version;
+    let reason = if !schema_supported {
+        "unsupported_manifest_schema"
+    } else if backup_ctox_version.is_empty() {
+        "missing_backup_ctox_version"
+    } else if downgrade_restore {
+        "backup_created_by_newer_runtime_downgrade_blocked"
+    } else if cross_version_restore {
+        "cross_version_restore_requires_release_level_evidence"
+    } else {
+        "same_version_restore_supported"
+    };
+    serde_json::json!({
+        "allowed": allowed,
+        "reason": reason,
+        "manifest_schema_version": schema_version,
+        "supported_manifest_schema_versions": {
+            "min": BUSINESS_OS_BACKUP_MANIFEST_SCHEMA_VERSION,
+            "max": BUSINESS_OS_BACKUP_MANIFEST_SCHEMA_VERSION
+        },
+        "backup_ctox_version": backup_ctox_version,
+        "current_ctox_version": current_version,
+        "version_relation": version_relation,
+        "same_version_restore_supported": same_version && schema_supported,
+        "automatic_cross_version_restore_supported": false,
+        "cross_version_restore_requested": cross_version_restore,
+        "downgrade_restore_supported": false,
+        "downgrade_restore_requested": downgrade_restore
+    })
+}
+
+fn compare_semverish_versions(left: &str, right: &str) -> Option<String> {
+    let left = parse_semverish_triplet(left)?;
+    let right = parse_semverish_triplet(right)?;
+    Some(
+        match left.cmp(&right) {
+            std::cmp::Ordering::Less => "older_than_runtime",
+            std::cmp::Ordering::Equal => "same_as_runtime",
+            std::cmp::Ordering::Greater => "newer_than_runtime",
+        }
+        .to_owned(),
+    )
+}
+
+fn parse_semverish_triplet(value: &str) -> Option<(u64, u64, u64)> {
+    let core = value.split(['-', '+']).next().unwrap_or(value);
+    let mut parts = core.split('.');
+    let major = parts.next()?.parse::<u64>().ok()?;
+    let minor = parts.next().unwrap_or("0").parse::<u64>().ok()?;
+    let patch = parts.next().unwrap_or("0").parse::<u64>().ok()?;
+    Some((major, minor, patch))
+}
+
+fn business_os_inspect_portable_backup_export(
+    root: &Path,
+    manifest_path: &Path,
+    manifest: &Value,
+) -> anyhow::Result<Value> {
+    let export = manifest
+        .get("portable_encrypted_export")
+        .unwrap_or(&Value::Null);
+    let ciphertext_path = export
+        .pointer("/ciphertext/path")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let expected_sha256 = export
+        .pointer("/ciphertext/sha256")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let resolved_path = resolve_backup_manifest_artifact_path(root, manifest_path, ciphertext_path);
+    let (exists, size_bytes, actual_sha256) = if resolved_path.is_file() {
+        let (size, sha256) = file_sha256(&resolved_path)?;
+        (true, Some(size), Some(sha256))
+    } else {
+        (false, None, None)
+    };
+    let ciphertext_sha256_matches =
+        exists && !expected_sha256.is_empty() && actual_sha256.as_deref() == Some(expected_sha256);
+    Ok(serde_json::json!({
+        "present": export.is_object(),
+        "encrypted": export.get("encrypted").and_then(Value::as_bool).unwrap_or(false),
+        "algorithm": export.get("algorithm").cloned().unwrap_or(Value::Null),
+        "ciphertext_path": ciphertext_path,
+        "resolved_ciphertext_path": business_os_restore_drill_relative_path(root, &resolved_path),
+        "ciphertext_exists": exists,
+        "ciphertext_size_bytes": size_bytes,
+        "ciphertext_sha256": actual_sha256,
+        "expected_ciphertext_sha256": expected_sha256,
+        "ciphertext_sha256_matches": ciphertext_sha256_matches,
+        "key_secret_value_in_manifest": export
+            .pointer("/key/secret_value_in_manifest")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        "key_escrow_required_for_disaster_restore": export
+            .pointer("/key/escrow_required_for_disaster_restore")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        "verification_status": export
+            .pointer("/verification/status")
+            .cloned()
+            .unwrap_or(Value::Null)
+    }))
+}
+
+fn resolve_backup_manifest_artifact_path(
+    root: &Path,
+    manifest_path: &Path,
+    artifact_path: &str,
+) -> PathBuf {
+    let path = Path::new(artifact_path);
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    let root_relative = root.join(path);
+    if root_relative.exists() {
+        return root_relative;
+    }
+    manifest_path.parent().unwrap_or(root).join(path)
+}
+
+fn business_os_active_root_restore_runbook(
+    root: &Path,
+    restore_root: Option<&Path>,
+    manifest_path: Option<&Path>,
+    manifest_sha256: Option<&str>,
+    module_scope: Option<&str>,
+) -> Value {
+    let restore_root_path =
+        restore_root.map(|path| business_os_restore_drill_relative_path(root, path));
+    let manifest_path =
+        manifest_path.map(|path| business_os_restore_drill_relative_path(root, path));
+    serde_json::json!({
+        "schema_version": 1,
+        "status": "manual_operator_runbook",
+        "destructive_restore_performed": false,
+        "requires_operator_confirmation": true,
+        "quiesce_required": true,
+        "restart_required": true,
+        "module_scope": module_scope,
+        "staged_restore_root": restore_root_path,
+        "snapshot_manifest_path": manifest_path,
+        "snapshot_manifest_sha256": manifest_sha256,
+        "scope_note": "This runbook documents the active-root restore gates. The drill validates an isolated restore and does not overwrite the running installation.",
+        "operator_gates": [
+            {
+                "id": "confirm-incident-owner",
+                "required": true,
+                "label": "Incident-Verantwortlichen und Restore-Ziel bestaetigen"
+            },
+            {
+                "id": "quiesce-business-os",
+                "required": true,
+                "label": "Business-OS Desktop, native RxDB Peer, MCP Gateway und Schreibautomationen stoppen"
+            },
+            {
+                "id": "capture-current-active-root",
+                "required": true,
+                "label": "Aktuelles Active Root vor dem Restore erneut sichern"
+            },
+            {
+                "id": "verify-snapshot-manifest",
+                "required": true,
+                "label": "Snapshot-Manifest und SHA-256 gegen das Drill-Ergebnis pruefen"
+            },
+            {
+                "id": "verify-snapshot-signature",
+                "required": true,
+                "label": "Snapshot-Manifest-Signatur mit dem Backup-Signing-Key aus dem CTOX Secret Store pruefen"
+            },
+            {
+                "id": "verify-restore-compatibility",
+                "required": true,
+                "label": "Manifest-Schema, CTOX-Version und Downgrade-Policy vor Active-Root-Restore pruefen"
+            },
+            {
+                "id": "verify-portable-encrypted-export",
+                "required": true,
+                "label": "Verschluesselten Portable-Export per Decrypt/ZIP-Check und Manifest-Hash pruefen"
+            },
+            {
+                "id": "confirm-portable-key-escrow",
+                "required": true,
+                "label": "Portable-Backup-Schluessel ausserhalb des verschluesselten Artefakts in einem Organisations-Secret-Store bestaetigen"
+            },
+            {
+                "id": "restore-runtime-surfaces",
+                "required": true,
+                "label": "SQLite Stores, installierte App-Roots, Source-Snapshots und Audit-Exports aus dem Restore-Root zurueckspielen"
+            },
+            {
+                "id": "restart-and-validate",
+                "required": true,
+                "label": "Business-OS neu starten und Restore-Readiness plus App-Sichtbarkeit erneut pruefen"
+            }
+        ],
+        "restore_targets": [
+            "runtime/ctox.sqlite3",
+            "runtime/ctox-secrets.sqlite3",
+            format!("runtime/{STORE_FILE}"),
+            format!("runtime/{RXDB_STORE_FILE}"),
+            "runtime/business-os/installed-modules",
+            "runtime/business-os-source-snapshots",
+            BUSINESS_AUDIT_EXPORT_DIR
+        ],
+        "manifest_requirements": {
+            "artifact_schema": "ctox.business_os.backup_restore_snapshot_manifest.v1",
+            "supported_schema_versions": {
+                "min": BUSINESS_OS_BACKUP_MANIFEST_SCHEMA_VERSION,
+                "max": BUSINESS_OS_BACKUP_MANIFEST_SCHEMA_VERSION
+            },
+            "signature_required": true,
+            "signature_algorithm": "HMAC-SHA256",
+            "signing_secret_scope": BUSINESS_OS_SECRET_SCOPE,
+            "signing_secret_name": BUSINESS_OS_BACKUP_MANIFEST_SIGNING_SECRET_NAME,
+            "portable_export_required": true,
+            "portable_export_algorithm": "AES-256-GCM",
+            "portable_export_secret_scope": BUSINESS_OS_SECRET_SCOPE,
+            "portable_export_secret_name": BUSINESS_OS_BACKUP_PORTABLE_ENCRYPTION_SECRET_NAME,
+            "downgrade_restore_supported": false,
+            "cross_version_restore_policy": "run_restore_drill_with_target_version_before_active_root_restore"
+        },
+        "raw_backup_handling": {
+            "classification": "sensitive-local-raw-backup",
+            "support_attachment_allowed": false,
+            "retention_days": BUSINESS_OS_BACKUP_RAW_RETENTION_DAYS,
+            "encryption_required_before_off_machine_transfer": true,
+            "portable_encrypted_export_required_for_off_machine_transfer": true,
+            "portable_key_must_not_travel_with_artifact": true,
+            "portable_key_escrow_required_for_disaster_restore": true,
+            "operator_delete_after_drill": true
+        },
+        "post_restore_checks": [
+            {
+                "id": "sqlite-integrity",
+                "required": true,
+                "label": "PRAGMA integrity_check fuer alle wiederhergestellten SQLite Stores ist ok"
+            },
+            {
+                "id": "restore-readiness-preflight",
+                "required": true,
+                "label": "ctox.business_os.backup.restore_drill oder CLI restore-drill liefert keine Blocking-Failures"
+            },
+            {
+                "id": "app-visibility-smoke",
+                "required": true,
+                "label": "Admin- und Teammitglied-Sichtbarkeit fuer betroffene Apps im Browser neu laden und pruefen"
+            },
+            {
+                "id": "audit-retention-policy",
+                "required": true,
+                "label": "Typisierte MCP- und native Audit-Retention-Policy nach Restore sichtbar"
+            },
+            {
+                "id": "backup-signing-key",
+                "required": true,
+                "label": "Backup-Signing-Key ist im wiederhergestellten Secret Store vorhanden"
+            },
+            {
+                "id": "portable-backup-key",
+                "required": true,
+                "label": "Portable-Backup-Schluessel ist verfuegbar, aber nicht im Artefakt oder Manifest offengelegt"
+            }
+        ],
+        "explicit_non_goals": [
+            "No active installation is overwritten by this drill.",
+            "Browser IndexedDB state that has not replicated is not restored by this runbook.",
+            "Hosted WebRTC resync after restore still needs separate browser-level evidence.",
+            "Key escrow into an external organisation secret manager is an operator process, not a local filesystem mutation."
+        ]
+    })
+}
+
+fn business_os_restore_drill_check(
+    id: &str,
+    label: &str,
+    passed: bool,
+    severity: &str,
+    detail: &str,
+) -> Value {
+    serde_json::json!({
+        "id": id,
+        "label": label,
+        "passed": passed,
+        "severity": severity,
+        "detail": detail
+    })
+}
+
+fn business_os_restore_drill_native_tables(conn: &Connection) -> anyhow::Result<Value> {
+    const REQUIRED_TABLES: &[&str] = &[
+        "business_users",
+        "business_module_acl",
+        "business_permission_grants",
+        "business_records",
+        "business_commands",
+        "business_module_releases",
+        "business_module_versions",
+        "business_events",
+    ];
+    let mut tables = Vec::new();
+    let mut required_tables_present = true;
+    for table in REQUIRED_TABLES {
+        let exists = sqlite_table_exists(conn, table)?;
+        required_tables_present &= exists;
+        let row_count = if exists {
+            sqlite_table_row_count(conn, table)?
+        } else {
+            0
+        };
+        tables.push(serde_json::json!({
+            "name": table,
+            "exists": exists,
+            "row_count": row_count
+        }));
+    }
+    Ok(serde_json::json!({
+        "required_tables_present": required_tables_present,
+        "tables": tables
+    }))
+}
+
+fn business_os_restore_drill_release_summary(
+    conn: &Connection,
+    module_scope: Option<&str>,
+) -> anyhow::Result<Value> {
+    let mut sql = String::from(
+        "SELECT version_id, module_id, status, snapshot_json
+         FROM business_module_releases",
+    );
+    if module_scope.is_some() {
+        sql.push_str(" WHERE module_id = ?1");
+    }
+    sql.push_str(" ORDER BY module_id ASC, version DESC");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = if let Some(module_id) = module_scope {
+        stmt.query_map(params![module_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+    } else {
+        stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    drop(stmt);
+    let mut release_record_count = 0i64;
+    let mut released_count = 0i64;
+    let mut rollback_target_count = 0i64;
+    let mut modules = BTreeSet::new();
+    let mut sample = Vec::new();
+    for (version_id, module_id, status, snapshot_json) in &rows {
+        if outbound_load_record(conn, "business_module_releases", version_id)?.is_some() {
+            release_record_count += 1;
+        }
+        if status == "released" {
+            released_count += 1;
+        }
+        let snapshot = serde_json::from_str::<Value>(snapshot_json).unwrap_or(Value::Null);
+        let rollback_version_id = snapshot
+            .get("rollback_version_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        if !rollback_version_id.is_empty() {
+            rollback_target_count += 1;
+        }
+        modules.insert(module_id.clone());
+        if sample.len() < 20 {
+            sample.push(serde_json::json!({
+                "version_id": version_id,
+                "module_id": module_id,
+                "status": status,
+                "has_rollback_target": !rollback_version_id.is_empty()
+            }));
+        }
+    }
+    Ok(serde_json::json!({
+        "release_count": rows.len() as i64,
+        "released_count": released_count,
+        "business_record_projection_count": release_record_count,
+        "rollback_target_count": rollback_target_count,
+        "module_count": modules.len() as i64,
+        "sample": sample
+    }))
+}
+
+fn business_os_restore_drill_service_state(root: &Path) -> anyhow::Result<Value> {
+    let path = crate::persistence::sqlite_path(root);
+    let path_summary = business_os_restore_drill_path_summary(root, &path)?;
+    let mut table_present = false;
+    let mut typed_mcp_policy_present = false;
+    let mut typed_audit_retention_policy_present = false;
+    let mut typed_audit_retention_policy_valid = false;
+    let mut native_audit_retention_days: Option<i64> = None;
+    if path.is_file() {
+        let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| format!("failed to open service state store {}", path.display()))?;
+        table_present = sqlite_table_exists(&conn, "ctox_payload_store")?;
+        if table_present {
+            typed_mcp_policy_present = conn
+                .query_row(
+                    "SELECT 1 FROM ctox_payload_store WHERE payload_key = ?1 LIMIT 1",
+                    params![BUSINESS_OS_MCP_POLICY_PAYLOAD_KEY],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            let audit_policy_json: Option<String> = conn
+                .query_row(
+                    "SELECT payload_json FROM ctox_payload_store WHERE payload_key = ?1 LIMIT 1",
+                    params![BUSINESS_OS_AUDIT_RETENTION_POLICY_PAYLOAD_KEY],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(audit_policy_json) = audit_policy_json {
+                typed_audit_retention_policy_present = true;
+                if let Ok(payload) =
+                    serde_json::from_str::<BusinessAuditRetentionPolicyPayload>(&audit_policy_json)
+                {
+                    if validate_business_audit_retention_days(payload.retention_days).is_ok() {
+                        typed_audit_retention_policy_valid = true;
+                        native_audit_retention_days = Some(payload.retention_days);
+                    }
+                }
+            }
+        }
+    }
+    Ok(serde_json::json!({
+        "path": path_summary,
+        "payload_table_present": table_present,
+        "typed_mcp_policy_present": typed_mcp_policy_present,
+        "mcp_policy_storage": BUSINESS_OS_MCP_POLICY_PAYLOAD_KEY,
+        "typed_audit_retention_policy_present": typed_audit_retention_policy_present,
+        "typed_audit_retention_policy_valid": typed_audit_retention_policy_valid,
+        "audit_retention_policy_storage": BUSINESS_OS_AUDIT_RETENTION_POLICY_PAYLOAD_KEY,
+        "native_audit_retention_days": native_audit_retention_days
+    }))
+}
+
+fn business_os_restore_drill_installed_modules(
+    root: &Path,
+    module_scope: Option<&str>,
+) -> anyhow::Result<Value> {
+    let installed_modules_root =
+        resolve_business_os_installed_app_root(root).join("installed-modules");
+    let path = business_os_restore_drill_path_summary(root, &installed_modules_root)?;
+    let mut module_ids = Vec::new();
+    if installed_modules_root.is_dir() {
+        for entry in fs::read_dir(&installed_modules_root)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let module_id = entry.file_name().to_string_lossy().to_string();
+            if module_scope.is_some_and(|scope| scope != module_id) {
+                continue;
+            }
+            if entry.path().join("module.json").is_file() {
+                module_ids.push(module_id);
+            }
+        }
+    }
+    module_ids.sort();
+    module_ids.truncate(100);
+    Ok(serde_json::json!({
+        "path": path,
+        "manifest_count": module_ids.len() as i64,
+        "module_ids": module_ids
+    }))
+}
+
+fn business_os_restore_drill_source_snapshots(
+    root: &Path,
+    module_scope: Option<&str>,
+) -> anyhow::Result<Value> {
+    let snapshot_root = root.join("runtime").join("business-os-source-snapshots");
+    let path = business_os_restore_drill_path_summary(root, &snapshot_root)?;
+    let file_count = if let Some(module_id) = module_scope {
+        count_files_recursive(&snapshot_root.join(module_id))?
+    } else {
+        count_files_recursive(&snapshot_root)?
+    };
+    Ok(serde_json::json!({
+        "path": path,
+        "file_count": file_count as i64
+    }))
+}
+
+fn business_os_restore_drill_json_dir_summary(
+    root: &Path,
+    relative: &Path,
+    kind: &str,
+) -> anyhow::Result<Value> {
+    let dir = root.join(relative);
+    let path = business_os_restore_drill_path_summary(root, &dir)?;
+    let mut file_count = 0i64;
+    let mut latest_modified_at_ms = 0i64;
+    if dir.is_dir() {
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            file_count += 1;
+            let modified = fs::metadata(&path)
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis() as i64)
+                .unwrap_or_default();
+            latest_modified_at_ms = latest_modified_at_ms.max(modified);
+        }
+    }
+    Ok(serde_json::json!({
+        "kind": kind,
+        "path": path,
+        "file_count": file_count,
+        "latest_modified_at_ms": latest_modified_at_ms
+    }))
+}
+
+fn business_os_restore_drill_rxdb_summary(root: &Path) -> anyhow::Result<Value> {
+    let path = rxdb_store_path(root);
+    let path_summary = business_os_restore_drill_path_summary(root, &path)?;
+    if !path.is_file() {
+        return Ok(serde_json::json!({
+            "path": path_summary,
+            "module_catalog_present": false,
+            "business_module_releases_projection_count": 0,
+            "reason": "native RxDB SQLite store is missing"
+        }));
+    }
+    let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("failed to open native RxDB SQLite store {}", path.display()))?;
+    let catalog_table = rxdb_collection_table_name(&conn, "business_module_catalog");
+    let module_catalog_present = if let Some(table) = catalog_table.as_deref() {
+        conn.query_row(
+            &format!("SELECT 1 FROM {table} WHERE id = 'module-catalog' LIMIT 1"),
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some()
+    } else {
+        false
+    };
+    let release_table = rxdb_collection_table_name(&conn, "business_module_releases");
+    let release_projection_count = if let Some(table) = release_table.as_deref() {
+        sqlite_table_row_count(&conn, table)?
+    } else {
+        0
+    };
+    Ok(serde_json::json!({
+        "path": path_summary,
+        "module_catalog_table": catalog_table,
+        "module_catalog_present": module_catalog_present,
+        "business_module_releases_table": release_table,
+        "business_module_releases_projection_count": release_projection_count
+    }))
+}
+
+fn business_os_restore_drill_path_summary(root: &Path, path: &Path) -> anyhow::Result<Value> {
+    let relative_path = business_os_restore_drill_relative_path(root, path);
+    let metadata = fs::metadata(path).ok();
+    let kind = metadata
+        .as_ref()
+        .map(|metadata| {
+            if metadata.is_dir() {
+                "directory"
+            } else if metadata.is_file() {
+                "file"
+            } else {
+                "other"
+            }
+        })
+        .unwrap_or("missing");
+    let size_bytes = metadata
+        .as_ref()
+        .filter(|metadata| metadata.is_file())
+        .map(fs::Metadata::len)
+        .unwrap_or_default();
+    let modified_at_ms = metadata
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or_default();
+    Ok(serde_json::json!({
+        "path": relative_path,
+        "exists": kind != "missing",
+        "kind": kind,
+        "size_bytes": size_bytes,
+        "modified_at_ms": modified_at_ms
+    }))
+}
+
+fn business_os_restore_drill_relative_path(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn sqlite_table_exists(conn: &Connection, table: &str) -> anyhow::Result<bool> {
+    anyhow::ensure!(is_safe_sqlite_identifier(table), "unsafe sqlite table name");
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
+        params![table],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|value| value.is_some())
+    .context("failed to inspect sqlite table")
+}
+
+fn sqlite_table_row_count(conn: &Connection, table: &str) -> anyhow::Result<i64> {
+    anyhow::ensure!(is_safe_sqlite_identifier(table), "unsafe sqlite table name");
+    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+        row.get(0)
+    })
+    .with_context(|| format!("failed to count rows in {table}"))
+}
+
+fn is_safe_sqlite_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+fn count_files_recursive(root: &Path) -> anyhow::Result<usize> {
+    if !root.is_dir() {
+        return Ok(0);
+    }
+    let mut count = 0usize;
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            count += count_files_recursive(&entry.path())?;
+        } else if file_type.is_file() {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+fn sqlite_vacuum_into(source: &Path, target: &Path) -> anyhow::Result<bool> {
+    if !source.is_file() {
+        return Ok(false);
+    }
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if target.exists() {
+        fs::remove_file(target)?;
+    }
+    let conn = Connection::open_with_flags(source, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("failed to open sqlite snapshot source {}", source.display()))?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    let target_text = target.to_string_lossy().to_string();
+    conn.execute("VACUUM INTO ?1", params![target_text])
+        .with_context(|| format!("failed to snapshot sqlite database to {}", target.display()))?;
+    Ok(true)
+}
+
+fn sqlite_integrity_summary(path: &Path, kind: &str, relative: &Path) -> anyhow::Result<Value> {
+    if !path.is_file() {
+        return Ok(serde_json::json!({
+            "kind": kind,
+            "path": relative.to_string_lossy().replace('\\', "/"),
+            "ok": false,
+            "result": "missing"
+        }));
+    }
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("failed to open restored sqlite {}", path.display()))?;
+    let result: String = conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+    Ok(serde_json::json!({
+        "kind": kind,
+        "path": relative.to_string_lossy().replace('\\', "/"),
+        "ok": result == "ok",
+        "result": result
+    }))
+}
+
+fn copy_directory_if_exists(source: &Path, target: &Path) -> anyhow::Result<bool> {
+    if !source.is_dir() {
+        return Ok(false);
+    }
+    if target.exists() {
+        fs::remove_dir_all(target)?;
+    }
+    copy_directory_recursive(source, target)?;
+    Ok(true)
+}
+
+fn copy_directory_recursive(source: &Path, target: &Path) -> anyhow::Result<()> {
+    fs::create_dir_all(target)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let target_path = target.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_directory_recursive(&entry.path(), &target_path)?;
+        } else if file_type.is_file() {
+            fs::copy(entry.path(), target_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn backup_file_manifest(root: &Path) -> anyhow::Result<Vec<Value>> {
+    let mut files = Vec::new();
+    collect_backup_file_manifest(root, root, &mut files)?;
+    files.sort_by(|a, b| {
+        a.get("path")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .cmp(b.get("path").and_then(Value::as_str).unwrap_or_default())
+    });
+    Ok(files)
+}
+
+fn collect_backup_file_manifest(
+    root: &Path,
+    dir: &Path,
+    files: &mut Vec<Value>,
+) -> anyhow::Result<()> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let path = entry.path();
+        if file_type.is_dir() {
+            collect_backup_file_manifest(root, &path, files)?;
+        } else if file_type.is_file() {
+            let (size_bytes, sha256) = file_sha256(&path)?;
+            files.push(serde_json::json!({
+                "path": path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+                "size_bytes": size_bytes,
+                "sha256": sha256
+            }));
+        }
+    }
+    Ok(())
+}
+
+fn file_sha256(path: &Path) -> anyhow::Result<(u64, String)> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut size = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        size += read as u64;
+        hasher.update(&buffer[..read]);
+    }
+    let digest = hasher.finalize();
+    let sha256 = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    Ok((size, sha256))
+}
+
+fn business_events_before(root: &Path, cutoff_ms: i64) -> anyhow::Result<Vec<Value>> {
+    let conn = open_store(root)?;
+    let mut stmt = conn.prepare(
+        "SELECT event_id, collection, record_id, command_type, payload_json, observed_at_ms
+         FROM business_events
+         WHERE observed_at_ms < ?1
+         ORDER BY observed_at_ms ASC, event_id ASC",
+    )?;
+    let rows = stmt.query_map(params![cutoff_ms], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, i64>(5)?,
+        ))
+    })?;
+    let mut events = Vec::new();
+    for row in rows {
+        let (event_id, collection, record_id, command_type, payload_json, observed_at_ms) = row?;
+        let payload: Value = serde_json::from_str(&payload_json).unwrap_or(Value::Null);
+        let event_type = payload
+            .get("event_type")
+            .and_then(Value::as_str)
+            .unwrap_or(command_type.as_str())
+            .to_owned();
+        events.push(serde_json::json!({
+            "id": event_id.clone(),
+            "event_id": event_id,
+            "collection": collection,
+            "record_id": record_id,
+            "type": event_type,
+            "command_type": command_type,
+            "observed_at_ms": observed_at_ms,
+            "payload": payload
+        }));
+    }
+    Ok(events)
+}
+
+fn prune_business_events_before(root: &Path, cutoff_ms: i64) -> anyhow::Result<usize> {
+    let conn = open_store(root)?;
+    let deleted = conn.execute(
+        "DELETE FROM business_events WHERE observed_at_ms < ?1",
+        params![cutoff_ms],
+    )?;
+    Ok(deleted)
+}
+
+fn support_diagnostics_why_summary(diagnostics: &Value) -> Value {
+    let decisions = diagnostics.get("decisions").unwrap_or(&Value::Null);
+    let data_access = diagnostics.get("data_access").unwrap_or(&Value::Null);
+    let areas = data_access
+        .get("areas")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|area| {
+                    serde_json::json!({
+                        "collection": support_string(area.get("collection")),
+                        "read_review_state": support_string(area.get("read_review_state")),
+                        "write_review_state": support_string(area.get("write_review_state")),
+                        "read_decision": support_policy_decision_summary(area.get("read_decision")),
+                        "write_decision": support_policy_decision_summary(area.get("write_decision")),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    serde_json::json!({
+        "kind": "business_os_why_diagnostics_summary",
+        "schema_version": 1,
+        "actor": support_actor_summary(diagnostics.get("actor")),
+        "module": {
+            "id": support_string(diagnostics.pointer("/module/id")),
+            "title": support_string(diagnostics.pointer("/module/title")),
+            "version": support_string(diagnostics.pointer("/module/version")),
+            "runtime_installed": diagnostics
+                .pointer("/module/runtime_installed")
+                .cloned()
+                .unwrap_or(Value::Bool(false)),
+        },
+        "lifecycle": {
+            "visibility_state": support_string(diagnostics.pointer("/lifecycle/visibility_state")),
+            "audience": support_string(diagnostics.pointer("/lifecycle/audience")),
+            "release_channel": support_string(diagnostics.pointer("/lifecycle/release_channel")),
+            "current_semver": diagnostics
+                .pointer("/lifecycle/current_semver")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "public": diagnostics
+                .pointer("/lifecycle/public")
+                .cloned()
+                .unwrap_or(Value::Bool(false)),
+            "warning_code": diagnostics
+                .pointer("/lifecycle/warning_code")
+                .cloned()
+                .unwrap_or(Value::Null),
+        },
+        "decisions": {
+            "visibility": support_policy_decision_summary(decisions.get("visibility")),
+            "open": support_policy_decision_summary(decisions.get("open")),
+            "modify": support_policy_decision_summary(decisions.get("modify")),
+            "source": support_policy_decision_summary(decisions.get("source")),
+            "release": support_policy_decision_summary(decisions.get("release")),
+            "rollback": support_policy_decision_summary(decisions.get("rollback")),
+        },
+        "data_access": {
+            "status": support_string(data_access.get("status")),
+            "completed": data_access
+                .get("completed")
+                .cloned()
+                .unwrap_or(Value::Bool(false)),
+            "areas": areas,
+        }
+    })
+}
+
+fn support_actor_summary(value: Option<&Value>) -> Value {
+    let value = value.unwrap_or(&Value::Null);
+    serde_json::json!({
+        "id": support_string(value.get("id")),
+        "display_name": support_string(value.get("display_name")),
+        "role": support_string(value.get("role")),
+        "trusted": value.get("trusted").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn support_policy_decision_summary(value: Option<&Value>) -> Value {
+    let value = value.unwrap_or(&Value::Null);
+    serde_json::json!({
+        "allowed": value.get("allowed").cloned().unwrap_or(Value::Bool(false)),
+        "permission": support_string(value.get("permission")),
+        "scope_type": support_string(value.get("scope_type")),
+        "scope_id": value.get("scope_id").cloned().unwrap_or(Value::Null),
+        "reason_code": support_string(value.get("reason_code")),
+        "display_reason": support_string(value.get("display_reason")),
+        "requires_approval": value
+            .get("requires_approval")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "audit_level": support_string(value.get("audit_level")),
+        "source": support_string(value.get("source")),
+    })
+}
+
+fn support_client_scope_summary(value: Option<&Value>) -> Value {
+    let value = value.unwrap_or(&Value::Null);
+    let visible_scope = value.get("visible_scope").unwrap_or(value);
+    serde_json::json!({
+        "source": support_string(value.get("source")),
+        "module_id": support_string(
+            visible_scope
+                .get("module_id")
+                .or_else(|| visible_scope.get("module"))
+                .or_else(|| value.get("module_id"))
+        ),
+        "app_id": support_string(
+            visible_scope
+                .get("app_id")
+                .or_else(|| visible_scope.get("app"))
+                .or_else(|| value.get("app_id"))
+        ),
+        "record_id": support_string(
+            visible_scope
+                .get("record_id")
+                .or_else(|| value.get("record_id"))
+        ),
+        "collection": support_string(
+            visible_scope
+                .get("collection")
+                .or_else(|| value.get("collection"))
+        ),
+        "action": support_string(
+            visible_scope
+                .get("action")
+                .or_else(|| value.get("action"))
+        ),
+    })
+}
+
+fn support_string(value: Option<&Value>) -> Value {
+    value
+        .and_then(Value::as_str)
+        .map(|text| Value::String(text.trim().chars().take(240).collect()))
+        .unwrap_or(Value::Null)
+}
+
+fn support_artifact_forbidden_paths(value: &Value) -> Vec<String> {
+    let mut paths = Vec::new();
+    support_artifact_collect_forbidden_paths(value, "$", &mut paths);
+    paths
+}
+
+fn support_artifact_collect_forbidden_paths(value: &Value, path: &str, paths: &mut Vec<String>) {
+    match value {
+        Value::Object(object) => {
+            for (key, child) in object {
+                let child_path = format!("{path}.{key}");
+                let lower = key.to_ascii_lowercase();
+                let redaction_manifest_path = path.starts_with("$.redaction");
+                if !redaction_manifest_path
+                    && matches!(
+                        lower.as_str(),
+                        "prompt"
+                            | "selected_text"
+                            | "message_body"
+                            | "body"
+                            | "record_payload"
+                            | "payload_json"
+                            | "raw"
+                            | "token"
+                            | "secret"
+                    )
+                {
+                    paths.push(child_path.clone());
+                }
+                support_artifact_collect_forbidden_paths(child, child_path.as_str(), paths);
+            }
+        }
+        Value::Array(items) => {
+            for (index, child) in items.iter().enumerate() {
+                support_artifact_collect_forbidden_paths(
+                    child,
+                    format!("{path}[{index}]").as_str(),
+                    paths,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+fn policy_audit_actor_context(root: &Path, command: &BusinessCommand) -> Value {
+    if let Ok(session) = rxdb_authenticated_session(root, command) {
+        if let Some(user) = session.user {
+            return serde_json::json!({
+                "id": user.id,
+                "display_name": user.display_name,
+                "role": user.role,
+                "trusted": true
+            });
+        }
+    }
+    let client_context = business_command_client_context_value(command);
+    let actor = client_context
+        .get("actor")
+        .or_else(|| client_context.get("user"));
+    let id = actor
+        .and_then(|value| value.get("id"))
+        .or_else(|| client_context.get("user_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("rxdb-command");
+    let display_name = actor
+        .and_then(|value| value.get("display_name"))
+        .or_else(|| actor.and_then(|value| value.get("name")))
+        .or_else(|| client_context.get("display_name"))
+        .and_then(Value::as_str)
+        .unwrap_or(id);
+    serde_json::json!({
+        "id": id,
+        "display_name": display_name,
+        "trusted": false
+    })
+}
+
+fn business_command_client_context_value(command: &BusinessCommand) -> Value {
+    if let Value::String(ref raw) = command.client_context {
+        serde_json::from_str(raw).unwrap_or_else(|_| command.client_context.clone())
+    } else {
+        command.client_context.clone()
+    }
+}
+
+fn policy_audit_client_context(command: &BusinessCommand) -> Value {
+    let client_context = business_command_client_context_value(command);
+    let Some(object) = client_context.as_object() else {
+        return Value::Null;
+    };
+    let mut audited = serde_json::Map::new();
+    for key in [
+        "source",
+        "surface",
+        "action",
+        "mode",
+        "target",
+        "module",
+        "module_id",
+        "app_id",
+        "source_module",
+        "record_id",
+        "record_type",
+        "collection",
+        "column",
+        "active_scope",
+        "version",
+        "visibility",
+    ] {
+        if let Some(value) = object.get(key).and_then(policy_audit_safe_scalar) {
+            audited.insert(key.to_string(), value);
+        }
+    }
+    if let Some(scope) = object
+        .get("visible_scope")
+        .or_else(|| client_context.pointer("/scope/visible_scope"))
+        .map(policy_audit_visible_scope_value)
+    {
+        audited.insert("visible_scope".to_string(), scope);
+    }
+    Value::Object(audited)
+}
+
+fn policy_audit_safe_scalar(value: &Value) -> Option<Value> {
+    match value {
+        Value::String(text) => Some(Value::String(policy_audit_truncate(text, 160))),
+        Value::Number(_) | Value::Bool(_) | Value::Null => Some(value.clone()),
+        Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+fn policy_audit_visible_scope_value(value: &Value) -> Value {
+    match value {
+        Value::Object(object) => {
+            let mut audited = serde_json::Map::new();
+            for (key, nested) in object {
+                if !policy_audit_visible_scope_key_allowed(key) {
+                    continue;
+                }
+                let audited_value = policy_audit_visible_scope_value(nested);
+                if !audited_value.is_null() {
+                    audited.insert(key.clone(), audited_value);
+                }
+            }
+            Value::Object(audited)
+        }
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .take(24)
+                .map(policy_audit_visible_scope_value)
+                .filter(|item| !item.is_null())
+                .collect(),
+        ),
+        Value::String(text) => Value::String(policy_audit_truncate(text, 240)),
+        Value::Number(_) | Value::Bool(_) => value.clone(),
+        Value::Null => Value::Null,
+    }
+}
+
+fn policy_audit_visible_scope_key_allowed(key: &str) -> bool {
+    matches!(
+        key,
+        "access"
+            | "actor"
+            | "app"
+            | "app_id"
+            | "badge"
+            | "can_modify"
+            | "can_read"
+            | "can_write"
+            | "collection"
+            | "data"
+            | "display_name"
+            | "external_actions"
+            | "id"
+            | "key"
+            | "label"
+            | "lifecycle"
+            | "mode"
+            | "module_id"
+            | "permission"
+            | "permission_label"
+            | "record_id"
+            | "record_type"
+            | "role"
+            | "rows"
+            | "scope"
+            | "scope_id"
+            | "scope_type"
+            | "selection"
+            | "source"
+            | "status"
+            | "target"
+            | "title"
+            | "trusted"
+            | "value"
+            | "version"
+            | "visibility"
+    )
+}
+
+fn policy_audit_truncate(text: &str, max_chars: usize) -> String {
+    let mut truncated = String::new();
+    for (index, ch) in text.chars().enumerate() {
+        if index >= max_chars {
+            truncated.push_str("...");
+            return truncated;
+        }
+        truncated.push(ch);
+    }
+    truncated
+}
+
+fn session_audit_actor_context(session: &BusinessOsSession) -> Value {
+    if let Some(user) = &session.user {
+        return serde_json::json!({
+            "id": user.id,
+            "display_name": user.display_name,
+            "role": user.role,
+            "trusted": true
+        });
+    }
+    serde_json::json!({
+        "id": "business-os-session",
+        "display_name": "Business OS Session",
+        "trusted": false
+    })
+}
+
+fn business_user_audit_snapshot(conn: &Connection, user_id: &str) -> anyhow::Result<Option<Value>> {
+    conn.query_row(
+        "SELECT user_id, display_name, role, active
+         FROM business_users
+         WHERE user_id = ?1",
+        params![user_id],
+        |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, String>(0)?,
+                "display_name": row.get::<_, String>(1)?,
+                "role": row.get::<_, String>(2)?,
+                "active": row.get::<_, i64>(3)? != 0
+            }))
+        },
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+fn module_founder_audit_snapshot(
+    conn: &Connection,
+    module_id: &str,
+    user_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    conn.query_row(
+        "SELECT module_id, user_id, role, active
+         FROM business_module_acl
+         WHERE module_id = ?1 AND user_id = ?2 AND role = 'founder'",
+        params![module_id, user_id],
+        |row| {
+            let module_id: String = row.get(0)?;
+            let user_id: String = row.get(1)?;
+            let role: String = row.get(2)?;
+            Ok(serde_json::json!({
+                "id": format!("{module_id}:founder:{user_id}"),
+                "module_id": module_id,
+                "user_id": user_id,
+                "role": role,
+                "active": row.get::<_, i64>(3)? != 0
+            }))
+        },
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+fn changed_fields(previous: Option<&Value>, current: &Value, fields: &[&str]) -> Vec<Value> {
+    fields
+        .iter()
+        .filter(|field| {
+            previous
+                .and_then(|value| value.get(*field))
+                .unwrap_or(&Value::Null)
+                != current.get(*field).unwrap_or(&Value::Null)
+        })
+        .map(|field| Value::String((*field).to_owned()))
+        .collect()
+}
+
+fn record_business_user_change_event(
+    conn: &Connection,
+    session: &BusinessOsSession,
+    previous: Option<&Value>,
+    current: &Value,
+    observed_at_ms: i64,
+) -> anyhow::Result<()> {
+    let user_id = current
+        .get("id")
+        .and_then(Value::as_str)
+        .context("business user audit id is required")?;
+    insert_business_event(
+        conn,
+        "business_users",
+        user_id,
+        "business_os.user.changed",
+        serde_json::json!({
+            "event_type": "business_os.user.changed",
+            "user_id": user_id,
+            "actor": session_audit_actor_context(session),
+            "previous": previous.cloned(),
+            "current": current,
+            "changed_fields": changed_fields(previous, current, &[
+                "display_name",
+                "role",
+                "active"
+            ]),
+            "observed_at_ms": observed_at_ms
+        }),
+        observed_at_ms,
+    )
+}
+
+fn record_module_founder_change_event(
+    conn: &Connection,
+    session: &BusinessOsSession,
+    previous: Option<&Value>,
+    current: &Value,
+    observed_at_ms: i64,
+) -> anyhow::Result<()> {
+    let record_id = current
+        .get("id")
+        .and_then(Value::as_str)
+        .context("module founder audit id is required")?;
+    insert_business_event(
+        conn,
+        "business_module_acl",
+        record_id,
+        "business_os.app_responsibility.changed",
+        serde_json::json!({
+            "event_type": "business_os.app_responsibility.changed",
+            "module_id": current.get("module_id").and_then(Value::as_str),
+            "user_id": current.get("user_id").and_then(Value::as_str),
+            "actor": session_audit_actor_context(session),
+            "previous": previous.cloned(),
+            "current": current,
+            "changed_fields": changed_fields(previous, current, &["active"]),
+            "observed_at_ms": observed_at_ms
+        }),
+        observed_at_ms,
+    )
+}
+
+fn reject_command_if_policy_denied(
+    root: &Path,
+    command: &BusinessCommand,
+    decision: &PolicyDecision,
+) -> anyhow::Result<Option<Value>> {
+    if decision.allowed {
+        if should_record_allowed_policy_decision(command) {
+            record_business_policy_decision_event(root, command, decision)?;
+        }
+        return Ok(None);
+    }
+    Ok(Some(write_rxdb_policy_denied_command_outcome(
+        root, command, decision,
+    )?))
+}
+
+fn should_record_allowed_policy_decision(command: &BusinessCommand) -> bool {
+    !matches!(command.command_type.as_str(), "ctox.business_os.audit.list")
+}
+
+fn workspace_policy_decision(
+    root: &Path,
+    session: &BusinessOsSession,
+    permission: BusinessOsPermission,
+) -> anyhow::Result<PolicyDecision> {
+    scoped_policy_decision(root, session, permission, BusinessOsScope::workspace())
+}
+
+fn owner_transfer_policy_decision(session: &BusinessOsSession) -> PolicyDecision {
+    let actor = policy_actor_from_session(session);
+    policy::evaluate(
+        &actor,
+        BusinessOsPermission::WorkspaceManage,
+        &BusinessOsScope::workspace(),
+    )
+}
+
+fn user_upsert_policy_decision(
+    root: &Path,
+    session: &BusinessOsSession,
+    target_role: &str,
+) -> anyhow::Result<PolicyDecision> {
+    let decision = workspace_policy_decision(root, session, BusinessOsPermission::UsersManage)?;
+    if !decision.allowed || target_role != "chef" {
+        return Ok(decision);
+    }
+    Ok(owner_transfer_policy_decision(session))
+}
+
+fn task_policy_decision(
+    root: &Path,
+    session: &BusinessOsSession,
+    task_id: &str,
+) -> anyhow::Result<PolicyDecision> {
+    scoped_policy_decision(
+        root,
+        session,
+        BusinessOsPermission::CtoxTaskManage,
+        BusinessOsScope::task(task_id.trim(), false, false),
+    )
 }
 
 pub fn process_source_parse_command(
@@ -7063,7 +13245,12 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
         "ctox.task.update" => {
             let mutation: CtoxTaskUpdateMutation = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.task.update payload")?;
-            let session = rxdb_command_session(root, &command)?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let task_id_for_policy = resolve_ctox_task_id(root, &mutation.task_id)?;
+            let decision = task_policy_decision(root, &session, &task_id_for_policy)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
             let outcome = update_ctox_task(root, &session, mutation)?;
             let task_id = outcome
                 .get("task")
@@ -7082,7 +13269,12 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
         "ctox.task.delete" => {
             let mutation: CtoxTaskDeleteMutation = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.task.delete payload")?;
-            let session = rxdb_command_session(root, &command)?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let task_id_for_policy = resolve_ctox_task_id(root, &mutation.task_id)?;
+            let decision = task_policy_decision(root, &session, &task_id_for_policy)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
             let outcome = delete_ctox_task(root, &session, mutation)?;
             let task_id = outcome
                 .get("task_id")
@@ -7125,10 +13317,153 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             let mutation: BusinessOsUserMutation = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.business_os.user.upsert payload")?;
             let session = rxdb_authenticated_session(root, &command)?;
-            let outcome = upsert_user(root, &session, mutation)?;
+            let target_role = normalize_business_role(&mutation.role);
+            let decision = user_upsert_policy_decision(root, &session, &target_role)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            let outcome = match upsert_user(root, &session, mutation) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    return write_rxdb_failed_control_command_outcome(
+                        root,
+                        &command,
+                        "user_upsert",
+                        error,
+                    );
+                }
+            };
             return write_rxdb_control_command_outcome(
                 root,
                 &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.business_os.audit.list" => {
+            let request: BusinessActivityListRequest =
+                serde_json::from_value(command.payload.clone())
+                    .context("invalid ctox.business_os.audit.list payload")?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let decision =
+                workspace_policy_decision(root, &session, BusinessOsPermission::UsersManage)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            let outcome = list_business_activity_events(root, request)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.business_os.audit.retention" => {
+            let request: BusinessAuditRetentionRequest =
+                serde_json::from_value(command.payload.clone())
+                    .context("invalid ctox.business_os.audit.retention payload")?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let safe_command =
+                business_os_audit_retention_safe_command(root, &command, &request, &session)?;
+            let decision =
+                workspace_policy_decision(root, &session, BusinessOsPermission::UsersManage)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &safe_command, &decision)?
+            {
+                return Ok(outcome);
+            }
+            let outcome = business_os_audit_retention_export(root, &session, &request)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &safe_command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.business_os.audit.retention_policy.set" => {
+            let request: BusinessAuditRetentionPolicySetRequest =
+                serde_json::from_value(command.payload.clone())
+                    .context("invalid ctox.business_os.audit.retention_policy.set payload")?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let safe_command =
+                business_os_audit_retention_policy_safe_command(&command, &request, &session);
+            let decision =
+                workspace_policy_decision(root, &session, BusinessOsPermission::UsersManage)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &safe_command, &decision)?
+            {
+                return Ok(outcome);
+            }
+            let outcome = business_os_audit_retention_policy_set(root, &session, &request)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &safe_command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.business_os.backup.restore_drill" => {
+            let request: BusinessBackupRestoreDrillRequest =
+                serde_json::from_value(command.payload.clone())
+                    .context("invalid ctox.business_os.backup.restore_drill payload")?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let safe_command =
+                business_os_backup_restore_drill_safe_command(&command, &request, &session);
+            let decision =
+                workspace_policy_decision(root, &session, BusinessOsPermission::RuntimeManage)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &safe_command, &decision)?
+            {
+                return Ok(outcome);
+            }
+            let outcome = business_os_backup_restore_drill_export(root, &session, &request)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &safe_command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.business_os.support.export_diagnostics" => {
+            let request: BusinessSupportDiagnosticsExportRequest =
+                serde_json::from_value(command.payload.clone())
+                    .context("invalid ctox.business_os.support.export_diagnostics payload")?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let safe_command =
+                business_os_support_diagnostics_safe_command(&command, &request, &session);
+            let decision =
+                workspace_policy_decision(root, &session, BusinessOsPermission::UsersManage)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &safe_command, &decision)?
+            {
+                return Ok(outcome);
+            }
+            let outcome = business_os_support_diagnostics_export(root, &session, &request)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &safe_command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.business_os.why" => {
+            let request: BusinessOsWhyDiagnosticsRequest =
+                serde_json::from_value(command.payload.clone())
+                    .context("invalid ctox.business_os.why payload")?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let outcome = business_os_why_diagnostics(root, &session, &request)?;
+            let safe_command = business_os_why_safe_command(&command, &request, &session);
+            return write_rxdb_control_command_outcome(
+                root,
+                &safe_command,
                 "completed",
                 None,
                 Some("completed"),
@@ -7139,10 +13474,37 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             let mutation: RuntimeSettingsRequest = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.runtime_settings.save payload")?;
             let session = rxdb_authenticated_session(root, &command)?;
+            let decision =
+                workspace_policy_decision(root, &session, BusinessOsPermission::RuntimeManage)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
             let outcome = save_runtime_settings_command(root, &session, mutation)?;
             return write_rxdb_control_command_outcome(
                 root,
                 &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.module.repair_lifecycle_projection" => {
+            let request: ModuleLifecycleProjectionRepairRequest =
+                serde_json::from_value(command.payload.clone())
+                    .context("invalid ctox.module.repair_lifecycle_projection payload")?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let decision =
+                workspace_policy_decision(root, &session, BusinessOsPermission::RuntimeManage)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            let safe_command =
+                module_lifecycle_projection_repair_safe_command(&command, &request, &session);
+            let outcome = repair_module_lifecycle_projections(root, &session, request)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &safe_command,
                 "completed",
                 None,
                 Some("completed"),
@@ -7154,6 +13516,14 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
                 serde_json::from_value(command.payload.clone())
                     .context("invalid ctox.subscription_auth.start payload")?;
             let session = rxdb_authenticated_session(root, &command)?;
+            let decision = workspace_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::IntegrationsManage,
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
             let outcome = start_subscription_auth_command(root, &session, request)?;
             return write_rxdb_control_command_outcome(
                 root,
@@ -7207,12 +13577,12 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
         }
         command_type if is_iot_active_command(command_type) => {
             // §4A: the executor goes through the SAME iot::commands code path the
-            // `ctox iot` CLI uses. ACL-gate like the management-class families
-            // (ctox.task.update/delete): rxdb_command_session enforces a real
-            // chef/admin role via session_can_manage_all, so an untrusted peer
-            // that falls through to the default `user` role is rejected here with
-            // "chef or admin role required" instead of slipping past the
-            // always-true `authenticated && !auth_required` disjunct downstream.
+            // `ctox iot` CLI uses. This family still uses rxdb_command_session
+            // to enforce a real chef/admin role via session_can_manage_all, so
+            // an untrusted peer that falls through to the default `user` role is
+            // rejected here with "chef or admin role required" instead of
+            // slipping past the always-true `authenticated && !auth_required`
+            // disjunct downstream.
             // Then write a completed/failed outcome whose `result.projections` the
             // rxdb_peer branch reprojects into the iot_* collections. Idempotent: a
             // replayed command short-circuits on the stored outcome above.
@@ -7259,6 +13629,14 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             let mutation: ChannelCommandRequest = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.channel payload")?;
             let session = rxdb_authenticated_session(root, &command)?;
+            let decision = workspace_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::IntegrationsManage,
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
             let outcome = run_channel_command(root, &session, command_type, mutation)?;
             return write_rxdb_control_command_outcome(
                 root,
@@ -7289,6 +13667,40 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
                 Some("completed"),
                 outcome,
             );
+        }
+        command_type if super::support::is_support_command(command_type) => {
+            let session = rxdb_authenticated_session(root, &command)?;
+            let permission = super::support::command_permission(command_type);
+            let decision = module_policy_decision(root, &session, permission, "support")?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            match super::support::handle_business_command(root, &session, &command) {
+                Ok(outcome) => {
+                    return write_rxdb_control_command_outcome(
+                        root,
+                        &command,
+                        "completed",
+                        command.record_id.as_deref(),
+                        Some("completed"),
+                        outcome,
+                    );
+                }
+                Err(error) => {
+                    let _ = write_rxdb_control_command_outcome(
+                        root,
+                        &command,
+                        "failed",
+                        command.record_id.as_deref(),
+                        Some("failed"),
+                        serde_json::json!({
+                            "ok": false,
+                            "error": error.to_string(),
+                        }),
+                    );
+                    return Err(error);
+                }
+            }
         }
         command_type if command_type.starts_with("ctox.report.") => {
             let mut mutation: BusinessOsReportMutation =
@@ -7324,6 +13736,18 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             let mutation: ModuleSourceLoadMutation =
                 serde_json::from_value(command.payload.clone())
                     .context("invalid ctox.source.load payload")?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let module_id = source_sanitize_slug(&mutation.module_id);
+            anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+            let decision = module_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::AppsSourceView,
+                &module_id,
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
             let outcome = load_module_source_records(root, &mutation)?;
             return write_rxdb_control_command_outcome(
                 root,
@@ -7341,10 +13765,15 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             let session = rxdb_authenticated_session(root, &command)?;
             let module_id = source_sanitize_slug(&mutation.module_id);
             anyhow::ensure!(!module_id.is_empty(), "module_id is required");
-            anyhow::ensure!(
-                session_can_modify_module(root, &session, &module_id)?,
-                "module modification rights required"
-            );
+            let decision = module_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::AppsModify,
+                &module_id,
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
             let outcome = save_module_source_record(root, mutation)?;
             return write_rxdb_control_command_outcome(
                 root,
@@ -7359,6 +13788,18 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             let request: ModuleSourceListSnapshotsRequest =
                 serde_json::from_value(command.payload.clone())
                     .context("invalid ctox.source.list_snapshots payload")?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let module_id = source_sanitize_slug(&request.module_id);
+            anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+            let decision = module_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::AppsSourceView,
+                &module_id,
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
             let outcome = list_module_source_snapshots(root, request)?;
             return write_rxdb_control_command_outcome(
                 root,
@@ -7376,10 +13817,15 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             let session = rxdb_authenticated_session(root, &command)?;
             let module_id = source_sanitize_slug(&request.module_id);
             anyhow::ensure!(!module_id.is_empty(), "module_id is required");
-            anyhow::ensure!(
-                session_can_modify_module(root, &session, &module_id)?,
-                "module modification rights required"
-            );
+            let decision = module_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::AppsRollback,
+                &module_id,
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
             let outcome = rollback_module_source_snapshot(root, request)?;
             return write_rxdb_control_command_outcome(
                 root,
@@ -7409,8 +13855,26 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             let mutation: ModuleReleaseRequest = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.module.release payload")?;
             let session = rxdb_authenticated_session(root, &command)?;
+            let module_id = source_sanitize_slug(&mutation.module_id);
+            anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+            let decision = module_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::AppsRelease,
+                &module_id,
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
             let app_root = resolve_business_os_app_root(root)?;
-            let outcome = record_module_release(root, &app_root, &session, mutation)?;
+            let outcome = match record_module_release(root, &app_root, &session, mutation) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    return write_rxdb_failed_control_command_outcome(
+                        root, &command, "release", error,
+                    );
+                }
+            };
             return write_rxdb_control_command_outcome(
                 root,
                 &command,
@@ -7424,7 +13888,28 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             let mutation: ModuleFounderAssignment = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.module.assign_founder payload")?;
             let session = rxdb_authenticated_session(root, &command)?;
-            let outcome = assign_module_founder(root, &session, mutation)?;
+            let module_id = source_sanitize_slug(&mutation.module_id);
+            anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+            let decision = scoped_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::AppsAssignOwner,
+                BusinessOsScope::module(module_id, false),
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            let outcome = match assign_module_founder(root, &session, mutation) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    return write_rxdb_failed_control_command_outcome(
+                        root,
+                        &command,
+                        "assign_founder",
+                        error,
+                    );
+                }
+            };
             return write_rxdb_control_command_outcome(
                 root,
                 &command,
@@ -7438,6 +13923,17 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             let mutation: ModuleUpsertRequest = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.module.save payload")?;
             let session = rxdb_authenticated_session(root, &command)?;
+            let module_id = source_sanitize_slug(&mutation.id);
+            anyhow::ensure!(!module_id.is_empty(), "module id is required");
+            let decision = module_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::AppsModify,
+                &module_id,
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
             let app_root = resolve_business_os_app_root(root)?;
             let installed_app_root = resolve_business_os_installed_app_root(root);
             let outcome = upsert_module_manifest_command(
@@ -7460,6 +13956,17 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             let mutation: ModuleDeleteRequest = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.module.delete payload")?;
             let session = rxdb_authenticated_session(root, &command)?;
+            let module_id = source_sanitize_slug(&mutation.module_id);
+            anyhow::ensure!(!module_id.is_empty(), "module id is required");
+            let decision = module_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::AppsModify,
+                &module_id,
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
             let installed_app_root = resolve_business_os_installed_app_root(root);
             let outcome =
                 delete_installed_module_command(root, &installed_app_root, &session, mutation)?;
@@ -7477,6 +13984,15 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
                 serde_json::from_value(command.payload.clone())
                     .context("invalid ctox.module.install_template payload")?;
             let session = rxdb_authenticated_session(root, &command)?;
+            let decision = scoped_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::AppsInstall,
+                BusinessOsScope::workspace(),
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
             let app_root = resolve_business_os_app_root(root)?;
             let installed_app_root = resolve_business_os_installed_app_root(root);
             let outcome = install_template_module_command(
@@ -7500,8 +14016,26 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
                 serde_json::from_value(command.payload.clone())
                     .context("invalid ctox.module.rollback payload")?;
             let session = rxdb_authenticated_session(root, &command)?;
+            let module_id = source_sanitize_slug(&mutation.module_id);
+            anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+            let decision = module_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::AppsRollback,
+                &module_id,
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
             let app_root = resolve_business_os_app_root(root)?;
-            let outcome = rollback_module_release(root, &app_root, &session, mutation)?;
+            let outcome = match rollback_module_release(root, &app_root, &session, mutation) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    return write_rxdb_failed_control_command_outcome(
+                        root, &command, "rollback", error,
+                    );
+                }
+            };
             return write_rxdb_control_command_outcome(
                 root,
                 &command,
@@ -7514,6 +14048,13 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
         "ctox.module.list_versions" => {
             let request: ModuleVersionListRequest = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.module.list_versions payload")?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let module_id = source_sanitize_slug(&request.module_id);
+            anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+            let decision = module_version_timeline_policy_decision(root, &session, &module_id)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
             let outcome = list_module_versions(root, request)?;
             return write_rxdb_control_command_outcome(
                 root,
@@ -7529,8 +14070,29 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
                 serde_json::from_value(command.payload.clone())
                     .context("invalid ctox.module.rollback_version payload")?;
             let session = rxdb_authenticated_session(root, &command)?;
+            let module_id = source_sanitize_slug(&request.module_id);
+            anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+            let decision = module_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::AppsRollback,
+                &module_id,
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
             let app_root = resolve_business_os_app_root(root)?;
-            let outcome = rollback_module_to_version(root, &app_root, &session, request)?;
+            let outcome = match rollback_module_to_version(root, &app_root, &session, request) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    return write_rxdb_failed_control_command_outcome(
+                        root,
+                        &command,
+                        "rollback_version",
+                        error,
+                    );
+                }
+            };
             return write_rxdb_control_command_outcome(
                 root,
                 &command,
@@ -7545,6 +14107,17 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
                 serde_json::from_value(command.payload.clone())
                     .context("invalid ctox.app_store.install payload")?;
             let session = rxdb_authenticated_session(root, &command)?;
+            let module_id = source_sanitize_slug(&request.module_id);
+            anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+            let decision = scoped_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::AppsInstall,
+                BusinessOsScope::module(module_id, false),
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
             let installed_app_root = resolve_business_os_installed_app_root(root);
             let outcome = install_app_module(root, &installed_app_root, &session, request)?;
             return write_rxdb_control_command_outcome(
@@ -7560,6 +14133,17 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             let request: AppStoreUninstallRequest = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.app_store.uninstall payload")?;
             let session = rxdb_authenticated_session(root, &command)?;
+            let module_id = source_sanitize_slug(&request.module_id);
+            anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+            let decision = scoped_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::AppsUninstall,
+                BusinessOsScope::module(module_id, false),
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
             let installed_app_root = resolve_business_os_installed_app_root(root);
             let outcome = uninstall_app_module(root, &installed_app_root, &session, request)?;
             return write_rxdb_control_command_outcome(
@@ -8474,6 +15058,9 @@ fn handle_outbound_active_command(
             if !engagement_id.is_empty() {
                 outbound_update_engagement_status(&conn, &engagement_id, "approved_for_send", now)?;
             }
+            record_outbound_approval_decision_event(
+                &conn, session, command, &approval, &message, now,
+            )?;
             Ok(serde_json::json!({
                 "ok": true,
                 "message": message,
@@ -11414,6 +18001,70 @@ fn outbound_session_actor_id(session: &BusinessOsSession) -> String {
         .unwrap_or_else(|| "business-os-user".to_string())
 }
 
+fn outbound_approval_audit_snapshot(approval: &Value) -> Value {
+    serde_json::json!({
+        "id": outbound_string(approval, &["id"]),
+        "message_id": outbound_string(approval, &["message_id"]),
+        "engagement_id": outbound_string(approval, &["engagement_id"]),
+        "revision_id": outbound_string(approval, &["revision_id"]),
+        "actor_user_id": outbound_string(approval, &["actor_user_id"]),
+        "decision": outbound_string(approval, &["decision"]),
+        "updated_at_ms": approval.get("updated_at_ms").and_then(Value::as_i64)
+    })
+}
+
+fn outbound_message_audit_snapshot(message: &Value) -> Value {
+    serde_json::json!({
+        "id": outbound_string(message, &["id"]),
+        "engagement_id": outbound_string(message, &["engagement_id"]),
+        "campaign_id": outbound_string(message, &["campaign_id"]),
+        "channel": outbound_string(message, &["channel"]),
+        "draft_status": outbound_string(message, &["draft_status"]),
+        "approval_status": outbound_string(message, &["approval_status"]),
+        "send_status": outbound_string(message, &["send_status"]),
+        "updated_at_ms": message.get("updated_at_ms").and_then(Value::as_i64)
+    })
+}
+
+fn record_outbound_approval_decision_event(
+    conn: &Connection,
+    session: &BusinessOsSession,
+    command: &BusinessCommand,
+    approval: &Value,
+    message: &Value,
+    observed_at_ms: i64,
+) -> anyhow::Result<()> {
+    let approval_id = outbound_required_string(approval, &["id"])?;
+    let message_id = outbound_string(approval, &["message_id"])
+        .or_else(|| outbound_string(message, &["id"]))
+        .unwrap_or_default();
+    let engagement_id = outbound_string(approval, &["engagement_id"])
+        .or_else(|| outbound_string(message, &["engagement_id"]))
+        .unwrap_or_default();
+    let decision =
+        outbound_string(approval, &["decision"]).unwrap_or_else(|| "updated".to_string());
+    insert_business_event(
+        conn,
+        "outbound_approvals",
+        &approval_id,
+        "business_os.external_approval.decided",
+        serde_json::json!({
+            "event_type": "business_os.external_approval.decided",
+            "approval_id": approval_id,
+            "message_id": message_id,
+            "engagement_id": engagement_id,
+            "decision": decision,
+            "command_id": command.id.as_deref(),
+            "command_type": command.command_type.as_str(),
+            "actor": session_audit_actor_context(session),
+            "approval": outbound_approval_audit_snapshot(approval),
+            "message": outbound_message_audit_snapshot(message),
+            "observed_at_ms": observed_at_ms
+        }),
+        observed_at_ms,
+    )
+}
+
 fn outbound_record_rejection(
     conn: &Connection,
     session: &BusinessOsSession,
@@ -11459,6 +18110,7 @@ fn outbound_record_rejection(
     if !engagement_id.is_empty() {
         outbound_update_engagement_status(conn, &engagement_id, "draft_rejected", now)?;
     }
+    record_outbound_approval_decision_event(conn, session, command, &approval, &message, now)?;
     Ok(serde_json::json!({
         "ok": true,
         "message": message,
@@ -11512,6 +18164,7 @@ fn outbound_record_change_request(
     if !engagement_id.is_empty() {
         outbound_update_engagement_status(conn, &engagement_id, "draft_changes_requested", now)?;
     }
+    record_outbound_approval_decision_event(conn, session, command, &approval, &message, now)?;
     Ok(serde_json::json!({
         "ok": true,
         "message": message,
@@ -12084,25 +18737,7 @@ fn trusted_rxdb_command_user(
     let actor_id = actor_id.trim();
     let conn = open_store(root)?;
     seed_configured_business_users(&conn)?;
-    let user = conn
-        .query_row(
-            "SELECT user_id, display_name, role, active, created_at_ms, updated_at_ms
-             FROM business_users
-             WHERE user_id = ?1 AND active = 1",
-            params![actor_id],
-            |row| {
-                Ok(BusinessOsUser {
-                    id: row.get(0)?,
-                    display_name: row.get(1)?,
-                    role: normalize_business_role(&row.get::<_, String>(2)?),
-                    active: row.get::<_, i64>(3)? != 0,
-                    created_at_ms: row.get(4)?,
-                    updated_at_ms: row.get(5)?,
-                })
-            },
-        )
-        .optional()?;
-    if let Some(user) = user {
+    if let Some(user) = active_business_user(&conn, actor_id)? {
         return Ok(user);
     }
 
@@ -12146,6 +18781,34 @@ fn trusted_rxdb_command_user(
         created_at_ms: 0,
         updated_at_ms: 0,
     })
+}
+
+fn active_business_user(
+    conn: &Connection,
+    actor_id: &str,
+) -> anyhow::Result<Option<BusinessOsUser>> {
+    let actor_id = actor_id.trim();
+    if actor_id.is_empty() {
+        return Ok(None);
+    }
+    Ok(conn
+        .query_row(
+            "SELECT user_id, display_name, role, active, created_at_ms, updated_at_ms
+         FROM business_users
+         WHERE user_id = ?1 AND active = 1",
+            params![actor_id],
+            |row| {
+                Ok(BusinessOsUser {
+                    id: row.get(0)?,
+                    display_name: row.get(1)?,
+                    role: normalize_business_role(&row.get::<_, String>(2)?),
+                    active: row.get::<_, i64>(3)? != 0,
+                    created_at_ms: row.get(4)?,
+                    updated_at_ms: row.get(5)?,
+                })
+            },
+        )
+        .optional()?)
 }
 
 fn write_rxdb_control_command_outcome(
@@ -12196,6 +18859,7 @@ fn write_rxdb_control_command_outcome(
         now,
         projection.clone(),
     )?;
+    record_business_module_lifecycle_event(root, command, status, &result)?;
     upsert_rxdb_collection_record(root, "business_commands", command_id, now, projection)?;
     Ok(serde_json::json!({
         "ok": true,
@@ -13989,12 +20653,12 @@ pub fn update_ctox_task(
     session: &BusinessOsSession,
     mutation: CtoxTaskUpdateMutation,
 ) -> anyhow::Result<Value> {
-    anyhow::ensure!(
-        session_can_manage_all(session),
-        "chef or admin role required"
-    );
     let task_id = resolve_ctox_task_id(root, &mutation.task_id)?;
     anyhow::ensure!(!task_id.is_empty(), "task_id is required");
+    anyhow::ensure!(
+        session_can_manage_task(root, session, &task_id)?,
+        "chef or admin role required"
+    );
     let title = mutation.title.and_then(non_empty_trimmed);
     let prompt = mutation.prompt.and_then(non_empty_trimmed);
     let priority = mutation.priority.and_then(non_empty_trimmed);
@@ -14033,12 +20697,12 @@ pub fn delete_ctox_task(
     session: &BusinessOsSession,
     mutation: CtoxTaskDeleteMutation,
 ) -> anyhow::Result<Value> {
-    anyhow::ensure!(
-        session_can_manage_all(session),
-        "chef or admin role required"
-    );
     let task_id = resolve_ctox_task_id(root, &mutation.task_id)?;
     anyhow::ensure!(!task_id.is_empty(), "task_id is required");
+    anyhow::ensure!(
+        session_can_manage_task(root, session, &task_id)?,
+        "chef or admin role required"
+    );
 
     let conn = open_store(root)?;
     seed_session_user(&conn, session)?;
@@ -16914,6 +23578,10 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             payload_json TEXT NOT NULL,
             observed_at_ms INTEGER NOT NULL
         );
+        CREATE INDEX IF NOT EXISTS idx_business_events_record
+            ON business_events(collection, record_id, observed_at_ms DESC);
+        CREATE INDEX IF NOT EXISTS idx_business_events_type
+            ON business_events(command_type, observed_at_ms DESC);
 
         CREATE TABLE IF NOT EXISTS business_commands (
             command_id TEXT PRIMARY KEY,
@@ -16946,6 +23614,24 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_business_module_acl_user
             ON business_module_acl(user_id, active, module_id);
+
+        CREATE TABLE IF NOT EXISTS business_permission_grants (
+            grant_id TEXT PRIMARY KEY,
+            subject_type TEXT NOT NULL CHECK(subject_type IN ('user', 'role')),
+            subject_id TEXT NOT NULL,
+            permission TEXT NOT NULL,
+            scope_type TEXT NOT NULL CHECK(scope_type IN ('workspace', 'module', 'collection', 'record', 'task', 'approval', 'mcp')),
+            scope_id TEXT NOT NULL DEFAULT '',
+            active INTEGER NOT NULL DEFAULT 1,
+            reason TEXT NOT NULL DEFAULT '',
+            created_by TEXT NOT NULL DEFAULT '',
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_business_permission_grants_subject
+            ON business_permission_grants(subject_type, subject_id, active);
+        CREATE INDEX IF NOT EXISTS idx_business_permission_grants_scope
+            ON business_permission_grants(permission, scope_type, scope_id, active);
 
         CREATE TABLE IF NOT EXISTS business_module_releases (
             version_id TEXT PRIMARY KEY,
@@ -17019,6 +23705,7 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
         ",
     )?;
     migrate_business_users_roles(conn)?;
+    super::support::migrate(conn)?;
     Ok(())
 }
 
@@ -17184,6 +23871,22 @@ mod tests {
         }
     }
 
+    fn test_session(user_id: &str, role: &str) -> BusinessOsSession {
+        BusinessOsSession {
+            ok: true,
+            authenticated: true,
+            auth_required: false,
+            user: Some(BusinessOsSessionUser {
+                id: user_id.to_owned(),
+                display_name: user_id.to_owned(),
+                role: role.to_owned(),
+                is_admin: matches!(normalize_business_role(role).as_str(), "chef" | "admin"),
+            }),
+            login_url: None,
+            reason: None,
+        }
+    }
+
     struct EnvRestore {
         values: Vec<(&'static str, Option<String>)>,
     }
@@ -17234,6 +23937,37 @@ mod tests {
         Ok(())
     }
 
+    fn write_installed_inventory_module(app_root: &Path, version: &str) -> anyhow::Result<()> {
+        let module_dir = app_root.join("installed-modules").join("inventory");
+        fs::create_dir_all(&module_dir)?;
+        fs::write(
+            module_dir.join("module.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "id": "inventory",
+                "title": "Inventory",
+                "version": version,
+                "entry": "installed-modules/inventory/index.html",
+                "install_scope": "installed",
+                "collections": ["inventory_items"]
+            }))?,
+        )?;
+        fs::write(module_dir.join("index.html"), "<h1>Inventory</h1>")?;
+        Ok(())
+    }
+
+    fn locked_inventory_data_review() -> Value {
+        serde_json::json!({
+            "completed": true,
+            "collections": ["inventory_items"],
+            "read_collections": ["inventory_items"],
+            "write_collections": ["inventory_items"],
+            "locked_read_collections": ["inventory_items"],
+            "locked_write_collections": ["inventory_items"],
+            "locked_state_behavior": "App renders a locked data state until explicit Team data grants exist.",
+            "reviewed_by": "release-user"
+        })
+    }
+
     fn save_widget_source(root: &Path, path: &str, content: &str) -> anyhow::Result<()> {
         save_module_source_record(
             root,
@@ -17256,6 +23990,835 @@ mod tests {
                 "entry": "index.html"
             }))?,
         )?;
+        Ok(())
+    }
+
+    fn seed_test_business_os_app_root(root: &Path) -> anyhow::Result<()> {
+        let app_root = root.join("src/apps/business-os");
+        fs::create_dir_all(app_root.join("modules/ctox"))?;
+        fs::write(app_root.join("index.html"), "<!doctype html>")?;
+        fs::write(
+            app_root.join("modules/ctox/module.json"),
+            r#"{"id":"ctox","title":"CTOX","entry":"modules/ctox/index.html","install_scope":"core"}"#,
+        )?;
+        Ok(())
+    }
+
+    fn write_private_runtime_module(
+        root: &Path,
+        module_id: &str,
+        version: &str,
+    ) -> anyhow::Result<()> {
+        fs::create_dir_all(root.join("runtime"))?;
+        let module_dir = resolve_business_os_installed_app_root(root)
+            .join("installed-modules")
+            .join(module_id);
+        fs::create_dir_all(&module_dir)?;
+        fs::write(
+            module_dir.join("module.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "id": module_id,
+                "title": module_id,
+                "version": version,
+                "entry": format!("installed-modules/{module_id}/index.html"),
+                "install_scope": "installed"
+            }))?,
+        )?;
+        fs::write(module_dir.join("index.html"), "<h1>Private App</h1>")?;
+        Ok(())
+    }
+
+    fn build_test_app_module_zip(module_id: &str) -> anyhow::Result<Vec<u8>> {
+        let mut buffer = Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buffer);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            let module_dir = format!("repo/modules/{module_id}");
+            zip.add_directory(&module_dir, options)?;
+            zip.start_file(format!("{module_dir}/module.json"), options)?;
+            zip.write_all(
+                serde_json::to_vec_pretty(&serde_json::json!({
+                    "id": module_id,
+                    "title": "Inventory",
+                    "entry": "index.js"
+                }))?
+                .as_slice(),
+            )?;
+            zip.start_file(format!("{module_dir}/index.js"), options)?;
+            zip.write_all(b"export default {};\n")?;
+            zip.finish()?;
+        }
+        Ok(buffer.into_inner())
+    }
+
+    fn serve_test_zip_once(bytes: Vec<u8>) -> anyhow::Result<String> {
+        let server = Server::http("127.0.0.1:0")
+            .map_err(|err| anyhow::anyhow!("failed to bind test zip server: {err}"))?;
+        let url = format!("http://{}/module.zip", server.server_addr());
+        thread::spawn(move || {
+            if let Ok(request) = server.recv() {
+                let _ = request.respond(Response::from_data(bytes));
+            }
+        });
+        Ok(url)
+    }
+
+    fn seed_business_user(root: &Path, id: &str, role: &str) -> anyhow::Result<()> {
+        let conn = open_store(root)?;
+        let now = now_ms() as i64;
+        conn.execute(
+            "INSERT INTO business_users
+                (user_id, display_name, role, active, created_at_ms, updated_at_ms)
+             VALUES (?1, ?1, ?2, 1, ?3, ?3)",
+            params![id, normalize_business_role(role), now],
+        )?;
+        Ok(())
+    }
+
+    fn seed_module_founder_acl(root: &Path, module_id: &str, user_id: &str) -> anyhow::Result<()> {
+        let conn = open_store(root)?;
+        let now = now_ms() as i64;
+        conn.execute(
+            "INSERT INTO business_module_acl
+                (module_id, user_id, role, active, created_at_ms, updated_at_ms)
+             VALUES (?1, ?2, 'founder', 1, ?3, ?3)",
+            params![module_id, user_id, now],
+        )?;
+        Ok(())
+    }
+
+    fn seed_permission_grant(
+        root: &Path,
+        grant_id: &str,
+        subject_type: &str,
+        subject_id: &str,
+        permission: BusinessOsPermission,
+        scope_type: &str,
+        scope_id: &str,
+    ) -> anyhow::Result<()> {
+        let conn = open_store(root)?;
+        let now = now_ms() as i64;
+        conn.execute(
+            "INSERT INTO business_permission_grants
+                (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
+                 active, reason, created_by, created_at_ms, updated_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, 'test grant', 'tester', ?7, ?7)",
+            params![
+                grant_id,
+                subject_type,
+                subject_id,
+                permission.as_str(),
+                scope_type,
+                scope_id,
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn assert_policy_denied(
+        outcome: &Value,
+        permission: &str,
+        scope_type: &str,
+        scope_id: Option<&str>,
+    ) {
+        assert_eq!(outcome.get("ok").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            outcome
+                .pointer("/result/policy_decision/permission")
+                .and_then(Value::as_str),
+            Some(permission)
+        );
+        assert_eq!(
+            outcome
+                .pointer("/result/policy_decision/scope_type")
+                .and_then(Value::as_str),
+            Some(scope_type)
+        );
+        match scope_id {
+            Some(expected) => assert_eq!(
+                outcome
+                    .pointer("/result/policy_decision/scope_id")
+                    .and_then(Value::as_str),
+                Some(expected)
+            ),
+            None => assert_eq!(
+                outcome.pointer("/result/policy_decision/scope_id"),
+                Some(&Value::Null)
+            ),
+        }
+        assert_eq!(
+            outcome
+                .pointer("/result/policy_decision/reason_code")
+                .and_then(Value::as_str),
+            Some("role_or_scope_denied")
+        );
+    }
+
+    fn business_event_payloads(
+        conn: &Connection,
+        collection: &str,
+        record_id: &str,
+        command_type: &str,
+    ) -> anyhow::Result<Vec<Value>> {
+        let mut stmt = conn.prepare(
+            "SELECT payload_json
+             FROM business_events
+             WHERE collection = ?1
+               AND record_id = ?2
+               AND command_type = ?3
+             ORDER BY observed_at_ms ASC, event_id ASC",
+        )?;
+        let rows = stmt.query_map(params![collection, record_id, command_type], |row| {
+            Ok(row.get::<_, String>(0)?)
+        })?;
+        let mut payloads = Vec::new();
+        for row in rows {
+            payloads.push(serde_json::from_str(&row?)?);
+        }
+        Ok(payloads)
+    }
+
+    #[test]
+    fn business_role_normalization_preserves_phase0_aliases() {
+        assert_eq!(normalize_business_role("chef"), "chef");
+        assert_eq!(normalize_business_role("owner"), "chef");
+        assert_eq!(normalize_business_role("business_os_admin"), "admin");
+        assert_eq!(normalize_business_role("founder"), "founder");
+        assert_eq!(normalize_business_role("user"), "user");
+        assert_eq!(normalize_business_role("business_os_user"), "user");
+        assert_eq!(normalize_business_role("team"), "user");
+        assert_eq!(normalize_business_role("business_os_team"), "user");
+        assert_eq!(normalize_business_role("unknown"), "user");
+    }
+
+    #[test]
+    fn permission_grant_allows_scoped_module_action_without_new_role() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let conn = open_store(root)?;
+        let now = now_ms() as i64;
+        conn.execute(
+            "INSERT INTO business_users
+                (user_id, display_name, role, active, created_at_ms, updated_at_ms)
+             VALUES ('viewer', 'Viewer', 'user', 1, ?1, ?1)",
+            params![now],
+        )?;
+        conn.execute(
+            "INSERT INTO business_permission_grants
+                (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
+                 active, reason, created_by, created_at_ms, updated_at_ms)
+             VALUES (?1, 'user', 'viewer', ?2, 'module', 'inventory', 1,
+                 'temporary app editor', 'tester', ?3, ?3)",
+            params![
+                "grant_viewer_inventory_modify",
+                BusinessOsPermission::AppsModify.as_str(),
+                now
+            ],
+        )?;
+        drop(conn);
+
+        let session = test_session("viewer", "user");
+        assert!(
+            session_can_modify_module(root, &session, "inventory")?,
+            "explicit module grant should allow a Teammitglied to modify that module"
+        );
+        assert!(
+            !session_can_modify_module(root, &session, "billing")?,
+            "the same grant must not leak to another module"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn record_owner_payload_field_does_not_grant_native_policy_access() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "record-owner", "team")?;
+        push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": "customer_opportunities",
+                "documents": [{
+                    "id": "opp_1",
+                    "name": "Opportunity",
+                    "owner_id": "record-owner",
+                    "updated_at_ms": 10
+                }]
+            }),
+        )?;
+
+        let decision = trusted_mcp_actor_policy_decision(
+            root,
+            "record-owner",
+            "Record Owner",
+            BusinessOsPermission::DataRead,
+            BusinessOsScopeType::Record,
+            Some("customer_opportunities/opp_1"),
+        )?;
+
+        assert!(
+            !decision.allowed,
+            "owner-like payload fields must not become implicit record grants"
+        );
+        assert_eq!(decision.permission, BusinessOsPermission::DataRead.as_str());
+        assert_eq!(decision.scope_type, BusinessOsScopeType::Record.as_str());
+        assert_eq!(
+            decision.scope_id.as_deref(),
+            Some("customer_opportunities/opp_1")
+        );
+        assert_eq!(decision.reason_code, "role_or_scope_denied");
+        Ok(())
+    }
+
+    #[test]
+    fn module_governance_projection_includes_permission_model_and_grants() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let conn = open_store(root)?;
+        let now = now_ms() as i64;
+        conn.execute(
+            "INSERT INTO business_module_acl
+                (module_id, user_id, role, active, created_at_ms, updated_at_ms)
+             VALUES ('inventory', 'app-owner', 'founder', 1, ?1, ?1)",
+            params![now],
+        )?;
+        conn.execute(
+            "INSERT INTO business_permission_grants
+                (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
+                 active, reason, created_by, created_at_ms, updated_at_ms)
+             VALUES (?1, 'user', 'viewer', ?2, 'module', 'inventory', 1,
+                 'approval delegate', 'tester', ?3, ?3)",
+            params![
+                "grant_viewer_inventory_external_approve",
+                BusinessOsPermission::ExternalApprove.as_str(),
+                now
+            ],
+        )?;
+        drop(conn);
+
+        let governance = module_governance_map(root, &chef_session())?;
+        let model = governance
+            .get("permission_model")
+            .expect("governance projects permission model");
+        assert_eq!(model.get("version").and_then(Value::as_i64), Some(1));
+        assert_eq!(
+            model.get("deny_supported").and_then(Value::as_bool),
+            Some(false)
+        );
+        let founder_assigned = model
+            .pointer("/role_defaults/founder/assigned_module")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(founder_assigned.iter().any(|permission| {
+            permission.as_str() == Some(BusinessOsPermission::AppsView.as_str())
+        }));
+        assert!(founder_assigned.iter().any(|permission| {
+            permission.as_str() == Some(BusinessOsPermission::AppsModify.as_str())
+        }));
+
+        let owner_permissions = model
+            .pointer("/module_assignments/inventory/app-owner")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(owner_permissions.iter().any(|permission| {
+            permission.as_str() == Some(BusinessOsPermission::AppsView.as_str())
+        }));
+        assert!(owner_permissions.iter().any(|permission| {
+            permission.as_str() == Some(BusinessOsPermission::AppsRelease.as_str())
+        }));
+
+        let explicit_grants = model
+            .get("explicit_grants")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(explicit_grants.iter().any(|grant| {
+            grant.get("grant_id").and_then(Value::as_str)
+                == Some("grant_viewer_inventory_external_approve")
+                && grant.get("permission").and_then(Value::as_str)
+                    == Some(BusinessOsPermission::ExternalApprove.as_str())
+                && grant.get("scope_id").and_then(Value::as_str) == Some("inventory")
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn workspace_permission_grant_allows_user_upsert_without_admin_role() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "viewer", "user")?;
+        seed_permission_grant(
+            root,
+            "grant_viewer_users_manage",
+            "user",
+            "viewer",
+            BusinessOsPermission::UsersManage,
+            "workspace",
+            "",
+        )?;
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_granted_user_upsert",
+                "command_id": "cmd_granted_user_upsert",
+                "module": "ctox",
+                "command_type": "ctox.business_os.user.upsert",
+                "record_id": "new-user",
+                "status": "pending_sync",
+                "payload": {
+                    "id": "new-user",
+                    "display_name": "New User",
+                    "role": "user",
+                    "active": true
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "viewer",
+                        "display_name": "Viewer",
+                        "role": "admin",
+                        "is_admin": true
+                    }
+                }
+            }),
+        )?;
+
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        let conn = open_store(root)?;
+        let stored_role: String = conn.query_row(
+            "SELECT role FROM business_users WHERE user_id = ?1",
+            params!["new-user"],
+            |row| row.get(0),
+        )?;
+        assert_eq!(stored_role, "user");
+        Ok(())
+    }
+
+    #[test]
+    fn source_load_requires_source_view_permission() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let app_root = root.join("src").join("apps").join("business-os");
+        fs::create_dir_all(&app_root)?;
+        fs::write(app_root.join("index.html"), b"<!doctype html>")?;
+        write_widget_module(&app_root, "export default { name: 'widget' };\n")?;
+        seed_business_user(root, "viewer", "user")?;
+
+        let denied = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_team_source_load",
+                "command_id": "cmd_team_source_load",
+                "module": "ctox",
+                "command_type": "ctox.source.load",
+                "record_id": "widget",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "widget"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "viewer",
+                        "display_name": "Viewer"
+                    }
+                }
+            }),
+        )?;
+        assert_policy_denied(&denied, "apps.source.view", "module", Some("widget"));
+        let snapshot_denied = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_team_source_snapshots",
+                "command_id": "cmd_team_source_snapshots",
+                "module": "ctox",
+                "command_type": "ctox.source.list_snapshots",
+                "record_id": "widget:snapshots",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "widget"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "viewer",
+                        "display_name": "Viewer"
+                    }
+                }
+            }),
+        )?;
+        assert_policy_denied(
+            &snapshot_denied,
+            "apps.source.view",
+            "module",
+            Some("widget"),
+        );
+        let conn = open_store(root)?;
+        let source_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_records WHERE collection = ?1",
+            params!["business_module_source_files"],
+            |row| row.get(0),
+        )?;
+        assert_eq!(source_count, 0);
+        drop(conn);
+
+        seed_permission_grant(
+            root,
+            "grant_viewer_widget_source",
+            "user",
+            "viewer",
+            BusinessOsPermission::AppsSourceView,
+            "module",
+            "widget",
+        )?;
+        let granted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_granted_source_load",
+                "command_id": "cmd_granted_source_load",
+                "module": "ctox",
+                "command_type": "ctox.source.load",
+                "record_id": "widget",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "widget"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "viewer",
+                        "display_name": "Viewer",
+                        "role": "admin",
+                        "is_admin": true
+                    }
+                }
+            }),
+        )?;
+
+        assert_eq!(
+            granted.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert!(granted
+            .pointer("/result/source_file_ids")
+            .and_then(Value::as_array)
+            .map(|ids| !ids.is_empty())
+            .unwrap_or(false));
+        let granted_snapshots = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_granted_source_snapshots",
+                "command_id": "cmd_granted_source_snapshots",
+                "module": "ctox",
+                "command_type": "ctox.source.list_snapshots",
+                "record_id": "widget:snapshots",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "widget"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "viewer",
+                        "display_name": "Viewer",
+                        "role": "admin",
+                        "is_admin": true
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            granted_snapshots.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert!(granted_snapshots
+            .get("result")
+            .and_then(Value::as_array)
+            .is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn admin_cannot_assign_owner_role_through_user_upsert() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "ops_admin", "admin")?;
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_admin_owner_upsert",
+                "command_id": "cmd_admin_owner_upsert",
+                "module": "ctox",
+                "command_type": "ctox.business_os.user.upsert",
+                "record_id": "new-owner",
+                "status": "pending_sync",
+                "payload": {
+                    "id": "new-owner",
+                    "display_name": "New Owner",
+                    "role": "owner",
+                    "active": true
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "ops_admin",
+                        "display_name": "Ops Admin"
+                    }
+                }
+            }),
+        )?;
+
+        assert_policy_denied(&outcome, "workspace.manage", "workspace", None);
+        let conn = open_store(root)?;
+        let stored_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_users WHERE user_id = ?1",
+            params!["new-owner"],
+            |row| row.get(0),
+        )?;
+        assert_eq!(stored_count, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn users_manage_grant_cannot_assign_owner_role() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "viewer", "user")?;
+        seed_permission_grant(
+            root,
+            "grant_viewer_users_manage",
+            "user",
+            "viewer",
+            BusinessOsPermission::UsersManage,
+            "workspace",
+            "",
+        )?;
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_granted_owner_upsert",
+                "command_id": "cmd_granted_owner_upsert",
+                "module": "ctox",
+                "command_type": "ctox.business_os.user.upsert",
+                "record_id": "new-owner",
+                "status": "pending_sync",
+                "payload": {
+                    "id": "new-owner",
+                    "display_name": "New Owner",
+                    "role": "chef",
+                    "active": true
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "viewer",
+                        "display_name": "Viewer",
+                        "role": "admin",
+                        "is_admin": true
+                    }
+                }
+            }),
+        )?;
+
+        assert_policy_denied(&outcome, "workspace.manage", "workspace", None);
+        let conn = open_store(root)?;
+        let stored_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_users WHERE user_id = ?1",
+            params!["new-owner"],
+            |row| row.get(0),
+        )?;
+        assert_eq!(stored_count, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn owner_can_assign_owner_role_through_user_upsert() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "workspace_owner", "chef")?;
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_owner_owner_upsert",
+                "command_id": "cmd_owner_owner_upsert",
+                "module": "ctox",
+                "command_type": "ctox.business_os.user.upsert",
+                "record_id": "new-owner",
+                "status": "pending_sync",
+                "payload": {
+                    "id": "new-owner",
+                    "display_name": "New Owner",
+                    "role": "owner",
+                    "active": true
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "workspace_owner",
+                        "display_name": "Workspace Owner"
+                    }
+                }
+            }),
+        )?;
+
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        let conn = open_store(root)?;
+        let stored_role: String = conn.query_row(
+            "SELECT role FROM business_users WHERE user_id = ?1",
+            params!["new-owner"],
+            |row| row.get(0),
+        )?;
+        assert_eq!(stored_role, "chef");
+        Ok(())
+    }
+
+    #[test]
+    fn task_permission_grant_allows_ctox_task_update_without_admin_role() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "viewer", "user")?;
+        let task = channels::create_queue_task(
+            root,
+            channels::QueueTaskCreateRequest {
+                title: "Original task".to_string(),
+                prompt: "Do the original thing".to_string(),
+                thread_key: "business-os/test".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )?;
+        seed_permission_grant(
+            root,
+            "grant_viewer_task_manage",
+            "user",
+            "viewer",
+            BusinessOsPermission::CtoxTaskManage,
+            "task",
+            &task.message_key,
+        )?;
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_granted_task_update",
+                "command_id": "cmd_granted_task_update",
+                "module": "ctox",
+                "command_type": "ctox.task.update",
+                "record_id": task.message_key,
+                "status": "pending_sync",
+                "payload": {
+                    "task_id": task.message_key,
+                    "title": "Updated by grant"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "viewer",
+                        "display_name": "Viewer",
+                        "role": "admin",
+                        "is_admin": true
+                    }
+                }
+            }),
+        )?;
+
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        let updated = channels::load_queue_task(root, &task.message_key)?
+            .context("expected updated queue task")?;
+        assert_eq!(updated.title, "Updated by grant");
+        Ok(())
+    }
+
+    #[test]
+    fn app_store_install_uninstall_allows_explicit_module_grants() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        seed_business_user(root, "viewer", "user")?;
+        seed_permission_grant(
+            root,
+            "grant_viewer_install_inventory",
+            "user",
+            "viewer",
+            BusinessOsPermission::AppsInstall,
+            "module",
+            "inventory",
+        )?;
+        seed_permission_grant(
+            root,
+            "grant_viewer_uninstall_inventory",
+            "user",
+            "viewer",
+            BusinessOsPermission::AppsUninstall,
+            "module",
+            "inventory",
+        )?;
+        let download_url = serve_test_zip_once(build_test_app_module_zip("inventory")?)?;
+        let actor = serde_json::json!({
+            "actor": {
+                "id": "viewer",
+                "display_name": "Viewer",
+                "role": "admin",
+                "is_admin": true
+            }
+        });
+
+        let install = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_granted_app_store_install",
+                "command_id": "cmd_granted_app_store_install",
+                "module": "app-store",
+                "command_type": "ctox.app_store.install",
+                "record_id": "inventory",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "inventory",
+                    "download_url": download_url,
+                    "source_path": "modules/inventory"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        assert_eq!(
+            install.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+
+        let uninstall = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_granted_app_store_uninstall",
+                "command_id": "cmd_granted_app_store_uninstall",
+                "module": "app-store",
+                "command_type": "ctox.app_store.uninstall",
+                "record_id": "inventory",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "inventory"
+                },
+                "client_context": actor
+            }),
+        )?;
+        assert_eq!(
+            uninstall.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
         Ok(())
     }
 
@@ -17361,6 +24924,8 @@ mod tests {
         assert!(prompt.contains("open-work context rule: queue IDs"));
         assert!(prompt.contains("required file inventory: module.json"));
         assert!(prompt.contains("core/automation.mjs, core/records.mjs"));
+        assert!(prompt.contains("schema.js is the only root schema module"));
+        assert!(prompt.contains("Do not rename it, delete it, replace it with schema.mjs"));
         assert!(prompt.contains("mandatory first screen: inspect the scaffold first"));
         assert!(prompt.contains(
             "Use shipped customers, shiftflow, and outbound as the default three few-shots"
@@ -17400,10 +24965,6 @@ mod tests {
         assert!(prompt.contains("or any other runtime network fetch"));
         assert!(prompt.contains("assign the result into `ctx.host.innerHTML`"));
         assert!(prompt.contains("new URL('./index.css', import.meta.url)"));
-        assert!(prompt.contains("core/automation.mjs, core/records.mjs"));
-        assert!(prompt.contains(
-            "Do not read or write ~/.local/state/ctox/business-os/installed-modules directly"
-        ));
         assert!(prompt
             .contains("HTML fragment rule: index.html must be a Business OS shell fragment only"));
         assert!(prompt.contains("Do not write a full browser document"));
@@ -17486,8 +25047,6 @@ mod tests {
         assert!(prompt.contains(
             "only_allowed_app_artifact_directory: runtime/business-os/installed-modules/inventory"
         ));
-        assert!(prompt.contains("schema.js is the only root schema module"));
-        assert!(prompt.contains("Do not rename it, delete it, replace it with schema.mjs"));
         assert!(prompt.contains("Do not call ctox queue ack/complete/release/fail/block"));
         assert!(prompt.contains("Do not request complete file dumps"));
         assert!(prompt.contains("do not search for validator filenames"));
@@ -17500,6 +25059,10 @@ mod tests {
         assert!(prompt.contains("Do not use `fetch('./index.html')`"));
         assert!(prompt.contains("ctx.host.innerHTML"));
         assert!(prompt.contains("new URL('./index.css', import.meta.url)"));
+        assert!(prompt.contains("core/automation.mjs, core/records.mjs"));
+        assert!(prompt.contains(
+            "Do not read or write ~/.local/state/ctox/business-os/installed-modules directly"
+        ));
         assert!(prompt
             .contains("HTML fragment rule: index.html must be a Business OS shell fragment only"));
         assert!(prompt.contains("CSS scoping rule: index.css must scope module variables"));
@@ -17573,6 +25136,2887 @@ mod tests {
     }
 
     #[test]
+    fn app_build_commands_enforce_policy_before_queueing() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "viewer", "user")?;
+        seed_business_user(root, "app_owner", "founder")?;
+        seed_business_user(root, "ops_admin", "admin")?;
+        seed_module_founder_acl(root, "inventory", "app_owner")?;
+
+        let team_modify = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_team_modify_app",
+                "module": "creator",
+                "type": "ctox.business_os.app.modify",
+                "record_id": "inventory",
+                "payload": {
+                    "module_id": "inventory",
+                    "instruction": "Change Inventory",
+                    "target": "app"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "viewer",
+                        "display_name": "Viewer",
+                        "role": "admin"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(team_modify.get("ok").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            team_modify.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert!(
+            channels::list_queue_tasks(root, &[], 256)?.is_empty(),
+            "denied app modify command must not create a queue task"
+        );
+        let conn = open_store(root)?;
+        let denied =
+            outbound_load_required(&conn, "business_commands", "cmd_team_modify_app", "command")?;
+        assert_eq!(denied.get("status").and_then(Value::as_str), Some("failed"));
+        assert_eq!(
+            denied
+                .pointer("/result/policy_decision/permission")
+                .and_then(Value::as_str),
+            Some("apps.modify")
+        );
+        assert_eq!(
+            denied
+                .pointer("/result/policy_decision/scope_type")
+                .and_then(Value::as_str),
+            Some("module")
+        );
+        assert_eq!(
+            denied
+                .pointer("/result/policy_decision/scope_id")
+                .and_then(Value::as_str),
+            Some("inventory")
+        );
+        assert_eq!(
+            denied
+                .pointer("/result/policy_decision/reason_code")
+                .and_then(Value::as_str),
+            Some("role_or_scope_denied")
+        );
+        assert!(denied
+            .pointer("/result/policy_decision/display_reason")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("not allowed"));
+        drop(conn);
+
+        let founder_unassigned = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_founder_modify_unassigned_app",
+                "module": "creator",
+                "type": "ctox.business_os.app.modify",
+                "record_id": "sales",
+                "payload": {
+                    "module_id": "sales",
+                    "instruction": "Change Sales",
+                    "target": "app"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "app_owner",
+                        "display_name": "App Owner"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            founder_unassigned.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+
+        let founder_assigned = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_founder_modify_assigned_app",
+                "module": "creator",
+                "type": "ctox.business_os.app.modify",
+                "record_id": "inventory",
+                "payload": {
+                    "module_id": "inventory",
+                    "instruction": "Change Inventory",
+                    "target": "app"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "app_owner",
+                        "display_name": "App Owner"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            founder_assigned.get("status").and_then(Value::as_str),
+            Some("accepted")
+        );
+        let task_id = founder_assigned
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected assigned founder app modify queue task")?;
+        let task = channels::load_queue_task(root, task_id)?.context("expected queue task")?;
+        assert!(task.prompt.contains("- module_id: inventory"));
+
+        let team_create = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_team_create_app",
+                "module": "creator",
+                "type": "ctox.business_os.app.create",
+                "record_id": "warehouse",
+                "payload": {
+                    "module_id": "warehouse",
+                    "instruction": "Create Warehouse",
+                    "target": "app"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "viewer",
+                        "display_name": "Viewer"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            team_create.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        let conn = open_store(root)?;
+        let denied_create =
+            outbound_load_required(&conn, "business_commands", "cmd_team_create_app", "command")?;
+        assert_eq!(
+            denied_create
+                .pointer("/result/policy_decision/permission")
+                .and_then(Value::as_str),
+            Some("apps.install")
+        );
+        assert_eq!(
+            denied_create
+                .pointer("/result/policy_decision/scope_id")
+                .and_then(Value::as_str),
+            Some("warehouse")
+        );
+        drop(conn);
+
+        let admin_create = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_admin_create_app",
+                "module": "creator",
+                "type": "ctox.business_os.app.create",
+                "record_id": "warehouse",
+                "payload": {
+                    "module_id": "warehouse",
+                    "instruction": "Create Warehouse",
+                    "target": "app"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "ops_admin",
+                        "display_name": "Ops Admin"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            admin_create.get("status").and_then(Value::as_str),
+            Some("accepted")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn control_commands_return_structured_policy_denials() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "viewer", "user")?;
+
+        let actor = serde_json::json!({
+            "actor": {
+                "id": "viewer",
+                "display_name": "Viewer",
+                "role": "admin",
+                "is_admin": true
+            }
+        });
+
+        let cases = vec![
+            (
+                "cmd_deny_task_update",
+                "ctox.task.update",
+                "task_1",
+                serde_json::json!({
+                    "task_id": "task_1",
+                    "title": "Updated title"
+                }),
+                "ctox.task.manage",
+                "task",
+                Some("task_1"),
+            ),
+            (
+                "cmd_deny_task_delete",
+                "ctox.task.delete",
+                "task_1",
+                serde_json::json!({
+                    "task_id": "task_1"
+                }),
+                "ctox.task.manage",
+                "task",
+                Some("task_1"),
+            ),
+            (
+                "cmd_deny_user_upsert",
+                "ctox.business_os.user.upsert",
+                "team-user",
+                serde_json::json!({
+                    "id": "team-user",
+                    "display_name": "Team User",
+                    "role": "admin"
+                }),
+                "users.manage",
+                "workspace",
+                None,
+            ),
+            (
+                "cmd_deny_subscription_auth_start",
+                "ctox.subscription_auth.start",
+                "subscription-auth",
+                serde_json::json!({
+                    "provider": "openai",
+                    "auth_mode": "chatgpt_subscription"
+                }),
+                "integrations.manage",
+                "workspace",
+                None,
+            ),
+            (
+                "cmd_deny_channel_settings_save",
+                "ctox.channel.settings.save",
+                "email",
+                serde_json::json!({
+                    "channel": "email",
+                    "config": {}
+                }),
+                "integrations.manage",
+                "workspace",
+                None,
+            ),
+            (
+                "cmd_deny_source_save",
+                "ctox.source.save",
+                "inventory",
+                serde_json::json!({
+                    "module_id": "inventory",
+                    "path": "index.js",
+                    "content": "export default {};"
+                }),
+                "apps.modify",
+                "module",
+                Some("inventory"),
+            ),
+            (
+                "cmd_deny_source_rollback_snapshot",
+                "ctox.source.rollback_snapshot",
+                "inventory",
+                serde_json::json!({
+                    "module_id": "inventory",
+                    "snapshot_id": "snap_1"
+                }),
+                "apps.rollback",
+                "module",
+                Some("inventory"),
+            ),
+            (
+                "cmd_deny_module_release",
+                "ctox.module.release",
+                "inventory",
+                serde_json::json!({
+                    "module_id": "inventory",
+                    "notes": "release"
+                }),
+                "apps.release",
+                "module",
+                Some("inventory"),
+            ),
+            (
+                "cmd_deny_module_assign_founder",
+                "ctox.module.assign_founder",
+                "inventory",
+                serde_json::json!({
+                    "module_id": "inventory",
+                    "user_id": "module-owner"
+                }),
+                "apps.assign_owner",
+                "module",
+                Some("inventory"),
+            ),
+            (
+                "cmd_deny_module_save",
+                "ctox.module.save",
+                "inventory",
+                serde_json::json!({
+                    "id": "inventory",
+                    "title": "Inventory"
+                }),
+                "apps.modify",
+                "module",
+                Some("inventory"),
+            ),
+            (
+                "cmd_deny_module_delete",
+                "ctox.module.delete",
+                "inventory",
+                serde_json::json!({
+                    "module_id": "inventory"
+                }),
+                "apps.modify",
+                "module",
+                Some("inventory"),
+            ),
+            (
+                "cmd_deny_template_install",
+                "ctox.module.install_template",
+                "inventory",
+                serde_json::json!({
+                    "template_id": "simple",
+                    "module_id": "inventory",
+                    "title": "Inventory"
+                }),
+                "apps.install",
+                "workspace",
+                None,
+            ),
+            (
+                "cmd_deny_module_rollback",
+                "ctox.module.rollback",
+                "inventory",
+                serde_json::json!({
+                    "module_id": "inventory",
+                    "version_id": "version_1"
+                }),
+                "apps.rollback",
+                "module",
+                Some("inventory"),
+            ),
+            (
+                "cmd_deny_module_rollback_version",
+                "ctox.module.rollback_version",
+                "inventory",
+                serde_json::json!({
+                    "module_id": "inventory",
+                    "version_id": "version_1"
+                }),
+                "apps.rollback",
+                "module",
+                Some("inventory"),
+            ),
+            (
+                "cmd_deny_app_store_install",
+                "ctox.app_store.install",
+                "inventory",
+                serde_json::json!({
+                    "module_id": "inventory",
+                    "download_url": "https://example.invalid/inventory.zip",
+                    "source_path": "modules/inventory"
+                }),
+                "apps.install",
+                "module",
+                Some("inventory"),
+            ),
+            (
+                "cmd_deny_app_store_uninstall",
+                "ctox.app_store.uninstall",
+                "inventory",
+                serde_json::json!({
+                    "module_id": "inventory"
+                }),
+                "apps.uninstall",
+                "module",
+                Some("inventory"),
+            ),
+        ];
+
+        for (id, command_type, record_id, payload, permission, scope_type, scope_id) in cases {
+            let outcome = accept_rxdb_business_command(
+                root,
+                serde_json::json!({
+                    "id": id,
+                    "command_id": id,
+                    "module": "ctox",
+                    "command_type": command_type,
+                    "record_id": record_id,
+                    "status": "pending_sync",
+                    "payload": payload,
+                    "client_context": actor
+                }),
+            )
+            .with_context(|| format!("accept {command_type}"))?;
+
+            assert_policy_denied(&outcome, permission, scope_type, scope_id);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn policy_denial_writes_business_event_audit() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "viewer", "user")?;
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_audit_policy_denied",
+                "command_id": "cmd_audit_policy_denied",
+                "module": "ctox",
+                "command_type": "ctox.runtime_settings.save",
+                "record_id": "runtime-settings",
+                "status": "pending_sync",
+                "payload": {
+                    "provider": "openai",
+                    "auth_mode": "chatgpt_subscription",
+                    "chat_model": "gpt-5.5",
+                    "preset": "Quality",
+                    "context": "256k"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "viewer",
+                        "display_name": "Viewer",
+                        "role": "admin",
+                        "is_admin": true
+                    }
+                }
+            }),
+        )?;
+        assert_policy_denied(&outcome, "runtime.manage", "workspace", None);
+
+        let conn = open_store(root)?;
+        let payload_json: String = conn.query_row(
+            "SELECT payload_json
+             FROM business_events
+             WHERE collection = 'business_commands'
+               AND record_id = ?1
+               AND command_type = 'business_os.policy.denied'",
+            params!["cmd_audit_policy_denied"],
+            |row| row.get(0),
+        )?;
+        let payload: Value = serde_json::from_str(&payload_json)?;
+        assert_eq!(
+            payload.pointer("/event_type").and_then(Value::as_str),
+            Some("business_os.policy.denied")
+        );
+        assert_eq!(
+            payload.pointer("/command_id").and_then(Value::as_str),
+            Some("cmd_audit_policy_denied")
+        );
+        assert_eq!(
+            payload.pointer("/module").and_then(Value::as_str),
+            Some("ctox")
+        );
+        assert_eq!(
+            payload.pointer("/command_type").and_then(Value::as_str),
+            Some("ctox.runtime_settings.save")
+        );
+        assert_eq!(
+            payload.pointer("/record_id").and_then(Value::as_str),
+            Some("runtime-settings")
+        );
+        assert_eq!(
+            payload.pointer("/actor/id").and_then(Value::as_str),
+            Some("viewer")
+        );
+        assert_eq!(
+            payload
+                .pointer("/actor/display_name")
+                .and_then(Value::as_str),
+            Some("viewer")
+        );
+        assert_eq!(
+            payload.pointer("/actor/role").and_then(Value::as_str),
+            Some("user")
+        );
+        assert_eq!(
+            payload.pointer("/actor/trusted").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/policy_decision/permission")
+                .and_then(Value::as_str),
+            Some("runtime.manage")
+        );
+        assert_eq!(
+            payload
+                .pointer("/policy_decision/scope_type")
+                .and_then(Value::as_str),
+            Some("workspace")
+        );
+        assert_eq!(
+            payload
+                .pointer("/policy_decision/reason_code")
+                .and_then(Value::as_str),
+            Some("role_or_scope_denied")
+        );
+        assert_eq!(
+            payload
+                .pointer("/policy_decision/allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            payload
+                .pointer("/observed_at_ms")
+                .and_then(Value::as_i64)
+                .unwrap_or_default()
+                > 0
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn allowed_policy_decision_writes_business_event_audit() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "ops_admin", "admin")?;
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_audit_policy_allowed",
+                "command_id": "cmd_audit_policy_allowed",
+                "module": "ctox",
+                "command_type": "ctox.runtime_settings.save",
+                "record_id": "runtime-settings",
+                "status": "pending_sync",
+                "payload": {
+                    "provider": "openai",
+                    "auth_mode": "chatgpt_subscription",
+                    "chat_model": "gpt-5.5",
+                    "preset": "Quality",
+                    "context": "256k"
+                },
+                "client_context": {
+                    "action": "settings-save",
+                    "mode": "app",
+                    "target": "settings",
+                    "module": "ctox",
+                    "module_id": "ctox",
+                    "app_id": "runtime-settings",
+                    "record_id": "runtime-settings",
+                    "prompt": "this free-form prompt must not be copied into policy audit",
+                    "actor": {
+                        "id": "ops_admin",
+                        "display_name": "Ops Admin",
+                        "role": "user"
+                    },
+                    "visible_scope": {
+                        "app": {
+                            "module_id": "ctox",
+                            "version": "1.0.0",
+                            "visibility": "team"
+                        },
+                        "data": {
+                            "collection": "runtime_settings",
+                            "permission": "write"
+                        },
+                        "rows": [{
+                            "key": "app",
+                            "label": "App",
+                            "value": "Runtime Settings"
+                        }],
+                        "selected_text": "selected row text must not be copied"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+
+        let conn = open_store(root)?;
+        let payloads = business_event_payloads(
+            &conn,
+            "business_commands",
+            "cmd_audit_policy_allowed",
+            "business_os.policy.allowed",
+        )?;
+        assert_eq!(payloads.len(), 1, "expected one allowed audit event");
+        let payload = &payloads[0];
+        assert_eq!(
+            payload.pointer("/event_type").and_then(Value::as_str),
+            Some("business_os.policy.allowed")
+        );
+        assert_eq!(
+            payload.pointer("/command_id").and_then(Value::as_str),
+            Some("cmd_audit_policy_allowed")
+        );
+        assert_eq!(
+            payload.pointer("/actor/id").and_then(Value::as_str),
+            Some("ops_admin")
+        );
+        assert_eq!(
+            payload.pointer("/actor/role").and_then(Value::as_str),
+            Some("admin")
+        );
+        assert_eq!(
+            payload
+                .pointer("/client_context/action")
+                .and_then(Value::as_str),
+            Some("settings-save")
+        );
+        assert_eq!(
+            payload
+                .pointer("/client_context/app_id")
+                .and_then(Value::as_str),
+            Some("runtime-settings")
+        );
+        assert_eq!(
+            payload
+                .pointer("/client_context/visible_scope/app/module_id")
+                .and_then(Value::as_str),
+            Some("ctox")
+        );
+        assert_eq!(
+            payload
+                .pointer("/client_context/visible_scope/data/collection")
+                .and_then(Value::as_str),
+            Some("runtime_settings")
+        );
+        assert_eq!(payload.pointer("/client_context/prompt"), None);
+        assert_eq!(
+            payload.pointer("/client_context/visible_scope/selected_text"),
+            None
+        );
+        let payload_json = serde_json::to_string(payload)?;
+        assert!(
+            !payload_json.contains("free-form prompt")
+                && !payload_json.contains("selected row text"),
+            "policy audit must not persist free-form prompt or selection text"
+        );
+        assert_eq!(
+            payload
+                .pointer("/policy_decision/permission")
+                .and_then(Value::as_str),
+            Some("runtime.manage")
+        );
+        assert_eq!(
+            payload
+                .pointer("/policy_decision/reason_code")
+                .and_then(Value::as_str),
+            Some("allowed")
+        );
+        assert_eq!(
+            payload
+                .pointer("/policy_decision/allowed")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let activity = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_activity_allowed_list",
+                "command_id": "cmd_activity_allowed_list",
+                "module": "ctox",
+                "command_type": "ctox.business_os.audit.list",
+                "record_id": "business-activity",
+                "status": "pending_sync",
+                "payload": {
+                    "limit": 10
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "ops_admin",
+                        "display_name": "Ops Admin",
+                        "role": "user"
+                    }
+                }
+            }),
+        )?;
+        let events = activity
+            .pointer("/result/events")
+            .and_then(Value::as_array)
+            .context("expected activity events")?;
+        assert!(events.iter().any(|event| {
+            event.get("type").and_then(Value::as_str) == Some("business_os.policy.allowed")
+                && event.pointer("/payload/command_id").and_then(Value::as_str)
+                    == Some("cmd_audit_policy_allowed")
+        }));
+        assert!(business_event_payloads(
+            &conn,
+            "business_commands",
+            "cmd_activity_allowed_list",
+            "business_os.policy.allowed",
+        )?
+        .is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn user_role_change_writes_business_event_audit() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let session = test_session("ops_admin", "admin");
+
+        upsert_user(
+            root,
+            &session,
+            BusinessOsUserMutation {
+                id: "member".to_owned(),
+                display_name: "Member".to_owned(),
+                role: "user".to_owned(),
+                active: true,
+                accept_recovery_responsibility: false,
+            },
+        )?;
+        upsert_user(
+            root,
+            &session,
+            BusinessOsUserMutation {
+                id: "member".to_owned(),
+                display_name: "Member".to_owned(),
+                role: "founder".to_owned(),
+                active: true,
+                accept_recovery_responsibility: false,
+            },
+        )?;
+
+        let conn = open_store(root)?;
+        let payloads = business_event_payloads(
+            &conn,
+            "business_users",
+            "member",
+            "business_os.user.changed",
+        )?;
+        assert_eq!(payloads.len(), 2);
+        let role_change = payloads
+            .iter()
+            .find(|payload| {
+                payload.pointer("/current/role").and_then(Value::as_str) == Some("founder")
+            })
+            .context("expected founder role-change audit payload")?;
+        assert_eq!(
+            role_change.pointer("/event_type").and_then(Value::as_str),
+            Some("business_os.user.changed")
+        );
+        assert_eq!(
+            role_change.pointer("/actor/id").and_then(Value::as_str),
+            Some("ops_admin")
+        );
+        assert_eq!(
+            role_change.pointer("/actor/role").and_then(Value::as_str),
+            Some("admin")
+        );
+        assert_eq!(
+            role_change
+                .pointer("/actor/trusted")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            role_change
+                .pointer("/previous/role")
+                .and_then(Value::as_str),
+            Some("user")
+        );
+        assert_eq!(
+            role_change.pointer("/current/role").and_then(Value::as_str),
+            Some("founder")
+        );
+        assert!(role_change
+            .pointer("/changed_fields")
+            .and_then(Value::as_array)
+            .context("expected changed_fields")?
+            .contains(&Value::String("role".to_owned())));
+
+        Ok(())
+    }
+
+    #[test]
+    fn module_founder_assignment_writes_business_event_audit() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let session = test_session("ops_admin", "admin");
+
+        assign_module_founder(
+            root,
+            &session,
+            ModuleFounderAssignment {
+                module_id: "inventory".to_owned(),
+                user_id: "module_owner".to_owned(),
+                active: true,
+                accept_recovery_responsibility: false,
+            },
+        )?;
+        assign_module_founder(
+            root,
+            &session,
+            ModuleFounderAssignment {
+                module_id: "inventory".to_owned(),
+                user_id: "module_owner".to_owned(),
+                active: false,
+                accept_recovery_responsibility: false,
+            },
+        )?;
+
+        let conn = open_store(root)?;
+        let payloads = business_event_payloads(
+            &conn,
+            "business_module_acl",
+            "inventory:founder:module_owner",
+            "business_os.app_responsibility.changed",
+        )?;
+        assert_eq!(payloads.len(), 2);
+        let deactivation = payloads
+            .iter()
+            .find(|payload| {
+                payload.pointer("/current/active").and_then(Value::as_bool) == Some(false)
+            })
+            .context("expected app-responsibility deactivation audit payload")?;
+        assert_eq!(
+            deactivation.pointer("/event_type").and_then(Value::as_str),
+            Some("business_os.app_responsibility.changed")
+        );
+        assert_eq!(
+            deactivation.pointer("/module_id").and_then(Value::as_str),
+            Some("inventory")
+        );
+        assert_eq!(
+            deactivation.pointer("/user_id").and_then(Value::as_str),
+            Some("module_owner")
+        );
+        assert_eq!(
+            deactivation.pointer("/actor/id").and_then(Value::as_str),
+            Some("ops_admin")
+        );
+        assert_eq!(
+            deactivation
+                .pointer("/previous/active")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            deactivation
+                .pointer("/current/active")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(deactivation
+            .pointer("/changed_fields")
+            .and_then(Value::as_array)
+            .context("expected changed_fields")?
+            .contains(&Value::String("active".to_owned())));
+
+        Ok(())
+    }
+
+    #[test]
+    fn module_founder_assignment_rejects_orphan_private_app_without_recovery() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        write_private_runtime_module(root, "private-app", "0.4.0")?;
+        let session = test_session("ops_admin", "admin");
+
+        assign_module_founder(
+            root,
+            &session,
+            ModuleFounderAssignment {
+                module_id: "private-app".to_owned(),
+                user_id: "module_owner".to_owned(),
+                active: true,
+                accept_recovery_responsibility: false,
+            },
+        )?;
+
+        let error = assign_module_founder(
+            root,
+            &session,
+            ModuleFounderAssignment {
+                module_id: "private-app".to_owned(),
+                user_id: "module_owner".to_owned(),
+                active: false,
+                accept_recovery_responsibility: false,
+            },
+        )
+        .expect_err("last private app responsibility must be rejected");
+        assert!(error.to_string().contains("App responsibility"));
+
+        let conn = open_store(root)?;
+        let active: i64 = conn.query_row(
+            "SELECT active
+             FROM business_module_acl
+             WHERE module_id = 'private-app'
+               AND user_id = 'module_owner'
+               AND role = 'founder'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(active, 1);
+        let payloads = business_event_payloads(
+            &conn,
+            "business_module_acl",
+            "private-app:founder:module_owner",
+            "business_os.app_responsibility.changed",
+        )?;
+        assert_eq!(
+            payloads.len(),
+            1,
+            "failed deactivation must not audit a change"
+        );
+        assert_eq!(
+            payloads[0]
+                .pointer("/current/active")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn module_founder_assignment_accepts_recovery_for_private_app() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        write_private_runtime_module(root, "private-app", "0.4.0")?;
+        let session = test_session("ops_admin", "admin");
+
+        assign_module_founder(
+            root,
+            &session,
+            ModuleFounderAssignment {
+                module_id: "private-app".to_owned(),
+                user_id: "module_owner".to_owned(),
+                active: true,
+                accept_recovery_responsibility: false,
+            },
+        )?;
+        let governance = assign_module_founder(
+            root,
+            &session,
+            ModuleFounderAssignment {
+                module_id: "private-app".to_owned(),
+                user_id: "module_owner".to_owned(),
+                active: false,
+                accept_recovery_responsibility: true,
+            },
+        )?;
+        let changed_ids = governance
+            .get("business_module_acl_ids")
+            .and_then(Value::as_array)
+            .context("expected changed ACL ids")?;
+        assert!(changed_ids
+            .iter()
+            .any(|id| id.as_str() == Some("private-app:founder:ops_admin")));
+        assert!(changed_ids
+            .iter()
+            .any(|id| id.as_str() == Some("private-app:founder:module_owner")));
+
+        let conn = open_store(root)?;
+        let owner_active: i64 = conn.query_row(
+            "SELECT active
+             FROM business_module_acl
+             WHERE module_id = 'private-app'
+               AND user_id = 'module_owner'
+               AND role = 'founder'",
+            [],
+            |row| row.get(0),
+        )?;
+        let recovery_active: i64 = conn.query_row(
+            "SELECT active
+             FROM business_module_acl
+             WHERE module_id = 'private-app'
+               AND user_id = 'ops_admin'
+               AND role = 'founder'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(owner_active, 0);
+        assert_eq!(recovery_active, 1);
+        let recovery_payloads = business_event_payloads(
+            &conn,
+            "business_module_acl",
+            "private-app:founder:ops_admin",
+            "business_os.app_responsibility.changed",
+        )?;
+        assert_eq!(recovery_payloads.len(), 1);
+        assert_eq!(
+            recovery_payloads[0]
+                .pointer("/current/active")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            recovery_payloads[0]
+                .pointer("/actor/id")
+                .and_then(Value::as_str),
+            Some("ops_admin")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn user_deactivation_requires_recovery_for_sole_private_app_responsibility(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        write_private_runtime_module(root, "private-app", "0.4.0")?;
+        seed_business_user(root, "module_owner", "founder")?;
+        seed_module_founder_acl(root, "private-app", "module_owner")?;
+        let session = test_session("ops_admin", "admin");
+
+        let error = upsert_user(
+            root,
+            &session,
+            BusinessOsUserMutation {
+                id: "module_owner".to_owned(),
+                display_name: "Module Owner".to_owned(),
+                role: "founder".to_owned(),
+                active: false,
+                accept_recovery_responsibility: false,
+            },
+        )
+        .expect_err("sole private app responsibility must require recovery");
+        assert!(error.to_string().contains("App responsibility"));
+
+        let conn = open_store(root)?;
+        let owner_user_active: i64 = conn.query_row(
+            "SELECT active FROM business_users WHERE user_id = 'module_owner'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(owner_user_active, 1);
+        drop(conn);
+
+        upsert_user(
+            root,
+            &session,
+            BusinessOsUserMutation {
+                id: "module_owner".to_owned(),
+                display_name: "Module Owner".to_owned(),
+                role: "founder".to_owned(),
+                active: false,
+                accept_recovery_responsibility: true,
+            },
+        )?;
+
+        let conn = open_store(root)?;
+        let owner_user_active: i64 = conn.query_row(
+            "SELECT active FROM business_users WHERE user_id = 'module_owner'",
+            [],
+            |row| row.get(0),
+        )?;
+        let recovery_active: i64 = conn.query_row(
+            "SELECT active
+             FROM business_module_acl
+             WHERE module_id = 'private-app'
+               AND user_id = 'ops_admin'
+               AND role = 'founder'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(owner_user_active, 0);
+        assert_eq!(recovery_active, 1);
+        drop(conn);
+
+        let catalog = module_catalog_for_rxdb(root)?;
+        let private_app = catalog
+            .get("modules")
+            .and_then(Value::as_array)
+            .and_then(|modules| {
+                modules
+                    .iter()
+                    .find(|module| module.get("id").and_then(Value::as_str) == Some("private-app"))
+            })
+            .context("expected private app in catalog")?;
+        let responsible = private_app
+            .pointer("/lifecycle/responsible_user_ids")
+            .and_then(Value::as_array)
+            .context("expected responsible ids")?;
+        assert!(responsible
+            .iter()
+            .any(|user| user.as_str() == Some("ops_admin")));
+        assert!(!responsible
+            .iter()
+            .any(|user| user.as_str() == Some("module_owner")));
+
+        Ok(())
+    }
+
+    #[test]
+    fn module_assign_founder_command_persists_failed_orphan_outcome() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        write_private_runtime_module(root, "private-app", "0.4.0")?;
+        seed_business_user(root, "ops_admin", "admin")?;
+        seed_business_user(root, "module_owner", "founder")?;
+        seed_module_founder_acl(root, "private-app", "module_owner")?;
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_private_app_orphan_founder",
+                "command_id": "cmd_private_app_orphan_founder",
+                "module": "ctox",
+                "command_type": "ctox.module.assign_founder",
+                "record_id": "private-app",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "private-app",
+                    "user_id": "module_owner",
+                    "active": false
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "ops_admin",
+                        "display_name": "Ops Admin"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(outcome.get("ok").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            outcome.pointer("/result/operation").and_then(Value::as_str),
+            Some("assign_founder")
+        );
+        assert!(outcome
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("App responsibility"));
+
+        let conn = open_store(root)?;
+        let stored = outbound_load_required(
+            &conn,
+            "business_commands",
+            "cmd_private_app_orphan_founder",
+            "command",
+        )?;
+        assert_eq!(stored.get("status").and_then(Value::as_str), Some("failed"));
+        let active: i64 = conn.query_row(
+            "SELECT active
+             FROM business_module_acl
+             WHERE module_id = 'private-app'
+               AND user_id = 'module_owner'
+               AND role = 'founder'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(active, 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn user_upsert_command_persists_failed_private_app_responsibility_outcome() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        write_private_runtime_module(root, "private-app", "0.4.0")?;
+        seed_business_user(root, "ops_admin", "admin")?;
+        seed_business_user(root, "module_owner", "founder")?;
+        seed_module_founder_acl(root, "private-app", "module_owner")?;
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_private_app_owner_deactivate",
+                "command_id": "cmd_private_app_owner_deactivate",
+                "module": "ctox",
+                "command_type": "ctox.business_os.user.upsert",
+                "record_id": "module_owner",
+                "status": "pending_sync",
+                "payload": {
+                    "id": "module_owner",
+                    "display_name": "Module Owner",
+                    "role": "founder",
+                    "active": false
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "ops_admin",
+                        "display_name": "Ops Admin"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(outcome.get("ok").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            outcome.pointer("/result/operation").and_then(Value::as_str),
+            Some("user_upsert")
+        );
+        assert!(outcome
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("App responsibility"));
+
+        let conn = open_store(root)?;
+        let stored = outbound_load_required(
+            &conn,
+            "business_commands",
+            "cmd_private_app_owner_deactivate",
+            "command",
+        )?;
+        assert_eq!(stored.get("status").and_then(Value::as_str), Some("failed"));
+        let active: i64 = conn.query_row(
+            "SELECT active FROM business_users WHERE user_id = 'module_owner'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(active, 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn audit_list_command_returns_native_activity_for_admin() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let session = test_session("ops_admin", "admin");
+
+        upsert_user(
+            root,
+            &session,
+            BusinessOsUserMutation {
+                id: "viewer".to_owned(),
+                display_name: "Viewer".to_owned(),
+                role: "user".to_owned(),
+                active: true,
+                accept_recovery_responsibility: false,
+            },
+        )?;
+        assign_module_founder(
+            root,
+            &session,
+            ModuleFounderAssignment {
+                module_id: "inventory".to_owned(),
+                user_id: "module_owner".to_owned(),
+                active: true,
+                accept_recovery_responsibility: false,
+            },
+        )?;
+        let denied = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_activity_denied_runtime",
+                "command_id": "cmd_activity_denied_runtime",
+                "module": "ctox",
+                "command_type": "ctox.runtime_settings.save",
+                "record_id": "runtime-settings",
+                "status": "pending_sync",
+                "payload": {
+                    "provider": "openai",
+                    "auth_mode": "chatgpt_subscription",
+                    "chat_model": "gpt-5.5",
+                    "preset": "Quality",
+                    "context": "256k"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "viewer",
+                        "display_name": "Viewer"
+                    }
+                }
+            }),
+        )?;
+        assert_policy_denied(&denied, "runtime.manage", "workspace", None);
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_activity_list",
+                "command_id": "cmd_activity_list",
+                "module": "ctox",
+                "command_type": "ctox.business_os.audit.list",
+                "record_id": "business-activity",
+                "status": "pending_sync",
+                "payload": {
+                    "limit": 10
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "ops_admin",
+                        "display_name": "Ops Admin",
+                        "role": "user"
+                    }
+                }
+            }),
+        )?;
+
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            outcome.pointer("/result/ok").and_then(Value::as_bool),
+            Some(true)
+        );
+        let events = outcome
+            .pointer("/result/events")
+            .and_then(Value::as_array)
+            .context("expected activity events")?;
+        assert!(
+            events.len() >= 3,
+            "expected policy, user and app-responsibility events: {events:?}"
+        );
+        let event_types: HashSet<&str> = events
+            .iter()
+            .filter_map(|event| event.get("type").and_then(Value::as_str))
+            .collect();
+        assert!(event_types.contains("business_os.policy.denied"));
+        assert!(event_types.contains("business_os.user.changed"));
+        assert!(event_types.contains("business_os.app_responsibility.changed"));
+        let denied_event = events
+            .iter()
+            .find(|event| {
+                event.get("type").and_then(Value::as_str) == Some("business_os.policy.denied")
+            })
+            .context("expected denied policy activity event")?;
+        assert_eq!(
+            denied_event
+                .pointer("/payload/command_id")
+                .and_then(Value::as_str),
+            Some("cmd_activity_denied_runtime")
+        );
+        assert_eq!(
+            denied_event
+                .pointer("/payload/policy_decision/permission")
+                .and_then(Value::as_str),
+            Some("runtime.manage")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn audit_list_command_denies_team_member_without_leaking_events() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "viewer", "user")?;
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_activity_list_denied",
+                "command_id": "cmd_activity_list_denied",
+                "module": "ctox",
+                "command_type": "ctox.business_os.audit.list",
+                "record_id": "business-activity",
+                "status": "pending_sync",
+                "payload": {
+                    "limit": 10
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "viewer",
+                        "display_name": "Viewer",
+                        "role": "admin"
+                    }
+                }
+            }),
+        )?;
+
+        assert_policy_denied(&outcome, "users.manage", "workspace", None);
+        assert!(outcome.pointer("/result/events").is_none());
+
+        let conn = open_store(root)?;
+        let payloads = business_event_payloads(
+            &conn,
+            "business_commands",
+            "cmd_activity_list_denied",
+            "business_os.policy.denied",
+        )?;
+        assert_eq!(payloads.len(), 1);
+        let payload = &payloads[0];
+        assert_eq!(
+            payload
+                .pointer("/policy_decision/permission")
+                .and_then(Value::as_str),
+            Some("users.manage")
+        );
+        assert_eq!(
+            payload
+                .pointer("/policy_decision/reason_code")
+                .and_then(Value::as_str),
+            Some("role_or_scope_denied")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn audit_retention_command_exports_before_prune_and_redacts() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "ops_admin", "admin")?;
+        let conn = open_store(root)?;
+        let now = now_ms() as i64;
+        let expired_ms = now.saturating_sub(2 * 24 * 60 * 60 * 1000);
+        insert_business_event(
+            &conn,
+            "business_commands",
+            "cmd_expired_sensitive",
+            "business_os.policy.denied",
+            serde_json::json!({
+                "event_type": "business_os.policy.denied",
+                "command_id": "cmd_expired_sensitive",
+                "module": "ctox",
+                "command_type": "ctox.runtime_settings.save",
+                "record_id": "runtime-settings",
+                "status": "failed",
+                "actor": {
+                    "id": "viewer",
+                    "display_name": "Viewer",
+                    "role": "user"
+                },
+                "policy_decision": {
+                    "allowed": false,
+                    "permission": "runtime.manage",
+                    "scope_type": "workspace",
+                    "scope_id": null,
+                    "reason_code": "role_or_scope_denied",
+                    "display_reason": "Not allowed"
+                },
+                "client_context": {
+                    "visible_scope": {
+                        "module_id": "ctox",
+                        "record_id": "runtime-settings"
+                    },
+                    "prompt": "do not export prompt secret",
+                    "selected_text": "do not export selected secret"
+                },
+                "prompt": "do not export prompt secret",
+                "token": "do-not-export-token",
+                "body": "do not export body secret",
+                "record_payload": {
+                    "secret": "do-not-export-record-payload"
+                },
+                "observed_at_ms": expired_ms
+            }),
+            expired_ms,
+        )?;
+        insert_business_event(
+            &conn,
+            "business_commands",
+            "cmd_current",
+            "business_os.policy.allowed",
+            serde_json::json!({
+                "event_type": "business_os.policy.allowed",
+                "command_id": "cmd_current",
+                "module": "ctox",
+                "actor": { "id": "ops_admin", "display_name": "Ops Admin", "role": "admin" },
+                "observed_at_ms": now
+            }),
+            now,
+        )?;
+        drop(conn);
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_audit_retention",
+                "command_id": "cmd_audit_retention",
+                "module": "ctox",
+                "command_type": "ctox.business_os.audit.retention",
+                "record_id": "business-activity",
+                "status": "pending_sync",
+                "payload": {
+                    "retention_days": 1,
+                    "prune": true,
+                    "prompt": "operator command prompt must not persist"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "ops_admin",
+                        "display_name": "Ops Admin",
+                        "role": "user"
+                    }
+                }
+            }),
+        )?;
+
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        let result = outcome.pointer("/result").context("retention result")?;
+        assert_eq!(
+            result.get("artifact_schema").and_then(Value::as_str),
+            Some("ctox.business_os.audit_retention_export.v1")
+        );
+        assert_eq!(
+            result.get("exported_count").and_then(Value::as_i64),
+            Some(1)
+        );
+        assert_eq!(result.get("deleted_count").and_then(Value::as_i64), Some(1));
+        let artifact_path = result
+            .get("artifact_path")
+            .and_then(Value::as_str)
+            .context("artifact path")?;
+        let artifact_bytes = fs::read(root.join(artifact_path))?;
+        assert_eq!(
+            result.get("artifact_sha256").and_then(Value::as_str),
+            Some(hex_sha256(&artifact_bytes).as_str())
+        );
+        let artifact_text = String::from_utf8(artifact_bytes)?;
+        for forbidden in [
+            "do not export prompt secret",
+            "do not export selected secret",
+            "do-not-export-token",
+            "do not export body secret",
+            "do-not-export-record-payload",
+            "operator command prompt must not persist",
+        ] {
+            assert!(
+                !artifact_text.contains(forbidden),
+                "retention export leaked forbidden value {forbidden}"
+            );
+            assert!(
+                !outcome.to_string().contains(forbidden),
+                "retention command result leaked forbidden value {forbidden}"
+            );
+        }
+
+        let conn = open_store(root)?;
+        let expired_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_events WHERE record_id = 'cmd_expired_sensitive'",
+            [],
+            |row| row.get(0),
+        )?;
+        let current_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_events WHERE record_id = 'cmd_current'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(expired_count, 0);
+        assert_eq!(current_count, 1);
+        let stored = outbound_load_required(
+            &conn,
+            "business_commands",
+            "cmd_audit_retention",
+            "retention command",
+        )?;
+        assert_eq!(
+            stored
+                .pointer("/payload/retention_days")
+                .and_then(Value::as_i64),
+            Some(1)
+        );
+        assert!(stored.pointer("/payload/prompt").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn audit_retention_uses_persisted_native_policy_when_payload_omits_days() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "ops_admin", "admin")?;
+        save_business_os_audit_retention_policy(root, 1)?;
+        let conn = open_store(root)?;
+        let now = now_ms() as i64;
+        let expired_ms = now.saturating_sub(2 * 24 * 60 * 60 * 1000);
+        insert_business_event(
+            &conn,
+            "business_commands",
+            "cmd_policy_expired",
+            "business_os.policy.allowed",
+            serde_json::json!({
+                "event_type": "business_os.policy.allowed",
+                "command_id": "cmd_policy_expired",
+                "module": "ctox",
+                "actor": { "id": "ops_admin", "display_name": "Ops Admin", "role": "admin" },
+                "observed_at_ms": expired_ms
+            }),
+            expired_ms,
+        )?;
+        insert_business_event(
+            &conn,
+            "business_commands",
+            "cmd_policy_current",
+            "business_os.policy.allowed",
+            serde_json::json!({
+                "event_type": "business_os.policy.allowed",
+                "command_id": "cmd_policy_current",
+                "module": "ctox",
+                "actor": { "id": "ops_admin", "display_name": "Ops Admin", "role": "admin" },
+                "observed_at_ms": now
+            }),
+            now,
+        )?;
+        drop(conn);
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_audit_retention_policy_default",
+                "command_id": "cmd_audit_retention_policy_default",
+                "module": "ctox",
+                "command_type": "ctox.business_os.audit.retention",
+                "record_id": "business-activity",
+                "status": "pending_sync",
+                "payload": {
+                    "prune": false
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "ops_admin",
+                        "display_name": "Ops Admin",
+                        "role": "user"
+                    }
+                }
+            }),
+        )?;
+
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            outcome
+                .pointer("/result/retention_days")
+                .and_then(Value::as_i64),
+            Some(1)
+        );
+        assert_eq!(
+            outcome
+                .pointer("/result/exported_count")
+                .and_then(Value::as_i64),
+            Some(1)
+        );
+        let conn = open_store(root)?;
+        let stored = outbound_load_required(
+            &conn,
+            "business_commands",
+            "cmd_audit_retention_policy_default",
+            "retention command",
+        )?;
+        assert_eq!(
+            stored
+                .pointer("/payload/retention_days")
+                .and_then(Value::as_i64),
+            Some(1)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn audit_retention_policy_set_is_users_manage_gated_and_sanitized() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "ops_admin", "admin")?;
+        seed_business_user(root, "viewer", "user")?;
+
+        let denied = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_audit_retention_policy_denied",
+                "command_id": "cmd_audit_retention_policy_denied",
+                "module": "ctox",
+                "command_type": "ctox.business_os.audit.retention_policy.set",
+                "record_id": "business-activity",
+                "status": "pending_sync",
+                "payload": {
+                    "retention_days": 14,
+                    "prompt": "SECRET_AUDIT_POLICY_PROMPT"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "viewer",
+                        "display_name": "Viewer",
+                        "role": "admin"
+                    }
+                }
+            }),
+        )?;
+        assert_policy_denied(&denied, "users.manage", "workspace", None);
+        assert!(
+            crate::persistence::load_json_payload::<BusinessAuditRetentionPolicyPayload>(
+                root,
+                BUSINESS_OS_AUDIT_RETENTION_POLICY_PAYLOAD_KEY,
+            )?
+            .is_none()
+        );
+
+        let allowed = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_audit_retention_policy_allowed",
+                "command_id": "cmd_audit_retention_policy_allowed",
+                "module": "ctox",
+                "command_type": "ctox.business_os.audit.retention_policy.set",
+                "record_id": "business-activity",
+                "status": "pending_sync",
+                "payload": {
+                    "retention_days": 14,
+                    "prompt": "SECRET_AUDIT_POLICY_PROMPT"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "ops_admin",
+                        "display_name": "Ops Admin",
+                        "role": "user"
+                    }
+                }
+            }),
+        )?;
+
+        assert_eq!(
+            allowed.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            allowed
+                .pointer("/result/artifact_schema")
+                .and_then(Value::as_str),
+            Some("ctox.business_os.audit_retention_policy.v1")
+        );
+        assert_eq!(business_os_effective_audit_retention_days(root, None)?, 14);
+        let conn = open_store(root)?;
+        let stored = outbound_load_required(
+            &conn,
+            "business_commands",
+            "cmd_audit_retention_policy_allowed",
+            "retention policy command",
+        )?;
+        assert_eq!(
+            stored
+                .pointer("/payload/retention_days")
+                .and_then(Value::as_i64),
+            Some(14)
+        );
+        let allowed_text = serde_json::to_string(&allowed)?;
+        let stored_text = serde_json::to_string(&stored)?;
+        assert!(!allowed_text.contains("SECRET_AUDIT_POLICY_PROMPT"));
+        assert!(!stored_text.contains("SECRET_AUDIT_POLICY_PROMPT"));
+        Ok(())
+    }
+
+    #[test]
+    fn audit_retention_command_denies_team_member_without_exporting() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "viewer", "user")?;
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_audit_retention_denied",
+                "command_id": "cmd_audit_retention_denied",
+                "module": "ctox",
+                "command_type": "ctox.business_os.audit.retention",
+                "record_id": "business-activity",
+                "status": "pending_sync",
+                "payload": {
+                    "retention_days": 1,
+                    "prune": true
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "viewer",
+                        "display_name": "Viewer",
+                        "role": "admin"
+                    }
+                }
+            }),
+        )?;
+
+        assert_policy_denied(&outcome, "users.manage", "workspace", None);
+        assert!(!root.join(BUSINESS_AUDIT_EXPORT_DIR).exists());
+        Ok(())
+    }
+
+    #[test]
+    fn backup_restore_drill_copies_and_validates_isolated_restore() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        fs::create_dir_all(root.join("runtime"))?;
+        let installed_app_root = resolve_business_os_installed_app_root(root);
+        write_installed_inventory_module(&installed_app_root, "0.8.0")?;
+        let baseline_version = record_module_version(
+            root,
+            &installed_app_root,
+            "inventory",
+            "install",
+            "Initial inventory restore point",
+            "release-user",
+        )?
+        .context("baseline module version")?;
+        let baseline_version_id = baseline_version
+            .get("version_id")
+            .and_then(Value::as_str)
+            .context("baseline version id")?
+            .to_owned();
+        seed_business_user(root, "release-user", "user")?;
+        seed_permission_grant(
+            root,
+            "grant_inventory_release_for_backup_drill",
+            "user",
+            "release-user",
+            BusinessOsPermission::AppsRelease,
+            "module",
+            "inventory",
+        )?;
+        let mut policy = crate::business_os::mcp_channel::default_mcp_policy();
+        policy.audit_retention_days = 7;
+        crate::business_os::mcp_channel::save_mcp_policy(root, &policy)?;
+        save_business_os_audit_retention_policy(root, 14)?;
+
+        let key_escrow_before_drill = inspect_business_os_backup_key_escrow(root)?;
+        assert_eq!(
+            key_escrow_before_drill.get("ok").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            key_escrow_before_drill
+                .get("status")
+                .and_then(Value::as_str),
+            Some("portable_backup_key_missing")
+        );
+        assert_eq!(
+            key_escrow_before_drill
+                .pointer("/key/secret_value_revealed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+
+        let snapshot_dir = root
+            .join("runtime")
+            .join("business-os-source-snapshots")
+            .join("inventory");
+        fs::create_dir_all(&snapshot_dir)?;
+        fs::write(snapshot_dir.join("snap_1.source"), "SECRET_SOURCE_RAW")?;
+        fs::write(
+            snapshot_dir.join("snap_1.json"),
+            r#"{"snapshot_id":"snap_1","module_id":"inventory","path":"index.js"}"#,
+        )?;
+        let audit_export_dir = root.join(BUSINESS_AUDIT_EXPORT_DIR);
+        fs::create_dir_all(&audit_export_dir)?;
+        fs::write(
+            audit_export_dir.join("business-events-retention-test.json"),
+            r#"{"note":"SECRET_AUDIT_RAW"}"#,
+        )?;
+
+        let release = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_inventory_release_before_backup_drill",
+                "command_id": "cmd_inventory_release_before_backup_drill",
+                "module": "app-store",
+                "command_type": "ctox.module.release",
+                "record_id": "inventory",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "inventory",
+                    "target_version": "1.0.0",
+                    "release_channel": "team",
+                    "source_version_id": baseline_version_id,
+                    "rollback_version_id": baseline_version_id,
+                    "data_access_review": locked_inventory_data_review(),
+                    "notes": "release before backup drill"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "release-user",
+                        "display_name": "Release User"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            release.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        write_module_catalog_projection_to_rxdb(root)?;
+
+        let result = run_business_os_backup_restore_drill(root, Some("inventory"))?;
+        assert_eq!(result.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            result.get("artifact_schema").and_then(Value::as_str),
+            Some("ctox.business_os.backup_restore_drill_run.v1")
+        );
+        let remaining_boundaries = result
+            .get("remaining_boundaries")
+            .and_then(Value::as_array)
+            .context("remaining restore boundaries")?;
+        assert!(
+            remaining_boundaries.iter().any(|boundary| boundary
+                .as_str()
+                .unwrap_or_default()
+                .contains("browser IndexedDB unsynced local state")),
+            "restore drill must document the unsynced browser IndexedDB boundary"
+        );
+        assert!(
+            !remaining_boundaries.iter().any(|boundary| boundary
+                .as_str()
+                .unwrap_or_default()
+                .contains("active-root restore still requires")),
+            "active-root restore must be represented by the machine-readable runbook"
+        );
+        assert!(
+            remaining_boundaries.iter().any(|boundary| boundary
+                .as_str()
+                .unwrap_or_default()
+                .contains("hosted WebRTC resync")),
+            "restore drill must keep hosted WebRTC resync as an explicit boundary"
+        );
+        assert!(
+            !remaining_boundaries.iter().any(|boundary| boundary
+                .as_str()
+                .unwrap_or_default()
+                .contains("off-machine raw backup encryption")),
+            "portable/off-machine raw backup encryption must be represented by an encrypted export, not a remaining blocker"
+        );
+        assert!(
+            remaining_boundaries.iter().any(|boundary| boundary
+                .as_str()
+                .unwrap_or_default()
+                .contains("encryption key to be escrowed")),
+            "restore drill must keep separate key escrow as an operator boundary"
+        );
+        let manifest_path = result
+            .get("manifest_path")
+            .and_then(Value::as_str)
+            .context("manifest_path")?;
+        let manifest_bytes = fs::read(root.join(manifest_path))?;
+        let manifest: Value = serde_json::from_slice(&manifest_bytes)?;
+        assert_eq!(
+            result.get("manifest_sha256").and_then(Value::as_str),
+            Some(hex_sha256(&manifest_bytes).as_str())
+        );
+        assert_eq!(
+            manifest
+                .pointer("/raw_backup_security/support_attachment_allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            manifest
+                .pointer("/raw_backup_security/retention/retention_days")
+                .and_then(Value::as_i64),
+            Some(BUSINESS_OS_BACKUP_RAW_RETENTION_DAYS)
+        );
+        assert_eq!(
+            manifest
+                .pointer("/raw_backup_security/encryption/required_before_off_machine_transfer")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            manifest
+                .pointer("/raw_backup_security/encryption/status")
+                .and_then(Value::as_str),
+            Some("portable_encrypted_export_created")
+        );
+        assert_eq!(
+            manifest
+                .pointer("/raw_backup_security/encryption/portable_export_encrypted")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            manifest
+                .pointer("/manifest_integrity/status")
+                .and_then(Value::as_str),
+            Some("signed")
+        );
+        assert_eq!(
+            manifest
+                .pointer("/manifest_integrity/algorithm")
+                .and_then(Value::as_str),
+            Some("HMAC-SHA256")
+        );
+        assert_eq!(
+            manifest
+                .pointer("/manifest_integrity/signature_verified_before_write")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            manifest
+                .pointer("/manifest_integrity/signing_key/secret_value_in_manifest")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            manifest
+                .pointer("/restore_compatibility/supported_manifest_schema_versions/max")
+                .and_then(Value::as_i64),
+            Some(BUSINESS_OS_BACKUP_MANIFEST_SCHEMA_VERSION)
+        );
+        assert_eq!(
+            manifest
+                .pointer("/restore_compatibility/downgrade_restore_supported")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let signing_secret = crate::secrets::read_secret_value(
+            root,
+            BUSINESS_OS_SECRET_SCOPE,
+            BUSINESS_OS_BACKUP_MANIFEST_SIGNING_SECRET_NAME,
+        )?;
+        let portable_encryption_secret = crate::secrets::read_secret_value(
+            root,
+            BUSINESS_OS_SECRET_SCOPE,
+            BUSINESS_OS_BACKUP_PORTABLE_ENCRYPTION_SECRET_NAME,
+        )?;
+        let key_escrow_after_drill = inspect_business_os_backup_key_escrow(root)?;
+        assert_eq!(
+            key_escrow_after_drill.get("ok").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            key_escrow_after_drill.get("status").and_then(Value::as_str),
+            Some("ready_for_external_escrow_confirmation")
+        );
+        assert_eq!(
+            key_escrow_after_drill
+                .pointer("/key/exists_in_secret_store")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            key_escrow_after_drill
+                .pointer("/key/secret_value_revealed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            key_escrow_after_drill
+                .pointer("/external_escrow/status")
+                .and_then(Value::as_str),
+            Some("operator_confirmation_required")
+        );
+        let key_escrow_text = serde_json::to_string(&key_escrow_after_drill)?;
+        assert!(
+            !key_escrow_text.contains(&portable_encryption_secret),
+            "key escrow status must not reveal the portable backup encryption key"
+        );
+        let manifest_text = String::from_utf8(manifest_bytes.clone())?;
+        assert!(
+            !manifest_text.contains(&signing_secret),
+            "backup manifest must not inline the signing key"
+        );
+        assert!(
+            !manifest_text.contains(&portable_encryption_secret),
+            "backup manifest must not inline the portable backup encryption key"
+        );
+        let portable_export = manifest
+            .get("portable_encrypted_export")
+            .context("portable encrypted export")?;
+        assert_eq!(
+            portable_export.get("encrypted").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            portable_export.get("algorithm").and_then(Value::as_str),
+            Some("AES-256-GCM")
+        );
+        assert_eq!(
+            portable_export
+                .pointer("/key/secret_value_in_manifest")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            portable_export
+                .pointer("/key/escrow_required_for_disaster_restore")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            portable_export
+                .pointer("/plaintext/temp_plaintext_deleted")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            portable_export
+                .pointer("/plaintext/zip64_large_file_enabled")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            portable_export
+                .pointer("/verification/temp_verify_zip_deleted")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            portable_export
+                .pointer("/verification/plaintext_sha256_matches")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            portable_export
+                .pointer("/verification/plaintext_size_matches")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            portable_export
+                .pointer("/verification/zip_entries_match_manifest")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            portable_export
+                .pointer("/off_machine_transfer/raw_snapshot_transfer_allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let ciphertext_relative_path = portable_export
+            .pointer("/ciphertext/path")
+            .and_then(Value::as_str)
+            .context("portable ciphertext path")?;
+        let ciphertext_path = root.join(ciphertext_relative_path);
+        assert!(ciphertext_path.is_file());
+        let ciphertext_bytes = fs::read(&ciphertext_path)?;
+        assert_eq!(
+            portable_export
+                .pointer("/ciphertext/sha256")
+                .and_then(Value::as_str),
+            Some(hex_sha256(&ciphertext_bytes).as_str())
+        );
+        assert!(
+            !ciphertext_bytes
+                .windows(signing_secret.as_bytes().len())
+                .any(|window| window == signing_secret.as_bytes()),
+            "portable ciphertext must not contain the manifest signing key in plaintext"
+        );
+        let manifest_preflight =
+            inspect_business_os_backup_manifest(root, root.join(manifest_path).as_path())?;
+        assert_eq!(
+            manifest_preflight.get("ok").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            manifest_preflight
+                .pointer("/integrity/signature_valid")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            manifest_preflight
+                .pointer("/compatibility/allowed")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            manifest_preflight
+                .pointer("/portable_encrypted_export/ciphertext_sha256_matches")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let snapshots = result
+            .get("sqlite_snapshots")
+            .and_then(Value::as_array)
+            .context("sqlite snapshots")?;
+        assert!(
+            snapshots
+                .iter()
+                .filter(|snapshot| snapshot.get("copied").and_then(Value::as_bool) == Some(true))
+                .count()
+                >= 4,
+            "expected core, secret, native and RxDB sqlite snapshots"
+        );
+        assert!(
+            snapshots.iter().any(|snapshot| {
+                snapshot.get("kind").and_then(Value::as_str) == Some("ctox_secret_store")
+                    && snapshot.get("copied").and_then(Value::as_bool) == Some(true)
+            }),
+            "backup drill must snapshot the CTOX secret store for manifest verification"
+        );
+        let readiness = result
+            .pointer("/restore_validation/readiness/artifact/surfaces")
+            .context("restore readiness surfaces")?;
+        assert_eq!(
+            readiness
+                .pointer("/service_state_store/typed_mcp_policy_present")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            readiness
+                .pointer("/service_state_store/typed_audit_retention_policy_present")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            readiness
+                .pointer("/service_state_store/typed_audit_retention_policy_valid")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            readiness
+                .pointer("/service_state_store/native_audit_retention_days")
+                .and_then(Value::as_i64),
+            Some(14)
+        );
+        assert_eq!(
+            readiness
+                .pointer("/retention/business_events_effective_days")
+                .and_then(Value::as_i64),
+            Some(14)
+        );
+        let support_runbook = result
+            .pointer(
+                "/restore_validation/readiness/artifact/restore_validation/active_root_restore_runbook",
+            )
+            .context("support active-root restore runbook")?;
+        assert_eq!(
+            support_runbook
+                .get("destructive_restore_performed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            support_runbook
+                .get("quiesce_required")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            support_runbook
+                .get("restart_required")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(
+            support_runbook
+                .pointer("/operator_gates")
+                .and_then(Value::as_array)
+                .map(|gates| {
+                    gates.iter().any(|gate| {
+                        gate.get("id").and_then(Value::as_str) == Some("quiesce-business-os")
+                    })
+                })
+                .unwrap_or(false),
+            "runbook must require explicit Business-OS quiesce"
+        );
+        let cli_runbook = result
+            .pointer("/restore_validation/active_root_restore_runbook")
+            .context("CLI active-root restore runbook")?;
+        assert_eq!(
+            cli_runbook
+                .get("snapshot_manifest_sha256")
+                .and_then(Value::as_str),
+            result.get("manifest_sha256").and_then(Value::as_str)
+        );
+        assert_eq!(
+            cli_runbook
+                .get("staged_restore_root")
+                .and_then(Value::as_str),
+            result.get("restore_root").and_then(Value::as_str)
+        );
+        assert!(
+            cli_runbook
+                .pointer("/restore_targets")
+                .and_then(Value::as_array)
+                .map(|targets| {
+                    targets
+                        .iter()
+                        .any(|target| target.as_str() == Some("runtime/ctox-secrets.sqlite3"))
+                })
+                .unwrap_or(false),
+            "runbook must list secret store as active-restore target"
+        );
+        assert!(
+            cli_runbook
+                .pointer("/restore_targets")
+                .and_then(Value::as_array)
+                .map(|targets| {
+                    targets.iter().any(|target| {
+                        target.as_str() == Some("runtime/business-os/installed-modules")
+                    })
+                })
+                .unwrap_or(false),
+            "runbook must list installed app roots as active-restore target"
+        );
+        assert_eq!(
+            cli_runbook
+                .pointer("/manifest_requirements/signature_required")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            cli_runbook
+                .pointer("/manifest_requirements/portable_export_required")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            cli_runbook
+                .pointer("/raw_backup_handling/support_attachment_allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            cli_runbook
+                .pointer("/raw_backup_handling/portable_encrypted_export_required_for_off_machine_transfer")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            readiness
+                .pointer("/native_store/releases/release_count")
+                .and_then(Value::as_i64),
+            Some(1)
+        );
+        assert_eq!(
+            readiness
+                .pointer("/native_store/releases/rollback_target_count")
+                .and_then(Value::as_i64),
+            Some(1)
+        );
+        assert_eq!(
+            readiness
+                .pointer("/installed_modules/manifest_count")
+                .and_then(Value::as_i64),
+            Some(1)
+        );
+        assert!(
+            readiness
+                .pointer("/source_snapshots/file_count")
+                .and_then(Value::as_i64)
+                .unwrap_or_default()
+                >= 2
+        );
+        assert_eq!(
+            readiness
+                .pointer("/audit_exports/file_count")
+                .and_then(Value::as_i64),
+            Some(1)
+        );
+        assert_eq!(
+            readiness
+                .pointer("/rxdb_store/module_catalog_present")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let result_text = serde_json::to_string(&result)?;
+        assert!(
+            !result_text.contains("SECRET_SOURCE_RAW") && !result_text.contains("SECRET_AUDIT_RAW"),
+            "backup drill result must not inline raw backed-up content"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn backup_manifest_version_compatibility_blocks_cross_version_and_downgrade(
+    ) -> anyhow::Result<()> {
+        let current = env!("CARGO_PKG_VERSION");
+        let same = business_os_backup_restore_version_compatibility(
+            Some(BUSINESS_OS_BACKUP_MANIFEST_SCHEMA_VERSION),
+            Some(current),
+        );
+        assert_eq!(same.get("allowed").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            same.get("reason").and_then(Value::as_str),
+            Some("same_version_restore_supported")
+        );
+
+        let older = business_os_backup_restore_version_compatibility(
+            Some(BUSINESS_OS_BACKUP_MANIFEST_SCHEMA_VERSION),
+            Some("0.0.1"),
+        );
+        assert_eq!(older.get("allowed").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            older.get("reason").and_then(Value::as_str),
+            Some("cross_version_restore_requires_release_level_evidence")
+        );
+
+        let newer = business_os_backup_restore_version_compatibility(
+            Some(BUSINESS_OS_BACKUP_MANIFEST_SCHEMA_VERSION),
+            Some("999.0.0"),
+        );
+        assert_eq!(newer.get("allowed").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            newer.get("reason").and_then(Value::as_str),
+            Some("backup_created_by_newer_runtime_downgrade_blocked")
+        );
+        assert_eq!(
+            newer
+                .get("downgrade_restore_requested")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn backup_restore_drill_prune_deletes_expired_drill_dirs() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let backup_root = crate::paths::backup_dir(root);
+        fs::create_dir_all(&backup_root)?;
+
+        let expired = backup_root.join("business-os-drill-expired");
+        let fresh = backup_root.join("business-os-drill-fresh");
+        let missing_policy = backup_root.join("business-os-drill-missing-policy");
+        for dir in [&expired, &fresh, &missing_policy] {
+            fs::create_dir_all(dir)?;
+            fs::write(dir.join("payload.sqlite3"), "raw-drill-payload")?;
+        }
+        fs::write(
+            expired.join("manifest.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "raw_backup_security": {
+                    "retention": {
+                        "expires_at_ms": 1
+                    }
+                }
+            }))?,
+        )?;
+        fs::write(
+            fresh.join("manifest.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "raw_backup_security": {
+                    "retention": {
+                        "expires_at_ms": now_ms() as i64 + 86_400_000
+                    }
+                }
+            }))?,
+        )?;
+        fs::write(missing_policy.join("manifest.json"), "{}")?;
+
+        let dry_run = prune_business_os_backup_restore_drills(root, true)?;
+        assert_eq!(
+            dry_run.get("expired_drill_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            dry_run.get("deleted_drill_count").and_then(Value::as_u64),
+            Some(0)
+        );
+        assert!(expired.is_dir());
+        assert!(fresh.is_dir());
+        assert!(missing_policy.is_dir());
+
+        let applied = prune_business_os_backup_restore_drills(root, false)?;
+        assert_eq!(
+            applied.get("expired_drill_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            applied.get("deleted_drill_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert!(!expired.exists());
+        assert!(fresh.is_dir());
+        assert!(missing_policy.is_dir());
+        let items = applied
+            .get("items")
+            .and_then(Value::as_array)
+            .context("prune items")?;
+        assert!(
+            items.iter().any(|item| {
+                item.get("drill_id").and_then(Value::as_str)
+                    == Some("business-os-drill-missing-policy")
+                    && item
+                        .get("retention_policy_present")
+                        .and_then(Value::as_bool)
+                        == Some(false)
+                    && item.get("deleted").and_then(Value::as_bool) == Some(false)
+            }),
+            "drills without retention policy must be reported but not deleted"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn backup_restore_drill_command_is_runtime_gated_and_sanitized() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        fs::create_dir_all(root.join("runtime"))?;
+        let installed_app_root = resolve_business_os_installed_app_root(root);
+        write_installed_inventory_module(&installed_app_root, "0.8.0")?;
+        seed_business_user(root, "ops-admin", "admin")?;
+        seed_business_user(root, "viewer", "user")?;
+        write_module_catalog_projection_to_rxdb(root)?;
+
+        let denied = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_backup_restore_drill_denied",
+                "command_id": "cmd_backup_restore_drill_denied",
+                "module": "ctox",
+                "command_type": "ctox.business_os.backup.restore_drill",
+                "record_id": "business-os-backup",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "inventory",
+                    "prompt": "SECRET_BACKUP_DRILL_PROMPT"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "viewer",
+                        "display_name": "Viewer",
+                        "role": "admin"
+                    }
+                }
+            }),
+        )?;
+        assert_policy_denied(&denied, "runtime.manage", "workspace", None);
+        assert!(!root.join(BUSINESS_RESTORE_DRILL_EXPORT_DIR).exists());
+
+        let allowed = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_backup_restore_drill_allowed",
+                "command_id": "cmd_backup_restore_drill_allowed",
+                "module": "ctox",
+                "command_type": "ctox.business_os.backup.restore_drill",
+                "record_id": "business-os-backup",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "inventory",
+                    "prompt": "SECRET_BACKUP_DRILL_PROMPT"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "ops-admin",
+                        "display_name": "Ops Admin",
+                        "role": "user"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            allowed.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            allowed
+                .pointer("/result/artifact_schema")
+                .and_then(Value::as_str),
+            Some("ctox.business_os.backup_restore_drill.v1")
+        );
+        let artifact_path = allowed
+            .pointer("/result/artifact_path")
+            .and_then(Value::as_str)
+            .context("artifact path")?;
+        assert!(root.join(artifact_path).is_file());
+        let conn = open_store(root)?;
+        let stored = outbound_load_required(
+            &conn,
+            "business_commands",
+            "cmd_backup_restore_drill_allowed",
+            "backup restore drill command",
+        )?;
+        assert_eq!(
+            stored.pointer("/payload/module_id").and_then(Value::as_str),
+            Some("inventory")
+        );
+        let stored_text = serde_json::to_string(&stored)?;
+        assert!(
+            !stored_text.contains("SECRET_BACKUP_DRILL_PROMPT"),
+            "backup restore drill command projection must be sanitized"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_approval_decisions_write_business_event_audit() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "ops_admin", "admin")?;
+        let actor = serde_json::json!({
+            "actor": {
+                "id": "ops_admin",
+                "display_name": "Ops Admin"
+            }
+        });
+        let command = |id: &str, command_type: &str, record_id: &str, payload: Value| {
+            serde_json::json!({
+                "id": id,
+                "command_id": id,
+                "module": "outbound",
+                "command_type": command_type,
+                "record_id": record_id,
+                "status": "pending_sync",
+                "payload": payload,
+                "client_context": actor.clone()
+            })
+        };
+        let prepare_message = |suffix: &str| -> anyhow::Result<()> {
+            let message_id = format!("msg_{suffix}");
+            accept_rxdb_business_command(
+                root,
+                command(
+                    &format!("cmd_prepare_{suffix}"),
+                    "outbound.message.prepare",
+                    &message_id,
+                    serde_json::json!({
+                        "engagement_id": format!("eng_{suffix}"),
+                        "campaign_id": "camp_audit",
+                        "sender_account_id": "sender@example.com",
+                        "recipient_email": format!("{suffix}@example.com"),
+                        "subject": "Intro",
+                        "body_text": "Hello"
+                    }),
+                ),
+            )?;
+            accept_rxdb_business_command(
+                root,
+                command(
+                    &format!("cmd_request_{suffix}"),
+                    "outbound.message.request_approval",
+                    &message_id,
+                    serde_json::json!({
+                        "message_id": message_id
+                    }),
+                ),
+            )?;
+            Ok(())
+        };
+
+        prepare_message("approved")?;
+        prepare_message("rejected")?;
+        prepare_message("changes")?;
+
+        accept_rxdb_business_command(
+            root,
+            command(
+                "cmd_approve_audit",
+                "outbound.message.approve",
+                "msg_approved",
+                serde_json::json!({
+                    "message_id": "msg_approved",
+                    "approval_id": "approval_audit_approved"
+                }),
+            ),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            command(
+                "cmd_reject_audit",
+                "outbound.message.reject",
+                "msg_rejected",
+                serde_json::json!({
+                    "message_id": "msg_rejected",
+                    "approval_id": "approval_audit_rejected"
+                }),
+            ),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            command(
+                "cmd_changes_audit",
+                "outbound.message.request_changes",
+                "msg_changes",
+                serde_json::json!({
+                    "message_id": "msg_changes",
+                    "approval_id": "approval_audit_changes"
+                }),
+            ),
+        )?;
+
+        let conn = open_store(root)?;
+        let approved_payloads = business_event_payloads(
+            &conn,
+            "outbound_approvals",
+            "approval_audit_approved",
+            "business_os.external_approval.decided",
+        )?;
+        assert_eq!(approved_payloads.len(), 1);
+        let approved = &approved_payloads[0];
+        assert_eq!(
+            approved.pointer("/event_type").and_then(Value::as_str),
+            Some("business_os.external_approval.decided")
+        );
+        assert_eq!(
+            approved.pointer("/decision").and_then(Value::as_str),
+            Some("approved")
+        );
+        assert_eq!(
+            approved.pointer("/actor/id").and_then(Value::as_str),
+            Some("ops_admin")
+        );
+        assert_eq!(
+            approved.pointer("/message/id").and_then(Value::as_str),
+            Some("msg_approved")
+        );
+        assert_eq!(
+            approved
+                .pointer("/message/approval_status")
+                .and_then(Value::as_str),
+            Some("approved")
+        );
+        assert!(
+            approved.pointer("/message/body_text").is_none(),
+            "approval activity must not duplicate message body text"
+        );
+        let rejected_payloads = business_event_payloads(
+            &conn,
+            "outbound_approvals",
+            "approval_audit_rejected",
+            "business_os.external_approval.decided",
+        )?;
+        assert_eq!(
+            rejected_payloads[0]
+                .pointer("/decision")
+                .and_then(Value::as_str),
+            Some("rejected")
+        );
+        let changes_payloads = business_event_payloads(
+            &conn,
+            "outbound_approvals",
+            "approval_audit_changes",
+            "business_os.external_approval.decided",
+        )?;
+        assert_eq!(
+            changes_payloads[0]
+                .pointer("/decision")
+                .and_then(Value::as_str),
+            Some("changes_requested")
+        );
+        drop(conn);
+
+        let activity = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_activity_list_approvals",
+                "command_id": "cmd_activity_list_approvals",
+                "module": "ctox",
+                "command_type": "ctox.business_os.audit.list",
+                "record_id": "business-activity",
+                "status": "pending_sync",
+                "payload": {
+                    "limit": 10
+                },
+                "client_context": actor
+            }),
+        )?;
+        let events = activity
+            .pointer("/result/events")
+            .and_then(Value::as_array)
+            .context("expected activity events")?;
+        assert!(events.iter().any(|event| {
+            event.get("type").and_then(Value::as_str)
+                == Some("business_os.external_approval.decided")
+                && event.pointer("/payload/decision").and_then(Value::as_str) == Some("approved")
+        }));
+
+        Ok(())
+    }
+
+    #[test]
+    fn app_store_install_uninstall_allows_admin_policy_path() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        seed_business_user(root, "ops_admin", "admin")?;
+        let download_url = serve_test_zip_once(build_test_app_module_zip("inventory")?)?;
+        let actor = serde_json::json!({
+            "actor": {
+                "id": "ops_admin",
+                "display_name": "Ops Admin"
+            }
+        });
+
+        let install = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_admin_app_store_install",
+                "command_id": "cmd_admin_app_store_install",
+                "module": "app-store",
+                "command_type": "ctox.app_store.install",
+                "record_id": "inventory",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "inventory",
+                    "download_url": download_url,
+                    "source_path": "modules/inventory"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        assert_eq!(
+            install.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            install.pointer("/result/ok").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            install.pointer("/result/module_id").and_then(Value::as_str),
+            Some("inventory")
+        );
+        let installed_manifest = resolve_business_os_installed_app_root(root)
+            .join("installed-modules")
+            .join("inventory")
+            .join("module.json");
+        assert!(
+            installed_manifest.is_file(),
+            "expected installed manifest at {}",
+            installed_manifest.display()
+        );
+
+        let uninstall = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_admin_app_store_uninstall",
+                "command_id": "cmd_admin_app_store_uninstall",
+                "module": "app-store",
+                "command_type": "ctox.app_store.uninstall",
+                "record_id": "inventory",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "inventory"
+                },
+                "client_context": actor
+            }),
+        )?;
+        assert_eq!(
+            uninstall.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            uninstall.pointer("/result/ok").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(
+            !installed_manifest.exists(),
+            "expected installed manifest to be removed"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn runtime_settings_uses_ctox_proxy_for_minimax_when_configured() {
         let mut env_map = BTreeMap::new();
         env_map.insert(
@@ -17592,6 +28036,2191 @@ mod tests {
             runtime_settings_api_upstream_base_url("minimax", &env_map),
             "https://kunstmen.ctox.dev/api/fallback-llm"
         );
+    }
+
+    #[test]
+    fn module_release_rollback_command_uses_apps_rollback_without_modify_permission(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        let app_root = root.join("src/apps/business-os");
+        write_installed_inventory_module(&app_root, "1.1.0")?;
+        seed_business_user(root, "rollback-user", "user")?;
+        seed_permission_grant(
+            root,
+            "grant_inventory_rollback",
+            "user",
+            "rollback-user",
+            BusinessOsPermission::AppsRollback,
+            "module",
+            "inventory",
+        )?;
+
+        let now = now_ms() as i64;
+        let release_manifest = serde_json::json!({
+            "id": "inventory",
+            "title": "Inventory",
+            "version": "1.0.0",
+            "entry": "installed-modules/inventory/index.html",
+            "install_scope": "installed",
+            "collections": ["inventory_items"],
+            "lifecycle": {
+                "visibility_state": "team",
+                "audience": "team",
+                "release_channel": "team"
+            }
+        });
+        let conn = open_store(root)?;
+        conn.execute(
+            "INSERT INTO business_module_releases
+                (version_id, module_id, version, status, manifest_json, snapshot_json,
+                 created_by, created_at_ms, notes)
+             VALUES ('modrel_inventory_1', 'inventory', 1, 'released', ?1, '{}',
+                 'release-owner', ?2, 'release 1')",
+            params![serde_json::to_string(&release_manifest)?, now],
+        )?;
+        drop(conn);
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_inventory_release_rollback",
+                "command_id": "cmd_inventory_release_rollback",
+                "module": "app-store",
+                "command_type": "ctox.module.rollback",
+                "record_id": "inventory",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "inventory",
+                    "version_id": "modrel_inventory_1"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "rollback-user",
+                        "display_name": "Rollback User",
+                        "role": "admin"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        let manifest: Value = serde_json::from_str(&fs::read_to_string(
+            app_root.join("installed-modules/inventory/module.json"),
+        )?)?;
+        assert_eq!(
+            manifest.get("version").and_then(Value::as_str),
+            Some("1.0.0")
+        );
+
+        let conn = open_store(root)?;
+        let stored = outbound_load_required(
+            &conn,
+            "business_commands",
+            "cmd_inventory_release_rollback",
+            "command",
+        )?;
+        assert_eq!(
+            stored.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn module_rollback_commands_persist_failed_outcomes() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        let app_root = root.join("src/apps/business-os");
+        write_installed_inventory_module(&app_root, "1.1.0")?;
+        write_widget_module(&app_root, "export const v = 1;\n")?;
+        seed_business_user(root, "rollback-user", "user")?;
+        for (grant_id, module_id) in [
+            ("grant_inventory_rollback_fail", "inventory"),
+            ("grant_widget_rollback_fail", "widget"),
+        ] {
+            seed_permission_grant(
+                root,
+                grant_id,
+                "user",
+                "rollback-user",
+                BusinessOsPermission::AppsRollback,
+                "module",
+                module_id,
+            )?;
+        }
+
+        let release_outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_missing_release_rollback",
+                "command_id": "cmd_missing_release_rollback",
+                "module": "app-store",
+                "command_type": "ctox.module.rollback",
+                "record_id": "inventory",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "inventory",
+                    "version_id": "missing-release"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "rollback-user",
+                        "display_name": "Rollback User"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            release_outcome.get("ok").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            release_outcome.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            release_outcome
+                .pointer("/result/rollback_check")
+                .and_then(Value::as_str),
+            Some("failed")
+        );
+
+        let version_outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_missing_source_rollback",
+                "command_id": "cmd_missing_source_rollback",
+                "module": "app-store",
+                "command_type": "ctox.module.rollback_version",
+                "record_id": "widget",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "widget",
+                    "version_id": "missing-version"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "rollback-user",
+                        "display_name": "Rollback User"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            version_outcome.get("ok").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            version_outcome.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            version_outcome
+                .pointer("/result/rollback_check")
+                .and_then(Value::as_str),
+            Some("failed")
+        );
+
+        let conn = open_store(root)?;
+        for command_id in [
+            "cmd_missing_release_rollback",
+            "cmd_missing_source_rollback",
+        ] {
+            let stored = outbound_load_required(&conn, "business_commands", command_id, "command")?;
+            assert_eq!(stored.get("status").and_then(Value::as_str), Some("failed"));
+            assert!(
+                stored
+                    .pointer("/result/error")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .len()
+                    > 0
+            );
+        }
+        let source_rollback_payloads = business_event_payloads(
+            &conn,
+            "business_commands",
+            "cmd_missing_source_rollback",
+            "business_os.module.rollback.failed",
+        )?;
+        assert_eq!(source_rollback_payloads.len(), 1);
+        let source_rollback_payload = &source_rollback_payloads[0];
+        assert_eq!(
+            source_rollback_payload
+                .pointer("/summary/module_id")
+                .and_then(Value::as_str),
+            Some("widget")
+        );
+        assert_eq!(
+            source_rollback_payload
+                .pointer("/summary/version_id")
+                .and_then(Value::as_str),
+            Some("missing-version")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn module_source_rollback_version_uses_apps_rollback_without_modify_permission(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let app_root = root.join("src").join("apps").join("business-os");
+        fs::create_dir_all(&app_root)?;
+        fs::write(app_root.join("index.html"), b"<!doctype html>")?;
+        write_widget_module(&app_root, "export const v = 1;\n")?;
+        let baseline =
+            record_module_version(root, &app_root, "widget", "install", "Installed", "tester")?
+                .expect("baseline recorded");
+        let baseline_id = baseline
+            .get("version_id")
+            .and_then(Value::as_str)
+            .context("version_id")?
+            .to_owned();
+        fs::write(
+            app_root.join("modules/widget/index.js"),
+            "export const v = 2;\n",
+        )?;
+        seed_business_user(root, "rollback-user", "user")?;
+        seed_permission_grant(
+            root,
+            "grant_widget_rollback_only",
+            "user",
+            "rollback-user",
+            BusinessOsPermission::AppsRollback,
+            "module",
+            "widget",
+        )?;
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_widget_source_rollback",
+                "command_id": "cmd_widget_source_rollback",
+                "module": "app-store",
+                "command_type": "ctox.module.rollback_version",
+                "record_id": "widget",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "widget",
+                    "version_id": baseline_id
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "rollback-user",
+                        "display_name": "Rollback User",
+                        "role": "admin"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            fs::read_to_string(app_root.join("modules/widget/index.js"))?,
+            "export const v = 1;\n"
+        );
+        let conn = open_store(root)?;
+        let payloads = business_event_payloads(
+            &conn,
+            "business_commands",
+            "cmd_widget_source_rollback",
+            "business_os.module.rollback.succeeded",
+        )?;
+        assert_eq!(payloads.len(), 1);
+        let payload = &payloads[0];
+        assert_eq!(
+            payload.pointer("/actor/id").and_then(Value::as_str),
+            Some("rollback-user")
+        );
+        assert_eq!(
+            payload
+                .pointer("/summary/module_id")
+                .and_then(Value::as_str),
+            Some("widget")
+        );
+        assert_eq!(
+            payload
+                .pointer("/summary/version_id")
+                .and_then(Value::as_str),
+            Some(baseline_id.as_str())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn module_list_versions_requires_source_release_or_rollback_rights() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let app_root = root.join("src").join("apps").join("business-os");
+        fs::create_dir_all(&app_root)?;
+        fs::write(app_root.join("index.html"), b"<!doctype html>")?;
+        write_widget_module(&app_root, "export const v = 1;\n")?;
+        record_module_version(root, &app_root, "widget", "install", "Installed", "tester")?;
+
+        seed_business_user(root, "viewer", "user")?;
+        let denied = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_widget_versions_denied",
+                "command_id": "cmd_widget_versions_denied",
+                "module": "app-store",
+                "command_type": "ctox.module.list_versions",
+                "record_id": "widget",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "widget"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "viewer",
+                        "display_name": "Viewer",
+                        "role": "admin"
+                    }
+                }
+            }),
+        )?;
+        assert_policy_denied(&denied, "apps.source.view", "module", Some("widget"));
+
+        for (user_id, permission) in [
+            ("source-viewer", BusinessOsPermission::AppsSourceView),
+            ("release-user", BusinessOsPermission::AppsRelease),
+            ("rollback-user", BusinessOsPermission::AppsRollback),
+        ] {
+            seed_business_user(root, user_id, "user")?;
+            seed_permission_grant(
+                root,
+                &format!("grant_{user_id}_timeline"),
+                "user",
+                user_id,
+                permission,
+                "module",
+                "widget",
+            )?;
+            let command_id = format!("cmd_widget_versions_{user_id}");
+            let outcome = accept_rxdb_business_command(
+                root,
+                serde_json::json!({
+                    "id": command_id,
+                    "command_id": command_id,
+                    "module": "app-store",
+                    "command_type": "ctox.module.list_versions",
+                    "record_id": "widget",
+                    "status": "pending_sync",
+                    "payload": {
+                        "module_id": "widget"
+                    },
+                    "client_context": {
+                        "actor": {
+                            "id": user_id,
+                            "display_name": user_id
+                        }
+                    }
+                }),
+            )?;
+            assert_eq!(
+                outcome.get("status").and_then(Value::as_str),
+                Some("completed")
+            );
+            assert_eq!(
+                outcome
+                    .pointer("/result/versions")
+                    .and_then(Value::as_array)
+                    .map(Vec::len),
+                Some(1)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn module_release_rejects_data_review_access_outside_manifest() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        let app_root = root.join("src/apps/business-os");
+        write_installed_inventory_module(&app_root, "0.8.0")?;
+        seed_business_user(root, "release-user", "user")?;
+        seed_permission_grant(
+            root,
+            "grant_inventory_release_only",
+            "user",
+            "release-user",
+            BusinessOsPermission::AppsRelease,
+            "module",
+            "inventory",
+        )?;
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_inventory_release_bad_review",
+                "command_id": "cmd_inventory_release_bad_review",
+                "module": "app-store",
+                "command_type": "ctox.module.release",
+                "record_id": "inventory",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "inventory",
+                    "target_version": "1.0.0",
+                    "release_channel": "team",
+                    "data_access_review": {
+                        "completed": true,
+                        "collections": ["inventory_items"],
+                        "read_collections": ["customer_accounts"],
+                        "write_collections": ["inventory_items"],
+                        "reviewed_by": "release-user"
+                    },
+                    "notes": "release"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "release-user",
+                        "display_name": "Release User"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(outcome.get("ok").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            outcome
+                .pointer("/result/release_check")
+                .and_then(Value::as_str),
+            Some("failed")
+        );
+        assert!(outcome
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("read_collections"));
+        Ok(())
+    }
+
+    #[test]
+    fn module_release_stores_data_review_as_evidence_without_implied_grants() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        let app_root = root.join("src/apps/business-os");
+        write_installed_inventory_module(&app_root, "0.8.0")?;
+        seed_business_user(root, "release-user", "user")?;
+        seed_permission_grant(
+            root,
+            "grant_inventory_release_success",
+            "user",
+            "release-user",
+            BusinessOsPermission::AppsRelease,
+            "module",
+            "inventory",
+        )?;
+        seed_permission_grant(
+            root,
+            "grant_inventory_team_read",
+            "role",
+            "user",
+            BusinessOsPermission::DataRead,
+            "collection",
+            "inventory_items",
+        )?;
+        seed_permission_grant(
+            root,
+            "grant_inventory_team_write",
+            "role",
+            "user",
+            BusinessOsPermission::DataWrite,
+            "collection",
+            "inventory_items",
+        )?;
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_inventory_release_review_evidence",
+                "command_id": "cmd_inventory_release_review_evidence",
+                "module": "app-store",
+                "command_type": "ctox.module.release",
+                "record_id": "inventory",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "inventory",
+                    "target_version": "1.0.0",
+                    "release_channel": "team",
+                    "data_access_review": {
+                        "completed": true,
+                        "collections": ["inventory_items"],
+                        "read_collections": ["inventory_items"],
+                        "write_collections": ["inventory_items"],
+                        "reviewed_by": "release-user"
+                    },
+                    "notes": "release"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "release-user",
+                        "display_name": "Release User"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        let manifest: Value = serde_json::from_str(&fs::read_to_string(
+            app_root.join("installed-modules/inventory/module.json"),
+        )?)?;
+        assert_eq!(
+            manifest.get("version").and_then(Value::as_str),
+            Some("1.0.0")
+        );
+
+        let conn = open_store(root)?;
+        let snapshot_json: String = conn.query_row(
+            "SELECT snapshot_json
+             FROM business_module_releases
+             WHERE module_id = 'inventory' AND status = 'released'
+             ORDER BY version DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )?;
+        let snapshot: Value = serde_json::from_str(&snapshot_json)?;
+        assert_eq!(
+            snapshot
+                .pointer("/data_access_review/review_is_evidence_only")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            snapshot
+                .pointer("/data_access_review/grants_implied")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            snapshot
+                .pointer("/data_access_review/read_collections/0")
+                .and_then(Value::as_str),
+            Some("inventory_items")
+        );
+        assert_eq!(
+            snapshot
+                .pointer("/data_access_review/grant_reconciliation/read/0/status")
+                .and_then(Value::as_str),
+            Some("granted")
+        );
+        assert_eq!(
+            snapshot
+                .pointer("/data_access_review/grant_reconciliation/write/0/status")
+                .and_then(Value::as_str),
+            Some("granted")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn module_release_rejects_review_without_data_grant_or_locked_state() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        let app_root = root.join("src/apps/business-os");
+        write_installed_inventory_module(&app_root, "0.8.0")?;
+        seed_business_user(root, "release-user", "user")?;
+        seed_permission_grant(
+            root,
+            "grant_inventory_release_without_data",
+            "user",
+            "release-user",
+            BusinessOsPermission::AppsRelease,
+            "module",
+            "inventory",
+        )?;
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_inventory_release_missing_data_grant",
+                "command_id": "cmd_inventory_release_missing_data_grant",
+                "module": "app-store",
+                "command_type": "ctox.module.release",
+                "record_id": "inventory",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "inventory",
+                    "target_version": "1.0.0",
+                    "release_channel": "team",
+                    "data_access_review": {
+                        "completed": true,
+                        "collections": ["inventory_items"],
+                        "read_collections": ["inventory_items"],
+                        "write_collections": ["inventory_items"],
+                        "reviewed_by": "release-user"
+                    },
+                    "notes": "release"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "release-user",
+                        "display_name": "Release User"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(outcome.get("ok").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        let error = outcome
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            error.contains("data.read"),
+            "unexpected release error: {error}"
+        );
+        assert!(error.contains("explicit Team grant or locked-state behavior"));
+        Ok(())
+    }
+
+    #[test]
+    fn module_release_accepts_locked_review_without_implied_data_grants() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        let app_root = root.join("src/apps/business-os");
+        write_installed_inventory_module(&app_root, "0.8.0")?;
+        seed_business_user(root, "release-user", "user")?;
+        seed_permission_grant(
+            root,
+            "grant_inventory_release_locked_review",
+            "user",
+            "release-user",
+            BusinessOsPermission::AppsRelease,
+            "module",
+            "inventory",
+        )?;
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_inventory_release_locked_review",
+                "command_id": "cmd_inventory_release_locked_review",
+                "module": "app-store",
+                "command_type": "ctox.module.release",
+                "record_id": "inventory",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "inventory",
+                    "target_version": "1.0.0",
+                    "release_channel": "team",
+                    "data_access_review": {
+                        "completed": true,
+                        "collections": ["inventory_items"],
+                        "read_collections": ["inventory_items"],
+                        "write_collections": ["inventory_items"],
+                        "locked_read_collections": ["inventory_items"],
+                        "locked_write_collections": ["inventory_items"],
+                        "locked_state_behavior": "App renders a locked data state until explicit Team data grants exist.",
+                        "reviewed_by": "release-user"
+                    },
+                    "notes": "release"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "release-user",
+                        "display_name": "Release User"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        let conn = open_store(root)?;
+        let data_grants: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM business_permission_grants
+             WHERE permission IN (?1, ?2)",
+            params![
+                BusinessOsPermission::DataRead.as_str(),
+                BusinessOsPermission::DataWrite.as_str()
+            ],
+            |row| row.get(0),
+        )?;
+        assert_eq!(data_grants, 0, "release review must not create grants");
+        let snapshot_json: String = conn.query_row(
+            "SELECT snapshot_json
+             FROM business_module_releases
+             WHERE module_id = 'inventory' AND status = 'released'
+             ORDER BY version DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )?;
+        let snapshot: Value = serde_json::from_str(&snapshot_json)?;
+        assert_eq!(
+            snapshot
+                .pointer("/data_access_review/grant_reconciliation/read/0/status")
+                .and_then(Value::as_str),
+            Some("locked")
+        );
+        assert_eq!(
+            snapshot
+                .pointer("/data_access_review/grant_reconciliation/write/0/status")
+                .and_then(Value::as_str),
+            Some("locked")
+        );
+        assert_eq!(
+            snapshot
+                .pointer("/data_access_review/locked_state_behavior")
+                .and_then(Value::as_str),
+            Some("App renders a locked data state until explicit Team data grants exist.")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn module_release_command_replay_does_not_duplicate_release_state() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        let app_root = root.join("src/apps/business-os");
+        write_installed_inventory_module(&app_root, "0.8.0")?;
+        seed_business_user(root, "release-user", "user")?;
+        seed_permission_grant(
+            root,
+            "grant_inventory_release_replay",
+            "user",
+            "release-user",
+            BusinessOsPermission::AppsRelease,
+            "module",
+            "inventory",
+        )?;
+
+        let command = serde_json::json!({
+            "id": "cmd_inventory_release_replay",
+            "command_id": "cmd_inventory_release_replay",
+            "module": "app-store",
+            "command_type": "ctox.module.release",
+            "record_id": "inventory",
+            "status": "pending_sync",
+            "payload": {
+                "module_id": "inventory",
+                "target_version": "1.0.0",
+                "release_channel": "team",
+                "data_access_review": locked_inventory_data_review(),
+                "notes": "release replay"
+            },
+            "client_context": {
+                "actor": {
+                    "id": "release-user",
+                    "display_name": "Release User"
+                }
+            }
+        });
+        let first = accept_rxdb_business_command(root, command.clone())?;
+        let second = accept_rxdb_business_command(root, command)?;
+        assert_eq!(
+            first.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            second.get("already_accepted").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            second.pointer("/result/version_id").and_then(Value::as_str),
+            first.pointer("/result/version_id").and_then(Value::as_str)
+        );
+
+        let conn = open_store(root)?;
+        let release_rows: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_module_releases WHERE module_id = 'inventory'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            release_rows, 1,
+            "replayed command must not create release rows"
+        );
+        let manual_release_versions: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_module_versions
+             WHERE module_id = 'inventory' AND origin = 'manual_release'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            manual_release_versions, 1,
+            "replayed command must not create another source-version snapshot"
+        );
+        let release_events: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_events
+             WHERE collection = 'business_commands'
+               AND record_id = 'cmd_inventory_release_replay'
+               AND command_type = 'business_os.module.release.succeeded'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            release_events, 1,
+            "replayed command must not duplicate audit events"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn module_lifecycle_projection_repair_resyncs_releases_and_catalog() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        fs::create_dir_all(root.join("runtime"))?;
+        let installed_app_root = resolve_business_os_installed_app_root(root);
+        write_installed_inventory_module(&installed_app_root, "0.8.0")?;
+        seed_business_user(root, "release-user", "user")?;
+        seed_business_user(root, "ops-admin", "admin")?;
+        seed_permission_grant(
+            root,
+            "grant_inventory_release_for_repair",
+            "user",
+            "release-user",
+            BusinessOsPermission::AppsRelease,
+            "module",
+            "inventory",
+        )?;
+
+        let release = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_inventory_release_before_repair",
+                "command_id": "cmd_inventory_release_before_repair",
+                "module": "app-store",
+                "command_type": "ctox.module.release",
+                "record_id": "inventory",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "inventory",
+                    "target_version": "1.0.0",
+                    "release_channel": "team",
+                    "data_access_review": locked_inventory_data_review(),
+                    "notes": "release before repair"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "release-user",
+                        "display_name": "Release User"
+                    }
+                }
+            }),
+        )?;
+        let release_id = release
+            .pointer("/result/version_id")
+            .and_then(Value::as_str)
+            .context("release version id")?
+            .to_owned();
+
+        let rxdb_conn = Connection::open(rxdb_store_path(root))?;
+        let release_table = format!(
+            "ctox_business_os__business_module_releases__v{}",
+            rxdb_schema_version("business_module_releases")
+        );
+        rxdb_conn.execute(
+            &format!(
+                "CREATE TABLE {release_table} (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    revision TEXT,
+                    deleted INTEGER NOT NULL DEFAULT 0,
+                    lastWriteTime REAL NOT NULL DEFAULT 0,
+                    data TEXT NOT NULL
+                )"
+            ),
+            [],
+        )?;
+        drop(rxdb_conn);
+
+        let conn = open_store(root)?;
+        conn.execute(
+            "DELETE FROM business_records
+             WHERE collection = 'business_module_releases' AND record_id = ?1",
+            params![release_id.as_str()],
+        )?;
+        drop(conn);
+
+        let dry_run = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_inventory_repair_lifecycle_projection_dry_run",
+                "command_id": "cmd_inventory_repair_lifecycle_projection_dry_run",
+                "module": "ctox",
+                "command_type": "ctox.module.repair_lifecycle_projection",
+                "record_id": "inventory",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "inventory",
+                    "dry_run": true,
+                    "prompt": "SECRET_REPAIR_PROMPT"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "ops-admin",
+                        "display_name": "Ops Admin",
+                        "role": "team"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            dry_run.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            dry_run.pointer("/result/check").and_then(Value::as_str),
+            Some("dry_run")
+        );
+        assert_eq!(
+            dry_run.pointer("/result/dry_run").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            dry_run
+                .pointer("/result/release_projection_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            dry_run
+                .pointer("/result/actions/0/apply")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+
+        let conn = open_store(root)?;
+        assert!(
+            outbound_load_record(&conn, "business_module_releases", &release_id)?.is_none(),
+            "dry-run must not restore canonical business_records release projection"
+        );
+        let dry_run_command = outbound_load_record(
+            &conn,
+            "business_commands",
+            "cmd_inventory_repair_lifecycle_projection_dry_run",
+        )?
+        .context("expected dry-run command projection")?;
+        let dry_run_command_text = serde_json::to_string(&dry_run_command)?;
+        assert!(
+            !dry_run_command_text.contains("SECRET_REPAIR_PROMPT"),
+            "repair command projection must be sanitized"
+        );
+        drop(conn);
+        assert!(
+            load_rxdb_collection_record(root, "business_module_releases", &release_id)?.is_none(),
+            "dry-run must not restore RxDB release projection"
+        );
+
+        let repair = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_inventory_repair_lifecycle_projection",
+                "command_id": "cmd_inventory_repair_lifecycle_projection",
+                "module": "ctox",
+                "command_type": "ctox.module.repair_lifecycle_projection",
+                "record_id": "inventory",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "inventory"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "ops-admin",
+                        "display_name": "Ops Admin"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            repair.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            repair.pointer("/result/check").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            repair
+                .pointer("/result/actions/0/apply")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let conn = open_store(root)?;
+        assert!(
+            outbound_load_record(&conn, "business_module_releases", &release_id)?.is_some(),
+            "repair must restore canonical business_records release projection"
+        );
+        drop(conn);
+        let rxdb_release =
+            load_rxdb_collection_record(root, "business_module_releases", &release_id)?
+                .context("expected repaired RxDB release projection")?;
+        assert_eq!(
+            rxdb_release.get("version_id").and_then(Value::as_str),
+            Some(release_id.as_str())
+        );
+        let catalog =
+            load_rxdb_collection_record(root, "business_module_catalog", "module-catalog")?
+                .context("expected repaired module catalog projection")?;
+        let inventory = catalog
+            .get("modules")
+            .and_then(Value::as_array)
+            .and_then(|modules| {
+                modules
+                    .iter()
+                    .find(|module| module.get("id").and_then(Value::as_str) == Some("inventory"))
+            })
+            .context("inventory module projection")?;
+        assert_eq!(
+            inventory
+                .pointer("/lifecycle/release_status")
+                .and_then(Value::as_str),
+            Some("released")
+        );
+        assert_eq!(
+            inventory
+                .pointer("/lifecycle/release_state/current/version_id")
+                .and_then(Value::as_str),
+            Some(release_id.as_str())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn module_lifecycle_projection_repair_deactivates_stale_module_grants() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        fs::create_dir_all(root.join("runtime"))?;
+        let installed_app_root = resolve_business_os_installed_app_root(root);
+        write_installed_inventory_module(&installed_app_root, "1.0.0")?;
+        seed_business_user(root, "ops-admin", "admin")?;
+        seed_business_user(root, "team-user", "user")?;
+        seed_permission_grant(
+            root,
+            "grant_inventory_valid_modify",
+            "user",
+            "team-user",
+            BusinessOsPermission::AppsModify,
+            "module",
+            "inventory",
+        )?;
+        seed_permission_grant(
+            root,
+            "grant_ghost_stale_modify",
+            "user",
+            "team-user",
+            BusinessOsPermission::AppsModify,
+            "module",
+            "ghost-module",
+        )?;
+
+        let dry_run = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_repair_stale_grants_dry_run",
+                "command_id": "cmd_repair_stale_grants_dry_run",
+                "module": "ctox",
+                "command_type": "ctox.module.repair_lifecycle_projection",
+                "record_id": "ghost-module",
+                "status": "pending_sync",
+                "payload": {
+                    "dry_run": true,
+                    "repair_stale_grants": true,
+                    "prompt": "SECRET_GRANT_REPAIR_PROMPT"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "ops-admin",
+                        "display_name": "Ops Admin"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            dry_run
+                .pointer("/result/permission_grant_repair_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            dry_run
+                .pointer("/result/permission_grant_actions/0/grant_id")
+                .and_then(Value::as_str),
+            Some("grant_ghost_stale_modify")
+        );
+        assert_eq!(
+            dry_run
+                .pointer("/result/permission_grant_actions/0/apply")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let conn = open_store(root)?;
+        let dry_run_active: i64 = conn.query_row(
+            "SELECT active FROM business_permission_grants WHERE grant_id = 'grant_ghost_stale_modify'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(dry_run_active, 1, "dry-run must not deactivate stale grant");
+        let dry_run_command = outbound_load_record(
+            &conn,
+            "business_commands",
+            "cmd_repair_stale_grants_dry_run",
+        )?
+        .context("dry-run command projection")?;
+        let dry_run_command_text = serde_json::to_string(&dry_run_command)?;
+        assert!(
+            !dry_run_command_text.contains("SECRET_GRANT_REPAIR_PROMPT"),
+            "stale grant repair command projection must be sanitized"
+        );
+        drop(conn);
+
+        let repair = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_repair_stale_grants_apply",
+                "command_id": "cmd_repair_stale_grants_apply",
+                "module": "ctox",
+                "command_type": "ctox.module.repair_lifecycle_projection",
+                "record_id": "ghost-module",
+                "status": "pending_sync",
+                "payload": {
+                    "repair_stale_grants": true
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "ops-admin",
+                        "display_name": "Ops Admin"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            repair
+                .pointer("/result/permission_grant_repair_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            repair
+                .pointer("/result/permission_grant_actions/0/apply")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let conn = open_store(root)?;
+        let (ghost_active, ghost_reason): (i64, String) = conn.query_row(
+            "SELECT active, reason FROM business_permission_grants WHERE grant_id = 'grant_ghost_stale_modify'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(ghost_active, 0, "apply must deactivate stale grant");
+        assert!(
+            ghost_reason.contains("module scope no longer exists"),
+            "repair should explain why the grant was deactivated"
+        );
+        let valid_active: i64 = conn.query_row(
+            "SELECT active FROM business_permission_grants WHERE grant_id = 'grant_inventory_valid_modify'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(valid_active, 1, "valid module grants must remain active");
+        Ok(())
+    }
+
+    #[test]
+    fn module_lifecycle_projection_repair_clears_invalid_version_refs() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        fs::create_dir_all(root.join("runtime"))?;
+        let app_root = root.join("src/apps/business-os");
+        let installed_app_root = resolve_business_os_installed_app_root(root);
+        write_installed_inventory_module(&installed_app_root, "0.9.0")?;
+        seed_business_user(root, "ops-admin", "admin")?;
+
+        let baseline = record_module_version(
+            root,
+            &installed_app_root,
+            "inventory",
+            "install",
+            "Baseline source",
+            "ops-admin",
+        )?
+        .context("baseline module version")?;
+        let baseline_version_id = baseline
+            .get("version_id")
+            .and_then(Value::as_str)
+            .context("baseline version id")?
+            .to_owned();
+        let release = record_module_release(
+            root,
+            &app_root,
+            &chef_session(),
+            ModuleReleaseRequest {
+                module_id: "inventory".to_owned(),
+                target_version: "1.0.0".to_owned(),
+                release_channel: "team".to_owned(),
+                source_version_id: baseline_version_id.clone(),
+                rollback_version_id: baseline_version_id.clone(),
+                responsible_user_ids: Vec::new(),
+                data_access_review: locked_inventory_data_review(),
+                notes: "Release with source and rollback refs".to_owned(),
+            },
+        )?;
+        let release_id = release
+            .get("version_id")
+            .and_then(Value::as_str)
+            .context("release version id")?
+            .to_owned();
+
+        let conn = open_store(root)?;
+        conn.execute(
+            "DELETE FROM business_module_versions WHERE version_id = ?1",
+            params![baseline_version_id.as_str()],
+        )?;
+        drop(conn);
+
+        let dry_run = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_repair_invalid_version_refs_dry_run",
+                "command_id": "cmd_repair_invalid_version_refs_dry_run",
+                "module": "ctox",
+                "command_type": "ctox.module.repair_lifecycle_projection",
+                "record_id": "inventory",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "inventory",
+                    "dry_run": true,
+                    "repair_invalid_version_refs": true,
+                    "prompt": "SECRET_VERSION_REF_REPAIR_PROMPT"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "ops-admin",
+                        "display_name": "Ops Admin"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            dry_run
+                .pointer("/result/version_ref_repair_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        let fields = dry_run
+            .pointer("/result/version_ref_actions")
+            .and_then(Value::as_array)
+            .context("version ref dry-run actions")?
+            .iter()
+            .filter_map(|action| action.get("field").and_then(Value::as_str))
+            .collect::<HashSet<_>>();
+        assert!(fields.contains("source_version_id"));
+        assert!(fields.contains("rollback_version_id"));
+        assert_eq!(
+            dry_run
+                .pointer("/result/version_ref_actions/0/apply")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let conn = open_store(root)?;
+        let dry_snapshot_json: String = conn.query_row(
+            "SELECT snapshot_json FROM business_module_releases WHERE version_id = ?1",
+            params![release_id.as_str()],
+            |row| row.get(0),
+        )?;
+        let dry_snapshot: Value = serde_json::from_str(&dry_snapshot_json)?;
+        assert_eq!(
+            dry_snapshot
+                .get("source_version_id")
+                .and_then(Value::as_str),
+            Some(baseline_version_id.as_str()),
+            "dry-run must not clear invalid source refs"
+        );
+        let dry_run_command = outbound_load_record(
+            &conn,
+            "business_commands",
+            "cmd_repair_invalid_version_refs_dry_run",
+        )?
+        .context("invalid-version-ref dry-run command projection")?;
+        let dry_run_command_text = serde_json::to_string(&dry_run_command)?;
+        assert!(
+            !dry_run_command_text.contains("SECRET_VERSION_REF_REPAIR_PROMPT"),
+            "invalid version ref repair command projection must be sanitized"
+        );
+        drop(conn);
+
+        let repair = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_repair_invalid_version_refs_apply",
+                "command_id": "cmd_repair_invalid_version_refs_apply",
+                "module": "ctox",
+                "command_type": "ctox.module.repair_lifecycle_projection",
+                "record_id": "inventory",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "inventory",
+                    "repair_invalid_version_refs": true
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "ops-admin",
+                        "display_name": "Ops Admin"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            repair
+                .pointer("/result/version_ref_repair_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            repair
+                .pointer("/result/version_ref_actions/0/apply")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let conn = open_store(root)?;
+        let repaired_snapshot_json: String = conn.query_row(
+            "SELECT snapshot_json FROM business_module_releases WHERE version_id = ?1",
+            params![release_id.as_str()],
+            |row| row.get(0),
+        )?;
+        let repaired_snapshot: Value = serde_json::from_str(&repaired_snapshot_json)?;
+        assert_eq!(
+            repaired_snapshot
+                .get("source_version_id")
+                .and_then(Value::as_str),
+            Some("")
+        );
+        assert_eq!(
+            repaired_snapshot
+                .get("rollback_version_id")
+                .and_then(Value::as_str),
+            Some("")
+        );
+        let release_projection =
+            outbound_load_record(&conn, "business_module_releases", &release_id)?
+                .context("repaired release projection")?;
+        assert_eq!(
+            release_projection
+                .get("source_version_id")
+                .and_then(Value::as_str),
+            Some("")
+        );
+        assert_eq!(
+            release_projection
+                .get("rollback_version_id")
+                .and_then(Value::as_str),
+            Some("")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn module_lifecycle_projection_repair_assigns_orphan_private_app_responsibility(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        write_private_runtime_module(root, "private-orphan", "0.4.0")?;
+        seed_business_user(root, "ops-admin", "admin")?;
+
+        let dry_run = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_repair_orphan_private_app_dry_run",
+                "command_id": "cmd_repair_orphan_private_app_dry_run",
+                "module": "ctox",
+                "command_type": "ctox.module.repair_lifecycle_projection",
+                "record_id": "private-orphan",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "private-orphan",
+                    "dry_run": true,
+                    "repair_orphan_private_apps": true,
+                    "prompt": "SECRET_ORPHAN_REPAIR_PROMPT"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "ops-admin",
+                        "display_name": "Ops Admin"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            dry_run
+                .pointer("/result/orphan_private_app_repair_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            dry_run
+                .pointer("/result/orphan_private_app_actions/0/module_id")
+                .and_then(Value::as_str),
+            Some("private-orphan")
+        );
+        assert_eq!(
+            dry_run
+                .pointer("/result/orphan_private_app_actions/0/recovery_user_id")
+                .and_then(Value::as_str),
+            Some("ops-admin")
+        );
+        assert_eq!(
+            dry_run
+                .pointer("/result/orphan_private_app_actions/0/apply")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let conn = open_store(root)?;
+        let dry_responsibility_rows: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM business_module_acl
+             WHERE module_id = 'private-orphan'
+               AND role = 'founder'
+               AND active = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            dry_responsibility_rows, 0,
+            "dry-run must not assign orphan private app responsibility"
+        );
+        let dry_run_command = outbound_load_record(
+            &conn,
+            "business_commands",
+            "cmd_repair_orphan_private_app_dry_run",
+        )?
+        .context("orphan dry-run command projection")?;
+        let dry_run_command_text = serde_json::to_string(&dry_run_command)?;
+        assert!(
+            !dry_run_command_text.contains("SECRET_ORPHAN_REPAIR_PROMPT"),
+            "orphan repair command projection must be sanitized"
+        );
+        drop(conn);
+
+        let repair = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_repair_orphan_private_app_apply",
+                "command_id": "cmd_repair_orphan_private_app_apply",
+                "module": "ctox",
+                "command_type": "ctox.module.repair_lifecycle_projection",
+                "record_id": "private-orphan",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "private-orphan",
+                    "repair_orphan_private_apps": true
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "ops-admin",
+                        "display_name": "Ops Admin"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            repair
+                .pointer("/result/orphan_private_app_repair_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            repair
+                .pointer("/result/orphan_private_app_actions/0/apply")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let conn = open_store(root)?;
+        let recovery_active: i64 = conn.query_row(
+            "SELECT active
+             FROM business_module_acl
+             WHERE module_id = 'private-orphan'
+               AND user_id = 'ops-admin'
+               AND role = 'founder'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(recovery_active, 1);
+        let recovery_payloads = business_event_payloads(
+            &conn,
+            "business_module_acl",
+            "private-orphan:founder:ops-admin",
+            "business_os.app_responsibility.changed",
+        )?;
+        assert_eq!(recovery_payloads.len(), 1);
+        assert_eq!(
+            recovery_payloads[0]
+                .pointer("/actor/id")
+                .and_then(Value::as_str),
+            Some("ops-admin")
+        );
+        drop(conn);
+
+        let catalog = module_catalog_for_rxdb(root)?;
+        let private_app = catalog
+            .get("modules")
+            .and_then(Value::as_array)
+            .and_then(|modules| {
+                modules.iter().find(|module| {
+                    module.get("id").and_then(Value::as_str) == Some("private-orphan")
+                })
+            })
+            .context("expected private orphan app in catalog")?;
+        assert!(private_app
+            .pointer("/lifecycle/responsible_user_ids")
+            .and_then(Value::as_array)
+            .context("expected responsible ids")?
+            .iter()
+            .any(|id| id.as_str() == Some("ops-admin")));
+        Ok(())
+    }
+
+    #[test]
+    fn module_release_rejects_stale_source_and_rollback_version_refs_before_manifest_write(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        let app_root = root.join("src/apps/business-os");
+        write_installed_inventory_module(&app_root, "0.8.0")?;
+        let manifest_path = app_root.join("installed-modules/inventory/module.json");
+        let original_manifest = fs::read_to_string(&manifest_path)?;
+        seed_business_user(root, "release-user", "user")?;
+        seed_permission_grant(
+            root,
+            "grant_inventory_release_stale_refs",
+            "user",
+            "release-user",
+            BusinessOsPermission::AppsRelease,
+            "module",
+            "inventory",
+        )?;
+
+        for (command_id, field_name) in [
+            ("cmd_inventory_release_stale_source", "source_version_id"),
+            (
+                "cmd_inventory_release_stale_rollback",
+                "rollback_version_id",
+            ),
+        ] {
+            let mut payload = serde_json::json!({
+                "module_id": "inventory",
+                "target_version": "1.0.0",
+                "release_channel": "team",
+                "data_access_review": locked_inventory_data_review(),
+                "notes": "release"
+            });
+            payload.as_object_mut().expect("payload object").insert(
+                field_name.to_string(),
+                Value::String("missing-version".to_string()),
+            );
+            let outcome = accept_rxdb_business_command(
+                root,
+                serde_json::json!({
+                    "id": command_id,
+                    "command_id": command_id,
+                    "module": "app-store",
+                    "command_type": "ctox.module.release",
+                    "record_id": "inventory",
+                    "status": "pending_sync",
+                    "payload": payload,
+                    "client_context": {
+                        "actor": {
+                            "id": "release-user",
+                            "display_name": "Release User"
+                        }
+                    }
+                }),
+            )?;
+            assert_eq!(outcome.get("ok").and_then(Value::as_bool), Some(false));
+            assert_eq!(
+                outcome.get("status").and_then(Value::as_str),
+                Some("failed")
+            );
+            assert!(outcome
+                .pointer("/result/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains(field_name));
+            assert_eq!(fs::read_to_string(&manifest_path)?, original_manifest);
+        }
+
+        let conn = open_store(root)?;
+        let release_rows: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_module_releases WHERE module_id = 'inventory'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(release_rows, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn module_release_restores_manifest_when_release_db_write_fails() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        let app_root = root.join("src/apps/business-os");
+        write_installed_inventory_module(&app_root, "0.8.0")?;
+        let manifest_path = app_root.join("installed-modules/inventory/module.json");
+        let original_manifest = fs::read_to_string(&manifest_path)?;
+        seed_business_user(root, "release-user", "user")?;
+        seed_permission_grant(
+            root,
+            "grant_inventory_release_db_fail",
+            "user",
+            "release-user",
+            BusinessOsPermission::AppsRelease,
+            "module",
+            "inventory",
+        )?;
+        let conn = open_store(root)?;
+        conn.execute_batch(
+            "CREATE TRIGGER fail_inventory_release_insert
+             BEFORE INSERT ON business_module_releases
+             BEGIN
+               SELECT RAISE(FAIL, 'injected release insert failure');
+             END;",
+        )?;
+        drop(conn);
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_inventory_release_db_fail",
+                "command_id": "cmd_inventory_release_db_fail",
+                "module": "app-store",
+                "command_type": "ctox.module.release",
+                "record_id": "inventory",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "inventory",
+                    "target_version": "1.0.0",
+                    "release_channel": "team",
+                    "data_access_review": locked_inventory_data_review(),
+                    "notes": "release"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "release-user",
+                        "display_name": "Release User"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(outcome.get("ok").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert!(outcome
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("injected release insert failure"));
+        assert_eq!(fs::read_to_string(&manifest_path)?, original_manifest);
+
+        let conn = open_store(root)?;
+        let release_rows: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_module_releases WHERE module_id = 'inventory'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(release_rows, 0);
+        let stored = outbound_load_required(
+            &conn,
+            "business_commands",
+            "cmd_inventory_release_db_fail",
+            "command",
+        )?;
+        assert_eq!(stored.get("status").and_then(Value::as_str), Some("failed"));
+        Ok(())
+    }
+
+    #[test]
+    fn module_release_rollback_restores_manifest_when_status_update_fails() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        let app_root = root.join("src/apps/business-os");
+        write_installed_inventory_module(&app_root, "1.1.0")?;
+        let manifest_path = app_root.join("installed-modules/inventory/module.json");
+        let original_manifest = fs::read_to_string(&manifest_path)?;
+        seed_business_user(root, "rollback-user", "user")?;
+        seed_permission_grant(
+            root,
+            "grant_inventory_rollback_db_fail",
+            "user",
+            "rollback-user",
+            BusinessOsPermission::AppsRollback,
+            "module",
+            "inventory",
+        )?;
+
+        let now = now_ms() as i64;
+        let release_manifest = serde_json::json!({
+            "id": "inventory",
+            "title": "Inventory",
+            "version": "1.0.0",
+            "entry": "installed-modules/inventory/index.html",
+            "install_scope": "installed",
+            "collections": ["inventory_items"],
+            "lifecycle": {
+                "visibility_state": "team",
+                "audience": "team",
+                "release_channel": "team"
+            }
+        });
+        let conn = open_store(root)?;
+        conn.execute(
+            "INSERT INTO business_module_releases
+                (version_id, module_id, version, status, manifest_json, snapshot_json,
+                 created_by, created_at_ms, notes)
+             VALUES ('modrel_inventory_db_fail', 'inventory', 1, 'rolled_back', ?1, '{}',
+                 'release-owner', ?2, 'release 1')",
+            params![serde_json::to_string(&release_manifest)?, now],
+        )?;
+        conn.execute_batch(
+            "CREATE TRIGGER fail_inventory_release_status_update
+             BEFORE UPDATE OF status ON business_module_releases
+             BEGIN
+               SELECT RAISE(FAIL, 'injected release status failure');
+             END;",
+        )?;
+        drop(conn);
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_inventory_rollback_db_fail",
+                "command_id": "cmd_inventory_rollback_db_fail",
+                "module": "app-store",
+                "command_type": "ctox.module.rollback",
+                "record_id": "inventory",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "inventory",
+                    "version_id": "modrel_inventory_db_fail"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "rollback-user",
+                        "display_name": "Rollback User"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(outcome.get("ok").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert!(outcome
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("injected release status failure"));
+        assert_eq!(fs::read_to_string(&manifest_path)?, original_manifest);
+
+        let conn = open_store(root)?;
+        let status: String = conn.query_row(
+            "SELECT status FROM business_module_releases WHERE version_id = 'modrel_inventory_db_fail'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(status, "rolled_back");
+        Ok(())
+    }
+
+    #[test]
+    fn module_release_and_rollback_write_business_event_audit() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        let app_root = root.join("src/apps/business-os");
+        write_installed_inventory_module(&app_root, "0.8.0")?;
+        seed_business_user(root, "release-user", "user")?;
+        seed_business_user(root, "ops-admin", "admin")?;
+        seed_permission_grant(
+            root,
+            "grant_inventory_release_audit",
+            "user",
+            "release-user",
+            BusinessOsPermission::AppsRelease,
+            "module",
+            "inventory",
+        )?;
+        seed_permission_grant(
+            root,
+            "grant_inventory_rollback_audit",
+            "user",
+            "release-user",
+            BusinessOsPermission::AppsRollback,
+            "module",
+            "inventory",
+        )?;
+
+        let release = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_inventory_release_audit",
+                "command_id": "cmd_inventory_release_audit",
+                "module": "app-store",
+                "command_type": "ctox.module.release",
+                "record_id": "inventory",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "inventory",
+                    "target_version": "1.0.0",
+                    "release_channel": "team",
+                    "data_access_review": locked_inventory_data_review(),
+                    "notes": "release audit"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "release-user",
+                        "display_name": "Release User"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            release.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        let release_version_id = release
+            .pointer("/result/version_id")
+            .and_then(Value::as_str)
+            .context("release version id")?
+            .to_owned();
+
+        let rollback = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_inventory_rollback_audit",
+                "command_id": "cmd_inventory_rollback_audit",
+                "module": "app-store",
+                "command_type": "ctox.module.rollback",
+                "record_id": "inventory",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "inventory",
+                    "version_id": release_version_id
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "release-user",
+                        "display_name": "Release User"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            rollback.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+
+        let conn = open_store(root)?;
+        let release_payloads = business_event_payloads(
+            &conn,
+            "business_commands",
+            "cmd_inventory_release_audit",
+            "business_os.module.release.succeeded",
+        )?;
+        assert_eq!(release_payloads.len(), 1);
+        let release_payload = &release_payloads[0];
+        assert_eq!(
+            release_payload.pointer("/actor/id").and_then(Value::as_str),
+            Some("release-user")
+        );
+        assert_eq!(
+            release_payload
+                .pointer("/summary/module_id")
+                .and_then(Value::as_str),
+            Some("inventory")
+        );
+        assert_eq!(
+            release_payload
+                .pointer("/summary/version_id")
+                .and_then(Value::as_str),
+            Some(release_version_id.as_str())
+        );
+        assert_eq!(
+            release_payload
+                .pointer("/summary/target_version")
+                .and_then(Value::as_str),
+            Some("1.0.0")
+        );
+        assert_eq!(
+            release_payload
+                .pointer("/summary/data_access_review/grant_reconciliation/read/0/status")
+                .and_then(Value::as_str),
+            Some("locked")
+        );
+
+        let rollback_payloads = business_event_payloads(
+            &conn,
+            "business_commands",
+            "cmd_inventory_rollback_audit",
+            "business_os.module.rollback.succeeded",
+        )?;
+        assert_eq!(rollback_payloads.len(), 1);
+        let rollback_payload = &rollback_payloads[0];
+        assert_eq!(
+            rollback_payload
+                .pointer("/summary/module_id")
+                .and_then(Value::as_str),
+            Some("inventory")
+        );
+        assert_eq!(
+            rollback_payload
+                .pointer("/summary/version_id")
+                .and_then(Value::as_str),
+            Some(release_version_id.as_str())
+        );
+        assert!(
+            rollback_payload
+                .pointer("/summary/rolled_back_at_ms")
+                .and_then(Value::as_i64)
+                .unwrap_or_default()
+                > 0
+        );
+
+        let activity = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_release_activity_list",
+                "command_id": "cmd_release_activity_list",
+                "module": "ctox",
+                "command_type": "ctox.business_os.audit.list",
+                "record_id": "business-activity",
+                "status": "pending_sync",
+                "payload": {
+                    "limit": 20
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "ops-admin",
+                        "display_name": "Ops Admin"
+                    }
+                }
+            }),
+        )?;
+        let events = activity
+            .pointer("/result/events")
+            .and_then(Value::as_array)
+            .context("activity events")?;
+        assert!(events.iter().any(|event| {
+            event.get("type").and_then(Value::as_str)
+                == Some("business_os.module.release.succeeded")
+                && event.pointer("/payload/command_id").and_then(Value::as_str)
+                    == Some("cmd_inventory_release_audit")
+        }));
+        assert!(events.iter().any(|event| {
+            event.get("type").and_then(Value::as_str)
+                == Some("business_os.module.rollback.succeeded")
+                && event.pointer("/payload/command_id").and_then(Value::as_str)
+                    == Some("cmd_inventory_rollback_audit")
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn module_release_failed_validation_writes_business_event_audit() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        let app_root = root.join("src/apps/business-os");
+        write_installed_inventory_module(&app_root, "0.8.0")?;
+        seed_business_user(root, "release-user", "user")?;
+        seed_permission_grant(
+            root,
+            "grant_inventory_release_failed_audit",
+            "user",
+            "release-user",
+            BusinessOsPermission::AppsRelease,
+            "module",
+            "inventory",
+        )?;
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_inventory_release_failed_audit",
+                "command_id": "cmd_inventory_release_failed_audit",
+                "module": "app-store",
+                "command_type": "ctox.module.release",
+                "record_id": "inventory",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "inventory",
+                    "target_version": "1.0.0",
+                    "release_channel": "team",
+                    "data_access_review": {
+                        "completed": true,
+                        "collections": ["inventory_items"],
+                        "read_collections": ["inventory_items"],
+                        "write_collections": ["inventory_items"],
+                        "reviewed_by": "release-user"
+                    },
+                    "notes": "release should fail without data grants"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "release-user",
+                        "display_name": "Release User"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(outcome.get("ok").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+
+        let conn = open_store(root)?;
+        let payloads = business_event_payloads(
+            &conn,
+            "business_commands",
+            "cmd_inventory_release_failed_audit",
+            "business_os.module.release.failed",
+        )?;
+        assert_eq!(payloads.len(), 1);
+        let payload = &payloads[0];
+        assert_eq!(
+            payload.pointer("/actor/id").and_then(Value::as_str),
+            Some("release-user")
+        );
+        assert_eq!(
+            payload.pointer("/summary/ok").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            payload
+                .pointer("/summary/release_check")
+                .and_then(Value::as_str),
+            Some("failed")
+        );
+        assert!(payload
+            .pointer("/summary/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("explicit Team grant or locked-state behavior"));
+        assert_eq!(
+            payload
+                .pointer("/summary/data_access_review/read_collections/0")
+                .and_then(Value::as_str),
+            Some("inventory_items")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn module_release_rollback_failed_outcome_writes_business_event_audit() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        let app_root = root.join("src/apps/business-os");
+        write_installed_inventory_module(&app_root, "1.1.0")?;
+        seed_business_user(root, "rollback-user", "user")?;
+        seed_permission_grant(
+            root,
+            "grant_inventory_failed_rollback_audit",
+            "user",
+            "rollback-user",
+            BusinessOsPermission::AppsRollback,
+            "module",
+            "inventory",
+        )?;
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_inventory_rollback_failed_audit",
+                "command_id": "cmd_inventory_rollback_failed_audit",
+                "module": "app-store",
+                "command_type": "ctox.module.rollback",
+                "record_id": "inventory",
+                "status": "pending_sync",
+                "payload": {
+                    "module_id": "inventory",
+                    "version_id": "missing-release"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "rollback-user",
+                        "display_name": "Rollback User"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(outcome.get("ok").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+
+        let conn = open_store(root)?;
+        let payloads = business_event_payloads(
+            &conn,
+            "business_commands",
+            "cmd_inventory_rollback_failed_audit",
+            "business_os.module.rollback.failed",
+        )?;
+        assert_eq!(payloads.len(), 1);
+        let payload = &payloads[0];
+        assert_eq!(
+            payload.pointer("/actor/id").and_then(Value::as_str),
+            Some("rollback-user")
+        );
+        assert_eq!(
+            payload.pointer("/summary/ok").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            payload
+                .pointer("/summary/rollback_check")
+                .and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            payload
+                .pointer("/summary/version_id")
+                .and_then(Value::as_str),
+            Some("missing-release")
+        );
+        assert!(payload
+            .pointer("/summary/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("Query returned no rows"));
+        Ok(())
     }
 
     #[test]
@@ -17619,6 +30248,8 @@ mod tests {
             .and_then(Value::as_str)
             .unwrap()
             .to_string();
+        let baseline_manifest =
+            fs::read_to_string(app_root.join("modules").join("widget").join("module.json"))?;
 
         // Two edits coalesce into a single open working version.
         save_widget_source(root, "index.js", "export const v = 2;\n")?;
@@ -17644,6 +30275,11 @@ mod tests {
             .join("widget")
             .join("extra.js")
             .is_file());
+        save_widget_source(
+            root,
+            "module.json",
+            r#"{"id":"widget","title":"Broken Widget","entry":"modules/widget/index.html","version":"0.9.0"}"#,
+        )?;
 
         // Roll back to the install baseline.
         let session = chef_session();
@@ -17662,6 +30298,12 @@ mod tests {
         let restored =
             fs::read_to_string(app_root.join("modules").join("widget").join("index.js"))?;
         assert_eq!(restored, "export const v = 1;\n");
+        let restored_manifest =
+            fs::read_to_string(app_root.join("modules").join("widget").join("module.json"))?;
+        assert_eq!(
+            restored_manifest, baseline_manifest,
+            "module.json must be restored together with source files"
+        );
         assert!(!app_root
             .join("modules")
             .join("widget")
@@ -19369,7 +32011,7 @@ mod tests {
         )?;
         drop(conn);
 
-        let error = accept_rxdb_business_command(
+        let denied = accept_rxdb_business_command(
             root,
             serde_json::json!({
                 "id": "cmd_spoof_runtime_admin",
@@ -19394,12 +32036,27 @@ mod tests {
                     }
                 }
             }),
-        )
-        .expect_err("client-side role claims must not grant admin rights");
+        )?;
 
-        assert!(
-            error.to_string().contains("chef or admin role required"),
-            "unexpected error: {error}"
+        assert_eq!(denied.get("ok").and_then(Value::as_bool), Some(false));
+        assert_eq!(denied.get("status").and_then(Value::as_str), Some("failed"));
+        assert_eq!(
+            denied
+                .pointer("/result/policy_decision/permission")
+                .and_then(Value::as_str),
+            Some("runtime.manage")
+        );
+        assert_eq!(
+            denied
+                .pointer("/result/policy_decision/scope_type")
+                .and_then(Value::as_str),
+            Some("workspace")
+        );
+        assert_eq!(
+            denied
+                .pointer("/result/policy_decision/reason_code")
+                .and_then(Value::as_str),
+            Some("role_or_scope_denied")
         );
         Ok(())
     }
@@ -24057,15 +36714,16 @@ mod tests {
         let temp = tempdir()?;
         let root = temp.path();
         let app_root = root.join("src/apps/business-os");
+        let installed_app_root = resolve_business_os_installed_app_root(root);
         fs::create_dir_all(app_root.join("modules/ctox"))?;
-        fs::create_dir_all(app_root.join("installed-modules/research"))?;
+        fs::create_dir_all(installed_app_root.join("installed-modules/research"))?;
         fs::write(app_root.join("index.html"), "<!doctype html>")?;
         fs::write(
             app_root.join("modules/ctox/module.json"),
             r#"{"id":"ctox","title":"CTOX","entry":"modules/ctox/index.html","install_scope":"core"}"#,
         )?;
         fs::write(
-            app_root.join("installed-modules/research/module.json"),
+            installed_app_root.join("installed-modules/research/module.json"),
             r#"{"id":"research","title":"Web Research","entry":"installed-modules/research/index.html","install_scope":"installed"}"#,
         )?;
 
@@ -24174,6 +36832,924 @@ mod tests {
         assert!(modules
             .iter()
             .any(|module| module.get("id").and_then(Value::as_str) == Some("research")));
+        Ok(())
+    }
+
+    #[test]
+    fn business_app_semver_major_matches_browser_plain_semver_contract() {
+        assert_eq!(parse_business_app_semver_major("0.2.3"), Some(0));
+        assert_eq!(parse_business_app_semver_major("1.0.0"), Some(1));
+        assert_eq!(parse_business_app_semver_major("10.20.30"), Some(10));
+        assert_eq!(parse_business_app_semver_major(""), None);
+        assert_eq!(parse_business_app_semver_major("1"), None);
+        assert_eq!(parse_business_app_semver_major("1.0"), None);
+        assert_eq!(parse_business_app_semver_major("1.0.0.0"), None);
+        assert_eq!(parse_business_app_semver_major("v1.0.0"), None);
+        assert_eq!(parse_business_app_semver_major("01.0.0"), None);
+        assert_eq!(parse_business_app_semver_major("1.02.0"), None);
+        assert_eq!(parse_business_app_semver_major("1.0.03"), None);
+        assert_eq!(parse_business_app_semver_major("1.0.0-beta.1"), None);
+    }
+
+    #[test]
+    fn module_catalog_projects_runtime_app_lifecycle_backfill() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let app_root = root.join("src/apps/business-os");
+        let bootstrap_conn = open_store(root)?;
+        drop(bootstrap_conn);
+        let installed_app_root = resolve_business_os_installed_app_root(root);
+        fs::create_dir_all(app_root.join("modules/ctox"))?;
+        fs::create_dir_all(installed_app_root.join("installed-modules/private-zero"))?;
+        fs::create_dir_all(installed_app_root.join("installed-modules/legacy-preview-zero"))?;
+        fs::create_dir_all(installed_app_root.join("installed-modules/modify-only-zero"))?;
+        fs::create_dir_all(installed_app_root.join("installed-modules/team-one"))?;
+        fs::create_dir_all(installed_app_root.join("installed-modules/missing-version"))?;
+        fs::create_dir_all(installed_app_root.join("installed-modules/invalid-semver"))?;
+        fs::create_dir_all(installed_app_root.join("installed-modules/restricted-team"))?;
+        fs::write(app_root.join("index.html"), "<!doctype html>")?;
+        fs::write(
+            app_root.join("modules/ctox/module.json"),
+            r#"{"id":"ctox","title":"CTOX","entry":"modules/ctox/index.html","install_scope":"core"}"#,
+        )?;
+        fs::write(
+            installed_app_root.join("installed-modules/private-zero/module.json"),
+            r#"{"id":"private-zero","title":"Private Zero","version":"0.2.0","entry":"installed-modules/private-zero/index.html","install_scope":"installed"}"#,
+        )?;
+        fs::write(
+            installed_app_root.join("installed-modules/legacy-preview-zero/module.json"),
+            r#"{"id":"legacy-preview-zero","title":"Legacy Preview Zero","version":"0.4.0","entry":"installed-modules/legacy-preview-zero/index.html","install_scope":"installed","lifecycle":{"visibility_state":"preview","preview_user_ids":["legacy-preview-user","legacy-preview-user","legacy-pregranted-user"]}}"#,
+        )?;
+        fs::write(
+            installed_app_root.join("installed-modules/modify-only-zero/module.json"),
+            r#"{"id":"modify-only-zero","title":"Modify Only Zero","version":"0.3.0","entry":"installed-modules/modify-only-zero/index.html","install_scope":"installed"}"#,
+        )?;
+        fs::write(
+            installed_app_root.join("installed-modules/team-one/module.json"),
+            r#"{"id":"team-one","title":"Team One","version":"1.0.0","entry":"installed-modules/team-one/index.html","install_scope":"installed","lifecycle":{"preview_user_ids":["team-preview-user"]}}"#,
+        )?;
+        fs::write(
+            installed_app_root.join("installed-modules/missing-version/module.json"),
+            r#"{"id":"missing-version","title":"Missing Version","entry":"installed-modules/missing-version/index.html","install_scope":"installed","lifecycle":{"preview_user_ids":["missing-preview-user"]}}"#,
+        )?;
+        fs::write(
+            installed_app_root.join("installed-modules/invalid-semver/module.json"),
+            r#"{"id":"invalid-semver","title":"Invalid Semver","version":"v1.0.0","entry":"installed-modules/invalid-semver/index.html","install_scope":"installed","lifecycle":{"preview_user_ids":["invalid-preview-user"]}}"#,
+        )?;
+        fs::write(
+            installed_app_root.join("installed-modules/restricted-team/module.json"),
+            r#"{"id":"restricted-team","title":"Restricted Team","version":"1.1.0","entry":"installed-modules/restricted-team/index.html","install_scope":"installed","lifecycle":{"visibility_state":"restricted","audience":"restricted","preview_user_ids":["restricted-preview-user"]}}"#,
+        )?;
+        seed_module_founder_acl(root, "private-zero", "app-owner")?;
+        seed_permission_grant(
+            root,
+            "grant_preview_private_zero",
+            "user",
+            "preview-user",
+            BusinessOsPermission::AppsView,
+            "module",
+            "private-zero",
+        )?;
+        seed_permission_grant(
+            root,
+            "grant_modify_only_zero",
+            "user",
+            "modify-user",
+            BusinessOsPermission::AppsModify,
+            "module",
+            "modify-only-zero",
+        )?;
+        seed_permission_grant(
+            root,
+            "grant_existing_legacy_preview",
+            "user",
+            "legacy-pregranted-user",
+            BusinessOsPermission::AppsView,
+            "module",
+            "legacy-preview-zero",
+        )?;
+
+        let conn = open_store(root)?;
+        let now = now_ms() as i64;
+        conn.execute(
+            "INSERT INTO business_module_versions
+                (version_id, module_id, seq, origin, label, bundle_sha256, files_json,
+                 sealed, created_by, created_at_ms, updated_at_ms)
+             VALUES ('modver_private_zero_1', 'private-zero', 1, 'install', 'Installed',
+                 'sha-private-zero', '[]', 1, 'creator-user', ?1, ?1)",
+            params![now],
+        )?;
+        conn.execute(
+            "INSERT INTO business_module_releases
+                (version_id, module_id, version, status, manifest_json, snapshot_json,
+                 created_by, created_at_ms, notes)
+             VALUES ('modrel_team_one_1', 'team-one', 1, 'released',
+                 '{\"id\":\"team-one\"}', '{}', 'release-owner', ?1, 'test release')",
+            params![now + 1],
+        )?;
+        drop(conn);
+
+        let catalog = module_catalog_for_rxdb(root)?;
+        let modules = catalog
+            .get("modules")
+            .and_then(Value::as_array)
+            .context("catalog modules")?;
+        let module = |id: &str| -> &Value {
+            modules
+                .iter()
+                .find(|module| module.get("id").and_then(Value::as_str) == Some(id))
+                .unwrap_or_else(|| panic!("missing module {id}"))
+        };
+
+        assert_eq!(
+            module("ctox")
+                .pointer("/lifecycle/visibility_state")
+                .and_then(Value::as_str),
+            Some("packaged")
+        );
+        assert_eq!(
+            module("private-zero")
+                .pointer("/lifecycle/visibility_state")
+                .and_then(Value::as_str),
+            Some("preview")
+        );
+        assert_eq!(
+            module("private-zero")
+                .pointer("/lifecycle/current_semver")
+                .and_then(Value::as_str),
+            Some("0.2.0")
+        );
+        assert_eq!(
+            module("private-zero")
+                .pointer("/lifecycle/creator_user_id")
+                .and_then(Value::as_str),
+            Some("creator-user")
+        );
+        assert!(module("private-zero")
+            .pointer("/lifecycle/responsible_user_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|user| user.as_str() == Some("app-owner")));
+        assert!(module("private-zero")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|grant| grant.as_str() == Some("grant_preview_private_zero")));
+        assert!(module("private-zero")
+            .pointer("/lifecycle/preview_user_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|user| user.as_str() == Some("preview-user")));
+        let legacy_preview_grant_id =
+            legacy_preview_audience_grant_id("legacy-preview-zero", "legacy-preview-user");
+        assert_eq!(
+            module("legacy-preview-zero")
+                .pointer("/lifecycle/visibility_state")
+                .and_then(Value::as_str),
+            Some("preview")
+        );
+        assert!(module("legacy-preview-zero")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|grant| grant.as_str() == Some(legacy_preview_grant_id.as_str())));
+        assert_eq!(
+            module("legacy-preview-zero")
+                .pointer("/lifecycle/preview_user_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .filter(|user| user.as_str() == Some("legacy-preview-user"))
+                .count(),
+            1
+        );
+        assert!(module("legacy-preview-zero")
+            .pointer("/lifecycle/preview_user_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|user| user.as_str() == Some("legacy-pregranted-user")));
+        assert!(module("legacy-preview-zero")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|grant| grant.as_str() == Some("grant_existing_legacy_preview")));
+        assert_eq!(
+            module("modify-only-zero")
+                .pointer("/lifecycle/visibility_state")
+                .and_then(Value::as_str),
+            Some("private")
+        );
+        assert!(module("modify-only-zero")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .is_empty());
+        assert!(module("modify-only-zero")
+            .pointer("/lifecycle/preview_user_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            module("team-one")
+                .pointer("/lifecycle/visibility_state")
+                .and_then(Value::as_str),
+            Some("team")
+        );
+        assert_eq!(
+            module("team-one")
+                .pointer("/lifecycle/public")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            module("team-one")
+                .pointer("/lifecycle/last_release_id")
+                .and_then(Value::as_str),
+            Some("modrel_team_one_1")
+        );
+        assert_eq!(
+            module("missing-version")
+                .pointer("/lifecycle/visibility_state")
+                .and_then(Value::as_str),
+            Some("private")
+        );
+        assert_eq!(
+            module("missing-version")
+                .pointer("/lifecycle/warning_code")
+                .and_then(Value::as_str),
+            Some("invalid_semver")
+        );
+        assert!(module("missing-version")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            module("invalid-semver")
+                .pointer("/lifecycle/visibility_state")
+                .and_then(Value::as_str),
+            Some("private")
+        );
+        assert_eq!(
+            module("invalid-semver").pointer("/lifecycle/current_semver"),
+            Some(&Value::Null)
+        );
+        assert_eq!(
+            module("invalid-semver")
+                .pointer("/lifecycle/warning_code")
+                .and_then(Value::as_str),
+            Some("invalid_semver")
+        );
+        assert!(module("invalid-semver")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            module("restricted-team")
+                .pointer("/lifecycle/visibility_state")
+                .and_then(Value::as_str),
+            Some("restricted")
+        );
+        assert_eq!(
+            module("restricted-team")
+                .pointer("/lifecycle/public")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let restricted_preview_grant_id =
+            legacy_preview_audience_grant_id("restricted-team", "restricted-preview-user");
+        assert!(module("restricted-team")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|grant| grant.as_str() == Some(restricted_preview_grant_id.as_str())));
+        assert_eq!(
+            catalog
+                .pointer("/governance/lifecycle/team-one/visibility_state")
+                .and_then(Value::as_str),
+            Some("team")
+        );
+        let conn = open_store(root)?;
+        let legacy_grants: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM business_permission_grants
+             WHERE grant_id = ?1
+               AND subject_type = 'user'
+               AND subject_id = 'legacy-preview-user'
+               AND permission = ?2
+               AND scope_type = 'module'
+               AND scope_id = 'legacy-preview-zero'
+               AND active = 1",
+            params![
+                legacy_preview_grant_id.as_str(),
+                BusinessOsPermission::AppsView.as_str()
+            ],
+            |row| row.get(0),
+        )?;
+        assert_eq!(legacy_grants, 1);
+        let generated_pregranted_grants: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM business_permission_grants
+             WHERE grant_id = ?1",
+            params![legacy_preview_audience_grant_id(
+                "legacy-preview-zero",
+                "legacy-pregranted-user"
+            )],
+            |row| row.get(0),
+        )?;
+        assert_eq!(generated_pregranted_grants, 0);
+        let unexpected_legacy_visibility_grants: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM business_permission_grants
+             WHERE permission = ?1
+               AND scope_type = 'module'
+               AND scope_id IN ('missing-version', 'invalid-semver', 'team-one')",
+            params![BusinessOsPermission::AppsView.as_str()],
+            |row| row.get(0),
+        )?;
+        assert_eq!(unexpected_legacy_visibility_grants, 0);
+        let unexpected_data_grants: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM business_permission_grants
+             WHERE permission IN (?1, ?2)",
+            params![
+                BusinessOsPermission::DataRead.as_str(),
+                BusinessOsPermission::DataWrite.as_str()
+            ],
+            |row| row.get(0),
+        )?;
+        assert_eq!(unexpected_data_grants, 0);
+        drop(conn);
+
+        let _catalog_again = module_catalog_for_rxdb(root)?;
+        let conn = open_store(root)?;
+        let legacy_grants_after_second_projection: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM business_permission_grants
+             WHERE subject_type = 'user'
+               AND subject_id = 'legacy-preview-user'
+               AND permission = ?1
+               AND scope_type = 'module'
+               AND scope_id = 'legacy-preview-zero'",
+            params![BusinessOsPermission::AppsView.as_str()],
+            |row| row.get(0),
+        )?;
+        assert_eq!(legacy_grants_after_second_projection, 1);
+        let restricted_grants_after_second_projection: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM business_permission_grants
+             WHERE grant_id = ?1
+               AND subject_type = 'user'
+               AND subject_id = 'restricted-preview-user'
+               AND permission = ?2
+               AND scope_type = 'module'
+               AND scope_id = 'restricted-team'
+               AND active = 1",
+            params![
+                restricted_preview_grant_id.as_str(),
+                BusinessOsPermission::AppsView.as_str()
+            ],
+            |row| row.get(0),
+        )?;
+        assert_eq!(restricted_grants_after_second_projection, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn business_os_why_command_explains_private_app_policy_and_data_access() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        fs::create_dir_all(root.join("runtime"))?;
+        let installed_app_root = resolve_business_os_installed_app_root(root);
+        write_installed_inventory_module(&installed_app_root, "0.9.0")?;
+        seed_business_user(root, "global_admin", "admin")?;
+        seed_business_user(root, "qa", "user")?;
+        seed_permission_grant(
+            root,
+            "grant_qa_inventory_view",
+            "user",
+            "qa",
+            BusinessOsPermission::AppsView,
+            "module",
+            "inventory",
+        )?;
+        seed_permission_grant(
+            root,
+            "grant_team_inventory_read",
+            "role",
+            "user",
+            BusinessOsPermission::DataRead,
+            "collection",
+            "inventory_items",
+        )?;
+
+        let admin = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_why_admin_private_inventory",
+                "module": "ctox",
+                "type": "ctox.business_os.why",
+                "payload": {
+                    "module_id": "inventory",
+                    "prompt": "DO_NOT_LEAK_PROMPT",
+                    "token": "DO_NOT_LEAK_TOKEN"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "global_admin",
+                        "display_name": "Global Admin"
+                    },
+                    "selected_text": "DO_NOT_LEAK_SELECTED_TEXT"
+                }
+            }),
+        )?;
+        assert_eq!(
+            admin.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            admin
+                .pointer("/result/decisions/visibility/allowed")
+                .and_then(Value::as_bool),
+            Some(false),
+            "admin authority may manage a private 0.x app but must not make it team-visible"
+        );
+        assert_eq!(
+            admin
+                .pointer("/result/decisions/open/allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            admin
+                .pointer("/result/decisions/modify/allowed")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            admin
+                .pointer("/result/decisions/visibility/source")
+                .and_then(Value::as_str),
+            Some("lifecycle_non_public")
+        );
+        let admin_json = serde_json::to_string(&admin)?;
+        assert!(!admin_json.contains("DO_NOT_LEAK"));
+        let conn = open_store(root)?;
+        let stored_admin = outbound_load_required(
+            &conn,
+            "business_commands",
+            "cmd_why_admin_private_inventory",
+            "command",
+        )?;
+        let stored_admin_json = serde_json::to_string(&stored_admin)?;
+        assert!(
+            !stored_admin_json.contains("DO_NOT_LEAK"),
+            "why command projections must persist a sanitized payload and context"
+        );
+        drop(conn);
+
+        let qa = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_why_qa_private_inventory",
+                "module": "ctox",
+                "type": "ctox.business_os.why",
+                "payload": {
+                    "module_id": "inventory"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "qa",
+                        "display_name": "QA"
+                    }
+                }
+            }),
+        )?;
+        assert_eq!(
+            qa.pointer("/result/decisions/visibility/allowed")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            qa.pointer("/result/decisions/visibility/source")
+                .and_then(Value::as_str),
+            Some("explicit_app_view_or_app_responsibility")
+        );
+        assert_eq!(
+            qa.pointer("/result/decisions/modify/allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            qa.pointer("/result/data_access/areas/0/collection")
+                .and_then(Value::as_str),
+            Some("inventory_items")
+        );
+        assert_eq!(
+            qa.pointer("/result/data_access/areas/0/read_decision/allowed")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            qa.pointer("/result/data_access/areas/0/read_decision/source")
+                .and_then(Value::as_str),
+            Some("collection_policy")
+        );
+        assert_eq!(
+            qa.pointer("/result/data_access/areas/0/write_decision/allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            qa.pointer("/result/data_access/areas/0/write_decision/source")
+                .and_then(Value::as_str),
+            Some("denied_collection_and_module_policy")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn business_os_support_diagnostics_export_redacts_payloads_and_has_schema() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        fs::create_dir_all(root.join("runtime"))?;
+        let installed_app_root = resolve_business_os_installed_app_root(root);
+        write_installed_inventory_module(&installed_app_root, "0.9.0")?;
+        seed_business_user(root, "support_admin", "admin")?;
+
+        let conn = open_store(root)?;
+        insert_business_event(
+            &conn,
+            "business_commands",
+            "cmd_sensitive_policy_denial",
+            "business_os.policy.denied",
+            serde_json::json!({
+                "event_type": "business_os.policy.denied",
+                "command_id": "cmd_sensitive_policy_denial",
+                "module": "inventory",
+                "command_type": "ctox.module.modify",
+                "record_id": "inventory",
+                "status": "failed",
+                "summary": "DO_NOT_LEAK_SUMMARY",
+                "actor": {
+                    "id": "support_admin",
+                    "display_name": "Support Admin",
+                    "role": "admin",
+                    "trusted": true
+                },
+                "client_context": {
+                    "source": "support-test",
+                    "visible_scope": {
+                        "module_id": "inventory",
+                        "record_id": "inventory",
+                        "selected_text": "DO_NOT_LEAK_SELECTED_TEXT"
+                    },
+                    "prompt": "DO_NOT_LEAK_PROMPT"
+                },
+                "policy_decision": {
+                    "allowed": false,
+                    "permission": "apps.modify",
+                    "scope_type": "module",
+                    "scope_id": "inventory",
+                    "reason_code": "role_or_scope_denied",
+                    "display_reason": "No app modify grant",
+                    "requires_approval": false,
+                    "audit_level": "decision"
+                },
+                "message_body": "DO_NOT_LEAK_MESSAGE_BODY",
+                "record_payload": {
+                    "secret": "DO_NOT_LEAK_SECRET"
+                },
+                "token": "DO_NOT_LEAK_TOKEN"
+            }),
+            now_ms() as i64,
+        )?;
+        drop(conn);
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_support_diagnostics_export",
+                "module": "ctox",
+                "type": "ctox.business_os.support.export_diagnostics",
+                "payload": {
+                    "module_id": "inventory",
+                    "limit": 10,
+                    "include_why": true,
+                    "prompt": "DO_NOT_LEAK_EXPORT_PROMPT",
+                    "token": "DO_NOT_LEAK_EXPORT_TOKEN"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "support_admin",
+                        "display_name": "Support Admin"
+                    },
+                    "selected_text": "DO_NOT_LEAK_EXPORT_SELECTION"
+                }
+            }),
+        )?;
+
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            outcome.pointer("/result/kind").and_then(Value::as_str),
+            Some("business_os_support_diagnostics_artifact")
+        );
+        assert_eq!(
+            outcome
+                .pointer("/result/artifact_schema")
+                .and_then(Value::as_str),
+            Some("ctox.business_os.support_diagnostics.v1")
+        );
+        assert_eq!(
+            outcome
+                .pointer("/result/redaction/profile")
+                .and_then(Value::as_str),
+            Some("support-safe-v1")
+        );
+        assert_eq!(
+            outcome
+                .pointer("/result/redaction/raw_payloads_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            outcome
+                .pointer("/result/diagnostics/why/kind")
+                .and_then(Value::as_str),
+            Some("business_os_why_diagnostics_summary")
+        );
+        let events = outcome
+            .pointer("/result/activity/events")
+            .and_then(Value::as_array)
+            .context("support artifact activity events are required")?;
+        assert!(
+            events.iter().any(|event| event
+                .pointer("/policy_decision/permission")
+                .and_then(Value::as_str)
+                == Some("apps.modify")),
+            "support artifact must include the redacted policy denial summary"
+        );
+        assert!(
+            events.iter().any(|event| event
+                .pointer("/client_scope/module_id")
+                .and_then(Value::as_str)
+                == Some("inventory")),
+            "support artifact must keep safe scope identifiers"
+        );
+        assert!(
+            outcome
+                .pointer("/result/activity/events/0/payload")
+                .is_none(),
+            "support artifact must not expose raw event payload"
+        );
+
+        let outcome_json = serde_json::to_string(&outcome)?;
+        assert!(!outcome_json.contains("DO_NOT_LEAK"));
+
+        let conn = open_store(root)?;
+        let stored = outbound_load_required(
+            &conn,
+            "business_commands",
+            "cmd_support_diagnostics_export",
+            "command",
+        )?;
+        let stored_json = serde_json::to_string(&stored)?;
+        assert!(
+            !stored_json.contains("DO_NOT_LEAK"),
+            "support export command projection must be sanitized"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn business_os_why_command_explains_team_visible_one_x_apps() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        write_private_runtime_module(root, "team-one", "1.0.0")?;
+        seed_business_user(root, "team_member", "user")?;
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_why_team_one",
+                "module": "ctox",
+                "type": "ctox.business_os.why",
+                "payload": {
+                    "module_id": "team-one"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "team_member",
+                        "display_name": "Team Member"
+                    }
+                }
+            }),
+        )?;
+
+        assert_eq!(
+            outcome
+                .pointer("/result/lifecycle/visibility_state")
+                .and_then(Value::as_str),
+            Some("team")
+        );
+        assert_eq!(
+            outcome
+                .pointer("/result/decisions/visibility/allowed")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            outcome
+                .pointer("/result/decisions/visibility/source")
+                .and_then(Value::as_str),
+            Some("lifecycle_public_team_version")
+        );
+        assert_eq!(
+            outcome
+                .pointer("/result/decisions/modify/allowed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn module_catalog_projects_release_state_data_access_and_rollback_target() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        let app_root = root.join("src/apps/business-os");
+        fs::create_dir_all(root.join("runtime"))?;
+        let installed_app_root = resolve_business_os_installed_app_root(root);
+        write_installed_inventory_module(&installed_app_root, "0.9.0")?;
+
+        let first_release = record_module_release(
+            root,
+            &app_root,
+            &chef_session(),
+            ModuleReleaseRequest {
+                module_id: "inventory".to_owned(),
+                target_version: "1.0.0".to_owned(),
+                release_channel: "team".to_owned(),
+                source_version_id: String::new(),
+                rollback_version_id: String::new(),
+                responsible_user_ids: Vec::new(),
+                data_access_review: locked_inventory_data_review(),
+                notes: "First team release".to_owned(),
+            },
+        )?;
+        let first_release_id = first_release
+            .get("version_id")
+            .and_then(Value::as_str)
+            .context("first release id")?
+            .to_owned();
+
+        let second_release = record_module_release(
+            root,
+            &app_root,
+            &chef_session(),
+            ModuleReleaseRequest {
+                module_id: "inventory".to_owned(),
+                target_version: "1.1.0".to_owned(),
+                release_channel: "team".to_owned(),
+                source_version_id: String::new(),
+                rollback_version_id: String::new(),
+                responsible_user_ids: Vec::new(),
+                data_access_review: locked_inventory_data_review(),
+                notes: "Second team release".to_owned(),
+            },
+        )?;
+        let second_release_id = second_release
+            .get("version_id")
+            .and_then(Value::as_str)
+            .context("second release id")?
+            .to_owned();
+
+        let catalog = module_catalog_for_rxdb(root)?;
+        let modules = catalog
+            .get("modules")
+            .and_then(Value::as_array)
+            .context("catalog modules")?;
+        let inventory = modules
+            .iter()
+            .find(|module| module.get("id").and_then(Value::as_str) == Some("inventory"))
+            .context("inventory module projection")?;
+
+        assert_eq!(
+            inventory
+                .pointer("/lifecycle/release_status")
+                .and_then(Value::as_str),
+            Some("released")
+        );
+        assert_eq!(
+            inventory
+                .pointer("/lifecycle/release_state/current/version_id")
+                .and_then(Value::as_str),
+            Some(second_release_id.as_str())
+        );
+        assert_eq!(
+            inventory
+                .pointer("/lifecycle/release_state/current/target_version")
+                .and_then(Value::as_str),
+            Some("1.1.0")
+        );
+        assert_eq!(
+            inventory
+                .pointer("/lifecycle/rollback_target/version_id")
+                .and_then(Value::as_str),
+            Some(first_release_id.as_str())
+        );
+        assert_eq!(
+            inventory
+                .pointer("/lifecycle/data_access/status")
+                .and_then(Value::as_str),
+            Some("reviewed")
+        );
+        assert_eq!(
+            inventory
+                .pointer("/lifecycle/data_access/areas/0/read")
+                .and_then(Value::as_str),
+            Some("locked")
+        );
+        assert_eq!(
+            inventory
+                .pointer("/lifecycle/data_access/areas/0/write")
+                .and_then(Value::as_str),
+            Some("locked")
+        );
+        assert_eq!(
+            inventory
+                .pointer("/lifecycle/data_access/locked_collection_ids/0")
+                .and_then(Value::as_str),
+            Some("inventory_items")
+        );
+        assert_eq!(
+            catalog
+                .pointer("/governance/lifecycle/inventory/release_state/current/version_id")
+                .and_then(Value::as_str),
+            Some(second_release_id.as_str())
+        );
+
+        rollback_module_release(
+            root,
+            &app_root,
+            &chef_session(),
+            ModuleRollbackRequest {
+                module_id: "inventory".to_owned(),
+                version_id: first_release_id.clone(),
+            },
+        )?;
+
+        let catalog_after_rollback = module_catalog_for_rxdb(root)?;
+        let modules_after_rollback = catalog_after_rollback
+            .get("modules")
+            .and_then(Value::as_array)
+            .context("catalog modules after rollback")?;
+        let inventory_after_rollback = modules_after_rollback
+            .iter()
+            .find(|module| module.get("id").and_then(Value::as_str) == Some("inventory"))
+            .context("inventory module projection after rollback")?;
+        assert_eq!(
+            inventory_after_rollback
+                .pointer("/lifecycle/release_state/current/version_id")
+                .and_then(Value::as_str),
+            Some(first_release_id.as_str())
+        );
+        assert_eq!(
+            inventory_after_rollback
+                .pointer("/lifecycle/release_state/current/target_version")
+                .and_then(Value::as_str),
+            Some("1.0.0")
+        );
+        assert_eq!(
+            inventory_after_rollback
+                .pointer("/lifecycle/rollback_target/version_id")
+                .and_then(Value::as_str),
+            Some(second_release_id.as_str())
+        );
+        assert_eq!(
+            inventory_after_rollback
+                .pointer("/lifecycle/current_semver")
+                .and_then(Value::as_str),
+            Some("1.0.0")
+        );
+
         Ok(())
     }
 

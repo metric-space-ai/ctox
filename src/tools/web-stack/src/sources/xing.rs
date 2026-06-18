@@ -42,8 +42,7 @@ use super::{
 const API_BASE: &str = "https://api.xing.com/v1";
 const SECRET_NAME: &str = "XING_API_TOKEN";
 const LOGIN_URL: &str = "https://login.xing.com/";
-const VERIFY_SELECTOR: &str =
-    "a[href*=\"/profile/\"], [data-testid=\"user-menu\"], nav";
+const VERIFY_SELECTOR: &str = "a[href*=\"/profile/\"], [data-testid=\"user-menu\"], nav";
 const CREDENTIAL_SELECTOR: &str =
     "input[name=\"password\"], input#password, input[type=\"password\"]";
 const CAPTURE_SCRIPT: &str = "xing.profile_capture.v1";

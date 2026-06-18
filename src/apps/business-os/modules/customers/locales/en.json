@@ -141,6 +141,7 @@
   "commandFailed": "Change could not be recorded: {0}",
   "commandUnavailable": "Changes are not available right now.",
   "loadingStatus": "Updating...",
+  "linkedDataLimited": "Linked data limited",
   "permissionReadOnly": "Read-only",
   "permissionReadOnlyBody": "Your role can inspect customer data, but cannot modify it.",
   "permissionDenied": "No permission for customer changes.",

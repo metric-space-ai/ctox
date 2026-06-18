@@ -124,7 +124,7 @@ Numbered in expected-impact order. Each gets the full
 - Touches: every layer's attn QKV proj, attn O proj, FFN gate/up/down
   per expert, shared-expert FFN, LM head
 - Dependence: blocks decode + prefill simultaneously
-- Phased approach (CLAUDE.md rule 4 + 5):
+- Phased approach (AGENTS.md Inference Model Rules):
   1. **Baseline drop-in** — call vendored `kernel_mul_mv_q4_K_f32` and
      `kernel_mul_mm_q4_K_f32` from a Rust dispatcher with byte-exact
      verifier against an in-crate Q4_K dequant + naive matmul CPU

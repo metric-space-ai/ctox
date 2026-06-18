@@ -1,15 +1,15 @@
 // ref: stalwart/src/smtp/server/mod.rs:1-300
 // ref: ctox-mailserver SQLite-backed native SMTP inbound listener for bounce processing
 
-use crate::store::SqliteStore;
 use crate::config::SmtpConfig;
 use crate::smtp::dsn::parse_dsn_report;
+use crate::store::SqliteStore;
 use crate::util::errors::StalwartResult;
+use base64::Engine;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tracing::{info, error, warn};
-use base64::Engine;
+use tracing::{error, info, warn};
 
 pub struct SmtpInboundServer {
     store: SqliteStore,
@@ -23,7 +23,10 @@ impl SmtpInboundServer {
 
     pub async fn start(self: Arc<Self>) -> StalwartResult<()> {
         let listener = TcpListener::bind(self.config.bind_address).await?;
-        info!("SMTP Inbound Server running on {}", self.config.bind_address);
+        info!(
+            "SMTP Inbound Server running on {}",
+            self.config.bind_address
+        );
 
         loop {
             match listener.accept().await {
@@ -44,9 +47,14 @@ impl SmtpInboundServer {
     }
 
     async fn handle_connection(&self, mut stream: TcpStream) -> StalwartResult<()> {
-        let client_ip = stream.peer_addr().map(|addr| addr.ip().to_string()).unwrap_or_else(|_| "unknown".to_string());
+        let client_ip = stream
+            .peer_addr()
+            .map(|addr| addr.ip().to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
         let mut buf = [0u8; 4096];
-        stream.write_all(b"220 localhost ESMTP Stalwart-Ctox Inbound\r\n").await?;
+        stream
+            .write_all(b"220 localhost ESMTP Stalwart-Ctox Inbound\r\n")
+            .await?;
 
         let mut mail_from = String::new();
         let mut rcpt_to: Vec<String> = Vec::new();
@@ -84,11 +92,12 @@ impl SmtpInboundServer {
                 if receiving_data {
                     if line == "." {
                         receiving_data = false;
-                        
+
                         // Parse email body with mailparse
                         let parsed = mailparse::parse_mail(mail_body.as_bytes());
                         let subject = parsed.as_ref().ok().and_then(|m| {
-                            m.headers.iter()
+                            m.headers
+                                .iter()
                                 .find(|h| h.get_key().to_ascii_lowercase() == "subject")
                                 .map(|h| h.get_value())
                         });
@@ -99,7 +108,9 @@ impl SmtpInboundServer {
                             }
                             s
                         });
-                        let mut extracted_body = parsed.as_ref().ok()
+                        let mut extracted_body = parsed
+                            .as_ref()
+                            .ok()
                             .map(|m| extract_text_body(m))
                             .unwrap_or_default();
                         if extracted_body.is_empty() {
@@ -110,10 +121,16 @@ impl SmtpInboundServer {
                         let mut delivered = false;
                         for recipient in &rcpt_to {
                             // Extract raw email address (e.g. from <user@domain.com> to user@domain.com)
-                            let clean_recip = recipient.trim_matches(|c| c == '<' || c == '>').trim().to_string();
+                            let clean_recip = recipient
+                                .trim_matches(|c| c == '<' || c == '>')
+                                .trim()
+                                .to_string();
                             if self.store.user_exists(&clean_recip)? {
-                                if let Some(inbox_id) = self.store.get_mailbox_id(&clean_recip, "INBOX")? {
-                                    let clean_from = mail_from.trim_matches(|c| c == '<' || c == '>').trim();
+                                if let Some(inbox_id) =
+                                    self.store.get_mailbox_id(&clean_recip, "INBOX")?
+                                {
+                                    let clean_from =
+                                        mail_from.trim_matches(|c| c == '<' || c == '>').trim();
                                     self.store.put_message(
                                         &inbox_id,
                                         clean_from,
@@ -129,7 +146,10 @@ impl SmtpInboundServer {
 
                         // Also check for bounce processing
                         if let Some(dsn) = parse_dsn_report(&mail_body) {
-                            warn!("Parsed bounce report: Recipient = {}, Status = {}, Hard = {}", dsn.recipient, dsn.status_code, dsn.is_hard_bounce);
+                            warn!(
+                                "Parsed bounce report: Recipient = {}, Status = {}, Hard = {}",
+                                dsn.recipient, dsn.status_code, dsn.is_hard_bounce
+                            );
                             let _ = self.store.queue_email(
                                 "bounce-handler@localhost",
                                 "admin@localhost",
@@ -138,7 +158,9 @@ impl SmtpInboundServer {
                         }
 
                         if delivered || !rcpt_to.is_empty() {
-                            stream.write_all(b"250 2.0.0 Ok: Message accepted for delivery\r\n").await?;
+                            stream
+                                .write_all(b"250 2.0.0 Ok: Message accepted for delivery\r\n")
+                                .await?;
                         } else {
                             // If no valid recipients and not a bounce
                             stream.write_all(b"550 5.1.1 User unknown\r\n").await?;
@@ -156,50 +178,72 @@ impl SmtpInboundServer {
                 match auth_state {
                     AuthState::Plain => {
                         auth_state = AuthState::None;
-                        if let Ok(decoded) = base64::prelude::BASE64_STANDARD.decode(line.trim().as_bytes()) {
+                        if let Ok(decoded) =
+                            base64::prelude::BASE64_STANDARD.decode(line.trim().as_bytes())
+                        {
                             let parts: Vec<&[u8]> = decoded.split(|&b| b == 0).collect();
                             if parts.len() >= 3 {
                                 let username = String::from_utf8_lossy(parts[1]).into_owned();
                                 let password = String::from_utf8_lossy(parts[2]).into_owned();
                                 if self.store.authenticate_user(&username, &password)? {
                                     authenticated_user = Some(username);
-                                    stream.write_all(b"235 2.7.0 Authentication successful\r\n").await?;
+                                    stream
+                                        .write_all(b"235 2.7.0 Authentication successful\r\n")
+                                        .await?;
                                 } else {
-                                    stream.write_all(b"535 5.7.8 Authentication failed\r\n").await?;
+                                    stream
+                                        .write_all(b"535 5.7.8 Authentication failed\r\n")
+                                        .await?;
                                 }
                             } else {
-                                stream.write_all(b"501 5.5.4 Invalid AUTH PLAIN parameters\r\n").await?;
+                                stream
+                                    .write_all(b"501 5.5.4 Invalid AUTH PLAIN parameters\r\n")
+                                    .await?;
                             }
                         } else {
-                            stream.write_all(b"501 5.5.4 Invalid Base64 data\r\n").await?;
+                            stream
+                                .write_all(b"501 5.5.4 Invalid Base64 data\r\n")
+                                .await?;
                         }
                         continue;
                     }
                     AuthState::LoginUsername => {
-                        if let Ok(decoded) = base64::prelude::BASE64_STANDARD.decode(line.trim().as_bytes()) {
+                        if let Ok(decoded) =
+                            base64::prelude::BASE64_STANDARD.decode(line.trim().as_bytes())
+                        {
                             let username = String::from_utf8_lossy(&decoded).into_owned();
                             auth_state = AuthState::LoginPassword { username };
                             // Respond with "Password:" in base64
                             stream.write_all(b"334 UGFzc3dvcmQ6\r\n").await?;
                         } else {
                             auth_state = AuthState::None;
-                            stream.write_all(b"501 5.5.4 Invalid Base64 data\r\n").await?;
+                            stream
+                                .write_all(b"501 5.5.4 Invalid Base64 data\r\n")
+                                .await?;
                         }
                         continue;
                     }
                     AuthState::LoginPassword { ref username } => {
                         let user = username.clone();
                         auth_state = AuthState::None;
-                        if let Ok(decoded) = base64::prelude::BASE64_STANDARD.decode(line.trim().as_bytes()) {
+                        if let Ok(decoded) =
+                            base64::prelude::BASE64_STANDARD.decode(line.trim().as_bytes())
+                        {
                             let password = String::from_utf8_lossy(&decoded).into_owned();
                             if self.store.authenticate_user(&user, &password)? {
                                 authenticated_user = Some(user);
-                                stream.write_all(b"235 2.7.0 Authentication successful\r\n").await?;
+                                stream
+                                    .write_all(b"235 2.7.0 Authentication successful\r\n")
+                                    .await?;
                             } else {
-                                stream.write_all(b"535 5.7.8 Authentication failed\r\n").await?;
+                                stream
+                                    .write_all(b"535 5.7.8 Authentication failed\r\n")
+                                    .await?;
                             }
                         } else {
-                            stream.write_all(b"501 5.5.4 Invalid Base64 data\r\n").await?;
+                            stream
+                                .write_all(b"501 5.5.4 Invalid Base64 data\r\n")
+                                .await?;
                         }
                         continue;
                     }
@@ -216,22 +260,31 @@ impl SmtpInboundServer {
                         auth_state = AuthState::Plain;
                         stream.write_all(b"334 \r\n").await?;
                     } else {
-                        if let Ok(decoded) = base64::prelude::BASE64_STANDARD.decode(arg.as_bytes()) {
+                        if let Ok(decoded) = base64::prelude::BASE64_STANDARD.decode(arg.as_bytes())
+                        {
                             let parts: Vec<&[u8]> = decoded.split(|&b| b == 0).collect();
                             if parts.len() >= 3 {
                                 let username = String::from_utf8_lossy(parts[1]).into_owned();
                                 let password = String::from_utf8_lossy(parts[2]).into_owned();
                                 if self.store.authenticate_user(&username, &password)? {
                                     authenticated_user = Some(username);
-                                    stream.write_all(b"235 2.7.0 Authentication successful\r\n").await?;
+                                    stream
+                                        .write_all(b"235 2.7.0 Authentication successful\r\n")
+                                        .await?;
                                 } else {
-                                    stream.write_all(b"535 5.7.8 Authentication failed\r\n").await?;
+                                    stream
+                                        .write_all(b"535 5.7.8 Authentication failed\r\n")
+                                        .await?;
                                 }
                             } else {
-                                stream.write_all(b"501 5.5.4 Invalid AUTH PLAIN parameters\r\n").await?;
+                                stream
+                                    .write_all(b"501 5.5.4 Invalid AUTH PLAIN parameters\r\n")
+                                    .await?;
                             }
                         } else {
-                            stream.write_all(b"501 5.5.4 Invalid Base64 data\r\n").await?;
+                            stream
+                                .write_all(b"501 5.5.4 Invalid Base64 data\r\n")
+                                .await?;
                         }
                     }
                 } else if line_upper.starts_with("AUTH LOGIN") {
@@ -241,12 +294,15 @@ impl SmtpInboundServer {
                         // Respond with "Username:" in base64
                         stream.write_all(b"334 VXNlcm5hbWU6\r\n").await?;
                     } else {
-                        if let Ok(decoded) = base64::prelude::BASE64_STANDARD.decode(arg.as_bytes()) {
+                        if let Ok(decoded) = base64::prelude::BASE64_STANDARD.decode(arg.as_bytes())
+                        {
                             let username = String::from_utf8_lossy(&decoded).into_owned();
                             auth_state = AuthState::LoginPassword { username };
                             stream.write_all(b"334 UGFzc3dvcmQ6\r\n").await?;
                         } else {
-                            stream.write_all(b"501 5.5.4 Invalid Base64 data\r\n").await?;
+                            stream
+                                .write_all(b"501 5.5.4 Invalid Base64 data\r\n")
+                                .await?;
                         }
                     }
                 } else if line_upper.starts_with("MAIL FROM:") {
@@ -254,15 +310,26 @@ impl SmtpInboundServer {
                     stream.write_all(b"250 2.1.0 Ok\r\n").await?;
                 } else if line_upper.starts_with("RCPT TO:") {
                     let recipient = line.replace("RCPT TO:", "").trim().to_string();
-                    let clean_recip = recipient.trim_matches(|c| c == '<' || c == '>').trim().to_string();
-                    
+                    let clean_recip = recipient
+                        .trim_matches(|c| c == '<' || c == '>')
+                        .trim()
+                        .to_string();
+
                     // If authenticated, we allow sending to any recipient
                     // If not authenticated, we only accept local registered users
                     if authenticated_user.is_some() || self.store.user_exists(&clean_recip)? {
                         if authenticated_user.is_none() {
-                            let clean_from = mail_from.trim_matches(|c| c == '<' || c == '>').trim();
-                            if !self.store.check_greylist(&client_ip, clean_from, &clean_recip)? {
-                                stream.write_all(b"450 4.2.0 Greylisting active, please try again later\r\n").await?;
+                            let clean_from =
+                                mail_from.trim_matches(|c| c == '<' || c == '>').trim();
+                            if !self
+                                .store
+                                .check_greylist(&client_ip, clean_from, &clean_recip)?
+                            {
+                                stream
+                                    .write_all(
+                                        b"450 4.2.0 Greylisting active, please try again later\r\n",
+                                    )
+                                    .await?;
                                 continue;
                             }
                         }
@@ -273,10 +340,14 @@ impl SmtpInboundServer {
                     }
                 } else if line_upper == "DATA" {
                     if mail_from.is_empty() || rcpt_to.is_empty() {
-                        stream.write_all(b"503 5.5.1 Bad sequence of commands\r\n").await?;
+                        stream
+                            .write_all(b"503 5.5.1 Bad sequence of commands\r\n")
+                            .await?;
                     } else {
                         receiving_data = true;
-                        stream.write_all(b"354 End data with <CR><LF>.<CR><LF>\r\n").await?;
+                        stream
+                            .write_all(b"354 End data with <CR><LF>.<CR><LF>\r\n")
+                            .await?;
                     }
                 } else if line_upper == "RSET" {
                     mail_from.clear();
@@ -289,7 +360,9 @@ impl SmtpInboundServer {
                     stream.write_all(b"221 2.0.0 Bye\r\n").await?;
                     return Ok(());
                 } else if !line_upper.is_empty() {
-                    stream.write_all(b"502 5.5.1 Command not implemented\r\n").await?;
+                    stream
+                        .write_all(b"502 5.5.1 Command not implemented\r\n")
+                        .await?;
                 }
             }
         }
@@ -316,5 +389,3 @@ fn extract_text_body(parsed: &mailparse::ParsedMail<'_>) -> String {
         String::new()
     }
 }
-
-

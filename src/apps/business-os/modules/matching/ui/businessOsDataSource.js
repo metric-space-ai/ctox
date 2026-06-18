@@ -1,6 +1,11 @@
-import { collections as matchingSchemas, migrationStrategies as matchingMigrationStrategies } from '../schema.js';
+import { collections as matchingSchemas } from '../schema.js';
 
-const DB_NAME = 'ctox_business_os_v4';
+const DATABASE_SURFACE = 'business-os-shell-facade';
+const MATCHING_REMOTE_COLLECTIONS = Object.freeze([
+  'matching_requirements',
+  'matching_objects',
+  'matching_results'
+]);
 
 const COLLECTION_MAP = {
   sources: 'matching_requirements',
@@ -13,19 +18,15 @@ const COLLECTION_MAP = {
 };
 
 let dbPromise = null;
-let rawDbPromise = null;
-let injectedRawDatabase = null;
+let businessOsContext = null;
 const cacheByCollection = new Map();
-const hydratedRemoteCollections = new Set();
 let diagnosticsCache = null;
 
-export function setBusinessOsRawDatabase(raw) {
-  injectedRawDatabase = raw && typeof raw === 'object' ? raw : null;
+export function setBusinessOsDatabaseContext(ctx) {
+  businessOsContext = ctx && typeof ctx === 'object' ? ctx : null;
   dbPromise = null;
-  rawDbPromise = null;
   diagnosticsCache = null;
   cacheByCollection.clear();
-  hydratedRemoteCollections.clear();
 }
 
 export async function getContactsCollection() {
@@ -52,7 +53,7 @@ export async function getMatchingCollectionDiagnostics({ probePull = false } = {
 
   diagnosticsCache = {
     checkedAt: new Date().toISOString(),
-    databaseName: DB_NAME,
+    databaseName: DATABASE_SURFACE,
     collections
   };
   return structuredCloneSafe(diagnosticsCache);
@@ -64,61 +65,18 @@ export async function getDatabase() {
 }
 
 async function createDatabase() {
-  const raw = await getRawDatabase();
   const db = {};
   for (const name of Object.keys(COLLECTION_MAP)) {
-    db[name] = createCollection(name, raw[COLLECTION_MAP[name]]);
+    db[name] = createCollection(name);
   }
   return db;
 }
 
-async function getRawDatabase() {
-  if (!rawDbPromise) rawDbPromise = createRawDatabase();
-  return rawDbPromise;
-}
-
-async function createRawDatabase() {
-  if (injectedRawDatabase) {
-    await ensureMatchingCollections(injectedRawDatabase);
-    return injectedRawDatabase;
-  }
-  const rxdb = await loadRxdb();
-  const { createRxDatabase, getCtoxIndexedDbStorage } = rxdb;
-  const raw = await createRxDatabase({
-    name: DB_NAME,
-    storage: getCtoxIndexedDbStorage(),
-    multiInstance: false,
-    closeDuplicates: true,
-  });
-  await ensureMatchingCollections(raw);
-  return raw;
-}
-
-async function ensureMatchingCollections(raw) {
-  if (!raw || typeof raw !== 'object') return;
-  const missing = {};
-  for (const [collectionName, definition] of Object.entries(matchingSchemas || {})) {
-    if (!raw[collectionName]) {
-      missing[collectionName] = withMigrationStrategies(collectionName, normalizeCollectionDefinition(definition));
-    }
-  }
-  if (Object.keys(missing).length) await raw.addCollections(missing);
-}
-
-function normalizeCollectionDefinition(definition) {
-  if (definition?.schema) return definition;
-  return { schema: definition };
-}
-
-function withMigrationStrategies(collectionName, definition) {
-  const strategies = matchingMigrationStrategies?.[collectionName];
-  return strategies ? { ...definition, migrationStrategies: strategies } : definition;
-}
-
-function createCollection(name, rxCollection) {
+function createCollection(name) {
   return {
     $: {
       subscribe(handler) {
+        const rxCollection = matchingCollection(COLLECTION_MAP[name] || name, { mode: 'read', optional: true });
         if (!rxCollection?.$?.subscribe) return { unsubscribe() {} };
         return rxCollection.$.subscribe((event) => {
           invalidateCacheForRemote(COLLECTION_MAP[name] || name);
@@ -153,20 +111,12 @@ function createCollection(name, rxCollection) {
 async function loadCollection(name, { force = false } = {}) {
   if (!force && cacheByCollection.has(name)) return cacheByCollection.get(name);
   const remote = COLLECTION_MAP[name] || name;
-  const raw = await getRawDatabase();
-  const rxCollection = raw[remote];
-  if (rxCollection) await hydrateRemoteCollection(remote, rxCollection);
+  const rxCollection = matchingCollection(remote, { mode: 'read', optional: true });
   const rows = rxCollection ? await rxCollection.find().exec() : [];
-  const documents = rows.map((row) => fromPersistedDocument(name, row.toJSON()));
+  const documents = rows.map((row) => fromPersistedDocument(name, toPlain(row)));
   const filtered = documents.filter((doc) => !doc?._deleted && belongsToUiCollection(name, doc));
   cacheByCollection.set(name, filtered);
   return filtered;
-}
-
-async function hydrateRemoteCollection(remote, rxCollection) {
-  if (!remote || !rxCollection || hydratedRemoteCollections.has(remote)) return;
-  hydratedRemoteCollections.add(remote);
-  void rxCollection;
 }
 
 async function saveDocument(name, input) {
@@ -179,9 +129,7 @@ async function saveDocument(name, input) {
   };
   const remote = COLLECTION_MAP[name] || name;
   const persisted = toPersistedDocument(name, doc);
-  const raw = await getRawDatabase();
-  const rxCollection = raw[remote];
-  if (!rxCollection) throw new Error(`Matching collection unavailable: ${remote}`);
+  const rxCollection = matchingCollection(remote, { mode: 'write' });
   if (typeof rxCollection.upsert === 'function') {
     await rxCollection.upsert(persisted);
   } else {
@@ -191,12 +139,55 @@ async function saveDocument(name, input) {
   }
 
   invalidateCacheForRemote(remote);
-  const docs = await loadCollection(name);
-  const idx = docs.findIndex((item) => item.id === doc.id);
-  if (idx >= 0) docs[idx] = doc;
-  else docs.push(doc);
-  cacheByCollection.set(name, docs);
+  if (canReadCollection(remote)) {
+    const docs = await loadCollection(name);
+    const idx = docs.findIndex((item) => item.id === doc.id);
+    if (idx >= 0) docs[idx] = doc;
+    else docs.push(doc);
+    cacheByCollection.set(name, docs);
+  }
   return doc;
+}
+
+function matchingCollection(collectionName, { mode = 'read', optional = false } = {}) {
+  const name = String(collectionName || '').trim();
+  if (!name || !MATCHING_REMOTE_COLLECTIONS.includes(name)) {
+    if (optional) return null;
+    throw new Error(`Matching collection is not part of the module contract: ${name || 'unknown'}`);
+  }
+  if (mode === 'write' && !canWriteCollection(name)) {
+    throw createPermissionError(name, 'data.write');
+  }
+  if (mode !== 'write' && !canReadCollection(name)) {
+    if (optional) return null;
+    throw createPermissionError(name, 'data.read');
+  }
+  const db = businessOsContext?.db;
+  const collection = db?.collection?.(name) || null;
+  if (!collection) {
+    if (optional) return null;
+    throw new Error(`Matching collection unavailable: ${name}`);
+  }
+  return collection;
+}
+
+function canReadCollection(collectionName) {
+  const check = businessOsContext?.permissions?.canReadCollection;
+  return typeof check === 'function' ? check(collectionName) === true : true;
+}
+
+function canWriteCollection(collectionName) {
+  const check = businessOsContext?.permissions?.canWriteCollection;
+  return typeof check === 'function' ? check(collectionName) === true : true;
+}
+
+function createPermissionError(collectionName, permission) {
+  const error = new Error(`Matching ${permission} permission denied for ${collectionName}.`);
+  error.name = 'BusinessOsPermissionDenied';
+  error.code = 'BUSINESS_OS_PERMISSION_DENIED';
+  error.collection = collectionName;
+  error.permission = permission;
+  return error;
 }
 
 function invalidateCacheForRemote(remote) {
@@ -368,8 +359,8 @@ function belongsToUiCollection(name, doc) {
 
 async function describeLocalCollection(collectionName) {
   try {
-    const raw = await getRawDatabase();
-    const rxCollection = raw?.[collectionName];
+    if (!canReadCollection(collectionName)) return { count: 0, error: 'collection read denied' };
+    const rxCollection = matchingCollection(collectionName, { mode: 'read', optional: true });
     if (!rxCollection?.find) return { count: 0, error: 'collection unavailable' };
     const rows = await rxCollection.find().exec();
     return { count: Array.isArray(rows) ? rows.length : 0, error: '' };
@@ -433,25 +424,4 @@ function getByPath(obj, path) {
 function makeId(prefix) {
   if (globalThis.crypto?.randomUUID) return `${prefix}_${crypto.randomUUID()}`;
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-}
-
-async function loadRxdb() {
-  const mod = await import('../../../rxdb/dist/ctox-rxdb-js.mjs?v=20260614-rxdb-cancel-unregister');
-  registerRxdbPlugin(mod, mod.RxDBMigrationSchemaPlugin || mod.RxDBMigrationPlugin);
-  const rxdb = typeof mod.rxdbCore === 'function'
-    ? mod.rxdbCore()
-    : (globalThis.rxdbCore || mod);
-  registerRxdbPlugin(rxdb, rxdb.RxDBMigrationSchemaPlugin || mod.RxDBMigrationSchemaPlugin || mod.RxDBMigrationPlugin);
-  return rxdb;
-}
-
-function registerRxdbPlugin(target, plugin) {
-  const add = target?.addRxPlugin;
-  if (typeof add !== 'function' || !plugin) return;
-  try {
-    add(plugin);
-  } catch (error) {
-    const message = String(error?.message || error || '');
-    if (!message.toLowerCase().includes('already')) throw error;
-  }
 }

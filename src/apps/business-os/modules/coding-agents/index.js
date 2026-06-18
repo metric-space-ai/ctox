@@ -662,9 +662,7 @@ function subscribeProjectionUpdates() {
 }
 
 function getCollection(collectionName) {
-  return state.ctx?.db?.collection?.(collectionName)
-    || state.ctx?.db?.collections?.[collectionName]
-    || null;
+  return state.ctx?.db?.collection?.(collectionName) || null;
 }
 
 function scheduleProjectionRefresh(key, fn) {
@@ -991,8 +989,7 @@ async function workspaceGrantsFromProjection(provider) {
 }
 
 async function readCollectionDocs(collectionName) {
-  const collection = state.ctx?.db?.collection?.(collectionName)
-    || state.ctx?.db?.collections?.[collectionName];
+  const collection = state.ctx?.db?.collection?.(collectionName);
   if (!collection) return null;
   if (typeof collection.find === 'function') {
     const query = collection.find();
@@ -1593,7 +1590,19 @@ async function dispatchAgyCommand(args, options = {}) {
       inbound_channel: 'business_os.coding_agents',
       payload: command.payload,
       wait_timeout_ms: waitTimeoutMs,
-      client_context: { source_module: 'coding-agents' }
+      client_context: {
+        source: 'business-os-coding-agents',
+        module: 'coding-agents',
+        module_id: 'coding-agents',
+        app_id: 'coding-agents',
+        source_module: 'coding-agents',
+        action: command.commandType,
+        target: 'external-agent',
+        external_provider: command.payload?.provider || app,
+        workspace_root: command.payload?.workspace_root || command.payload?.path || options.workspace || state.activeWorkspace || '',
+        session_id: command.payload?.session_id || state.activeSession || '',
+        surface: 'coding-agents.module.command',
+      }
     });
 
     return commandOutcome(dispatched) || dispatched;
