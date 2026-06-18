@@ -1,5 +1,12 @@
 <section class="ats-module ats-intake" data-ats-root>
-  <header class="ats-head"><h1>Bewerbungseingang</h1><p class="ats-sub">Generischer Mehrkanal-Eingang: normalisierte Bewerbungen aus Karriereseite/Jobbörse/E-Mail/QR.</p></header>
+  <header class="ats-head"><h1 data-ats-title></h1><p class="ats-sub" data-ats-sub></p></header>
+  <form class="ats-form" data-ats-form>
+    <input type="text" name="name" placeholder="Name" required data-f />
+    <input type="text" name="email" placeholder="E-Mail" data-f />
+    <select name="channel" data-f><option value="career_site">career_site</option><option value="job_board">job_board</option><option value="email">email</option><option value="referral">referral</option><option value="qr">qr</option></select>
+    <button type="submit">Anlegen</button>
+  </form>
+  <div class="ats-gate" data-ats-gate></div>
   <div class="ats-count" data-ats-count></div>
   <div class="ats-list" data-ats-list></div>
 </section>
