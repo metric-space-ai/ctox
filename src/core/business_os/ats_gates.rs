@@ -181,6 +181,82 @@ pub fn retention_due(reference_ms: i64, retention_days: i64, now_ms: i64) -> boo
     now_ms >= reference_ms + retention_days * DAY_MS
 }
 
+// ----------------------------------------------------------------------------
+// Submission guard (SHAREOUT-1) + signature status (ESIGN-1)
+// ----------------------------------------------------------------------------
+
+/// Find an existing active submission of the same candidate to the same client
+/// within the protection window (ownership conflict / double submission).
+/// Returns the conflicting submission id, if any.
+pub fn find_double_submission(
+    existing: &[Value],
+    candidate_id: &str,
+    client_account_id: &str,
+    within_days: i64,
+    now_ms: i64,
+) -> Option<String> {
+    let window = within_days.max(0) * DAY_MS;
+    for submission in existing {
+        if field_str(submission, "status") == Some("withdrawn") {
+            continue;
+        }
+        if field_str(submission, "candidate_id") != Some(candidate_id) {
+            continue;
+        }
+        if field_str(submission, "client_account_id") != Some(client_account_id) {
+            continue;
+        }
+        let sent_at = field_i64(submission, "sent_at_ms");
+        let within = match sent_at {
+            Some(ts) => now_ms - ts <= window,
+            None => true,
+        };
+        if within {
+            return field_str(submission, "id")
+                .map(str::to_owned)
+                .or(Some(String::new()));
+        }
+    }
+    None
+}
+
+/// Derive an e-signature request's overall status from its signers + expiry.
+pub fn signature_request_status(
+    signers: &[Value],
+    expires_at_ms: Option<i64>,
+    sent_at_ms: Option<i64>,
+    now_ms: i64,
+) -> &'static str {
+    if signers
+        .iter()
+        .any(|s| field_str(s, "state") == Some("declined"))
+    {
+        return "declined";
+    }
+    let all_signed = !signers.is_empty()
+        && signers
+            .iter()
+            .all(|s| field_str(s, "state") == Some("signed"));
+    if all_signed {
+        return "completed";
+    }
+    if let Some(expires) = expires_at_ms {
+        if expires > 0 && now_ms >= expires {
+            return "expired";
+        }
+    }
+    if signers
+        .iter()
+        .any(|s| field_str(s, "state") == Some("signed"))
+    {
+        return "partially_signed";
+    }
+    if sent_at_ms.unwrap_or(0) > 0 {
+        return "sent";
+    }
+    "created"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,5 +353,55 @@ mod tests {
         assert!(retention_due(NOW - 400 * DAY_MS, 365, NOW));
         assert!(!retention_due(NOW - 10 * DAY_MS, 365, NOW));
         assert!(!retention_due(0, 365, NOW));
+    }
+
+    #[test]
+    fn double_submission_detected_in_window() {
+        let existing = vec![
+            json!({"id": "s1", "candidate_id": "c1", "client_account_id": "a1", "sent_at_ms": NOW - 10 * DAY_MS, "status": "sent"}),
+            json!({"id": "s2", "candidate_id": "c1", "client_account_id": "a2", "sent_at_ms": NOW - 10 * DAY_MS, "status": "withdrawn"}),
+        ];
+        assert_eq!(
+            find_double_submission(&existing, "c1", "a1", 180, NOW).as_deref(),
+            Some("s1")
+        );
+        assert_eq!(
+            find_double_submission(&existing, "c1", "a3", 180, NOW),
+            None
+        );
+        assert_eq!(
+            find_double_submission(&existing, "c1", "a2", 180, NOW),
+            None
+        ); // withdrawn
+        assert_eq!(find_double_submission(&existing, "c1", "a1", 5, NOW), None);
+        // outside window
+    }
+
+    #[test]
+    fn signature_status_derives() {
+        let pending = vec![json!({"state": "signed"}), json!({"state": "pending"})];
+        assert_eq!(
+            signature_request_status(&pending, None, Some(NOW - DAY_MS), NOW),
+            "partially_signed"
+        );
+        let all = vec![json!({"state": "signed"}), json!({"state": "signed"})];
+        assert_eq!(
+            signature_request_status(&all, None, Some(NOW), NOW),
+            "completed"
+        );
+        let declined = vec![json!({"state": "declined"})];
+        assert_eq!(
+            signature_request_status(&declined, None, None, NOW),
+            "declined"
+        );
+        let expired = vec![json!({"state": "pending"})];
+        assert_eq!(
+            signature_request_status(&expired, Some(NOW - DAY_MS), Some(NOW - 2 * DAY_MS), NOW),
+            "expired"
+        );
+        assert_eq!(
+            signature_request_status(&[json!({"state": "pending"})], None, None, NOW),
+            "created"
+        );
     }
 }

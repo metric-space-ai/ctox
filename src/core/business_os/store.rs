@@ -7281,6 +7281,21 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
                 outcome,
             );
         }
+        command_type if is_ats_mutating_command(command_type) => {
+            // Server-authoritative ATS mutations (write records, gated where
+            // applicable). chef/admin role required, like the other active
+            // mutating module families.
+            let session = rxdb_command_session(root, &command)?;
+            let outcome = handle_ats_mutating_command(root, &session, &command)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                command.record_id.as_deref(),
+                Some("completed"),
+                outcome,
+            );
+        }
         command_type if command_type.starts_with("ctox.channel.") => {
             let mutation: ChannelCommandRequest = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.channel payload")?;
@@ -15127,6 +15142,294 @@ fn handle_ats_active_command(
             }))
         }
         other => Err(anyhow::anyhow!("unsupported ats command type: {other}")),
+    }
+}
+
+pub fn is_ats_mutating_command(command_type: &str) -> bool {
+    matches!(
+        command_type,
+        "ats.retention.purge"
+            | "ats.intake.capture"
+            | "ats.placement.create"
+            | "ats.submission.present"
+            | "ats.leistungsnachweis.signoff"
+            | "ats.signature.request"
+            | "ats.signature.sign"
+    )
+}
+
+fn load_all_business_records(
+    conn: &Connection,
+    collection: &str,
+) -> anyhow::Result<Vec<(String, Value)>> {
+    let mut stmt = conn.prepare(
+        "SELECT record_id, payload_json FROM business_records WHERE collection = ?1 AND deleted = 0",
+    )?;
+    let rows = stmt.query_map(params![collection], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (id, payload) = row?;
+        if let Ok(parsed) = serde_json::from_str::<Value>(&payload) {
+            out.push((id, parsed));
+        }
+    }
+    Ok(out)
+}
+
+/// Server-authoritative ATS mutations: each writes the generic business_records
+/// store (auto-projected to RxDB by rxdb_peer). Gates that protect a write
+/// (consent, double-submission) run native-side via ats_gates.
+fn handle_ats_mutating_command(
+    root: &Path,
+    _session: &BusinessOsSession,
+    command: &BusinessCommand,
+) -> anyhow::Result<Value> {
+    let conn = open_store(root)?;
+    let now = now_ms() as i64;
+    let p = &command.payload;
+    match command.command_type.as_str() {
+        "ats.retention.purge" => {
+            let collection = p
+                .get("collection")
+                .and_then(Value::as_str)
+                .context("ats.retention.purge requires collection")?;
+            let retention_days = p.get("retention_days").and_then(Value::as_i64).unwrap_or(0);
+            let reference_field = p
+                .get("reference_field")
+                .and_then(Value::as_str)
+                .unwrap_or("created_at_ms");
+            let mut purged = Vec::new();
+            for (id, payload) in load_all_business_records(&conn, collection)? {
+                let reference = payload
+                    .get(reference_field)
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                if super::ats_gates::retention_due(reference, retention_days, now) {
+                    conn.execute(
+                        "UPDATE business_records SET deleted = 1, updated_at_ms = ?3 WHERE collection = ?1 AND record_id = ?2",
+                        params![collection, id.as_str(), now],
+                    )?;
+                    purged.push(id);
+                }
+            }
+            Ok(serde_json::json!({ "ok": true, "purged": purged.len(), "purged_ids": purged }))
+        }
+        "ats.intake.capture" => {
+            let channel =
+                first_string_field(p, &["channel"]).unwrap_or_else(|| "email".to_string());
+            let name = first_string_field(p, &["name"]).unwrap_or_default();
+            let email = first_string_field(p, &["email"])
+                .unwrap_or_default()
+                .to_lowercase();
+            let id = format!("appl_{now}");
+            let dedupe_key = if !email.is_empty() {
+                format!("email:{email}")
+            } else {
+                format!("name:{}", name.to_lowercase())
+            };
+            let payload = serde_json::json!({
+                "id": id,
+                "channel": channel,
+                "vacancy_id": first_string_field(p, &["vacancy_id"]).unwrap_or_default(),
+                "candidate": {
+                    "name": name,
+                    "email": email,
+                    "phone": first_string_field(p, &["phone"]).unwrap_or_default()
+                },
+                "dedupe_key": dedupe_key,
+                "status": "new",
+                "received_at_ms": now,
+                "created_at_ms": now,
+                "updated_at_ms": now,
+                "_deleted": false
+            });
+            upsert_business_record(&conn, "applications", &id, now, payload)?;
+            Ok(serde_json::json!({ "ok": true, "application_id": id, "dedupe_key": dedupe_key }))
+        }
+        "ats.placement.create" => {
+            let candidate_id = first_string_field(p, &["candidate_id"])
+                .context("ats.placement.create requires candidate_id")?;
+            let client_account_id =
+                first_string_field(p, &["client_account_id"]).unwrap_or_default();
+            let fee = p.get("fee").and_then(Value::as_f64).unwrap_or(0.0);
+            let id = format!("plac_{now}");
+            let payload = serde_json::json!({
+                "id": id,
+                "candidate_id": candidate_id,
+                "vacancy_id": first_string_field(p, &["vacancy_id"]).unwrap_or_default(),
+                "client_account_id": client_account_id,
+                "offer_id": first_string_field(p, &["offer_id"]).unwrap_or_default(),
+                "start_ms": p.get("start_ms").and_then(Value::as_i64).unwrap_or(now),
+                "guarantee_days": p.get("guarantee_days").and_then(Value::as_i64).unwrap_or(90),
+                "fee": fee,
+                "status": "confirmed",
+                "created_at_ms": now,
+                "updated_at_ms": now,
+                "_deleted": false
+            });
+            upsert_business_record(&conn, "placements", &id, now, payload)?;
+            // Emit the placement-fee draft invoice directly (the invoices.rs module
+            // is an unwired draft; write the accounting record we own).
+            let inv_id = format!("inv_{now}");
+            let invoice = serde_json::json!({
+                "id": inv_id,
+                "invoice_type": "sale_out",
+                "account_id": client_account_id,
+                "source_placement_id": id,
+                "status": "draft",
+                "net_total": fee,
+                "lines": [{ "position": 1, "description": "Vermittlungshonorar", "quantity": 1, "unit_price": fee, "tax_rate": 0.19 }],
+                "created_at_ms": now,
+                "updated_at_ms": now,
+                "_deleted": false
+            });
+            upsert_business_record(&conn, "accounting_invoices", &inv_id, now, invoice)?;
+            Ok(serde_json::json!({ "ok": true, "placement_id": id, "fee_invoice_id": inv_id }))
+        }
+        "ats.submission.present" => {
+            let candidate_id = first_string_field(p, &["candidate_id"])
+                .context("ats.submission.present requires candidate_id")?;
+            let client_account_id = first_string_field(p, &["client_account_id"])
+                .context("ats.submission.present requires client_account_id")?;
+            let consents = load_business_records_by_field(
+                &conn,
+                "business_consents",
+                "subject_id",
+                &candidate_id,
+            )?;
+            let has_consent =
+                super::ats_gates::evaluate_consent_gate(Some("present_to_client"), &consents, now);
+            let existing: Vec<Value> = load_all_business_records(&conn, "submissions")?
+                .into_iter()
+                .map(|(_, v)| v)
+                .collect();
+            let conflict = super::ats_gates::find_double_submission(
+                &existing,
+                &candidate_id,
+                &client_account_id,
+                180,
+                now,
+            );
+            let mut blockers = Vec::new();
+            if !has_consent {
+                blockers.push(serde_json::json!({ "reason": "consent_to_present_missing" }));
+            }
+            if let Some(conflicting) = &conflict {
+                blockers.push(serde_json::json!({ "reason": "double_submission", "conflicting_submission_id": conflicting }));
+            }
+            if !blockers.is_empty() {
+                return Ok(
+                    serde_json::json!({ "ok": true, "allowed": false, "blockers": blockers }),
+                );
+            }
+            let id = format!("subm_{now}");
+            let payload = serde_json::json!({
+                "id": id,
+                "candidate_id": candidate_id,
+                "client_account_id": client_account_id,
+                "vacancy_id": first_string_field(p, &["vacancy_id"]).unwrap_or_default(),
+                "client_contact_id": first_string_field(p, &["client_contact_id"]).unwrap_or_default(),
+                "sent_at_ms": now,
+                "status": "sent",
+                "created_at_ms": now,
+                "updated_at_ms": now,
+                "_deleted": false
+            });
+            upsert_business_record(&conn, "submissions", &id, now, payload)?;
+            Ok(serde_json::json!({ "ok": true, "allowed": true, "submission_id": id }))
+        }
+        "ats.leistungsnachweis.signoff" => {
+            let collection = p
+                .get("collection")
+                .and_then(Value::as_str)
+                .unwrap_or("planning_time_records");
+            let record_id = first_string_field(p, &["record_id", "nachweis_id"])
+                .context("ats.leistungsnachweis.signoff requires record_id")?;
+            let existing = conn
+                .query_row(
+                    "SELECT payload_json FROM business_records WHERE collection = ?1 AND record_id = ?2 AND deleted = 0",
+                    params![collection, record_id.as_str()],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            let mut payload = existing
+                .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+                .unwrap_or_else(|| serde_json::json!({ "id": record_id }));
+            if let Some(obj) = payload.as_object_mut() {
+                obj.insert("entleiher_signed".to_string(), Value::Bool(true));
+                obj.insert("signed_at_ms".to_string(), Value::from(now));
+                obj.insert("billing_released".to_string(), Value::Bool(true));
+            }
+            upsert_business_record(&conn, collection, &record_id, now, payload)?;
+            Ok(serde_json::json!({ "ok": true, "record_id": record_id, "billing_released": true }))
+        }
+        "ats.signature.request" => {
+            let document_id = first_string_field(p, &["document_id"])
+                .context("ats.signature.request requires document_id")?;
+            let signers = p
+                .get("signers")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([]));
+            let id = format!("sig_{now}");
+            let payload = serde_json::json!({
+                "id": id,
+                "document_id": document_id,
+                "subject_kind": first_string_field(p, &["subject_kind"]).unwrap_or_default(),
+                "signers": signers,
+                "sent_at_ms": now,
+                "status": "sent",
+                "created_at_ms": now,
+                "updated_at_ms": now,
+                "_deleted": false
+            });
+            upsert_business_record(&conn, "signature_requests", &id, now, payload)?;
+            Ok(serde_json::json!({ "ok": true, "request_id": id, "status": "sent" }))
+        }
+        "ats.signature.sign" => {
+            let request_id = first_string_field(p, &["request_id"])
+                .context("ats.signature.sign requires request_id")?;
+            let signer_id = first_string_field(p, &["signer_id"])
+                .context("ats.signature.sign requires signer_id")?;
+            let existing = conn
+                .query_row(
+                    "SELECT payload_json FROM business_records WHERE collection = 'signature_requests' AND record_id = ?1 AND deleted = 0",
+                    params![request_id.as_str()],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+                .context("signature request not found")?;
+            let mut payload: Value = serde_json::from_str(&existing)?;
+            if let Some(signers) = payload.get_mut("signers").and_then(Value::as_array_mut) {
+                for signer in signers.iter_mut() {
+                    if signer.get("id").and_then(Value::as_str) == Some(signer_id.as_str()) {
+                        if let Some(obj) = signer.as_object_mut() {
+                            obj.insert("state".to_string(), Value::String("signed".to_string()));
+                        }
+                    }
+                }
+            }
+            let signers = payload
+                .get("signers")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let status = super::ats_gates::signature_request_status(
+                &signers,
+                payload.get("expires_at_ms").and_then(Value::as_i64),
+                payload.get("sent_at_ms").and_then(Value::as_i64),
+                now,
+            );
+            if let Some(obj) = payload.as_object_mut() {
+                obj.insert("status".to_string(), Value::String(status.to_string()));
+            }
+            upsert_business_record(&conn, "signature_requests", &request_id, now, payload)?;
+            Ok(serde_json::json!({ "ok": true, "request_id": request_id, "status": status }))
+        }
+        other => Err(anyhow::anyhow!(
+            "unsupported ats mutating command type: {other}"
+        )),
     }
 }
 
