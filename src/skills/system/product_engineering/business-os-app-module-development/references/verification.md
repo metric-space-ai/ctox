@@ -135,10 +135,12 @@ back to the model with `console.log`. Primary verification is focused
 snippet only when a validator, syntax check, or test output names the concrete
 selector/import/file to inspect.
 
-In a CTOX App Creator turn, do not read the App Creator skill itself through
-`ctox skills system show ...`, `src/skills`, `head`, `tail`, or partial source
-inspection. The service prompt already includes the operative rules. Do not use
-nonexistent few-shot paths such as
+In a CTOX App Creator turn, a complete
+`ctox skills system show business-os-app-module-development --body` read is
+acceptable at most once, but do not read the skill through `head`, `tail`,
+`sed`, `src/skills`, or partial source inspection. The service prompt already
+includes the operative rules and may embed the required three shipped-module
+few-shot patterns. Do not use nonexistent few-shot paths such as
 `src/apps/business-os/modules/outbound/core/automation.mjs`; use real shipped
 paths such as `outbound/index.js` or `outbound/core/audience.js`. Before the
 first requested-domain edit, do not read the generated scaffold back with `ls`,
@@ -155,10 +157,11 @@ CTOX may still reject a green validator if the tool trace shows process
 violations after the scaffold baseline: validation before direct final module
 edits, partial skill reads, `src/skills` inspection, `/tmp` artifact
 staging/testing/copying, generated scaffold readback before implementation,
-source-module discovery or line-count sweeps, or broad source/generated-file
-dumps. Treat that feedback as validator rework. Repair by writing bounded final
-files directly under `MODULE_DIR`, then run the app-specific validator once; do
-not repeat the same early validation or readback commands.
+source-module discovery or line-count sweeps, nonexistent few-shot paths, or
+broad source/generated-file dumps. Treat that feedback as validator rework.
+Repair by writing bounded final files directly under `MODULE_DIR`, then run the
+app-specific validator once; do not repeat the same early validation or readback
+commands.
 
 For first-pass runtime-installed App Creator modules, keep helper files bounded
 to `core/records.mjs` and `core/automation.mjs`. Extra helper layers such as

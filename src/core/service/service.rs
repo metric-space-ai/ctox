@@ -6786,7 +6786,7 @@ fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
         )
         .replace(
             "- Inspect and edit with a narrow tool budget. Do not dump whole generated files, loop over all app artifacts with `cat`, or run broad repo/source scans. Use targeted `sed -n` ranges, exact `rg -n` selectors/imports, and validator output to repair concrete issues.",
-            "- Inspect and edit with a narrow tool budget. Do not call `ctox skills system show business-os-app-module-development`, inspect `src/skills`, dump whole generated files, loop over all app artifacts with `cat`, run `wc -l`/`ls`/`head`/`tail`/Node readFileSync audits over generated app files, or run broad repo/source scans. CTOX has already embedded the App Creator rules in this prompt. If you need few-shot context, use only one or two short exact snippets from the known shipped modules `customers`, `shiftflow`, and `outbound`; never use `cat ... | head`, `find`, `ls`, or directory-wide `rg`/`grep` as few-shot discovery.",
+            "- Inspect and edit with a narrow tool budget. A full `ctox skills system show business-os-app-module-development --body` read is allowed at most once; do not pipe it through `head`/`tail`/`sed`, inspect `src/skills`, dump whole generated files, loop over app artifacts with `cat`, run `wc -l`/`ls`/`head`/`tail`/Node readFileSync audits over generated app files, or run broad repo/source scans. CTOX has already embedded the scaffold contract and the required three-app few-shot patterns here: `customers` proves manifest/dependency shape and commandBus dispatch; `shiftflow` proves shell-fragment mount and local CSS attachment but its legacy chat event pattern is rejected for generated apps; `outbound` proves commandBus-driven task orchestration but its source fallbacks and large-module helper sprawl are rejected for generated apps. Do not read nonexistent paths such as `outbound/core/automation.mjs` or `shiftflow/core/automation.mjs`. Start implementation with direct bounded writes under `$MODULE_DIR` instead of auditing the scaffold.",
         )
         .replace(
             "- Do not use Python, base64 blobs, Node writer scripts, generated writer scripts, data URLs, or temporary file-copy wrappers to create or patch app files. If a direct edit becomes fragile, reduce scope, split the file into a smaller local ESM helper, or edit the smaller affected file.",
@@ -6798,7 +6798,7 @@ fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
         )
         .replace(
             "- Before claiming success, run the module tests plus `ctox business-os app validate",
-            "- Tool trace policy: after the scaffold baseline, CTOX may reject validation that was run before any direct final module edit, partial skill reads, `src/skills` inspection, app artifacts staged under `/tmp`, generated scaffold readback before implementation, source-module discovery/line-count sweeps, or broad source/generated-file dumps. If this happens, repair by writing bounded final files directly under `$MODULE_DIR`, then validate again.\n- Before claiming success, run the module tests plus `ctox business-os app validate",
+            "- Tool trace policy: after the scaffold baseline, CTOX may reject validation that was run before any direct final module edit, partial skill reads, `src/skills` inspection, app artifacts staged under `/tmp`, generated scaffold readback before implementation, source-module discovery/line-count sweeps, nonexistent few-shot paths, or broad source/generated-file dumps. If this happens, repair by writing bounded final files directly under `$MODULE_DIR`, then validate again.\n- Before claiming success, run the module tests plus `ctox business-os app validate",
         )
 }
 
@@ -7615,14 +7615,18 @@ fn business_os_app_module_tool_trace_policy_report(
                 "validation ran before the first direct module artifact write",
             );
         }
-        if lowered.contains("ctox skills system show business-os-app-module-development")
-            || lowered.contains(
-                "src/skills/system/product_engineering/business-os-app-module-development",
-            )
+        if business_os_app_trace_command_is_partial_skill_read(&lowered) {
+            push_business_os_app_trace_finding(
+                &mut findings,
+                "App Creator skill was partially read instead of loaded as one complete body",
+            );
+        }
+        if lowered
+            .contains("src/skills/system/product_engineering/business-os-app-module-development")
         {
             push_business_os_app_trace_finding(
                 &mut findings,
-                "App Creator skill/source was inspected during app implementation instead of relying on the embedded rules",
+                "App Creator skill source was inspected during generated app implementation",
             );
         }
         if lowered.contains("/tmp/")
@@ -7657,6 +7661,14 @@ fn business_os_app_module_tool_trace_policy_report(
             push_business_os_app_trace_finding(
                 &mut findings,
                 "source-module discovery, broad dump, or line-count sweep was used instead of exact few-shot file snippets",
+            );
+        }
+        if lowered.contains("outbound/core/automation.mjs")
+            || lowered.contains("shiftflow/core/automation.mjs")
+        {
+            push_business_os_app_trace_finding(
+                &mut findings,
+                "nonexistent few-shot source paths were probed instead of using embedded shipped-module patterns",
             );
         }
         if lowered.contains(&artifact_marker)
@@ -7719,6 +7731,18 @@ fn business_os_app_trace_command_reads_generated_artifact(command: &str) -> bool
         && !command.contains("tee ")
         && !command.contains("writefile")
         && !command.contains("writefilesync")
+}
+
+fn business_os_app_trace_command_is_partial_skill_read(command: &str) -> bool {
+    command.contains("ctox skills system show business-os-app-module-development")
+        && (command.contains("| head")
+            || command.contains("| tail")
+            || command.contains("| sed")
+            || command.contains(" head ")
+            || command.contains(" tail ")
+            || command.contains(" sed -n")
+            || command.contains("head -")
+            || command.contains("tail -"))
 }
 
 fn business_os_app_trace_command_has_sed_range_over(command: &str, max_lines: u64) -> bool {
@@ -22129,11 +22153,12 @@ Business OS command:
             .expect("tool trace policy should report violations");
 
         assert!(report.contains("tool trace violated"));
-        assert!(report.contains("App Creator skill/source was inspected"));
+        assert!(report.contains("App Creator skill was partially read"));
         assert!(report.contains("generated scaffold files were read back"));
         assert!(report.contains("validation ran before the first direct module artifact write"));
         assert!(report.contains("staged or tested under /tmp"));
         assert!(report.contains("source-module discovery, broad dump, or line-count sweep"));
+        assert!(report.contains("nonexistent few-shot source paths"));
         assert!(report.contains("broad dumps or line-count/readback commands"));
     }
 
