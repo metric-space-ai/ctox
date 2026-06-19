@@ -140,9 +140,9 @@ In a CTOX App Creator turn, a complete
 acceptable at most once, but do not read the skill through `head`, `tail`,
 `sed`, `src/skills`, or partial source inspection. The service prompt already
 includes the operative rules and may embed the required three shipped-module
-few-shot patterns. Do not use nonexistent few-shot paths such as
-`src/apps/business-os/modules/outbound/core/automation.mjs`; use real shipped
-paths such as `outbound/index.js` or `outbound/core/audience.js`. Before the
+few-shot patterns. Do not invent core/automation.mjs few-shot files under
+outbound or shiftflow; use real shipped paths such as `outbound/index.js` or
+`outbound/core/audience.js`. Before the
 first requested-domain edit, do not read the generated scaffold back with `ls`,
 `sed`, `cat`, `head`, `tail`, or multi-file commands. Start from the scaffold
 contract, make bounded direct final edits under `MODULE_DIR`, then use focused

@@ -24947,17 +24947,17 @@ Business OS app build target:
 - open-work context rule: queue IDs, current_queue_item_id, and open-work blocks in surrounding context are not your app-build target and must not redirect you to another task. Build only module_id={module_id} under {module_dir}/.
 - required file inventory: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, core/automation.mjs, core/records.mjs, locales/de.json, locales/en.json, and tests/*.test.mjs must exist before you can claim success.
 - schema invariant rule: schema.js is the only root schema module. Do not rename it, delete it, replace it with schema.mjs, or leave schema.mjs/schema.cjs as a root-level alias. Put reusable ESM schema fragments under core/*.mjs and re-export them from schema.js.
-- mandatory first screen: inspect the scaffold first, preserve core/automation.mjs, core/records.mjs, locales, tests, mount wiring, and helper export names unless every importer is updated in the same edit. Use shipped customers, shiftflow, and outbound as the default three few-shots. Keep the app small, but do not treat an untouched scaffold as the requested app. The scaffold is already structurally valid; validating it before requested-domain edits is a task failure, not progress.
+- scaffold baseline rule: CTOX service preflight creates a validator-clean scaffold before the app-build turn when the target directory is missing or empty. Preserve core/automation.mjs, core/records.mjs, locales, tests, mount wiring, and helper export names unless every importer is updated in the same edit. Use the embedded customers, shiftflow, and outbound patterns as the default three few-shots. Keep the app small, but do not treat an untouched scaffold as the requested app. The scaffold is already structurally valid; auditing or validating it before requested-domain edits is a task failure, not progress.
 - one-shot data-model rule: for first-pass App Creator apps, preserve the scaffold's single primary module-owned collection and helper API by default. Add requested-domain fields, statuses, calculations, fixtures, labels, and automation facts to that collection instead of inventing extra collections. Introduce additional module-owned collections only when the user explicitly requires a relational workflow and you update module.json, collections.schema.json, schema.js, core/records.mjs, core/automation.mjs, index.js, locales, and tests in the same edit before validation. Never define collection-name constants for undeclared collections and never reference business_commands from runtime helpers; automation uses ctx.commandBus.dispatch only.
 - scaffold contract freeze rule: module.json installed-runtime fields, entry/install_scope/version, store.distribution/installable, layout without right, the scaffold primary collection name, collections.schema.json schema_format, schema.js, and core helper export names are fixed scaffold contract. Do not port module.json, collections.schema.json, or schema.js wholesale from a shipped/source module and do not rename the scaffold collection as a first-pass domain model. Add domain fields, labels, statuses, calculations, fixtures, and automation facts to the scaffold collection instead. If you already changed manifest/schema/collection names before core helpers, UI, locales, and tests are lockstep, restore the scaffold contract first.
 - stable core API rule: for first-pass runtime apps, keep `core/automation.mjs` exporting `buildFollowUpCommand(record = {{}})` and keep `core/records.mjs` exporting the scaffold record helpers. Make `buildFollowUpCommand` the compatibility facade that builds the requested-domain `business_os.chat.task` payload with both `type` and `command_type` plus `payload.record_snapshot`. Do not replace it with plan-only helpers such as `planFollowUpTasks`, move the command builder into `core/records.mjs`, or import helpers from `core/records.mjs` before exporting them there. If you add domain helpers such as needsAttention, budgetStatus, billingReadiness, or milestoneTotals, export them from `core/records.mjs`, update `core/automation.mjs`, `index.js`, and every tests/*.test.mjs in the same edit, and keep `buildFollowUpCommand` available until all importers deliberately change together.
 - exact artifact rule: required artifacts are canonical files, not shell patterns. Write module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales, core helpers, and tests by exact path under {module_dir}/ only. Do not create temporary schema/manifest aliases, short alias files such as m.json, manifest.json, collections.json, or schema.mjs/schema.cjs, do not copy through globs or brace expansion, do not create files literally named co*ions.*json or colle{{ctions,ctions}}.schema.json, and do not run rm against required artifacts.
 - scaffold preservation rule: CTOX service preflight may already have created a validator-clean scaffold in {module_dir}/. Treat that scaffold as the baseline. Do not clean, delete, reset, replace, or rewrite it wholesale. Customize the smallest necessary scaffold files in place, preserve the mount wiring, core helpers, schema wrappers, locales, and tests. Run `ctox business-os app scaffold {module_id} {mode_flag} --repair-missing` only if a required file is actually missing; never run it on a complete scaffold, and never count scaffold repair output as requested-domain implementation work.
-- few-shot rule: inspect exactly three shipped Business OS modules as short targeted pattern references, preferably customers, shiftflow, and outbound from the shipped `src/apps/business-os/modules/` tree. Open exact selected files directly, for example `src/apps/business-os/modules/customers/module.json`, `src/apps/business-os/modules/shiftflow/index.js`, and `src/apps/business-os/modules/outbound/core/automation.mjs`. Do not run `ls`, `find`, `rg`, `grep`, or `tree` over `src/apps/business-os/modules/` or over a source module directory to discover files. Use notes only as an optional fourth simple-CRUD reference; it is not a scaffold-helper template and may not contain core/automation.mjs or core/records.mjs. Never use generated installed modules, runtime/business-os/installed-modules, ~/.local/state/ctox/business-os/installed-modules, bench_* apps, previous App Creator outputs, or app-creator-bench artifacts as few-shot templates. Do not request complete file dumps, do not use combined multi-file snippets or broad line sweeps, do not delegate a broad module-reading sweep to a subagent, and do not keep reading examples after the three-module summary.
+- few-shot rule: CTOX embeds the required three shipped-module patterns for App Creator turns: customers for manifest/dependency shape and commandBus dispatch, shiftflow for shell-fragment mount and local CSS attachment, and outbound for commandBus-driven task orchestration. If a non-CTOX external agent needs source snippets, open only exact existing files such as `src/apps/business-os/modules/customers/module.json`, `src/apps/business-os/modules/customers/index.js`, `src/apps/business-os/modules/shiftflow/index.js`, `src/apps/business-os/modules/outbound/index.js`, and `src/apps/business-os/modules/outbound/core/audience.js`. Never invent core/automation.mjs few-shot files for outbound or shiftflow; those modules do not ship that pattern. Do not run `ls`, `find`, `rg`, `grep`, or `tree` over `src/apps/business-os/modules/` or over a source module directory to discover files. Use notes only as an optional fourth simple-CRUD reference; it is not a scaffold-helper template and may not contain core/automation.mjs or core/records.mjs. Never use generated installed modules, runtime/business-os/installed-modules, ~/.local/state/ctox/business-os/installed-modules, bench_* apps, previous App Creator outputs, or app-creator-bench artifacts as few-shot templates. Do not request complete file dumps, do not use combined multi-file snippets or broad line sweeps, do not delegate a broad module-reading sweep to a subagent, and do not keep reading examples after the three-module summary.
 - legacy anti-pattern rule: existing modules can contain old compatibility code. For this generated app, reject ctx.db.raw, db.raw, ctx.collections, window.dispatchEvent, ctox-business-os-chat-submit, manual business_commands insert/upsert fallbacks, pending_sync local state, JSON-module schema wrappers, bundler/fake-DOM tests, alternate ticket command types such as ctox.business_os.ticket.followup.create, and default layout.right/right-resizer patterns.
 - current-contract rule: if an existing module conflicts with the required skill, this prompt, `ctox business-os app validate`, or `module_static_check.mjs`, the current contract wins and the existing pattern is an anti-pattern.
 - bounded-shell rule: do not run find/rg/grep/ls/tree over $HOME, /Users, /, ~/.local/state, the whole install root, the whole repo, `src/apps/business-os/modules/`, any source module directory, `src/apps/business-os/app.js`, `src/apps/business-os/shared/`, `src/apps/business-os/scripts/`, `src/apps/business-os/rxdb/`, or `src/core/business_os/` to discover validators, scripts, examples, shell loaders, schema internals, or guard internals. Inspect only exact files in {module_dir}/ and exact chosen few-shot source files. Do not read or write ~/.local/state/ctox/business-os/installed-modules directly; use the prompt's {module_dir}/ path only. Use `ctox business-os app validate {module_id} {mode_flag}`; do not search for validator filenames or Business OS loader code.
-- sequencing rule: after reading the required skill and inspecting three shipped modules, verify {module_dir}/ has the required file inventory before reading validator/checker source files. If the directory is missing or incomplete, repair the scaffold first; do not replace a green scaffold just because it is generic. Do not open validate-app-module.mjs, module_static_check.mjs, assert-module-conformance.mjs, or assert-rxdb-only.mjs until the required files exist and a validation command has reported a concrete failure.
+- sequencing rule: after reading the required skill once, trust the service preflight scaffold and make bounded requested-domain edits under {module_dir}/. Do not list, dump, or inventory the generated scaffold before the first domain edit. If a later validator run reports a missing required file, repair only that exact scaffold gap; do not replace a green scaffold just because it is generic. Do not open validate-app-module.mjs, module_static_check.mjs, assert-module-conformance.mjs, or assert-rxdb-only.mjs until the app files exist and a validation command has reported a concrete failure.
 - pre-validation edit gate: after reading the skill and inspecting the scaffold/few-shots, your next app action must write requested-domain changes under {module_dir}/. Before the first validation call, edit at least core/records.mjs, core/automation.mjs, index.html, index.js, one locale file, and one tests/*.test.mjs file so they contain concrete requested-domain fixture facts. Do not run `ctox business-os app validate`, module tests, node --check, or scaffold repair as the first action on a complete fresh scaffold.
 - scaffold action allowlist rule: first-pass runtime apps should keep the scaffold's existing action surface: the form submit flow plus data-action values `new`, `delete`, and `follow-up`. Prefer changing labels, copy, filters, and selected-record facts over inventing new visible action buttons. Do not add data-action="attention", bulk, renew, reorder, export, ai, or status-only buttons in index.html unless index.js gets an exact `else if (action === "...")` branch in the same edit with a real persistence or commandBus effect. If a new action has no handler yet, remove the button before validation.
 - lockstep edit rule: if you change helper exports, schema fields, collection names, status values, command payload fields, fixture records, labels, filters, UI selectors, or HTML data-action values, update every importer, every concrete index.js handler/branch/action-map entry, and tests/*.test.mjs in the same implementation pass before running validation. Partial helper rewrites such as automation imports for records helpers that do not exist yet are invalid intermediate deliverables. Every data-action="..." in index.html must have a real click handler or action branch in index.js; do not add visible buttons such as bulk/renewal/churn actions unless those exact actions work end to end. If index.html changes after the scaffold baseline, index.js must also change after the baseline so the DOM selectors, form fields, render output, and actions match the new fragment.
@@ -24968,7 +24968,7 @@ Business OS app build target:
 - required artifact write pattern: use exact filenames only. Do not use `cp .tmp_schema.json co*.json`, `cp .csjson.tmp collections*.json`, `rm collections.schema.json`, `rm *.json`, `mv module*.json module.json`, short alias files such as `m.json`, or any glob/brace/wildcard repair for required files. If a required file must change, write the final content directly to "$MODULE_DIR/collections.schema.json" or the exact required target and parse/import it immediately.
 - path rule: every generated app artifact must be under {module_dir}/; do not write root-level module.json, root-level collections.schema.json, root-level {module_id}/, root-level blocker/status Markdown, src/skills/, or any skill-named path. Ignore stale artifact-contract/review examples that contradict this target block.
 - no guard probing: do not test shell aliases, wrapper behavior, root write behavior, hardlinks, symlinks, or guard behavior; implement only inside {module_dir}/.
-- first file action: inspect the existing scaffold in {module_dir}/. If it is missing, create {module_dir}/ and the required inventory; if it exists, do not clean or reset it. Edit only the bounded domain-specific parts needed for the requested app, including the owned collection shape, fixture records, labels, visible workflow, automation command facts, and positive tests.
+- first app artifact action: write bounded requested-domain changes directly under {module_dir}/. If preflight explicitly says the scaffold failed or {module_dir}/ is empty, stop and report the scaffold failure instead of inventing a different structure. Do not clean, reset, list, or dump the scaffold. Edit only the bounded domain-specific parts needed for the requested app, including the owned collection shape, fixture records, labels, visible workflow, automation command facts, and positive tests.
 - exact mount rule: installed App Creator modules must make index.js load `./index.html` with exactly `fetch(new URL('./index.html', import.meta.url))`, assign the result into `ctx.host.innerHTML`, and attach `./index.css` with `new URL('./index.css', import.meta.url)` before DOM queries or event wiring. Do not use `fetch('./index.html')`, helper-wrapped template fetches, or any other runtime network fetch. Do not leave index.html unused while building the whole UI only with document.createElement.
 - HTML fragment rule: index.html must be a Business OS shell fragment only. Do not write a full browser document and do not include `<!doctype>`, `<html>`, `<head>`, `<body>`, `<link>`, `<script>`, `<meta>`, `<title>`, or `<style>` in index.html.
 - CSS scoping rule: index.css must scope module variables and selectors under the module root class. Do not define custom properties on `:root`, `html`, or `body`, do not redefine shell/base tokens such as `--surface`, `--text`, `--line`, or `--accent`, and do not create self-referential token aliases.
@@ -26936,7 +26936,8 @@ mod tests {
         assert!(prompt.contains("core/automation.mjs, core/records.mjs"));
         assert!(prompt.contains("schema.js is the only root schema module"));
         assert!(prompt.contains("Do not rename it, delete it, replace it with schema.mjs"));
-        assert!(prompt.contains("mandatory first screen: inspect the scaffold first"));
+        assert!(prompt.contains("scaffold baseline rule"));
+        assert!(prompt.contains("auditing or validating it before requested-domain edits"));
         assert!(prompt.contains("one-shot data-model rule"));
         assert!(prompt.contains("preserve the scaffold's single primary module-owned collection"));
         assert!(
@@ -26977,15 +26978,12 @@ mod tests {
         assert!(prompt.contains("store.distribution=\"ctox-repo-module\""));
         assert!(prompt.contains("Do not run `ls`, `find`, `rg`, `grep`, or `tree` over"));
         assert!(prompt.contains("any source module directory"));
-        assert!(prompt.contains(
-            "Use shipped customers, shiftflow, and outbound as the default three few-shots"
-        ));
+        assert!(prompt.contains("embedded customers, shiftflow, and outbound patterns"));
         assert!(prompt.contains("scaffold preservation rule"));
         assert!(prompt.contains("Do not clean, delete, reset, replace, or rewrite it wholesale"));
-        assert!(prompt.contains(
-            "inspect exactly three shipped Business OS modules as short targeted pattern references"
-        ));
-        assert!(prompt.contains("preferably customers, shiftflow, and outbound"));
+        assert!(prompt.contains("CTOX embeds the required three shipped-module patterns"));
+        assert!(prompt.contains("outbound/core/audience.js"));
+        assert!(prompt.contains("Never invent core/automation.mjs few-shot files"));
         assert!(prompt.contains("Use notes only as an optional fourth simple-CRUD reference"));
         assert!(prompt.contains("Never use generated installed modules"));
         assert!(prompt.contains("bench_* apps"));
@@ -27000,8 +26998,8 @@ mod tests {
             "alternate ticket command types such as ctox.business_os.ticket.followup.create"
         ));
         assert!(prompt.contains("current-contract rule: if an existing module conflicts"));
-        assert!(prompt.contains("sequencing rule: after reading the required skill"));
-        assert!(prompt.contains("before reading validator/checker source files"));
+        assert!(prompt.contains("sequencing rule: after reading the required skill once"));
+        assert!(prompt.contains("Do not list, dump, or inventory the generated scaffold"));
         assert!(prompt.contains("validators and static checkers are black-box gates"));
         assert!(prompt.contains("cwd warning: shell tools run from the install root"));
         assert!(prompt.contains("bounded-shell rule: do not run find/rg/grep/ls/tree over $HOME"));
@@ -27067,6 +27065,9 @@ mod tests {
         assert!(prompt.contains("\"suggested_skill\": \"business-os-app-module-development\""));
         assert!(!prompt.contains("business-basic-module-development"));
         assert!(!prompt.contains("product_engineering/business-basic-module-development"));
+        assert!(!prompt.contains("src/apps/business-os/modules/outbound/core/automation.mjs"));
+        assert!(!prompt.contains("mandatory first screen: inspect the scaffold first"));
+        assert!(!prompt.contains("first file action: inspect the existing scaffold"));
     }
 
     #[test]
@@ -27096,8 +27097,8 @@ mod tests {
         ));
         assert!(prompt.contains("scaffold preservation rule"));
         assert!(prompt.contains("Do not clean, delete, reset, replace, or rewrite it wholesale"));
-        assert!(prompt.contains("inspect exactly three shipped Business OS modules"));
-        assert!(prompt.contains("mandatory first screen: inspect the scaffold first"));
+        assert!(prompt.contains("CTOX embeds the required three shipped-module patterns"));
+        assert!(prompt.contains("scaffold baseline rule"));
         assert!(prompt.contains("one-shot data-model rule"));
         assert!(prompt.contains("preserve the scaffold's single primary module-owned collection"));
         assert!(
@@ -27137,6 +27138,8 @@ mod tests {
         assert!(prompt.contains("Do not run `ls`, `find`, `rg`, `grep`, or `tree` over"));
         assert!(prompt.contains("any source module directory"));
         assert!(prompt.contains("customers, shiftflow, and outbound"));
+        assert!(prompt.contains("outbound/core/audience.js"));
+        assert!(prompt.contains("Never invent core/automation.mjs few-shot files"));
         assert!(prompt.contains("Use notes only as an optional fourth simple-CRUD reference"));
         assert!(prompt.contains("Never use generated installed modules"));
         assert!(prompt.contains(
@@ -27175,6 +27178,9 @@ mod tests {
         assert!(prompt.contains("Python file-generation scripts"));
         assert!(prompt.contains("Node writer scripts"));
         assert!(prompt.contains("base64 write wrappers"));
+        assert!(!prompt.contains("src/apps/business-os/modules/outbound/core/automation.mjs"));
+        assert!(!prompt.contains("mandatory first screen: inspect the scaffold first"));
+        assert!(!prompt.contains("first file action: inspect the existing scaffold"));
         assert_eq!(
             suggested_skill_for_command(&command).as_deref(),
             Some(BUSINESS_OS_APP_MODULE_SKILL_NAME)
