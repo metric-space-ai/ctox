@@ -1302,14 +1302,14 @@ fn business_os_guard_allows_scaffold_runtime_core_helpers() -> anyhow::Result<()
 
     assert!(
         business_os_app_root_artifact_write_guard(
-            "cat > runtime/business-os/installed-modules/inventory/core/records.mjs <<'EOF'\nexport const records = [];\nEOF",
+            "cat > runtime/business-os/installed-modules/inventory/core/records.mjs <<'EOF'\nexport const MODULE_ID = 'inventory';\nexport const COLLECTION_NAME = 'inventory_records';\nexport function createRecord(input = {}, time = Date.now()) { return { id: String(input.id || 'rec_' + time), title: String(input.title || 'New record'), status: normalizeStatus(input.status), is_deleted: Boolean(input.is_deleted) }; }\nexport function normalizeStatus(value) { const status = String(value || '').trim().toLowerCase(); return status === 'done' || status === 'blocked' ? status : 'open'; }\nexport function visibleRecords(records = []) { return records.filter((record) => !record.is_deleted); }\nexport function summarizeRecords(records = []) { const visible = visibleRecords(records); return { total: visible.length, open: visible.filter((record) => normalizeStatus(record.status) === 'open').length }; }\nEOF",
             root.path(),
         )
         .is_none()
     );
     assert!(
         business_os_app_root_artifact_write_guard(
-            "cat > runtime/business-os/installed-modules/inventory/core/automation.mjs <<'EOF'\nexport function buildFollowUpCommand() { return {}; }\nEOF",
+            "cat > runtime/business-os/installed-modules/inventory/core/automation.mjs <<'EOF'\nexport function buildFollowUpCommand(record = {}) { return { type: 'business_os.chat.task', command_type: 'business_os.chat.task', payload: { record_snapshot: { ...record } } }; }\nEOF",
             root.path(),
         )
         .is_none()
@@ -1563,6 +1563,182 @@ cat > "$MODULE_DIR/collections.schema.json" <<'JSON'
   }
 }
 JSON"#;
+
+    assert!(business_os_app_root_artifact_write_guard(command, root.path()).is_none());
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_runtime_schema_js_that_renames_scaffold_collection(
+) -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let command = r#"cat > runtime/business-os/installed-modules/bench_subscriptions_r105_20260619T181717Z/schema.js <<'JS'
+const subscriptionsSchema = {
+  title: 'Subscriptions',
+  primaryKey: 'id',
+  type: 'object',
+  properties: { id: { type: 'string' } },
+};
+
+export const collections = {
+  subscriptions: subscriptionsSchema,
+};
+JS"#;
+
+    let err = business_os_app_root_artifact_write_guard(command, root.path())
+        .expect("schema.js collection rename should be blocked");
+
+    assert!(err.contains("legacy or source-style runtime module contract"));
+    assert!(err.contains("schema.js"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_allows_runtime_schema_js_with_scaffold_collection() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let command = r#"cat > runtime/business-os/installed-modules/bench_inventory_r105_20260619T181717Z/schema.js <<'JS'
+const recordSchema = {
+  title: 'Inventory Records',
+  primaryKey: 'id',
+  type: 'object',
+  properties: { id: { type: 'string' }, title: { type: 'string' } },
+};
+
+export const collections = {
+  bench_inventory_r105_20260619t181717z_records: recordSchema,
+};
+JS"#;
+
+    assert!(business_os_app_root_artifact_write_guard(command, root.path()).is_none());
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_runtime_records_mjs_that_drops_stable_scaffold_exports(
+) -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let command = r#"cat > runtime/business-os/installed-modules/bench_subscriptions_r105_20260619T181717Z/core/records.mjs <<'JS'
+export const STATUS_OPTIONS = ['active', 'paused', 'churn_risk', 'churned'];
+
+export function normalizeRecord(input = {}) {
+  return { id: String(input.id || 'rec'), status: input.status || 'active' };
+}
+
+export function visibleRecords(records = []) {
+  return records.filter((record) => record.status !== 'churned');
+}
+
+export function summarizeRecords(records = []) {
+  return { total: records.length };
+}
+JS"#;
+
+    let err = business_os_app_root_artifact_write_guard(command, root.path())
+        .expect("records.mjs stable export removal should be blocked");
+
+    assert!(err.contains("legacy or source-style runtime module contract"));
+    assert!(err.contains("records.mjs"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_allows_runtime_records_mjs_with_stable_scaffold_exports() -> anyhow::Result<()>
+{
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let command = r#"cat > runtime/business-os/installed-modules/bench_subscriptions_r105_20260619T181717Z/core/records.mjs <<'JS'
+export const MODULE_ID = 'bench_subscriptions_r105_20260619T181717Z';
+export const COLLECTION_NAME = 'bench_subscriptions_r105_20260619t181717z_records';
+
+export function createRecord(input = {}, time = Date.now()) {
+  return {
+    id: String(input.id || 'rec_' + time),
+    title: String(input.title || input.customer || 'New subscription'),
+    status: normalizeStatus(input.status),
+    owner: String(input.owner || ''),
+    due_at_ms: Number(input.due_at_ms || 0),
+    notes: String(input.notes || ''),
+    created_at_ms: Number(input.created_at_ms || time),
+    updated_at_ms: Number(input.updated_at_ms || time),
+    is_deleted: Boolean(input.is_deleted),
+    customer: String(input.customer || ''),
+    renewal_date: String(input.renewal_date || ''),
+    churn_risk: String(input.churn_risk || 'low'),
+  };
+}
+
+export function normalizeStatus(value) {
+  const status = String(value || '').trim().toLowerCase();
+  return status === 'done' || status === 'blocked' ? status : 'open';
+}
+
+export function visibleRecords(records = []) {
+  return records.filter((record) => !record.is_deleted);
+}
+
+export function summarizeRecords(records = []) {
+  const visible = visibleRecords(records);
+  return { total: visible.length, open: visible.filter((record) => normalizeStatus(record.status) === 'open').length };
+}
+JS"#;
+
+    assert!(business_os_app_root_artifact_write_guard(command, root.path()).is_none());
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_runtime_automation_mjs_without_chat_task_contract() -> anyhow::Result<()>
+{
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let command = r#"cat > runtime/business-os/installed-modules/bench_subscriptions_r105_20260619T181717Z/core/automation.mjs <<'JS'
+export function planFollowUpTasks(record = {}) {
+  return [{ record_id: record.id, title: 'Renewal review' }];
+}
+JS"#;
+
+    let err = business_os_app_root_artifact_write_guard(command, root.path())
+        .expect("automation.mjs without buildFollowUpCommand should be blocked");
+
+    assert!(err.contains("legacy or source-style runtime module contract"));
+    assert!(err.contains("automation.mjs"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_allows_runtime_automation_mjs_with_chat_task_contract() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let command = r#"cat > runtime/business-os/installed-modules/bench_subscriptions_r105_20260619T181717Z/core/automation.mjs <<'JS'
+const MODULE_ID = 'bench_subscriptions_r105_20260619T181717Z';
+
+export function buildFollowUpCommand(record = {}) {
+  const recordId = String(record.id || 'demo');
+  const prompt = 'Review subscription renewal for ' + String(record.title || record.customer || recordId);
+  return {
+    id: 'cmd_' + MODULE_ID + '_' + recordId,
+    module: MODULE_ID,
+    type: 'business_os.chat.task',
+    command_type: 'business_os.chat.task',
+    record_id: recordId,
+    payload: {
+      title: 'Review: ' + recordId,
+      instruction: prompt,
+      prompt,
+      record_snapshot: { ...record, id: recordId },
+    },
+  };
+}
+JS"#;
 
     assert!(business_os_app_root_artifact_write_guard(command, root.path()).is_none());
     Ok(())

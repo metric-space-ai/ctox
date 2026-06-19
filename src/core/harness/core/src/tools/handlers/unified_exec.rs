@@ -397,10 +397,6 @@ pub(crate) fn business_os_app_root_artifact_write_guard(
     {
         return Some(module_noncanonical_helper_guard_message(&path));
     }
-    if let Some(path) = command_writes_legacy_runtime_module_contract(command, &workspace_root, cwd)
-    {
-        return Some(module_legacy_contract_guard_message(&path));
-    }
     if let Some(path) = command_reads_business_os_module_whole_file(command, &workspace_root, cwd) {
         return Some(module_whole_file_read_guard_message(&path));
     }
@@ -432,6 +428,10 @@ pub(crate) fn business_os_app_root_artifact_write_guard(
         command_writes_large_business_os_module_heredoc(command, &workspace_root, cwd)
     {
         return Some(module_large_heredoc_guard_message(&path));
+    }
+    if let Some(path) = command_writes_legacy_runtime_module_contract(command, &workspace_root, cwd)
+    {
+        return Some(module_legacy_contract_guard_message(&path));
     }
     None
 }
@@ -1093,10 +1093,46 @@ fn command_writes_legacy_runtime_module_contract(
         command_writes_runtime_module_artifact_named(&compact, workspace_root, cwd, "schema.js")
     {
         let squashed = squashed_lower(&compact);
+        let expected_collection =
+            runtime_scaffold_collection_for_path_or_command(&path, &compact).unwrap_or_default();
         let legacy_schema_js = (squashed.contains("schemaformat")
             || squashed.contains("schema_format"))
             && squashed.contains("es-module");
-        if legacy_schema_js {
+        let scaffold_collection_drift =
+            !expected_collection.is_empty() && !squashed.contains(&expected_collection);
+        if legacy_schema_js || scaffold_collection_drift {
+            return Some(path);
+        }
+    }
+
+    if let Some(path) =
+        command_writes_runtime_module_artifact_named(&compact, workspace_root, cwd, "records.mjs")
+    {
+        let squashed = squashed_lower(&compact);
+        let missing_stable_exports = !squashed.contains("exportconstcollection_name")
+            || !squashed.contains("exportfunctioncreaterecord")
+            || !squashed.contains("exportfunctionnormalizestatus")
+            || !squashed.contains("exportfunctionvisiblerecords")
+            || !squashed.contains("exportfunctionsummarizerecords");
+        if missing_stable_exports {
+            return Some(path);
+        }
+    }
+
+    if let Some(path) = command_writes_runtime_module_artifact_named(
+        &compact,
+        workspace_root,
+        cwd,
+        "automation.mjs",
+    ) {
+        let squashed = squashed_lower(&compact);
+        let has_build_follow_up_export = squashed.contains("exportfunctionbuildfollowupcommand")
+            || squashed.contains("exportconstbuildfollowupcommand")
+            || squashed.contains("export{buildfollowupcommand");
+        let missing_stable_automation = !has_build_follow_up_export
+            || !squashed.contains("business_os.chat.task")
+            || !squashed.contains("record_snapshot");
+        if missing_stable_automation {
             return Some(path);
         }
     }
