@@ -12,12 +12,12 @@ use ctox_app_server_protocol::AuthMode as ApiAuthMode;
 use ring::aead;
 use ring::hmac;
 use ring::rand::{SecureRandom, SystemRandom};
-use rusqlite::params;
-use rusqlite::params_from_iter;
-use rusqlite::types::Value as SqlValue;
 use rusqlite::Connection;
 use rusqlite::OpenFlags;
 use rusqlite::OptionalExtension;
+use rusqlite::params;
+use rusqlite::params_from_iter;
+use rusqlite::types::Value as SqlValue;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -8598,7 +8598,11 @@ fn business_os_backup_restore_drill_export(
             "installed_module_manifests",
             "Installierte App-Manifeste sind sichtbar",
             module_manifest_count > 0,
-            if module_scope.is_some() { "blocking" } else { "warning" },
+            if module_scope.is_some() {
+                "blocking"
+            } else {
+                "warning"
+            },
             "Dynamische Apps brauchen ihre runtime/business-os/installed-modules Manifeste und Assets.",
         ),
         business_os_restore_drill_check(
@@ -24429,17 +24433,17 @@ Business OS app build target:
 - required file inventory: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, core/automation.mjs, core/records.mjs, locales/de.json, locales/en.json, and tests/*.test.mjs must exist before you can claim success.
 - schema invariant rule: schema.js is the only root schema module. Do not rename it, delete it, replace it with schema.mjs, or leave schema.mjs/schema.cjs as a root-level alias. Put reusable ESM schema fragments under core/*.mjs and re-export them from schema.js.
 - mandatory first screen: inspect the scaffold first, preserve core/automation.mjs, core/records.mjs, locales, tests, mount wiring, and helper export names unless every importer is updated in the same edit. Use shipped customers, shiftflow, and outbound as the default three few-shots. Keep the app small, but do not treat an untouched scaffold as the requested app.
-- exact artifact rule: required artifacts are canonical files, not shell patterns. Write module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales, core helpers, and tests by exact path under {module_dir}/ only. Do not create temporary schema/manifest aliases, do not copy through globs or brace expansion, do not create files literally named co*ions.*json or colle{{ctions,ctions}}.schema.json, and do not run rm against required artifacts.
+- exact artifact rule: required artifacts are canonical files, not shell patterns. Write module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales, core helpers, and tests by exact path under {module_dir}/ only. Do not create temporary schema/manifest aliases, short alias files such as m.json, manifest.json, collections.json, or schema.mjs/schema.cjs, do not copy through globs or brace expansion, do not create files literally named co*ions.*json or colle{{ctions,ctions}}.schema.json, and do not run rm against required artifacts.
 - scaffold preservation rule: CTOX service preflight may already have created a validator-clean scaffold in {module_dir}/. Treat that scaffold as the baseline. Do not clean, delete, reset, replace, or rewrite it wholesale. Customize the smallest necessary scaffold files in place, preserve the mount wiring, core helpers, schema wrappers, locales, and tests, and run `ctox business-os app scaffold {module_id} {mode_flag} --repair-missing` before domain edits if core/automation.mjs or core/records.mjs is missing.
-- few-shot rule: inspect exactly three shipped Business OS modules as short targeted pattern references, preferably customers, shiftflow, and outbound from the shipped `src/apps/business-os/modules/` tree. Use notes only as an optional fourth simple-CRUD reference; it is not a scaffold-helper template and may not contain core/automation.mjs or core/records.mjs. Never use generated installed modules, runtime/business-os/installed-modules, ~/.local/state/ctox/business-os/installed-modules, bench_* apps, previous App Creator outputs, or app-creator-bench artifacts as few-shot templates. Do not request complete file dumps, do not delegate a broad module-reading sweep to a subagent, and do not keep reading examples after the three-module summary.
+- few-shot rule: inspect exactly three shipped Business OS modules as short targeted pattern references, preferably customers, shiftflow, and outbound from the shipped `src/apps/business-os/modules/` tree. Open exact selected module paths directly; do not run `ls src/apps/business-os/modules/`, `find src/apps/business-os/modules`, or module-root discovery to choose examples. Use notes only as an optional fourth simple-CRUD reference; it is not a scaffold-helper template and may not contain core/automation.mjs or core/records.mjs. Never use generated installed modules, runtime/business-os/installed-modules, ~/.local/state/ctox/business-os/installed-modules, bench_* apps, previous App Creator outputs, or app-creator-bench artifacts as few-shot templates. Do not request complete file dumps, do not use combined multi-file snippets or broad line sweeps, do not delegate a broad module-reading sweep to a subagent, and do not keep reading examples after the three-module summary.
 - legacy anti-pattern rule: existing modules can contain old compatibility code. For this generated app, reject ctx.db.raw, db.raw, ctx.collections, window.dispatchEvent, ctox-business-os-chat-submit, manual business_commands insert/upsert fallbacks, pending_sync local state, JSON-module schema wrappers, bundler/fake-DOM tests, alternate ticket command types such as ctox.business_os.ticket.followup.create, and default layout.right/right-resizer patterns.
 - current-contract rule: if an existing module conflicts with the required skill, this prompt, `ctox business-os app validate`, or `module_static_check.mjs`, the current contract wins and the existing pattern is an anti-pattern.
-- bounded-shell rule: do not run find/rg/grep/ls over $HOME, /Users, /, ~/.local/state, the whole install root, or the whole repo to discover validators, scripts, examples, or guard internals. Inspect only exact files in {module_dir}/ and exact files in the three chosen shipped few-shot module directories. Do not read or write ~/.local/state/ctox/business-os/installed-modules directly; use the prompt's {module_dir}/ path only. Use `ctox business-os app validate {module_id} {mode_flag}`; do not search for validator filenames.
+- bounded-shell rule: do not run find/rg/grep/ls over $HOME, /Users, /, ~/.local/state, the whole install root, the whole repo, or `src/apps/business-os/modules/` to discover validators, scripts, examples, or guard internals. Inspect only exact files in {module_dir}/ and exact files in the three chosen shipped few-shot module directories. Do not read or write ~/.local/state/ctox/business-os/installed-modules directly; use the prompt's {module_dir}/ path only. Use `ctox business-os app validate {module_id} {mode_flag}`; do not search for validator filenames.
 - sequencing rule: after reading the required skill and inspecting three shipped modules, verify {module_dir}/ has the required file inventory before reading validator/checker source files. If the directory is missing or incomplete, repair the scaffold first; do not replace a green scaffold just because it is generic. Do not open validate-app-module.mjs, module_static_check.mjs, assert-module-conformance.mjs, or assert-rxdb-only.mjs until the required files exist and a validation command has reported a concrete failure.
 - validator rule: validators and static checkers are black-box gates. Run `ctox business-os app validate {module_id} {mode_flag}` only after you have made the smallest requested-domain edits to records, labels, filters, automation payload, and tests; scaffold inspection alone is not a file pass. If validation says there were no post-lease app artifact writes, edit files under {module_dir}/ for the requested domain and validate again. Repair validator output bullets exactly. Do not reconstruct scanner regexes or plan around checker internals before writing the app.
 - cwd warning: shell tools run from the install root, not from the module directory; never use bare redirects like > module.json, > collections.schema.json, > {module_id}/index.js, or mkdir {module_id}.
 - required shell write pattern: set MODULE_DIR="{module_dir}" and write every file as "$MODULE_DIR/<file>"; create "$MODULE_DIR/locales" and "$MODULE_DIR/tests" before writing nested files.
-- required artifact write pattern: use exact filenames only. Do not use `cp .tmp_schema.json co*.json`, `cp .csjson.tmp collections*.json`, `rm collections.schema.json`, `rm *.json`, `mv module*.json module.json`, or any glob/brace/wildcard repair for required files. If a required file must change, write the final content directly to "$MODULE_DIR/collections.schema.json" or the exact required target and parse/import it immediately.
+- required artifact write pattern: use exact filenames only. Do not use `cp .tmp_schema.json co*.json`, `cp .csjson.tmp collections*.json`, `rm collections.schema.json`, `rm *.json`, `mv module*.json module.json`, short alias files such as `m.json`, or any glob/brace/wildcard repair for required files. If a required file must change, write the final content directly to "$MODULE_DIR/collections.schema.json" or the exact required target and parse/import it immediately.
 - path rule: every generated app artifact must be under {module_dir}/; do not write root-level module.json, root-level collections.schema.json, root-level {module_id}/, root-level blocker/status Markdown, src/skills/, or any skill-named path. Ignore stale artifact-contract/review examples that contradict this target block.
 - no guard probing: do not test shell aliases, wrapper behavior, root write behavior, hardlinks, symlinks, or guard behavior; implement only inside {module_dir}/.
 - first file action: inspect the existing scaffold in {module_dir}/. If it is missing, create {module_dir}/ and the required inventory; if it exists, do not clean or reset it. Edit only the bounded domain-specific parts needed for the requested app, including the owned collection shape, fixture records, labels, visible workflow, automation command facts, and positive tests.
@@ -25991,11 +25995,13 @@ mod tests {
             granted.get("status").and_then(Value::as_str),
             Some("completed")
         );
-        assert!(granted
-            .pointer("/result/source_file_ids")
-            .and_then(Value::as_array)
-            .map(|ids| !ids.is_empty())
-            .unwrap_or(false));
+        assert!(
+            granted
+                .pointer("/result/source_file_ids")
+                .and_then(Value::as_array)
+                .map(|ids| !ids.is_empty())
+                .unwrap_or(false)
+        );
         let granted_snapshots = accept_rxdb_business_command(
             root,
             serde_json::json!({
@@ -26022,10 +26028,12 @@ mod tests {
             granted_snapshots.get("status").and_then(Value::as_str),
             Some("completed")
         );
-        assert!(granted_snapshots
-            .get("result")
-            .and_then(Value::as_array)
-            .is_some());
+        assert!(
+            granted_snapshots
+                .get("result")
+                .and_then(Value::as_array)
+                .is_some()
+        );
         Ok(())
     }
 
@@ -26414,13 +26422,16 @@ mod tests {
         assert!(prompt.contains("do not treat an untouched scaffold as the requested app"));
         assert!(prompt.contains("scaffold inspection alone is not a file pass"));
         assert!(prompt.contains("no post-lease app artifact writes"));
+        assert!(prompt.contains("short alias files such as m.json"));
+        assert!(prompt.contains("do not run `ls src/apps/business-os/modules/`"));
         assert!(prompt.contains(
             "Use shipped customers, shiftflow, and outbound as the default three few-shots"
         ));
         assert!(prompt.contains("scaffold preservation rule"));
         assert!(prompt.contains("Do not clean, delete, reset, replace, or rewrite it wholesale"));
-        assert!(prompt
-            .contains("inspect exactly three shipped Business OS modules as short targeted pattern references"));
+        assert!(prompt.contains(
+            "inspect exactly three shipped Business OS modules as short targeted pattern references"
+        ));
         assert!(prompt.contains("preferably customers, shiftflow, and outbound"));
         assert!(prompt.contains("Use notes only as an optional fourth simple-CRUD reference"));
         assert!(prompt.contains("Never use generated installed modules"));
@@ -26429,7 +26440,9 @@ mod tests {
         assert!(prompt.contains(
             "legacy anti-pattern rule: existing modules can contain old compatibility code"
         ));
-        assert!(prompt.contains("reject ctx.db.raw, db.raw, ctx.collections, window.dispatchEvent"));
+        assert!(
+            prompt.contains("reject ctx.db.raw, db.raw, ctx.collections, window.dispatchEvent")
+        );
         assert!(prompt.contains("ctox-business-os-chat-submit"));
         assert!(prompt.contains("manual business_commands insert/upsert fallbacks"));
         assert!(prompt.contains(
@@ -26444,16 +26457,23 @@ mod tests {
         assert!(prompt.contains(
             "Do not read or write ~/.local/state/ctox/business-os/installed-modules directly"
         ));
-        assert!(prompt
-            .contains("set MODULE_DIR=\"runtime/business-os/installed-modules/subscriptions\""));
-        assert!(prompt.contains("exact mount rule: installed App Creator modules must make index.js load `./index.html`"));
+        assert!(
+            prompt
+                .contains("set MODULE_DIR=\"runtime/business-os/installed-modules/subscriptions\"")
+        );
+        assert!(prompt.contains(
+            "exact mount rule: installed App Creator modules must make index.js load `./index.html`"
+        ));
         assert!(prompt.contains("fetch(new URL('./index.html', import.meta.url))"));
         assert!(prompt.contains("Do not use `fetch('./index.html')`"));
         assert!(prompt.contains("or any other runtime network fetch"));
         assert!(prompt.contains("assign the result into `ctx.host.innerHTML`"));
         assert!(prompt.contains("new URL('./index.css', import.meta.url)"));
-        assert!(prompt
-            .contains("HTML fragment rule: index.html must be a Business OS shell fragment only"));
+        assert!(
+            prompt.contains(
+                "HTML fragment rule: index.html must be a Business OS shell fragment only"
+            )
+        );
         assert!(prompt.contains("Do not write a full browser document"));
         assert!(prompt.contains("CSS scoping rule: index.css must scope module variables"));
         assert!(prompt.contains("Do not define custom properties on `:root`, `html`, or `body`"));
@@ -26531,6 +26551,8 @@ mod tests {
         assert!(prompt.contains("do not treat an untouched scaffold as the requested app"));
         assert!(prompt.contains("scaffold inspection alone is not a file pass"));
         assert!(prompt.contains("no post-lease app artifact writes"));
+        assert!(prompt.contains("short alias files such as m.json"));
+        assert!(prompt.contains("do not run `ls src/apps/business-os/modules/`"));
         assert!(prompt.contains("customers, shiftflow, and outbound"));
         assert!(prompt.contains("Use notes only as an optional fourth simple-CRUD reference"));
         assert!(prompt.contains("Never use generated installed modules"));
@@ -26553,8 +26575,11 @@ mod tests {
         assert!(prompt.contains(
             "Do not read or write ~/.local/state/ctox/business-os/installed-modules directly"
         ));
-        assert!(prompt
-            .contains("HTML fragment rule: index.html must be a Business OS shell fragment only"));
+        assert!(
+            prompt.contains(
+                "HTML fragment rule: index.html must be a Business OS shell fragment only"
+            )
+        );
         assert!(prompt.contains("CSS scoping rule: index.css must scope module variables"));
         assert!(prompt.contains("Node tests must not import ../index.js or ../schema.js directly"));
         assert!(prompt.contains("keep helper exports and every named local import in lockstep"));
@@ -26805,11 +26830,13 @@ mod tests {
                 .and_then(Value::as_str),
             Some("role_or_scope_denied")
         );
-        assert!(denied
-            .pointer("/result/policy_decision/display_reason")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("not allowed"));
+        assert!(
+            denied
+                .pointer("/result/policy_decision/display_reason")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("not allowed")
+        );
         drop(conn);
 
         let founder_unassigned = accept_rxdb_business_command(
@@ -27457,13 +27484,15 @@ mod tests {
                 && event.pointer("/payload/command_id").and_then(Value::as_str)
                     == Some("cmd_audit_policy_allowed")
         }));
-        assert!(business_event_payloads(
-            &conn,
-            "business_commands",
-            "cmd_activity_allowed_list",
-            "business_os.policy.allowed",
-        )?
-        .is_empty());
+        assert!(
+            business_event_payloads(
+                &conn,
+                "business_commands",
+                "cmd_activity_allowed_list",
+                "business_os.policy.allowed",
+            )?
+            .is_empty()
+        );
 
         Ok(())
     }
@@ -27539,11 +27568,13 @@ mod tests {
             role_change.pointer("/current/role").and_then(Value::as_str),
             Some("founder")
         );
-        assert!(role_change
-            .pointer("/changed_fields")
-            .and_then(Value::as_array)
-            .context("expected changed_fields")?
-            .contains(&Value::String("role".to_owned())));
+        assert!(
+            role_change
+                .pointer("/changed_fields")
+                .and_then(Value::as_array)
+                .context("expected changed_fields")?
+                .contains(&Value::String("role".to_owned()))
+        );
 
         Ok(())
     }
@@ -27617,11 +27648,13 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(false)
         );
-        assert!(deactivation
-            .pointer("/changed_fields")
-            .and_then(Value::as_array)
-            .context("expected changed_fields")?
-            .contains(&Value::String("active".to_owned())));
+        assert!(
+            deactivation
+                .pointer("/changed_fields")
+                .and_then(Value::as_array)
+                .context("expected changed_fields")?
+                .contains(&Value::String("active".to_owned()))
+        );
 
         Ok(())
     }
@@ -27723,12 +27756,16 @@ mod tests {
             .get("business_module_acl_ids")
             .and_then(Value::as_array)
             .context("expected changed ACL ids")?;
-        assert!(changed_ids
-            .iter()
-            .any(|id| id.as_str() == Some("private-app:founder:ops_admin")));
-        assert!(changed_ids
-            .iter()
-            .any(|id| id.as_str() == Some("private-app:founder:module_owner")));
+        assert!(
+            changed_ids
+                .iter()
+                .any(|id| id.as_str() == Some("private-app:founder:ops_admin"))
+        );
+        assert!(
+            changed_ids
+                .iter()
+                .any(|id| id.as_str() == Some("private-app:founder:module_owner"))
+        );
 
         let conn = open_store(root)?;
         let owner_active: i64 = conn.query_row(
@@ -27775,8 +27812,8 @@ mod tests {
     }
 
     #[test]
-    fn user_deactivation_requires_recovery_for_sole_private_app_responsibility(
-    ) -> anyhow::Result<()> {
+    fn user_deactivation_requires_recovery_for_sole_private_app_responsibility()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -27853,12 +27890,16 @@ mod tests {
             .pointer("/lifecycle/responsible_user_ids")
             .and_then(Value::as_array)
             .context("expected responsible ids")?;
-        assert!(responsible
-            .iter()
-            .any(|user| user.as_str() == Some("ops_admin")));
-        assert!(!responsible
-            .iter()
-            .any(|user| user.as_str() == Some("module_owner")));
+        assert!(
+            responsible
+                .iter()
+                .any(|user| user.as_str() == Some("ops_admin"))
+        );
+        assert!(
+            !responsible
+                .iter()
+                .any(|user| user.as_str() == Some("module_owner"))
+        );
 
         Ok(())
     }
@@ -27904,11 +27945,13 @@ mod tests {
             outcome.pointer("/result/operation").and_then(Value::as_str),
             Some("assign_founder")
         );
-        assert!(outcome
-            .pointer("/result/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("App responsibility"));
+        assert!(
+            outcome
+                .pointer("/result/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("App responsibility")
+        );
 
         let conn = open_store(root)?;
         let stored = outbound_load_required(
@@ -27975,11 +28018,13 @@ mod tests {
             outcome.pointer("/result/operation").and_then(Value::as_str),
             Some("user_upsert")
         );
-        assert!(outcome
-            .pointer("/result/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("App responsibility"));
+        assert!(
+            outcome
+                .pointer("/result/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("App responsibility")
+        );
 
         let conn = open_store(root)?;
         let stored = outbound_load_required(
@@ -29137,8 +29182,8 @@ mod tests {
     }
 
     #[test]
-    fn backup_manifest_version_compatibility_blocks_cross_version_and_downgrade(
-    ) -> anyhow::Result<()> {
+    fn backup_manifest_version_compatibility_blocks_cross_version_and_downgrade()
+    -> anyhow::Result<()> {
         let current = env!("CARGO_PKG_VERSION");
         let same = business_os_backup_restore_version_compatibility(
             Some(BUSINESS_OS_BACKUP_MANIFEST_SCHEMA_VERSION),
@@ -29642,8 +29687,8 @@ mod tests {
     }
 
     #[test]
-    fn module_release_rollback_command_uses_apps_rollback_without_modify_permission(
-    ) -> anyhow::Result<()> {
+    fn module_release_rollback_command_uses_apps_rollback_without_modify_permission()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -29869,8 +29914,8 @@ mod tests {
     }
 
     #[test]
-    fn module_source_rollback_version_uses_apps_rollback_without_modify_permission(
-    ) -> anyhow::Result<()> {
+    fn module_source_rollback_version_uses_apps_rollback_without_modify_permission()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let app_root = root.join("src").join("apps").join("business-os");
@@ -30102,11 +30147,13 @@ mod tests {
                 .and_then(Value::as_str),
             Some("failed")
         );
-        assert!(outcome
-            .pointer("/result/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("read_collections"));
+        assert!(
+            outcome
+                .pointer("/result/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("read_collections")
+        );
         Ok(())
     }
 
@@ -31042,8 +31089,8 @@ mod tests {
     }
 
     #[test]
-    fn module_lifecycle_projection_repair_assigns_orphan_private_app_responsibility(
-    ) -> anyhow::Result<()> {
+    fn module_lifecycle_projection_repair_assigns_orphan_private_app_responsibility()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -31194,18 +31241,20 @@ mod tests {
                 })
             })
             .context("expected private orphan app in catalog")?;
-        assert!(private_app
-            .pointer("/lifecycle/responsible_user_ids")
-            .and_then(Value::as_array)
-            .context("expected responsible ids")?
-            .iter()
-            .any(|id| id.as_str() == Some("ops-admin")));
+        assert!(
+            private_app
+                .pointer("/lifecycle/responsible_user_ids")
+                .and_then(Value::as_array)
+                .context("expected responsible ids")?
+                .iter()
+                .any(|id| id.as_str() == Some("ops-admin"))
+        );
         Ok(())
     }
 
     #[test]
-    fn module_release_rejects_stale_source_and_rollback_version_refs_before_manifest_write(
-    ) -> anyhow::Result<()> {
+    fn module_release_rejects_stale_source_and_rollback_version_refs_before_manifest_write()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -31265,11 +31314,13 @@ mod tests {
                 outcome.get("status").and_then(Value::as_str),
                 Some("failed")
             );
-            assert!(outcome
-                .pointer("/result/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains(field_name));
+            assert!(
+                outcome
+                    .pointer("/result/error")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .contains(field_name)
+            );
             assert_eq!(fs::read_to_string(&manifest_path)?, original_manifest);
         }
 
@@ -31341,11 +31392,13 @@ mod tests {
             outcome.get("status").and_then(Value::as_str),
             Some("failed")
         );
-        assert!(outcome
-            .pointer("/result/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("injected release insert failure"));
+        assert!(
+            outcome
+                .pointer("/result/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("injected release insert failure")
+        );
         assert_eq!(fs::read_to_string(&manifest_path)?, original_manifest);
 
         let conn = open_store(root)?;
@@ -31443,11 +31496,13 @@ mod tests {
             outcome.get("status").and_then(Value::as_str),
             Some("failed")
         );
-        assert!(outcome
-            .pointer("/result/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("injected release status failure"));
+        assert!(
+            outcome
+                .pointer("/result/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("injected release status failure")
+        );
         assert_eq!(fs::read_to_string(&manifest_path)?, original_manifest);
 
         let conn = open_store(root)?;
@@ -31730,11 +31785,13 @@ mod tests {
                 .and_then(Value::as_str),
             Some("failed")
         );
-        assert!(payload
-            .pointer("/summary/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("explicit Team grant or locked-state behavior"));
+        assert!(
+            payload
+                .pointer("/summary/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("explicit Team grant or locked-state behavior")
+        );
         assert_eq!(
             payload
                 .pointer("/summary/data_access_review/read_collections/0")
@@ -31818,11 +31875,13 @@ mod tests {
                 .and_then(Value::as_str),
             Some("missing-release")
         );
-        assert!(payload
-            .pointer("/summary/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("Query returned no rows"));
+        assert!(
+            payload
+                .pointer("/summary/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("Query returned no rows")
+        );
         Ok(())
     }
 
@@ -31873,11 +31932,13 @@ mod tests {
 
         // A brand new source file added after the baseline.
         save_widget_source(root, "extra.js", "export const extra = true;\n")?;
-        assert!(app_root
-            .join("modules")
-            .join("widget")
-            .join("extra.js")
-            .is_file());
+        assert!(
+            app_root
+                .join("modules")
+                .join("widget")
+                .join("extra.js")
+                .is_file()
+        );
         save_widget_source(
             root,
             "module.json",
@@ -31907,11 +31968,13 @@ mod tests {
             restored_manifest, baseline_manifest,
             "module.json must be restored together with source files"
         );
-        assert!(!app_root
-            .join("modules")
-            .join("widget")
-            .join("extra.js")
-            .is_file());
+        assert!(
+            !app_root
+                .join("modules")
+                .join("widget")
+                .join("extra.js")
+                .is_file()
+        );
         assert_eq!(
             baseline_sha,
             compute_module_bundle(&app_root, "widget")?.sha256
@@ -32156,9 +32219,10 @@ mod tests {
         assert!(materialized_path.is_file());
         assert_eq!(fs::read(&materialized_path)?, bytes);
         assert!(task.prompt.contains("Business OS attachments"));
-        assert!(task
-            .prompt
-            .contains(materialized_path.to_string_lossy().as_ref()));
+        assert!(
+            task.prompt
+                .contains(materialized_path.to_string_lossy().as_ref())
+        );
         assert!(task.prompt.contains("desktop_files/chatfile_verified"));
         assert!(task.prompt.contains(&content_hash));
         assert!(
@@ -32943,8 +33007,8 @@ mod tests {
     }
 
     #[test]
-    fn repair_queue_projections_redacts_inline_report_artifacts_and_counts_legacy_records(
-    ) -> anyhow::Result<()> {
+    fn repair_queue_projections_redacts_inline_report_artifacts_and_counts_legacy_records()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let conn = open_store(root)?;
@@ -33282,8 +33346,8 @@ mod tests {
     }
 
     #[test]
-    fn customers_invalid_command_writes_failed_projection_without_partial_record(
-    ) -> anyhow::Result<()> {
+    fn customers_invalid_command_writes_failed_projection_without_partial_record()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let actor = serde_json::json!({
@@ -33322,11 +33386,13 @@ mod tests {
             outbound_string(&command, &["status"]).as_deref(),
             Some("failed")
         );
-        assert!(command
-            .pointer("/result/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("health_status"));
+        assert!(
+            command
+                .pointer("/result/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("health_status")
+        );
         Ok(())
     }
 
@@ -35323,9 +35389,11 @@ mod tests {
             !backbone.is_empty(),
             "message drafting skillbook must have a real workflow backbone"
         );
-        assert!(backbone
-            .iter()
-            .any(|step| { outbound_string(step, &["step"]).as_deref() == Some("writeback") }));
+        assert!(
+            backbone
+                .iter()
+                .any(|step| { outbound_string(step, &["step"]).as_deref() == Some("writeback") })
+        );
         let routing = drafting
             .get("routing_taxonomy")
             .and_then(Value::as_array)
@@ -36075,8 +36143,8 @@ mod tests {
     }
 
     #[test]
-    fn outbound_active_engagement_keeps_sequence_version_until_explicit_reapply(
-    ) -> anyhow::Result<()> {
+    fn outbound_active_engagement_keeps_sequence_version_until_explicit_reapply()
+    -> anyhow::Result<()> {
         // Welle 4 (367): a live campaign sequence change must not silently
         // re-version active engagements. Each engagement stays pinned to the
         // sequence snapshot it captured until an explicit reapply flow runs.
@@ -36413,10 +36481,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("manual_physical_letter_marked_sent")
         );
-        assert!(send
-            .pointer("/result/physical_sent_at_ms")
-            .and_then(Value::as_i64)
-            .is_some());
+        assert!(
+            send.pointer("/result/physical_sent_at_ms")
+                .and_then(Value::as_i64)
+                .is_some()
+        );
         // Idempotency: replaying send_approved must not re-mark.
         let send_again = accept_rxdb_business_command(
             root,
@@ -38155,9 +38224,11 @@ mod tests {
             .pointer("/result/projections")
             .and_then(Value::as_array)
             .expect("asset upsert reports projections");
-        assert!(projections
-            .iter()
-            .any(|p| p["collection"] == "iot_assets" && p["id"] == "asset-iot-bc-1"));
+        assert!(
+            projections
+                .iter()
+                .any(|p| p["collection"] == "iot_assets" && p["id"] == "asset-iot-bc-1")
+        );
 
         let write = accept_rxdb_business_command(
             root,
@@ -38432,9 +38503,11 @@ mod tests {
             .get("modules")
             .and_then(Value::as_array)
             .context("catalog modules")?;
-        assert!(modules
-            .iter()
-            .any(|module| module.get("id").and_then(Value::as_str) == Some("research")));
+        assert!(
+            modules
+                .iter()
+                .any(|module| module.get("id").and_then(Value::as_str) == Some("research"))
+        );
         Ok(())
     }
 
@@ -38588,24 +38661,30 @@ mod tests {
                 .and_then(Value::as_str),
             Some("creator-user")
         );
-        assert!(module("private-zero")
-            .pointer("/lifecycle/responsible_user_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .any(|user| user.as_str() == Some("app-owner")));
-        assert!(module("private-zero")
-            .pointer("/lifecycle/preview_grant_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .any(|grant| grant.as_str() == Some("grant_preview_private_zero")));
-        assert!(module("private-zero")
-            .pointer("/lifecycle/preview_user_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .any(|user| user.as_str() == Some("preview-user")));
+        assert!(
+            module("private-zero")
+                .pointer("/lifecycle/responsible_user_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|user| user.as_str() == Some("app-owner"))
+        );
+        assert!(
+            module("private-zero")
+                .pointer("/lifecycle/preview_grant_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|grant| grant.as_str() == Some("grant_preview_private_zero"))
+        );
+        assert!(
+            module("private-zero")
+                .pointer("/lifecycle/preview_user_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|user| user.as_str() == Some("preview-user"))
+        );
         let legacy_preview_grant_id =
             legacy_preview_audience_grant_id("legacy-preview-zero", "legacy-preview-user");
         assert_eq!(
@@ -38614,12 +38693,14 @@ mod tests {
                 .and_then(Value::as_str),
             Some("preview")
         );
-        assert!(module("legacy-preview-zero")
-            .pointer("/lifecycle/preview_grant_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .any(|grant| grant.as_str() == Some(legacy_preview_grant_id.as_str())));
+        assert!(
+            module("legacy-preview-zero")
+                .pointer("/lifecycle/preview_grant_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|grant| grant.as_str() == Some(legacy_preview_grant_id.as_str()))
+        );
         assert_eq!(
             module("legacy-preview-zero")
                 .pointer("/lifecycle/preview_user_ids")
@@ -38630,34 +38711,42 @@ mod tests {
                 .count(),
             1
         );
-        assert!(module("legacy-preview-zero")
-            .pointer("/lifecycle/preview_user_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .any(|user| user.as_str() == Some("legacy-pregranted-user")));
-        assert!(module("legacy-preview-zero")
-            .pointer("/lifecycle/preview_grant_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .any(|grant| grant.as_str() == Some("grant_existing_legacy_preview")));
+        assert!(
+            module("legacy-preview-zero")
+                .pointer("/lifecycle/preview_user_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|user| user.as_str() == Some("legacy-pregranted-user"))
+        );
+        assert!(
+            module("legacy-preview-zero")
+                .pointer("/lifecycle/preview_grant_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|grant| grant.as_str() == Some("grant_existing_legacy_preview"))
+        );
         assert_eq!(
             module("modify-only-zero")
                 .pointer("/lifecycle/visibility_state")
                 .and_then(Value::as_str),
             Some("private")
         );
-        assert!(module("modify-only-zero")
-            .pointer("/lifecycle/preview_grant_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .is_empty());
-        assert!(module("modify-only-zero")
-            .pointer("/lifecycle/preview_user_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .is_empty());
+        assert!(
+            module("modify-only-zero")
+                .pointer("/lifecycle/preview_grant_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            module("modify-only-zero")
+                .pointer("/lifecycle/preview_user_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             module("team-one")
                 .pointer("/lifecycle/visibility_state")
@@ -38688,11 +38777,13 @@ mod tests {
                 .and_then(Value::as_str),
             Some("invalid_semver")
         );
-        assert!(module("missing-version")
-            .pointer("/lifecycle/preview_grant_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .is_empty());
+        assert!(
+            module("missing-version")
+                .pointer("/lifecycle/preview_grant_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             module("invalid-semver")
                 .pointer("/lifecycle/visibility_state")
@@ -38709,11 +38800,13 @@ mod tests {
                 .and_then(Value::as_str),
             Some("invalid_semver")
         );
-        assert!(module("invalid-semver")
-            .pointer("/lifecycle/preview_grant_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .is_empty());
+        assert!(
+            module("invalid-semver")
+                .pointer("/lifecycle/preview_grant_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             module("restricted-team")
                 .pointer("/lifecycle/visibility_state")
@@ -38728,12 +38821,14 @@ mod tests {
         );
         let restricted_preview_grant_id =
             legacy_preview_audience_grant_id("restricted-team", "restricted-preview-user");
-        assert!(module("restricted-team")
-            .pointer("/lifecycle/preview_grant_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .any(|grant| grant.as_str() == Some(restricted_preview_grant_id.as_str())));
+        assert!(
+            module("restricted-team")
+                .pointer("/lifecycle/preview_grant_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|grant| grant.as_str() == Some(restricted_preview_grant_id.as_str()))
+        );
         assert_eq!(
             catalog
                 .pointer("/governance/lifecycle/team-one/visibility_state")

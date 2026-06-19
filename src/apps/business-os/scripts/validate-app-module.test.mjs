@@ -100,6 +100,20 @@ function writeInstalledModule(root, moduleId, overrides = {}) {
     '}',
     '',
   ].join('\n'));
+  writeFileSync(join(dir, 'core/records.mjs'), overrides.recordsJs || [
+    'export const fixtureRecords = [',
+    "  { id: 'demo', title: 'Demo', updated_at_ms: 1 },",
+    '];',
+    '',
+    'export function visibleRecords(records = fixtureRecords) {',
+    '  return records;',
+    '}',
+    '',
+    'export function summarizeRecords(records = fixtureRecords) {',
+    '  return { total: records.length };',
+    '}',
+    '',
+  ].join('\n'));
   writeFileSync(join(dir, 'index.html'), overrides.indexHtml || '<main class="good-module"><button type="button" data-action="follow-up">Review</button></main>\n');
   writeFileSync(join(dir, 'index.css'), overrides.indexCss || '.good-module { --good-accent: #2563eb; color: inherit; }\n');
   writeFileSync(join(dir, 'index.js'), overrides.indexJs || [
@@ -407,6 +421,18 @@ function installedIndexJsWith(extraLines = []) {
   const run = runValidator(root, 'moduleharnessnote', '--installed');
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /forbidden module artifact .*HARNESS_ARTIFACT_CONFLICT\.md/);
+}
+
+{
+  const root = makeWorkspace();
+  const dir = writeInstalledModule(root, 'shortalias');
+  writeFileSync(join(dir, 'm.json'), '{}\n');
+  const run = runValidator(root, 'shortalias', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(
+    run.stderr,
+    /unexpected installed-module root entry is forbidden: runtime\/business-os\/installed-modules\/shortalias\/m\.json/,
+  );
 }
 
 {

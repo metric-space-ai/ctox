@@ -375,6 +375,22 @@ fn business_os_guard_blocks_module_package_json_write_from_module_cwd() -> anyho
 }
 
 #[test]
+fn business_os_guard_blocks_short_module_root_alias_write() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "MD=runtime/business-os/installed-modules/inventory\ncat > \"$MD/m.json\" <<'JSON'\n{}\nJSON",
+        root.path(),
+    )
+    .expect("short module root alias should be blocked");
+
+    assert!(err.contains("forbidden generated-module side effect"));
+    assert!(err.contains("$MD/m.json"));
+    Ok(())
+}
+
+#[test]
 fn business_os_guard_allows_installed_module_write_and_reads() -> anyhow::Result<()> {
     let root = tempdir()?;
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;
@@ -827,6 +843,23 @@ fn business_os_guard_blocks_broad_bench_find() -> anyhow::Result<()> {
 
     assert!(err.contains("broad App Creator discovery"));
     assert!(err.contains("source/runtime/install tree"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_source_modules_root_listing() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os/modules"))?;
+
+    let command = format!(
+        "ls {}/src/apps/business-os/modules/ 2>&1",
+        root.path().display()
+    );
+    let err = business_os_app_root_artifact_write_guard(&command, root.path())
+        .expect("source modules root listing should be blocked");
+
+    assert!(err.contains("broad App Creator discovery"));
+    assert!(err.contains("src/apps/business-os/modules/"));
     Ok(())
 }
 

@@ -154,6 +154,35 @@ function collectRootArtifactFailures(workspace) {
     .map((path) => `root-level app artifact is forbidden: ${rel(workspace, path)}`);
 }
 
+const INSTALLED_MODULE_ROOT_FILES = new Set([
+  'module.json',
+  'collections.schema.json',
+  'schema.js',
+  'index.html',
+  'index.css',
+  'index.js',
+  'icon.svg',
+]);
+
+const INSTALLED_MODULE_ROOT_DIRS = new Set([
+  'core',
+  'locales',
+  'tests',
+]);
+
+function collectInstalledModuleRootEntryFailures(workspace, moduleDir) {
+  if (!existsSync(moduleDir)) return [];
+  return readdirSync(moduleDir)
+    .filter((name) => {
+      const path = join(moduleDir, name);
+      const stats = statSync(path);
+      if (stats.isDirectory()) return !INSTALLED_MODULE_ROOT_DIRS.has(name);
+      if (stats.isFile()) return !INSTALLED_MODULE_ROOT_FILES.has(name);
+      return true;
+    })
+    .map((name) => `unexpected installed-module root entry is forbidden: ${rel(workspace, join(moduleDir, name))}`);
+}
+
 function collectStaticFailures(stderr) {
   const lines = outputLines(stderr);
   const bulletLines = lines
@@ -174,6 +203,9 @@ function validate(options) {
   const checks = [];
 
   failures.push(...collectRootArtifactFailures(options.workspace));
+  if (mode === 'installed') {
+    failures.push(...collectInstalledModuleRootEntryFailures(options.workspace, moduleDir));
+  }
 
   const staticChecker = resolveStaticChecker(options.workspace);
   if (!staticChecker) {

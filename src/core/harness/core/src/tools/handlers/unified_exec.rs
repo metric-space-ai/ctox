@@ -829,7 +829,18 @@ fn command_writes_forbidden_business_os_module_side_effect(
         let variable_module_target = normalized.contains("MODULE_DIR")
             && (command_writes_path(&compact, &normalized)
                 || token_is_target_of_write_verb(&tokens, idx));
-        if explicitly_targets_module || targets_module_cwd || variable_module_target {
+        let variable_runtime_module_target = normalized.contains('$')
+            && lower.contains('/')
+            && compact
+                .to_ascii_lowercase()
+                .contains("runtime/business-os/installed-modules/")
+            && (command_writes_path(&compact, &normalized)
+                || token_is_target_of_write_verb(&tokens, idx));
+        if explicitly_targets_module
+            || targets_module_cwd
+            || variable_module_target
+            || variable_runtime_module_target
+        {
             return Some(normalized);
         }
     }
@@ -845,6 +856,13 @@ fn forbidden_business_os_module_side_effect_name(name: &str) -> bool {
             | "pnpm-lock.yaml"
             | "bun.lockb"
             | "node_modules"
+            | "m.json"
+            | "modul.json"
+            | "manifest.json"
+            | "schema.mjs"
+            | "schema.cjs"
+            | "collections.json"
+            | "collection.schema.json"
     ) || name.starts_with("_probe_")
         || name.starts_with("_test_")
         || name.starts_with("_test")
@@ -1351,6 +1369,18 @@ fn command_uses_broad_business_os_app_creator_discovery(command: &str) -> Option
             || lower.contains("runtime/business-os/template-store"));
     if lists_business_os_root {
         return Some("runtime/business-os/".to_string());
+    }
+
+    let lists_source_modules_root = (lower_contains_shell_word(&lower, "ls")
+        || lower_contains_shell_word(&lower, "tree"))
+        && (lower.ends_with("src/apps/business-os/modules")
+            || lower.ends_with("src/apps/business-os/modules/")
+            || lower.contains("src/apps/business-os/modules 2>")
+            || lower.contains("src/apps/business-os/modules/ 2>")
+            || lower.contains(" src/apps/business-os/modules ")
+            || lower.contains(" src/apps/business-os/modules/ "));
+    if lists_source_modules_root {
+        return Some("src/apps/business-os/modules/".to_string());
     }
 
     None
