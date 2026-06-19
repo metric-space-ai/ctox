@@ -392,6 +392,9 @@ pub(crate) fn business_os_app_root_artifact_write_guard(
     if let Some(path) = command_reads_business_os_module_whole_file(command, &workspace_root, cwd) {
         return Some(module_whole_file_read_guard_message(&path));
     }
+    if let Some(path) = command_reads_runtime_module_node_dump(command, &workspace_root, cwd) {
+        return Some(module_whole_file_read_guard_message(&path));
+    }
     if let Some(path) =
         command_uses_forbidden_business_os_module_writer(command, &workspace_root, cwd)
     {
@@ -1034,6 +1037,69 @@ fn command_has_large_head_tail_read(command_lower: &str) -> bool {
         }
     }
     false
+}
+
+fn command_reads_runtime_module_node_dump(
+    command: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+) -> Option<String> {
+    let compact = command.replace("\\\n", " ").replace('\n', " ");
+    let lower = compact.to_ascii_lowercase();
+    if !command_targets_runtime_business_os_module(&lower, workspace_root, cwd) {
+        return None;
+    }
+    if !lower_contains_shell_word(&lower, "node") && !lower_contains_shell_word(&lower, "nodejs") {
+        return None;
+    }
+    if !lower.contains("readfilesync") {
+        return None;
+    }
+
+    let squashed: String = lower.chars().filter(|ch| !ch.is_whitespace()).collect();
+    let dumps_variable = [
+        "console.log(code",
+        "console.log(text",
+        "console.log(source",
+        "console.log(contents",
+        "console.log(content",
+        "console.log(file",
+        "console.log(html",
+        "console.log(css",
+    ]
+    .iter()
+    .any(|pattern| squashed.contains(pattern));
+    let dumps_json_slice =
+        squashed.contains("console.log(json.stringify(") && squashed.contains(".slice(0,");
+    let line_split_audit = (squashed.contains(".split('\\n')")
+        || squashed.contains(".split(\"\\n\")")
+        || squashed.contains(".split(`\\n`)"))
+        && squashed.contains("console.log");
+
+    if dumps_variable || dumps_json_slice || line_split_audit {
+        return Some(
+            first_business_os_module_artifact_reference(&compact, workspace_root, cwd)
+                .or_else(|| first_runtime_business_os_module_artifact_substring(&compact))
+                .unwrap_or_else(|| "runtime-installed module artifact".to_string()),
+        );
+    }
+    None
+}
+
+fn first_runtime_business_os_module_artifact_substring(command: &str) -> Option<String> {
+    let lower = command.to_ascii_lowercase();
+    let marker = "runtime/business-os/installed-modules/";
+    let start = lower.find(marker)?;
+    let rest = &command[start..];
+    let end = rest
+        .find(|ch: char| {
+            ch.is_whitespace() || matches!(ch, '\'' | '"' | '`' | ',' | ')' | ';' | '|' | '&')
+        })
+        .unwrap_or(rest.len());
+    let candidate = rest[..end]
+        .trim_matches(|ch: char| matches!(ch, '\'' | '"' | '`' | ',' | ')' | ';'))
+        .to_string();
+    business_os_module_artifact_token_name(&candidate, false).map(|_| candidate)
 }
 
 fn command_reads_business_os_module_whole_file(

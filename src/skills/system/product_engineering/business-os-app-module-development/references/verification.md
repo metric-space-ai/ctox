@@ -64,7 +64,9 @@ while verifying or repairing app artifacts.
 Do not turn verification into a generated-file readback audit. After the file
 inventory is known, do not run `wc -l` over generated app artifacts, multi-file
 `sed -n`, multi-file `grep`/`rg`, broad `head`/`tail` snippets, broad globs, or
-consecutive line-range chunks against runtime-installed module files. Primary verification is focused
+consecutive line-range chunks against runtime-installed module files. Do not use
+Node `fs.readFileSync` scripts to print generated source, JSON, HTML, or CSS
+back to the model with `console.log`. Primary verification is focused
 `node --check`, `node --test`, and
 `ctox business-os app validate <module> --installed`. Read one exact failing
 snippet only when a validator, syntax check, or test output names the concrete

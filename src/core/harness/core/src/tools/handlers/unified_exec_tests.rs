@@ -611,6 +611,26 @@ fn business_os_guard_blocks_runtime_module_large_head_readback() -> anyhow::Resu
 }
 
 #[test]
+fn business_os_guard_blocks_runtime_module_large_tail_readback() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+    let module_dir = root
+        .path()
+        .join("runtime/business-os/installed-modules/subscriptions");
+    fs::create_dir_all(&module_dir)?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "tail -60 tests/subscriptions.test.mjs 2>&1",
+        &module_dir,
+    )
+    .expect("large generated-file tail snippets should be blocked");
+
+    assert!(err.contains("self-audit readback"));
+    assert!(err.contains("subscriptions.test.mjs"));
+    Ok(())
+}
+
+#[test]
 fn business_os_guard_allows_small_runtime_module_head_snippet() -> anyhow::Result<()> {
     let root = tempdir()?;
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;
@@ -623,6 +643,69 @@ fn business_os_guard_allows_small_runtime_module_head_snippet() -> anyhow::Resul
         business_os_app_root_artifact_write_guard(
             "head -30 tests/subscriptions.test.mjs 2>&1",
             &module_dir
+        )
+        .is_none()
+    );
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_node_whole_file_dump() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "node -e \"const fs=require('fs'); const code=fs.readFileSync('runtime/business-os/installed-modules/subscriptions/index.js','utf8'); console.log(code);\"",
+        root.path(),
+    )
+    .expect("node readFileSync plus console.log(code) should be blocked");
+
+    assert!(err.contains("whole-file dump"));
+    assert!(err.contains("runtime/business-os/installed-modules/subscriptions/index.js"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_node_json_slice_dump() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "node -e \"const fs=require('fs'); const c=JSON.parse(fs.readFileSync('runtime/business-os/installed-modules/subscriptions/collections.schema.json','utf8')); console.log(JSON.stringify(c, null, 2).slice(0, 3000));\"",
+        root.path(),
+    )
+    .expect("node JSON stringify slice dumps should be blocked");
+
+    assert!(err.contains("whole-file dump"));
+    assert!(err.contains("collections.schema.json"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_node_line_split_audit() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "node -e \"const fs=require('fs'); const code=fs.readFileSync('runtime/business-os/installed-modules/subscriptions/index.js','utf8'); const lines=code.split('\\n'); console.log('total lines:', lines.length); console.log(lines.slice(0, 80).join('\\n'));\"",
+        root.path(),
+    )
+    .expect("node line-split audits of generated files should be blocked");
+
+    assert!(err.contains("whole-file dump"));
+    assert!(err.contains("index.js"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_allows_node_json_parse_smoke() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    assert!(
+        business_os_app_root_artifact_write_guard(
+            "node -e \"JSON.parse(require('fs').readFileSync('runtime/business-os/installed-modules/subscriptions/module.json','utf8')); console.log('module JSON OK')\"",
+            root.path()
         )
         .is_none()
     );

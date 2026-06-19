@@ -207,7 +207,9 @@ validation.
 Do not self-audit generated runtime module files by reading them back
 file-by-file. Avoid `wc -l` over app artifacts, multi-file `sed -n`, multi-file
 `grep`/`rg`, broad `head`/`tail` snippets, broad globs, and consecutive
-line-range chunks that reconstruct a file in model context. Use `node --check`, `node --test`, and
+line-range chunks that reconstruct a file in model context. Also avoid Node
+`fs.readFileSync` plus `console.log` scripts that print generated source, JSON,
+HTML, or CSS back to the model. Use `node --check`, `node --test`, and
 `ctox business-os app validate <module> --installed` as the primary feedback
 loop; inspect one exact failing selector/import/snippet only after a concrete
 validator or syntax error.
