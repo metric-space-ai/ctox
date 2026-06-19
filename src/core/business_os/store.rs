@@ -19378,6 +19378,66 @@ fn stored_rxdb_business_command_outcome(
     Ok(Some(payload))
 }
 
+const CAPABILITY_SECRET_SCOPE: &str = "credentials";
+const CAPABILITY_SECRET_NAME: &str = "BUSINESS_OS_CAPABILITY_SECRET";
+/// Default capability-token lifetime (12h) — short enough to bound a leaked
+/// token, long enough for a working session.
+const CAPABILITY_TOKEN_TTL_MS: i64 = 12 * 60 * 60 * 1000;
+
+/// Get (or generate + persist) the per-instance HMAC secret that signs Business
+/// OS capability tokens. Stored in the CTOX secret store so it survives restarts
+/// and is never shipped to the browser.
+fn capability_signing_secret(root: &Path) -> anyhow::Result<Vec<u8>> {
+    if crate::secrets::secret_exists(root, CAPABILITY_SECRET_SCOPE, CAPABILITY_SECRET_NAME)? {
+        let value =
+            crate::secrets::read_secret_value(root, CAPABILITY_SECRET_SCOPE, CAPABILITY_SECRET_NAME)?;
+        if !value.trim().is_empty() {
+            return Ok(value.into_bytes());
+        }
+    }
+    use ring::rand::SecureRandom;
+    let mut buf = [0u8; 32];
+    ring::rand::SystemRandom::new()
+        .fill(&mut buf)
+        .map_err(|_| anyhow::anyhow!("failed to generate capability signing secret"))?;
+    let value = base64::engine::general_purpose::STANDARD.encode(buf);
+    crate::secrets::write_secret_record(
+        root,
+        CAPABILITY_SECRET_SCOPE,
+        CAPABILITY_SECRET_NAME,
+        &value,
+        Some("Business OS capability-token HMAC secret (auto-generated)".to_string()),
+        serde_json::json!({ "auto_managed": true }),
+    )?;
+    Ok(value.into_bytes())
+}
+
+/// Issue a capability token for an active Business OS user, binding their id to
+/// their CURRENT server-side role. This is the native-authoritative step: a
+/// browser obtains one of these after authenticating and then carries it on
+/// every command so the native side can trust the role without trusting the
+/// browser-asserted actor. Returns `(token, expires_at_ms)`.
+pub fn issue_business_os_capability_token(
+    root: &Path,
+    user_id: &str,
+    now_ms: i64,
+) -> anyhow::Result<(String, i64)> {
+    let conn = open_store(root)?;
+    seed_configured_business_users(&conn)?;
+    let user = active_business_user(&conn, user_id.trim())?
+        .ok_or_else(|| anyhow::anyhow!("no active Business OS user {user_id:?}"))?;
+    let secret = capability_signing_secret(root)?;
+    let expires_at_ms = now_ms + CAPABILITY_TOKEN_TTL_MS;
+    let token = super::capability::issue_capability_token(
+        &secret,
+        &user.id,
+        &normalize_business_role(&user.role),
+        now_ms,
+        expires_at_ms,
+    );
+    Ok((token, expires_at_ms))
+}
+
 fn rxdb_command_session(
     root: &Path,
     command: &BusinessCommand,
@@ -19428,9 +19488,40 @@ fn rxdb_session_from_command(
         .and_then(Value::as_str)
         .unwrap_or(id.as_str())
         .to_string();
-    let trusted_user = trusted_rxdb_command_user(root, &id, &display_name)?;
-    let role = trusted_user.role;
-    let display_name = trusted_user.display_name;
+
+    // Capability token (preferred, native-authoritative): when the command
+    // carries a valid native-signed `capability_token`, the id + role come from
+    // the SIGNED token, not from the browser-asserted actor. When enforcement is
+    // enabled (runtime config CTOX_BUSINESS_OS_REQUIRE_CAPABILITY_TOKEN=1) a
+    // privileged (manage-all) command without a valid token is denied. Without
+    // enforcement and without a token we fall back to the legacy claimed-actor
+    // path so existing browsers keep working until they attach tokens.
+    let now = now_ms() as i64;
+    let verified = client_ctx
+        .get("capability_token")
+        .and_then(Value::as_str)
+        .filter(|token| !token.is_empty())
+        .and_then(|token| {
+            let secret = capability_signing_secret(root).ok()?;
+            super::capability::verify_capability_token(&secret, token, now)
+        });
+    let enforce_token = crate::inference::runtime_env::env_or_config(
+        root,
+        "CTOX_BUSINESS_OS_REQUIRE_CAPABILITY_TOKEN",
+    )
+    .as_deref()
+        == Some("1");
+
+    let (id, role, display_name) = if let Some(claims) = verified {
+        (claims.user_id, claims.role, display_name)
+    } else {
+        anyhow::ensure!(
+            !(enforce_token && require_manage_all),
+            "a valid capability token is required for privileged Business OS commands"
+        );
+        let trusted_user = trusted_rxdb_command_user(root, &id, &display_name)?;
+        (id, trusted_user.role, trusted_user.display_name)
+    };
     let is_admin = role_can_manage(&role);
     let session = BusinessOsSession {
         ok: true,

@@ -3,6 +3,7 @@
 
 mod ats_gates;
 mod browser_runtime;
+mod capability;
 mod importer;
 mod invoices;
 pub mod mcp_channel;

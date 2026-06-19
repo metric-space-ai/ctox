@@ -328,6 +328,7 @@ pub fn handle_business_os_command(root: &Path, args: &[String]) -> anyhow::Resul
         Some("backup") => handle_business_os_backup(root, &args[1..]),
         Some("install") => install_business_os(root, &args[1..]),
         Some("commands") => handle_business_os_commands(root, &args[1..]),
+        Some("auth") => handle_business_os_auth(root, &args[1..]),
         Some("desktop") => handle_business_os_desktop(root, &args[1..]),
         Some("web-stack") => handle_business_os_web_stack(root, &args[1..]),
         Some("files") => handle_business_os_files(root, &args[1..]),
@@ -969,6 +970,46 @@ fn print_process_output(output: &std::process::Output) {
     }
     if !stderr.is_empty() {
         eprint!("{stderr}");
+    }
+}
+
+fn handle_business_os_auth(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    match args.first().map(String::as_str) {
+        Some("issue-capability") => {
+            let mut user_id: Option<String> = None;
+            let mut idx = 1;
+            while idx < args.len() {
+                match args[idx].as_str() {
+                    "--user" | "--user-id" => {
+                        user_id = args.get(idx + 1).cloned();
+                        idx += 2;
+                    }
+                    other => {
+                        if user_id.is_none() {
+                            user_id = Some(other.to_string());
+                        }
+                        idx += 1;
+                    }
+                }
+            }
+            let user_id = user_id
+                .context("usage: ctox business-os auth issue-capability --user <user-id>")?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            let (token, expires_at_ms) =
+                crate::business_os::store::issue_business_os_capability_token(root, &user_id, now)?;
+            print_json(&serde_json::json!({
+                "ok": true,
+                "user_id": user_id,
+                "capability_token": token,
+                "expires_at_ms": expires_at_ms
+            }))
+        }
+        other => anyhow::bail!(
+            "usage: ctox business-os auth issue-capability --user <user-id> (got {other:?})"
+        ),
     }
 }
 
