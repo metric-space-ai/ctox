@@ -631,10 +631,12 @@ fn handle_business_os_app(root: &Path, args: &[String]) -> anyhow::Result<()> {
                     "usage: ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]",
                 )?;
             let output = run_business_os_app_validator(root, module_id, &args[2..])?;
-            print_process_output(&output);
             if !output.status.success() {
+                print_process_output(&output);
                 anyhow::bail!("Business OS app validation failed for `{module_id}`");
             }
+            enforce_leased_app_creator_post_baseline_validation_gate(root, module_id)?;
+            print_process_output(&output);
             let completed = complete_leased_app_creator_tasks_after_validation(
                 root,
                 module_id,
@@ -796,6 +798,27 @@ fn complete_leased_app_creator_tasks_after_validation(
     Ok(completed)
 }
 
+fn enforce_leased_app_creator_post_baseline_validation_gate(
+    root: &Path,
+    module_id: &str,
+) -> anyhow::Result<usize> {
+    let tasks = channels::list_queue_tasks(root, &["leased".to_string()], 512)?;
+    let mut matched = 0usize;
+    for task in tasks {
+        if !queue_task_matches_validated_app_module(&task, module_id) {
+            continue;
+        }
+        let artifact_directory = app_validation_artifact_directory_for_task(&task, module_id);
+        crate::business_os::store::ensure_app_validation_completion_has_post_lease_artifact_write(
+            root,
+            &task,
+            &artifact_directory,
+        )?;
+        matched = matched.saturating_add(1);
+    }
+    Ok(matched)
+}
+
 fn queue_task_matches_validated_app_module(
     task: &channels::QueueTaskView,
     module_id: &str,
@@ -807,11 +830,30 @@ fn queue_task_matches_validated_app_module(
     let exact_yaml_target = format!("module_id: {module_id}");
     let exact_json_target = format!("\"module_id\": \"{module_id}\"");
     let exact_dir_target = format!("runtime/business-os/installed-modules/{module_id}");
+    let exact_source_dir_target = format!("src/apps/business-os/modules/{module_id}");
     prompt.contains("ctox.business_os.app.create")
-        && prompt.contains("business-os-app-module-development")
         && (prompt.contains(&exact_yaml_target)
             || prompt.contains(&exact_json_target)
-            || prompt.contains(&exact_dir_target))
+            || prompt.contains(&exact_dir_target)
+            || prompt.contains(&exact_source_dir_target))
+}
+
+fn app_validation_artifact_directory_for_task(
+    task: &channels::QueueTaskView,
+    module_id: &str,
+) -> String {
+    let prompt = task.prompt.to_ascii_lowercase();
+    let source_dir = format!("src/apps/business-os/modules/{module_id}");
+    if task.prompt.contains(&source_dir)
+        || prompt.contains("install_target: source")
+        || prompt.contains("\"install_target\": \"source\"")
+        || prompt.contains("\"install_target\":\"source\"")
+        || prompt.contains("--source")
+    {
+        source_dir
+    } else {
+        format!("runtime/business-os/installed-modules/{module_id}")
+    }
 }
 
 fn run_business_os_app_validator(
@@ -2383,6 +2425,7 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     #[test]
     fn web_stack_redaction_audit_reports_canary_without_echoing_value() {
@@ -2502,6 +2545,108 @@ mod tests {
         assert_eq!(
             reloaded.status_note.as_deref(),
             Some("business-os:terminal-success: app validation passed")
+        );
+    }
+
+    #[test]
+    fn app_validate_matcher_accepts_creator_prompt_without_skill_id() {
+        let task = channels::QueueTaskView {
+            message_key: "queue:system::projects".to_string(),
+            thread_key: "business-os/creator".to_string(),
+            title: "Projects Bench".to_string(),
+            prompt: "Build a Business OS projects app.\nBusiness OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            priority: "urgent".to_string(),
+            suggested_skill: None,
+            parent_message_key: None,
+            route_status: "leased".to_string(),
+            status_note: None,
+            lease_owner: Some("ctox-service".to_string()),
+            leased_at: Some("2026-06-19T09:00:00Z".to_string()),
+            acked_at: None,
+            created_at: "2026-06-19T09:00:00Z".to_string(),
+            sort_at: "2026-06-19T09:00:00Z".to_string(),
+            updated_at: "2026-06-19T09:00:00Z".to_string(),
+        };
+
+        assert!(queue_task_matches_validated_app_module(&task, "projects"));
+        assert_eq!(
+            app_validation_artifact_directory_for_task(&task, "projects"),
+            "runtime/business-os/installed-modules/projects"
+        );
+    }
+
+    #[test]
+    fn app_validate_gate_rejects_baseline_only_creator_task_without_skill_id() {
+        let root = tempfile::tempdir().expect("temp root");
+        let module_id = "projects";
+        let prompt = format!(
+            "Build a Business OS projects app.\nBusiness OS app build target:\n- module_id: {module_id}\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/{module_id}\nBusiness OS command:\n- type: ctox.business_os.app.create\n"
+        );
+        let created = channels::create_queue_task(
+            root.path(),
+            channels::QueueTaskCreateRequest {
+                title: "Projects Bench".to_string(),
+                prompt,
+                thread_key: "business-os/creator".to_string(),
+                workspace_root: Some(root.path().display().to_string()),
+                priority: "urgent".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("create queue task");
+        channels::lease_queue_task(root.path(), &created.message_key, "ctox-service")
+            .expect("lease queue task");
+
+        let module_dir = root
+            .path()
+            .join("runtime/business-os/installed-modules")
+            .join(module_id);
+        for relative in [
+            "module.json",
+            "collections.schema.json",
+            "schema.js",
+            "index.html",
+            "index.css",
+            "index.js",
+            "icon.svg",
+            "core/automation.mjs",
+            "core/records.mjs",
+            "locales/de.json",
+            "locales/en.json",
+            "tests/projects.test.mjs",
+        ] {
+            let path = module_dir.join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("create artifact parent");
+            }
+            fs::write(path, "scaffold artifact\n").expect("write artifact");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let baseline_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before epoch")
+            .as_millis() as i64;
+        channels::set_queue_task_metadata_value(
+            root.path(),
+            &created.message_key,
+            "business_os_app_scaffold_baseline_ms",
+            Value::from(baseline_ms),
+        )
+        .expect("set baseline");
+
+        let error =
+            enforce_leased_app_creator_post_baseline_validation_gate(root.path(), module_id)
+                .expect_err("baseline-only app creator validation must be rejected");
+        let report = format!("{error:#}");
+        assert!(
+            report.contains("Early or partial validation is rejected")
+                && report.contains("core/records.mjs")
+                && report.contains("one tests/*.test.mjs file"),
+            "unexpected report: {report}"
         );
     }
 

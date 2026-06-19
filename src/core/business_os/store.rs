@@ -11577,7 +11577,7 @@ pub fn complete_business_command_from_app_validation_success(
     Ok(Some(command_payload))
 }
 
-fn ensure_app_validation_completion_has_post_lease_artifact_write(
+pub(crate) fn ensure_app_validation_completion_has_post_lease_artifact_write(
     root: &Path,
     task: &channels::QueueTaskView,
     artifact_directory: &str,
@@ -22193,9 +22193,8 @@ fn load_business_records_by_field(
         let raw = row?;
         // Fail closed: a corrupt credential/consent row must not silently vanish
         // and let a server-authoritative gate pass as if it did not exist.
-        let parsed = serde_json::from_str::<Value>(&raw).with_context(|| {
-            format!("corrupt {collection} record while loading by {field}")
-        })?;
+        let parsed = serde_json::from_str::<Value>(&raw)
+            .with_context(|| format!("corrupt {collection} record while loading by {field}"))?;
         out.push(parsed);
     }
     Ok(out)
