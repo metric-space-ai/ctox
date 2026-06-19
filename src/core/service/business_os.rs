@@ -18,6 +18,7 @@ use std::time::UNIX_EPOCH;
 use url::Url;
 use uuid::Uuid;
 
+use crate::mission::channels;
 use crate::persistence;
 use crate::skill_store;
 
@@ -634,6 +635,16 @@ fn handle_business_os_app(root: &Path, args: &[String]) -> anyhow::Result<()> {
             if !output.status.success() {
                 anyhow::bail!("Business OS app validation failed for `{module_id}`");
             }
+            let completed = complete_leased_app_creator_tasks_after_validation(
+                root,
+                module_id,
+                "Business OS app artifacts validated by ctox business-os app validate",
+            )?;
+            if completed > 0 {
+                eprintln!(
+                    "Business OS app validation finalized {completed} leased queue task(s); stop now."
+                );
+            }
             Ok(())
         }
         Some("finalize") => {
@@ -743,6 +754,64 @@ fn run_business_os_app_scaffold(
     command
         .output()
         .context("failed to run Business OS app scaffold helper")
+}
+
+fn complete_leased_app_creator_tasks_after_validation(
+    root: &Path,
+    module_id: &str,
+    reason: &str,
+) -> anyhow::Result<usize> {
+    let tasks = channels::list_queue_tasks(root, &["leased".to_string()], 512)?;
+    let mut completed = 0usize;
+    for task in tasks {
+        if !queue_task_matches_validated_app_module(&task, module_id) {
+            continue;
+        }
+        let _ = crate::business_os::store::complete_business_command_from_app_validation_success(
+            root,
+            &task.message_key,
+            Some(module_id),
+            reason,
+        )?;
+        let reloaded = channels::load_queue_task(root, &task.message_key)?;
+        if reloaded.as_ref().map(|task| task.route_status.as_str()) != Some("handled") {
+            channels::update_queue_task(
+                root,
+                channels::QueueTaskUpdateRequest {
+                    message_key: task.message_key.clone(),
+                    route_status: Some("handled".to_string()),
+                    status_note: Some(
+                        "business-os:terminal-success: app validation passed".to_string(),
+                    ),
+                    ..Default::default()
+                },
+            )?;
+            crate::business_os::store::refresh_business_command_queue_task_projection(
+                root,
+                &task.message_key,
+            )?;
+        }
+        completed = completed.saturating_add(1);
+    }
+    Ok(completed)
+}
+
+fn queue_task_matches_validated_app_module(
+    task: &channels::QueueTaskView,
+    module_id: &str,
+) -> bool {
+    if task.route_status != "leased" {
+        return false;
+    }
+    let prompt = &task.prompt;
+    let exact_yaml_target = format!("module_id: {module_id}");
+    let exact_json_target = format!("\"module_id\": \"{module_id}\"");
+    let exact_dir_target = format!("runtime/business-os/installed-modules/{module_id}");
+    prompt.contains("ctox.business_os.app.create")
+        && prompt.contains("business-os-app-module-development")
+        && (prompt.contains(&exact_yaml_target)
+            || prompt.contains(&exact_json_target)
+            || prompt.contains(&exact_dir_target))
 }
 
 fn run_business_os_app_validator(
@@ -2391,6 +2460,48 @@ mod tests {
             skill_md.is_file(),
             "matching skill pack missing at {}",
             skill_md.display()
+        );
+    }
+
+    #[test]
+    fn app_validate_success_marks_matching_leased_creator_task_handled() {
+        let root = tempfile::tempdir().expect("temp root");
+        let module_id = "projects";
+        let prompt = format!(
+            "Business OS app build target:\n- module_id: {module_id}\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/{module_id}\nBusiness OS command:\n- type: ctox.business_os.app.create\nRequired CTOX skills: business-os-app-module-development\n"
+        );
+        let created = channels::create_queue_task(
+            root.path(),
+            channels::QueueTaskCreateRequest {
+                title: "Projects Bench".to_string(),
+                prompt,
+                thread_key: "business-os/creator".to_string(),
+                workspace_root: Some(root.path().display().to_string()),
+                priority: "urgent".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("create queue task");
+        channels::lease_queue_task(root.path(), &created.message_key, "ctox-service")
+            .expect("lease queue task");
+
+        let completed = complete_leased_app_creator_tasks_after_validation(
+            root.path(),
+            module_id,
+            "validated in test",
+        )
+        .expect("complete app creator queue task");
+
+        assert_eq!(completed, 1);
+        let reloaded = channels::load_queue_task(root.path(), &created.message_key)
+            .expect("load queue task")
+            .expect("queue task exists");
+        assert_eq!(reloaded.route_status, "handled");
+        assert_eq!(
+            reloaded.status_note.as_deref(),
+            Some("business-os:terminal-success: app validation passed")
         );
     }
 
