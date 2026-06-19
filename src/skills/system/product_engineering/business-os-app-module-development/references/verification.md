@@ -144,9 +144,10 @@ few-shot patterns. Do not invent core/automation.mjs few-shot files under
 outbound or shiftflow; use real shipped paths such as `outbound/index.js` or
 `outbound/core/audience.js`. Before the
 first requested-domain edit, do not read the generated scaffold back with `ls`,
-`sed`, `cat`, `head`, `tail`, or multi-file commands. Start from the scaffold
-contract, make bounded direct final edits under `MODULE_DIR`, then use focused
-tests and the app validator.
+`sed`, `cat`, `head`, `tail`, or multi-file commands, and do not run validation,
+tests, syntax checks, or scaffold repair to confirm the scaffold. Start from the
+scaffold contract, make bounded direct final edits under `MODULE_DIR`, then use
+focused tests and the app validator.
 
 The first app-artifact tool action after the scaffold baseline must be a
 direct bounded requested-domain write under `MODULE_DIR`. A directory listing,

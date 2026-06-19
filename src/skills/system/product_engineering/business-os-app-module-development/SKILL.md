@@ -15,6 +15,16 @@ If the user asks to build, change, or repair a CTOX Business OS app, build the a
 
 For CTOX App Creator and runtime-installed app work, follow this short path before any broad exploration:
 
+Immediate start gate for CTOX App Creator turns: the CTOX service already created
+and recorded the scaffold baseline. Do not confirm the scaffold with `ls`,
+`find`, `tree`, `stat`, `cat`, `head`, `tail`, `sed`, Node readFileSync,
+validation, tests, syntax checks, or scaffold repair before requested-domain
+writes. After an optional complete skill-body read, the first app-artifact tool
+action must set `MODULE_DIR` and write bounded requested-domain content directly
+to files under `$MODULE_DIR/`, including `core/records.mjs`,
+`core/automation.mjs`, `index.html`, `index.js`, one locale file, and one
+`tests/*.test.mjs` file.
+
 1. Target only the prompted module directory: `runtime/business-os/installed-modules/<id>/` for installed apps. Generated apps never belong under `src/`.
 2. Treat the existing scaffold as already structurally valid. The required file inventory is the fixed scaffold contract: `module.json`, `collections.schema.json`, `schema.js`, `index.html`, `index.css`, `index.js`, `icon.svg`, `core/automation.mjs`, `core/records.mjs`, `locales/de.json`, `locales/en.json`, and `tests/*.test.mjs`. This list is not permission to run `ls`, `find`, `tree`, `stat`, or file-by-file readback before requested-domain edits. Inspect only the exact export, selector, or failing snippet needed after a concrete validator/test/syntax failure names it. Keep its mount wiring, `core/automation.mjs`, `core/records.mjs`, locales, and tests as the baseline. Validating it before requested-domain edits is a task failure, not progress. Run scaffold repair only if a required file is actually missing; never run it on a complete scaffold, and never count scaffold repair output as requested-domain implementation work.
 3. Inspect exactly three shipped source modules for patterns, preferably `customers`, `shiftflow`, and `outbound`, unless a CTOX App Creator prompt has already embedded those three few-shot patterns. Use exact files that exist in normal CTOX installs, such as `src/apps/business-os/modules/customers/module.json`, `src/apps/business-os/modules/customers/index.js`, `src/apps/business-os/modules/shiftflow/index.js`, `src/apps/business-os/modules/outbound/index.js`, and `src/apps/business-os/modules/outbound/core/audience.js`; do not run `ls`, `find`, `rg`, or `grep` over `src/apps/business-os/modules/` or any source-module directory. Use `notes` only as a supplemental simple-CRUD reference; do not treat it as a scaffold-helper template. Do not inspect `src/apps/business-os/app.js`, `shared/`, `router/loader` source, `src/core/business_os/`, `src/skills`, or validator/checker source while building a generated app. Inside a CTOX App Creator turn, a full `ctox skills system show business-os-app-module-development --body` read is acceptable at most once, but partial reads through `head`, `tail`, or `sed` and source-skill inspection are failures.
@@ -267,7 +277,7 @@ is:
 ```text
 1. inspect contracts and 3 modules
 2. choose MODULE_DIR and app scope
-3. for a new runtime-installed app, confirm the CTOX service preflight scaffold exists or run `ctox business-os app scaffold`; otherwise write the required files with a small two-pane/modal app
+3. for a new CTOX runtime-installed app, trust the service preflight scaffold and customize requested-domain facts immediately; for external empty-target runs only, run `ctox business-os app scaffold` or write the exact required files with a small two-pane/modal app
 4. customize the scaffold for the requested domain before final validation: update the owned collection shape, fixture records, labels, filters/statuses, visible workflow, `business_os.chat.task` payload, and positive tests
 5. parse JSON and run syntax/test/validator gates
 6. copy exact validator failure bullets into the repair checklist
