@@ -1402,6 +1402,20 @@ fn release_stale_service_communication_leases_on_boot(
     root: &Path,
     state: &Arc<Mutex<SharedState>>,
 ) {
+    match recover_stale_business_os_app_queue_tasks(root, state, 16) {
+        Ok(updated) if updated > 0 => push_event(
+            state,
+            format!("Recovered {updated} stale Business OS app queue task(s) at boot"),
+        ),
+        Ok(_) => {}
+        Err(err) => push_event(
+            state,
+            format!(
+                "Boot Business OS app validation recovery skipped: {}",
+                clip_text(&err.to_string(), 180)
+            ),
+        ),
+    }
     match release_stale_service_communication_leases(root) {
         Ok(0) => {}
         Ok(count) => {
@@ -1452,7 +1466,14 @@ fn release_stale_service_communication_leases(root: &Path) -> Result<usize> {
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(statement);
+    let mut releasable_message_keys = Vec::new();
     for message_key in &message_keys {
+        if preserve_stale_service_communication_lease_for_specialized_recovery(root, message_key)? {
+            continue;
+        }
+        releasable_message_keys.push(message_key.clone());
+    }
+    for message_key in &releasable_message_keys {
         channels::enforce_queue_route_status_transition(
             &conn,
             message_key,
@@ -1462,21 +1483,35 @@ fn release_stale_service_communication_leases(root: &Path) -> Result<usize> {
             "release_stale_service_communication_leases",
         )?;
     }
-    let updated = conn.execute(
-        r#"
-        UPDATE communication_routing_state
-        SET route_status='pending',
-            lease_owner=NULL,
-            leased_at=NULL,
-            last_error='released stale service lease during service boot',
-            updated_at=?1
-        WHERE route_status='leased'
-          AND lease_owner=?2
-          AND acked_at IS NULL
-        "#,
-        params![now, CHANNEL_ROUTER_LEASE_OWNER],
-    )?;
+    let mut updated = 0usize;
+    for message_key in &releasable_message_keys {
+        updated += conn.execute(
+            r#"
+            UPDATE communication_routing_state
+            SET route_status='pending',
+                lease_owner=NULL,
+                leased_at=NULL,
+                last_error='released stale service lease during service boot',
+                updated_at=?1
+            WHERE message_key=?2
+              AND route_status='leased'
+              AND lease_owner=?3
+              AND acked_at IS NULL
+            "#,
+            params![now, message_key, CHANNEL_ROUTER_LEASE_OWNER],
+        )?;
+    }
     Ok(updated)
+}
+
+fn preserve_stale_service_communication_lease_for_specialized_recovery(
+    root: &Path,
+    message_key: &str,
+) -> Result<bool> {
+    let Some(task) = channels::load_queue_task(root, message_key)? else {
+        return Ok(false);
+    };
+    Ok(business_os_app_module_target_from_prompt(&task.prompt).is_some())
 }
 
 fn is_non_work_tui_probe(prompt: &str) -> bool {
@@ -26643,6 +26678,88 @@ Use shell tools to create or update these files."
         assert_eq!(row.0, "pending");
         assert_eq!(row.1, None);
         assert_eq!(row.2, None);
+    }
+
+    #[test]
+    fn boot_release_preserves_business_os_app_leases_for_specialized_recovery() {
+        let root = temp_root("boot-release-preserve-business-os-app-lease");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create subscriptions app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/subscriptions".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, CHANNEL_ROUTER_LEASE_OWNER)
+            .expect("failed to lease app queue task");
+
+        let repaired =
+            release_stale_service_communication_leases(&root).expect("release stale leases");
+
+        assert_eq!(repaired, 0);
+        let reloaded = channels::load_queue_task(&root, &task.message_key)
+            .expect("load failed")
+            .expect("missing queue task");
+        assert_eq!(reloaded.route_status, "leased");
+        assert_eq!(
+            reloaded.lease_owner.as_deref(),
+            Some(CHANNEL_ROUTER_LEASE_OWNER)
+        );
+    }
+
+    #[test]
+    fn boot_recovery_completes_green_business_os_app_lease_before_generic_release() {
+        let state_root = temp_root("boot-recovery-app-state-root");
+        let app_workspace_root = temp_root("boot-recovery-app-workspace");
+        let script_dir = app_workspace_root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "process.exit(0);\n",
+        )
+        .expect("write green validator script fixture");
+        let task = channels::create_queue_task(
+            &state_root,
+            channels::QueueTaskCreateRequest {
+                title: "Create subscriptions app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/subscriptions".to_string(),
+                workspace_root: Some(app_workspace_root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        seed_business_os_app_artifacts(&app_workspace_root, "subscriptions");
+        channels::lease_queue_task(&state_root, &task.message_key, CHANNEL_ROUTER_LEASE_OWNER)
+            .expect("failed to lease app queue task");
+        age_queue_task_lease(
+            &state_root,
+            &task.message_key,
+            BUSINESS_OS_APP_RECOVERY_STALE_SECS + 5,
+        );
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        release_stale_service_communication_leases_on_boot(&state_root, &state);
+
+        assert_eq!(route_status_for(&state_root, &task.message_key), "handled");
+        let shared = lock_shared_state(&state);
+        assert!(
+            shared
+                .recent_events
+                .iter()
+                .any(|event| event
+                    .contains("Recovered 1 stale Business OS app queue task(s) at boot"))
+        );
     }
 
     #[test]
