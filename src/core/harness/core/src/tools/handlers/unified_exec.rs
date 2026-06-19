@@ -363,6 +363,9 @@ pub(crate) fn business_os_app_root_artifact_write_guard(
     if let Some(path) = command_uses_broad_business_os_app_creator_discovery(command) {
         return Some(module_broad_discovery_guard_message(&path));
     }
+    if let Some(path) = command_uses_tmp_scratch_for_business_os_app_creator(command) {
+        return Some(module_tmp_scratch_guard_message(&path));
+    }
     if let Some(path) =
         command_stages_tmp_patch_for_business_os_module(command, &workspace_root, cwd)
     {
@@ -594,6 +597,74 @@ fn module_tmp_patch_guard_message(path: &str) -> String {
 Do not create .patch files under /tmp or shell wrappers around patch tools for Business OS app files. \
 Rewrite the affected bounded file directly at its final module path, or split behavior into a smaller module-local ESM helper."
     )
+}
+
+fn module_tmp_scratch_guard_message(path: &str) -> String {
+    format!(
+        "Business OS app module guard blocked temporary scratch/staging path `{path}`. \
+Generated Business OS App Creator files must be written, tested, and repaired directly at \
+`runtime/business-os/installed-modules/<module_id>/` or the exact prompted module path. \
+Do not write probes, split app fragments, validation fixtures, or generated module payloads under /tmp."
+    )
+}
+
+fn command_uses_tmp_scratch_for_business_os_app_creator(command: &str) -> Option<String> {
+    let compact = command.replace("\\\n", " ").replace('\n', " ");
+    let lower = compact.to_ascii_lowercase();
+    if !lower.contains("/tmp/") && !lower.contains("$tmpdir") && !lower.contains("${tmpdir}") {
+        return None;
+    }
+
+    let tmp_path = shellish_tokens(&compact)
+        .into_iter()
+        .find(|token| {
+            let lower = token.to_ascii_lowercase();
+            lower.contains("/tmp/") || lower.contains("$tmpdir") || lower.contains("${tmpdir}")
+        })
+        .unwrap_or_else(|| "/tmp".to_string());
+
+    let artifact_like = [
+        ".mjs",
+        ".js",
+        ".json",
+        ".html",
+        ".css",
+        ".svg",
+        ".patch",
+        "automation",
+        "index",
+        "locale",
+        "module",
+        "probe",
+        "records",
+        "schema",
+        "test",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+    if !artifact_like {
+        return None;
+    }
+
+    let tmp_write_or_probe = lower.contains(">/tmp/")
+        || lower.contains("> /tmp/")
+        || lower.contains(">>/tmp/")
+        || lower.contains(">> /tmp/")
+        || lower.contains(" tee /tmp/")
+        || lower.contains(" touch /tmp/")
+        || lower.contains(" cat /tmp/")
+        || lower.contains(" rm /tmp/")
+        || lower.contains(" mv /tmp/")
+        || lower.contains(" cp /tmp/")
+        || lower.contains(" install /tmp/")
+        || lower.contains("writefilesync('/tmp/")
+        || lower.contains("writefilesync(\"/tmp/")
+        || lower.contains("writefile('/tmp/")
+        || lower.contains("writefile(\"/tmp/")
+        || lower.contains("readfilesync('/tmp/")
+        || lower.contains("readfilesync(\"/tmp/");
+
+    tmp_write_or_probe.then_some(tmp_path)
 }
 
 fn command_writes_source_tree_installed_module(command: &str) -> Option<String> {

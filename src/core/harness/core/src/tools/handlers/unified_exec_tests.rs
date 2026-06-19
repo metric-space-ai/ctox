@@ -256,7 +256,8 @@ fn business_os_guard_blocks_root_schema_alias_move() -> anyhow::Result<()> {
     )
     .expect("root schema alias move should be blocked");
 
-    assert!(err.contains("root-level app artifact write to `harness-collections.schema.json`"));
+    assert!(err.contains("temporary scratch/staging"));
+    assert!(err.contains("/tmp/probe.json"));
     Ok(())
 }
 
@@ -803,9 +804,41 @@ fn business_os_guard_blocks_tmp_file_copy_wrapper_to_module_artifact() -> anyhow
     )
     .expect("/tmp copy wrapper to module artifact should be blocked");
 
-    assert!(err.contains("temporary"));
-    assert!(err.contains("file-copy wrappers"));
-    assert!(err.contains("runtime/business-os/installed-modules/inventory/index.html"));
+    assert!(err.contains("temporary scratch/staging"));
+    assert!(err.contains("/tmp/index.html"));
+    assert!(err.contains("runtime/business-os/installed-modules/<module_id>/"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_tmp_probe_during_app_creator_work() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "echo \"test write\" > /tmp/probe.txt 2>&1; cat /tmp/probe.txt; rm /tmp/probe.txt",
+        root.path(),
+    )
+    .expect("/tmp probes should be blocked for App Creator work");
+
+    assert!(err.contains("temporary scratch/staging"));
+    assert!(err.contains("/tmp/probe.txt"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_tmp_generated_module_fragments() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "cat > /tmp/records_top.mjs <<'TOP_EOF'\nexport const MODULE_ID = 'inventory';\nTOP_EOF\nwc -c /tmp/records_top.mjs",
+        root.path(),
+    )
+    .expect("/tmp app fragments should be blocked for App Creator work");
+
+    assert!(err.contains("temporary scratch/staging"));
+    assert!(err.contains("/tmp/records_top.mjs"));
     Ok(())
 }
 
@@ -1117,8 +1150,8 @@ fn business_os_guard_blocks_tmp_patch_staging_for_module_artifact() -> anyhow::R
     )
     .expect("/tmp .patch staging for module artifact should be blocked");
 
-    assert!(err.contains("temporary patch staging"));
-    assert!(err.contains("runtime/business-os/installed-modules/inventory/index.js"));
+    assert!(err.contains("temporary scratch/staging"));
+    assert!(err.contains("/tmp/p1.patch"));
     Ok(())
 }
 
