@@ -741,16 +741,18 @@ fn find_journal_entry_for_invoice(
     conn: &Connection,
     invoice_id: &str,
 ) -> anyhow::Result<Option<Value>> {
-    let pattern = format!("%\"ref_id\":\"{invoice_id}\"%");
+    // Exact JSON match: a LIKE pattern would treat `_`/`%` in the invoice id as
+    // SQL wildcards and could match an unrelated journal entry, making a post
+    // falsely idempotent and silently skipping a real post.
     let payload_json: Option<String> = conn
         .query_row(
             "SELECT payload_json
              FROM business_records
              WHERE collection = ?1
                AND deleted = 0
-               AND payload_json LIKE ?2
+               AND json_extract(payload_json, '$.ref_id') = ?2
              LIMIT 1",
-            rusqlite::params!["accounting_journal_entries", pattern.as_str()],
+            rusqlite::params!["accounting_journal_entries", invoice_id],
             |row| row.get(0),
         )
         .optional()?;
@@ -955,11 +957,6 @@ fn invoices_build_journal_entry(
     } else {
         net_total + tax_total
     };
-    let party_amount = if is_credit_note {
-        -party_base
-    } else {
-        party_base
-    };
     let party_line = json!({
         "account_id": party_account_id,
         "debit": (!party_is_credit).then_some(party_base).unwrap_or(0),
@@ -1122,17 +1119,23 @@ fn build_credit_note_draft(
         .get("reverse_charge")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let original_small_business = original
+        .get("small_business")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let raw_lines = command
         .payload
         .get("lines")
         .cloned()
         .or_else(|| original.get("lines").cloned())
         .unwrap_or_else(|| json!([]));
-    // Under reverse charge the supplier shows no output tax, so the credit note
-    // must stay tax-free too. We cannot carry the `reverse_charge` flag onto a
-    // credit_note_* type (validate_invoice_for_command rejects it), so we
-    // neutralise per-line tax instead and record the origin for traceability.
-    let lines = if original_reverse_charge {
+    // Under reverse charge OR small-business (§19 UStG) the supplier shows no
+    // output tax, so the credit note must stay tax-free too. We cannot carry the
+    // `reverse_charge` flag onto a credit_note_* type (validate_invoice_for_command
+    // rejects it), and even with `small_business` carried the copied line
+    // `tax_rate` would read as taxable in exports — so neutralise per-line tax.
+    let tax_free_origin = original_reverse_charge || original_small_business;
+    let lines = if tax_free_origin {
         Value::Array(
             raw_lines
                 .as_array()

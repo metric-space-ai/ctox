@@ -50,7 +50,10 @@ pub const EXPIRY_WARN_DAYS: i64 = 30;
 
 /// Classify a credential's validity at `now_ms`.
 pub fn credential_status(credential: &Value, now_ms: i64) -> CredentialStatus {
-    if field_bool(credential, "verified") == Some(false) {
+    // Fail closed: a compliance/legal credential is deployable only when it is
+    // explicitly verified. A missing `verified` flag (e.g. an imported or
+    // UI-created record) must NOT count as verified.
+    if field_bool(credential, "verified") != Some(true) {
         return CredentialStatus::Unverified;
     }
     if let Some(from) = field_i64(credential, "valid_from_ms") {
@@ -373,15 +376,13 @@ pub fn evaluate_billing_gate(nachweis: &Value) -> Vec<&'static str> {
     {
         None | Some([]) => blockers.push("no_time_entries"),
         Some(entries) => {
-            // A non-empty array is not enough: zero-, negative-, or all-NaN-hour
-            // entries must not release billing (they would create no invoice or
-            // underbill). Require strictly positive total billable hours.
-            let total: f64 = entries
-                .iter()
-                .map(entry_hours)
-                .filter(|h| h.is_finite())
-                .sum();
-            if total <= 0.0 {
+            // A non-empty array is not enough. Any single non-finite or negative
+            // entry would become a negative invoice line (which the poster
+            // rejects), and a zero total bills nothing — so reject both.
+            let hours: Vec<f64> = entries.iter().map(entry_hours).collect();
+            if hours.iter().any(|h| !h.is_finite() || *h < 0.0) {
+                blockers.push("invalid_hours");
+            } else if hours.iter().sum::<f64>() <= 0.0 {
                 blockers.push("no_billable_hours");
             }
         }
@@ -604,12 +605,19 @@ mod tests {
             &json!({"entleiher_signed": true, "signed_at_ms": NOW, "entries": []})
         )
         .contains(&"no_time_entries"));
-        // Regression (#8): a non-empty array of zero/negative hours must not
-        // release billing.
+        // Regression (#8): a non-empty array with a negative hour entry is
+        // invalid (would become a negative invoice line).
         assert!(evaluate_billing_gate(&json!({
             "entleiher_signed": true,
             "signed_at_ms": NOW,
             "entries": [{"type": "regular", "hours": 0.0}, {"type": "nacht", "hours": -4.0}]
+        }))
+        .contains(&"invalid_hours"));
+        // All-zero hours → nothing to bill.
+        assert!(evaluate_billing_gate(&json!({
+            "entleiher_signed": true,
+            "signed_at_ms": NOW,
+            "entries": [{"type": "regular", "hours": 0.0}]
         }))
         .contains(&"no_billable_hours"));
     }

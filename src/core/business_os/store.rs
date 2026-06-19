@@ -14111,21 +14111,45 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
                 outcome,
             );
         }
-        command_type if super::invoices::is_invoices_active_command(command_type) => {
+        command_type if command_type.starts_with("invoices.") => {
             // §5.6/§5.11 invoices module: server-authoritative accounting
             // mutations (draft CRUD, post, Storno/cancel, §17 credit notes).
-            // chef/admin role required, like the other mutating module families.
-            let session = rxdb_command_session(root, &command)?;
-            let outcome =
-                super::invoices::handle_invoices_active_command(root, &session, &command)?;
-            return write_rxdb_control_command_outcome(
-                root,
-                &command,
-                "completed",
-                command.record_id.as_deref(),
-                Some("completed"),
-                outcome,
-            );
+            // An unknown invoices.* command, an auth failure, or a handler error
+            // must persist a FAILED business_commands outcome AND propagate the
+            // error — never fall through to generic queue acceptance. Reject an
+            // unknown type before the session check so the error names the
+            // unsupported type rather than an auth failure.
+            let outcome = (|| -> anyhow::Result<Value> {
+                anyhow::ensure!(
+                    super::invoices::is_invoices_active_command(command_type),
+                    "unsupported invoices command type: {command_type}"
+                );
+                let session = rxdb_command_session(root, &command)?;
+                super::invoices::handle_invoices_active_command(root, &session, &command)
+            })();
+            match outcome {
+                Ok(value) => {
+                    return write_rxdb_control_command_outcome(
+                        root,
+                        &command,
+                        "completed",
+                        command.record_id.as_deref(),
+                        Some("completed"),
+                        value,
+                    );
+                }
+                Err(err) => {
+                    let _ = write_rxdb_control_command_outcome(
+                        root,
+                        &command,
+                        "failed",
+                        command.record_id.as_deref(),
+                        Some("failed"),
+                        serde_json::json!({ "ok": false, "error": err.to_string() }),
+                    );
+                    return Err(err);
+                }
+            }
         }
         command_type if command_type.starts_with("ctox.channel.") => {
             let mutation: ChannelCommandRequest = serde_json::from_value(command.payload.clone())
@@ -22429,6 +22453,31 @@ fn ats_canonical_invoice(
     invoice
 }
 
+/// Allowlist of ATS PII/record collections an ats.* mutation may target. A
+/// payload-supplied `collection` outside this set is rejected so a malicious
+/// RxDB command cannot redirect a retention purge / sign-off at arbitrary
+/// business_records (invoices, credentials, commands, module records, …).
+const ATS_WRITABLE_COLLECTIONS: &[&str] = &[
+    "applications",
+    "business_credentials",
+    "business_consents",
+    "submissions",
+    "offers",
+    "placements",
+    "interview_scorecards",
+    "interview_meetings",
+    "signature_requests",
+    "planning_time_records",
+];
+
+fn ensure_ats_collection_allowed(collection: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        ATS_WRITABLE_COLLECTIONS.contains(&collection),
+        "collection {collection:?} is not an ATS-writable collection"
+    );
+    Ok(())
+}
+
 fn handle_ats_mutating_command(
     root: &Path,
     session: &BusinessOsSession,
@@ -22444,6 +22493,9 @@ fn handle_ats_mutating_command(
                 .get("collection")
                 .and_then(Value::as_str)
                 .context("ats.retention.purge requires collection")?;
+            // Security: a payload-supplied collection must be an ATS PII
+            // collection — never invoices/credentials/commands/module records.
+            ensure_ats_collection_allowed(collection)?;
             let retention_days = p.get("retention_days").and_then(Value::as_i64).unwrap_or(0);
             let reference_field = p
                 .get("reference_field")
@@ -22456,9 +22508,21 @@ fn handle_ats_mutating_command(
                     .and_then(Value::as_i64)
                     .unwrap_or(0);
                 if super::ats_gates::retention_due(reference, retention_days, now) {
+                    // DSGVO erasure: overwrite the PII payload with a non-PII
+                    // tombstone before marking deleted — a soft-delete alone
+                    // leaves candidate PII sitting in payload_json.
+                    let tombstone = serde_json::json!({
+                        "id": id,
+                        "_deleted": true,
+                        "redacted": true,
+                        "redacted_at_ms": now,
+                        "reference_field": reference_field,
+                        "retention_days": retention_days,
+                        "updated_at_ms": now
+                    });
                     conn.execute(
-                        "UPDATE business_records SET deleted = 1, updated_at_ms = ?3 WHERE collection = ?1 AND record_id = ?2",
-                        params![collection, id.as_str(), now],
+                        "UPDATE business_records SET deleted = 1, updated_at_ms = ?3, payload_json = ?4 WHERE collection = ?1 AND record_id = ?2",
+                        params![collection, id.as_str(), now, serde_json::to_string(&tombstone)?],
                     )?;
                     purged.push(id);
                 }
@@ -22585,11 +22649,15 @@ fn handle_ats_mutating_command(
                 first_string_field(p, &["client_account_id"]).unwrap_or_default();
             let fee = p.get("fee").and_then(Value::as_f64).unwrap_or(0.0);
             let id = format!("plac_{now}");
+            // Deterministic fee-invoice id so a replay updates the same invoice
+            // and the early-leave clawback can reference it (§17 credit note).
+            let inv_id = format!("inv_placement_{id}");
             let payload = serde_json::json!({
                 "id": id,
                 "candidate_id": candidate_id,
                 "vacancy_id": first_string_field(p, &["vacancy_id"]).unwrap_or_default(),
                 "client_account_id": client_account_id,
+                "fee_invoice_id": inv_id,
                 "offer_id": first_string_field(p, &["offer_id"]).unwrap_or_default(),
                 "start_ms": p.get("start_ms").and_then(Value::as_i64).unwrap_or(now),
                 "guarantee_days": p.get("guarantee_days").and_then(Value::as_i64).unwrap_or(90),
@@ -22602,7 +22670,6 @@ fn handle_ats_mutating_command(
             upsert_business_record(&conn, "placements", &id, now, payload)?;
             // Emit the placement-fee draft invoice in the canonical, postable
             // accounting_invoices shape (flows through the invoices module).
-            let inv_id = format!("inv_{now}");
             let invoice = ats_canonical_invoice(
                 &inv_id,
                 "sale_out",
@@ -22720,6 +22787,9 @@ fn handle_ats_mutating_command(
                 .get("collection")
                 .and_then(Value::as_str)
                 .unwrap_or("planning_time_records");
+            // Security: never let the signoff write its billing/signature fields
+            // into a non-ATS collection (invoices, credentials, commands, …).
+            ensure_ats_collection_allowed(collection)?;
             let record_id = first_string_field(p, &["record_id", "nachweis_id"])
                 .context("ats.leistungsnachweis.signoff requires record_id")?;
             let existing = conn
@@ -22736,31 +22806,30 @@ fn handle_ats_mutating_command(
                 obj.insert("entleiher_signed".to_string(), Value::Bool(true));
                 obj.insert("signed_at_ms".to_string(), Value::from(now));
             }
-            // §5.9 Entleiher sign-off → billing gate. Billing is released only
-            // when the now-signed Nachweis carries time entries; if released, draft
-            // an invoice at the Verrechnungssatz (charge_rate) with the per-category
-            // Nacht/Sonn/Feiertag surcharges applied.
-            let blockers = super::ats_gates::evaluate_billing_gate(&payload);
-            let billing_released = blockers.is_empty();
-            if let Some(obj) = payload.as_object_mut() {
-                obj.insert(
-                    "billing_released".to_string(),
-                    Value::Bool(billing_released),
-                );
+            // §5.9 Entleiher sign-off → billing gate. Billing requires the signed
+            // Nachweis to carry positive billable hours AND a finite positive
+            // charge_rate (Verrechnungssatz). billing_released is set true only
+            // when an invoice is actually emitted, never on an empty/zero bill.
+            let mut blockers: Vec<String> = super::ats_gates::evaluate_billing_gate(&payload)
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect();
+            let charge_rate = p
+                .get("charge_rate")
+                .and_then(Value::as_f64)
+                .or_else(|| payload.get("charge_rate").and_then(Value::as_f64))
+                .unwrap_or(0.0);
+            if !(charge_rate.is_finite() && charge_rate > 0.0) {
+                blockers.push("missing_charge_rate".to_string());
             }
             let mut invoice_id = String::new();
             let mut net_total = 0.0;
-            if billing_released {
+            if blockers.is_empty() {
                 let entries = payload
                     .get("entries")
                     .and_then(Value::as_array)
                     .cloned()
                     .unwrap_or_default();
-                let charge_rate = p
-                    .get("charge_rate")
-                    .and_then(Value::as_f64)
-                    .or_else(|| payload.get("charge_rate").and_then(Value::as_f64))
-                    .unwrap_or(0.0);
                 let surcharge = p
                     .get("surcharge_pct")
                     .cloned()
@@ -22770,7 +22839,9 @@ fn handle_ats_mutating_command(
                     super::ats_gates::compute_nachweis_billing(&entries, charge_rate, &surcharge);
                 net_total = billing.net_total;
                 if net_total > 0.0 {
-                    invoice_id = format!("inv_{now}");
+                    // Deterministic id: a replayed signoff updates the same
+                    // invoice instead of minting a duplicate inv_{now}.
+                    invoice_id = format!("inv_nachweis_{record_id}");
                     let account_id = payload
                         .get("entleiher_account_id")
                         .and_then(Value::as_str)
@@ -22811,6 +22882,14 @@ fn handle_ats_mutating_command(
                         invoice,
                     )?;
                 }
+            }
+            // Released only when an invoice was actually emitted.
+            let billing_released = !invoice_id.is_empty();
+            if let Some(obj) = payload.as_object_mut() {
+                obj.insert(
+                    "billing_released".to_string(),
+                    Value::Bool(billing_released),
+                );
             }
             upsert_business_record(&conn, collection, &record_id, now, payload)?;
             Ok(serde_json::json!({
@@ -22936,8 +23015,15 @@ fn handle_ats_mutating_command(
                 let served = ((left_at_ms - start) / 86_400_000).clamp(0, days);
                 let remaining_ratio = (days - served) as f64 / days as f64;
                 clawback = (fee * remaining_ratio * 100.0).round() / 100.0;
-                credit_note_id = format!("cn_{now}");
-                let credit = ats_canonical_invoice(
+                // Deterministic id (replay-safe) and reference the placement-fee
+                // invoice so the clawback is a valid, postable §17 credit note.
+                credit_note_id = format!("cn_earlyleave_{placement_id}");
+                let fee_invoice_id = placement
+                    .get("fee_invoice_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let mut credit = ats_canonical_invoice(
                     &credit_note_id,
                     "credit_note_out",
                     &client_account_id,
@@ -22951,6 +23037,12 @@ fn handle_ats_mutating_command(
                     "source_placement_id",
                     &placement_id,
                 );
+                if let Some(obj) = credit.as_object_mut() {
+                    obj.insert(
+                        "credit_note_for_id".to_string(),
+                        Value::String(fee_invoice_id),
+                    );
+                }
                 upsert_business_record(&conn, "accounting_invoices", &credit_note_id, now, credit)?;
             }
             if let Some(obj) = placement.as_object_mut() {
@@ -22997,10 +23089,9 @@ fn handle_ats_mutating_command(
             // the meeting record.
             let meeting_id = first_string_field(p, &["meeting_id", "record_id"])
                 .context("ats.interview.transcribe requires meeting_id")?;
-            let collection = p
-                .get("collection")
-                .and_then(Value::as_str)
-                .unwrap_or("interview_meetings");
+            // Security: the transcript may only ever be written onto the meeting
+            // record — the target collection is fixed, never payload-controlled.
+            let collection = "interview_meetings";
             let file_id = first_string_field(p, &["source_file_id"])
                 .context("ats.interview.transcribe requires source_file_id")?;
             let generation = first_string_field(p, &["generation_id"]);
