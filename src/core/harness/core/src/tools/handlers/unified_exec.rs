@@ -357,6 +357,9 @@ pub(crate) fn business_os_app_root_artifact_write_guard(
     if let Some(path) = command_reads_business_os_validator_internals(command) {
         return Some(module_validator_internals_guard_message(&path));
     }
+    if let Some(action) = command_uses_forbidden_business_os_app_cli_probe(command) {
+        return Some(module_app_cli_probe_guard_message(&action));
+    }
     if let Some(path) = command_uses_broad_business_os_app_creator_discovery(command) {
         return Some(module_broad_discovery_guard_message(&path));
     }
@@ -565,6 +568,15 @@ fn module_validator_internals_guard_message(path: &str) -> String {
 Do not inspect static-checker source while creating runtime-installed apps. Run \
 `ctox business-os app validate <id> --installed`, focused node checks, and tests; repair only concrete \
 reported bullets. If the app validator is green, stop instead of reading validator internals."
+    )
+}
+
+fn module_app_cli_probe_guard_message(action: &str) -> String {
+    format!(
+        "Business OS app module guard blocked App Creator CLI probing `{action}`. \
+Use the skill instructions and the prompted module directory instead of inspecting CLI surfaces. \
+Run only full validation after implementing domain behavior: `ctox business-os app validate <id> --installed`. \
+Do not use inspect/help probing or validator skip flags during App Creator work."
     )
 }
 
@@ -1640,10 +1652,33 @@ fn command_reads_business_os_validator_internals(command: &str) -> Option<String
     reads_internals.then_some(path.to_string())
 }
 
+fn command_uses_forbidden_business_os_app_cli_probe(command: &str) -> Option<String> {
+    let compact = command.replace("\\\n", " ").replace('\n', " ");
+    let lower = compact.to_ascii_lowercase();
+    if lower.contains("ctox business-os app inspect") {
+        return Some("ctox business-os app inspect".to_string());
+    }
+    if lower.contains("ctox business-os app --help")
+        || lower.contains("ctox business-os app -h")
+        || lower.contains("ctox business-os app help")
+    {
+        return Some("ctox business-os app help".to_string());
+    }
+    if lower.contains("ctox business-os app validate")
+        && (lower.contains("--skip-tests") || lower.contains("--skip-node-check"))
+    {
+        return Some("ctox business-os app validate --skip-*".to_string());
+    }
+    None
+}
+
 fn command_uses_broad_business_os_app_creator_discovery(command: &str) -> Option<String> {
     let compact = command.replace("\\\n", " ").replace('\n', " ");
     let lower = compact.to_ascii_lowercase();
     if let Some(path) = command_uses_forbidden_business_os_source_discovery(&lower) {
+        return Some(path);
+    }
+    if let Some(path) = command_uses_broad_source_module_few_shot_read(&lower) {
         return Some(path);
     }
 
@@ -1668,6 +1703,16 @@ fn command_uses_broad_business_os_app_creator_discovery(command: &str) -> Option
             || lower.contains("validate-app-module.mjs"));
     if broad_find {
         return Some("find over source/runtime/install tree".to_string());
+    }
+
+    let broad_installed_module_find = lower_contains_shell_word(&lower, "find")
+        && lower.contains("installed-modules")
+        && (lower.contains("*/installed-modules/*")
+            || lower.contains("/runtime/business-os/installed-modules")
+            || lower.contains(" runtime/business-os/installed-modules")
+            || lower.contains("/.local/lib/ctox/current"));
+    if broad_installed_module_find {
+        return Some("runtime/business-os/installed-modules/".to_string());
     }
 
     let lists_installed_root = (lower_contains_shell_word(&lower, "ls")
@@ -1699,6 +1744,28 @@ fn command_uses_broad_business_os_app_creator_discovery(command: &str) -> Option
         return Some("src/apps/business-os/modules/".to_string());
     }
 
+    None
+}
+
+fn command_uses_broad_source_module_few_shot_read(lower: &str) -> Option<String> {
+    let source_module_refs = lower.matches("src/apps/business-os/modules/").count();
+    if source_module_refs == 0 {
+        return None;
+    }
+    let reads_source = lower_contains_shell_word(lower, "cat")
+        || lower_contains_shell_word(lower, "sed")
+        || lower_contains_shell_word(lower, "head")
+        || lower_contains_shell_word(lower, "tail")
+        || lower_contains_shell_word(lower, "awk");
+    if !reads_source {
+        return None;
+    }
+    let broad_multi_file_cat = lower_contains_shell_word(lower, "cat") && source_module_refs > 1;
+    let broad_large_head_tail = command_has_large_head_tail_read(lower);
+    let broad_loop_dump = lower.contains("for f in") && lower_contains_shell_word(lower, "cat");
+    if broad_multi_file_cat || broad_large_head_tail || broad_loop_dump {
+        return Some("src/apps/business-os/modules/".to_string());
+    }
     None
 }
 

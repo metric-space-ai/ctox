@@ -940,6 +940,31 @@ fn business_os_guard_blocks_source_module_wc_line_count_sweep() -> anyhow::Resul
 }
 
 #[test]
+fn business_os_guard_blocks_source_module_multi_file_cat_dump() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(
+        root.path()
+            .join("src/apps/business-os/modules/customers/core"),
+    )?;
+
+    let command = format!(
+        "cat {root}/src/apps/business-os/modules/customers/module.json \
+{root}/src/apps/business-os/modules/customers/collections.schema.json \
+{root}/src/apps/business-os/modules/customers/schema.js \
+{root}/src/apps/business-os/modules/customers/index.js \
+{root}/src/apps/business-os/modules/customers/core/automation.mjs \
+{root}/src/apps/business-os/modules/customers/core/records.mjs 2>&1 | head -400",
+        root = root.path().display()
+    );
+    let err = business_os_app_root_artifact_write_guard(&command, root.path())
+        .expect("source module multi-file cat dumps should be blocked");
+
+    assert!(err.contains("broad App Creator discovery"));
+    assert!(err.contains("src/apps/business-os/modules/"));
+    Ok(())
+}
+
+#[test]
 fn business_os_guard_blocks_source_module_multi_file_loop_dump() -> anyhow::Result<()> {
     let root = tempdir()?;
     fs::create_dir_all(root.path().join("src/apps/business-os/modules/customers"))?;
@@ -952,6 +977,83 @@ fn business_os_guard_blocks_source_module_multi_file_loop_dump() -> anyhow::Resu
 
     assert!(err.contains("broad App Creator discovery"));
     assert!(err.contains("src/apps/business-os/modules/"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_business_os_app_inspect_probe() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "ctox business-os app inspect bench_subscriptions_r102_20260619t173151z --installed 2>&1 | head -200",
+        root.path(),
+    )
+    .expect("App Creator inspect probing should be blocked");
+
+    assert!(err.contains("CLI probing"));
+    assert!(err.contains("inspect"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_business_os_app_help_probe() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "ctox business-os app --help 2>&1 | head -50",
+        root.path(),
+    )
+    .expect("App Creator help probing should be blocked");
+
+    assert!(err.contains("CLI probing"));
+    assert!(err.contains("help"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_partial_app_validate_probe() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "ctox business-os app validate bench_subscriptions_r102_20260619t173151z --installed --skip-tests --skip-node-check 2>&1 | head -80",
+        root.path(),
+    )
+    .expect("partial App Creator validator probes should be blocked");
+
+    assert!(err.contains("CLI probing"));
+    assert!(err.contains("validate --skip"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_allows_full_app_validate() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    assert!(business_os_app_root_artifact_write_guard(
+        "ctox business-os app validate bench_subscriptions_r102_20260619t173151z --installed",
+        root.path(),
+    )
+    .is_none());
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_absolute_installed_modules_find() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "find /Users/michaelwelsch/.local/lib/ctox/current -path '*/installed-modules/*' -name 'module.json' -not -path '*/node_modules/*' 2>/dev/null | head -5",
+        root.path(),
+    )
+    .expect("absolute installed-modules find should be blocked");
+
+    assert!(err.contains("broad App Creator discovery"));
+    assert!(err.contains("runtime/business-os/installed-modules/"));
     Ok(())
 }
 
