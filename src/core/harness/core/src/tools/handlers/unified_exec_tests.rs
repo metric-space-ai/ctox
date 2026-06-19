@@ -8,6 +8,7 @@ use ctox_protocol::models::PermissionProfile;
 use ctox_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -1862,6 +1863,142 @@ fn business_os_guard_allows_runtime_index_html_shell_fragment() -> anyhow::Resul
     )
     .is_none());
     Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_fresh_runtime_scaffold_probe_before_entry_tests() -> anyhow::Result<()>
+{
+    let root = tempdir()?;
+    let module_dir = seed_generic_runtime_app_scaffold(root.path(), "bench_subscriptions_r115")?;
+
+    for command in [
+        "test -f runtime/business-os/installed-modules/bench_subscriptions_r115/index.html && echo exists",
+        "wc -c runtime/business-os/installed-modules/bench_subscriptions_r115/index.html",
+        "head -20 runtime/business-os/installed-modules/bench_subscriptions_r115/index.html",
+        "ctox business-os app validate bench_subscriptions_r115 --installed 2>&1 | head -40",
+    ] {
+        let err = business_os_app_root_artifact_write_guard(command, root.path())
+            .expect("fresh scaffold probe should be blocked");
+        assert!(err.contains("fresh App Creator scaffold access"));
+        assert!(err.contains(&module_dir.display().to_string()));
+    }
+
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_fresh_runtime_scaffold_probe_at_absolute_install_root(
+) -> anyhow::Result<()> {
+    let workspace = tempdir()?;
+    fs::create_dir_all(workspace.path().join("src/apps/business-os"))?;
+    let install = tempdir()?;
+    let module_dir = seed_generic_runtime_app_scaffold(install.path(), "bench_subscriptions_r115")?;
+    let index_path = module_dir.join("index.html");
+
+    let command = format!("head -20 {}", index_path.display());
+    let err = business_os_app_root_artifact_write_guard(&command, workspace.path())
+        .expect("fresh scaffold probe through absolute install root should be blocked");
+
+    assert!(err.contains("fresh App Creator scaffold access"));
+    assert!(err.contains(&module_dir.display().to_string()));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_fresh_runtime_index_html_printf_before_entry_tests(
+) -> anyhow::Result<()> {
+    let root = tempdir()?;
+    let module_dir = seed_generic_runtime_app_scaffold(root.path(), "bench_subscriptions_r115")?;
+
+    let command = "printf '%s\\n' '<main class=\"bench-subscriptions-r115-module\" data-module-root><section><h1 data-title>Subscriptions</h1></section></main>' > runtime/business-os/installed-modules/bench_subscriptions_r115/index.html && echo \"wrote OK\"";
+    let err = business_os_app_root_artifact_write_guard(command, root.path())
+        .expect("fresh scaffold partial html rewrite should be blocked");
+
+    assert!(err.contains("fresh App Creator scaffold access"));
+    assert!(err.contains(&module_dir.display().to_string()));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_allows_fresh_runtime_vertical_slice_with_entry_and_tests() -> anyhow::Result<()>
+{
+    let root = tempdir()?;
+    seed_generic_runtime_app_scaffold(root.path(), "bench_subscriptions_r115")?;
+
+    let command = r#"MODULE_DIR="runtime/business-os/installed-modules/bench_subscriptions_r115"
+cat > "$MODULE_DIR/index.html" <<'HTML'
+<main class="bench-subscriptions-r115-module" data-module-root><section data-subscriptions></section></main>
+HTML
+cat > "$MODULE_DIR/index.js" <<'JS'
+export async function mount(ctx) {
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((response) => response.text());
+  ctx.host.innerHTML = html;
+}
+JS
+cat > "$MODULE_DIR/tests/subscriptions.test.mjs" <<'JS'
+import assert from 'node:assert/strict';
+assert.equal('subscription renewal', 'subscription renewal');
+JS"#;
+
+    assert!(business_os_app_root_artifact_write_guard(command, root.path()).is_none());
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_allows_runtime_index_html_after_entry_tests_are_domain_specific(
+) -> anyhow::Result<()> {
+    let root = tempdir()?;
+    let module_dir = seed_generic_runtime_app_scaffold(root.path(), "bench_subscriptions_r115")?;
+    fs::write(
+        module_dir.join("index.js"),
+        "export async function mount(ctx) { ctx.host.innerHTML = 'Subscription renewals'; }\n",
+    )?;
+    fs::write(
+        module_dir.join("tests/bench_subscriptions_r115.test.mjs"),
+        "import assert from 'node:assert/strict';\nassert.equal('MRR renewal', 'MRR renewal');\n",
+    )?;
+
+    assert!(business_os_app_root_artifact_write_guard(
+        "printf '%s\\n' '<main data-module-root>Subscription renewals</main>' > runtime/business-os/installed-modules/bench_subscriptions_r115/index.html",
+        root.path(),
+    )
+    .is_none());
+    Ok(())
+}
+
+fn seed_generic_runtime_app_scaffold(root: &Path, module_id: &str) -> anyhow::Result<PathBuf> {
+    fs::create_dir_all(root.join("src/apps/business-os"))?;
+    let module_dir = root
+        .join("runtime/business-os/installed-modules")
+        .join(module_id);
+    fs::create_dir_all(module_dir.join("core"))?;
+    fs::create_dir_all(module_dir.join("locales"))?;
+    fs::create_dir_all(module_dir.join("tests"))?;
+    fs::write(
+        module_dir.join("index.js"),
+        "function render(summary) { document.querySelector('[data-summary]').textContent = summary.total + ' records, ' + summary.open + ' open, ' + summary.blocked + ' blocked'; }\nfunction newRecord() { return 'New record'; }\n",
+    )?;
+    fs::write(
+        module_dir.join("tests").join(format!("{module_id}.test.mjs")),
+        "import assert from 'node:assert/strict';\nconst open = { title: 'Open item' };\nconst blocked = { title: 'Blocked item' };\nassert.deepEqual({ total: 2, open: 1, blocked: 1, done: 0 }, { total: 2, open: 1, blocked: 1, done: 0 });\n",
+    )?;
+    fs::write(
+        module_dir.join("index.html"),
+        "<main data-module-root></main>\n",
+    )?;
+    fs::write(module_dir.join("core/records.mjs"), "export {}\n")?;
+    fs::write(module_dir.join("core/automation.mjs"), "export {}\n")?;
+    fs::write(module_dir.join("locales/en.json"), "{}\n")?;
+    fs::write(module_dir.join("locales/de.json"), "{}\n")?;
+    fs::write(module_dir.join("module.json"), "{}\n")?;
+    fs::write(module_dir.join("collections.schema.json"), "{}\n")?;
+    fs::write(
+        module_dir.join("schema.js"),
+        "export const collections = {};\n",
+    )?;
+    fs::write(module_dir.join("index.css"), "\n")?;
+    fs::write(module_dir.join("icon.svg"), "<svg></svg>\n")?;
+    Ok(module_dir)
 }
 
 #[test]

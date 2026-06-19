@@ -367,6 +367,11 @@ pub(crate) fn business_os_app_root_artifact_write_guard(
         return Some(module_tmp_scratch_guard_message(&path));
     }
     if let Some(path) =
+        command_accesses_fresh_runtime_scaffold_before_entry_test(command, &workspace_root, cwd)
+    {
+        return Some(module_fresh_scaffold_first_slice_guard_message(&path));
+    }
+    if let Some(path) =
         command_stages_tmp_patch_for_business_os_module(command, &workspace_root, cwd)
     {
         return Some(module_tmp_patch_guard_message(&path));
@@ -605,6 +610,17 @@ fn module_tmp_scratch_guard_message(path: &str) -> String {
 Generated Business OS App Creator files must be written, tested, and repaired directly at \
 `runtime/business-os/installed-modules/<module_id>/` or the exact prompted module path. \
 Do not write probes, split app fragments, validation fixtures, generated module payloads, or run read/test probes from /tmp."
+    )
+}
+
+fn module_fresh_scaffold_first_slice_guard_message(path: &str) -> String {
+    format!(
+        "Business OS app module guard blocked fresh App Creator scaffold access at `{path}` before \
+the requested-domain entry/test vertical slice exists. Do not inspect, validate, probe, or partially \
+rewrite generated runtime app artifacts while `index.js` and tests still contain the generic scaffold. \
+The first runtime module artifact write must update requested-domain `core/records.mjs`, \
+`core/automation.mjs`, `index.html`, `index.js`, one locale file, and one `tests/*.test.mjs` file \
+together, including both `index.js` and tests in that write."
     )
 }
 
@@ -2010,6 +2026,349 @@ fn command_uses_broad_source_module_few_shot_read(lower: &str) -> Option<String>
     None
 }
 
+fn command_accesses_fresh_runtime_scaffold_before_entry_test(
+    command: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+) -> Option<String> {
+    let compact = command.replace("\\\n", " ").replace('\n', " ");
+    let lower = compact.to_ascii_lowercase();
+    if !command_targets_runtime_business_os_module(&lower, workspace_root, cwd) {
+        return None;
+    }
+    let module_dir = runtime_business_os_module_dir_for_command(&compact, workspace_root, cwd)?;
+    if !runtime_module_entry_and_tests_still_generic(&module_dir) {
+        return None;
+    }
+
+    let categories = runtime_module_write_categories(&compact, workspace_root, cwd);
+    let writes_any_artifact = categories.any();
+    let writes_entry_and_test = categories.entry && categories.test;
+    if writes_any_artifact && !writes_entry_and_test {
+        return Some(module_dir.display().to_string());
+    }
+
+    if !writes_any_artifact && command_reads_or_validates_runtime_module(&lower) {
+        return Some(module_dir.display().to_string());
+    }
+
+    None
+}
+
+#[derive(Default)]
+struct RuntimeModuleWriteCategories {
+    records: bool,
+    automation: bool,
+    html: bool,
+    entry: bool,
+    locale: bool,
+    test: bool,
+    contract: bool,
+    cosmetic: bool,
+}
+
+impl RuntimeModuleWriteCategories {
+    fn any(&self) -> bool {
+        self.records
+            || self.automation
+            || self.html
+            || self.entry
+            || self.locale
+            || self.test
+            || self.contract
+            || self.cosmetic
+    }
+}
+
+fn runtime_module_write_categories(
+    command: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+) -> RuntimeModuleWriteCategories {
+    RuntimeModuleWriteCategories {
+        records: command_writes_runtime_module_artifact_named(
+            command,
+            workspace_root,
+            cwd,
+            "records.mjs",
+        )
+        .is_some(),
+        automation: command_writes_runtime_module_artifact_named(
+            command,
+            workspace_root,
+            cwd,
+            "automation.mjs",
+        )
+        .is_some(),
+        html: command_writes_runtime_module_artifact_named(
+            command,
+            workspace_root,
+            cwd,
+            "index.html",
+        )
+        .is_some(),
+        entry: command_writes_runtime_module_artifact_named(
+            command,
+            workspace_root,
+            cwd,
+            "index.js",
+        )
+        .is_some(),
+        locale: command_writes_runtime_module_artifact_named(
+            command,
+            workspace_root,
+            cwd,
+            "en.json",
+        )
+        .is_some()
+            || command_writes_runtime_module_artifact_named(
+                command,
+                workspace_root,
+                cwd,
+                "de.json",
+            )
+            .is_some(),
+        test: command_writes_runtime_module_test_artifact(command, workspace_root, cwd).is_some(),
+        contract: command_writes_runtime_module_artifact_named(
+            command,
+            workspace_root,
+            cwd,
+            "module.json",
+        )
+        .is_some()
+            || command_writes_runtime_module_artifact_named(
+                command,
+                workspace_root,
+                cwd,
+                "collections.schema.json",
+            )
+            .is_some()
+            || command_writes_runtime_module_artifact_named(
+                command,
+                workspace_root,
+                cwd,
+                "schema.js",
+            )
+            .is_some(),
+        cosmetic: command_writes_runtime_module_artifact_named(
+            command,
+            workspace_root,
+            cwd,
+            "index.css",
+        )
+        .is_some()
+            || command_writes_runtime_module_artifact_named(
+                command,
+                workspace_root,
+                cwd,
+                "icon.svg",
+            )
+            .is_some(),
+    }
+}
+
+fn command_writes_runtime_module_test_artifact(
+    command: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+) -> Option<String> {
+    let tokens = shellish_tokens(command);
+    let cwd_is_module_dir = is_runtime_business_os_module_dir(workspace_root, cwd);
+    for (idx, token) in tokens.iter().enumerate() {
+        let Some(path) = business_os_module_artifact_token_name(token, cwd_is_module_dir) else {
+            continue;
+        };
+        if !path.to_ascii_lowercase().ends_with(".test.mjs") {
+            continue;
+        }
+        if command_writes_path(command, &path)
+            || command_programmatically_writes_path(command, &path)
+            || token_is_target_of_write_verb(&tokens, idx)
+        {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn runtime_business_os_module_dir_for_command(
+    command: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+) -> Option<PathBuf> {
+    if is_runtime_business_os_module_dir(workspace_root, cwd) {
+        return Some(runtime_business_os_module_root_from_path(
+            workspace_root,
+            cwd,
+        )?);
+    }
+    runtime_business_os_module_dir_from_reference(command, workspace_root)
+        .or_else(|| runtime_business_os_module_dir_from_validate_command(command, workspace_root))
+}
+
+fn runtime_business_os_module_dir_from_reference(
+    reference: &str,
+    workspace_root: &Path,
+) -> Option<PathBuf> {
+    let lower = reference.to_ascii_lowercase();
+    let marker = "runtime/business-os/installed-modules/";
+    let start = lower.find(marker)?;
+    let token_start = reference[..start]
+        .rfind(|ch: char| {
+            ch.is_whitespace() || matches!(ch, '\'' | '"' | '`' | ',' | '(' | ';' | '|' | '&')
+        })
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+    let rest = &reference[start + marker.len()..];
+    let module_id = rest
+        .split(|ch: char| {
+            ch == '/'
+                || ch == '\\'
+                || ch.is_whitespace()
+                || matches!(ch, '\'' | '"' | '`' | ',' | ')' | ';' | '|' | '&')
+        })
+        .next()
+        .unwrap_or_default()
+        .trim();
+    if module_id.is_empty() || module_id.contains('$') {
+        return None;
+    }
+    let token_end = start + marker.len() + module_id.len();
+    let candidate = reference[token_start..token_end]
+        .trim()
+        .trim_start_matches("./")
+        .trim_matches(|ch: char| matches!(ch, '\'' | '"' | '`'));
+    if Path::new(candidate).is_absolute() {
+        return Some(PathBuf::from(candidate));
+    }
+    Some(workspace_root.join(candidate))
+}
+
+fn runtime_business_os_module_dir_from_validate_command(
+    command: &str,
+    workspace_root: &Path,
+) -> Option<PathBuf> {
+    let tokens = shellish_tokens(command);
+    for (idx, window) in tokens.windows(4).enumerate() {
+        if window[0] == "ctox"
+            && window[1] == "business-os"
+            && window[2] == "app"
+            && window[3] == "validate"
+        {
+            let module_id = tokens.get(idx + 4)?.trim();
+            if module_id.is_empty() || module_id.starts_with('-') || module_id.contains('/') {
+                return None;
+            }
+            if !tokens.iter().any(|token| token == "--installed") {
+                return None;
+            }
+            return Some(
+                workspace_root
+                    .join("runtime/business-os/installed-modules")
+                    .join(module_id),
+            );
+        }
+    }
+    None
+}
+
+fn runtime_business_os_module_root_from_path(
+    workspace_root: &Path,
+    path: &Path,
+) -> Option<PathBuf> {
+    let relative = path.strip_prefix(workspace_root).ok()?;
+    let mut components = relative
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    if components.len() < 4
+        || components[0] != "runtime"
+        || components[1] != "business-os"
+        || components[2] != "installed-modules"
+    {
+        return None;
+    }
+    components.truncate(4);
+    let mut root = workspace_root.to_path_buf();
+    for component in components {
+        root.push(component);
+    }
+    Some(root)
+}
+
+fn runtime_module_entry_and_tests_still_generic(module_dir: &Path) -> bool {
+    let index_js = fs::read_to_string(module_dir.join("index.js")).unwrap_or_default();
+    let index_generic = contains_generic_app_creator_scaffold_markers(&index_js);
+    let tests_generic = runtime_module_tests_contain_generic_scaffold_markers(module_dir);
+    index_generic || tests_generic
+}
+
+fn runtime_module_tests_contain_generic_scaffold_markers(module_dir: &Path) -> bool {
+    let tests_dir = module_dir.join("tests");
+    let Ok(entries) = fs::read_dir(tests_dir) else {
+        return true;
+    };
+    let mut saw_test = false;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_none_or(|name| !name.ends_with(".test.mjs"))
+        {
+            continue;
+        }
+        saw_test = true;
+        let content = fs::read_to_string(path).unwrap_or_default();
+        if contains_generic_app_creator_scaffold_markers(&content) {
+            return true;
+        }
+    }
+    !saw_test
+}
+
+fn contains_generic_app_creator_scaffold_markers(content: &str) -> bool {
+    let lower = content.to_ascii_lowercase();
+    let squashed = lower
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    let generic_pairs = [
+        ("new record", "summary.open"),
+        ("new record", "summary.blocked"),
+        ("select a record", "use the list to open or create a record"),
+        ("open item", "blocked item"),
+        ("assert.deepequal(summarizerecords", "done: 0"),
+    ];
+    generic_pairs.iter().any(|(left, right)| {
+        lower.contains(left)
+            && squashed.contains(
+                &right
+                    .chars()
+                    .filter(|ch| !ch.is_whitespace())
+                    .collect::<String>(),
+            )
+    }) || lower.contains("no records match the current view")
+        || lower.contains("record saved.")
+        || lower.contains("record archived.")
+}
+
+fn command_reads_or_validates_runtime_module(command_lower: &str) -> bool {
+    command_lower.contains("ctox business-os app validate")
+        || command_lower.contains("node --check")
+        || command_lower.contains("node --test")
+        || lower_contains_shell_word(command_lower, "test")
+        || lower_contains_shell_word(command_lower, "stat")
+        || lower_contains_shell_word(command_lower, "wc")
+        || lower_contains_shell_word(command_lower, "ls")
+        || lower_contains_shell_word(command_lower, "find")
+        || lower_contains_shell_word(command_lower, "head")
+        || lower_contains_shell_word(command_lower, "tail")
+        || lower_contains_shell_word(command_lower, "sed")
+        || lower_contains_shell_word(command_lower, "cat")
+        || command_lower.contains("readfilesync")
+}
+
 fn command_uses_forbidden_business_os_source_discovery(lower: &str) -> Option<String> {
     let reads_source = lower_contains_shell_word(lower, "cat")
         || lower_contains_shell_word(lower, "sed")
@@ -2177,6 +2536,8 @@ fn command_targets_runtime_business_os_module(
     cwd: &Path,
 ) -> bool {
     command_lower.contains("runtime/business-os/installed-modules/")
+        || (command_lower.contains("ctox business-os app validate")
+            && command_lower.contains("--installed"))
         || is_runtime_business_os_module_dir(workspace_root, cwd)
 }
 
