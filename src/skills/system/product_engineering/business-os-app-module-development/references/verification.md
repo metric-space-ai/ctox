@@ -36,6 +36,18 @@ must not mention `business_commands`; command creation goes through
 `ctx.commandBus.dispatch(...)`, and only `module.json` may list
 `business_commands` as an explicit dependency.
 
+Treat the generated scaffold as an installed-runtime contract, not as a source
+module draft. Do not port a shipped/source `module.json`, `collections.schema.json`,
+or `schema.js` shape over the scaffold. Preserve installed manifest fields
+(`entry`, `install_scope`, SemVer `version`, `store.distribution`,
+`store.installable=false`), the two-pane layout without `layout.right`, the
+scaffold primary collection name, `collections.schema.json.schema_format`, and
+the helper exports used by `index.js` and tests. If schema or collection fields
+need domain changes, make them in the same edit as `core/records.mjs`,
+`core/automation.mjs`, UI/locales, and tests. A validator diff showing source
+manifest fields, a renamed primary collection, or missing helper exports means
+restore the scaffold contract first, then reapply domain fields lockstep.
+
 Generated tests must also be internally correct. Before treating a failing
 module test as an app failure, verify that its fixture expectations are
 hand-computed and consistent with the domain rules. Aggregate assertions such as
