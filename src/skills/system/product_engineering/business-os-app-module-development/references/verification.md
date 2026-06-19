@@ -51,6 +51,12 @@ actual exported shape. If a helper adds legitimate fields such as
 `renewal_due_ids`, update the expected object or assert named fields
 deliberately. Do not keep a stale partial `assert.deepEqual(summary, {...})`
 that fails only because the helper now reports more useful facts.
+This is especially important for domain ports that replace scaffold status
+values. If `normalizeStatus()` now maps everything to `active`, `on_hold`,
+`completed`, or another domain vocabulary, fixture records and expected counts
+must use that vocabulary. A validator diff that shows extra helper fields or
+different status counts is not a reason to delete helper fields; repair either
+the helper rule or the test expectation so both encode the same business rule.
 
 For runtime-installed App Creator modules, `module.json.description` and
 `module.json.tags` are part of the domain proof. Do not leave the scaffold

@@ -24958,6 +24958,7 @@ Business OS app build target:
 - sequencing rule: after reading the required skill and inspecting three shipped modules, verify {module_dir}/ has the required file inventory before reading validator/checker source files. If the directory is missing or incomplete, repair the scaffold first; do not replace a green scaffold just because it is generic. Do not open validate-app-module.mjs, module_static_check.mjs, assert-module-conformance.mjs, or assert-rxdb-only.mjs until the required files exist and a validation command has reported a concrete failure.
 - pre-validation edit gate: after reading the skill and inspecting the scaffold/few-shots, your next app action must write requested-domain changes under {module_dir}/. Before the first validation call, edit at least core/records.mjs, core/automation.mjs, one visible UI/locales file, and one tests/*.test.mjs file so they contain concrete requested-domain fixture facts. Do not run `ctox business-os app validate`, module tests, node --check, or scaffold repair as the first action on a complete fresh scaffold.
 - lockstep edit rule: if you change helper exports, schema fields, collection names, status values, command payload fields, fixture records, labels, filters, UI selectors, or HTML data-action values, update every importer, every concrete index.js handler/branch/action-map entry, and tests/*.test.mjs in the same implementation pass before running validation. Partial helper rewrites such as automation imports for records helpers that do not exist yet are invalid intermediate deliverables. Every data-action="..." in index.html must have a real click handler or action branch in index.js; do not add visible buttons such as bulk/renewal/churn actions unless those exact actions work end to end.
+- test-helper parity rule: when you change summarizeRecords, visibleRecords, needsAttention, budgetStatus, billingReadiness, milestoneTotals, or any aggregate helper, update every tests/*.test.mjs expectation in the same edit to match the helper's actual exported shape. Do not use assert.deepEqual(summary, {{...}}) with an expected object that omits fields returned by the helper; either assert the full hand-computed object including every returned field or assign the helper result to a variable and assert named fields deliberately. Keep fixture statuses aligned with normalizeStatus/normalizers. A validator diff between actual and expected summary counts is a test/logic mismatch to repair before UI polish or completion.
 - validator rule: validators and static checkers are black-box gates. Run `ctox business-os app validate {module_id} {mode_flag}` only after you have made the smallest requested-domain edits to records, labels, filters, automation payload, and tests; scaffold inspection alone is not a file pass. Validation completion is accepted only when core/records.mjs, core/automation.mjs, one visible UI/locales file, and one tests/*.test.mjs file all changed after the scaffold baseline. If validation reports early or partial validation, immediately edit the requested-domain files under {module_dir}/ as one lockstep repair and validate again. Repair validator output bullets exactly. Do not reconstruct scanner regexes or plan around checker internals before writing the app.
 - cwd warning: shell tools run from the install root, not from the module directory; never use bare redirects like > module.json, > collections.schema.json, > {module_id}/index.js, or mkdir {module_id}.
 - required shell write pattern: set MODULE_DIR="{module_dir}" and write every file as "$MODULE_DIR/<file>"; create "$MODULE_DIR/locales" and "$MODULE_DIR/tests" before writing nested files.
@@ -26938,6 +26939,9 @@ mod tests {
         assert!(
             prompt.contains("Never define collection-name constants for undeclared collections")
         );
+        assert!(prompt.contains("test-helper parity rule"));
+        assert!(prompt.contains("Do not use assert.deepEqual(summary"));
+        assert!(prompt.contains("assert.deepEqual(summary, {...})"));
         assert!(prompt.contains("do not treat an untouched scaffold as the requested app"));
         assert!(prompt.contains("validating it before requested-domain edits is a task failure"));
         assert!(prompt.contains("scaffold inspection alone is not a file pass"));
@@ -27079,6 +27083,9 @@ mod tests {
         assert!(
             prompt.contains("Never define collection-name constants for undeclared collections")
         );
+        assert!(prompt.contains("test-helper parity rule"));
+        assert!(prompt.contains("Do not use assert.deepEqual(summary"));
+        assert!(prompt.contains("assert.deepEqual(summary, {...})"));
         assert!(prompt.contains("do not treat an untouched scaffold as the requested app"));
         assert!(prompt.contains("validating it before requested-domain edits is a task failure"));
         assert!(prompt.contains("scaffold inspection alone is not a file pass"));
