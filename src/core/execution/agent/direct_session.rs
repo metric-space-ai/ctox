@@ -224,6 +224,23 @@ fn use_openai_chatgpt_subscription_auth(
     provider_is_openai && openai_chatgpt_subscription_auth_enabled(settings)
 }
 
+fn direct_session_selected_model(
+    settings: &BTreeMap<String, String>,
+    runtime_model: Option<String>,
+) -> String {
+    runtime_model
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            settings
+                .get("CTOX_CHAT_MODEL")
+                .or_else(|| settings.get("CODEX_MODEL"))
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or_else(|| "gpt-5.4-mini".to_string())
+}
+
 fn restore_chatgpt_subscription_auth_from_instance(
     root: &Path,
     codex_home: &Path,
@@ -619,12 +636,7 @@ impl PersistentSession {
                 .or_else(|| runtime.state.requested_model.clone())
                 .or_else(|| runtime.state.base_model.clone())
         });
-        let model = settings
-            .get("CTOX_CHAT_MODEL")
-            .or_else(|| settings.get("CODEX_MODEL"))
-            .cloned()
-            .or(runtime_model)
-            .unwrap_or_else(|| "gpt-5.4-mini".to_string());
+        let model = direct_session_selected_model(settings, runtime_model);
         let reasoning_effort =
             direct_session_reasoning_effort(settings, &model, runtime_local_preset.as_deref());
         let runtime_api_provider = resolved_runtime
@@ -1324,6 +1336,26 @@ mod tests {
                 "{value}"
             );
         }
+    }
+
+    #[test]
+    fn selected_model_prefers_resolved_runtime_over_stale_settings() {
+        let mut settings = BTreeMap::new();
+        settings.insert("CTOX_CHAT_MODEL".to_string(), "gpt-5.5".to_string());
+        settings.insert("CODEX_MODEL".to_string(), "gpt-5.4".to_string());
+
+        assert_eq!(
+            direct_session_selected_model(&settings, Some("MiniMax-M3".to_string())),
+            "MiniMax-M3"
+        );
+    }
+
+    #[test]
+    fn selected_model_uses_settings_without_resolved_runtime() {
+        let mut settings = BTreeMap::new();
+        settings.insert("CTOX_CHAT_MODEL".to_string(), "gpt-5.4".to_string());
+
+        assert_eq!(direct_session_selected_model(&settings, None), "gpt-5.4");
     }
 
     fn compose_test_root(label: &str) -> PathBuf {
