@@ -17,7 +17,7 @@ For CTOX App Creator and runtime-installed app work, follow this short path befo
 
 1. Target only the prompted module directory: `runtime/business-os/installed-modules/<id>/` for installed apps. Generated apps never belong under `src/`.
 2. Inspect the existing scaffold first, but do not dump every scaffold file into context. Verify the file inventory, then inspect only the exact exports, selectors, or failing snippets needed for the next edit. Keep its mount wiring, `core/automation.mjs`, `core/records.mjs`, locales, and tests as the baseline. Do not read the generated scaffold file-by-file or in consecutive chunks to audit your own output.
-3. Inspect exactly three shipped source modules for patterns, preferably `customers`, `shiftflow`, and `outbound`. Use exact paths such as `src/apps/business-os/modules/customers/module.json`; do not run `ls src/apps/business-os/modules/`, `find src/apps/business-os/modules`, or any source-module root discovery. Use `notes` only as a supplemental simple-CRUD reference; do not treat it as a scaffold-helper template.
+3. Inspect exactly three shipped source modules for patterns, preferably `customers`, `shiftflow`, and `outbound`. Use exact files such as `src/apps/business-os/modules/customers/module.json`, `src/apps/business-os/modules/shiftflow/index.js`, and `src/apps/business-os/modules/outbound/core/automation.mjs`; do not run `ls`, `find`, `rg`, or `grep` over `src/apps/business-os/modules/` or any source-module directory. Use `notes` only as a supplemental simple-CRUD reference; do not treat it as a scaffold-helper template. Do not inspect `src/apps/business-os/app.js`, `shared/`, `router/loader` source, `src/core/business_os/`, or validator/checker source while building a generated app.
 4. Preserve scaffold helper export names such as `buildFollowUpCommand`, `summarizeRecords`, and `visibleRecords` unless you update every import in `index.js` and `tests/*.mjs` in the same edit.
 5. Use direct bounded exact-path file edits only. If a shell write fails because of quoting, history expansion, command length, or escaping, do not switch to Python, base64, Node writer scripts, generated writer scripts, `/tmp` scratch files copied into the module, `/tmp/*.patch` patch staging, shell-level `apply_patch` discovery/invocation, module scratch/probe files, `cat >>` append chunks against app artifacts, huge `printf`/`echo`/`tee`/`cat` payload rewrites, `sed -i`/`perl -pi` line surgery, or data-URL workarounds. Shorten the file, keep simple DOM wiring in `index.js`, put pure record logic in `core/records.mjs`, put command payload logic in `core/automation.mjs`, and rewrite the smaller affected file directly at its final module path.
 6. Required artifacts are canonical files, not shell patterns. Write `module.json`, `collections.schema.json`, `schema.js`, `index.html`, `index.css`, `index.js`, `icon.svg`, `locales/en.json`, `locales/de.json`, `core/records.mjs`, `core/automation.mjs`, and tests by exact path only. For first-pass runtime-installed App Creator apps, do not create extra `core/*.mjs` layers such as `ui.mjs`, `render.mjs`, `runtime.mjs`, or `panel.mjs`; those are refactor work, not one-shot app creation. For runtime-installed App Creator apps, the module root may contain only those root files plus `core/`, `locales/`, and `tests/`. Do not create or leave temporary schema/manifest aliases, typo files such as `m.json`, `m`, or `modul.json`, scratch notes, copied app roots, glob artifacts, or ad hoc helper directories in the module root.
@@ -52,6 +52,7 @@ you are about to use IndexedDB directly, localStorage, sessionStorage, Postgres,
 you are about to use legacy module patterns as implementation authority instead of translating them to the current contract; examples to reject for new App Creator apps include ctx.db.raw, ctx.collections, manual business_commands inserts/upserts, pending_sync command fallbacks, window.dispatchEvent('ctox-business-os-chat-submit'), esbuild/fake-DOM tests, JSON-module schema wrappers, default layout.right panes, and right-drawer manifest metadata
 you are about to request complete file dumps, delegate a broad subagent sweep, or spend more than a short targeted pass on existing modules before writing the first runnable module files
 you are about to list or discover the source module root (`src/apps/business-os/modules/`) instead of opening the exact chosen few-shot module paths: customers, shiftflow, and outbound
+you are about to run `find`, `ls`, `rg`, `grep`, `tree`, `sed`, `cat`, `head`, or `tail` over a source module directory, the Business OS shell source (`src/apps/business-os/app.js`, `shared/`, `router`, `loader`, `scripts`, `rxdb`), or native Business OS source (`src/core/business_os/`) while creating a runtime-installed app; these are not few-shots
 you are about to read the generated App Creator scaffold back file-by-file or in consecutive line-range chunks; after file inventory, inspect only snippets needed for a concrete import, selector, syntax, test, or validator failure
 you are about to run `wc -l`, multi-file `sed -n`, multi-file `grep`/`rg`, broad globs, `head`/`tail` over roughly 40 lines, line ranges over roughly 60 lines, or Node `fs.readFileSync` plus `console.log` dumps against generated runtime-installed module files to audit your own output; use validator/test output and one exact failing snippet only
 you are about to run broad discovery commands over `$HOME`, `/Users`, the whole install root, the whole repo, or validator/checker names; use exact known paths, `MODULE_DIR`, and at most the three selected few-shot modules
@@ -125,8 +126,16 @@ Never say "done", "ready", "production-ready", or "runs" while any hard stop is 
 
 ## Required First Steps
 
+For CTOX App Creator, App Store, chat, CLI, inbound communication, or external-agent work that targets a runtime-installed app, the "Mandatory First Screen" above is the controlling path. Do not read validator/checker implementation files, Business OS shell internals, native `src/core/business_os` code, or broad docs during the worker turn. The app-specific validator is the contract surface:
+
+```sh
+ctox business-os app validate <id> --installed
+```
+
+For source-development or architecture work that changes packaged modules or Business OS framework code, use the deeper repository reading path below before coding:
+
 1. Identify the Business OS app root. In a source checkout this is usually `src/apps/business-os`. In a regular release it is the shipped Business OS app root. Use local files first; use the GitHub source only when local source is unavailable.
-2. Read the core contracts before coding:
+2. Read the core contracts before source/framework coding:
    - `docs/ctox-rxdb.md`
    - `src/apps/business-os/README.md`
    - `src/apps/business-os/RXDB_SYNC_CONTRACT.md`

@@ -1338,6 +1338,10 @@ fn command_reads_business_os_validator_internals(command: &str) -> Option<String
 fn command_uses_broad_business_os_app_creator_discovery(command: &str) -> Option<String> {
     let compact = command.replace("\\\n", " ").replace('\n', " ");
     let lower = compact.to_ascii_lowercase();
+    if let Some(path) = command_uses_forbidden_business_os_source_discovery(&lower) {
+        return Some(path);
+    }
+
     let broad_find = lower_contains_shell_word(&lower, "find")
         && (lower.starts_with("find .")
             || lower.starts_with("find ./")
@@ -1383,6 +1387,68 @@ fn command_uses_broad_business_os_app_creator_discovery(command: &str) -> Option
         return Some("src/apps/business-os/modules/".to_string());
     }
 
+    None
+}
+
+fn command_uses_forbidden_business_os_source_discovery(lower: &str) -> Option<String> {
+    let reads_source = lower_contains_shell_word(lower, "cat")
+        || lower_contains_shell_word(lower, "sed")
+        || lower_contains_shell_word(lower, "grep")
+        || lower_contains_shell_word(lower, "rg")
+        || lower_contains_shell_word(lower, "wc")
+        || lower_contains_shell_word(lower, "awk")
+        || lower_contains_shell_word(lower, "find")
+        || lower_contains_shell_word(lower, "ls")
+        || lower_contains_shell_word(lower, "tree")
+        || lower_contains_shell_word(lower, "head")
+        || lower_contains_shell_word(lower, "tail");
+    if !reads_source {
+        return None;
+    }
+
+    if lower.contains("src/core/business_os/") {
+        return Some("src/core/business_os/".to_string());
+    }
+    if lower.contains("src/apps/business-os/shared/")
+        || lower.contains("src/apps/business-os/scripts/")
+        || lower.contains("src/apps/business-os/rxdb/")
+        || lower.contains("src/apps/business-os/app.js")
+        || lower.contains("src/apps/business-os/router.js")
+        || lower.contains("src/apps/business-os/loader.js")
+        || lower.contains("src/apps/business-os/*.js")
+        || lower.contains(" src/apps/business-os/ -g")
+        || lower.contains(" src/apps/business-os/ 2>")
+    {
+        return Some("src/apps/business-os/".to_string());
+    }
+    if lower_contains_shell_word(lower, "find") && lower.contains("src/apps/business-os/modules") {
+        return Some("src/apps/business-os/modules/".to_string());
+    }
+    if lower.contains("cd src/apps/business-os/modules/")
+        && (lower.contains("for f in")
+            || lower_contains_shell_word(lower, "find")
+            || lower_contains_shell_word(lower, "ls")
+            || lower_contains_shell_word(lower, "tree")
+            || lower_contains_shell_word(lower, "rg")
+            || lower_contains_shell_word(lower, "grep"))
+    {
+        return Some("src/apps/business-os/modules/".to_string());
+    }
+    if (lower_contains_shell_word(lower, "ls") || lower_contains_shell_word(lower, "tree"))
+        && lower.contains("src/apps/business-os/modules/")
+    {
+        return Some("src/apps/business-os/modules/".to_string());
+    }
+    if (lower_contains_shell_word(lower, "rg") || lower_contains_shell_word(lower, "grep"))
+        && (lower.contains("src/apps/business-os/modules/ -g")
+            || lower.contains("src/apps/business-os/modules/ 2>")
+            || lower.contains("src/apps/business-os/modules/ |")
+            || lower.contains("src/apps/business-os/modules/;")
+            || lower.contains("src/apps/business-os/modules/ &&")
+            || lower.contains("src/apps/business-os/modules/ -"))
+    {
+        return Some("src/apps/business-os/modules/".to_string());
+    }
     None
 }
 

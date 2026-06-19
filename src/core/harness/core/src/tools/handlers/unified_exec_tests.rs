@@ -864,6 +864,87 @@ fn business_os_guard_blocks_source_modules_root_listing() -> anyhow::Result<()> 
 }
 
 #[test]
+fn business_os_guard_blocks_source_modules_root_find() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os/modules"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "find src/apps/business-os/modules -maxdepth 3 -name \"automation.mjs\" -o -name \"records.mjs\" 2>&1 | head -30",
+        root.path(),
+    )
+    .expect("source modules root find should be blocked for App Creator work");
+
+    assert!(err.contains("broad App Creator discovery"));
+    assert!(err.contains("src/apps/business-os/modules/"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_source_modules_directory_rg() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os/modules"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "rg -n \"buildFollowUpCommand|summarizeRecords|visibleRecords\" src/apps/business-os/modules/ -g '*.{js,mjs}' 2>&1 | head -20",
+        root.path(),
+    )
+    .expect("source modules directory rg should be blocked for App Creator work");
+
+    assert!(err.contains("broad App Creator discovery"));
+    assert!(err.contains("src/apps/business-os/modules/"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_source_module_multi_file_loop_dump() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os/modules/customers"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "cd src/apps/business-os/modules/customers && for f in module.json collections.schema.json schema.js index.js core/automation.mjs; do echo \"=== $f ===\"; cat \"$f\" 2>&1 | head -120; done",
+        root.path(),
+    )
+    .expect("source module multi-file loop dumps should be blocked for App Creator work");
+
+    assert!(err.contains("broad App Creator discovery"));
+    assert!(err.contains("src/apps/business-os/modules/"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_business_os_shell_source_discovery() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os/shared"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "rg -n \"installed-modules|app\\.entry|resolveModule\" src/apps/business-os/app.js src/apps/business-os/shared/ -g '*.js' 2>&1 | head -40",
+        root.path(),
+    )
+    .expect("Business OS shell source discovery should be blocked for App Creator work");
+
+    assert!(err.contains("broad App Creator discovery"));
+    assert!(err.contains("src/apps/business-os/"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_native_business_os_source_reads() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+    fs::create_dir_all(root.path().join("src/core/business_os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "sed -n '170,250p' src/core/business_os/server.rs 2>&1",
+        root.path(),
+    )
+    .expect("native Business OS source reads should be blocked for App Creator work");
+
+    assert!(err.contains("broad App Creator discovery"));
+    assert!(err.contains("src/core/business_os/"));
+    Ok(())
+}
+
+#[test]
 fn business_os_guard_blocks_installed_modules_root_listing() -> anyhow::Result<()> {
     let root = tempdir()?;
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;
