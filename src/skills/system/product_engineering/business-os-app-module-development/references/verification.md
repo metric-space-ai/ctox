@@ -149,7 +149,8 @@ source inspection. The service prompt already
 includes the operative rules and may embed the required three shipped-module
 few-shot patterns. Do not invent core/automation.mjs few-shot files under
 outbound or shiftflow; use real shipped paths such as `outbound/index.js` or
-`outbound/core/audience.js`. Before the
+`outbound/core/audience.js`. Do not run `wc -l` or line-count sweeps over those
+few-shot files; line counts are not implementation patterns. Before the
 first requested-domain edit, do not read the generated scaffold back with `ls`,
 `sed`, `cat`, `head`, `tail`, or multi-file commands, and do not run validation,
 tests, syntax checks, or scaffold repair to confirm the scaffold. Use scaffold

@@ -1131,12 +1131,15 @@ fn command_reads_runtime_module_self_audit(
         || lower_contains_shell_word(&lower, "rg")
         || lower_contains_shell_word(&lower, "wc")
         || lower_contains_shell_word(&lower, "awk")
+        || lower_contains_shell_word(&lower, "ls")
+        || lower_contains_shell_word(&lower, "stat")
         || lower_contains_shell_word(&lower, "head")
         || lower_contains_shell_word(&lower, "tail");
     if !read_like {
         return None;
     }
     let module_path = first_business_os_module_artifact_reference(&compact, workspace_root, cwd)
+        .or_else(|| first_runtime_business_os_module_dir_substring(&compact))
         .unwrap_or_else(|| "runtime-installed module artifact".to_string());
     let artifact_refs = business_os_module_artifact_reference_count(&compact, workspace_root, cwd);
     let broad_module_glob = lower.contains("runtime/business-os/installed-modules/")
@@ -1155,6 +1158,8 @@ fn command_reads_runtime_module_self_audit(
         || lower.contains(" && echo")
         || lower.contains("\\necho");
     let wc_readback = lower_contains_shell_word(&lower, "wc") && lower.contains("-l");
+    let listing_readback =
+        lower_contains_shell_word(&lower, "ls") || lower_contains_shell_word(&lower, "stat");
     let large_sed_range = command_has_large_sed_read_range(&lower);
     let large_head_tail = command_has_large_head_tail_read(&lower);
     let grep_audit = (lower_contains_shell_word(&lower, "grep")
@@ -1164,6 +1169,7 @@ fn command_reads_runtime_module_self_audit(
     if broad_module_glob
         || multi_readback
         || wc_readback
+        || listing_readback
         || large_sed_range
         || large_head_tail
         || grep_audit
@@ -1639,6 +1645,13 @@ fn command_uses_broad_business_os_app_creator_discovery(command: &str) -> Option
     let lower = compact.to_ascii_lowercase();
     if let Some(path) = command_uses_forbidden_business_os_source_discovery(&lower) {
         return Some(path);
+    }
+
+    let source_module_line_count_sweep = lower_contains_shell_word(&lower, "wc")
+        && lower.contains("-l")
+        && lower.matches("src/apps/business-os/modules/").count() >= 1;
+    if source_module_line_count_sweep {
+        return Some("src/apps/business-os/modules/".to_string());
     }
 
     let broad_find = lower_contains_shell_word(&lower, "find")

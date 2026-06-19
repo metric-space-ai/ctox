@@ -571,6 +571,38 @@ fn business_os_guard_blocks_runtime_module_wc_readback_audit() -> anyhow::Result
 }
 
 #[test]
+fn business_os_guard_blocks_runtime_module_listing_readback() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "ls runtime/business-os/installed-modules/bench_inventory_r101/core/ runtime/business-os/installed-modules/bench_inventory_r101/locales/ runtime/business-os/installed-modules/bench_inventory_r101/tests/",
+        root.path(),
+    )
+    .expect("listing generated runtime module scaffold should be blocked");
+
+    assert!(err.contains("self-audit readback"));
+    assert!(err.contains("runtime/business-os/installed-modules/bench_inventory_r101"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_runtime_module_stat_readback() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "stat runtime/business-os/installed-modules/inventory/index.js",
+        root.path(),
+    )
+    .expect("stat readback of generated runtime module artifact should be blocked");
+
+    assert!(err.contains("self-audit readback"));
+    assert!(err.contains("index.js"));
+    Ok(())
+}
+
+#[test]
 fn business_os_guard_blocks_runtime_module_multi_sed_readback() -> anyhow::Result<()> {
     let root = tempdir()?;
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;
@@ -883,6 +915,24 @@ fn business_os_guard_blocks_source_modules_directory_rg() -> anyhow::Result<()> 
         root.path(),
     )
     .expect("source modules directory rg should be blocked for App Creator work");
+
+    assert!(err.contains("broad App Creator discovery"));
+    assert!(err.contains("src/apps/business-os/modules/"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_source_module_wc_line_count_sweep() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os/modules/customers"))?;
+    fs::create_dir_all(root.path().join("src/apps/business-os/modules/shiftflow"))?;
+    fs::create_dir_all(root.path().join("src/apps/business-os/modules/outbound"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "wc -l src/apps/business-os/modules/customers/index.js src/apps/business-os/modules/shiftflow/index.js src/apps/business-os/modules/outbound/index.js",
+        root.path(),
+    )
+    .expect("source module line-count sweep should be blocked for App Creator work");
 
     assert!(err.contains("broad App Creator discovery"));
     assert!(err.contains("src/apps/business-os/modules/"));
