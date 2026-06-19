@@ -42,12 +42,14 @@ function writeInstalledModule(root, moduleId, overrides = {}) {
   mkdirSync(join(dir, 'core'), { recursive: true });
   writeJson(join(dir, 'module.json'), {
     id: moduleId,
-    title: moduleId,
+    title: `${moduleId} Workbench`,
+    description: `${moduleId} records, owner status, due dates, and CTOX chat task follow-up.`,
     version: '0.1.0',
     entry: `installed-modules/${moduleId}/index.html`,
     install_scope: 'installed',
     collections: ['business_commands', `${moduleId}_records`],
     layout: { shell: 'full-workspace', left: 'List', center: 'Details' },
+    tags: ['business-os', moduleId, 'workflow'],
     ...overrides.manifest,
   });
   writeJson(join(dir, 'collections.schema.json'), {
@@ -309,6 +311,21 @@ function installedIndexJsWith(extraLines = []) {
   const run = runValidator(root, 'good', '--installed');
   assert.equal(run.status, 0, `${run.stderr}\n${run.stdout}`);
   assert.match(run.stdout, /validation OK: good \(installed mode\)/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'genericmanifest', {
+    manifest: {
+      title: 'Quality Compliance Bench',
+      description: 'Quality Compliance Bench Business OS app for durable records and CTOX follow-up work.',
+      tags: ['business-os', 'app'],
+    },
+  });
+  const run = runValidator(root, 'genericmanifest', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /module\.json description must describe the requested app domain/);
+  assert.match(run.stderr, /module\.json tags must include at least one requested-domain tag/);
 }
 
 {

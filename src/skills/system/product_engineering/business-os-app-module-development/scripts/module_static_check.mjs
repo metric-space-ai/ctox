@@ -100,6 +100,33 @@ function parseSemver(value) {
   };
 }
 
+const genericManifestTags = new Set([
+  'app',
+  'business',
+  'business-os',
+  'ctox',
+  'module',
+  'record',
+  'records',
+]);
+
+function hasDomainSpecificManifestTag(tags) {
+  if (!Array.isArray(tags)) return false;
+  return tags.some((tag) => {
+    const value = String(tag || '').trim().toLowerCase();
+    return value.length >= 3 && !genericManifestTags.has(value);
+  });
+}
+
+function hasGenericAppDescription(description) {
+  const value = String(description || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  if (!value) return true;
+  return value.includes('business os app for durable records and ctox follow-up work')
+    || value === 'business os app'
+    || value === 'business os module'
+    || value === 'durable records and ctox follow-up work';
+}
+
 function walk(dir, out = []) {
   if (!existsSync(dir)) return out;
   for (const name of readdirSync(dir)) {
@@ -458,6 +485,12 @@ if (manifest) {
     }
     if (manifest.store?.installable === true) {
       fail('module.json store.installable must not be true for runtime-installed App Creator modules');
+    }
+    if (hasGenericAppDescription(manifest.description)) {
+      fail('module.json description must describe the requested app domain; do not leave the generic scaffold durable-records/follow-up text');
+    }
+    if (!hasDomainSpecificManifestTag(manifest.tags)) {
+      fail('module.json tags must include at least one requested-domain tag beyond business-os/app/ctox/module/records');
     }
   }
   if (!Array.isArray(manifest.collections)) {

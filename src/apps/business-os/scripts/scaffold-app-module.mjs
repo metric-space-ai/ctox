@@ -86,7 +86,7 @@ function parseArgs(argv) {
   if (!/^[a-z][a-z0-9_]*$/.test(result.collection)) {
     throw new Error('--collection must be snake_case and start with a letter');
   }
-  result.description ||= `${result.title} Business OS app for durable records and CTOX follow-up work.`;
+  result.description ||= `${result.title} workspace for records, owner status, due dates, and CTOX chat task follow-up.`;
   return result;
 }
 
@@ -213,7 +213,7 @@ function moduleManifest(options) {
     category: 'Business',
     developer: 'CTOX',
     license: 'AGPL-3.0-only',
-    tags: ['business-os', 'app'],
+    tags: domainTags(options),
     store: {
       summary: options.description,
       repository: 'metric-space-ai/ctox',
@@ -228,6 +228,16 @@ function moduleManifest(options) {
     },
     default_installed: false,
   };
+}
+
+function domainTags(options) {
+  const generic = new Set(['app', 'business', 'business-os', 'ctox', 'module', 'records', 'record']);
+  const tokens = `${options.moduleId} ${options.title}`
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && !generic.has(token));
+  return ['business-os', ...Array.from(new Set(tokens)).slice(0, 4), 'workflow'];
 }
 
 function schemaJs(options) {

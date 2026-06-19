@@ -11,15 +11,16 @@ not work on lower layers until the higher layer is green:
 1. target path and off-target artifacts
 2. valid module.json / collections.schema.json JSON
 3. source vs installed manifest fields
-4. app SemVer and release visibility status
-5. required file set
-6. collection ownership and schema parity
-7. UI layout contract
-8. runtime import/dependency/data-plane contract
-9. index.html/index.css mount contract
-10. index.js syntax
-11. no-dependency tests
-12. real-shell smoke
+4. requested-domain manifest description and tags, not the generic scaffold text
+5. app SemVer and release visibility status
+6. required file set
+7. collection ownership and schema parity
+8. UI layout contract
+9. runtime import/dependency/data-plane contract
+10. index.html/index.css mount contract
+11. index.js syntax
+12. no-dependency tests
+13. real-shell smoke
 ```
 
 Do not modify tests to match a broken module contract. A passing custom test is
@@ -41,6 +42,12 @@ actual exported shape. If a helper adds legitimate fields such as
 `renewal_due_ids`, update the expected object or assert named fields
 deliberately. Do not keep a stale partial `assert.deepEqual(summary, {...})`
 that fails only because the helper now reports more useful facts.
+
+For runtime-installed App Creator modules, `module.json.description` and
+`module.json.tags` are part of the domain proof. Do not leave the scaffold
+description `Business OS app for durable records and CTOX follow-up work`, and
+do not leave only generic tags such as `business-os` and `app`. Add at least
+one requested-domain tag and a description that names the actual workflow.
 
 Do not repair generated JavaScript with repeated `sed -i`, `gsed -i`,
 `perl -pi`, or line-number insert/delete commands. Those edits commonly create

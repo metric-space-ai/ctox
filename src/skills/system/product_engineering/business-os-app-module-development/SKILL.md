@@ -454,11 +454,14 @@ Minimum installed-module manifest fields:
 ```json
 {
   "id": "<id>",
+  "title": "Concrete Requested-Domain App",
+  "description": "Concrete requested-domain workflow: records, statuses, deadlines, owners, and the CTOX chat task follow-up it creates.",
   "version": "0.1.0",
   "entry": "installed-modules/<id>/index.html",
   "install_scope": "installed",
   "collections": ["business_commands", "<id>_records"],
-  "layout": { "shell": "full-workspace", "left": "List", "center": "Details" }
+  "layout": { "shell": "full-workspace", "left": "List", "center": "Details" },
+  "tags": ["business-os", "<requested-domain>", "workflow"]
 }
 ```
 
@@ -471,6 +474,10 @@ metadata as a decorative substitute for a third pane.
 Do not embed SVG in `module.json.layout.icon_svg`; keep the icon in the
 required separate `icon.svg` file. Do not put inline SVG markup in any manifest
 field, including `icon_svg`, `iconSvg`, `layout.icon`, or `layout.icon_svg`.
+Do not leave the generic scaffold description
+`Business OS app for durable records and CTOX follow-up work`, and do not leave
+only generic tags such as `business-os` and `app`. The manifest must name the
+requested business domain in `title`, `description`, and at least one tag.
 
 ## App Versioning Contract
 
@@ -698,7 +705,7 @@ Use this checklist exactly. Mark each item `done`, `rework`, `blocked`, or
 phase 0 target: resolved module directory is correct; runtime-installed apps use runtime/business-os/installed-modules/<id>, not src/apps/business-os/installed-modules
 phase 1 few-shots: inspected at least 3 existing modules and copied only concrete proven patterns
 phase 2 scope: app has one focused workbench, one create/edit/detail flow, one automation; no decorative views or fake future controls
-phase 3 manifest: module.json parses, id/entry/install_scope are correct, collections lists every read/write dependency
+phase 3 manifest: module.json parses, id/entry/install_scope are correct, collections lists every read/write dependency, description names the requested business domain, and tags include at least one domain tag beyond business-os/app/ctox/module/records
 phase 4 versioning: new/runtime-installed module.json uses SemVer x.y.z without v prefix; 0.1.0 is the normal initial data-app version; <1.0.0 remains developer/founder/admin-only in shell/App Store; public/user-visible release requires >=1.0.0; 2.0.0+ is a new module id/icon line
 phase 5 schema: collections.schema.json has schema_format ctox-business-os-module-collections-v1, contains only module-owned collections, and matches schema.js
 phase 6 persistence: all durable records use ctx.db facade collections; no ctox.db, db.raw, Web Storage, HTTP data route, table creation, or manual database file
@@ -709,7 +716,7 @@ phase 9a mount file: index.js exists, exports mount(ctx), attaches ./index.css t
 phase 10 CSS: module CSS is scoped under the module root class; no :root/html/body custom property definitions, shell token redefinitions, self-referential custom properties, decorative resize handles, or layout affordances copied from unrelated modules
 phase 11 dependencies: browser runtime uses only vanilla HTML/CSS/browser ESM and local relative ESM imports; no UI framework, JSX/TSX, package manager, bare package import, remote import, CommonJS, bundler, transpiler, or generated bundle
 phase 12 tests/imports: tests import only local `.mjs` helpers and JSON/text files; every named local import in `index.js`, `core/*.mjs`, and `tests/*.mjs` is exported by that target file; first-pass runtime apps use only `core/records.mjs` and `core/automation.mjs` unless a post-validator rework has a concrete reason; scaffold export names such as buildFollowUpCommand, summarizeRecords, and visibleRecords are preserved unless every importer was updated; tests do not import `index.js`/`schema.js` directly, do not use data: URLs, do not contain forbidden anti-pattern literals as negative assertions/messages, and cover schema parity, core command builders, and at least one CRUD/automation path; automation assertions include concrete fixture facts in title/instruction/prompt and record_snapshot; fixture totals/counts are hand-computed in comments or small named facts and are consistent with the implementation; scaffold core/locales/tests still exist
-phase 13 validation: focused node checks, `ctox business-os app validate <id> --installed|--source`, forbidden-pattern scan when needed for a concrete validator bullet, and any available shell/browser smoke proof are green; after the app-specific validator is green, stop instead of running source-wide conformance scripts or polishing
+phase 13 validation: focused node checks, `ctox business-os app validate <id> --installed|--source`, forbidden-pattern scan when needed for a concrete validator bullet, catalog/queue finalization from the CTOX command path when applicable, and any available shell/browser smoke proof are green; after the app-specific validator is green and CTOX finalization succeeds, stop instead of running source-wide conformance scripts or polishing
 phase 14 cleanup: no unexpected installed-module root entries remain; runtime-installed module root contains only module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, core/, locales/, and tests/; no root-level artifacts, source-installed app artifacts, probe files, blocker notes, generated bundles, package files, stale phase rows, temporary schema/manifest files, literal wildcard/brace filenames, or stale failing replacement tests remain
 ```
 
@@ -722,6 +729,7 @@ index.html/index.css contains data-*-right, right-pane, right-column, right-resi
 collections.schema.json starts directly with collections and omits schema_format
 index.css contains self-referential custom properties such as `--module-bg: var(--module-bg)`, or broad token replacement has removed shell-token fallbacks
 module.json for a new/runtime-installed app has no SemVer version, uses legacy v1, uses 0.0.0, or claims public release below 1.0.0
+module.json keeps the generic scaffold durable-records/follow-up description or only generic tags such as business-os/app instead of requested-domain tags
 version 2.0.0 or later is used without a new module id/icon for a parallel major app line
 runtime-installed App Creator app uses React/Vue/Svelte/Angular/Solid/Preact/Lit, JSX/TSX, framework config, or any compile/transpile artifact
 schema.js or collections.schema.json redeclares business_commands

@@ -3613,6 +3613,31 @@ pub fn write_module_catalog_projection_to_rxdb(root: &Path) -> anyhow::Result<()
     Ok(())
 }
 
+fn write_module_catalog_projection_to_rxdb_for_module(
+    root: &Path,
+    module_id: &str,
+) -> anyhow::Result<()> {
+    write_module_catalog_projection_to_rxdb(root).with_context(|| {
+        format!("failed to refresh Business OS module catalog after validating `{module_id}`")
+    })?;
+    let catalog = load_rxdb_collection_record(root, "business_module_catalog", "module-catalog")?;
+    let catalog = catalog
+        .context("Business OS module catalog projection did not create module-catalog record")?;
+    let present = catalog
+        .get("modules")
+        .and_then(Value::as_array)
+        .is_some_and(|modules| {
+            modules
+                .iter()
+                .any(|module| module.get("id").and_then(Value::as_str) == Some(module_id))
+        });
+    anyhow::ensure!(
+        present,
+        "Business OS module catalog projection does not contain validated module `{module_id}`"
+    );
+    Ok(())
+}
+
 fn module_requires_active_responsibility(root: &Path, module_id: &str) -> anyhow::Result<bool> {
     let Ok(app_root) = resolve_business_os_app_root(root) else {
         return Ok(false);
@@ -11473,6 +11498,7 @@ pub fn complete_business_command_from_app_validation_success(
             &artifact_directory,
         )?;
     }
+    write_module_catalog_projection_to_rxdb_for_module(root, &module_id)?;
     let completed_at_ms = now_ms() as i64;
     conn.execute(
         "UPDATE business_commands SET status = 'completed', observed_at_ms = ?2 WHERE command_id = ?1",
@@ -11569,11 +11595,6 @@ pub fn complete_business_command_from_app_validation_success(
         terminal_queue_task.as_ref(),
         completed_at_ms,
     )?;
-    if let Err(err) = write_module_catalog_projection_to_rxdb(root) {
-        eprintln!(
-            "[business-os] module catalog refresh failed after app validation success for `{module_id}`: {err:#}"
-        );
-    }
     Ok(Some(command_payload))
 }
 
@@ -27220,6 +27241,7 @@ mod tests {
         let temp = tempdir()?;
         let root = temp.path();
         let module_id = "inventory";
+        seed_test_business_os_app_root(root)?;
         let accepted = accept_rxdb_business_command(
             root,
             serde_json::json!({
@@ -27266,6 +27288,101 @@ mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(status, "completed");
+        let catalog =
+            load_rxdb_collection_record(root, "business_module_catalog", "module-catalog")?
+                .context("expected module catalog projection")?;
+        let module_present = catalog
+            .get("modules")
+            .and_then(Value::as_array)
+            .is_some_and(|modules| {
+                modules
+                    .iter()
+                    .any(|module| module.get("id").and_then(Value::as_str) == Some(module_id))
+            });
+        assert!(
+            module_present,
+            "validated app must be present in the RxDB module catalog"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn app_validation_success_refuses_catalog_mismatched_module_manifest() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let module_id = "quality";
+        seed_test_business_os_app_root(root)?;
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_app_catalog_mismatch",
+                "module": "creator",
+                "type": "ctox.business_os.app.create",
+                "record_id": module_id,
+                "payload": {
+                    "title": "Build Quality",
+                    "instruction": "Build a Business OS quality compliance app.",
+                    "module_id": module_id,
+                    "install_target": "runtime-installed-module",
+                    "target": "app"
+                },
+                "client_context": {
+                    "source": "business-os-app-creator-native-test",
+                    "target": "app"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queued task id")?
+            .to_string();
+        channels::lease_queue_task(root, &task_id, "ctox-service-test")?;
+        thread::sleep(Duration::from_millis(1100));
+        write_minimal_runtime_app_artifacts(root, module_id)?;
+        let module_dir = root
+            .join("runtime/business-os/installed-modules")
+            .join(module_id);
+        fs::write(
+            module_dir.join("module.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "id": "quality_shadow",
+                "title": "Quality Shadow",
+                "version": "0.1.0",
+                "entry": format!("installed-modules/{module_id}/index.html"),
+                "install_scope": "installed",
+                "collections": ["business_commands", "quality_records"],
+                "layout": {
+                    "shell": "full-workspace",
+                    "left": "Records",
+                    "center": "Detail"
+                }
+            }))?,
+        )?;
+
+        let error = complete_business_command_from_app_validation_success(
+            root,
+            &task_id,
+            Some(module_id),
+            "validated with mismatched manifest id",
+        )
+        .expect_err("module catalog mismatch must not complete an app command");
+        let report = format!("{error:#}");
+        assert!(
+            report
+                .contains("module catalog projection does not contain validated module `quality`"),
+            "unexpected error: {report}"
+        );
+        let task = channels::load_queue_task(root, &task_id)?
+            .context("expected queue task after refused completion")?;
+        assert_eq!(task.route_status, "leased");
+        let conn = open_store(root)?;
+        let status: String = conn.query_row(
+            "SELECT status FROM business_commands WHERE command_id = ?1",
+            params!["cmd_app_catalog_mismatch"],
+            |row| row.get(0),
+        )?;
+        assert_eq!(status, "accepted");
         Ok(())
     }
 
