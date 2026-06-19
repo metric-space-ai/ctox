@@ -62,10 +62,12 @@ pub fn credential_status(credential: &Value, now_ms: i64) -> CredentialStatus {
         None => CredentialStatus::Valid, // no expiry set
         Some(until) if until == 0 => CredentialStatus::Valid,
         Some(until) => {
-            let days = (until - now_ms) / DAY_MS;
-            if days < 0 {
+            // Compare the instant before the day math: integer division
+            // truncates toward zero, so a credential that expired <24h ago would
+            // otherwise classify as `Expiring` (days==0) and slip past the gate.
+            if until <= now_ms {
                 CredentialStatus::Expired
-            } else if days <= EXPIRY_WARN_DAYS {
+            } else if (until - now_ms) / DAY_MS <= EXPIRY_WARN_DAYS {
                 CredentialStatus::Expiring
             } else {
                 CredentialStatus::Valid
@@ -74,13 +76,12 @@ pub fn credential_status(credential: &Value, now_ms: i64) -> CredentialStatus {
     }
 }
 
-fn is_blocking(credential: &Value, now_ms: i64) -> bool {
-    if field_bool(credential, "deployment_blocking") != Some(true) {
-        return false;
-    }
+/// A credential is deployable when it is currently usable: Valid or within the
+/// expiry-warning window (Expiring). Expired / Unverified / NotYetValid are not.
+fn is_deployable(credential: &Value, now_ms: i64) -> bool {
     matches!(
         credential_status(credential, now_ms),
-        CredentialStatus::Expired | CredentialStatus::Unverified | CredentialStatus::NotYetValid
+        CredentialStatus::Valid | CredentialStatus::Expiring
     )
 }
 
@@ -91,30 +92,44 @@ pub struct DeploymentReadiness {
     pub blockers: Vec<(String, String)>,
 }
 
-/// Decide whether a subject may be deployed: every required credential type must
-/// be present and not blocking. `credentials` is the subject's credential list;
-/// each may carry `deployment_blocking: true`.
+/// Decide whether a subject may be deployed. A type must be satisfied when it is
+/// explicitly required OR when the subject carries a `deployment_blocking`
+/// credential of that type. A type is satisfied when at least one credential of
+/// that type is deployable (Valid/Expiring) — so a newer valid credential
+/// covers an older expired one, and a required-but-expired credential is caught
+/// even when it is not flagged `deployment_blocking`.
 pub fn evaluate_deployment_readiness(
     credentials: &[Value],
     required_types: &[&str],
     now_ms: i64,
 ) -> DeploymentReadiness {
-    let mut blockers = Vec::new();
-    for ty in required_types {
-        let present = credentials
-            .iter()
-            .any(|c| field_str(c, "credential_type") == Some(ty));
-        if !present {
-            blockers.push((ty.to_string(), "missing".to_string()));
+    let mut types_to_check: Vec<String> =
+        required_types.iter().map(|ty| (*ty).to_string()).collect();
+    for credential in credentials {
+        if field_bool(credential, "deployment_blocking") == Some(true) {
+            if let Some(ty) = field_str(credential, "credential_type") {
+                if !types_to_check.iter().any(|t| t == ty) {
+                    types_to_check.push(ty.to_string());
+                }
+            }
         }
     }
-    for credential in credentials {
-        if is_blocking(credential, now_ms) {
-            let ty = field_str(credential, "credential_type")
-                .unwrap_or_default()
-                .to_string();
-            let reason = format!("{:?}", credential_status(credential, now_ms)).to_lowercase();
-            blockers.push((ty, reason));
+
+    let mut blockers = Vec::new();
+    for ty in &types_to_check {
+        let of_type: Vec<&Value> = credentials
+            .iter()
+            .filter(|c| field_str(c, "credential_type") == Some(ty.as_str()))
+            .collect();
+        if of_type.is_empty() {
+            // Only required types can be "missing"; a blocking-only type is in
+            // the list because a credential of it exists.
+            blockers.push((ty.clone(), "missing".to_string()));
+            continue;
+        }
+        if !of_type.iter().any(|c| is_deployable(c, now_ms)) {
+            let reason = format!("{:?}", credential_status(of_type[0], now_ms)).to_lowercase();
+            blockers.push((ty.clone(), reason));
         }
     }
     DeploymentReadiness {
@@ -351,13 +366,25 @@ pub fn evaluate_billing_gate(nachweis: &Value) -> Vec<&'static str> {
     if !signed {
         blockers.push("entleiher_signature_missing");
     }
-    let has_entries = nachweis
+    match nachweis
         .get("entries")
         .and_then(Value::as_array)
-        .map(|a| !a.is_empty())
-        .unwrap_or(false);
-    if !has_entries {
-        blockers.push("no_time_entries");
+        .map(Vec::as_slice)
+    {
+        None | Some([]) => blockers.push("no_time_entries"),
+        Some(entries) => {
+            // A non-empty array is not enough: zero-, negative-, or all-NaN-hour
+            // entries must not release billing (they would create no invoice or
+            // underbill). Require strictly positive total billable hours.
+            let total: f64 = entries
+                .iter()
+                .map(entry_hours)
+                .filter(|h| h.is_finite())
+                .sum();
+            if total <= 0.0 {
+                blockers.push("no_billable_hours");
+            }
+        }
     }
     blockers
 }
@@ -388,6 +415,14 @@ mod tests {
         assert_eq!(
             credential_status(
                 &json!({"verified": true, "valid_until_ms": NOW - DAY_MS}),
+                NOW
+            ),
+            CredentialStatus::Expired
+        );
+        // Regression: expired <24h ago must be Expired, not Expiring (int trunc).
+        assert_eq!(
+            credential_status(
+                &json!({"verified": true, "valid_until_ms": NOW - DAY_MS / 2}),
                 NOW
             ),
             CredentialStatus::Expired
@@ -427,6 +462,28 @@ mod tests {
             NOW,
         );
         assert!(ok.ready);
+
+        // Regression (#5): a newer valid credential covers an older expired one
+        // of the same type — the candidate is deployable.
+        let dup = evaluate_deployment_readiness(
+            &[
+                json!({"credential_type": "staplerschein", "deployment_blocking": true, "verified": true, "valid_until_ms": NOW - DAY_MS}),
+                json!({"credential_type": "staplerschein", "deployment_blocking": true, "verified": true, "valid_until_ms": NOW + 100 * DAY_MS}),
+            ],
+            &["staplerschein"],
+            NOW,
+        );
+        assert!(dup.ready, "a valid credential should cover an expired duplicate");
+
+        // Regression (#5): a required type that is present but expired and NOT
+        // flagged deployment_blocking must still be caught.
+        let stale = evaluate_deployment_readiness(
+            &[json!({"credential_type": "g25", "verified": true, "valid_until_ms": NOW - DAY_MS})],
+            &["g25"],
+            NOW,
+        );
+        assert!(!stale.ready);
+        assert!(stale.blockers.iter().any(|(t, why)| t == "g25" && why == "expired"));
     }
 
     #[test]
@@ -547,5 +604,13 @@ mod tests {
             &json!({"entleiher_signed": true, "signed_at_ms": NOW, "entries": []})
         )
         .contains(&"no_time_entries"));
+        // Regression (#8): a non-empty array of zero/negative hours must not
+        // release billing.
+        assert!(evaluate_billing_gate(&json!({
+            "entleiher_signed": true,
+            "signed_at_ms": NOW,
+            "entries": [{"type": "regular", "hours": 0.0}, {"type": "nacht", "hours": -4.0}]
+        }))
+        .contains(&"no_billable_hours"));
     }
 }

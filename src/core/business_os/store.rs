@@ -8086,7 +8086,13 @@ fn list_business_activity_events(
             'business_os.ats.candidate_presented',
             'business_os.ats.candidate_present_denied',
             'business_os.ats.placement_created',
-            'business_os.ats.placement_denied'
+            'business_os.ats.placement_denied',
+            'business_os.ats.placement_early_leave',
+            'business_os.ats.intake_captured',
+            'business_os.ats.retention_purged',
+            'business_os.ats.signature_requested',
+            'business_os.ats.signature_signed',
+            'business_os.ats.interview_transcribed'
          )
          ORDER BY observed_at_ms DESC, event_id DESC
          LIMIT ?1",
@@ -11579,7 +11585,8 @@ fn ensure_app_validation_completion_has_post_lease_artifact_write(
     let Some((cutoff_time, cutoff_label)) = app_validation_artifact_cutoff_time(root, task)? else {
         return Ok(());
     };
-    let module_dir = root.join(artifact_directory);
+    let app_workspace_root = app_validation_artifact_workspace_root(root, task, artifact_directory);
+    let module_dir = app_workspace_root.join(artifact_directory);
     let mut newest: Option<SystemTime> = None;
     let mut newest_path: Option<PathBuf> = None;
     let mut records_written = false;
@@ -11667,6 +11674,31 @@ fn ensure_app_validation_completion_has_post_lease_artifact_write(
         artifact_directory,
         newest_label
     )
+}
+
+fn app_validation_artifact_workspace_root(
+    root: &Path,
+    task: &channels::QueueTaskView,
+    artifact_directory: &str,
+) -> PathBuf {
+    task.workspace_root
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| app_validation_artifact_workspace_root_looks_valid(path, artifact_directory))
+        .unwrap_or_else(|| root.to_path_buf())
+}
+
+fn app_validation_artifact_workspace_root_looks_valid(
+    path: &Path,
+    artifact_directory: &str,
+) -> bool {
+    path.join(artifact_directory).exists()
+        || path
+            .join("src/apps/business-os/scripts/validate-app-module.mjs")
+            .is_file()
+        || path.join("runtime/business-os/installed-modules").is_dir()
 }
 
 fn app_validation_artifact_cutoff_time(
@@ -14084,7 +14116,8 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             // mutations (draft CRUD, post, Storno/cancel, §17 credit notes).
             // chef/admin role required, like the other mutating module families.
             let session = rxdb_command_session(root, &command)?;
-            let outcome = super::invoices::handle_invoices_active_command(root, &session, &command)?;
+            let outcome =
+                super::invoices::handle_invoices_active_command(root, &session, &command)?;
             return write_rxdb_control_command_outcome(
                 root,
                 &command,
@@ -22325,6 +22358,77 @@ fn record_ats_governance_event(
     )
 }
 
+/// One canonical `accounting_invoices` line (postable shape): `quantity` in
+/// thousandths and `unit_price_cents` in cents, with the revenue `account_code`
+/// the invoice poster requires.
+fn ats_invoice_line(position: i64, description: &str, amount_eur: f64, tax_rate: f64) -> Value {
+    serde_json::json!({
+        "position": position,
+        "description": description,
+        "quantity": 1000,
+        "unit_price_cents": (amount_eur * 100.0).round() as i64,
+        "tax_rate": tax_rate,
+        "account_code": "8400"
+    })
+}
+
+/// Build a canonical `accounting_invoices` DRAFT the invoices module can post.
+/// ATS billing (placement fee, Leistungsnachweis, early-leave clawback) emits
+/// these so the records satisfy the RxDB `accounting_invoices` schema (which
+/// requires `state`/`currency`/`search_text`/`is_deleted`) and flow through the
+/// invoices app — instead of a non-postable, schema-invalid shadow shape.
+fn ats_canonical_invoice(
+    id: &str,
+    invoice_type: &str,
+    party_id: &str,
+    lines: Vec<Value>,
+    now: i64,
+    source_field: &str,
+    source_id: &str,
+) -> Value {
+    let mut net_total: i64 = 0;
+    let mut tax_total: i64 = 0;
+    for line in &lines {
+        let quantity = line.get("quantity").and_then(Value::as_i64).unwrap_or(0);
+        let unit_price = line
+            .get("unit_price_cents")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let net = ((unit_price as f64) * (quantity as f64) / 1000.0).round() as i64;
+        let tax = ((net as f64) * line.get("tax_rate").and_then(Value::as_f64).unwrap_or(0.0))
+            .round() as i64;
+        net_total += net;
+        tax_total += tax;
+    }
+    let total = net_total + tax_total;
+    let mut invoice = serde_json::json!({
+        "id": id,
+        "invoice_type": invoice_type,
+        "party_id": party_id,
+        "currency": "EUR",
+        "state": "draft",
+        "invoice_date_ms": now,
+        "lines": lines,
+        "subtotal_cents": net_total,
+        "tax_cents": tax_total,
+        "total_cents": total,
+        "paid_cents": 0,
+        "open_cents": total,
+        "search_text": party_id.to_lowercase(),
+        "is_deleted": false,
+        "created_at_ms": now,
+        "updated_at_ms": now,
+        "_deleted": false
+    });
+    if let Some(obj) = invoice.as_object_mut() {
+        obj.insert(
+            source_field.to_string(),
+            Value::String(source_id.to_string()),
+        );
+    }
+    invoice
+}
+
 fn handle_ats_mutating_command(
     root: &Path,
     session: &BusinessOsSession,
@@ -22359,6 +22463,20 @@ fn handle_ats_mutating_command(
                     purged.push(id);
                 }
             }
+            // §5.3 DSGVO trail: record the retention deletion (PII erasure).
+            record_ats_governance_event(
+                &conn,
+                command,
+                &actor,
+                "business_os.ats.retention_purged",
+                serde_json::json!({
+                    "collection": collection,
+                    "purged_count": purged.len(),
+                    "purged_ids": purged,
+                    "retention_days": retention_days
+                }),
+                now,
+            )?;
             Ok(serde_json::json!({ "ok": true, "purged": purged.len(), "purged_ids": purged }))
         }
         "ats.intake.capture" => {
@@ -22391,6 +22509,20 @@ fn handle_ats_mutating_command(
                 "_deleted": false
             });
             upsert_business_record(&conn, "applications", &id, now, payload)?;
+            // §5.3 DSGVO trail: record the inbound candidate-PII capture.
+            record_ats_governance_event(
+                &conn,
+                command,
+                &actor,
+                "business_os.ats.intake_captured",
+                serde_json::json!({
+                    "application_id": id,
+                    "channel": channel,
+                    "dedupe_key": dedupe_key,
+                    "has_email": !email.is_empty()
+                }),
+                now,
+            )?;
             Ok(serde_json::json!({ "ok": true, "application_id": id, "dedupe_key": dedupe_key }))
         }
         "ats.placement.create" => {
@@ -22468,21 +22600,18 @@ fn handle_ats_mutating_command(
                 "_deleted": false
             });
             upsert_business_record(&conn, "placements", &id, now, payload)?;
-            // Emit the placement-fee draft invoice directly (the invoices.rs module
-            // is an unwired draft; write the accounting record we own).
+            // Emit the placement-fee draft invoice in the canonical, postable
+            // accounting_invoices shape (flows through the invoices module).
             let inv_id = format!("inv_{now}");
-            let invoice = serde_json::json!({
-                "id": inv_id,
-                "invoice_type": "sale_out",
-                "account_id": client_account_id,
-                "source_placement_id": id,
-                "status": "draft",
-                "net_total": fee,
-                "lines": [{ "position": 1, "description": "Vermittlungshonorar", "quantity": 1, "unit_price": fee, "tax_rate": 0.19 }],
-                "created_at_ms": now,
-                "updated_at_ms": now,
-                "_deleted": false
-            });
+            let invoice = ats_canonical_invoice(
+                &inv_id,
+                "sale_out",
+                &client_account_id,
+                vec![ats_invoice_line(1, "Vermittlungshonorar", fee, 0.19)],
+                now,
+                "source_placement_id",
+                &id,
+            );
             upsert_business_record(&conn, "accounting_invoices", &inv_id, now, invoice)?;
             // §5.3 DSGVO trail: record the placement lifecycle event.
             record_ats_governance_event(
@@ -22658,24 +22787,22 @@ fn handle_ats_mutating_command(
                             serde_json::json!({
                                 "position": i + 1,
                                 "description": format!("Arbeitsstunden ({})", l.category),
-                                "quantity": l.hours,
-                                "unit_price": l.rate,
-                                "tax_rate": 0.19
+                                "quantity": (l.hours * 1000.0).round() as i64,
+                                "unit_price_cents": (l.rate * 100.0).round() as i64,
+                                "tax_rate": 0.19,
+                                "account_code": "8400"
                             })
                         })
                         .collect();
-                    let invoice = serde_json::json!({
-                        "id": invoice_id,
-                        "invoice_type": "sale_out",
-                        "account_id": account_id,
-                        "source_nachweis_id": record_id,
-                        "status": "draft",
-                        "net_total": net_total,
-                        "lines": lines,
-                        "created_at_ms": now,
-                        "updated_at_ms": now,
-                        "_deleted": false
-                    });
+                    let invoice = ats_canonical_invoice(
+                        &invoice_id,
+                        "sale_out",
+                        &account_id,
+                        lines,
+                        now,
+                        "source_nachweis_id",
+                        &record_id,
+                    );
                     upsert_business_record(
                         &conn,
                         "accounting_invoices",
@@ -22715,6 +22842,14 @@ fn handle_ats_mutating_command(
                 "_deleted": false
             });
             upsert_business_record(&conn, "signature_requests", &id, now, payload)?;
+            record_ats_governance_event(
+                &conn,
+                command,
+                &actor,
+                "business_os.ats.signature_requested",
+                serde_json::json!({ "request_id": id, "document_id": document_id }),
+                now,
+            )?;
             Ok(serde_json::json!({ "ok": true, "request_id": id, "status": "sent" }))
         }
         "ats.signature.sign" => {
@@ -22755,6 +22890,14 @@ fn handle_ats_mutating_command(
                 obj.insert("status".to_string(), Value::String(status.to_string()));
             }
             upsert_business_record(&conn, "signature_requests", &request_id, now, payload)?;
+            record_ats_governance_event(
+                &conn,
+                command,
+                &actor,
+                "business_os.ats.signature_signed",
+                serde_json::json!({ "request_id": request_id, "signer_id": signer_id, "status": status }),
+                now,
+            )?;
             Ok(serde_json::json!({ "ok": true, "request_id": request_id, "status": status }))
         }
         "ats.placement.early_leave" => {
@@ -22794,18 +22937,20 @@ fn handle_ats_mutating_command(
                 let remaining_ratio = (days - served) as f64 / days as f64;
                 clawback = (fee * remaining_ratio * 100.0).round() / 100.0;
                 credit_note_id = format!("cn_{now}");
-                let credit = serde_json::json!({
-                    "id": credit_note_id,
-                    "invoice_type": "credit_note_out",
-                    "account_id": client_account_id,
-                    "source_placement_id": placement_id,
-                    "status": "draft",
-                    "net_total": clawback,
-                    "lines": [{ "position": 1, "description": "Anteilige Gutschrift (Garantie/Frühausstieg)", "quantity": 1, "unit_price": clawback, "tax_rate": 0.19 }],
-                    "created_at_ms": now,
-                    "updated_at_ms": now,
-                    "_deleted": false
-                });
+                let credit = ats_canonical_invoice(
+                    &credit_note_id,
+                    "credit_note_out",
+                    &client_account_id,
+                    vec![ats_invoice_line(
+                        1,
+                        "Anteilige Gutschrift (Garantie/Frühausstieg)",
+                        clawback,
+                        0.19,
+                    )],
+                    now,
+                    "source_placement_id",
+                    &placement_id,
+                );
                 upsert_business_record(&conn, "accounting_invoices", &credit_note_id, now, credit)?;
             }
             if let Some(obj) = placement.as_object_mut() {
@@ -22817,6 +22962,19 @@ fn handle_ats_mutating_command(
                 obj.insert("updated_at_ms".to_string(), Value::from(now));
             }
             upsert_business_record(&conn, "placements", &placement_id, now, placement)?;
+            record_ats_governance_event(
+                &conn,
+                command,
+                &actor,
+                "business_os.ats.placement_early_leave",
+                serde_json::json!({
+                    "placement_id": placement_id,
+                    "within_guarantee": within,
+                    "clawback": clawback,
+                    "credit_note_id": credit_note_id
+                }),
+                now,
+            )?;
             Ok(serde_json::json!({
                 "ok": true,
                 "placement_id": placement_id,
@@ -22828,10 +22986,12 @@ fn handle_ats_mutating_command(
         "ats.interview.transcribe" => {
             // §5.10 Interview transcription: transcribe an interview recording via
             // the native STT runtime and write the transcript back onto the
-            // interview_meetings record. The audio is either a direct filesystem
-            // path (ops/testing) or a Business OS desktop file reconstructed from
-            // RxDB chunks (the browser-upload flow) — the data plane stays
-            // WebRTC-only, no HTTP. When the STT model weights are not installed
+            // interview_meetings record. The audio MUST be a Business OS desktop
+            // file referenced by `source_file_id`, reconstructed and integrity-
+            // verified from RxDB chunks (the browser-upload flow) — the data plane
+            // stays WebRTC-only, no HTTP. A raw `audio_path` is intentionally NOT
+            // accepted: an RxDB command must not be able to point the daemon at an
+            // arbitrary local file. When the STT model weights are not installed
             // the runtime returns a clear error; surface it as a non-fatal outcome
             // so the command records a failed transcription instead of poisoning
             // the meeting record.
@@ -22841,24 +23001,17 @@ fn handle_ats_mutating_command(
                 .get("collection")
                 .and_then(Value::as_str)
                 .unwrap_or("interview_meetings");
-            let audio_path: std::path::PathBuf =
-                if let Some(path) = first_string_field(p, &["audio_path"]) {
-                    std::path::PathBuf::from(path)
-                } else if let Some(file_id) = first_string_field(p, &["source_file_id"]) {
-                    let generation = first_string_field(p, &["generation_id"]);
-                    let materialized = materialize_business_chat_attachment(
-                        root,
-                        command.id.as_deref().unwrap_or("ats-transcribe"),
-                        &serde_json::json!({}),
-                        &file_id,
-                        generation.as_deref(),
-                    )?;
-                    std::path::PathBuf::from(materialized.local_path)
-                } else {
-                    anyhow::bail!(
-                        "ats.interview.transcribe requires source_file_id or audio_path"
-                    );
-                };
+            let file_id = first_string_field(p, &["source_file_id"])
+                .context("ats.interview.transcribe requires source_file_id")?;
+            let generation = first_string_field(p, &["generation_id"]);
+            let materialized = materialize_business_chat_attachment(
+                root,
+                command.id.as_deref().unwrap_or("ats-transcribe"),
+                &serde_json::json!({}),
+                &file_id,
+                generation.as_deref(),
+            )?;
+            let audio_path = std::path::PathBuf::from(materialized.local_path);
             match crate::execution::models::native_stt::transcribe_audio_file(root, &audio_path) {
                 Ok(resp) => {
                     let transcript_id = format!("transcript_{now}");
@@ -22874,12 +23027,28 @@ fn handle_ats_mutating_command(
                         .unwrap_or_else(|| serde_json::json!({ "id": meeting_id }));
                     let char_count = resp.text.chars().count();
                     if let Some(obj) = payload.as_object_mut() {
-                        obj.insert("transcript_id".to_string(), Value::String(transcript_id.clone()));
+                        obj.insert(
+                            "transcript_id".to_string(),
+                            Value::String(transcript_id.clone()),
+                        );
                         obj.insert("transcript_text".to_string(), Value::String(resp.text));
                         obj.insert("transcript_model".to_string(), Value::String(resp.model));
                         obj.insert("transcribed_at_ms".to_string(), Value::from(now));
                     }
                     upsert_business_record(&conn, collection, &meeting_id, now, payload)?;
+                    record_ats_governance_event(
+                        &conn,
+                        command,
+                        &actor,
+                        "business_os.ats.interview_transcribed",
+                        serde_json::json!({
+                            "meeting_id": meeting_id,
+                            "transcript_id": transcript_id,
+                            "transcript_chars": char_count,
+                            "source_file_id": file_id
+                        }),
+                        now,
+                    )?;
                     Ok(serde_json::json!({
                         "ok": true,
                         "meeting_id": meeting_id,

@@ -556,10 +556,24 @@ fn invoices_invoice_delete_stub(root: &Path, command: &BusinessCommand) -> anyho
 fn invoices_invoice_post_stub(root: &Path, command: &BusinessCommand) -> anyhow::Result<Value> {
     let invoice_id = invoices_record_requirement(command, &["invoice_id", "id"])?;
     let conn = open_business_os_store(root)?;
+    let now = now_ms() as i64;
+    let command_id = command.id.clone().unwrap_or_default();
+    post_invoice_in_conn(&conn, &invoice_id, &command_id, now)
+}
 
-    // Idempotency: if a journal entry already references this invoice,
-    // return the previous outcome.
-    if let Some(existing_je) = find_journal_entry_for_invoice(&conn, &invoice_id)? {
+/// Post a draft invoice (or credit note): reserve its number, build the balanced
+/// journal entry (credit-note-aware — a credit_note_* posts a reversing entry),
+/// persist it, and mark the invoice posted/GoBD-immutable. Idempotent by the
+/// invoice's journal entry. Shared by invoices.invoice.post and the Storno path
+/// in invoices.invoice.cancel.
+fn post_invoice_in_conn(
+    conn: &Connection,
+    invoice_id: &str,
+    command_id: &str,
+    now: i64,
+) -> anyhow::Result<Value> {
+    // Idempotency: if a journal entry already references this invoice, return it.
+    if let Some(existing_je) = find_journal_entry_for_invoice(conn, invoice_id)? {
         return Ok(json!({
             "ok": true,
             "idempotent": true,
@@ -567,7 +581,7 @@ fn invoices_invoice_post_stub(root: &Path, command: &BusinessCommand) -> anyhow:
         }));
     }
 
-    let mut invoice = load_accounting_invoice(&conn, &invoice_id)?
+    let mut invoice = load_accounting_invoice(conn, invoice_id)?
         .ok_or_else(|| anyhow!("invoice {invoice_id} not found"))?;
     let state = invoice
         .get("state")
@@ -586,12 +600,11 @@ fn invoices_invoice_post_stub(root: &Path, command: &BusinessCommand) -> anyhow:
     // recurring hooks).
     validate_invoice_for_command(&invoice, true)?;
 
-    let now = now_ms() as i64;
     let fiscal_year = iso_year_from_ms(invoice_invoice_date_ms(&invoice));
-    let party = resolve_party_account(&conn, &invoice_id)?;
+    let party = resolve_party_account(conn, invoice_id)?;
 
     // 1. Reserve the next invoice number from accounting_number_series.
-    let invoice_number = reserve_next_invoice_number(&conn, &invoice, fiscal_year, now)?;
+    let invoice_number = reserve_next_invoice_number(conn, &invoice, fiscal_year, now)?;
     invoice["invoice_number"] = json!(invoice_number);
     invoice["updated_at_ms"] = json!(now);
 
@@ -653,9 +666,9 @@ fn invoices_invoice_post_stub(root: &Path, command: &BusinessCommand) -> anyhow:
 
     // 3. Persist the journal entry and lines.
     let journal_id = format!("je_{invoice_id}_post");
-    invoices_upsert_invoice(&conn, &invoice_id, &invoice, now)?;
+    invoices_upsert_invoice(conn, invoice_id, &invoice, now)?;
     upsert_business_record_helper(
-        &conn,
+        conn,
         "accounting_journal_entries",
         &journal_id,
         now,
@@ -675,7 +688,7 @@ fn invoices_invoice_post_stub(root: &Path, command: &BusinessCommand) -> anyhow:
             obj.insert("updated_at_ms".to_string(), Value::from(now));
         }
         upsert_business_record_helper(
-            &conn,
+            conn,
             "accounting_journal_entry_lines",
             &line_id_for_record,
             now,
@@ -688,9 +701,9 @@ fn invoices_invoice_post_stub(root: &Path, command: &BusinessCommand) -> anyhow:
     invoice["post_journal_entry_id"] = json!(journal_id);
     invoice["posted_at"] = json!(now);
     invoice["state_changed_at_ms"] = json!(now);
-    invoice["state_changed_by_command_id"] = json!(command.id.clone().unwrap_or_default());
+    invoice["state_changed_by_command_id"] = json!(command_id);
     invoice["updated_at_ms"] = json!(now);
-    invoices_upsert_invoice(&conn, &invoice_id, &invoice, now)?;
+    invoices_upsert_invoice(conn, invoice_id, &invoice, now)?;
 
     Ok(json!({
         "ok": true,
@@ -700,15 +713,21 @@ fn invoices_invoice_post_stub(root: &Path, command: &BusinessCommand) -> anyhow:
 }
 
 fn iso_year_from_ms(ms: i64) -> i64 {
-    let secs = ms / 1000;
-    let days = secs / 86_400;
-    // Civil-date-from-days algorithm, Howard Hinnant's date.h
+    let secs = ms.div_euclid(1000);
+    let days = secs.div_euclid(86_400);
+    // Civil-date-from-days algorithm, Howard Hinnant's date.h. `yoe` counts years
+    // from a March-1 era start, so January and February belong to the *next*
+    // calendar year and need the `+ (m <= 2)` adjustment — omitting it put e.g.
+    // 2025-01-01 in fiscal year 2024 and broke the RE-/GS- number series.
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = (z - era * 146_097) as u64;
     let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
     let y = yoe as i64 + era * 400;
-    y
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    y + i64::from(month <= 2)
 }
 
 fn invoice_invoice_date_ms(invoice: &Value) -> i64 {
@@ -1099,12 +1118,38 @@ fn build_credit_note_draft(
         .and_then(Value::as_str)
         .unwrap_or("EUR")
         .to_string();
-    let lines = command
+    let original_reverse_charge = original
+        .get("reverse_charge")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let raw_lines = command
         .payload
         .get("lines")
         .cloned()
         .or_else(|| original.get("lines").cloned())
         .unwrap_or_else(|| json!([]));
+    // Under reverse charge the supplier shows no output tax, so the credit note
+    // must stay tax-free too. We cannot carry the `reverse_charge` flag onto a
+    // credit_note_* type (validate_invoice_for_command rejects it), so we
+    // neutralise per-line tax instead and record the origin for traceability.
+    let lines = if original_reverse_charge {
+        Value::Array(
+            raw_lines
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|mut line| {
+                    if let Some(obj) = line.as_object_mut() {
+                        obj.insert("tax_rate".to_string(), json!(0.0));
+                    }
+                    line
+                })
+                .collect(),
+        )
+    } else {
+        raw_lines
+    };
     let invoice_number = original
         .get("invoice_number")
         .and_then(Value::as_str)
@@ -1122,7 +1167,8 @@ fn build_credit_note_draft(
         "lines": lines,
         "reason": command.payload.get("reason").and_then(Value::as_str).unwrap_or("§17 UStG Korrektur"),
         "small_business": original.get("small_business").cloned().unwrap_or(json!(false)),
-        "reverse_charge": original.get("reverse_charge").cloned().unwrap_or(json!(false)),
+        "reverse_charge": false,
+        "reverse_charge_origin": original_reverse_charge,
         "state": "draft",
         "is_deleted": false,
         "search_text": search_text,
@@ -1173,14 +1219,19 @@ fn invoices_invoice_cancel(root: &Path, command: &BusinessCommand) -> anyhow::Re
             Ok(json!({ "ok": true, "invoice_id": invoice_id, "state": "cancelled" }))
         }
         "posted" => {
+            // GoBD Storno: a posted invoice is reversed by a credit note that is
+            // itself POSTED (writing the reversing journal entry), never by a
+            // dangling draft. Create the Storno draft once, post it so the ledger
+            // is actually reversed, then mark the original cancelled. Posting
+            // first means there is no "cancelled but unreversed" window; the post
+            // step is idempotent by the credit note's journal entry.
             let cn_id = format!("cn_{invoice_id}_storno");
-            let cn = if let Some(existing) = load_accounting_invoice(&conn, &cn_id)? {
-                existing
-            } else {
+            if load_accounting_invoice(&conn, &cn_id)?.is_none() {
                 let cn = build_credit_note_draft(&invoice, &cn_id, command, now)?;
                 invoices_upsert_invoice(&conn, &cn_id, &cn, now)?;
-                cn
-            };
+            }
+            let command_id = command.id.clone().unwrap_or_default();
+            let storno_posted = post_invoice_in_conn(&conn, &cn_id, &command_id, now)?;
             invoice["state"] = json!("cancelled");
             invoice["cancelled_at_ms"] = json!(now);
             invoice["storno_credit_note_id"] = json!(cn_id);
@@ -1191,7 +1242,7 @@ fn invoices_invoice_cancel(root: &Path, command: &BusinessCommand) -> anyhow::Re
                 "invoice_id": invoice_id,
                 "state": "cancelled",
                 "storno_credit_note_id": cn_id,
-                "credit_note": cn,
+                "storno_posted": storno_posted,
             }))
         }
         other => anyhow::bail!("cannot cancel invoice in state {other} (only draft or posted)"),
@@ -1208,13 +1259,17 @@ fn invoices_invoice_create_credit_note(
     let credit_note_for_id =
         invoices_record_requirement(command, &["credit_note_for_id", "invoice_id", "id"])?;
     let now = now_ms() as i64;
+    // Idempotency: default to a deterministic id per original so a replayed
+    // command returns the existing credit note instead of minting a new
+    // postable cn_{now} draft each time. A caller wanting multiple/partial
+    // credit notes for one invoice must supply an explicit credit_note_id.
     let new_id = command
         .payload
         .get("credit_note_id")
         .or_else(|| command.payload.get("new_invoice_id"))
         .and_then(Value::as_str)
         .map(str::to_string)
-        .unwrap_or_else(|| format!("cn_{now}"));
+        .unwrap_or_else(|| format!("cn_{credit_note_for_id}"));
     let conn = open_business_os_store(root)?;
     if let Some(existing) = load_accounting_invoice(&conn, &new_id)? {
         return Ok(json!({ "ok": true, "idempotent": true, "invoice": existing }));
