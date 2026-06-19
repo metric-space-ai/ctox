@@ -6807,11 +6807,12 @@ fn ensure_business_os_app_scaffold_before_worker(
     let Some(target) = business_os_app_module_target_from_prompt(&job.prompt) else {
         return Ok(());
     };
-    if business_os_app_required_inventory_complete(root, &target) {
+    let app_workspace_root = business_os_app_workspace_root(root, job);
+    if business_os_app_required_inventory_complete(&app_workspace_root, &target) {
         record_business_os_app_scaffold_baseline(root, state, job, &target)?;
         return Ok(());
     }
-    let artifact_dir = root.join(&target.artifact_directory);
+    let artifact_dir = app_workspace_root.join(&target.artifact_directory);
     if business_os_app_artifact_dir_has_user_content(&artifact_dir)? {
         push_event(
             state,
@@ -6823,7 +6824,7 @@ fn ensure_business_os_app_scaffold_before_worker(
         record_business_os_app_scaffold_baseline(root, state, job, &target)?;
         return Ok(());
     }
-    run_business_os_app_scaffold_preflight(root, &target, job)?;
+    run_business_os_app_scaffold_preflight(&app_workspace_root, &target, job)?;
     push_event(
         state,
         format!(
@@ -6833,6 +6834,32 @@ fn ensure_business_os_app_scaffold_before_worker(
     );
     record_business_os_app_scaffold_baseline(root, state, job, &target)?;
     Ok(())
+}
+
+fn business_os_app_workspace_root(root: &Path, job: &QueuedPrompt) -> PathBuf {
+    job.workspace_root
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| business_os_app_workspace_root_looks_valid(path))
+        .unwrap_or_else(|| root.to_path_buf())
+}
+
+fn business_os_app_task_workspace_root(root: &Path, task: &channels::QueueTaskView) -> PathBuf {
+    task.workspace_root
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| business_os_app_workspace_root_looks_valid(path))
+        .unwrap_or_else(|| root.to_path_buf())
+}
+
+fn business_os_app_workspace_root_looks_valid(path: &Path) -> bool {
+    path.join("src/apps/business-os/scripts/validate-app-module.mjs")
+        .is_file()
+        || path.join("runtime/business-os/installed-modules").is_dir()
 }
 
 fn record_business_os_app_scaffold_baseline(
@@ -7289,7 +7316,8 @@ fn business_os_app_module_validation_feedback(
     let Some(target) = business_os_app_module_target_from_prompt(&job.prompt) else {
         return Ok(None);
     };
-    let script = root.join("src/apps/business-os/scripts/validate-app-module.mjs");
+    let app_workspace_root = business_os_app_workspace_root(root, job);
+    let script = app_workspace_root.join("src/apps/business-os/scripts/validate-app-module.mjs");
     if !script.exists() {
         return Ok(Some(render_business_os_app_module_validation_feedback(
             job,
@@ -7300,9 +7328,12 @@ fn business_os_app_module_validation_feedback(
             ),
         )));
     }
-    let scaffold_script = root.join("src/apps/business-os/scripts/scaffold-app-module.mjs");
+    let scaffold_script =
+        app_workspace_root.join("src/apps/business-os/scripts/scaffold-app-module.mjs");
     if target.mode_flag == "--installed" && scaffold_script.exists() {
-        if let Err(err) = run_business_os_app_scaffold_repair_missing(root, &target, job) {
+        if let Err(err) =
+            run_business_os_app_scaffold_repair_missing(&app_workspace_root, &target, job)
+        {
             return Ok(Some(render_business_os_app_module_validation_feedback(
                 job,
                 &target,
@@ -7318,7 +7349,7 @@ fn business_os_app_module_validation_feedback(
         .arg(&target.module_id)
         .arg(target.mode_flag)
         .arg("--workspace")
-        .arg(root);
+        .arg(&app_workspace_root);
     let output = match command_output_with_timeout(
         &mut command,
         Duration::from_secs(90),
@@ -7334,7 +7365,12 @@ fn business_os_app_module_validation_feedback(
         }
     };
     if output.status.success() {
-        if let Some(report) = business_os_app_module_completion_policy_report(root, job, &target)? {
+        if let Some(report) = business_os_app_module_completion_policy_report(
+            root,
+            &app_workspace_root,
+            job,
+            &target,
+        )? {
             return Ok(Some(render_business_os_app_module_validation_feedback(
                 job, &target, &report,
             )));
@@ -7359,15 +7395,23 @@ fn business_os_app_module_validation_feedback(
 }
 
 fn business_os_app_module_completion_policy_report(
-    root: &Path,
+    state_root: &Path,
+    app_workspace_root: &Path,
     job: &QueuedPrompt,
     target: &BusinessOsAppModuleTarget,
 ) -> Result<Option<String>> {
     let mut reports = Vec::new();
-    if let Some(report) = business_os_app_module_post_baseline_write_report(root, job, target)? {
+    if let Some(report) = business_os_app_module_post_baseline_write_report(
+        state_root,
+        app_workspace_root,
+        job,
+        target,
+    )? {
         reports.push(report);
     }
-    if let Some(report) = business_os_app_module_domain_relevance_report(root, job, target)? {
+    if let Some(report) =
+        business_os_app_module_domain_relevance_report(app_workspace_root, job, target)?
+    {
         reports.push(report);
     }
     if reports.is_empty() {
@@ -7378,7 +7422,8 @@ fn business_os_app_module_completion_policy_report(
 }
 
 fn business_os_app_module_post_baseline_write_report(
-    root: &Path,
+    state_root: &Path,
+    app_workspace_root: &Path,
     job: &QueuedPrompt,
     target: &BusinessOsAppModuleTarget,
 ) -> Result<Option<String>> {
@@ -7386,7 +7431,7 @@ fn business_os_app_module_post_baseline_write_report(
         return Ok(None);
     };
     let Some(value) = channels::queue_task_metadata_value(
-        root,
+        state_root,
         message_key,
         BUSINESS_OS_APP_SCAFFOLD_BASELINE_MS_METADATA_KEY,
     )?
@@ -7404,7 +7449,7 @@ fn business_os_app_module_post_baseline_write_report(
             )
         })?;
     let baseline_time = UNIX_EPOCH + Duration::from_millis(baseline_ms.max(0) as u64);
-    let module_dir = root.join(&target.artifact_directory);
+    let module_dir = app_workspace_root.join(&target.artifact_directory);
     let mut newest: Option<(SystemTime, PathBuf)> = None;
     for relative in BUSINESS_OS_APP_REQUIRED_ARTIFACTS {
         let path = module_dir.join(relative);
@@ -7439,11 +7484,11 @@ fn business_os_app_module_post_baseline_write_report(
 }
 
 fn business_os_app_module_domain_relevance_report(
-    root: &Path,
+    app_workspace_root: &Path,
     job: &QueuedPrompt,
     target: &BusinessOsAppModuleTarget,
 ) -> Result<Option<String>> {
-    let module_dir = root.join(&target.artifact_directory);
+    let module_dir = app_workspace_root.join(&target.artifact_directory);
     let text = business_os_app_module_artifact_text(&module_dir)?;
     if text.trim().is_empty() {
         return Ok(None);
@@ -11746,7 +11791,8 @@ fn requeue_unstarted_business_os_app_queue_task(
     if task.route_status != "leased" {
         return Ok(false);
     }
-    let artifact_dir = root.join(&target.artifact_directory);
+    let app_workspace_root = business_os_app_task_workspace_root(root, task);
+    let artifact_dir = app_workspace_root.join(&target.artifact_directory);
     if business_os_app_artifact_dir_has_user_content(&artifact_dir)? {
         return Ok(false);
     }
@@ -22495,6 +22541,51 @@ Business OS command:
     }
 
     #[test]
+    fn stale_app_validation_recovery_uses_queue_workspace_root_for_installed_app_artifacts() {
+        let state_root = temp_root("stale-app-validation-state-root");
+        let app_workspace_root = temp_root("stale-app-validation-app-workspace");
+        let script_dir = app_workspace_root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "process.exit(0);\n",
+        )
+        .expect("write green validator script fixture");
+        let task = channels::create_queue_task(
+            &state_root,
+            channels::QueueTaskCreateRequest {
+                title: "Create subscriptions app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/subscriptions".to_string(),
+                workspace_root: Some(app_workspace_root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        seed_business_os_app_artifacts(&app_workspace_root, "subscriptions");
+        channels::lease_queue_task(&state_root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        age_queue_task_lease(
+            &state_root,
+            &task.message_key,
+            BUSINESS_OS_APP_RECOVERY_STALE_SECS + 5,
+        );
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        let updated = recover_stale_business_os_app_queue_tasks(&state_root, &state, 10)
+            .expect("stale app validation recovery failed");
+
+        assert_eq!(updated, 1);
+        assert_eq!(route_status_for(&state_root, &task.message_key), "handled");
+        assert!(!state_root
+            .join("runtime/business-os/installed-modules/subscriptions")
+            .exists());
+    }
+
+    #[test]
     fn stale_app_recovery_requeues_leased_missing_target_before_validation() {
         let root = temp_root("stale-app-recovery-missing-target-requeue");
         let task = channels::create_queue_task(
@@ -23331,6 +23422,8 @@ Business OS command:
     #[test]
     fn business_os_app_validation_worker_error_after_green_completes_business_command() {
         let root = temp_root("business-os-app-validation-worker-error-green-command");
+        let app_workspace_root =
+            temp_root("business-os-app-validation-worker-error-green-command-workspace");
         seed_business_os_app_module_fixture(&root, "subscriptions");
         let accepted = crate::business_os::store::accept_rxdb_business_command(
             &root,
@@ -23358,8 +23451,19 @@ Business OS command:
             .and_then(Value::as_str)
             .expect("expected queue task id")
             .to_string();
+        channels::update_queue_task(
+            &root,
+            channels::QueueTaskUpdateRequest {
+                message_key: task_id.clone(),
+                workspace_root: Some(app_workspace_root.display().to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("failed to point app queue task at app workspace root");
         channels::lease_queue_task(&root, &task_id, "ctox-service-test")
             .expect("failed to lease app queue task");
+        age_queue_task_lease(&root, &task_id, 5);
+        seed_business_os_app_artifacts(&app_workspace_root, "subscriptions");
         let task = channels::load_queue_task(&root, &task_id)
             .expect("failed to load app queue task")
             .expect("missing app queue task");
