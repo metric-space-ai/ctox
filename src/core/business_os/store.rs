@@ -11606,7 +11606,7 @@ fn ensure_app_validation_completion_has_post_lease_artifact_write(
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| module_dir.display().to_string());
     anyhow::bail!(
-        "Business OS app validation passed, but queue task `{}` has no required app artifact written after its app-build baseline ({cutoff_label}). New-app scaffolds may validate before the agent implements the requested app; edit the runtime app files under `{}` first, then run validation again. Newest checked artifact before the baseline: {}",
+        "Early validation is rejected for queue task `{}`: no required app artifact was written after its app-build baseline ({cutoff_label}). The scaffold is only a starting point and must not be validated as the finished app. Immediately edit requested-domain files under `{}` before validating again: at minimum core/records.mjs, core/automation.mjs, one visible UI/locales file, and one tests/*.test.mjs file. Newest checked artifact before the baseline: {}",
         task.message_key,
         artifact_directory,
         newest_label
@@ -24489,7 +24489,7 @@ Business OS app build target:
 - open-work context rule: queue IDs, current_queue_item_id, and open-work blocks in surrounding context are not your app-build target and must not redirect you to another task. Build only module_id={module_id} under {module_dir}/.
 - required file inventory: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, core/automation.mjs, core/records.mjs, locales/de.json, locales/en.json, and tests/*.test.mjs must exist before you can claim success.
 - schema invariant rule: schema.js is the only root schema module. Do not rename it, delete it, replace it with schema.mjs, or leave schema.mjs/schema.cjs as a root-level alias. Put reusable ESM schema fragments under core/*.mjs and re-export them from schema.js.
-- mandatory first screen: inspect the scaffold first, preserve core/automation.mjs, core/records.mjs, locales, tests, mount wiring, and helper export names unless every importer is updated in the same edit. Use shipped customers, shiftflow, and outbound as the default three few-shots. Keep the app small, but do not treat an untouched scaffold as the requested app.
+- mandatory first screen: inspect the scaffold first, preserve core/automation.mjs, core/records.mjs, locales, tests, mount wiring, and helper export names unless every importer is updated in the same edit. Use shipped customers, shiftflow, and outbound as the default three few-shots. Keep the app small, but do not treat an untouched scaffold as the requested app. The scaffold is already structurally valid; validating it before requested-domain edits is a task failure, not progress.
 - exact artifact rule: required artifacts are canonical files, not shell patterns. Write module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales, core helpers, and tests by exact path under {module_dir}/ only. Do not create temporary schema/manifest aliases, short alias files such as m.json, manifest.json, collections.json, or schema.mjs/schema.cjs, do not copy through globs or brace expansion, do not create files literally named co*ions.*json or colle{{ctions,ctions}}.schema.json, and do not run rm against required artifacts.
 - scaffold preservation rule: CTOX service preflight may already have created a validator-clean scaffold in {module_dir}/. Treat that scaffold as the baseline. Do not clean, delete, reset, replace, or rewrite it wholesale. Customize the smallest necessary scaffold files in place, preserve the mount wiring, core helpers, schema wrappers, locales, and tests, and run `ctox business-os app scaffold {module_id} {mode_flag} --repair-missing` before domain edits if core/automation.mjs or core/records.mjs is missing.
 - few-shot rule: inspect exactly three shipped Business OS modules as short targeted pattern references, preferably customers, shiftflow, and outbound from the shipped `src/apps/business-os/modules/` tree. Open exact selected files directly, for example `src/apps/business-os/modules/customers/module.json`, `src/apps/business-os/modules/shiftflow/index.js`, and `src/apps/business-os/modules/outbound/core/automation.mjs`. Do not run `ls`, `find`, `rg`, `grep`, or `tree` over `src/apps/business-os/modules/` or over a source module directory to discover files. Use notes only as an optional fourth simple-CRUD reference; it is not a scaffold-helper template and may not contain core/automation.mjs or core/records.mjs. Never use generated installed modules, runtime/business-os/installed-modules, ~/.local/state/ctox/business-os/installed-modules, bench_* apps, previous App Creator outputs, or app-creator-bench artifacts as few-shot templates. Do not request complete file dumps, do not use combined multi-file snippets or broad line sweeps, do not delegate a broad module-reading sweep to a subagent, and do not keep reading examples after the three-module summary.
@@ -24497,7 +24497,8 @@ Business OS app build target:
 - current-contract rule: if an existing module conflicts with the required skill, this prompt, `ctox business-os app validate`, or `module_static_check.mjs`, the current contract wins and the existing pattern is an anti-pattern.
 - bounded-shell rule: do not run find/rg/grep/ls/tree over $HOME, /Users, /, ~/.local/state, the whole install root, the whole repo, `src/apps/business-os/modules/`, any source module directory, `src/apps/business-os/app.js`, `src/apps/business-os/shared/`, `src/apps/business-os/scripts/`, `src/apps/business-os/rxdb/`, or `src/core/business_os/` to discover validators, scripts, examples, shell loaders, schema internals, or guard internals. Inspect only exact files in {module_dir}/ and exact chosen few-shot source files. Do not read or write ~/.local/state/ctox/business-os/installed-modules directly; use the prompt's {module_dir}/ path only. Use `ctox business-os app validate {module_id} {mode_flag}`; do not search for validator filenames or Business OS loader code.
 - sequencing rule: after reading the required skill and inspecting three shipped modules, verify {module_dir}/ has the required file inventory before reading validator/checker source files. If the directory is missing or incomplete, repair the scaffold first; do not replace a green scaffold just because it is generic. Do not open validate-app-module.mjs, module_static_check.mjs, assert-module-conformance.mjs, or assert-rxdb-only.mjs until the required files exist and a validation command has reported a concrete failure.
-- validator rule: validators and static checkers are black-box gates. Run `ctox business-os app validate {module_id} {mode_flag}` only after you have made the smallest requested-domain edits to records, labels, filters, automation payload, and tests; scaffold inspection alone is not a file pass. If validation says there were no post-lease app artifact writes, edit files under {module_dir}/ for the requested domain and validate again. Repair validator output bullets exactly. Do not reconstruct scanner regexes or plan around checker internals before writing the app.
+- pre-validation edit gate: after reading the skill and inspecting the scaffold/few-shots, your next app action must write requested-domain changes under {module_dir}/. Before the first validation call, edit at least core/records.mjs, core/automation.mjs, one visible UI/locales file, and one tests/*.test.mjs file so they contain concrete requested-domain fixture facts. Do not run `ctox business-os app validate`, module tests, or node --check as the first action on a fresh scaffold.
+- validator rule: validators and static checkers are black-box gates. Run `ctox business-os app validate {module_id} {mode_flag}` only after you have made the smallest requested-domain edits to records, labels, filters, automation payload, and tests; scaffold inspection alone is not a file pass. If validation reports early validation or no post-lease app artifact writes, immediately edit the requested-domain files under {module_dir}/ and validate again. Repair validator output bullets exactly. Do not reconstruct scanner regexes or plan around checker internals before writing the app.
 - cwd warning: shell tools run from the install root, not from the module directory; never use bare redirects like > module.json, > collections.schema.json, > {module_id}/index.js, or mkdir {module_id}.
 - required shell write pattern: set MODULE_DIR="{module_dir}" and write every file as "$MODULE_DIR/<file>"; create "$MODULE_DIR/locales" and "$MODULE_DIR/tests" before writing nested files.
 - required artifact write pattern: use exact filenames only. Do not use `cp .tmp_schema.json co*.json`, `cp .csjson.tmp collections*.json`, `rm collections.schema.json`, `rm *.json`, `mv module*.json module.json`, short alias files such as `m.json`, or any glob/brace/wildcard repair for required files. If a required file must change, write the final content directly to "$MODULE_DIR/collections.schema.json" or the exact required target and parse/import it immediately.
@@ -26477,8 +26478,13 @@ mod tests {
         assert!(prompt.contains("Do not rename it, delete it, replace it with schema.mjs"));
         assert!(prompt.contains("mandatory first screen: inspect the scaffold first"));
         assert!(prompt.contains("do not treat an untouched scaffold as the requested app"));
+        assert!(prompt.contains("validating it before requested-domain edits is a task failure"));
         assert!(prompt.contains("scaffold inspection alone is not a file pass"));
         assert!(prompt.contains("no post-lease app artifact writes"));
+        assert!(prompt.contains("pre-validation edit gate"));
+        assert!(
+            prompt.contains("Before the first validation call, edit at least core/records.mjs")
+        );
         assert!(prompt.contains("short alias files such as m.json"));
         assert!(prompt.contains("Do not run `ls`, `find`, `rg`, `grep`, or `tree` over"));
         assert!(prompt.contains("any source module directory"));
@@ -26611,8 +26617,10 @@ mod tests {
         assert!(prompt.contains("inspect exactly three shipped Business OS modules"));
         assert!(prompt.contains("mandatory first screen: inspect the scaffold first"));
         assert!(prompt.contains("do not treat an untouched scaffold as the requested app"));
+        assert!(prompt.contains("validating it before requested-domain edits is a task failure"));
         assert!(prompt.contains("scaffold inspection alone is not a file pass"));
         assert!(prompt.contains("no post-lease app artifact writes"));
+        assert!(prompt.contains("pre-validation edit gate"));
         assert!(prompt.contains("short alias files such as m.json"));
         assert!(prompt.contains("Do not run `ls`, `find`, `rg`, `grep`, or `tree` over"));
         assert!(prompt.contains("any source module directory"));
@@ -26756,7 +26764,9 @@ mod tests {
         .expect_err("pre-lease scaffold must not complete an app command");
         let report = format!("{error:#}");
         assert!(
-            report.contains("has no required app artifact written after its app-build baseline"),
+            report.contains("Early validation is rejected")
+                && report
+                    .contains("no required app artifact was written after its app-build baseline"),
             "unexpected error: {report}"
         );
         let task = channels::load_queue_task(root, &task_id)?
@@ -26876,7 +26886,9 @@ mod tests {
         .expect_err("post-scaffold baseline without worker edits must not complete");
         let report = format!("{error:#}");
         assert!(
-            report.contains("has no required app artifact written after its app-build baseline"),
+            report.contains("Early validation is rejected")
+                && report
+                    .contains("no required app artifact was written after its app-build baseline"),
             "unexpected error: {report}"
         );
         let task = channels::load_queue_task(root, &task_id)?
