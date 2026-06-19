@@ -576,10 +576,10 @@ reported bullets. If the app validator is green, stop instead of reading validat
 
 fn module_app_cli_probe_guard_message(action: &str) -> String {
     format!(
-        "Business OS app module guard blocked App Creator CLI probing `{action}`. \
+        "Business OS app module guard blocked App Creator CLI probing or repair shortcut `{action}`. \
 Use the skill instructions and the prompted module directory instead of inspecting CLI surfaces. \
 Run only full validation after implementing domain behavior: `ctox business-os app validate <id> --installed`. \
-Do not use inspect/help probing or validator skip flags during App Creator work."
+Do not use inspect/help probing, validator skip flags, or repair-missing shortcuts during App Creator work."
     )
 }
 
@@ -604,14 +604,20 @@ fn module_tmp_scratch_guard_message(path: &str) -> String {
         "Business OS app module guard blocked temporary scratch/staging path `{path}`. \
 Generated Business OS App Creator files must be written, tested, and repaired directly at \
 `runtime/business-os/installed-modules/<module_id>/` or the exact prompted module path. \
-Do not write probes, split app fragments, validation fixtures, or generated module payloads under /tmp."
+Do not write probes, split app fragments, validation fixtures, generated module payloads, or run read/test probes from /tmp."
     )
 }
 
 fn command_uses_tmp_scratch_for_business_os_app_creator(command: &str) -> Option<String> {
     let compact = command.replace("\\\n", " ").replace('\n', " ");
     let lower = compact.to_ascii_lowercase();
-    if !lower.contains("/tmp/") && !lower.contains("$tmpdir") && !lower.contains("${tmpdir}") {
+    let mentions_tmp = lower.contains("/tmp/")
+        || lower.contains(" /tmp")
+        || lower.contains("'/tmp")
+        || lower.contains("\"/tmp")
+        || lower.contains("$tmpdir")
+        || lower.contains("${tmpdir}");
+    if !mentions_tmp {
         return None;
     }
 
@@ -619,7 +625,10 @@ fn command_uses_tmp_scratch_for_business_os_app_creator(command: &str) -> Option
         .into_iter()
         .find(|token| {
             let lower = token.to_ascii_lowercase();
-            lower.contains("/tmp/") || lower.contains("$tmpdir") || lower.contains("${tmpdir}")
+            lower == "/tmp"
+                || lower.starts_with("/tmp/")
+                || lower.contains("$tmpdir")
+                || lower.contains("${tmpdir}")
         })
         .unwrap_or_else(|| "/tmp".to_string());
 
@@ -646,6 +655,24 @@ fn command_uses_tmp_scratch_for_business_os_app_creator(command: &str) -> Option
         return None;
     }
 
+    let tmp_cwd_probe = (lower.contains("cd /tmp")
+        || lower.contains("cd '/tmp")
+        || lower.contains("cd \"/tmp")
+        || lower.contains("pushd /tmp")
+        || lower.contains("pushd '/tmp")
+        || lower.contains("pushd \"/tmp")
+        || lower.contains("cd $tmpdir")
+        || lower.contains("cd ${tmpdir}")
+        || lower.contains("pushd $tmpdir")
+        || lower.contains("pushd ${tmpdir}"))
+        && (lower_contains_shell_word(&lower, "node")
+            || lower_contains_shell_word(&lower, "nodejs")
+            || lower_contains_shell_word(&lower, "stat")
+            || lower.contains("readfilesync")
+            || lower.contains("import(")
+            || lower.contains("ctox business-os app")
+            || lower.contains("installed-modules"));
+
     let tmp_write_or_probe = lower.contains(">/tmp/")
         || lower.contains("> /tmp/")
         || lower.contains(">>/tmp/")
@@ -664,7 +691,7 @@ fn command_uses_tmp_scratch_for_business_os_app_creator(command: &str) -> Option
         || lower.contains("readfilesync('/tmp/")
         || lower.contains("readfilesync(\"/tmp/");
 
-    tmp_write_or_probe.then_some(tmp_path)
+    (tmp_cwd_probe || tmp_write_or_probe).then_some(tmp_path)
 }
 
 fn command_writes_source_tree_installed_module(command: &str) -> Option<String> {
@@ -1863,6 +1890,12 @@ fn command_reads_business_os_validator_internals(command: &str) -> Option<String
 fn command_uses_forbidden_business_os_app_cli_probe(command: &str) -> Option<String> {
     let compact = command.replace("\\\n", " ").replace('\n', " ");
     let lower = compact.to_ascii_lowercase();
+    if lower.contains("ctox business-os app repair-missing") {
+        return Some("ctox business-os app repair-missing".to_string());
+    }
+    if lower.contains("ctox business-os app scaffold") && lower.contains("--repair-missing") {
+        return Some("ctox business-os app scaffold --repair-missing".to_string());
+    }
     if lower.contains("ctox business-os app inspect") {
         return Some("ctox business-os app inspect".to_string());
     }

@@ -843,6 +843,23 @@ fn business_os_guard_blocks_tmp_generated_module_fragments() -> anyhow::Result<(
 }
 
 #[test]
+fn business_os_guard_blocks_tmp_cwd_node_probe_during_app_creator_work() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "cd /tmp && node -e \"import('/Users/example/.local/lib/ctox/current/runtime/business-os/installed-modules/bench_subscriptions_r109_20260619_195030Z/index.js')\"",
+        root.path(),
+    )
+    .expect("/tmp cwd node probes should be blocked for App Creator work");
+
+    assert!(err.contains("temporary scratch/staging"));
+    assert!(err.contains("/tmp"));
+    assert!(err.contains("read/test probes"));
+    Ok(())
+}
+
+#[test]
 fn business_os_guard_blocks_shell_apply_patch_probe() -> anyhow::Result<()> {
     let root = tempdir()?;
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;
@@ -1042,6 +1059,38 @@ fn business_os_guard_blocks_business_os_app_help_probe() -> anyhow::Result<()> {
 
     assert!(err.contains("CLI probing"));
     assert!(err.contains("help"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_business_os_app_repair_missing_probe() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "ctox business-os app repair-missing bench_subscriptions_r109_20260619_195030Z --installed 2>&1 | head -20",
+        root.path(),
+    )
+    .expect("App Creator repair-missing probing should be blocked");
+
+    assert!(err.contains("repair shortcut"));
+    assert!(err.contains("repair-missing"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_business_os_app_scaffold_repair_missing_probe() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "ctox business-os app scaffold bench_subscriptions_r109_20260619_195030Z --installed --repair-missing 2>&1 | head -20",
+        root.path(),
+    )
+    .expect("App Creator scaffold repair-missing probing should be blocked");
+
+    assert!(err.contains("repair shortcut"));
+    assert!(err.contains("scaffold --repair-missing"));
     Ok(())
 }
 
