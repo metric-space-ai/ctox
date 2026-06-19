@@ -48,6 +48,18 @@ need domain changes, make them in the same edit as `core/records.mjs`,
 manifest fields, a renamed primary collection, or missing helper exports means
 restore the scaffold contract first, then reapply domain fields lockstep.
 
+For first-pass runtime-installed App Creator modules, `core/automation.mjs`
+must keep exporting `buildFollowUpCommand(record = {})` as the command-builder
+facade used by `index.js` and tests. Customize the function body for the
+requested domain, but keep both `type` and `command_type` equal to
+`business_os.chat.task` and include `payload.record_snapshot`. Do not replace
+the export with only plan helpers, move the command builder into
+`core/records.mjs`, or import helpers from `core/records.mjs` before those
+helpers are exported there. Domain helper additions such as needs-attention,
+budget, billing, milestone, renewal, or risk calculations must be exported from
+`core/records.mjs` and consumed by `core/automation.mjs`, `index.js`, and tests
+in one lockstep edit.
+
 Generated tests must also be internally correct. Before treating a failing
 module test as an app failure, verify that its fixture expectations are
 hand-computed and consistent with the domain rules. Aggregate assertions such as
