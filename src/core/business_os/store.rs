@@ -25104,6 +25104,7 @@ fn business_os_app_command_target_prompt_block(command: &BusinessCommand) -> Str
     format!(
         r#"
 Business OS app build target:
+- top acceptance gate: the final app must be requested-domain UI, logic, automation, and tests. Generic scaffold strings such as `New record`, `Search records`, `Select a record`, `Title`, `Owner`, `Due date`, `Open`, `Blocked`, `Done`, `record.title`, `due_at_ms`, `summary.total`, `summary.open`, and `summary.blocked` may exist only as temporary scaffold internals before the first app-file write. They must not remain in final index.html, index.js, locales, or tests unless the user's domain literally uses those exact words. If core/records.mjs changes away from generic records, rewrite index.html, index.js, core/automation.mjs, one locale, and tests/*.test.mjs in the same pass so visible fields, filters, summaries, fixture facts, and automation copy all match. A helper-only rewrite is a failed app.
 - priority rule: CTOX-native App Creator/runtime app creation is the primary acceptance target. Build the runtime-installed Business OS app under the allowed directory first; external/source-checkout agent behavior is secondary evidence only.
 - immediate start gate: CTOX service preflight scaffold state is authoritative. Do not confirm the scaffold with `ls`, `find`, `tree`, `stat`, `cat`, `head`, `tail`, `sed`, Node readFileSync, validation, tests, syntax checks, or scaffold repair before requested-domain writes. If you read the skill, use exactly `ctox skills system show business-os-app-module-development --body` once with no pipe, no redirection, no `head`, no `tail`, and no `sed`. After that optional complete skill read, the next app-artifact action must set `MODULE_DIR="{module_dir}"` and write bounded requested-domain content directly to files under `$MODULE_DIR/`, including core helpers, visible UI, one locale, and one test.
 - deliverable: runnable Business OS app/module files, not documentation, plans, trace files, blocker notes, or skill files.
@@ -25114,7 +25115,7 @@ Business OS app build target:
 - open-work context rule: queue IDs, current_queue_item_id, and open-work blocks in surrounding context are not your app-build target and must not redirect you to another task. Build only module_id={module_id} under {module_dir}/.
 - required file inventory: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, core/automation.mjs, core/records.mjs, locales/de.json, locales/en.json, and tests/*.test.mjs must exist before you can claim success. This is a known scaffold contract, not permission to run `ls`, `find`, `tree`, or file-by-file readback before requested-domain edits.
 - schema invariant rule: schema.js is the only root schema module. Do not rename it, delete it, replace it with schema.mjs, or leave schema.mjs/schema.cjs as a root-level alias. Put reusable ESM schema fragments under core/*.mjs and re-export them from schema.js.
-- scaffold baseline rule: CTOX service preflight creates a structurally complete scaffold before the app-build turn when the target directory is missing or empty. Preserve core/automation.mjs, core/records.mjs, locales, tests, mount wiring, and helper export names unless every importer is updated in the same edit. Use the embedded customers, shiftflow, and outbound patterns as the default three few-shots. Keep the app small, but do not treat an untouched scaffold as the requested app. The scaffold is only a baseline; validating it before requested-domain edits is a task failure, not progress.
+- scaffold baseline rule: CTOX service preflight creates a structurally complete scaffold before the app-build turn when the target directory is missing or empty. Preserve the technical contracts: core/automation.mjs, core/records.mjs, locales, tests, mount wiring, commandBus facade, and helper export names unless every importer is updated in the same edit. Do not preserve generic visible labels, generic field names, generic summaries, or generic fixture expectations as the final app. Use the embedded customers, shiftflow, and outbound patterns as the default three few-shots. Keep the app small, but do not treat an untouched scaffold as the requested app. The scaffold is only a baseline; validating it before requested-domain edits is a task failure, not progress.
 - one-shot data-model rule: for first-pass App Creator apps, preserve the scaffold's single primary module-owned collection and helper API by default. Add requested-domain fields, statuses, calculations, fixtures, labels, and automation facts to that collection instead of inventing extra collections. Introduce additional module-owned collections only when the user explicitly requires a relational workflow and you update module.json, collections.schema.json, schema.js, core/records.mjs, core/automation.mjs, index.js, locales, and tests in the same edit before validation. Never define collection-name constants for undeclared collections and never reference business_commands from runtime helpers; automation uses ctx.commandBus.dispatch only.
 - scaffold contract freeze rule: module.json installed-runtime fields, entry/install_scope/version, store.distribution/installable, layout without right, the scaffold primary collection name, collections.schema.json schema_format, schema.js, and core helper export names are fixed scaffold contract. Do not port module.json, collections.schema.json, or schema.js wholesale from a shipped/source module and do not rename the scaffold collection as a first-pass domain model. Add domain fields, labels, statuses, calculations, fixtures, and automation facts to the scaffold collection instead. If you already changed manifest/schema/collection names before core helpers, UI, locales, and tests are lockstep, restore the scaffold contract first.
 - stable core API rule: for first-pass runtime apps, keep `core/automation.mjs` exporting `buildFollowUpCommand(record = {{}})` and keep `core/records.mjs` exporting the scaffold record helpers `MODULE_ID`, `COLLECTION_NAME`, `createRecord`, `normalizeStatus`, `visibleRecords`, and `summarizeRecords`. Make `buildFollowUpCommand` the compatibility facade that builds the requested-domain `business_os.chat.task` payload with both `type` and `command_type` plus `payload.record_snapshot`. Do not replace it with plan-only helpers such as `planFollowUpTasks`, move the command builder into `core/records.mjs`, or import helpers from `core/records.mjs` before exporting them there. If you add domain helpers such as needsAttention, budgetStatus, billingReadiness, or milestoneTotals, export them from `core/records.mjs`, update `core/automation.mjs`, `index.js`, and every tests/*.test.mjs in the same edit, and keep `buildFollowUpCommand` available until all importers deliberately change together.
@@ -27159,6 +27160,10 @@ mod tests {
         let prompt = command_prompt("cmd_app_bench", &command, &[]);
         assert!(prompt.contains("Required CTOX skills: business-os-app-module-development"));
         assert!(prompt.contains("Business OS app build target:"));
+        assert!(prompt.contains("top acceptance gate"));
+        assert!(prompt.contains("the final app must be requested-domain UI"));
+        assert!(prompt.contains("Generic scaffold strings such as `New record`"));
+        assert!(prompt.contains("A helper-only rewrite is a failed app"));
         assert!(prompt.contains("priority rule: CTOX-native App Creator/runtime app creation is the primary acceptance target"));
         assert!(prompt.contains("- module_id: subscriptions"));
         assert!(
@@ -27176,6 +27181,8 @@ mod tests {
         assert!(prompt.contains("schema.js is the only root schema module"));
         assert!(prompt.contains("Do not rename it, delete it, replace it with schema.mjs"));
         assert!(prompt.contains("scaffold baseline rule"));
+        assert!(prompt.contains("Preserve the technical contracts"));
+        assert!(prompt.contains("Do not preserve generic visible labels"));
         assert!(prompt.contains("validating it before requested-domain edits"));
         assert!(prompt.contains("one-shot data-model rule"));
         assert!(prompt.contains("preserve the scaffold's single primary module-owned collection"));
@@ -27346,8 +27353,13 @@ mod tests {
         assert!(prompt.contains(
             "CTOX-native App Creator/runtime app creation is the primary acceptance target"
         ));
+        assert!(prompt.contains("top acceptance gate"));
+        assert!(prompt.contains("the final app must be requested-domain UI"));
+        assert!(prompt.contains("Generic scaffold strings such as `New record`"));
+        assert!(prompt.contains("A helper-only rewrite is a failed app"));
         assert!(prompt.contains("scaffold preservation rule"));
         assert!(prompt.contains("Do not clean, delete, reset, replace, or rewrite it wholesale"));
+        assert!(prompt.contains("Do not preserve generic visible labels"));
         assert!(prompt.contains("CTOX embeds the required three shipped-module patterns"));
         assert!(prompt.contains("scaffold baseline rule"));
         assert!(prompt.contains("one-shot data-model rule"));
