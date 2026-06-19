@@ -571,7 +571,23 @@ Run the matching guard suite (§2.1) before pushing any schema change.
 
 ## 5. Missing CTOX backend functions (the authoritative build list)
 
-These do **not** exist today and are referenced by the 🔴/🧠 tickets above.
+> **STATUS (2026-06): all 11 delivered + on `origin/main`, then hardened through
+> two adversarial review rounds (single Codex review, then a 4-reviewer
+> gpt-5.5-xhigh pass: accounting/GoBD · security/data-boundary · DSGVO/AÜG ·
+> Rust/remediation).** Key commits: 2b6673e9 (5.8/5.9), 6eeba6fa (5.2),
+> 6593f47e (5.3), d5692f45 (5.10 + 5.6/5.11), 807d1016 (review-1 remediation),
+> 23d38c7c + 5e8d9ab0 (review-2 remediation incl. transactional post), 3533f026
+> (capability-token foundation for the actor-trust finding). Per-function notes:
+> 5.1 cv-print skill + writeback ✅ · 5.2 matching now binds the LLM scoring skill
+> (root-cause was a skill-name typo); bulk-pool auto-scoring is a remaining UX
+> gap ⚠️ · 5.3 DSGVO audit trail ✅ · 5.4 intake ✅ · 5.5 consent/retention (purge
+> now redacts PII, not soft-delete) ✅ · 5.6/5.11 invoices wired + Storno/§17
+> credit note, atomic post ✅ (advanced suite — dunning/recurring/payments/
+> proposals — stays a documented stub) · 5.7 e-sign ✅ · 5.8 AÜG gate ✅ (still
+> opt-in via `required_types` — see §9) · 5.9 Leistungsnachweis billing ✅ · 5.10
+> STT skill+writeback ✅ in code, transcription unverifiable here (no GGUF
+> weights) ⚠️. **The plan's original build list is closed; the remaining work to
+> reach _production ready_ is in §9.**
 
 | # | Missing function | Kind | Lives in | Used by |
 |---|------------------|------|----------|---------|
@@ -631,3 +647,76 @@ invoices substrate) are reused, not rebuilt.
   CTOX service owns queue completion.
 
 If a check can't be run, state exactly which and why (per AGENTS.md).
+
+---
+
+## 9. Production-Readiness gate (authoritative — what "green AND production ready" means)
+
+The §4 backlog and the §5 build list are **closed**: every generic engine + the
+11 backend functions are implemented, on `origin/main`, and reviewed twice
+(single Codex review → 4-reviewer gpt-5.5-xhigh pass). "Green" (all automated
+gates pass) is true today. "**Production ready**" is **not yet** true as a whole.
+This section is the gate: it must be fully checked before the ATS is declared
+production ready. Items are ranked by severity; each has a concrete acceptance
+criterion. Update the checkboxes as work lands.
+
+### 9.0 Green baseline — verified today (keep green on every change)
+
+- [x] native `ats_gates` 8/8 · `invoices` 18/18 · `capability` 5/5
+- [x] guards: rogue-`invoices.*` rejected · matching-skill binding · native↔browser schema parity
+- [x] `node src/apps/business-os/rxdb/tests/run-all.mjs` 37/0 · ATS engine cores 74/0
+- [x] `ctox business-os app validate nachweise` OK · whole `main` tree compiles
+- [x] live (CLI `commands dispatch`, isolated store): every `ats.*`/`invoices.*` handler, pos+neg
+
+> Re-run this baseline after **any** change here; a red gate blocks the release.
+
+### 9.1 P0 — Security: finish the actor-trust fix (BLOCKER)
+
+Native authorization still trusts the browser-asserted `client_context.actor`
+unless a capability token is present and enforced. The native half is done
+(commit 3533f026); production requires the **browser half + enforcement on**.
+
+- [ ] Browser obtains a capability token after login (calls `issue_business_os_capability_token` / a thin control-plane endpoint) and attaches it as `client_context.capability_token` on **every** command. *(web stack / sync layer — coordinate with the parallel agent; do not bypass RxDB/WebRTC.)*
+- [ ] Token refresh before the 12h expiry; revoke-on-logout (drop the token).
+- [ ] Flip `CTOX_BUSINESS_OS_REQUIRE_CAPABILITY_TOKEN=1` in the runtime store for hardened instances; document the rollout (legacy browsers fail closed once on).
+- [ ] Guard/e2e test: a command claiming chef/admin **without** a valid token is denied with enforcement on (CLI proof exists; add a browser-path test).
+- **Acceptance:** with enforcement on, a forged/absent token cannot perform any manage-all `ats.*`/`invoices.*` mutation; legitimate logged-in users are unaffected.
+
+### 9.2 P1 — DSGVO / German-staffing legal correctness (from the 4-reviewer pass)
+
+- [ ] **AÜG gate mandatory, server-derived.** Today the deployment-readiness gate only fires when the caller supplies `required_types`; the UI sends none, so an Arbeitnehmerüberlassung placement can confirm without right-to-work/AÜG checks. Derive a server-side `placement_type` → required credential set; never trust an omitted list.
+- [ ] **Legal-basis evidence model for consent.** `contract`/`legal_obligation`/`legitimate_interest` are currently auto-valid for `present_to_client` without proof/purpose-scope/notice/objection. Model legal-basis evidence per purpose + data category; require documented balancing or explicit consent before client sharing.
+- [ ] **External Entleiher signature proof for Leistungsnachweis.** `signoff` lets an internal admin assert `entleiher_signed=true` with no external signer proof. Require a completed `signature_request` or a signed-file hash from the Entleiher before billing release.
+- [ ] **Command-gated audit for direct RxDB PII writes.** ATS PII collections can be written by the browser via replication, bypassing the command-path `record_ats_governance_event`. Either make ATS PII collections command-only or add native write/delete audit triggers per collection. *(sync layer — coordinate.)*
+- [ ] **Retention erasure completeness.** Purge now redacts the payload (✅), but confirm every PII surface (chunks, derived projections, search text, embeddings) is covered, and surface a §15/§17 DSGVO export + erasure report.
+- **Acceptance:** a DSGVO/AÜG reviewer can show, for every candidate-PII create/share/delete, a legal basis + an immutable audit row, and an unprivileged placement cannot skip mandatory deployment credentials.
+
+### 9.3 P2 — Live (model + WebRTC) end-to-end verification
+
+- [ ] **STT transcription** runs on real audio (install the Voxtral Q4 GGUF weights; `runtime stt-smoke` returns real text); then drive `ats.interview.transcribe` with a real `source_file_id`.
+- [ ] **LLM matching live turn**: a `matching.match` command actually binds the `business-os-requirement-matching` skill through the running daemon's gateway (llm.ctox.dev) and writes back scores (skill binding fixed in code; full live turn not yet run).
+- [ ] **Full browser→WebRTC→native→sync round-trip** for the core flows (parse → intake → present → placement → billing → e-sign) against a running instance, not just CLI dispatch.
+- **Acceptance:** each model-dependent feature produces a correct artifact end-to-end on a real instance; no feature is "code-complete but never run".
+
+### 9.4 P2 — Bulk matching quality
+
+- [ ] Replace the `shortlistObjectsForRequirement` read-persisted-scores behaviour with pool auto-scoring: for each unscored candidate, drive `computeRequirementMatch` (LLM) before ranking. Keep the native keyword scorer only as an offline/CLI fallback.
+- **Acceptance:** a shortlist over an unscored pool returns LLM-ranked candidates, not "noch nicht bewertet".
+
+### 9.5 P3 — Surface maturity (UX, not correctness)
+
+- [ ] Promote the minimal record-list mounts of the new ATS modules (intake, submissions, placements, interviews, esign, nachweise, consent) to full forms/boards/detail per the App-Creator contract (§3), shell-delivered DB handles only.
+- **Acceptance:** a recruiter can run each step from a real UI, not a record list.
+
+### 9.6 P4 — Out-of-ATS-core billing (optional, separate project)
+
+- [ ] Invoices advanced suite — dunning, recurring, payment allocation, proposals, `assign_payment_terms` — currently documented stubs. A general Business OS billing build, not ATS-blocking (placement-fee / clawback / Leistungsnachweis invoicing already work).
+- **Acceptance:** out of scope for ATS production-ready; track as its own billing-app plan.
+
+### 9.7 Definition of "production ready" for this ATS
+
+All of **9.0 green**, **9.1 (security) closed**, **9.2 (DSGVO/AÜG) closed**, and
+**9.3 (live e2e) demonstrated**. 9.4–9.5 strongly recommended (matching quality +
+usable UI). 9.6 explicitly out of scope. Until 9.1 is closed the instance is
+**not** safe for multi-user production regardless of the green baseline.
+
