@@ -484,6 +484,16 @@ Minimum installed-module manifest fields:
 }
 ```
 
+For runtime-installed App Creator work, this is the contract to preserve, not a
+shape to redesign. Do not write a generic app manifest with `name` instead of
+`title`, `entry: "index.js"` or `entry: "index.html"`, `layout: { "type":
+"shell" }`, `store.distribution: "installable"`, `store.installable: true`, or
+`collections` as an array of objects. `module.json.collections` is an array of
+collection name strings such as `["business_commands", "<id>_records"]`. New
+App Creator modules must not set `version: "1.0.0"` manually; use a work
+version such as `0.1.0` and let a release/publish command handle public
+visibility later.
+
 This is also a negative example: do not add `"right": "Details"`,
 `"right": "Inspector"`, `layout.drawers.right`, or any `layout.right` unless
 the user explicitly asked for a persistent third pane and you also add
@@ -568,6 +578,14 @@ The `schema_format` line is mandatory. Do not write this invalid shortcut:
 ```json
 { "collections": { "<id>_records": {} } }
 ```
+
+Also do not write legacy schema shortcuts such as `"format": "es-module"`,
+`"schema_format": "es-module"`, or `"collections": [{ ... }]`. The Business OS
+runtime registration path expects the checked-in wrapper above:
+`schema_format` set to `ctox-business-os-module-collections-v1` and
+`collections` as an object keyed by collection name. `schema.js` must export the
+same collection objects and `migrationStrategies`; do not add a
+`schemaFormat = "es-module"` facade.
 
 After creating `collections.schema.json`, explicitly assert the wrapper before
 writing `index.js`:

@@ -47,6 +47,12 @@ need domain changes, make them in the same edit as `core/records.mjs`,
 `core/automation.mjs`, UI/locales, and tests. A validator diff showing source
 manifest fields, a renamed primary collection, or missing helper exports means
 restore the scaffold contract first, then reapply domain fields lockstep.
+For runtime-installed App Creator modules, reject generic app-manifest shapes:
+do not use `name` instead of `title`, `entry: "index.js"` or `"index.html"`,
+`layout: { "type": "shell" }`, `store.distribution: "installable"`,
+`store.installable: true`, object-array `collections`, manual `version:
+"1.0.0"`, `"format": "es-module"`, `"schema_format": "es-module"`, or
+`schemaFormat = "es-module"` in `schema.js`.
 
 For first-pass runtime-installed App Creator modules, `core/automation.mjs`
 must keep exporting `buildFollowUpCommand(record = {})` as the command-builder
@@ -350,6 +356,10 @@ Browser runtime files must not import `.json` modules. In particular, do not
 write `schema.js` as a JSON import wrapper around `collections.schema.json`.
 Keep `collections.schema.json` for native/runtime registration and mirror the
 same schemas in browser-safe JS/ESM objects or a local `.mjs` helper.
+The collections schema wrapper is not negotiable: use
+`schema_format: "ctox-business-os-module-collections-v1"` and a `collections`
+object keyed by collection name. Do not use a legacy `format: "es-module"`
+wrapper or a `collections` array.
 
 For schema parity tests, prefer a local browser-safe helper such as
 `core/schemas.mjs` or `schemas.mjs` that exports the plain schema objects.

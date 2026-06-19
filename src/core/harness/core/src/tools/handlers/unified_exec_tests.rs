@@ -1245,6 +1245,116 @@ fn business_os_guard_allows_module_dir_manifest_write() -> anyhow::Result<()> {
 }
 
 #[test]
+fn business_os_guard_blocks_runtime_installed_legacy_manifest_contract() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let command = r#"cat > runtime/business-os/installed-modules/inventory/module.json <<'JSON'
+{
+  "id": "inventory",
+  "name": "Inventory",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "layout": { "type": "shell" },
+  "store": { "distribution": "installable", "installable": true },
+  "collections": [{ "name": "inventory_items" }]
+}
+JSON"#;
+
+    let err = business_os_app_root_artifact_write_guard(command, root.path())
+        .expect("legacy runtime manifest contract should be blocked");
+
+    assert!(err.contains("legacy or source-style runtime module contract"));
+    assert!(err.contains("module.json"));
+    assert!(err.contains("ctox-runtime-installed-module"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_runtime_legacy_collections_schema_contract() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let command = r#"cat > runtime/business-os/installed-modules/inventory/collections.schema.json <<'JSON'
+{
+  "format": "es-module",
+  "collections": [{ "name": "inventory_items", "primaryKey": "id" }]
+}
+JSON"#;
+
+    let err = business_os_app_root_artifact_write_guard(command, root.path())
+        .expect("legacy runtime collections schema contract should be blocked");
+
+    assert!(err.contains("legacy or source-style runtime module contract"));
+    assert!(err.contains("collections.schema.json"));
+    assert!(err.contains("schema_format"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_runtime_schema_js_legacy_schema_format() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let command = r#"cat > runtime/business-os/installed-modules/inventory/schema.js <<'EOF'
+export const schemaFormat = 'es-module';
+export const collections = {};
+EOF"#;
+
+    let err = business_os_app_root_artifact_write_guard(command, root.path())
+        .expect("legacy schema.js wrapper should be blocked");
+
+    assert!(err.contains("legacy or source-style runtime module contract"));
+    assert!(err.contains("schema.js"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_runtime_node_stat_self_audit() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "node -e 'const fs=require(\"fs\"); const p=\"runtime/business-os/installed-modules/inventory/index.js\"; console.log(fs.statSync(p).size)'",
+        root.path(),
+    )
+    .expect("node stat readback of generated runtime module artifact should be blocked");
+
+    assert!(err.contains("generated-module self-audit readback"));
+    assert!(err.contains("index.js"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_allows_runtime_manifest_json_parse_check() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    assert!(business_os_app_root_artifact_write_guard(
+        "node -e \"const fs=require('fs'); for (const f of ['runtime/business-os/installed-modules/inventory/module.json','runtime/business-os/installed-modules/inventory/collections.schema.json']) JSON.parse(fs.readFileSync(f,'utf8')); console.log('module JSON OK')\"",
+        root.path(),
+    )
+    .is_none());
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_runtime_mkdir_only_scaffold_probe() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "mkdir -p runtime/business-os/installed-modules/inventory/core runtime/business-os/installed-modules/inventory/locales runtime/business-os/installed-modules/inventory/tests",
+        root.path(),
+    )
+    .expect("mkdir-only scaffold probe should be blocked");
+
+    assert!(err.contains("scaffold-directory probe"));
+    assert!(err.contains("runtime/business-os/installed-modules/inventory"));
+    Ok(())
+}
+
+#[test]
 fn business_os_guard_allows_small_module_heredoc_without_readback() -> anyhow::Result<()> {
     let root = tempdir()?;
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;

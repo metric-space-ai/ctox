@@ -385,15 +385,27 @@ pub(crate) fn business_os_app_root_artifact_write_guard(
         return Some(module_side_effect_guard_message(&artifact));
     }
     if let Some(path) =
+        command_creates_runtime_module_scaffold_dirs_only(command, &workspace_root, cwd)
+    {
+        return Some(module_scaffold_dir_probe_guard_message(&path));
+    }
+    if let Some(path) =
         command_writes_noncanonical_runtime_module_helper(command, &workspace_root, cwd)
     {
         return Some(module_noncanonical_helper_guard_message(&path));
+    }
+    if let Some(path) = command_writes_legacy_runtime_module_contract(command, &workspace_root, cwd)
+    {
+        return Some(module_legacy_contract_guard_message(&path));
     }
     if let Some(path) = command_reads_business_os_module_whole_file(command, &workspace_root, cwd) {
         return Some(module_whole_file_read_guard_message(&path));
     }
     if let Some(path) = command_reads_runtime_module_node_dump(command, &workspace_root, cwd) {
         return Some(module_whole_file_read_guard_message(&path));
+    }
+    if let Some(path) = command_reads_runtime_module_node_probe(command, &workspace_root, cwd) {
+        return Some(module_self_audit_read_guard_message(&path));
     }
     if let Some(path) =
         command_uses_forbidden_business_os_module_writer(command, &workspace_root, cwd)
@@ -480,6 +492,28 @@ fn module_noncanonical_helper_guard_message(path: &str) -> String {
 Keep initial runtime-installed apps bounded: use the scaffold helper files `core/records.mjs` and \
 `core/automation.mjs`, with simple DOM wiring in `index.js`. Do not create extra helper layers such \
 as ui/render/runtime/panel modules during one-shot app creation."
+    )
+}
+
+fn module_scaffold_dir_probe_guard_message(path: &str) -> String {
+    format!(
+        "Business OS app module guard blocked a scaffold-directory probe `{path}`. \
+The CTOX App Creator service or `ctox business-os app scaffold --installed` owns initial directory \
+creation. In a worker turn, write requested-domain app files directly under MODULE_DIR; do not spend \
+the first app-artifact action recreating or probing scaffold directories."
+    )
+}
+
+fn module_legacy_contract_guard_message(path: &str) -> String {
+    format!(
+        "Business OS app module guard blocked a legacy or source-style runtime module contract write to `{path}`. \
+Runtime-installed App Creator modules must preserve the scaffold contract: module.json uses \
+`entry=\"installed-modules/<id>/index.html\"`, `install_scope=\"installed\"`, SemVer work versions \
+such as `0.1.0`, `store.distribution=\"ctox-runtime-installed-module\"`, `store.installable=false`, \
+and collection names as strings; collections.schema.json uses `schema_format=\"ctox-business-os-module-collections-v1\"` \
+with a collections object; schema.js exports the matching collections and migrationStrategies. Do not \
+write source/store fields, `entry=\"index.js\"`, `store.installable=true`, `format=\"es-module\"`, \
+object-array collections, or a manual `1.0.0` public release marker from an App Creator worker."
     )
 }
 
@@ -894,6 +928,32 @@ fn forbidden_business_os_module_side_effect_name(name: &str) -> bool {
         || name.ends_with(".tmp")
 }
 
+fn command_creates_runtime_module_scaffold_dirs_only(
+    command: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+) -> Option<String> {
+    let compact = command.replace("\\\n", " ").replace('\n', " ");
+    let lower = compact.to_ascii_lowercase();
+    if !command_targets_runtime_business_os_module(&lower, workspace_root, cwd)
+        || !lower_contains_shell_word(&lower, "mkdir")
+    {
+        return None;
+    }
+    let write_like = lower.contains('>')
+        || lower.contains(" tee ")
+        || lower.contains("writefilesync(")
+        || lower.contains("writefile(")
+        || lower.contains("fs.writefile");
+    if write_like {
+        return None;
+    }
+    let module_path = first_business_os_module_artifact_reference(&compact, workspace_root, cwd)
+        .or_else(|| first_runtime_business_os_module_dir_substring(&compact))
+        .unwrap_or_else(|| "runtime-installed module directory".to_string());
+    Some(module_path)
+}
+
 fn command_writes_noncanonical_runtime_module_helper(
     command: &str,
     workspace_root: &Path,
@@ -940,6 +1000,114 @@ fn command_writes_noncanonical_runtime_module_helper(
         }
     }
     None
+}
+
+fn command_writes_legacy_runtime_module_contract(
+    command: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+) -> Option<String> {
+    let compact = command.replace("\\\n", " ").replace('\n', " ");
+    let lower = compact.to_ascii_lowercase();
+    if !command_targets_runtime_business_os_module(&lower, workspace_root, cwd) {
+        return None;
+    }
+
+    if let Some(path) =
+        command_writes_runtime_module_artifact_named(&compact, workspace_root, cwd, "module.json")
+    {
+        let squashed = squashed_lower(&compact);
+        let legacy_manifest = squashed.contains("\"entry\":\"index.js\"")
+            || squashed.contains("\"entry\":\"index.html\"")
+            || squashed.contains("\"entry\":\"modules/")
+            || squashed.contains("\"install_scope\":\"store\"")
+            || squashed.contains("\"source\":\"local\"")
+            || squashed.contains("\"source_path\":\"modules/")
+            || squashed.contains("\"distribution\":\"installable\"")
+            || squashed.contains("\"distribution\":\"ctox-repo-module\"")
+            || squashed.contains("\"installable\":true")
+            || squashed.contains("\"collections\":[{")
+            || squashed.contains("\"layout\":{\"type\":\"shell\"")
+            || squashed.contains("\"layout\":{\"right\"")
+            || squashed.contains("\"right_resizer\"")
+            || squashed.contains("\"layout\":{\"icon_svg\"")
+            || squashed.contains("\"icon_svg\"")
+            || squashed.contains("\"version\":\"1.0.0\"");
+        if legacy_manifest {
+            return Some(path);
+        }
+    }
+
+    if let Some(path) = command_writes_runtime_module_artifact_named(
+        &compact,
+        workspace_root,
+        cwd,
+        "collections.schema.json",
+    ) {
+        let squashed = squashed_lower(&compact);
+        let legacy_schema = squashed.contains("\"format\":\"es-module\"")
+            || squashed.contains("\"schema_format\":\"es-module\"")
+            || squashed.contains("\"collections\":[")
+            || (squashed.contains("\"collections\":")
+                && !squashed
+                    .contains("\"schema_format\":\"ctox-business-os-module-collections-v1\""));
+        if legacy_schema {
+            return Some(path);
+        }
+    }
+
+    if let Some(path) =
+        command_writes_runtime_module_artifact_named(&compact, workspace_root, cwd, "schema.js")
+    {
+        let squashed = squashed_lower(&compact);
+        let legacy_schema_js = (squashed.contains("schemaformat")
+            || squashed.contains("schema_format"))
+            && squashed.contains("es-module");
+        if legacy_schema_js {
+            return Some(path);
+        }
+    }
+
+    None
+}
+
+fn command_writes_runtime_module_artifact_named(
+    command: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+    basename: &str,
+) -> Option<String> {
+    let tokens = shellish_tokens(command);
+    let cwd_is_module_dir = is_runtime_business_os_module_dir(workspace_root, cwd);
+    for (idx, token) in tokens.iter().enumerate() {
+        let Some(path) = business_os_module_artifact_token_name(token, cwd_is_module_dir) else {
+            continue;
+        };
+        let path_basename = path
+            .to_ascii_lowercase()
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        if path_basename != basename {
+            continue;
+        }
+        if command_writes_path(command, &path)
+            || command_programmatically_writes_path(command, &path)
+            || token_is_target_of_write_verb(&tokens, idx)
+        {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn squashed_lower(command: &str) -> String {
+    command
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect()
 }
 
 fn command_reads_runtime_module_self_audit(
@@ -1119,6 +1287,41 @@ fn command_reads_runtime_module_node_dump(
     None
 }
 
+fn command_reads_runtime_module_node_probe(
+    command: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+) -> Option<String> {
+    let compact = command.replace("\\\n", " ").replace('\n', " ");
+    let lower = compact.to_ascii_lowercase();
+    if !command_targets_runtime_business_os_module(&lower, workspace_root, cwd) {
+        return None;
+    }
+    if !lower_contains_shell_word(&lower, "node") && !lower_contains_shell_word(&lower, "nodejs") {
+        return None;
+    }
+    if lower.contains("ctox business-os app validate")
+        || lower.contains("node --test")
+        || lower.contains("node --check")
+    {
+        return None;
+    }
+
+    let node_probe = lower.contains("statsync(")
+        || lower.contains("lstatsync(")
+        || lower.contains("existssync(")
+        || lower.contains("readdirsync(");
+    if !node_probe {
+        return None;
+    }
+    Some(
+        first_business_os_module_artifact_reference(&compact, workspace_root, cwd)
+            .or_else(|| first_runtime_business_os_module_artifact_substring(&compact))
+            .or_else(|| first_runtime_business_os_module_dir_substring(&compact))
+            .unwrap_or_else(|| "runtime-installed module artifact".to_string()),
+    )
+}
+
 fn command_destructively_modifies_business_os_required_artifact(
     command: &str,
     workspace_root: &Path,
@@ -1197,6 +1400,23 @@ fn first_runtime_business_os_module_artifact_substring(command: &str) -> Option<
         .trim_matches(|ch: char| matches!(ch, '\'' | '"' | '`' | ',' | ')' | ';'))
         .to_string();
     business_os_module_artifact_token_name(&candidate, false).map(|_| candidate)
+}
+
+fn first_runtime_business_os_module_dir_substring(command: &str) -> Option<String> {
+    let lower = command.to_ascii_lowercase();
+    let marker = "runtime/business-os/installed-modules/";
+    let start = lower.find(marker)?;
+    let rest = &command[start..];
+    let end = rest
+        .find(|ch: char| {
+            ch.is_whitespace() || matches!(ch, '\'' | '"' | '`' | ',' | ')' | ';' | '|' | '&')
+        })
+        .unwrap_or(rest.len());
+    let candidate = rest[..end]
+        .trim_matches(|ch: char| matches!(ch, '\'' | '"' | '`' | ',' | ')' | ';'))
+        .trim_end_matches('/')
+        .to_string();
+    business_os_module_dir_token_name(&candidate)
 }
 
 fn command_reads_business_os_module_whole_file(
