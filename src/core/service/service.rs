@@ -6786,7 +6786,7 @@ fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
         )
         .replace(
             "- Inspect and edit with a narrow tool budget. Do not dump whole generated files, loop over all app artifacts with `cat`, or run broad repo/source scans. Use targeted `sed -n` ranges, exact `rg -n` selectors/imports, and validator output to repair concrete issues.",
-            "- Inspect and edit with a narrow tool budget. Do not dump whole generated files, loop over all app artifacts with `cat`, run `wc -l`/`ls -la`/`head`/`tail`/Node readFileSync audits over generated app files, or run broad repo/source scans. Use targeted `sed -n` ranges, exact `rg -n` selectors/imports, and validator output to repair concrete issues.",
+            "- Inspect and edit with a narrow tool budget. Do not call `ctox skills system show business-os-app-module-development`, inspect `src/skills`, dump whole generated files, loop over all app artifacts with `cat`, run `wc -l`/`ls`/`head`/`tail`/Node readFileSync audits over generated app files, or run broad repo/source scans. CTOX has already embedded the App Creator rules in this prompt. If you need few-shot context, use only one or two short exact snippets from the known shipped modules `customers`, `shiftflow`, and `outbound`; never use `cat ... | head`, `find`, `ls`, or directory-wide `rg`/`grep` as few-shot discovery.",
         )
         .replace(
             "- Do not use Python, base64 blobs, Node writer scripts, generated writer scripts, data URLs, or temporary file-copy wrappers to create or patch app files. If a direct edit becomes fragile, reduce scope, split the file into a smaller local ESM helper, or edit the smaller affected file.",
@@ -6798,7 +6798,7 @@ fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
         )
         .replace(
             "- Before claiming success, run the module tests plus `ctox business-os app validate",
-            "- Tool trace policy: after the scaffold baseline, CTOX may reject validation that was run before any direct final module edit, app artifacts staged under `/tmp`, source-module discovery/line-count sweeps, or broad generated-file readbacks. If this happens, repair by writing bounded final files directly under `$MODULE_DIR`, then validate again.\n- Before claiming success, run the module tests plus `ctox business-os app validate",
+            "- Tool trace policy: after the scaffold baseline, CTOX may reject validation that was run before any direct final module edit, partial skill reads, `src/skills` inspection, app artifacts staged under `/tmp`, generated scaffold readback before implementation, source-module discovery/line-count sweeps, or broad source/generated-file dumps. If this happens, repair by writing bounded final files directly under `$MODULE_DIR`, then validate again.\n- Before claiming success, run the module tests plus `ctox business-os app validate",
         )
 }
 
@@ -7615,6 +7615,16 @@ fn business_os_app_module_tool_trace_policy_report(
                 "validation ran before the first direct module artifact write",
             );
         }
+        if lowered.contains("ctox skills system show business-os-app-module-development")
+            || lowered.contains(
+                "src/skills/system/product_engineering/business-os-app-module-development",
+            )
+        {
+            push_business_os_app_trace_finding(
+                &mut findings,
+                "App Creator skill/source was inspected during app implementation instead of relying on the embedded rules",
+            );
+        }
         if lowered.contains("/tmp/")
             && mentions_app_artifact
             && (lowered.contains("cat >")
@@ -7635,26 +7645,50 @@ fn business_os_app_module_tool_trace_policy_report(
                 || lowered.contains(" ls -")
                 || lowered.contains("find ")
                 || lowered.contains(" rg ")
-                || lowered.contains(" grep "))
+                || lowered.contains(" grep ")
+                || lowered.starts_with("cat ")
+                || lowered.contains(" cat ")
+                || lowered.starts_with("head ")
+                || lowered.contains(" head ")
+                || lowered.starts_with("tail ")
+                || lowered.contains(" tail ")
+                || business_os_app_trace_command_has_sed_range_over(&lowered, 80))
         {
             push_business_os_app_trace_finding(
                 &mut findings,
-                "source-module discovery or line-count sweep was used instead of exact few-shot file snippets",
+                "source-module discovery, broad dump, or line-count sweep was used instead of exact few-shot file snippets",
+            );
+        }
+        if lowered.contains(&artifact_marker)
+            && !saw_final_artifact_write
+            && business_os_app_trace_command_reads_generated_artifact(&lowered)
+        {
+            push_business_os_app_trace_finding(
+                &mut findings,
+                "generated scaffold files were read back before requested-domain implementation edits",
             );
         }
         if lowered.contains(&artifact_marker)
             && (lowered.contains("ls -la")
                 || lowered.contains("wc -l")
+                || lowered.starts_with("ls ")
+                || lowered.contains(" ls ")
+                || lowered.contains(" ls -")
+                || ((lowered.starts_with("cat ") || lowered.contains(" cat "))
+                    && !lowered.contains("cat >"))
+                || lowered.starts_with("head ")
                 || lowered.contains(" head ")
+                || lowered.starts_with("tail ")
                 || lowered.contains(" tail ")
-                || lowered.contains("readfilesync"))
+                || lowered.contains("readfilesync")
+                || business_os_app_trace_command_has_sed_range_over(&lowered, 60))
         {
             push_business_os_app_trace_finding(
                 &mut findings,
                 "generated app files were audited through broad dumps or line-count/readback commands",
             );
         }
-        if findings.len() >= 5 {
+        if findings.len() >= 10 {
             break;
         }
     }
@@ -7666,6 +7700,47 @@ fn business_os_app_module_tool_trace_policy_report(
         target.artifact_directory,
         findings.join("; ")
     )))
+}
+
+fn business_os_app_trace_command_reads_generated_artifact(command: &str) -> bool {
+    (command.contains(" sed -n")
+        || command.starts_with("sed -n")
+        || command.starts_with("cat ")
+        || command.contains(" cat ")
+        || command.starts_with("head ")
+        || command.contains(" head ")
+        || command.starts_with("tail ")
+        || command.contains(" tail ")
+        || command.starts_with("ls ")
+        || command.contains(" ls ")
+        || command.contains(" ls -")
+        || command.contains("readfilesync"))
+        && !command.contains("cat >")
+        && !command.contains("tee ")
+        && !command.contains("writefile")
+        && !command.contains("writefilesync")
+}
+
+fn business_os_app_trace_command_has_sed_range_over(command: &str, max_lines: u64) -> bool {
+    if !command.contains("sed -n") {
+        return false;
+    }
+    command.split_whitespace().any(|token| {
+        let token = token.trim_matches(|ch| ch == '\'' || ch == '"' || ch == '`' || ch == ';');
+        let Some(range) = token.strip_suffix('p') else {
+            return false;
+        };
+        let Some((start, end)) = range.split_once(',') else {
+            return false;
+        };
+        let Ok(start) = start.parse::<u64>() else {
+            return false;
+        };
+        let Ok(end) = end.parse::<u64>() else {
+            return false;
+        };
+        end >= start && (end - start + 1) > max_lines
+    })
 }
 
 fn business_os_app_trace_command_is_final_artifact_write(
@@ -22008,6 +22083,19 @@ Business OS command:
             outbound_anchor: None,
         };
         let commands = [
+            "ctox skills system show business-os-app-module-development --body 2>&1 | head -200".to_string(),
+            format!(
+                "ls {}/core/ {}/locales/ {}/tests/",
+                root.join(&target.artifact_directory).display(),
+                root.join(&target.artifact_directory).display(),
+                root.join(&target.artifact_directory).display(),
+            ),
+            format!(
+                "sed -n '1,60p' {}/module.json 2>&1",
+                root.join(&target.artifact_directory).display()
+            ),
+            "cat src/apps/business-os/modules/shiftflow/index.js 2>&1 | head -200".to_string(),
+            "sed -n '200,400p' src/apps/business-os/modules/shiftflow/index.js 2>&1".to_string(),
             format!(
                 "cd {} && ctox business-os app validate {module_id} --installed 2>&1 | head -200",
                 root.display()
@@ -22041,9 +22129,11 @@ Business OS command:
             .expect("tool trace policy should report violations");
 
         assert!(report.contains("tool trace violated"));
+        assert!(report.contains("App Creator skill/source was inspected"));
+        assert!(report.contains("generated scaffold files were read back"));
         assert!(report.contains("validation ran before the first direct module artifact write"));
         assert!(report.contains("staged or tested under /tmp"));
-        assert!(report.contains("source-module discovery or line-count sweep"));
+        assert!(report.contains("source-module discovery, broad dump, or line-count sweep"));
         assert!(report.contains("broad dumps or line-count/readback commands"));
     }
 
@@ -22139,7 +22229,8 @@ Business OS command:
         assert!(prompt.contains("Tests are required app artifacts"));
         assert!(prompt.contains("ESM import/export rule"));
         assert!(prompt.contains("Inspect and edit with a narrow tool budget"));
-        assert!(prompt.contains("Do not dump whole generated files"));
+        assert!(prompt.contains("dump whole generated files"));
+        assert!(prompt.contains("ctox skills system show business-os-app-module-development"));
         assert!(prompt.contains("Node readFileSync audits"));
         assert!(prompt.contains("Do not use Python, base64 blobs, Node writer scripts"));
         assert!(prompt.contains("`/tmp` scratch files"));
