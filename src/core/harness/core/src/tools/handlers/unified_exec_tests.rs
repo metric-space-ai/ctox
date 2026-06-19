@@ -396,7 +396,7 @@ fn business_os_guard_allows_installed_module_write_and_reads() -> anyhow::Result
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;
 
     assert!(business_os_app_root_artifact_write_guard(
-        "cat module.json && cat > runtime/business-os/installed-modules/contracts/module.json <<'EOF'\n{}\nEOF",
+        "cat module.json && cat > runtime/business-os/installed-modules/contracts/module.json <<'EOF'\n{\"id\":\"contracts\",\"title\":\"Contracts\",\"description\":\"Contract workspace\",\"version\":\"0.1.0\",\"entry\":\"installed-modules/contracts/index.html\",\"install_scope\":\"installed\",\"collections\":[\"business_commands\",\"contracts_records\"],\"layout\":{\"shell\":\"full-workspace\",\"left\":\"Records\",\"center\":\"Detail\"},\"store\":{\"distribution\":\"ctox-runtime-installed-module\",\"installable\":false}}\nEOF",
         root.path(),
     )
     .is_none());
@@ -1388,7 +1388,7 @@ fn business_os_guard_allows_module_dir_manifest_write() -> anyhow::Result<()> {
 
     assert!(
         business_os_app_root_artifact_write_guard(
-            "MODULE_DIR=runtime/business-os/installed-modules/inventory && cat > \"$MODULE_DIR/module.json\" <<'JSON'\n{}\nJSON",
+            "MODULE_DIR=runtime/business-os/installed-modules/inventory && cat > \"$MODULE_DIR/module.json\" <<'JSON'\n{\"id\":\"inventory\",\"title\":\"Inventory\",\"description\":\"Inventory workspace\",\"version\":\"0.1.0\",\"entry\":\"installed-modules/inventory/index.html\",\"install_scope\":\"installed\",\"collections\":[\"business_commands\",\"inventory_records\"],\"layout\":{\"shell\":\"full-workspace\",\"left\":\"Records\",\"center\":\"Detail\"},\"store\":{\"distribution\":\"ctox-runtime-installed-module\",\"installable\":false}}\nJSON",
             root.path(),
         )
         .is_none()
@@ -1440,6 +1440,169 @@ JSON"#;
     assert!(err.contains("legacy or source-style runtime module contract"));
     assert!(err.contains("collections.schema.json"));
     assert!(err.contains("schema_format"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_runtime_manifest_that_breaks_scaffold_contract() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let command = r#"MODULE_DIR=runtime/business-os/installed-modules/bench_subscriptions_r104_20260619t175320z
+cat > "$MODULE_DIR/module.json" <<'JSON'
+{
+  "id": "bench_subscriptions_r104_20260619t175320z",
+  "name": "Subscriptions",
+  "version": "0.1.0",
+  "entry": "installed-modules/bench_subscriptions_r104_20260619t175320z/index.html",
+  "install_scope": "installed",
+  "store": {
+    "distribution": "ctox-runtime-installed-module",
+    "installable": false
+  },
+  "layout": { "shell": "single" },
+  "permissions": { "data_access": ["subscriptions.read"] },
+  "collection_ownership": { "owned": ["subscriptions"] }
+}
+JSON"#;
+
+    let err = business_os_app_root_artifact_write_guard(command, root.path())
+        .expect("runtime manifest that breaks scaffold contract should be blocked");
+
+    assert!(err.contains("legacy or source-style runtime module contract"));
+    assert!(err.contains("module.json"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_allows_runtime_scaffold_manifest_contract() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let command = r#"MODULE_DIR=runtime/business-os/installed-modules/bench_inventory_r104_20260619t175320z
+cat > "$MODULE_DIR/module.json" <<'JSON'
+{
+  "id": "bench_inventory_r104_20260619t175320z",
+  "title": "Inventory",
+  "description": "Inventory workspace for stock, locations, reorder levels, and CTOX follow-up.",
+  "version": "0.1.0",
+  "entry": "installed-modules/bench_inventory_r104_20260619t175320z/index.html",
+  "install_scope": "installed",
+  "collections": ["business_commands", "bench_inventory_r104_20260619t175320z_records"],
+  "layout": { "shell": "full-workspace", "left": "Records", "center": "Detail" },
+  "tags": ["business-os", "inventory", "workflow"],
+  "store": {
+    "summary": "Inventory workspace for stock, locations, reorder levels, and CTOX follow-up.",
+    "repository": "metric-space-ai/ctox",
+    "source_path": "installed-modules/bench_inventory_r104_20260619t175320z",
+    "installable": false,
+    "editable_after_install": true,
+    "distribution": "ctox-runtime-installed-module"
+  },
+  "default_installed": false
+}
+JSON"#;
+
+    assert!(business_os_app_root_artifact_write_guard(command, root.path()).is_none());
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_runtime_schema_with_legacy_json_schema_wrapper() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let command = r#"MODULE_DIR=runtime/business-os/installed-modules/bench_subscriptions_r104_20260619t175320z
+cat > "$MODULE_DIR/collections.schema.json" <<'JSON'
+{
+  "schema_format": "ctox-business-os-module-collections-v1",
+  "collections": {
+    "subscriptions": {
+      "primary_key": "id",
+      "json_schema": {
+        "type": "object",
+        "properties": { "id": { "type": "string" } }
+      }
+    }
+  }
+}
+JSON"#;
+
+    let err = business_os_app_root_artifact_write_guard(command, root.path())
+        .expect("legacy json_schema wrapper should be blocked");
+
+    assert!(err.contains("legacy or source-style runtime module contract"));
+    assert!(err.contains("collections.schema.json"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_allows_runtime_scaffold_collections_schema_contract() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let command = r#"MODULE_DIR=runtime/business-os/installed-modules/bench_inventory_r104_20260619t175320z
+cat > "$MODULE_DIR/collections.schema.json" <<'JSON'
+{
+  "schema_format": "ctox-business-os-module-collections-v1",
+  "collections": {
+    "bench_inventory_r104_20260619t175320z_records": {
+      "version": 0,
+      "primaryKey": "id",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 120 },
+        "title": { "type": "string" },
+        "status": { "type": "string" },
+        "updated_at_ms": { "type": "number" },
+        "is_deleted": { "type": "boolean" }
+      },
+      "required": ["id", "title", "status", "updated_at_ms", "is_deleted"],
+      "additionalProperties": true
+    }
+  }
+}
+JSON"#;
+
+    assert!(business_os_app_root_artifact_write_guard(command, root.path()).is_none());
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_runtime_index_html_full_document_contract() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let command = r#"cat > runtime/business-os/installed-modules/inventory/index.html <<'EOF'
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Inventory</title>
+    <link rel="stylesheet" href="index.css">
+  </head>
+  <body><main data-module-root></main></body>
+</html>
+EOF"#;
+
+    let err = business_os_app_root_artifact_write_guard(command, root.path())
+        .expect("full document index.html should be blocked");
+
+    assert!(err.contains("legacy or source-style runtime module contract"));
+    assert!(err.contains("index.html"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_allows_runtime_index_html_shell_fragment() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    assert!(business_os_app_root_artifact_write_guard(
+        "cat > runtime/business-os/installed-modules/inventory/index.html <<'EOF'\n<main class=\"inventory-module\" data-module-root><button type=\"button\" data-action=\"new\">New</button></main>\nEOF",
+        root.path(),
+    )
+    .is_none());
     Ok(())
 }
 

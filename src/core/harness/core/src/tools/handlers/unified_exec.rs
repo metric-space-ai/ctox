@@ -1029,6 +1029,8 @@ fn command_writes_legacy_runtime_module_contract(
         command_writes_runtime_module_artifact_named(&compact, workspace_root, cwd, "module.json")
     {
         let squashed = squashed_lower(&compact);
+        let expected_collection =
+            runtime_scaffold_collection_for_path_or_command(&path, &compact).unwrap_or_default();
         let legacy_manifest = squashed.contains("\"entry\":\"index.js\"")
             || squashed.contains("\"entry\":\"index.html\"")
             || squashed.contains("\"entry\":\"modules/")
@@ -1045,7 +1047,20 @@ fn command_writes_legacy_runtime_module_contract(
             || squashed.contains("\"layout\":{\"icon_svg\"")
             || squashed.contains("\"icon_svg\"")
             || squashed.contains("\"version\":\"1.0.0\"");
-        if legacy_manifest {
+        let broken_runtime_manifest = !squashed.contains("\"title\":")
+            || squashed.contains("\"name\":")
+            || !squashed.contains("\"entry\":\"installed-modules/")
+            || !squashed.contains("\"install_scope\":\"installed\"")
+            || !squashed.contains("\"collections\":[")
+            || !squashed.contains("\"business_commands\"")
+            || !expected_collection.is_empty()
+                && !squashed.contains(&format!("\"{expected_collection}\""))
+            || !squashed.contains("\"layout\":{\"shell\":\"full-workspace\"")
+            || !squashed.contains("\"distribution\":\"ctox-runtime-installed-module\"")
+            || !squashed.contains("\"installable\":false")
+            || squashed.contains("\"collection_ownership\"")
+            || squashed.contains("\"permissions\":");
+        if legacy_manifest || broken_runtime_manifest {
             return Some(path);
         }
     }
@@ -1057,12 +1072,18 @@ fn command_writes_legacy_runtime_module_contract(
         "collections.schema.json",
     ) {
         let squashed = squashed_lower(&compact);
+        let expected_collection =
+            runtime_scaffold_collection_for_path_or_command(&path, &compact).unwrap_or_default();
         let legacy_schema = squashed.contains("\"format\":\"es-module\"")
             || squashed.contains("\"schema_format\":\"es-module\"")
             || squashed.contains("\"collections\":[")
+            || squashed.contains("\"primary_key\"")
+            || squashed.contains("\"json_schema\"")
             || (squashed.contains("\"collections\":")
                 && !squashed
-                    .contains("\"schema_format\":\"ctox-business-os-module-collections-v1\""));
+                    .contains("\"schema_format\":\"ctox-business-os-module-collections-v1\""))
+            || (!expected_collection.is_empty()
+                && !squashed.contains(&format!("\"{expected_collection}\"")));
         if legacy_schema {
             return Some(path);
         }
@@ -1080,7 +1101,87 @@ fn command_writes_legacy_runtime_module_contract(
         }
     }
 
+    if let Some(path) =
+        command_writes_runtime_module_artifact_named(&compact, workspace_root, cwd, "index.html")
+    {
+        let lower = compact.to_ascii_lowercase();
+        let full_document = lower.contains("<!doctype")
+            || lower.contains("<html")
+            || lower.contains("<head")
+            || lower.contains("<body");
+        let document_resources = lower.contains("<link")
+            || lower.contains("<script")
+            || lower.contains("<meta")
+            || lower.contains("<title")
+            || lower.contains("<style");
+        if full_document || document_resources {
+            return Some(path);
+        }
+    }
+
     None
+}
+
+fn runtime_scaffold_collection_for_path_or_command(path: &str, command: &str) -> Option<String> {
+    runtime_module_id_from_runtime_path(path)
+        .or_else(|| {
+            first_runtime_business_os_module_dir_substring(command)
+                .and_then(|module_dir| runtime_module_id_from_runtime_path(&module_dir))
+        })
+        .map(|module_id| format!("{}_records", app_creator_snake_name(&module_id)))
+}
+
+fn runtime_module_id_from_runtime_path(path: &str) -> Option<String> {
+    let lower = path.to_ascii_lowercase();
+    let marker = "runtime/business-os/installed-modules/";
+    let start = lower.find(marker)?;
+    let rest = &path[start + marker.len()..];
+    let module_id = rest
+        .split(|ch: char| {
+            ch == '/'
+                || ch == '\\'
+                || ch.is_whitespace()
+                || matches!(ch, '\'' | '"' | '`' | ',' | ')' | ';' | '|' | '&')
+        })
+        .next()
+        .unwrap_or_default()
+        .trim();
+    if module_id.is_empty() || module_id.contains('$') {
+        return None;
+    }
+    Some(module_id.to_string())
+}
+
+fn app_creator_snake_name(value: &str) -> String {
+    let mut out = String::new();
+    let mut last_underscore = false;
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            last_underscore = false;
+        } else if !last_underscore {
+            out.push('_');
+            last_underscore = true;
+        }
+    }
+    let trimmed = out.trim_matches('_').to_string();
+    if trimmed
+        .chars()
+        .next()
+        .map(|ch| ch.is_ascii_lowercase())
+        .unwrap_or(false)
+    {
+        trimmed
+    } else {
+        format!(
+            "app_{}",
+            if trimmed.is_empty() {
+                "records"
+            } else {
+                &trimmed
+            }
+        )
+    }
 }
 
 fn command_writes_runtime_module_artifact_named(
