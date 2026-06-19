@@ -15,17 +15,26 @@ not work on lower layers until the higher layer is green:
 5. app SemVer and release visibility status
 6. required file set
 7. collection ownership and schema parity
-8. UI layout contract
-9. runtime import/dependency/data-plane contract
-10. index.html/index.css mount contract
-11. index.js syntax
-12. no-dependency tests
-13. real-shell smoke
+8. runtime collection references match declared collections and do not
+   reference shell collections directly
+9. UI layout contract
+10. runtime import/dependency/data-plane contract
+11. index.html/index.css mount contract
+12. index.js syntax
+13. no-dependency tests
+14. real-shell smoke
 ```
 
 Do not modify tests to match a broken module contract. A passing custom test is
 not evidence while `ctox business-os app validate`, `module_static_check.mjs`,
 or `validate-app-module.mjs` is red.
+
+For runtime-installed App Creator modules, every collection name referenced in
+browser runtime files must be declared in `module.json` and, unless it is a
+shell collection, in `collections.schema.json` and `schema.js`. Runtime code
+must not mention `business_commands`; command creation goes through
+`ctx.commandBus.dispatch(...)`, and only `module.json` may list
+`business_commands` as an explicit dependency.
 
 Generated tests must also be internally correct. Before treating a failing
 module test as an app failure, verify that its fixture expectations are

@@ -210,6 +210,49 @@ the source architecture into a Business OS architecture.
 9. **Verify in the real shell.** Unit tests are supporting evidence; readiness
    requires browser proof through the actual Business OS shell and CTOX DB path.
 
+## One-Shot App Creator Scope Minimization
+
+For a new App Creator module, the safest first pass is usually a single
+module-owned collection that represents the primary work item. This is not a
+database-design ideal; it is the minimum reliable Business OS slice that can be
+created, validated, mounted, and then evolved.
+
+Translate common multi-table instincts like this:
+
+```text
+Inventory tables: items, locations, batches, pick_lists
+Business OS first pass: inventory_records
+  fields: kind, sku, name, location_name, batch_code, quantity, min_level,
+          expires_at_ms, pick_status, owner, notes
+
+Projects tables: projects, milestones, time_entries, invoices
+Business OS first pass: project_records
+  fields: kind, customer_name, project_name, pricing_model, milestone_name,
+          budget_cents, actual_cents, billing_status, risk, due_at_ms
+
+Contracts tables: contracts, slas, renewal_terms, notices
+Business OS first pass: contract_records
+  fields: customer_name, contract_title, sla_level, renewal_at_ms,
+          cancellation_deadline_ms, status, owner, notes
+
+Quality tables: complaints, findings, audits, evidence
+Business OS first pass: quality_records
+  fields: kind, title, customer_name, severity, state, due_at_ms,
+          evidence_summary, audit_ref, owner, notes
+```
+
+Only split the first pass into additional persisted collections when the user
+explicitly needs independently editable objects and you update every contract
+surface in one edit: `module.json`, `collections.schema.json`, `schema.js`,
+`core/records.mjs`, `core/automation.mjs`, `index.js`, locales, and tests. A
+helper that references `items`, `locations`, or `batches` while the manifest
+and schema still only declare `<module>_records` is an invalid app, even if a
+custom helper test is green.
+
+Never reference `business_commands` from runtime helpers or permission probes.
+`module.json` may list `business_commands` as a shell dependency, but app code
+must create automation through `ctx.commandBus.dispatch(...)` only.
+
 ## Source Inventory Checklist
 
 Create this inventory in the plan before implementation:

@@ -278,6 +278,61 @@ function collectEsmImportExportFailures(moduleFiles) {
   return failuresOut;
 }
 
+function unescapeJsStringLiteral(raw) {
+  try {
+    return JSON.parse(`"${String(raw).replace(/"/g, '\\"')}"`);
+  } catch {
+    return raw;
+  }
+}
+
+function collectStaticStringLiterals(text) {
+  const values = [];
+  const pattern = /(['"`])((?:\\[\s\S]|(?!\1)[\s\S])*?)\1/g;
+  for (const match of String(text || '').matchAll(pattern)) {
+    const quote = match[1];
+    const raw = match[2];
+    if (quote === '`' && raw.includes('${')) continue;
+    values.push(unescapeJsStringLiteral(raw));
+  }
+  return values;
+}
+
+function collectCollectionReferenceFailures(runtimeFiles, manifest, schemaDoc) {
+  const failuresOut = [];
+  const declaredCollections = new Set(Array.isArray(manifest?.collections) ? manifest.collections : []);
+  const schemaCollections = new Set(Object.keys(schemaDoc?.collections || {}));
+  const modulePrefix = moduleId.toLowerCase();
+  for (const file of runtimeFiles) {
+    const text = readFileSync(file, 'utf8');
+    const relFile = rel(file);
+    for (const literal of collectStaticStringLiterals(text)) {
+      const value = String(literal || '').trim();
+      const lower = value.toLowerCase();
+      if (lower === 'business_commands') {
+        failuresOut.push(`${relFile} references shell collection business_commands; runtime app code must use ctx.commandBus.dispatch and leave business_commands only in module.json`);
+        continue;
+      }
+      if (
+        lower.startsWith(`${modulePrefix}_`)
+        && !declaredCollections.has(value)
+        && !declaredCollections.has(lower)
+      ) {
+        failuresOut.push(`${relFile} references module collection ${value}, but module.json does not declare it`);
+        continue;
+      }
+      if (
+        declaredCollections.has(value)
+        && !shellCollections.has(value)
+        && !schemaCollections.has(value)
+      ) {
+        failuresOut.push(`${relFile} references module collection ${value}, but collections.schema.json does not define it`);
+      }
+    }
+  }
+  return failuresOut;
+}
+
 function hasBusinessOsChatTaskCommandType(text) {
   if (/(?:command_type\s*:\s*['"]business_os\.chat\.task['"]|["']command_type["']\s*:\s*["']business_os\.chat\.task["'])/.test(text)) {
     return true;
@@ -810,6 +865,9 @@ if (installedMode) {
   const runtimeTextFiles = files.filter((path) =>
     /\.(js|mjs|html|css)$/.test(path) && !hasPathSegment(path, 'tests')
   );
+  for (const message of collectCollectionReferenceFailures(runtimeTextFiles, manifest, schemaDoc)) {
+    fail(message);
+  }
   const runtimeText = runtimeTextFiles
     .map((path) => readFileSync(path, 'utf8'))
     .join('\n');

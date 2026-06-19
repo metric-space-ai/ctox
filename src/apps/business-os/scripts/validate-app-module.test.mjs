@@ -734,6 +734,40 @@ function installedIndexJsWith(extraLines = []) {
 
 {
   const root = makeWorkspace();
+  writeInstalledModule(root, 'undeclaredcollections', {
+    recordsJs: [
+      "export const COLLECTIONS = { items: 'undeclaredcollections_items' };",
+      '',
+      'export function visibleRecords(records = []) { return records; }',
+      'export function summarizeRecords(records = []) { return { total: records.length }; }',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'undeclaredcollections', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /references module collection undeclaredcollections_items/);
+  assert.match(run.stderr, /module\.json does not declare it/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'runtimecommandsref', {
+    recordsJs: [
+      "export const COMMAND_COLLECTION = 'business_commands';",
+      '',
+      'export function visibleRecords(records = []) { return records; }',
+      'export function summarizeRecords(records = []) { return { total: records.length }; }',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'runtimecommandsref', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /references shell collection business_commands/);
+  assert.match(run.stderr, /ctx\.commandBus\.dispatch/);
+}
+
+{
+  const root = makeWorkspace();
   writeInstalledModule(root, 'inlineiconmanifest', {
     manifest: {
       layout: {

@@ -24948,6 +24948,7 @@ Business OS app build target:
 - required file inventory: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, core/automation.mjs, core/records.mjs, locales/de.json, locales/en.json, and tests/*.test.mjs must exist before you can claim success.
 - schema invariant rule: schema.js is the only root schema module. Do not rename it, delete it, replace it with schema.mjs, or leave schema.mjs/schema.cjs as a root-level alias. Put reusable ESM schema fragments under core/*.mjs and re-export them from schema.js.
 - mandatory first screen: inspect the scaffold first, preserve core/automation.mjs, core/records.mjs, locales, tests, mount wiring, and helper export names unless every importer is updated in the same edit. Use shipped customers, shiftflow, and outbound as the default three few-shots. Keep the app small, but do not treat an untouched scaffold as the requested app. The scaffold is already structurally valid; validating it before requested-domain edits is a task failure, not progress.
+- one-shot data-model rule: for first-pass App Creator apps, preserve the scaffold's single primary module-owned collection and helper API by default. Add requested-domain fields, statuses, calculations, fixtures, labels, and automation facts to that collection instead of inventing extra collections. Introduce additional module-owned collections only when the user explicitly requires a relational workflow and you update module.json, collections.schema.json, schema.js, core/records.mjs, core/automation.mjs, index.js, locales, and tests in the same edit before validation. Never define collection-name constants for undeclared collections and never reference business_commands from runtime helpers; automation uses ctx.commandBus.dispatch only.
 - exact artifact rule: required artifacts are canonical files, not shell patterns. Write module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales, core helpers, and tests by exact path under {module_dir}/ only. Do not create temporary schema/manifest aliases, short alias files such as m.json, manifest.json, collections.json, or schema.mjs/schema.cjs, do not copy through globs or brace expansion, do not create files literally named co*ions.*json or colle{{ctions,ctions}}.schema.json, and do not run rm against required artifacts.
 - scaffold preservation rule: CTOX service preflight may already have created a validator-clean scaffold in {module_dir}/. Treat that scaffold as the baseline. Do not clean, delete, reset, replace, or rewrite it wholesale. Customize the smallest necessary scaffold files in place, preserve the mount wiring, core helpers, schema wrappers, locales, and tests. Run `ctox business-os app scaffold {module_id} {mode_flag} --repair-missing` only if a required file is actually missing; never run it on a complete scaffold, and never count scaffold repair output as requested-domain implementation work.
 - few-shot rule: inspect exactly three shipped Business OS modules as short targeted pattern references, preferably customers, shiftflow, and outbound from the shipped `src/apps/business-os/modules/` tree. Open exact selected files directly, for example `src/apps/business-os/modules/customers/module.json`, `src/apps/business-os/modules/shiftflow/index.js`, and `src/apps/business-os/modules/outbound/core/automation.mjs`. Do not run `ls`, `find`, `rg`, `grep`, or `tree` over `src/apps/business-os/modules/` or over a source module directory to discover files. Use notes only as an optional fourth simple-CRUD reference; it is not a scaffold-helper template and may not contain core/automation.mjs or core/records.mjs. Never use generated installed modules, runtime/business-os/installed-modules, ~/.local/state/ctox/business-os/installed-modules, bench_* apps, previous App Creator outputs, or app-creator-bench artifacts as few-shot templates. Do not request complete file dumps, do not use combined multi-file snippets or broad line sweeps, do not delegate a broad module-reading sweep to a subagent, and do not keep reading examples after the three-module summary.
@@ -26932,6 +26933,11 @@ mod tests {
         assert!(prompt.contains("schema.js is the only root schema module"));
         assert!(prompt.contains("Do not rename it, delete it, replace it with schema.mjs"));
         assert!(prompt.contains("mandatory first screen: inspect the scaffold first"));
+        assert!(prompt.contains("one-shot data-model rule"));
+        assert!(prompt.contains("preserve the scaffold's single primary module-owned collection"));
+        assert!(
+            prompt.contains("Never define collection-name constants for undeclared collections")
+        );
         assert!(prompt.contains("do not treat an untouched scaffold as the requested app"));
         assert!(prompt.contains("validating it before requested-domain edits is a task failure"));
         assert!(prompt.contains("scaffold inspection alone is not a file pass"));
@@ -27068,6 +27074,11 @@ mod tests {
         assert!(prompt.contains("Do not clean, delete, reset, replace, or rewrite it wholesale"));
         assert!(prompt.contains("inspect exactly three shipped Business OS modules"));
         assert!(prompt.contains("mandatory first screen: inspect the scaffold first"));
+        assert!(prompt.contains("one-shot data-model rule"));
+        assert!(prompt.contains("preserve the scaffold's single primary module-owned collection"));
+        assert!(
+            prompt.contains("Never define collection-name constants for undeclared collections")
+        );
         assert!(prompt.contains("do not treat an untouched scaffold as the requested app"));
         assert!(prompt.contains("validating it before requested-domain edits is a task failure"));
         assert!(prompt.contains("scaffold inspection alone is not a file pass"));
