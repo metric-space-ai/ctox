@@ -11630,11 +11630,8 @@ fn maybe_lease_next_durable_queue_prompt_for_idle_dispatch(
     root: &Path,
     state: &Arc<Mutex<SharedState>>,
 ) -> Result<Option<QueuedPrompt>> {
-    {
-        let shared = lock_shared_state(state);
-        if shared.busy {
-            return Ok(None);
-        }
+    if active_agent_loop_in_progress(state) {
+        return Ok(None);
     }
     match recover_stale_business_os_app_queue_tasks(
         root,
@@ -27631,6 +27628,55 @@ Use shell tools to create or update these files."
         assert!(
             tasks.is_empty(),
             "router must not lease external inbound work while an agent loop is active"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn durable_queue_leasing_waits_while_worker_active() {
+        // app-creator-queue-1: durable queue dispatch must use the same
+        // active-agent gate as channel routing. A worker can briefly have
+        // busy=false while worker_active_count remains >0 during finalization;
+        // leasing another durable App Creator task in that window marks it
+        // leased without a safe isolated worker and can strand the bench.
+        let root = temp_root("ctox-durable-queue-worker-active-lease");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Inventory App Creator Bench".to_string(),
+                prompt: "Build a small Business OS app for inventory management.".to_string(),
+                thread_key: "business-os/creator".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: Some(serde_json::json!({
+                    "source": "app-creator-bench",
+                    "run_id": "guard-test"
+                })),
+            },
+        )
+        .expect("failed to create durable queue task");
+        let state = Arc::new(Mutex::new(SharedState {
+            busy: false,
+            worker_active_count: 1,
+            ..SharedState::default()
+        }));
+
+        let leased = maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state)
+            .expect("durable queue dispatch should not fail");
+
+        assert!(
+            leased.is_none(),
+            "durable queue dispatch must not lease while a worker is active"
+        );
+        let reloaded = channels::load_queue_task(&root, &task.message_key)
+            .expect("failed to reload queue task")
+            .expect("queue task should exist");
+        assert_eq!(reloaded.route_status, "pending");
+        assert!(
+            reloaded.lease_owner.is_none(),
+            "pending durable queue task must not receive a lease while a worker is active"
         );
         let _ = std::fs::remove_dir_all(root);
     }
