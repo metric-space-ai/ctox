@@ -29,9 +29,7 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::env;
 use std::fs::OpenOptions;
-#[cfg(unix)]
 use std::io::BufRead;
-#[cfg(unix)]
 use std::io::BufReader;
 #[cfg(unix)]
 use std::io::BufWriter;
@@ -6786,6 +6784,22 @@ fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
             "- Tests must prove positive behavior only.",
             "- ESM import/export rule: every named local import in index.js, core/*.mjs, and tests/*.mjs must be exported by the target file. Preserve scaffold helper exports such as COLLECTION_NAME, createRecord, normalizeStatus, summarizeRecords, and visibleRecords unless every importer is updated in the same turn.\n- Tests must prove positive behavior only.",
         )
+        .replace(
+            "- Inspect and edit with a narrow tool budget. Do not dump whole generated files, loop over all app artifacts with `cat`, or run broad repo/source scans. Use targeted `sed -n` ranges, exact `rg -n` selectors/imports, and validator output to repair concrete issues.",
+            "- Inspect and edit with a narrow tool budget. Do not dump whole generated files, loop over all app artifacts with `cat`, run `wc -l`/`ls -la`/`head`/`tail`/Node readFileSync audits over generated app files, or run broad repo/source scans. Use targeted `sed -n` ranges, exact `rg -n` selectors/imports, and validator output to repair concrete issues.",
+        )
+        .replace(
+            "- Do not use Python, base64 blobs, Node writer scripts, generated writer scripts, data URLs, or temporary file-copy wrappers to create or patch app files. If a direct edit becomes fragile, reduce scope, split the file into a smaller local ESM helper, or edit the smaller affected file.",
+            "- Do not use Python, base64 blobs, Node writer scripts, generated writer scripts, data URLs, `/tmp` scratch files, `/tmp/*.patch`, or temporary file-copy wrappers to create, test, stage, copy, move, or patch app files. If shell redirection is needed, write the bounded payload directly to `$MODULE_DIR/<file>` at the final module path; if that becomes fragile, reduce scope, split the file into a smaller local ESM helper, or edit the smaller affected file.",
+        )
+        .replace(
+            "- If the current validator report says the app is green but no required artifact was written after the scaffold baseline, or says the app still looks like the generic App Creator records scaffold, edit domain facts in `core/records.mjs`, `core/automation.mjs`, one visible UI/locales file, and one `tests/*.test.mjs` file before running validation again. Running validation as the first or only action in that rework state is a task failure.",
+            "- If the current validator report says the app is green but no required artifact was written after the scaffold baseline, says the app still looks like the generic App Creator records scaffold, or reports an App Creator tool trace violation, edit domain facts in `core/records.mjs`, `core/automation.mjs`, one visible UI/locales file, and one `tests/*.test.mjs` file before running validation again. Running validation, tests, or `node --check` as the first or only action in that rework state is a task failure.",
+        )
+        .replace(
+            "- Before claiming success, run the module tests plus `ctox business-os app validate",
+            "- Tool trace policy: after the scaffold baseline, CTOX may reject validation that was run before any direct final module edit, app artifacts staged under `/tmp`, source-module discovery/line-count sweeps, or broad generated-file readbacks. If this happens, repair by writing bounded final files directly under `$MODULE_DIR`, then validate again.\n- Before claiming success, run the module tests plus `ctox business-os app validate",
+        )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -7444,6 +7458,14 @@ fn business_os_app_module_completion_policy_report(
     )? {
         reports.push(report);
     }
+    if let Some(report) = business_os_app_module_tool_trace_policy_report(
+        state_root,
+        app_workspace_root,
+        job,
+        target,
+    )? {
+        reports.push(report);
+    }
     if let Some(report) =
         business_os_app_module_domain_relevance_report(app_workspace_root, job, target)?
     {
@@ -7456,12 +7478,10 @@ fn business_os_app_module_completion_policy_report(
     }
 }
 
-fn business_os_app_module_post_baseline_write_report(
+fn business_os_app_scaffold_baseline_ms(
     state_root: &Path,
-    app_workspace_root: &Path,
     job: &QueuedPrompt,
-    target: &BusinessOsAppModuleTarget,
-) -> Result<Option<String>> {
+) -> Result<Option<i64>> {
     let Some(message_key) = job.leased_message_keys.first() else {
         return Ok(None);
     };
@@ -7483,6 +7503,18 @@ fn business_os_app_module_post_baseline_write_report(
                 BUSINESS_OS_APP_SCAFFOLD_BASELINE_MS_METADATA_KEY
             )
         })?;
+    Ok(Some(baseline_ms))
+}
+
+fn business_os_app_module_post_baseline_write_report(
+    state_root: &Path,
+    app_workspace_root: &Path,
+    job: &QueuedPrompt,
+    target: &BusinessOsAppModuleTarget,
+) -> Result<Option<String>> {
+    let Some(baseline_ms) = business_os_app_scaffold_baseline_ms(state_root, job)? else {
+        return Ok(None);
+    };
     let baseline_time = UNIX_EPOCH + Duration::from_millis(baseline_ms.max(0) as u64);
     let module_dir = app_workspace_root.join(&target.artifact_directory);
     let mut newest: Option<(SystemTime, PathBuf)> = None;
@@ -7516,6 +7548,144 @@ fn business_os_app_module_post_baseline_write_report(
         "Business OS app artifact validator is green, but no required app artifact was written after CTOX recorded the scaffold baseline for this turn (`{}`={baseline_ms}). The validator-clean scaffold is only a starting point; edit the requested domain app files under `{}` before validating again. Newest checked artifact before the baseline: {newest_label}",
         BUSINESS_OS_APP_SCAFFOLD_BASELINE_MS_METADATA_KEY, target.artifact_directory
     )))
+}
+
+fn business_os_app_module_tool_trace_policy_report(
+    state_root: &Path,
+    app_workspace_root: &Path,
+    job: &QueuedPrompt,
+    target: &BusinessOsAppModuleTarget,
+) -> Result<Option<String>> {
+    let Some(baseline_ms) = business_os_app_scaffold_baseline_ms(state_root, job)? else {
+        return Ok(None);
+    };
+    let context_log = app_workspace_root.join("runtime/context-log.jsonl");
+    let Ok(file) = std::fs::File::open(&context_log) else {
+        return Ok(None);
+    };
+    let mut findings: Vec<String> = Vec::new();
+    let mut saw_final_artifact_write = false;
+    let module_marker = target.module_id.to_ascii_lowercase();
+    let artifact_marker = target.artifact_directory.to_ascii_lowercase();
+    let validate_marker =
+        format!("ctox business-os app validate {}", target.module_id).to_ascii_lowercase();
+    for line in BufReader::new(file)
+        .lines()
+        .map_while(std::result::Result::ok)
+    {
+        if !line.contains("\"event\":\"tool_call_begin\"") {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let Some(ts) = value.get("ts").and_then(Value::as_i64) else {
+            continue;
+        };
+        if ts < baseline_ms {
+            continue;
+        }
+        let Some(command) = value.get("command").and_then(Value::as_str) else {
+            continue;
+        };
+        let lowered = command.to_ascii_lowercase();
+        let mentions_module =
+            lowered.contains(&module_marker) || lowered.contains(&artifact_marker);
+        let mentions_app_artifact = mentions_module
+            || [
+                "module.json",
+                "collections.schema.json",
+                "schema.js",
+                "index.html",
+                "index.css",
+                "index.js",
+                "icon.svg",
+                "records.mjs",
+                "automation.mjs",
+                ".test.mjs",
+            ]
+            .iter()
+            .any(|marker| lowered.contains(marker));
+        if business_os_app_trace_command_is_final_artifact_write(&lowered, &artifact_marker) {
+            saw_final_artifact_write = true;
+        }
+        if lowered.contains(&validate_marker) && !saw_final_artifact_write {
+            push_business_os_app_trace_finding(
+                &mut findings,
+                "validation ran before the first direct module artifact write",
+            );
+        }
+        if lowered.contains("/tmp/")
+            && mentions_app_artifact
+            && (lowered.contains("cat >")
+                || lowered.contains("tee ")
+                || lowered.contains("node --check /tmp/")
+                || lowered.contains("import('/tmp/")
+                || lowered.contains("cp /tmp/")
+                || lowered.contains("mv /tmp/"))
+        {
+            push_business_os_app_trace_finding(
+                &mut findings,
+                "app artifact content was staged or tested under /tmp instead of being written directly to MODULE_DIR",
+            );
+        }
+        if lowered.contains("src/apps/business-os/modules")
+            && (lowered.contains("wc -l")
+                || lowered.contains(" ls ")
+                || lowered.contains(" ls -")
+                || lowered.contains("find ")
+                || lowered.contains(" rg ")
+                || lowered.contains(" grep "))
+        {
+            push_business_os_app_trace_finding(
+                &mut findings,
+                "source-module discovery or line-count sweep was used instead of exact few-shot file snippets",
+            );
+        }
+        if lowered.contains(&artifact_marker)
+            && (lowered.contains("ls -la")
+                || lowered.contains("wc -l")
+                || lowered.contains(" head ")
+                || lowered.contains(" tail ")
+                || lowered.contains("readfilesync"))
+        {
+            push_business_os_app_trace_finding(
+                &mut findings,
+                "generated app files were audited through broad dumps or line-count/readback commands",
+            );
+        }
+        if findings.len() >= 5 {
+            break;
+        }
+    }
+    if findings.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "Business OS App Creator tool trace violated the runtime app contract after the scaffold baseline. Repair by editing `{}` directly with bounded exact-path writes, then validate again. Findings: {}.",
+        target.artifact_directory,
+        findings.join("; ")
+    )))
+}
+
+fn business_os_app_trace_command_is_final_artifact_write(
+    command: &str,
+    artifact_marker: &str,
+) -> bool {
+    command.contains(artifact_marker)
+        && (command.contains("cat >")
+            || command.contains("tee ")
+            || command.contains("printf ")
+            || command.contains("echo ")
+            || command.contains("writefile")
+            || command.contains("writefilesync"))
+        && !command.contains("/tmp/")
+}
+
+fn push_business_os_app_trace_finding(findings: &mut Vec<String>, finding: &str) {
+    if !findings.iter().any(|existing| existing == finding) {
+        findings.push(finding.to_string());
+    }
 }
 
 fn business_os_app_module_domain_relevance_report(
@@ -7709,7 +7879,7 @@ fn render_business_os_app_module_validation_feedback(
     report: &str,
 ) -> String {
     let feedback = format!(
-        "Business OS app artifact validation failed. Continue the same app-build task and repair the generated module before finishing.\n\nTask source: {}\n\nBusiness OS app build target:\n- module_id: {}\n- install_target: {}\n- only_allowed_app_artifact_directory: {}\n\nallowed artifact directory: {}\n\nValidator report:\n{}\n\nValidator-report routing:\n- If the report says the validator is green but no required artifact was written after the scaffold baseline, do not run validation first. Edit requested-domain facts in `core/records.mjs`, `core/automation.mjs`, one visible UI/locales file, and one `tests/*.test.mjs` file before validating again.\n- If the report says the app still looks like the generic App Creator records scaffold, replace generic labels, empty-state copy, fixture names, automation text, and tests with requested-domain language before validating again.\n\nImmediate repair order:\n1. If required scaffold files are missing, run `ctox business-os app scaffold {} {} --repair-missing` from the workspace root. Use `--force` only to reset a failed new-app scaffold, never for an existing app modification.\n2. Create or repair every missing required file first: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, core/automation.mjs, core/records.mjs, locales/de.json, locales/en.json, and tests/*.test.mjs under {}.\n3. Do not delete scaffold invariants. Preserve core/automation.mjs, core/records.mjs, locales, and tests; if domain collections/helpers change, update the matching tests in the same turn.\n4. If the validator reports selector or mount drift, edit index.html and index.js together so mount(ctx) loads `./index.html` with `fetch(new URL('./index.html', import.meta.url))`, assigns it into `ctx.host.innerHTML`, attaches `./index.css` with `new URL('./index.css', import.meta.url)`, and every `data-*` selector queried by index.js exists in index.html or generated markup.\n5. If the validator reports CSS token drift or `:root`, move module custom properties from `:root`, `html`, or `body` onto the module root class used in index.html. Do not redefine shell token names.\n6. If the validator reports automation, keep a command builder that returns `type: 'business_os.chat.task'`, `command_type: 'business_os.chat.task'`, and `payload.record_snapshot`, then dispatch that command through ctx.commandBus.dispatch from a real visible action.\n7. If module tests fail, verify the failing fixture by hand: expected counts/totals must be internally consistent with the domain rules and helper logic. Fix app logic when the rule is violated; fix generated test expectations when they are mathematically impossible.\n8. Remove default third/right panes, right-column CSS/resizers, and three-column grids unless the workflow explicitly justifies a persistent third pane.\n9. If tests mention forbidden anti-pattern strings only to prove absence, delete those negative source-text tests and replace them with positive behavior/schema/helper assertions.\n10. Re-run the app-specific validator and keep repairing exact bullets until it is green. Once it is green, stop immediately and return the final response; do not run repository-wide conformance scripts, broad source RxDB scans, extra file dumps, cosmetic rewrites, or polishing passes.\n\nRepair rules:\n- Edit only files under {}.\n- Do not dump whole generated files, loop over all app artifacts with `cat`, or run broad source/repo scans. Use targeted `sed -n` ranges, exact `rg -n` selectors/imports, and the validator report for concrete repairs.\n- Do not use Python, base64 blobs, Node writer scripts, generated writer scripts, data URLs, or temporary file-copy wrappers to create or patch app files. If a direct edit becomes fragile, reduce scope, split the file into a smaller local ESM helper, or edit the smaller affected file.\n- Do not create root-level module.json, root-level collections.schema.json, src/skills output, package-manager files, node_modules, or HTTP/database fallbacks.\n- Do not run or rely on npm, npx, pnpm, yarn, bun, esbuild, Vite, Rollup, Webpack, bundlers, transpilers, package installs, package.json, or node_modules as syntax, import, test, or readiness proof. Business OS apps are no-build vanilla HTML/CSS/browser ESM.\n- Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or direct SQL against queue/command/runtime status rows. CTOX service owns lifecycle completion after green validation.\n- For installed modules, module.json.entry must be installed-modules/{}/index.html and module.json.install_scope must be installed.\n- schema.js and collections.schema.json must export only module-owned collections; shell collections such as business_commands stay dependencies in module.json.collections only.\n- Remove default third/right panes unless there is a concrete persistent workflow justification.\n- Tests must not quote forbidden anti-pattern strings for absence checks; validators own source-text bans.\n- Run the validator again before claiming completion:\n  ctox business-os app validate {} {}\n\nOriginal task remains active:\n{}",
+        "Business OS app artifact validation failed. Continue the same app-build task and repair the generated module before finishing.\n\nTask source: {}\n\nBusiness OS app build target:\n- module_id: {}\n- install_target: {}\n- only_allowed_app_artifact_directory: {}\n\nallowed artifact directory: {}\n\nValidator report:\n{}\n\nValidator-report routing:\n- If the report says the validator is green but no required artifact was written after the scaffold baseline, do not run validation first. Edit requested-domain facts in `core/records.mjs`, `core/automation.mjs`, one visible UI/locales file, and one `tests/*.test.mjs` file before validating again.\n- If the report says the app still looks like the generic App Creator records scaffold, replace generic labels, empty-state copy, fixture names, automation text, and tests with requested-domain language before validating again.\n- If the report says the App Creator tool trace violated the runtime app contract, repair by writing bounded files directly under `MODULE_DIR`; do not repeat early validation, `/tmp` staging, source-module sweeps, or broad generated-file readbacks.\n\nImmediate repair order:\n1. If required scaffold files are missing, run `ctox business-os app scaffold {} {} --repair-missing` from the workspace root. Use `--force` only to reset a failed new-app scaffold, never for an existing app modification.\n2. Create or repair every missing required file first: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, core/automation.mjs, core/records.mjs, locales/de.json, locales/en.json, and tests/*.test.mjs under {}.\n3. Do not delete scaffold invariants. Preserve core/automation.mjs, core/records.mjs, locales, and tests; if domain collections/helpers change, update the matching tests in the same turn.\n4. If the validator reports selector or mount drift, edit index.html and index.js together so mount(ctx) loads `./index.html` with `fetch(new URL('./index.html', import.meta.url))`, assigns it into `ctx.host.innerHTML`, attaches `./index.css` with `new URL('./index.css', import.meta.url)`, and every `data-*` selector queried by index.js exists in index.html or generated markup.\n5. If the validator reports CSS token drift or `:root`, move module custom properties from `:root`, `html`, or `body` onto the module root class used in index.html. Do not redefine shell token names.\n6. If the validator reports automation, keep a command builder that returns `type: 'business_os.chat.task'`, `command_type: 'business_os.chat.task'`, and `payload.record_snapshot`, then dispatch that command through ctx.commandBus.dispatch from a real visible action.\n7. If module tests fail, verify the failing fixture by hand: expected counts/totals must be internally consistent with the domain rules and helper logic. Fix app logic when the rule is violated; fix generated test expectations when they are mathematically impossible.\n8. Remove default third/right panes, right-column CSS/resizers, and three-column grids unless the workflow explicitly justifies a persistent third pane.\n9. If tests mention forbidden anti-pattern strings only to prove absence, delete those negative source-text tests and replace them with positive behavior/schema/helper assertions.\n10. Re-run the app-specific validator and keep repairing exact bullets until it is green. Once it is green, stop immediately and return the final response; do not run repository-wide conformance scripts, broad source RxDB scans, extra file dumps, cosmetic rewrites, or polishing passes.\n\nRepair rules:\n- Edit only files under {}.\n- Do not dump whole generated files, loop over all app artifacts with `cat`, run `wc -l`/`ls -la`/`head`/`tail`/Node readFileSync audits over generated app files, or run broad source/repo scans. Use targeted `sed -n` ranges, exact `rg -n` selectors/imports, and the validator report for concrete repairs.\n- Do not use Python, base64 blobs, Node writer scripts, generated writer scripts, data URLs, `/tmp` scratch files, `/tmp/*.patch`, or temporary file-copy wrappers to create, test, stage, copy, move, or patch app files. If shell redirection is needed, write the bounded payload directly to `$MODULE_DIR/<file>` at the final module path; if that becomes fragile, reduce scope, split the file into a smaller local ESM helper, or edit the smaller affected file.\n- Do not create root-level module.json, root-level collections.schema.json, src/skills output, package-manager files, node_modules, or HTTP/database fallbacks.\n- Do not run or rely on npm, npx, pnpm, yarn, bun, esbuild, Vite, Rollup, Webpack, bundlers, transpilers, package installs, package.json, or node_modules as syntax, import, test, or readiness proof. Business OS apps are no-build vanilla HTML/CSS/browser ESM.\n- Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or direct SQL against queue/command/runtime status rows. CTOX service owns lifecycle completion after green validation.\n- For installed modules, module.json.entry must be installed-modules/{}/index.html and module.json.install_scope must be installed.\n- schema.js and collections.schema.json must export only module-owned collections; shell collections such as business_commands stay dependencies in module.json.collections only.\n- Remove default third/right panes unless there is a concrete persistent workflow justification.\n- Tests must not quote forbidden anti-pattern strings for absence checks; validators own source-text bans.\n- Run the validator again before claiming completion:\n  ctox business-os app validate {} {}\n\nOriginal task remains active:\n{}",
         job.source_label,
         target.module_id,
         target.install_target,
@@ -21698,7 +21868,10 @@ Business OS command:
         assert!(feedback.contains("Create or repair every missing required file first"));
         assert!(feedback.contains("Once it is green, stop immediately"));
         assert!(feedback.contains("Do not dump whole generated files"));
+        assert!(feedback.contains("run `wc -l`/`ls -la`/`head`/`tail`"));
         assert!(feedback.contains("Do not use Python, base64 blobs, Node writer scripts"));
+        assert!(feedback.contains("`/tmp` scratch files"));
+        assert!(feedback.contains("tool trace violated"));
         assert!(feedback.contains("Do not call `ctox queue ack`"));
     }
 
@@ -21779,6 +21952,99 @@ Business OS command:
         ));
         assert!(feedback.contains("generic App Creator records scaffold"));
         assert!(feedback.contains("Original task remains active"));
+    }
+
+    #[test]
+    fn business_os_app_tool_trace_policy_rejects_tmp_and_early_validation() {
+        let root = temp_root("business-os-app-tool-trace-policy");
+        std::fs::create_dir_all(root.join("runtime")).expect("create runtime dir");
+        let module_id = "bench_inventory_trace";
+        let target = BusinessOsAppModuleTarget {
+            module_id: module_id.to_string(),
+            install_target: "runtime-installed-module".to_string(),
+            mode_flag: "--installed",
+            artifact_directory: format!("runtime/business-os/installed-modules/{module_id}"),
+        };
+        let prompt = format!(
+            "Build an inventory Business OS app.\nBusiness OS app build target:\n- module_id: {module_id}\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: {}\nBusiness OS command:\n- type: ctox.business_os.app.create\n",
+            target.artifact_directory
+        );
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create inventory app".to_string(),
+                prompt: prompt.clone(),
+                thread_key: format!("business-os/apps/{module_id}"),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let baseline_ms = current_epoch_millis() as i64;
+        channels::set_queue_task_metadata_value(
+            &root,
+            &task.message_key,
+            BUSINESS_OS_APP_SCAFFOLD_BASELINE_MS_METADATA_KEY,
+            Value::from(baseline_ms),
+        )
+        .expect("record baseline metadata");
+        let job = QueuedPrompt {
+            prompt,
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "business-os:app-create".to_string(),
+            suggested_skill: task.suggested_skill.clone(),
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: task.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let commands = [
+            format!(
+                "cd {} && ctox business-os app validate {module_id} --installed 2>&1 | head -200",
+                root.display()
+            ),
+            "mkdir -p /tmp/inv-payloads && cat > /tmp/inv-payloads/records.mjs <<'EOF'\nexport const MODULE_ID = 'bench_inventory_trace';\nEOF".to_string(),
+            "node --check /tmp/inv-payloads/records.mjs".to_string(),
+            "cd src/apps/business-os/modules && wc -l customers/module.json shiftflow/index.js outbound/core/automation.mjs".to_string(),
+            format!("ls -la {}", root.join(&target.artifact_directory).display()),
+        ];
+        let context_lines = commands
+            .iter()
+            .enumerate()
+            .map(|(idx, command)| {
+                serde_json::json!({
+                    "ts": baseline_ms + idx as i64 + 1,
+                    "event": "tool_call_begin",
+                    "command": command,
+                })
+                .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(
+            root.join("runtime/context-log.jsonl"),
+            format!("{context_lines}\n"),
+        )
+        .expect("write context log fixture");
+
+        let report = business_os_app_module_tool_trace_policy_report(&root, &root, &job, &target)
+            .expect("tool trace policy should run")
+            .expect("tool trace policy should report violations");
+
+        assert!(report.contains("tool trace violated"));
+        assert!(report.contains("validation ran before the first direct module artifact write"));
+        assert!(report.contains("staged or tested under /tmp"));
+        assert!(report.contains("source-module discovery or line-count sweep"));
+        assert!(report.contains("broad dumps or line-count/readback commands"));
     }
 
     #[test]
@@ -21874,7 +22140,10 @@ Business OS command:
         assert!(prompt.contains("ESM import/export rule"));
         assert!(prompt.contains("Inspect and edit with a narrow tool budget"));
         assert!(prompt.contains("Do not dump whole generated files"));
+        assert!(prompt.contains("Node readFileSync audits"));
         assert!(prompt.contains("Do not use Python, base64 blobs, Node writer scripts"));
+        assert!(prompt.contains("`/tmp` scratch files"));
+        assert!(prompt.contains("Tool trace policy"));
         assert!(prompt.contains("If validation is green, stop immediately"));
         assert!(prompt.contains("ctox business-os app validate contracts --installed"));
     }

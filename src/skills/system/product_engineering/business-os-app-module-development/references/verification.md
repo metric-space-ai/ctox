@@ -111,15 +111,18 @@ too large to rewrite cleanly, move pure logic into `core/*.mjs` helpers and
 keep `index.js` as wiring only.
 
 Do not create app files through `/tmp` scratch files copied or moved into the
-module. Write exact target paths under `MODULE_DIR` directly. Scratch output is
+module. Write exact target paths under `MODULE_DIR` directly. A shell heredoc or
+redirect is acceptable only when it writes the final artifact to
+`$MODULE_DIR/<file>` or the exact prompted module path. Scratch output is
 acceptable only for non-app evidence such as command stdout, never as a
-generated app artifact transport. Do not stage `/tmp/*.patch` files, discover
-or inspect shell `apply_patch`, or invoke shell patch wrappers for generated
-module repairs; rewrite the affected bounded file directly or split logic into
-`core/*.mjs`. Do not stream large generated files through giant shell `printf`,
-`echo`, `tee`, or `cat` payload rewrites. Do not use `cat >>`, `tee -a`, or
-temporary module scratch/probe files such as `_scratch*`, `_size*`, or `_test*`
-while verifying or repairing app artifacts.
+generated app artifact transport or syntax-check location. Do not run
+`node --check /tmp/...` for app code, import app code from `/tmp`, stage
+`/tmp/*.patch` files, discover or inspect shell `apply_patch`, or invoke shell
+patch wrappers for generated module repairs; rewrite the affected bounded file
+directly or split logic into `core/*.mjs`. Do not stream large generated files
+through giant shell `printf`, `echo`, `tee`, or `cat` payload rewrites. Do not
+use `cat >>`, `tee -a`, or temporary module scratch/probe files such as
+`_scratch*`, `_size*`, or `_test*` while verifying or repairing app artifacts.
 
 Do not turn verification into a generated-file readback audit. After the file
 inventory is known, do not run `wc -l` over generated app artifacts, multi-file
@@ -137,6 +140,13 @@ validator/checker source, search the source or runtime tree for prior bench
 apps, list `runtime/business-os/installed-modules/`, list
 `runtime/business-os/template-store`, or run extra source-wide checks to satisfy
 missed process steps. A green App Creator validator is the completion boundary.
+CTOX may still reject a green validator if the tool trace shows process
+violations after the scaffold baseline: validation before direct final module
+edits, `/tmp` artifact staging/testing/copying, source-module discovery or
+line-count sweeps, or broad generated-file readback audits. Treat that feedback
+as validator rework. Repair by writing bounded final files directly under
+`MODULE_DIR`, then run the app-specific validator once; do not repeat the same
+early validation or readback commands.
 
 For first-pass runtime-installed App Creator modules, keep helper files bounded
 to `core/records.mjs` and `core/automation.mjs`. Extra helper layers such as
