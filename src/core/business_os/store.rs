@@ -56,6 +56,8 @@ const BUSINESS_OS_APP_REQUIRED_ARTIFACTS: &[&str] = &[
     "locales/de.json",
     "locales/en.json",
 ];
+const BUSINESS_OS_APP_SCAFFOLD_BASELINE_MS_METADATA_KEY: &str =
+    "business_os_app_scaffold_baseline_ms";
 const RXDB_STORE_FILE: &str = "business-os-rxdb.sqlite3";
 const DEFAULT_SIGNALING_URL: &str = "wss://signaling.ctox.dev";
 const DEFAULT_STUN_URL: &str = "stun:stun.l.google.com:19302";
@@ -11574,20 +11576,9 @@ fn ensure_app_validation_completion_has_post_lease_artifact_write(
     task: &channels::QueueTaskView,
     artifact_directory: &str,
 ) -> anyhow::Result<()> {
-    let Some(leased_at) = task.leased_at.as_deref() else {
+    let Some((cutoff_time, cutoff_label)) = app_validation_artifact_cutoff_time(root, task)? else {
         return Ok(());
     };
-    let cutoff = chrono::DateTime::parse_from_rfc3339(leased_at)
-        .with_context(|| {
-            format!(
-                "queue task `{}` has invalid leased_at timestamp `{leased_at}`",
-                task.message_key
-            )
-        })?
-        .with_timezone(&chrono::Utc);
-    let cutoff_time = UNIX_EPOCH
-        + Duration::from_secs(cutoff.timestamp().max(0) as u64)
-        + Duration::from_nanos(cutoff.timestamp_subsec_nanos() as u64);
     let module_dir = root.join(artifact_directory);
     let mut newest: Option<SystemTime> = None;
     let mut newest_path: Option<PathBuf> = None;
@@ -11615,11 +11606,77 @@ fn ensure_app_validation_completion_has_post_lease_artifact_write(
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| module_dir.display().to_string());
     anyhow::bail!(
-        "Business OS app validation passed, but queue task `{}` has no required app artifact written after its lease at `{leased_at}`. New-app scaffolds may validate before the agent implements the requested app; edit the runtime app files under `{}` first, then run validation again. Newest checked artifact before the lease: {}",
+        "Business OS app validation passed, but queue task `{}` has no required app artifact written after its app-build baseline ({cutoff_label}). New-app scaffolds may validate before the agent implements the requested app; edit the runtime app files under `{}` first, then run validation again. Newest checked artifact before the baseline: {}",
         task.message_key,
         artifact_directory,
         newest_label
     )
+}
+
+fn app_validation_artifact_cutoff_time(
+    root: &Path,
+    task: &channels::QueueTaskView,
+) -> anyhow::Result<Option<(SystemTime, String)>> {
+    let mut cutoff: Option<(SystemTime, String)> = None;
+    if let Some(leased_at) = task.leased_at.as_deref() {
+        let leased_time = queue_task_timestamp_to_system_time(&task.message_key, leased_at)?;
+        cutoff = Some((leased_time, format!("lease at {leased_at}")));
+    }
+    if let Some(baseline_time) = queue_task_app_scaffold_baseline_time(root, &task.message_key)? {
+        let replace = cutoff
+            .as_ref()
+            .map(|(current, _)| baseline_time > *current)
+            .unwrap_or(true);
+        if replace {
+            cutoff = Some((
+                baseline_time,
+                format!(
+                    "scaffold baseline metadata `{}`",
+                    BUSINESS_OS_APP_SCAFFOLD_BASELINE_MS_METADATA_KEY
+                ),
+            ));
+        }
+    }
+    Ok(cutoff)
+}
+
+fn queue_task_timestamp_to_system_time(
+    message_key: &str,
+    timestamp: &str,
+) -> anyhow::Result<SystemTime> {
+    let parsed = chrono::DateTime::parse_from_rfc3339(timestamp)
+        .with_context(|| format!("queue task `{message_key}` has invalid timestamp `{timestamp}`"))?
+        .with_timezone(&chrono::Utc);
+    Ok(UNIX_EPOCH
+        + Duration::from_secs(parsed.timestamp().max(0) as u64)
+        + Duration::from_nanos(parsed.timestamp_subsec_nanos() as u64))
+}
+
+fn queue_task_app_scaffold_baseline_time(
+    root: &Path,
+    message_key: &str,
+) -> anyhow::Result<Option<SystemTime>> {
+    let Some(value) = channels::queue_task_metadata_value(
+        root,
+        message_key,
+        BUSINESS_OS_APP_SCAFFOLD_BASELINE_MS_METADATA_KEY,
+    )?
+    else {
+        return Ok(None);
+    };
+    let baseline_ms = value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+        .or_else(|| value.as_str().and_then(|value| value.parse::<i64>().ok()))
+        .with_context(|| {
+            format!(
+                "queue task `{message_key}` has invalid `{}` metadata value `{value}`",
+                BUSINESS_OS_APP_SCAFFOLD_BASELINE_MS_METADATA_KEY
+            )
+        })?;
+    Ok(Some(
+        UNIX_EPOCH + Duration::from_millis(baseline_ms.max(0) as u64),
+    ))
 }
 
 pub fn complete_ready_documents_report_commands(
@@ -26693,7 +26750,7 @@ mod tests {
         .expect_err("pre-lease scaffold must not complete an app command");
         let report = format!("{error:#}");
         assert!(
-            report.contains("has no required app artifact written after its lease"),
+            report.contains("has no required app artifact written after its app-build baseline"),
             "unexpected error: {report}"
         );
         let task = channels::load_queue_task(root, &task_id)?
@@ -26760,6 +26817,65 @@ mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(status, "completed");
+        Ok(())
+    }
+
+    #[test]
+    fn app_validation_success_refuses_post_scaffold_baseline_only_completion() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let module_id = "subscriptions";
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_app_post_scaffold_baseline",
+                "module": "creator",
+                "type": "ctox.business_os.app.create",
+                "record_id": module_id,
+                "payload": {
+                    "title": "Build Subscriptions",
+                    "instruction": "Build a Business OS subscriptions app.",
+                    "module_id": module_id,
+                    "install_target": "runtime-installed-module",
+                    "target": "app"
+                },
+                "client_context": {
+                    "source": "business-os-app-creator-native-test",
+                    "target": "app"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queued task id")?
+            .to_string();
+        channels::lease_queue_task(root, &task_id, "ctox-service-test")?;
+        write_minimal_runtime_app_artifacts(root, module_id)?;
+        thread::sleep(Duration::from_millis(1100));
+        channels::set_queue_task_metadata_value(
+            root,
+            &task_id,
+            BUSINESS_OS_APP_SCAFFOLD_BASELINE_MS_METADATA_KEY,
+            Value::from(now_ms() as i64),
+        )?;
+
+        let error = complete_business_command_from_app_validation_success(
+            root,
+            &task_id,
+            Some(module_id),
+            "validated before any worker edit after scaffold baseline",
+        )
+        .expect_err("post-scaffold baseline without worker edits must not complete");
+        let report = format!("{error:#}");
+        assert!(
+            report.contains("has no required app artifact written after its app-build baseline"),
+            "unexpected error: {report}"
+        );
+        let task = channels::load_queue_task(root, &task_id)?
+            .context("expected queue task after refused completion")?;
+        assert_eq!(task.route_status, "leased");
         Ok(())
     }
 
