@@ -277,6 +277,31 @@ function queriedDataAttributes(indexJsText) {
   return attributes;
 }
 
+function htmlDataActions(indexHtmlText) {
+  const actions = new Set();
+  const pattern = /\bdata-action\s*=\s*(['"])([^'"]+)\1/g;
+  for (const match of String(indexHtmlText || '').matchAll(pattern)) {
+    const action = match[2].trim();
+    if (action) actions.add(action);
+  }
+  return actions;
+}
+
+function indexJsHandlesDataAction(indexJsText, action) {
+  const escaped = escapeRegExp(action);
+  const quoted = String.raw`['"\`]${escaped}['"\`]`;
+  if (new RegExp(String.raw`(?:===|==|case)\s*${quoted}`).test(indexJsText)) return true;
+  if (new RegExp(String.raw`${quoted}\s*:`).test(indexJsText)) return true;
+  if (
+    new RegExp(
+      String.raw`\[\s*data-action\s*=\s*["']${escaped}["']\s*\][\s\S]{0,320}\.addEventListener\s*\(\s*['"]click['"]`,
+    ).test(indexJsText)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function removeQuerySelectorArguments(indexJsText) {
   return indexJsText.replace(
     /\b(?:querySelector|querySelectorAll|closest|matches)\s*\(\s*(['"`])[\s\S]*?\1\s*\)/g,
@@ -827,6 +852,11 @@ if (installedMode) {
   }
   if (/<\s*(?:link|script|meta|title|style)\b/i.test(indexHtmlText)) {
     fail('installed App Creator module index.html must not include document/head resource tags such as <link>, <script>, <meta>, <title>, or <style>; attach CSS from index.js and let the Business OS shell import index.js');
+  }
+  for (const action of htmlDataActions(indexHtmlText)) {
+    if (!indexJsHandlesDataAction(indexJsText, action)) {
+      fail(`installed App Creator module index.html declares data-action="${action}" but index.js has no concrete click handler, action branch, or action-map entry for it`);
+    }
   }
   const selectorProducerText = `${indexHtmlText}\n${removeQuerySelectorArguments(indexJsText)}`;
   const selectorIgnore = new Set(['data-module-styles']);

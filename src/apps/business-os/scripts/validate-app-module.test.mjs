@@ -385,6 +385,16 @@ function installedIndexJsWith(extraLines = []) {
 
 {
   const root = makeWorkspace();
+  writeInstalledModule(root, 'unhandledaction', {
+    indexHtml: '<main class="good-module"><button type="button" data-action="follow-up">Review</button><button type="button" data-action="bulk-follow-up">Bulk</button></main>\n',
+  });
+  const run = runValidator(root, 'unhandledaction', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /index\.html declares data-action="bulk-follow-up" but index\.js has no concrete click handler/);
+}
+
+{
+  const root = makeWorkspace();
   writeInstalledModule(root, 'rootalias');
   writeFileSync(join(root, 'harness-module.json'), '{}\n');
   writeFileSync(join(root, 'harness-collections.schema.json'), '{}\n');
