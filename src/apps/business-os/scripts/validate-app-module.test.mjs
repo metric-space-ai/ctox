@@ -146,6 +146,10 @@ function writeInstalledModule(root, moduleId, overrides = {}) {
   writeFileSync(join(dir, 'tests/basic.test.mjs'), overrides.testJs || [
     "import assert from 'node:assert/strict';",
     "import { buildFollowUpCommand } from '../core/automation.mjs';",
+    "import { summarizeRecords, visibleRecords } from '../core/records.mjs';",
+    "const record = { id: 'demo', title: 'Demo', updated_at_ms: 1 };",
+    "assert.equal(visibleRecords([record]).length, 1);",
+    "assert.equal(summarizeRecords([record]).total, 1);",
     "const command = buildFollowUpCommand({ id: 'demo', title: 'Demo' });",
     "assert.equal(command.type, 'business_os.chat.task');",
     "assert.equal(command.command_type, 'business_os.chat.task');",
@@ -273,8 +277,8 @@ function installedIndexJsWith(extraLines = []) {
   const scaffoldRun = runScaffold(root, 'scaffolded', '--installed', '--title', 'Scaffolded App');
   assert.equal(scaffoldRun.status, 0, `${scaffoldRun.stderr}\n${scaffoldRun.stdout}`);
   const validateRun = runValidator(root, 'scaffolded', '--installed');
-  assert.equal(validateRun.status, 0, `${validateRun.stderr}\n${validateRun.stdout}`);
-  assert.match(validateRun.stdout, /validation OK: scaffolded \(installed mode\)/);
+  assert.notEqual(validateRun.status, 0);
+  assert.match(validateRun.stderr, /generic records scaffold/);
 
   const overwriteRun = runScaffold(root, 'scaffolded', '--installed');
   assert.notEqual(overwriteRun.status, 0);
@@ -293,7 +297,8 @@ function installedIndexJsWith(extraLines = []) {
   assert.equal(repairRun.status, 0, `${repairRun.stderr}\n${repairRun.stdout}`);
   assert.match(repairRun.stdout, /"repaired": true/);
   const validateRun = runValidator(root, 'repairmissing', '--installed');
-  assert.equal(validateRun.status, 0, `${validateRun.stderr}\n${validateRun.stdout}`);
+  assert.notEqual(validateRun.status, 0);
+  assert.match(validateRun.stderr, /generic records scaffold/);
 }
 
 {
@@ -986,6 +991,70 @@ function installedIndexJsWith(extraLines = []) {
 
 {
   const root = makeWorkspace();
+  writeInstalledModule(root, 'placeholdertest', {
+    testJs: [
+      "import { test } from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "test('placeholder', () => assert.equal(1, 1));",
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'placeholdertest', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /placeholder or tautological assertions/);
+  assert.match(run.stderr, /must import \.\.\/core\/records\.mjs/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'summarymismatch', {
+    indexJs: installedIndexJsWith([
+      '  const summary = {};',
+      "  ctx.host.dataset.mrr = String(summary.mrr || '');",
+    ]),
+  });
+  const run = runValidator(root, 'summarymismatch', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /index\.js reads summary\.mrr/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'genericscaffoldui', {
+    indexHtml: [
+      '<main class="good-module" data-module-root>',
+      '  <section aria-label="Records">',
+      '    <input type="search" data-search placeholder="Search records" />',
+      '    <select data-status-filter><option value="open">Open</option><option value="blocked">Blocked</option><option value="done">Done</option></select>',
+      '    <button type="button" data-action="follow-up">Follow up</button>',
+      '  </section>',
+      '  <section aria-label="Detail">',
+      '    <h2>Select a record</h2>',
+      '    <p>Use the list to open or create a record.</p>',
+      '    <form data-form>',
+      '      <label>Title<input name="title" /></label>',
+      '      <label>Status<select name="status"><option>Open</option><option>Blocked</option><option>Done</option></select></label>',
+      '      <label>Owner<input name="owner" /></label>',
+      '      <label>Due date<input name="due_at" type="date" /></label>',
+      '    </form>',
+      '  </section>',
+      '</main>',
+      '',
+    ].join('\n'),
+    indexJs: installedIndexJsWith([
+      '  const summary = { total: 0, open: 0, blocked: 0 };',
+      "  ctx.host.dataset.summary = `${summary.total}:${summary.open}:${summary.blocked}`;",
+      "  const record = { title: 'New record', owner: '', notes: '', due_at_ms: 0 };",
+      '  ctx.host.dataset.record = `${record.title}:${record.owner}:${record.notes}:${record.due_at_ms}`;',
+    ]),
+  });
+  const run = runValidator(root, 'genericscaffoldui', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /generic records scaffold/);
+}
+
+{
+  const root = makeWorkspace();
   writeInstalledModule(root, 'dataurltest', {
     testJs: [
       "import { readFile } from 'node:fs/promises';",
@@ -1020,6 +1089,10 @@ function installedIndexJsWith(extraLines = []) {
     testJs: [
       "import assert from 'node:assert/strict';",
       "import { buildFollowUpCommand } from '../core/automation.mjs';",
+      "import { summarizeRecords, visibleRecords } from '../core/records.mjs';",
+      "const record = { id: 'demo', title: 'Demo', updated_at_ms: 1 };",
+      "assert.equal(visibleRecords([record]).length, 1);",
+      "assert.equal(summarizeRecords([record]).total, 1);",
       "assert.equal('right reason', 'right reason');",
       "assert.equal('right selectors', 'right selectors');",
       "assert.equal(buildFollowUpCommand({ id: 'demo' }).command_type, 'business_os.chat.task');",

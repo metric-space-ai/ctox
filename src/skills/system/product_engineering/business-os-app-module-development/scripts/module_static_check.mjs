@@ -333,6 +333,63 @@ function collectCollectionReferenceFailures(runtimeFiles, manifest, schemaDoc) {
   return failuresOut;
 }
 
+function hasTrivialPlaceholderAssertion(text) {
+  return /\btest\s*\(\s*['"`]placeholder['"`]/i.test(text)
+    || /\bassert\.equal\s*\(\s*1\s*,\s*1\s*\)/.test(text)
+    || /\bassert\.equal\s*\(\s*1\s*\+\s*1\s*,\s*2\s*\)/.test(text)
+    || /\bassert\.ok\s*\(\s*true\s*\)/.test(text)
+    || /\bassert\.equal\s*\(\s*['"`]automation fixture['"`]\s*,\s*['"`]automation fixture['"`]\s*\)/.test(text);
+}
+
+function importsCoreHelper(text, helperName) {
+  const escaped = escapeRegExp(`../core/${helperName}.mjs`);
+  return new RegExp(String.raw`\bfrom\s+['"]${escaped}['"]`).test(text)
+    || new RegExp(String.raw`\bimport\s*\(\s*['"]${escaped}['"]\s*\)`).test(text);
+}
+
+function collectSummaryReferenceFailures(indexJsText, recordsJsText) {
+  const failuresOut = [];
+  const referenced = new Set();
+  for (const match of String(indexJsText || '').matchAll(/\bsummary\.([A-Za-z_$][\w$]*)/g)) {
+    referenced.add(match[1]);
+  }
+  for (const property of referenced) {
+    const escaped = escapeRegExp(property);
+    const propertyPattern = new RegExp(String.raw`(?:^|[,{]\s*)(?:${escaped}|['"]${escaped}['"])\s*:`, 'm');
+    if (!propertyPattern.test(recordsJsText)) {
+      failuresOut.push(
+        `index.js reads summary.${property}, but core/records.mjs does not visibly return a ${property} field from summarizeRecords; keep UI aggregate labels and helper output in lockstep`,
+      );
+    }
+  }
+  return failuresOut;
+}
+
+function countGenericScaffoldMarkers(indexHtmlText, indexJsText) {
+  const combined = `${indexHtmlText}\n${indexJsText}`;
+  const markers = [
+    /placeholder=["']Search records["']/i,
+    />\s*Open\s*</i,
+    />\s*Blocked\s*</i,
+    />\s*Done\s*</i,
+    /<label>\s*Title\s*<input\s+name=["']title["']/i,
+    /<label>\s*Status\s*<select\s+name=["']status["']/i,
+    /<label>\s*Owner\s*<input\s+name=["']owner["']/i,
+    /<label>\s*Due date\s*<input\s+name=["']due_at["']/i,
+    /Select a record/i,
+    /Use the list to open or create a record/i,
+    /\bsummary\.total\b/,
+    /\bsummary\.open\b/,
+    /\bsummary\.blocked\b/,
+    /\brecord\.title\b/,
+    /\brecord\.owner\b/,
+    /\brecord\.notes\b/,
+    /\bdue_at_ms\b/,
+    /New record/,
+  ];
+  return markers.reduce((count, regex) => count + (regex.test(combined) ? 1 : 0), 0);
+}
+
 function hasBusinessOsChatTaskCommandType(text) {
   if (/(?:command_type\s*:\s*['"]business_os\.chat\.task['"]|["']command_type["']\s*:\s*["']business_os\.chat\.task["'])/.test(text)) {
     return true;
@@ -659,6 +716,19 @@ if (testFiles.length === 0) {
   fail(`missing ${rel(join(moduleDir, 'tests'))}/*.test.mjs`);
 }
 
+if (installedMode && testFiles.length > 0) {
+  const allTestText = testFiles.map((path) => readFileSync(path, 'utf8')).join('\n');
+  if (!importsCoreHelper(allTestText, 'records')) {
+    fail('installed App Creator module tests must import ../core/records.mjs and assert record visibility, summary, or domain calculation behavior; placeholder or automation-only tests are too weak');
+  }
+  if (!importsCoreHelper(allTestText, 'automation')) {
+    fail('installed App Creator module tests must import ../core/automation.mjs and assert a real business_os.chat.task payload with concrete fixture facts');
+  }
+  if (!/\b(?:visibleRecords|summarizeRecords|createRecord)\s*\(/.test(allTestText)) {
+    fail('installed App Creator module tests must exercise record helper behavior such as createRecord, visibleRecords, or summarizeRecords');
+  }
+}
+
 for (const path of entries) {
   const name = path.split(sep).at(-1);
   if (!statSync(path).isDirectory()) continue;
@@ -720,6 +790,9 @@ for (const path of files.filter((file) => /\.(html|css|js|mjs)$/.test(file))) {
     }
   }
   if (isTestFile) {
+    if (installedMode && hasTrivialPlaceholderAssertion(text)) {
+      fail(`${rel(path)} contains placeholder or tautological assertions; generated App Creator tests must assert concrete record and automation behavior`);
+    }
     if (/data:text\/javascript/i.test(text)) {
       fail(`${rel(path)} imports local app source through a data: URL; test shared .mjs helpers and JSON/text parity instead`);
     }
@@ -927,6 +1000,11 @@ if (installedMode) {
   }
   const indexJsPath = join(moduleDir, 'index.js');
   const indexJsText = existsSync(indexJsPath) ? readFileSync(indexJsPath, 'utf8') : '';
+  const recordsJsPath = join(moduleDir, 'core/records.mjs');
+  const recordsJsText = existsSync(recordsJsPath) ? readFileSync(recordsJsPath, 'utf8') : '';
+  for (const message of collectSummaryReferenceFailures(indexJsText, recordsJsText)) {
+    fail(message);
+  }
   if (!/fetch\s*\(\s*new\s+URL\s*\(\s*['"]\.\/index\.html['"]\s*,\s*import\.meta\.url\s*\)/.test(indexJsText)) {
     fail('installed App Creator module index.js must load ./index.html with fetch(new URL(\'./index.html\', import.meta.url)) before DOM wiring');
   }
@@ -938,6 +1016,9 @@ if (installedMode) {
   }
   const indexHtmlPath = join(moduleDir, 'index.html');
   const indexHtmlText = existsSync(indexHtmlPath) ? readFileSync(indexHtmlPath, 'utf8') : '';
+  if (countGenericScaffoldMarkers(indexHtmlText, indexJsText) >= 7) {
+    fail('installed App Creator module still looks like the generic records scaffold; replace Title/Status/Open/Blocked/Done/Search-records UI and matching index.js branches with requested-domain fields, filters, summaries, and fixture facts before validation');
+  }
   if (/<!doctype\b|<\s*html\b|<\s*head\b|<\s*body\b/i.test(indexHtmlText)) {
     fail('installed App Creator module index.html must be a shell fragment, not a full HTML document; remove <!doctype>, <html>, <head>, and <body>');
   }

@@ -14,7 +14,7 @@ function usage() {
   return [
     'Usage: node src/apps/business-os/scripts/scaffold-app-module.mjs <module> [--installed|--source] [--workspace <path>] [--title <title>] [--collection <name>] [--description <text>] [--force] [--repair-missing] [--json]',
     '',
-    'Creates or repairs a validator-clean CTOX Business OS app module scaffold.',
+    'Creates or repairs a structurally complete CTOX Business OS app module scaffold.',
   ].join('\n');
 }
 
@@ -864,6 +864,7 @@ function contractTestJs(options) {
   return `import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import * as automation from '../core/automation.mjs';
+import { summarizeRecords, visibleRecords } from '../core/records.mjs';
 
 const shellCollections = new Set([
   'business_module_catalog',
@@ -893,6 +894,10 @@ const sample = {
   lowRows: [],
   records: [],
 };
+const visible = visibleRecords([sample]);
+const summary = summarizeRecords([sample]);
+assert.equal(visible.length, 1);
+assert.equal(summary.total, 1);
 const candidateArgs = [
   [sample],
   [sample.item],
