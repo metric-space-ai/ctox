@@ -1,12 +1,6 @@
 use anyhow::Context;
 use anyhow::Result;
 #[cfg(unix)]
-use libc::RLIMIT_NOFILE;
-#[cfg(unix)]
-use libc::SIG_IGN;
-#[cfg(unix)]
-use libc::SIGPIPE;
-#[cfg(unix)]
 use libc::geteuid;
 #[cfg(unix)]
 use libc::getrlimit;
@@ -18,9 +12,15 @@ use libc::setpgid;
 use libc::setrlimit;
 #[cfg(unix)]
 use libc::signal;
+#[cfg(unix)]
+use libc::RLIMIT_NOFILE;
+#[cfg(unix)]
+use libc::SIGPIPE;
+#[cfg(unix)]
+use libc::SIG_IGN;
+use rusqlite::params;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
-use rusqlite::params;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -90,8 +90,8 @@ use crate::service::core_state_machine::{
     CoreTransitionRequest, RuntimeLane,
 };
 use crate::service::core_transition_guard::{
-    CoreSpawnRequest, enforce_core_transition, ensure_core_transition_guard_schema,
-    evaluate_core_spawn,
+    enforce_core_transition, ensure_core_transition_guard_schema, evaluate_core_spawn,
+    CoreSpawnRequest,
 };
 use crate::state_invariants;
 use crate::verification;
@@ -1419,7 +1419,8 @@ fn release_stale_service_communication_leases_on_boot(
                     conversation_id: None,
                     severity: "info",
                     reason: "crash_recovery_stale_lease_reclaim",
-                    action_taken: "released stale service communication leases left by a prior crash at boot",
+                    action_taken:
+                        "released stale service communication leases left by a prior crash at boot",
                     details: serde_json::json!({ "released_count": count }),
                     idempotence_key: None,
                 },
@@ -1492,28 +1493,26 @@ fn is_non_work_tui_probe(prompt: &str) -> bool {
 }
 
 fn start_work_hours_dispatcher(root: PathBuf, state: Arc<Mutex<SharedState>>) {
-    thread::spawn(move || {
-        loop {
-            let tick = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                run_work_hours_dispatch_tick(&root, &state)
-            }));
-            match tick {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => push_event(
-                    &state,
-                    format!(
-                        "Working-hours dispatcher failed to lease durable queue task: {}",
-                        clip_text(&err.to_string(), 180)
-                    ),
+    thread::spawn(move || loop {
+        let tick = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_work_hours_dispatch_tick(&root, &state)
+        }));
+        match tick {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => push_event(
+                &state,
+                format!(
+                    "Working-hours dispatcher failed to lease durable queue task: {}",
+                    clip_text(&err.to_string(), 180)
                 ),
-                Err(_) => push_event(
-                    &state,
-                    "Working-hours dispatcher panicked during idle queue dispatch; continuing"
-                        .to_string(),
-                ),
-            }
-            thread::sleep(Duration::from_secs(IDLE_QUEUE_DISPATCH_POLL_SECS));
+            ),
+            Err(_) => push_event(
+                &state,
+                "Working-hours dispatcher panicked during idle queue dispatch; continuing"
+                    .to_string(),
+            ),
         }
+        thread::sleep(Duration::from_secs(IDLE_QUEUE_DISPATCH_POLL_SECS));
     });
 }
 
@@ -2900,21 +2899,8 @@ fn recover_business_os_app_queue_tasks_for_idle_status_snapshot(
                     summary.total()
                 ),
             );
-            maybe_queue_next_after_business_os_app_recovery(
-                root.to_path_buf(),
-                state.clone(),
-                "idle status snapshot",
-            );
         }
-        Ok(Ok(_)) => {
-            if runnable_business_os_app_queue_task_exists(root) {
-                maybe_queue_next_after_business_os_app_recovery(
-                    root.to_path_buf(),
-                    state.clone(),
-                    "idle status snapshot runnable app queue",
-                );
-            }
-        }
+        Ok(Ok(_)) => {}
         Ok(Err(err)) => push_event(
             state,
             format!(
@@ -2927,17 +2913,6 @@ fn recover_business_os_app_queue_tasks_for_idle_status_snapshot(
             "Business OS app recovery panicked during idle status snapshot; continuing".to_string(),
         ),
     }
-}
-
-fn runnable_business_os_app_queue_task_exists(root: &Path) -> bool {
-    let statuses = ["review_rework".to_string(), "pending".to_string()];
-    channels::list_queue_tasks(root, &statuses, 16)
-        .map(|tasks| {
-            tasks
-                .iter()
-                .any(|task| business_os_app_module_target_from_prompt(&task.prompt).is_some())
-        })
-        .unwrap_or(false)
 }
 
 fn begin_business_os_app_recovery_locked(shared: &mut SharedState, reason: &str) -> bool {
@@ -10758,37 +10733,33 @@ fn looks_like_internal_label(text: &str) -> bool {
 }
 
 fn start_channel_router(root: std::path::PathBuf, state: Arc<Mutex<SharedState>>) {
-    thread::spawn(move || {
-        loop {
-            let routed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                route_external_messages(&root, &state)
-            }));
-            match routed {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => {
-                    eprintln!("ctox channel route failed: {err:#}");
-                    push_event(&state, format!("Channel route failed: {err}"));
-                }
-                Err(_) => {
-                    eprintln!("ctox channel router panic; continuing");
-                    push_event(&state, "Channel router panicked; continuing".to_string());
-                }
+    thread::spawn(move || loop {
+        let routed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            route_external_messages(&root, &state)
+        }));
+        match routed {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                eprintln!("ctox channel route failed: {err:#}");
+                push_event(&state, format!("Channel route failed: {err}"));
             }
-            thread::sleep(Duration::from_secs(CHANNEL_ROUTER_POLL_SECS));
+            Err(_) => {
+                eprintln!("ctox channel router panic; continuing");
+                push_event(&state, "Channel router panicked; continuing".to_string());
+            }
         }
+        thread::sleep(Duration::from_secs(CHANNEL_ROUTER_POLL_SECS));
     });
 }
 
 fn start_business_os_app_recovery_loop(root: std::path::PathBuf, state: Arc<Mutex<SharedState>>) {
-    thread::spawn(move || {
-        loop {
-            maybe_spawn_business_os_app_recovery(
-                root.clone(),
-                state.clone(),
-                "dedicated app recovery loop",
-            );
-            thread::sleep(Duration::from_secs(BUSINESS_OS_APP_RECOVERY_POLL_SECS));
-        }
+    thread::spawn(move || loop {
+        maybe_spawn_business_os_app_recovery(
+            root.clone(),
+            state.clone(),
+            "dedicated app recovery loop",
+        );
+        thread::sleep(Duration::from_secs(BUSINESS_OS_APP_RECOVERY_POLL_SECS));
     });
 }
 
@@ -10870,50 +10841,11 @@ fn maybe_dispatch_after_business_os_app_recovery(
     }
 }
 
-fn maybe_queue_next_after_business_os_app_recovery(
-    root: PathBuf,
-    state: Arc<Mutex<SharedState>>,
-    reason: &'static str,
-) {
-    if active_agent_loop_in_progress(&state) {
-        return;
-    }
-    match maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state) {
-        Ok(Some(prompt)) => {
-            let event = decorate_service_event_with_skill(
-                &format!(
-                    "Queued durable queue task after Business OS app recovery during {reason}"
-                ),
-                prompt.suggested_skill.as_deref(),
-            );
-            let mut shared = lock_shared_state(&state);
-            track_leased_keys_locked(
-                &mut shared,
-                &prompt.leased_message_keys,
-                &prompt.leased_ticket_event_keys,
-            );
-            insert_pending_prompt_ordered(&mut shared.pending_prompts, prompt);
-            let pending = shared.pending_prompts.len();
-            push_event_locked(&mut shared, format!("{event} (queue #{pending})"));
-        }
-        Ok(None) => {}
-        Err(err) => push_event(
-            &state,
-            format!(
-                "Failed to queue next durable queue task after Business OS app recovery during {reason}: {}",
-                clip_text(&err.to_string(), 180)
-            ),
-        ),
-    }
-}
-
 fn start_channel_syncer(root: std::path::PathBuf) {
-    thread::spawn(move || {
-        loop {
-            let settings = live_service_settings(&root);
-            sync_configured_channels(&root, &settings);
-            thread::sleep(Duration::from_secs(channel_sync_poll_secs(&settings)));
-        }
+    thread::spawn(move || loop {
+        let settings = live_service_settings(&root);
+        sync_configured_channels(&root, &settings);
+        thread::sleep(Duration::from_secs(channel_sync_poll_secs(&settings)));
     });
 }
 
@@ -11125,7 +11057,8 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
                 conversation_id: None,
                 severity: "info",
                 reason: "queue_pressure_active",
-                action_taken: "skipped downstream channel-router stages while queue pressure is active",
+                action_taken:
+                    "skipped downstream channel-router stages while queue pressure is active",
                 details: serde_json::json!({}),
                 idempotence_key: Some("queue-pressure-router-skip"),
             },
@@ -11576,7 +11509,8 @@ fn handle_channel_router_guard_block(
             conversation_id: None,
             severity: "warning",
             reason: &reason,
-            action_taken: "kept channel router alive and skipped this guarded background routing stage",
+            action_taken:
+                "kept channel router alive and skipped this guarded background routing stage",
             details: serde_json::json!({
                 "stage": stage,
             }),
@@ -12200,7 +12134,8 @@ fn reconcile_ticket_runtime_state(root: &Path, state: &Arc<Mutex<SharedState>>) 
                 mechanism_id: "ticket_reconciliation",
                 conversation_id: None,
                 severity: "info",
-                reason: "blocked ticket events became preparable after knowledge/control state changed",
+                reason:
+                    "blocked ticket events became preparable after knowledge/control state changed",
                 action_taken: "released blocked ticket events back to pending",
                 details: serde_json::json!({
                     "released_event_keys": released_blocked.clone(),
@@ -12399,63 +12334,104 @@ fn enqueue_prompt(
     event: String,
 ) {
     let event = decorate_service_event_with_skill(&event, prompt.suggested_skill.as_deref());
+    let release_deferred_durable_queue_prompt = prompt.source_label == "queue"
+        && !prompt.leased_message_keys.is_empty()
+        && prompt.leased_ticket_event_keys.is_empty();
+    let mut deferred_durable_release: Option<(Vec<String>, String)> = None;
     let queued = {
         let mut shared = lock_shared_state(state);
-        track_leased_keys_locked(
-            &mut shared,
-            &prompt.leased_message_keys,
-            &prompt.leased_ticket_event_keys,
-        );
         let runtime_backoff_remaining = runtime_blocker_backoff_remaining_secs(&shared);
+        let active_agent_loop = shared.busy || shared.worker_active_count > 0;
         if let Some(reason) = crate::service::working_hours::hold_reason(root) {
-            insert_pending_prompt_ordered(&mut shared.pending_prompts, prompt.clone());
-            let pending = shared.pending_prompts.len();
-            push_event_locked(
-                &mut shared,
-                format!("{event} (queue #{pending}, outside working hours: {reason})"),
-            );
-            true
-        } else if shared.busy || runtime_backoff_remaining.is_some() {
-            insert_pending_prompt_ordered(&mut shared.pending_prompts, prompt.clone());
-            let pending = shared.pending_prompts.len();
-            if let Some(remaining_secs) = runtime_backoff_remaining {
-                let last_error = shared.last_error.clone().unwrap_or_default();
-                let event_key = format!(
-                    "runtime-backoff:{}:{}",
-                    normalize_token(&clip_text(&last_error, 96)),
-                    pending
+            if release_deferred_durable_queue_prompt {
+                let reason = format!("outside working hours: {reason}");
+                deferred_durable_release =
+                    Some((prompt.leased_message_keys.clone(), reason.clone()));
+                push_event_locked(
+                    &mut shared,
+                    format!("{event} (released durable queue lease; {reason})"),
                 );
-                if let Err(err) = governance::record_event(
-                    root,
-                    governance::GovernanceEventRequest {
-                        mechanism_id: "runtime_blocker_backoff",
-                        conversation_id: Some(turn_loop::CHAT_CONVERSATION_ID),
-                        severity: "warning",
-                        reason: "hard runtime blocker cooldown is deferring new prompt dispatch",
-                        action_taken: "kept the new prompt queued until the runtime cooldown expires",
-                        details: serde_json::json!({
-                            "remaining_secs": remaining_secs,
-                            "pending": pending,
-                            "source_label": prompt.source_label,
-                            "error": clip_text(&last_error, 180),
-                        }),
-                        idempotence_key: Some(&event_key),
-                    },
-                ) {
-                    push_event_locked(
-                        &mut shared,
-                        format!("Runtime blocker backoff event persistence failed: {err}"),
-                    );
-                }
+                true
+            } else {
+                track_leased_keys_locked(
+                    &mut shared,
+                    &prompt.leased_message_keys,
+                    &prompt.leased_ticket_event_keys,
+                );
+                insert_pending_prompt_ordered(&mut shared.pending_prompts, prompt.clone());
+                let pending = shared.pending_prompts.len();
+                push_event_locked(
+                    &mut shared,
+                    format!("{event} (queue #{pending}, outside working hours: {reason})"),
+                );
+                true
             }
-            ensure_queue_guard_locked(root, &mut shared);
-            let pending = shared.pending_prompts.len();
-            let reason = runtime_backoff_remaining
-                .map(|secs| format!("runtime blocker cooldown {secs}s"))
-                .unwrap_or_else(|| "service busy".to_string());
-            push_event_locked(&mut shared, format!("{event} (queue #{pending}, {reason})"));
-            true
+        } else if active_agent_loop || runtime_backoff_remaining.is_some() {
+            let reason = if active_agent_loop {
+                "active agent loop".to_string()
+            } else {
+                runtime_backoff_remaining
+                    .map(|secs| format!("runtime blocker cooldown {secs}s"))
+                    .unwrap_or_else(|| "service busy".to_string())
+            };
+            if release_deferred_durable_queue_prompt {
+                deferred_durable_release =
+                    Some((prompt.leased_message_keys.clone(), reason.clone()));
+                push_event_locked(
+                    &mut shared,
+                    format!("{event} (released durable queue lease; {reason})"),
+                );
+                true
+            } else {
+                track_leased_keys_locked(
+                    &mut shared,
+                    &prompt.leased_message_keys,
+                    &prompt.leased_ticket_event_keys,
+                );
+                insert_pending_prompt_ordered(&mut shared.pending_prompts, prompt.clone());
+                let pending = shared.pending_prompts.len();
+                if let Some(remaining_secs) = runtime_backoff_remaining {
+                    let last_error = shared.last_error.clone().unwrap_or_default();
+                    let event_key = format!(
+                        "runtime-backoff:{}:{}",
+                        normalize_token(&clip_text(&last_error, 96)),
+                        pending
+                    );
+                    if let Err(err) = governance::record_event(
+                        root,
+                        governance::GovernanceEventRequest {
+                            mechanism_id: "runtime_blocker_backoff",
+                            conversation_id: Some(turn_loop::CHAT_CONVERSATION_ID),
+                            severity: "warning",
+                            reason:
+                                "hard runtime blocker cooldown is deferring new prompt dispatch",
+                            action_taken:
+                                "kept the new prompt queued until the runtime cooldown expires",
+                            details: serde_json::json!({
+                                "remaining_secs": remaining_secs,
+                                "pending": pending,
+                                "source_label": prompt.source_label,
+                                "error": clip_text(&last_error, 180),
+                            }),
+                            idempotence_key: Some(&event_key),
+                        },
+                    ) {
+                        push_event_locked(
+                            &mut shared,
+                            format!("Runtime blocker backoff event persistence failed: {err}"),
+                        );
+                    }
+                }
+                ensure_queue_guard_locked(root, &mut shared);
+                push_event_locked(&mut shared, format!("{event} (queue #{pending}, {reason})"));
+                true
+            }
         } else {
+            track_leased_keys_locked(
+                &mut shared,
+                &prompt.leased_message_keys,
+                &prompt.leased_ticket_event_keys,
+            );
             shared.busy = true;
             shared.current_goal_preview = Some(prompt.preview.clone());
             shared.active_source_label = Some(prompt.source_label.clone());
@@ -12466,6 +12442,18 @@ fn enqueue_prompt(
             false
         }
     };
+    if let Some((message_keys, reason)) = deferred_durable_release {
+        if let Err(err) = channels::ack_leased_messages(root, &message_keys, "pending") {
+            push_event(
+                state,
+                format!(
+                    "Failed to release deferred durable queue lease(s) back to pending after {reason}: {}",
+                    clip_text(&err.to_string(), 180)
+                ),
+            );
+        }
+        return;
+    }
     if !queued {
         start_prompt_worker(root.to_path_buf(), state.clone(), prompt);
     }
@@ -16877,7 +16865,8 @@ fn maybe_enqueue_timeout_continuation(
             conversation_id: Some(turn_loop::CHAT_CONVERSATION_ID),
             severity: "error",
             reason: "the agent turn hit the runtime time budget",
-            action_taken: "suppressed timeout continuation spawn; original queue scope must retry or defer",
+            action_taken:
+                "suppressed timeout continuation spawn; original queue scope must retry or defer",
             details: serde_json::json!({
                 "source_label": job.source_label,
                 "thread_key": job.thread_key.clone(),
@@ -17643,8 +17632,8 @@ struct SystemdUnitStatus {
 /// sub-second refresh ticks; a fresh probe costs three systemctl spawns.
 /// `start_background`/`stop_background` drop the cache on every exit path
 /// so an in-process toggle is visible on the next poll.
-fn systemd_unit_status_cache()
--> &'static Mutex<Option<(Instant, PathBuf, Option<SystemdUnitStatus>)>> {
+fn systemd_unit_status_cache(
+) -> &'static Mutex<Option<(Instant, PathBuf, Option<SystemdUnitStatus>)>> {
     static CACHE: OnceLock<Mutex<Option<(Instant, PathBuf, Option<SystemdUnitStatus>)>>> =
         OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(None))
@@ -17921,6 +17910,39 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    fn seed_business_os_app_artifacts(root: &Path, module_id: &str) {
+        let artifact_dir = root
+            .join("runtime/business-os/installed-modules")
+            .join(module_id);
+        let domain_text = match module_id {
+            "subscriptions" => {
+                "subscription recurring revenue mrr renewal churn risk customer follow-up automation"
+            }
+            "inventory" => "inventory warehouse stock reorder point pick list location automation",
+            "projects" => {
+                "project customer order milestone budget actual fixed price time material automation"
+            }
+            "contracts" => "contract customer sla renewal cancellation deadline owner automation",
+            "quality" => "quality compliance complaint corrective action audit risk due date automation",
+            _ => "business os module domain records follow-up automation",
+        };
+        let artifact_text =
+            format!("{domain_text} create allowed artifact directory command type schema ui test");
+        for relative in BUSINESS_OS_APP_REQUIRED_ARTIFACTS {
+            let path = artifact_dir.join(relative);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("create app artifact parent");
+            }
+            std::fs::write(path, &artifact_text).expect("write app artifact fixture");
+        }
+        std::fs::create_dir_all(artifact_dir.join("tests")).expect("create app tests dir");
+        std::fs::write(
+            artifact_dir.join("tests/basic.test.mjs"),
+            format!("// {artifact_text}\nexport {{}};\n"),
+        )
+        .expect("write app test fixture");
     }
 
     fn seed_business_os_app_module_fixture(root: &Path, module_id: &str) {
@@ -18345,17 +18367,12 @@ mod tests {
 
         let evidence = review_external_work_backing_evidence_summaries(&root, &job);
         assert!(evidence.iter().any(|line| line.contains("queue_open=1")));
-        assert!(
-            evidence
-                .iter()
-                .any(|line| line
-                    .contains("new_task, update_existing, merge_duplicate, extend_scope"))
-        );
-        assert!(
-            evidence
-                .iter()
-                .any(|line| line.contains(&format!("message_key={}", queue_task.message_key)))
-        );
+        assert!(evidence
+            .iter()
+            .any(|line| line.contains("new_task, update_existing, merge_duplicate, extend_scope")));
+        assert!(evidence
+            .iter()
+            .any(|line| line.contains(&format!("message_key={}", queue_task.message_key))));
         assert!(evidence.iter().any(|line| {
             line.contains("Merge duplicate scraper request into existing Intersolar task")
         }));
@@ -18408,11 +18425,9 @@ mod tests {
         });
         let missing_target = communication_pipeline_resolution_guard_outcome(&request, &outcome)
             .expect("pipeline mutation without target must be rejected");
-        assert!(
-            missing_target
-                .summary
-                .contains("names no durable target item")
-        );
+        assert!(missing_target
+            .summary
+            .contains("names no durable target item"));
 
         outcome.pipeline_resolution = Some(review::PipelineResolution {
             action: review::PipelineResolutionAction::BlockedNeedsClarification,
@@ -18420,10 +18435,8 @@ mod tests {
             rationale: "Asked for the missing account id before changing queued work.".to_string(),
         });
         let approval_summary = communication_review_approval_summary(&outcome);
-        assert!(
-            approval_summary
-                .contains("PIPELINE_RESOLUTION: action=blocked_needs_clarification | target=none")
-        );
+        assert!(approval_summary
+            .contains("PIPELINE_RESOLUTION: action=blocked_needs_clarification | target=none"));
     }
 
     #[test]
@@ -18661,11 +18674,9 @@ mod tests {
         );
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
-        assert!(
-            events
-                .iter()
-                .any(|event| event.mechanism_id == "queue_pressure_guard")
-        );
+        assert!(events
+            .iter()
+            .any(|event| event.mechanism_id == "queue_pressure_guard"));
     }
 
     #[test]
@@ -18703,11 +18714,9 @@ mod tests {
             let shared = lock_shared_state(&state);
             shared.recent_events.iter().cloned().collect::<Vec<_>>()
         };
-        assert!(
-            recent_events
-                .iter()
-                .any(|event| event.contains("State invariants at boot"))
-        );
+        assert!(recent_events
+            .iter()
+            .any(|event| event.contains("State invariants at boot")));
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
         assert!(events.iter().any(|event| {
@@ -18758,11 +18767,9 @@ mod tests {
             let shared = lock_shared_state(&state);
             shared.recent_events.iter().cloned().collect::<Vec<_>>()
         };
-        assert!(
-            recent_events
-                .iter()
-                .any(|event| event.contains("State invariants repaired at boot"))
-        );
+        assert!(recent_events
+            .iter()
+            .any(|event| event.contains("State invariants repaired at boot")));
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
         assert!(events.iter().any(|event| {
@@ -18965,12 +18972,10 @@ mod tests {
             turn_loop::CHAT_CONVERSATION_ID,
         )
         .expect("failed to evaluate initial invariants");
-        assert!(
-            before
-                .violations
-                .iter()
-                .any(|issue| { issue.code == "closed_mission_with_open_runtime_work" })
-        );
+        assert!(before
+            .violations
+            .iter()
+            .any(|issue| { issue.code == "closed_mission_with_open_runtime_work" }));
 
         let state = Arc::new(Mutex::new(SharedState::default()));
         let repaired =
@@ -18996,12 +19001,10 @@ mod tests {
             .expect("failed to reload continuity");
         assert_ne!(continuity.focus.head_commit_id, "contbase_1_focus");
         assert!(continuity.focus.content.contains("- Mission state: active"));
-        assert!(
-            continuity
-                .focus
-                .content
-                .contains("- Continuation mode: continuous")
-        );
+        assert!(continuity
+            .focus
+            .content
+            .contains("- Continuation mode: continuous"));
 
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
@@ -19067,12 +19070,10 @@ mod tests {
             turn_loop::CHAT_CONVERSATION_ID,
         )
         .expect("failed to evaluate sparse-open invariants");
-        assert!(
-            before
-                .violations
-                .iter()
-                .any(|issue| { issue.code == "mission_state_requires_continuity_resync" })
-        );
+        assert!(before
+            .violations
+            .iter()
+            .any(|issue| { issue.code == "mission_state_requires_continuity_resync" }));
 
         let state = Arc::new(Mutex::new(SharedState::default()));
         let repaired =
@@ -19102,18 +19103,14 @@ mod tests {
         let continuity = engine
             .stored_continuity_show_all(turn_loop::CHAT_CONVERSATION_ID)
             .expect("failed to reload continuity");
-        assert!(
-            continuity
-                .focus
-                .content
-                .contains("- Mission: Spill restore: Deferred documentation review")
-        );
-        assert!(
-            continuity
-                .focus
-                .content
-                .contains("- Next slice: Spill restore: Deferred documentation review")
-        );
+        assert!(continuity
+            .focus
+            .content
+            .contains("- Mission: Spill restore: Deferred documentation review"));
+        assert!(continuity
+            .focus
+            .content
+            .contains("- Next slice: Spill restore: Deferred documentation review"));
     }
 
     #[test]
@@ -19210,12 +19207,10 @@ mod tests {
 
         ensure_queue_guard_locked(&root, &mut shared);
 
-        assert!(
-            shared
-                .pending_prompts
-                .iter()
-                .all(|item| item.source_label != QUEUE_GUARD_SOURCE_LABEL)
-        );
+        assert!(shared
+            .pending_prompts
+            .iter()
+            .all(|item| item.source_label != QUEUE_GUARD_SOURCE_LABEL));
     }
 
     #[test]
@@ -19246,12 +19241,10 @@ mod tests {
             shared.pending_prompts.front().unwrap().leased_message_keys,
             vec!["queue:system::next".to_string()]
         );
-        assert!(
-            shared
-                .recent_events
-                .iter()
-                .any(|event| event.contains("outcome-witness recovery"))
-        );
+        assert!(shared
+            .recent_events
+            .iter()
+            .any(|event| event.contains("outcome-witness recovery")));
     }
 
     #[test]
@@ -19362,21 +19355,17 @@ mod tests {
 
         let shared = state.lock().expect("state poisoned");
         assert!(shared.pending_prompts.is_empty());
-        assert!(
-            shared
-                .recent_events
-                .iter()
-                .any(|item| item.contains("Blocked ticket event"))
-        );
+        assert!(shared
+            .recent_events
+            .iter()
+            .any(|item| item.contains("Blocked ticket event")));
         drop(shared);
 
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
-        assert!(
-            events
-                .iter()
-                .any(|event| event.mechanism_id == "ticket_control_gate")
-        );
+        assert!(events
+            .iter()
+            .any(|event| event.mechanism_id == "ticket_control_gate"));
     }
 
     #[test]
@@ -19413,12 +19402,10 @@ mod tests {
             .expect("queued prompt missing");
         assert_eq!(prompt.suggested_skill.as_deref(), Some("system-onboarding"));
         assert_eq!(prompt.source_label, "queue");
-        assert!(
-            shared
-                .recent_events
-                .iter()
-                .any(|event| event.contains("skill system-onboarding"))
-        );
+        assert!(shared
+            .recent_events
+            .iter()
+            .any(|event| event.contains("skill system-onboarding")));
     }
 
     #[test]
@@ -19460,10 +19447,8 @@ mod tests {
         ));
         assert!(prompt.contains("ticket source-skill-review-note --case-id case-1"));
         assert!(prompt.contains("Oeffentliche Ticketantwort:"));
-        assert!(
-            prompt
-                .contains("ticket writeback-comment --case-id case-1 --body \\\"<reply text>\\\"")
-        );
+        assert!(prompt
+            .contains("ticket writeback-comment --case-id case-1 --body \\\"<reply text>\\\""));
         assert!(prompt.contains("--internal"));
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -19579,12 +19564,10 @@ mod tests {
             .expect("queued prompt missing");
         assert_eq!(prompt.source_label, "ticket:local");
         assert_eq!(prompt.suggested_skill.as_deref(), Some("system-onboarding"));
-        assert!(
-            shared
-                .recent_events
-                .iter()
-                .any(|event| event.contains("skill system-onboarding"))
-        );
+        assert!(shared
+            .recent_events
+            .iter()
+            .any(|event| event.contains("skill system-onboarding")));
     }
 
     #[test]
@@ -19644,12 +19627,10 @@ mod tests {
             .expect("queued prompt missing");
         assert_eq!(prompt.source_label, "ticket:local");
         assert_eq!(prompt.suggested_skill.as_deref(), Some("system-onboarding"));
-        assert!(
-            shared
-                .recent_events
-                .iter()
-                .any(|event| event.contains("skill system-onboarding"))
-        );
+        assert!(shared
+            .recent_events
+            .iter()
+            .any(|event| event.contains("skill system-onboarding")));
     }
 
     #[test]
@@ -19704,12 +19685,10 @@ mod tests {
             .expect("self-work missing after routing");
         assert_eq!(routed.state, "queued");
         let shared = state.lock().expect("state poisoned");
-        assert!(
-            shared
-                .recent_events
-                .iter()
-                .any(|event| event.contains("Queued internal work"))
-        );
+        assert!(shared
+            .recent_events
+            .iter()
+            .any(|event| event.contains("Queued internal work")));
     }
 
     #[test]
@@ -19790,12 +19769,10 @@ mod tests {
             prompt.suggested_skill.as_deref(),
             Some("roller-ticket-desk-operator-v4")
         );
-        assert!(
-            shared
-                .recent_events
-                .iter()
-                .any(|event| event.contains("skill roller-ticket-desk-operator-v4"))
-        );
+        assert!(shared
+            .recent_events
+            .iter()
+            .any(|event| event.contains("skill roller-ticket-desk-operator-v4")));
     }
 
     #[test]
@@ -19898,16 +19875,12 @@ mod tests {
 
         let shared = lock_shared_state(&state);
         assert_eq!(shared.pending_prompts.len(), 1);
-        assert!(
-            !shared.pending_prompts[0]
-                .prompt
-                .contains("sk-proj-service-secret-1234567890")
-        );
-        assert!(
-            shared.pending_prompts[0]
-                .prompt
-                .contains("[secret-ref:credentials/OPENAI_API_KEY")
-        );
+        assert!(!shared.pending_prompts[0]
+            .prompt
+            .contains("sk-proj-service-secret-1234567890"));
+        assert!(shared.pending_prompts[0]
+            .prompt
+            .contains("[secret-ref:credentials/OPENAI_API_KEY"));
         assert_eq!(
             shared.pending_prompts[0].suggested_skill.as_deref(),
             Some("secret-hygiene")
@@ -19931,11 +19904,9 @@ mod tests {
 
         assert_eq!(prepared.suggested_skill.as_deref(), Some("secret-hygiene"));
         assert!(prepared.auto_ingested_secrets >= 1);
-        assert!(
-            prepared
-                .prompt
-                .contains("[secret-ref:credentials/OPENAI_API_KEY")
-        );
+        assert!(prepared
+            .prompt
+            .contains("[secret-ref:credentials/OPENAI_API_KEY"));
     }
 
     #[test]
@@ -19991,12 +19962,10 @@ mod tests {
         assert_eq!(status.pending_count, 0);
         assert!(status.pending_previews.is_empty());
         assert_eq!(status.blocked_count, 1);
-        assert!(
-            status
-                .blocked_previews
-                .iter()
-                .any(|preview| preview.contains("queue blocked  HY3 smoke artifact missing"))
-        );
+        assert!(status
+            .blocked_previews
+            .iter()
+            .any(|preview| preview.contains("queue blocked  HY3 smoke artifact missing")));
     }
 
     #[test]
@@ -20126,12 +20095,10 @@ mod tests {
         assert_eq!(status.pid, Some(4242));
         assert_eq!(status.pending_count, 1);
         assert!(status.business_os.is_some());
-        assert!(
-            status
-                .recent_events
-                .iter()
-                .any(|event| event.contains("system-onboarding"))
-        );
+        assert!(status
+            .recent_events
+            .iter()
+            .any(|event| event.contains("system-onboarding")));
     }
 
     #[cfg(unix)]
@@ -20373,10 +20340,8 @@ mod tests {
             "Implement the requested slice.",
             Some("/tmp/ctox-workspace-contract"),
         );
-        assert!(
-            prompt
-                .starts_with("Work only inside this workspace:\n/tmp/ctox-workspace-contract\n\n")
-        );
+        assert!(prompt
+            .starts_with("Work only inside this workspace:\n/tmp/ctox-workspace-contract\n\n"));
         assert!(prompt.contains("Implement the requested slice."));
 
         let timeout_prompt = render_timeout_continue_prompt(
@@ -20384,10 +20349,8 @@ mod tests {
             "execution timed out after 180s",
             Some("/tmp/ctox-workspace-contract"),
         );
-        assert!(
-            timeout_prompt
-                .contains("Work only inside this workspace:\n/tmp/ctox-workspace-contract")
-        );
+        assert!(timeout_prompt
+            .contains("Work only inside this workspace:\n/tmp/ctox-workspace-contract"));
         assert!(timeout_prompt.contains("CURRENT TASK\nShip the next implementation slice."));
     }
 
@@ -20505,11 +20468,9 @@ mod tests {
             "CTO_MEETING_AUTO_JOIN_ENABLED".to_string(),
             "false".to_string(),
         );
-        assert!(
-            meeting_auto_join_policy_block(&settings, &message)
-                .expect("disabled block")
-                .contains("auto-join disabled")
-        );
+        assert!(meeting_auto_join_policy_block(&settings, &message)
+            .expect("disabled block")
+            .contains("auto-join disabled"));
 
         settings.insert(
             "CTO_MEETING_AUTO_JOIN_ENABLED".to_string(),
@@ -20519,11 +20480,9 @@ mod tests {
             "CTO_MEETING_ALLOWED_INVITE_SENDERS".to_string(),
             "scheduler@example.com,@trusted.example".to_string(),
         );
-        assert!(
-            meeting_auto_join_policy_block(&settings, &message)
-                .expect("sender block")
-                .contains("not in")
-        );
+        assert!(meeting_auto_join_policy_block(&settings, &message)
+            .expect("sender block")
+            .contains("not in"));
 
         let allowed_exact = routed_email_message("scheduler@example.com");
         assert_eq!(
@@ -20593,12 +20552,10 @@ mod tests {
 
         let shared = state.lock().expect("state poisoned");
         assert!(shared.pending_prompts.is_empty());
-        assert!(
-            shared
-                .recent_events
-                .iter()
-                .any(|event| event.contains("Ignored non-work TUI route"))
-        );
+        assert!(shared
+            .recent_events
+            .iter()
+            .any(|event| event.contains("Ignored non-work TUI route")));
         drop(shared);
         assert_eq!(route_status_for(&root, "tui-probe-1"), "handled");
         let _ = std::fs::remove_dir_all(&root);
@@ -21001,12 +20958,10 @@ mod tests {
             pending.front().map(|item| item.source_label.as_str()),
             Some("tui")
         );
-        assert!(
-            pending
-                .front()
-                .and_then(|item| item.outbound_email.as_ref())
-                .is_some()
-        );
+        assert!(pending
+            .front()
+            .and_then(|item| item.outbound_email.as_ref())
+            .is_some());
         assert_eq!(
             pending.back().map(|item| item.source_label.as_str()),
             Some("email:founder")
@@ -21280,11 +21235,9 @@ mod tests {
         assert!(self_work.is_empty());
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
-        assert!(
-            events
-                .iter()
-                .any(|event| event.mechanism_id == "turn_timeout_continuation")
-        );
+        assert!(events
+            .iter()
+            .any(|event| event.mechanism_id == "turn_timeout_continuation"));
     }
 
     #[test]
@@ -21317,12 +21270,10 @@ mod tests {
             maybe_enqueue_timeout_continuation(&root, &job, "direct session timeout after 900s")
                 .expect("timeout recovery should succeed");
 
-        assert!(
-            created
-                .as_deref()
-                .unwrap_or_default()
-                .starts_with("Recover interrupted Run artifact controller")
-        );
+        assert!(created
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("Recover interrupted Run artifact controller"));
         let pending = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
             .expect("failed to list pending queue tasks");
         assert_eq!(pending.len(), 1);
@@ -21332,11 +21283,9 @@ mod tests {
             job.workspace_root.as_deref()
         );
         assert_eq!(pending[0].parent_message_key, None);
-        assert!(
-            pending[0]
-                .prompt
-                .contains("DURABLE FILES THAT MUST STAY UPDATED")
-        );
+        assert!(pending[0]
+            .prompt
+            .contains("DURABLE FILES THAT MUST STAY UPDATED"));
         assert!(pending[0].prompt.contains(controller.to_str().unwrap()));
         assert!(pending[0].prompt.contains(logbook.to_str().unwrap()));
         let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
@@ -21524,22 +21473,18 @@ mod tests {
         let shared = state.lock().expect("state poisoned");
         assert!(!shared.busy);
         assert!(shared.active_source_label.is_none());
-        assert!(
-            !shared
-                .leased_message_keys_inflight
-                .contains(&task.message_key)
-        );
+        assert!(!shared
+            .leased_message_keys_inflight
+            .contains(&task.message_key));
         assert!(shared.recent_events.iter().any(|event| {
             event.contains("Suppressed fatal harness continuation before model execution")
         }));
         drop(shared);
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
-        assert!(
-            events
-                .iter()
-                .any(|event| event.mechanism_id == "fatal_harness_loop_guard")
-        );
+        assert!(events
+            .iter()
+            .any(|event| event.mechanism_id == "fatal_harness_loop_guard"));
     }
 
     #[test]
@@ -21875,16 +21820,12 @@ Business OS command:
         let reloaded = channels::load_queue_task(&root, &task.message_key)
             .expect("load failed")
             .expect("missing queue task");
-        assert!(
-            reloaded
-                .prompt
-                .contains("Business OS app artifact validation failed.")
-        );
-        assert!(
-            reloaded
-                .prompt
-                .contains("module.json install_scope must be installed")
-        );
+        assert!(reloaded
+            .prompt
+            .contains("Business OS app artifact validation failed."));
+        assert!(reloaded
+            .prompt
+            .contains("module.json install_scope must be installed"));
         assert!(reloaded.prompt.contains("Original task remains active"));
         assert_eq!(route_status_for(&root, &task.message_key), "review_rework");
         let conn =
@@ -21967,11 +21908,9 @@ Business OS command:
             .expect("load failed")
             .expect("missing queue task");
         assert_eq!(route_status_for(&root, &task.message_key), "review_rework");
-        assert!(
-            reloaded
-                .prompt
-                .contains("Business OS app artifact validation failed.")
-        );
+        assert!(reloaded
+            .prompt
+            .contains("Business OS app artifact validation failed."));
         assert!(reloaded.prompt.contains("layout.right is not allowed"));
         assert!(reloaded.prompt.contains("Original task remains active"));
         let conn =
@@ -22409,11 +22348,9 @@ Business OS command:
         let reloaded = channels::load_queue_task(&root, &task.message_key)
             .expect("load failed")
             .expect("missing queue task");
-        assert!(
-            reloaded
-                .prompt
-                .contains("Business OS app artifact validation failed.")
-        );
+        assert!(reloaded
+            .prompt
+            .contains("Business OS app artifact validation failed."));
         assert!(reloaded.prompt.contains("missing index.js and tests"));
         let shared = lock_shared_state(&state);
         assert!(
@@ -22686,6 +22623,7 @@ Business OS command:
             },
         )
         .expect("failed to create app queue task");
+        seed_business_os_app_artifacts(&root, "projects");
         channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
             .expect("failed to lease app queue task");
         let state = Arc::new(Mutex::new(SharedState::default()));
@@ -22702,7 +22640,7 @@ Business OS command:
     }
 
     #[test]
-    fn status_snapshot_recovery_dispatches_next_app_queue_task_after_green_lease() {
+    fn status_snapshot_recovery_does_not_prefetch_next_app_queue_task_after_green_lease() {
         let root = temp_root("status-snapshot-green-app-dispatch-next");
         let script_dir = root.join("src/apps/business-os/scripts");
         std::fs::create_dir_all(&script_dir).expect("create validator script dir");
@@ -22725,6 +22663,7 @@ Business OS command:
             },
         )
         .expect("failed to create completed app queue task");
+        seed_business_os_app_artifacts(&root, "subscriptions");
         channels::lease_queue_task(&root, &completed_task.message_key, "ctox-service-test")
             .expect("failed to lease completed app queue task");
         let next_task = channels::create_queue_task(
@@ -22749,17 +22688,13 @@ Business OS command:
             route_status_for(&root, &completed_task.message_key),
             "handled"
         );
-        assert_eq!(route_status_for(&root, &next_task.message_key), "leased");
+        assert_eq!(route_status_for(&root, &next_task.message_key), "pending");
         let shared = lock_shared_state(&state);
-        assert_eq!(shared.pending_prompts.len(), 1);
-        assert_eq!(
-            shared.pending_prompts[0].leased_message_keys,
-            vec![next_task.message_key.clone()]
-        );
+        assert!(shared.pending_prompts.is_empty());
     }
 
     #[test]
-    fn idle_status_snapshot_queues_pending_business_os_app_task() {
+    fn idle_status_snapshot_does_not_lease_pending_business_os_app_task() {
         let root = temp_root("status-snapshot-pending-app-dispatch");
         let task = channels::create_queue_task(
             &root,
@@ -22779,15 +22714,11 @@ Business OS command:
 
         recover_business_os_app_queue_tasks_for_idle_status_snapshot(&root, &state);
 
-        assert_eq!(route_status_for(&root, &task.message_key), "leased");
+        assert_eq!(route_status_for(&root, &task.message_key), "pending");
         let shared = lock_shared_state(&state);
-        assert_eq!(shared.pending_prompts.len(), 1);
-        assert_eq!(
-            shared.pending_prompts[0].leased_message_keys,
-            vec![task.message_key.clone()]
-        );
-        assert!(shared.recent_events.iter().any(|event| {
-            event.contains("Queued durable queue task after Business OS app recovery during idle status snapshot runnable app queue")
+        assert!(shared.pending_prompts.is_empty());
+        assert!(!shared.recent_events.iter().any(|event| {
+            event.contains("Queued durable queue task after Business OS app recovery")
         }));
     }
 
@@ -22815,6 +22746,7 @@ Business OS command:
             },
         )
         .expect("failed to create app queue task");
+        seed_business_os_app_artifacts(&root, "contracts");
         channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
             .expect("failed to lease app queue task");
         let state = Arc::new(Mutex::new(SharedState::default()));
@@ -22863,6 +22795,7 @@ Business OS command:
             },
         )
         .expect("failed to create app queue task");
+        seed_business_os_app_artifacts(&root, "subscriptions");
         channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
             .expect("failed to lease app queue task");
         let state = Arc::new(Mutex::new(SharedState::default()));
@@ -22912,6 +22845,7 @@ Business OS command:
             },
         )
         .expect("failed to create app queue task");
+        seed_business_os_app_artifacts(&root, "projects");
         channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
             .expect("failed to lease app queue task");
         let state = Arc::new(Mutex::new(SharedState::default()));
@@ -22951,7 +22885,8 @@ Business OS command:
     }
 
     #[test]
-    fn status_snapshot_recovery_requeues_red_business_os_app_queue_lease() {
+    fn status_snapshot_recovery_marks_red_business_os_app_queue_lease_for_rework_without_prefetch()
+    {
         let root = temp_root("status-snapshot-red-app-recovery");
         let script_dir = root.join("src/apps/business-os/scripts");
         std::fs::create_dir_all(&script_dir).expect("create validator script dir");
@@ -22974,30 +22909,15 @@ Business OS command:
             },
         )
         .expect("failed to create app queue task");
+        seed_business_os_app_artifacts(&root, "subscriptions");
         channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
             .expect("failed to lease app queue task");
         let state = Arc::new(Mutex::new(SharedState::default()));
 
         status_from_shared_state(&root, &state).expect("status snapshot failed");
-        for _ in 0..40 {
-            if route_status_for(&root, &task.message_key) == "leased" {
-                break;
-            }
-            thread::sleep(Duration::from_millis(25));
-        }
-
-        assert_eq!(route_status_for(&root, &task.message_key), "leased");
+        assert_eq!(route_status_for(&root, &task.message_key), "review_rework");
         let shared = lock_shared_state(&state);
-        assert_eq!(shared.pending_prompts.len(), 1);
-        assert_eq!(
-            shared.pending_prompts[0].leased_message_keys,
-            vec![task.message_key.clone()]
-        );
-        assert!(
-            shared.pending_prompts[0]
-                .prompt
-                .contains("Business OS app artifact validation failed.")
-        );
+        assert!(shared.pending_prompts.is_empty());
     }
 
     #[test]
@@ -23024,6 +22944,7 @@ Business OS command:
             },
         )
         .expect("failed to create red app queue task");
+        seed_business_os_app_artifacts(&root, "projects");
         channels::lease_queue_task(&root, &red_task.message_key, "ctox-service-test")
             .expect("failed to lease red app queue task");
         let pending_task = channels::create_queue_task(
@@ -23044,22 +22965,16 @@ Business OS command:
 
         status_from_shared_state(&root, &state).expect("status snapshot failed");
 
-        assert_eq!(route_status_for(&root, &red_task.message_key), "leased");
+        assert_eq!(
+            route_status_for(&root, &red_task.message_key),
+            "review_rework"
+        );
         assert_eq!(
             route_status_for(&root, &pending_task.message_key),
             "pending"
         );
         let shared = lock_shared_state(&state);
-        assert_eq!(shared.pending_prompts.len(), 1);
-        assert_eq!(
-            shared.pending_prompts[0].leased_message_keys,
-            vec![red_task.message_key.clone()]
-        );
-        assert!(
-            shared.pending_prompts[0]
-                .prompt
-                .contains("Business OS app artifact validation failed.")
-        );
+        assert!(shared.pending_prompts.is_empty());
     }
 
     #[test]
@@ -23548,11 +23463,9 @@ Business OS command:
             route_status_for(&root, &pending_task.message_key),
             "pending"
         );
-        assert!(
-            leased
-                .prompt
-                .contains("Business OS app artifact validation failed.")
-        );
+        assert!(leased
+            .prompt
+            .contains("Business OS app artifact validation failed."));
     }
 
     #[test]
@@ -23607,16 +23520,12 @@ Business OS command:
         );
         assert_eq!(route_status_for(&root, &stale_task.message_key), "leased");
         assert_eq!(route_status_for(&root, &fresh_task.message_key), "pending");
-        assert!(
-            leased
-                .prompt
-                .contains("Business OS app artifact validation failed.")
-        );
-        assert!(
-            leased
-                .prompt
-                .contains("module tests failed: expected count is inconsistent")
-        );
+        assert!(leased
+            .prompt
+            .contains("Business OS app artifact validation failed."));
+        assert!(leased
+            .prompt
+            .contains("module tests failed: expected count is inconsistent"));
     }
 
     #[test]
@@ -23764,7 +23673,7 @@ Business OS command:
             reasons: vec!["Runtime mission contract still open".to_string()],
             failed_gates: vec!["Closure readiness".to_string()],
             semantic_findings: vec![
-                "Do the remaining rework instead of closing the queue item.".to_string(),
+                "Do the remaining rework instead of closing the queue item.".to_string()
             ],
             categorized_findings: Vec::new(),
             open_items: vec!["Persist the missing closure evidence.".to_string()],
@@ -24168,13 +24077,11 @@ Business OS command:
             disposition,
             CompletionReviewDisposition::Hold { .. }
         ));
-        assert!(
-            state
-                .lock()
-                .expect("service state poisoned")
-                .pending_prompts
-                .is_empty()
-        );
+        assert!(state
+            .lock()
+            .expect("service state poisoned")
+            .pending_prompts
+            .is_empty());
     }
 
     #[test]
@@ -24564,11 +24471,9 @@ Business OS command:
             .expect("missing self-work");
         assert_eq!(reloaded.state, "published");
         assert_eq!(queued.thread_key, "queue/mission-1");
-        assert!(
-            queued
-                .title
-                .contains("Continue mission Deliver the Kunstmen homepage reset")
-        );
+        assert!(queued
+            .title
+            .contains("Continue mission Deliver the Kunstmen homepage reset"));
 
         let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
@@ -24834,11 +24739,9 @@ Business OS command:
 
         let blocked_tasks = channels::list_queue_tasks(&root, &["blocked".to_string()], 10)
             .expect("failed to list blocked queue tasks");
-        assert!(
-            !blocked_tasks
-                .iter()
-                .any(|task| task.ticket_self_work_id.as_deref() == Some(item.work_id.as_str()))
-        );
+        assert!(!blocked_tasks
+            .iter()
+            .any(|task| task.ticket_self_work_id.as_deref() == Some(item.work_id.as_str())));
     }
 
     #[test]
@@ -24904,11 +24807,9 @@ Business OS command:
 
         let blocked_tasks = channels::list_queue_tasks(&root, &["blocked".to_string()], 10)
             .expect("failed to list blocked queue tasks");
-        assert!(
-            !blocked_tasks
-                .iter()
-                .any(|task| task.ticket_self_work_id.as_deref() == Some(item.work_id.as_str()))
-        );
+        assert!(!blocked_tasks
+            .iter()
+            .any(|task| task.ticket_self_work_id.as_deref() == Some(item.work_id.as_str())));
     }
 
     #[test]
@@ -25449,16 +25350,12 @@ Business OS command:
             items[0].suggested_skill.as_deref(),
             Some("follow-up-orchestrator")
         );
-        assert!(
-            items[0]
-                .body_text
-                .contains("Use `ctox strategy show --conversation-id")
-        );
-        assert!(
-            items[0]
-                .body_text
-                .contains("--thread-key kunstmen-supervisor")
-        );
+        assert!(items[0]
+            .body_text
+            .contains("Use `ctox strategy show --conversation-id"));
+        assert!(items[0]
+            .body_text
+            .contains("--thread-key kunstmen-supervisor"));
     }
 
     #[test]
@@ -25625,11 +25522,9 @@ Keep the work bounded to project preparation."
         let tasks =
             channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
                 .expect("failed to list queue tasks");
-        assert!(
-            tasks
-                .iter()
-                .any(|task| task.title == "prep-priority-plan: choose first work items")
-        );
+        assert!(tasks
+            .iter()
+            .any(|task| task.title == "prep-priority-plan: choose first work items"));
 
         let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
@@ -26137,10 +26032,8 @@ Use shell tools to create or update these files."
         );
         assert!(runtime_error_is_transient_api_failure(error));
         assert_eq!(failed_worker_route_status(false, false, true), "pending");
-        assert!(
-            turn_loop::summarize_runtime_error(error)
-                .contains("managed local backend did not become ready")
-        );
+        assert!(turn_loop::summarize_runtime_error(error)
+            .contains("managed local backend did not become ready"));
     }
 
     #[test]
@@ -26308,16 +26201,12 @@ Use shell tools to create or update these files."
             .expect("load queue task")
             .expect("queue task exists");
         assert!(reloaded.prompt.contains("HARNESS FEEDBACK"));
-        assert!(
-            reloaded
-                .prompt
-                .contains("without producing the required final assistant message")
-        );
-        assert!(
-            reloaded
-                .prompt
-                .contains("Create and verify the smoke artifact.")
-        );
+        assert!(reloaded
+            .prompt
+            .contains("without producing the required final assistant message"));
+        assert!(reloaded
+            .prompt
+            .contains("Create and verify the smoke artifact."));
         assert_eq!(reloaded.workspace_root.as_deref(), Some("/tmp/qwen-smoke"));
         assert_eq!(route_status_for(&root, &task.message_key), "leased");
     }
@@ -27682,6 +27571,79 @@ Use shell tools to create or update these files."
     }
 
     #[test]
+    fn enqueue_prompt_releases_durable_queue_lease_instead_of_buffering_during_active_worker() {
+        // app-creator-queue-2: even with the idle-dispatch guard above, a
+        // dispatcher can lose a race after leasing and before enqueueing. Do
+        // not keep that durable lease in process-local pending_prompts; release
+        // it back to the DB so the next truly idle tick can lease it.
+        let root = temp_root("ctox-durable-queue-prefetch-release");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Projects App Creator Bench".to_string(),
+                prompt: "Build a small Business OS app for projects.".to_string(),
+                thread_key: "business-os/creator".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: Some(serde_json::json!({
+                    "source": "app-creator-bench",
+                    "run_id": "prefetch-guard-test"
+                })),
+            },
+        )
+        .expect("failed to create durable queue task");
+        let leased =
+            channels::lease_queue_task(&root, &task.message_key, CHANNEL_ROUTER_LEASE_OWNER)
+                .expect("failed to lease durable queue task");
+        let prompt = QueuedPrompt {
+            preview: preview_text(&leased.prompt),
+            source_label: "queue".to_string(),
+            goal: leased.title.clone(),
+            prompt: leased.prompt.clone(),
+            suggested_skill: leased.suggested_skill.clone(),
+            leased_message_keys: vec![leased.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(leased.thread_key.clone()),
+            workspace_root: leased.workspace_root.clone(),
+            ticket_self_work_id: leased.ticket_self_work_id.clone(),
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let state = Arc::new(Mutex::new(SharedState {
+            busy: true,
+            worker_active_count: 1,
+            ..SharedState::default()
+        }));
+
+        enqueue_prompt(
+            &root,
+            &state,
+            prompt,
+            "Working-hours window open; leasing durable queue task".to_string(),
+        );
+
+        let reloaded = channels::load_queue_task(&root, &task.message_key)
+            .expect("failed to reload queue task")
+            .expect("queue task should exist");
+        assert_eq!(reloaded.route_status, "pending");
+        assert!(
+            reloaded.lease_owner.is_none(),
+            "deferred durable queue task must be released back to pending"
+        );
+        let shared = lock_shared_state(&state);
+        assert!(shared.pending_prompts.is_empty());
+        assert!(!shared
+            .leased_message_keys_inflight
+            .contains(&task.message_key));
+        assert!(shared.recent_events.iter().any(|event| {
+            event.contains("released durable queue lease") && event.contains("active agent loop")
+        }));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn stalled_founder_email_superseded_by_later_reviewed_thread_send_is_cancelled() {
         let root = temp_root("ctox-stalled-founder-superseded");
         let mut settings = BTreeMap::new();
@@ -27732,16 +27694,14 @@ Use shell tools to create or update these files."
                 'later reviewed founder reply in same thread',
                 '2026-04-27T15:39:18Z', '2026-04-27T15:39:18Z', '{}'
             )"#,
-            rusqlite::params![
-                serde_json::json!({
-                    "thread_key": thread_key,
-                    "to": ["michael.welsch@metric-space.ai"],
-                    "cc": [],
-                    "subject": "Re: Aw: Re: Visuelle Homepage",
-                    "attachments": [],
-                })
-                .to_string()
-            ],
+            rusqlite::params![serde_json::json!({
+                "thread_key": thread_key,
+                "to": ["michael.welsch@metric-space.ai"],
+                "cc": [],
+                "subject": "Re: Aw: Re: Visuelle Homepage",
+                "attachments": [],
+            })
+            .to_string()],
         )
         .expect("failed to seed later reviewed send");
 
@@ -27974,16 +27934,14 @@ Use shell tools to create or update these files."
                 'later reviewed founder reply copied Michael on a different founder thread',
                 '2026-04-27T23:21:23Z', '2026-04-27T23:21:23Z', '{"ok":true}'
             )"#,
-            rusqlite::params![
-                serde_json::json!({
-                    "thread_key": "<current-thread@example.com>",
-                    "to": ["o.schaefers@gmx.net"],
-                    "cc": ["michael.welsch@metric-space.ai"],
-                    "subject": "Re: Aw: Re: Visuelle Homepage",
-                    "attachments": [],
-                })
-                .to_string()
-            ],
+            rusqlite::params![serde_json::json!({
+                "thread_key": "<current-thread@example.com>",
+                "to": ["o.schaefers@gmx.net"],
+                "cc": ["michael.welsch@metric-space.ai"],
+                "subject": "Re: Aw: Re: Visuelle Homepage",
+                "attachments": [],
+            })
+            .to_string()],
         )
         .expect("failed to seed later reviewed send");
 
@@ -28264,11 +28222,10 @@ Was jetzt zu tun ist:\n\
 
         let note = maybe_continue_platform_expertise_pipeline_after_success(&root, &job)
             .expect("platform pass continuation should succeed");
-        assert!(
-            note.as_deref()
-                .unwrap_or_default()
-                .contains("messaging-wording")
-        );
+        assert!(note
+            .as_deref()
+            .unwrap_or_default()
+            .contains("messaging-wording"));
 
         let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
@@ -28415,21 +28372,17 @@ Was jetzt zu tun ist:\n\
         let shared = state.lock().expect("service state poisoned");
         assert!(!shared.busy);
         assert_eq!(shared.pending_prompts.len(), 1);
-        assert!(
-            shared
-                .recent_events
-                .back()
-                .map(|event| event.contains("runtime blocker cooldown"))
-                .unwrap_or(false)
-        );
+        assert!(shared
+            .recent_events
+            .back()
+            .map(|event| event.contains("runtime blocker cooldown"))
+            .unwrap_or(false));
         drop(shared);
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
-        assert!(
-            events
-                .iter()
-                .any(|event| event.mechanism_id == "runtime_blocker_backoff")
-        );
+        assert!(events
+            .iter()
+            .any(|event| event.mechanism_id == "runtime_blocker_backoff"));
     }
 
     #[test]
@@ -28699,11 +28652,9 @@ Was jetzt zu tun ist:\n\
 
         let alerts = runtime_lifecycle_alerts(&root, None, false).unwrap();
 
-        assert!(
-            alerts
-                .iter()
-                .any(|alert| alert.contains("stale service pid file"))
-        );
+        assert!(alerts
+            .iter()
+            .any(|alert| alert.contains("stale service pid file")));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -28715,11 +28666,9 @@ Was jetzt zu tun ist:\n\
 
         let alerts = runtime_lifecycle_alerts(&root, None, false).unwrap();
 
-        assert!(
-            alerts
-                .iter()
-                .any(|alert| alert.contains("backend residue stale pid file"))
-        );
+        assert!(alerts
+            .iter()
+            .any(|alert| alert.contains("backend residue stale pid file")));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -29296,10 +29245,9 @@ Was jetzt zu tun ist:\n\
         assert!(paths.contains(&"/tmp/ctox-tb2-run/controller.json"));
         assert!(paths.contains(&"/tmp/ctox-tb2-run/results.jsonl"));
         assert!(paths.contains(&"/tmp/ctox-tb2-run/blogpost-notes.md"));
-        assert!(
-            refs.iter()
-                .all(|artifact| artifact.expected_terminal_state == "present")
-        );
+        assert!(refs
+            .iter()
+            .all(|artifact| artifact.expected_terminal_state == "present"));
     }
 
     #[test]
@@ -29829,18 +29777,16 @@ The controller must update stale files itself."
             delivered.is_empty(),
             "review-feedback must not accept files older than latest outcome rejection"
         );
-        assert!(
-            workspace_file_artifact_diagnostic_for_expected(
-                &root,
-                &job,
-                &ArtifactRef {
-                    kind: ArtifactKind::WorkspaceFile,
-                    primary_key: controller_text,
-                    expected_terminal_state: "fresh".to_string(),
-                },
-            )
-            .contains("stale")
-        );
+        assert!(workspace_file_artifact_diagnostic_for_expected(
+            &root,
+            &job,
+            &ArtifactRef {
+                kind: ArtifactKind::WorkspaceFile,
+                primary_key: controller_text,
+                expected_terminal_state: "fresh".to_string(),
+            },
+        )
+        .contains("stale"));
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -30700,11 +30646,9 @@ Those are not durable artifact requirements."
             classify_findings(&outcome.categorized_findings),
             ReviewRoutingClass::RewriteOnly
         );
-        assert!(
-            outcome
-                .summary
-                .contains("internal status or completion report")
-        );
+        assert!(outcome
+            .summary
+            .contains("internal status or completion report"));
     }
 
     #[test]
@@ -31473,11 +31417,9 @@ Those are not durable artifact requirements."
         let tasks =
             channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
                 .expect("failed to list queue tasks");
-        assert!(
-            tasks
-                .iter()
-                .all(|task| !task.title.starts_with("Founder communication rework:"))
-        );
+        assert!(tasks
+            .iter()
+            .all(|task| !task.title.starts_with("Founder communication rework:")));
         let _ = std::fs::remove_dir_all(root);
     }
 

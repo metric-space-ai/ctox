@@ -12,12 +12,12 @@ use ctox_app_server_protocol::AuthMode as ApiAuthMode;
 use ring::aead;
 use ring::hmac;
 use ring::rand::{SecureRandom, SystemRandom};
-use rusqlite::Connection;
-use rusqlite::OpenFlags;
-use rusqlite::OptionalExtension;
 use rusqlite::params;
 use rusqlite::params_from_iter;
 use rusqlite::types::Value as SqlValue;
+use rusqlite::Connection;
+use rusqlite::OpenFlags;
+use rusqlite::OptionalExtension;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -26110,13 +26110,11 @@ mod tests {
             granted.get("status").and_then(Value::as_str),
             Some("completed")
         );
-        assert!(
-            granted
-                .pointer("/result/source_file_ids")
-                .and_then(Value::as_array)
-                .map(|ids| !ids.is_empty())
-                .unwrap_or(false)
-        );
+        assert!(granted
+            .pointer("/result/source_file_ids")
+            .and_then(Value::as_array)
+            .map(|ids| !ids.is_empty())
+            .unwrap_or(false));
         let granted_snapshots = accept_rxdb_business_command(
             root,
             serde_json::json!({
@@ -26143,12 +26141,10 @@ mod tests {
             granted_snapshots.get("status").and_then(Value::as_str),
             Some("completed")
         );
-        assert!(
-            granted_snapshots
-                .get("result")
-                .and_then(Value::as_array)
-                .is_some()
-        );
+        assert!(granted_snapshots
+            .get("result")
+            .and_then(Value::as_array)
+            .is_some());
         Ok(())
     }
 
@@ -26543,9 +26539,7 @@ mod tests {
         assert!(prompt.contains("HTML data-action values"));
         assert!(prompt.contains("Every data-action=\"...\" in index.html"));
         assert!(prompt.contains("never run it on a complete scaffold"));
-        assert!(
-            prompt.contains("Before the first validation call, edit at least core/records.mjs")
-        );
+        assert!(prompt.contains("Before the first validation call, edit at least core/records.mjs"));
         assert!(prompt.contains("short alias files such as m.json"));
         assert!(prompt.contains("Do not copy source/store module manifest shape"));
         assert!(prompt.contains("store.distribution=\"ctox-repo-module\""));
@@ -26567,9 +26561,7 @@ mod tests {
         assert!(prompt.contains(
             "legacy anti-pattern rule: existing modules can contain old compatibility code"
         ));
-        assert!(
-            prompt.contains("reject ctx.db.raw, db.raw, ctx.collections, window.dispatchEvent")
-        );
+        assert!(prompt.contains("reject ctx.db.raw, db.raw, ctx.collections, window.dispatchEvent"));
         assert!(prompt.contains("ctox-business-os-chat-submit"));
         assert!(prompt.contains("manual business_commands insert/upsert fallbacks"));
         assert!(prompt.contains(
@@ -26588,10 +26580,8 @@ mod tests {
         assert!(prompt.contains(
             "Do not read or write ~/.local/state/ctox/business-os/installed-modules directly"
         ));
-        assert!(
-            prompt
-                .contains("set MODULE_DIR=\"runtime/business-os/installed-modules/subscriptions\"")
-        );
+        assert!(prompt
+            .contains("set MODULE_DIR=\"runtime/business-os/installed-modules/subscriptions\""));
         assert!(prompt.contains(
             "exact mount rule: installed App Creator modules must make index.js load `./index.html`"
         ));
@@ -26600,11 +26590,8 @@ mod tests {
         assert!(prompt.contains("or any other runtime network fetch"));
         assert!(prompt.contains("assign the result into `ctx.host.innerHTML`"));
         assert!(prompt.contains("new URL('./index.css', import.meta.url)"));
-        assert!(
-            prompt.contains(
-                "HTML fragment rule: index.html must be a Business OS shell fragment only"
-            )
-        );
+        assert!(prompt
+            .contains("HTML fragment rule: index.html must be a Business OS shell fragment only"));
         assert!(prompt.contains("Do not write a full browser document"));
         assert!(prompt.contains("CSS scoping rule: index.css must scope module variables"));
         assert!(prompt.contains("Do not define custom properties on `:root`, `html`, or `body`"));
@@ -26715,11 +26702,8 @@ mod tests {
         assert!(prompt.contains(
             "Do not read or write ~/.local/state/ctox/business-os/installed-modules directly"
         ));
-        assert!(
-            prompt.contains(
-                "HTML fragment rule: index.html must be a Business OS shell fragment only"
-            )
-        );
+        assert!(prompt
+            .contains("HTML fragment rule: index.html must be a Business OS shell fragment only"));
         assert!(prompt.contains("CSS scoping rule: index.css must scope module variables"));
         assert!(prompt.contains("Node tests must not import ../index.js or ../schema.js directly"));
         assert!(prompt.contains("keep helper exports and every named local import in lockstep"));
@@ -27099,13 +27083,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("role_or_scope_denied")
         );
-        assert!(
-            denied
-                .pointer("/result/policy_decision/display_reason")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("not allowed")
-        );
+        assert!(denied
+            .pointer("/result/policy_decision/display_reason")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("not allowed"));
         drop(conn);
 
         let founder_unassigned = accept_rxdb_business_command(
@@ -27753,15 +27735,13 @@ mod tests {
                 && event.pointer("/payload/command_id").and_then(Value::as_str)
                     == Some("cmd_audit_policy_allowed")
         }));
-        assert!(
-            business_event_payloads(
-                &conn,
-                "business_commands",
-                "cmd_activity_allowed_list",
-                "business_os.policy.allowed",
-            )?
-            .is_empty()
-        );
+        assert!(business_event_payloads(
+            &conn,
+            "business_commands",
+            "cmd_activity_allowed_list",
+            "business_os.policy.allowed",
+        )?
+        .is_empty());
 
         Ok(())
     }
@@ -27837,13 +27817,11 @@ mod tests {
             role_change.pointer("/current/role").and_then(Value::as_str),
             Some("founder")
         );
-        assert!(
-            role_change
-                .pointer("/changed_fields")
-                .and_then(Value::as_array)
-                .context("expected changed_fields")?
-                .contains(&Value::String("role".to_owned()))
-        );
+        assert!(role_change
+            .pointer("/changed_fields")
+            .and_then(Value::as_array)
+            .context("expected changed_fields")?
+            .contains(&Value::String("role".to_owned())));
 
         Ok(())
     }
@@ -27917,13 +27895,11 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(false)
         );
-        assert!(
-            deactivation
-                .pointer("/changed_fields")
-                .and_then(Value::as_array)
-                .context("expected changed_fields")?
-                .contains(&Value::String("active".to_owned()))
-        );
+        assert!(deactivation
+            .pointer("/changed_fields")
+            .and_then(Value::as_array)
+            .context("expected changed_fields")?
+            .contains(&Value::String("active".to_owned())));
 
         Ok(())
     }
@@ -28025,16 +28001,12 @@ mod tests {
             .get("business_module_acl_ids")
             .and_then(Value::as_array)
             .context("expected changed ACL ids")?;
-        assert!(
-            changed_ids
-                .iter()
-                .any(|id| id.as_str() == Some("private-app:founder:ops_admin"))
-        );
-        assert!(
-            changed_ids
-                .iter()
-                .any(|id| id.as_str() == Some("private-app:founder:module_owner"))
-        );
+        assert!(changed_ids
+            .iter()
+            .any(|id| id.as_str() == Some("private-app:founder:ops_admin")));
+        assert!(changed_ids
+            .iter()
+            .any(|id| id.as_str() == Some("private-app:founder:module_owner")));
 
         let conn = open_store(root)?;
         let owner_active: i64 = conn.query_row(
@@ -28081,8 +28053,8 @@ mod tests {
     }
 
     #[test]
-    fn user_deactivation_requires_recovery_for_sole_private_app_responsibility()
-    -> anyhow::Result<()> {
+    fn user_deactivation_requires_recovery_for_sole_private_app_responsibility(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -28159,16 +28131,12 @@ mod tests {
             .pointer("/lifecycle/responsible_user_ids")
             .and_then(Value::as_array)
             .context("expected responsible ids")?;
-        assert!(
-            responsible
-                .iter()
-                .any(|user| user.as_str() == Some("ops_admin"))
-        );
-        assert!(
-            !responsible
-                .iter()
-                .any(|user| user.as_str() == Some("module_owner"))
-        );
+        assert!(responsible
+            .iter()
+            .any(|user| user.as_str() == Some("ops_admin")));
+        assert!(!responsible
+            .iter()
+            .any(|user| user.as_str() == Some("module_owner")));
 
         Ok(())
     }
@@ -28214,13 +28182,11 @@ mod tests {
             outcome.pointer("/result/operation").and_then(Value::as_str),
             Some("assign_founder")
         );
-        assert!(
-            outcome
-                .pointer("/result/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("App responsibility")
-        );
+        assert!(outcome
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("App responsibility"));
 
         let conn = open_store(root)?;
         let stored = outbound_load_required(
@@ -28287,13 +28253,11 @@ mod tests {
             outcome.pointer("/result/operation").and_then(Value::as_str),
             Some("user_upsert")
         );
-        assert!(
-            outcome
-                .pointer("/result/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("App responsibility")
-        );
+        assert!(outcome
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("App responsibility"));
 
         let conn = open_store(root)?;
         let stored = outbound_load_required(
@@ -29451,8 +29415,8 @@ mod tests {
     }
 
     #[test]
-    fn backup_manifest_version_compatibility_blocks_cross_version_and_downgrade()
-    -> anyhow::Result<()> {
+    fn backup_manifest_version_compatibility_blocks_cross_version_and_downgrade(
+    ) -> anyhow::Result<()> {
         let current = env!("CARGO_PKG_VERSION");
         let same = business_os_backup_restore_version_compatibility(
             Some(BUSINESS_OS_BACKUP_MANIFEST_SCHEMA_VERSION),
@@ -29956,8 +29920,8 @@ mod tests {
     }
 
     #[test]
-    fn module_release_rollback_command_uses_apps_rollback_without_modify_permission()
-    -> anyhow::Result<()> {
+    fn module_release_rollback_command_uses_apps_rollback_without_modify_permission(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -30183,8 +30147,8 @@ mod tests {
     }
 
     #[test]
-    fn module_source_rollback_version_uses_apps_rollback_without_modify_permission()
-    -> anyhow::Result<()> {
+    fn module_source_rollback_version_uses_apps_rollback_without_modify_permission(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let app_root = root.join("src").join("apps").join("business-os");
@@ -30416,13 +30380,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("failed")
         );
-        assert!(
-            outcome
-                .pointer("/result/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("read_collections")
-        );
+        assert!(outcome
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("read_collections"));
         Ok(())
     }
 
@@ -31358,8 +31320,8 @@ mod tests {
     }
 
     #[test]
-    fn module_lifecycle_projection_repair_assigns_orphan_private_app_responsibility()
-    -> anyhow::Result<()> {
+    fn module_lifecycle_projection_repair_assigns_orphan_private_app_responsibility(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -31510,20 +31472,18 @@ mod tests {
                 })
             })
             .context("expected private orphan app in catalog")?;
-        assert!(
-            private_app
-                .pointer("/lifecycle/responsible_user_ids")
-                .and_then(Value::as_array)
-                .context("expected responsible ids")?
-                .iter()
-                .any(|id| id.as_str() == Some("ops-admin"))
-        );
+        assert!(private_app
+            .pointer("/lifecycle/responsible_user_ids")
+            .and_then(Value::as_array)
+            .context("expected responsible ids")?
+            .iter()
+            .any(|id| id.as_str() == Some("ops-admin")));
         Ok(())
     }
 
     #[test]
-    fn module_release_rejects_stale_source_and_rollback_version_refs_before_manifest_write()
-    -> anyhow::Result<()> {
+    fn module_release_rejects_stale_source_and_rollback_version_refs_before_manifest_write(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -31583,13 +31543,11 @@ mod tests {
                 outcome.get("status").and_then(Value::as_str),
                 Some("failed")
             );
-            assert!(
-                outcome
-                    .pointer("/result/error")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .contains(field_name)
-            );
+            assert!(outcome
+                .pointer("/result/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains(field_name));
             assert_eq!(fs::read_to_string(&manifest_path)?, original_manifest);
         }
 
@@ -31661,13 +31619,11 @@ mod tests {
             outcome.get("status").and_then(Value::as_str),
             Some("failed")
         );
-        assert!(
-            outcome
-                .pointer("/result/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("injected release insert failure")
-        );
+        assert!(outcome
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("injected release insert failure"));
         assert_eq!(fs::read_to_string(&manifest_path)?, original_manifest);
 
         let conn = open_store(root)?;
@@ -31765,13 +31721,11 @@ mod tests {
             outcome.get("status").and_then(Value::as_str),
             Some("failed")
         );
-        assert!(
-            outcome
-                .pointer("/result/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("injected release status failure")
-        );
+        assert!(outcome
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("injected release status failure"));
         assert_eq!(fs::read_to_string(&manifest_path)?, original_manifest);
 
         let conn = open_store(root)?;
@@ -32054,13 +32008,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("failed")
         );
-        assert!(
-            payload
-                .pointer("/summary/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("explicit Team grant or locked-state behavior")
-        );
+        assert!(payload
+            .pointer("/summary/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("explicit Team grant or locked-state behavior"));
         assert_eq!(
             payload
                 .pointer("/summary/data_access_review/read_collections/0")
@@ -32144,13 +32096,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("missing-release")
         );
-        assert!(
-            payload
-                .pointer("/summary/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("Query returned no rows")
-        );
+        assert!(payload
+            .pointer("/summary/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("Query returned no rows"));
         Ok(())
     }
 
@@ -32201,13 +32151,11 @@ mod tests {
 
         // A brand new source file added after the baseline.
         save_widget_source(root, "extra.js", "export const extra = true;\n")?;
-        assert!(
-            app_root
-                .join("modules")
-                .join("widget")
-                .join("extra.js")
-                .is_file()
-        );
+        assert!(app_root
+            .join("modules")
+            .join("widget")
+            .join("extra.js")
+            .is_file());
         save_widget_source(
             root,
             "module.json",
@@ -32237,13 +32185,11 @@ mod tests {
             restored_manifest, baseline_manifest,
             "module.json must be restored together with source files"
         );
-        assert!(
-            !app_root
-                .join("modules")
-                .join("widget")
-                .join("extra.js")
-                .is_file()
-        );
+        assert!(!app_root
+            .join("modules")
+            .join("widget")
+            .join("extra.js")
+            .is_file());
         assert_eq!(
             baseline_sha,
             compute_module_bundle(&app_root, "widget")?.sha256
@@ -32488,10 +32434,9 @@ mod tests {
         assert!(materialized_path.is_file());
         assert_eq!(fs::read(&materialized_path)?, bytes);
         assert!(task.prompt.contains("Business OS attachments"));
-        assert!(
-            task.prompt
-                .contains(materialized_path.to_string_lossy().as_ref())
-        );
+        assert!(task
+            .prompt
+            .contains(materialized_path.to_string_lossy().as_ref()));
         assert!(task.prompt.contains("desktop_files/chatfile_verified"));
         assert!(task.prompt.contains(&content_hash));
         assert!(
@@ -33276,8 +33221,8 @@ mod tests {
     }
 
     #[test]
-    fn repair_queue_projections_redacts_inline_report_artifacts_and_counts_legacy_records()
-    -> anyhow::Result<()> {
+    fn repair_queue_projections_redacts_inline_report_artifacts_and_counts_legacy_records(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let conn = open_store(root)?;
@@ -33615,8 +33560,8 @@ mod tests {
     }
 
     #[test]
-    fn customers_invalid_command_writes_failed_projection_without_partial_record()
-    -> anyhow::Result<()> {
+    fn customers_invalid_command_writes_failed_projection_without_partial_record(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let actor = serde_json::json!({
@@ -33655,13 +33600,11 @@ mod tests {
             outbound_string(&command, &["status"]).as_deref(),
             Some("failed")
         );
-        assert!(
-            command
-                .pointer("/result/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("health_status")
-        );
+        assert!(command
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("health_status"));
         Ok(())
     }
 
@@ -35658,11 +35601,9 @@ mod tests {
             !backbone.is_empty(),
             "message drafting skillbook must have a real workflow backbone"
         );
-        assert!(
-            backbone
-                .iter()
-                .any(|step| { outbound_string(step, &["step"]).as_deref() == Some("writeback") })
-        );
+        assert!(backbone
+            .iter()
+            .any(|step| { outbound_string(step, &["step"]).as_deref() == Some("writeback") }));
         let routing = drafting
             .get("routing_taxonomy")
             .and_then(Value::as_array)
@@ -36412,8 +36353,8 @@ mod tests {
     }
 
     #[test]
-    fn outbound_active_engagement_keeps_sequence_version_until_explicit_reapply()
-    -> anyhow::Result<()> {
+    fn outbound_active_engagement_keeps_sequence_version_until_explicit_reapply(
+    ) -> anyhow::Result<()> {
         // Welle 4 (367): a live campaign sequence change must not silently
         // re-version active engagements. Each engagement stays pinned to the
         // sequence snapshot it captured until an explicit reapply flow runs.
@@ -36750,11 +36691,10 @@ mod tests {
                 .and_then(Value::as_str),
             Some("manual_physical_letter_marked_sent")
         );
-        assert!(
-            send.pointer("/result/physical_sent_at_ms")
-                .and_then(Value::as_i64)
-                .is_some()
-        );
+        assert!(send
+            .pointer("/result/physical_sent_at_ms")
+            .and_then(Value::as_i64)
+            .is_some());
         // Idempotency: replaying send_approved must not re-mark.
         let send_again = accept_rxdb_business_command(
             root,
@@ -38493,11 +38433,9 @@ mod tests {
             .pointer("/result/projections")
             .and_then(Value::as_array)
             .expect("asset upsert reports projections");
-        assert!(
-            projections
-                .iter()
-                .any(|p| p["collection"] == "iot_assets" && p["id"] == "asset-iot-bc-1")
-        );
+        assert!(projections
+            .iter()
+            .any(|p| p["collection"] == "iot_assets" && p["id"] == "asset-iot-bc-1"));
 
         let write = accept_rxdb_business_command(
             root,
@@ -38772,11 +38710,9 @@ mod tests {
             .get("modules")
             .and_then(Value::as_array)
             .context("catalog modules")?;
-        assert!(
-            modules
-                .iter()
-                .any(|module| module.get("id").and_then(Value::as_str) == Some("research"))
-        );
+        assert!(modules
+            .iter()
+            .any(|module| module.get("id").and_then(Value::as_str) == Some("research")));
         Ok(())
     }
 
@@ -38930,30 +38866,24 @@ mod tests {
                 .and_then(Value::as_str),
             Some("creator-user")
         );
-        assert!(
-            module("private-zero")
-                .pointer("/lifecycle/responsible_user_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|user| user.as_str() == Some("app-owner"))
-        );
-        assert!(
-            module("private-zero")
-                .pointer("/lifecycle/preview_grant_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|grant| grant.as_str() == Some("grant_preview_private_zero"))
-        );
-        assert!(
-            module("private-zero")
-                .pointer("/lifecycle/preview_user_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|user| user.as_str() == Some("preview-user"))
-        );
+        assert!(module("private-zero")
+            .pointer("/lifecycle/responsible_user_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|user| user.as_str() == Some("app-owner")));
+        assert!(module("private-zero")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|grant| grant.as_str() == Some("grant_preview_private_zero")));
+        assert!(module("private-zero")
+            .pointer("/lifecycle/preview_user_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|user| user.as_str() == Some("preview-user")));
         let legacy_preview_grant_id =
             legacy_preview_audience_grant_id("legacy-preview-zero", "legacy-preview-user");
         assert_eq!(
@@ -38962,14 +38892,12 @@ mod tests {
                 .and_then(Value::as_str),
             Some("preview")
         );
-        assert!(
-            module("legacy-preview-zero")
-                .pointer("/lifecycle/preview_grant_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|grant| grant.as_str() == Some(legacy_preview_grant_id.as_str()))
-        );
+        assert!(module("legacy-preview-zero")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|grant| grant.as_str() == Some(legacy_preview_grant_id.as_str())));
         assert_eq!(
             module("legacy-preview-zero")
                 .pointer("/lifecycle/preview_user_ids")
@@ -38980,42 +38908,34 @@ mod tests {
                 .count(),
             1
         );
-        assert!(
-            module("legacy-preview-zero")
-                .pointer("/lifecycle/preview_user_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|user| user.as_str() == Some("legacy-pregranted-user"))
-        );
-        assert!(
-            module("legacy-preview-zero")
-                .pointer("/lifecycle/preview_grant_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|grant| grant.as_str() == Some("grant_existing_legacy_preview"))
-        );
+        assert!(module("legacy-preview-zero")
+            .pointer("/lifecycle/preview_user_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|user| user.as_str() == Some("legacy-pregranted-user")));
+        assert!(module("legacy-preview-zero")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|grant| grant.as_str() == Some("grant_existing_legacy_preview")));
         assert_eq!(
             module("modify-only-zero")
                 .pointer("/lifecycle/visibility_state")
                 .and_then(Value::as_str),
             Some("private")
         );
-        assert!(
-            module("modify-only-zero")
-                .pointer("/lifecycle/preview_grant_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            module("modify-only-zero")
-                .pointer("/lifecycle/preview_user_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(module("modify-only-zero")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .is_empty());
+        assert!(module("modify-only-zero")
+            .pointer("/lifecycle/preview_user_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .is_empty());
         assert_eq!(
             module("team-one")
                 .pointer("/lifecycle/visibility_state")
@@ -39046,13 +38966,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("invalid_semver")
         );
-        assert!(
-            module("missing-version")
-                .pointer("/lifecycle/preview_grant_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(module("missing-version")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .is_empty());
         assert_eq!(
             module("invalid-semver")
                 .pointer("/lifecycle/visibility_state")
@@ -39069,13 +38987,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("invalid_semver")
         );
-        assert!(
-            module("invalid-semver")
-                .pointer("/lifecycle/preview_grant_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(module("invalid-semver")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .is_empty());
         assert_eq!(
             module("restricted-team")
                 .pointer("/lifecycle/visibility_state")
@@ -39090,14 +39006,12 @@ mod tests {
         );
         let restricted_preview_grant_id =
             legacy_preview_audience_grant_id("restricted-team", "restricted-preview-user");
-        assert!(
-            module("restricted-team")
-                .pointer("/lifecycle/preview_grant_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|grant| grant.as_str() == Some(restricted_preview_grant_id.as_str()))
-        );
+        assert!(module("restricted-team")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|grant| grant.as_str() == Some(restricted_preview_grant_id.as_str())));
         assert_eq!(
             catalog
                 .pointer("/governance/lifecycle/team-one/visibility_state")

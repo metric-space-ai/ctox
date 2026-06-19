@@ -3,19 +3,19 @@ use anyhow::Result;
 use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
-use qrcode::QrCode;
 use qrcode::types::Color as QrColor;
+use qrcode::QrCode;
+use rusqlite::params;
+use rusqlite::params_from_iter;
+use rusqlite::types::Value as SqlValue;
 use rusqlite::Connection;
 use rusqlite::OpenFlags;
 use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
-use rusqlite::params;
-use rusqlite::params_from_iter;
-use rusqlite::types::Value as SqlValue;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::Value;
 use serde_json::json;
+use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
 use std::collections::BTreeMap;
@@ -37,11 +37,11 @@ use crate::service::core_state_machine::{
     CoreEntityType, CoreEvent, CoreEvidenceRefs, CoreState, CoreTransitionRequest, RuntimeLane,
 };
 use crate::service::core_transition_guard::{
-    CoreSpawnProof, CoreSpawnRequest, enforce_core_spawn, enforce_core_transition,
-    ensure_core_transition_guard_schema, evaluate_core_spawn,
+    enforce_core_spawn, enforce_core_transition, ensure_core_transition_guard_schema,
+    evaluate_core_spawn, CoreSpawnProof, CoreSpawnRequest,
 };
 use crate::service::harness_flow::{
-    RecordHarnessFlowEventRequest, record_harness_flow_event_lossy,
+    record_harness_flow_event_lossy, RecordHarnessFlowEventRequest,
 };
 
 const DEFAULT_TAKE_LIMIT: usize = 10;
@@ -9736,11 +9736,9 @@ mod tests {
         let policy = classify_email_sender(&settings, "mp@iip-gmbh.de");
         assert!(policy.allowed);
         assert_eq!(policy.role, "founder");
-        assert!(
-            settings
-                .get("CTOX_FOUNDER_EMAIL_ROLES")
-                .is_some_and(|roles| roles.contains("mp@iip-gmbh.de=CFO / Founder"))
-        );
+        assert!(settings
+            .get("CTOX_FOUNDER_EMAIL_ROLES")
+            .is_some_and(|roles| roles.contains("mp@iip-gmbh.de=CFO / Founder")));
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -9798,10 +9796,9 @@ mod tests {
 
         let err = ack_leased_messages(&root, &[message_key.to_string()], "handled")
             .expect_err("founder mail must not be handled without reviewed send proof");
-        assert!(
-            err.to_string()
-                .contains("cannot mark founder/owner/admin inbound mail as handled")
-        );
+        assert!(err
+            .to_string()
+            .contains("cannot mark founder/owner/admin inbound mail as handled"));
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -9888,10 +9885,9 @@ mod tests {
 
         let err = ack_leased_messages(&root, std::slice::from_ref(&task.message_key), "failed")
             .expect_err("failed ack without reason must be rejected");
-        assert!(
-            err.to_string()
-                .contains("failed queue ack requires a non-empty failure reason")
-        );
+        assert!(err
+            .to_string()
+            .contains("failed queue ack requires a non-empty failure reason"));
 
         ack_leased_messages_with_failure_reason(
             &root,
@@ -10470,11 +10466,9 @@ mod tests {
             &[],
         )
         .expect_err("missing qr code should block founder reply");
-        assert!(
-            error
-                .to_string()
-                .contains("missing required deliverable(s): qr_code")
-        );
+        assert!(error
+            .to_string()
+            .contains("missing required deliverable(s): qr_code"));
 
         let _ = std::fs::remove_file(&db_path);
         let _ = fs::remove_dir_all(&root);
@@ -10624,10 +10618,9 @@ mod tests {
 
         let err = enforce_external_work_ack_has_pipeline_backing(&conn, &request)
             .expect_err("queue-backed acknowledgement must still require review");
-        assert!(
-            err.to_string()
-                .contains("has not passed external chat review")
-        );
+        assert!(err
+            .to_string()
+            .contains("has not passed external chat review"));
 
         let reviewed_request = ChannelSendRequest {
             reviewed_founder_send: true,
@@ -10714,11 +10707,9 @@ mod tests {
         let changed_body =
             require_any_unconsumed_external_chat_review(&conn, &action, "Changed body")
                 .expect_err("changed email body must not inherit approval");
-        assert!(
-            changed_body
-                .to_string()
-                .contains("no matching unconsumed review approval")
-        );
+        assert!(changed_body
+            .to_string()
+            .contains("no matching unconsumed review approval"));
 
         let _ = std::fs::remove_file(&db_path);
         let _ = fs::remove_dir_all(&root);
@@ -10859,11 +10850,9 @@ mod tests {
         let before_approval =
             require_unconsumed_founder_reply_review(&conn, inbound_key, &action, approved_body)
                 .expect_err("send must be blocked before review approval");
-        assert!(
-            before_approval
-                .to_string()
-                .contains("no matching unconsumed review approval")
-        );
+        assert!(before_approval
+            .to_string()
+            .contains("no matching unconsumed review approval"));
 
         record_founder_reply_review_approval(&root, inbound_key, approved_body, "PASS")
             .expect("record approval");
@@ -10873,11 +10862,9 @@ mod tests {
         let changed_body =
             require_unconsumed_founder_reply_review(&conn, inbound_key, &action, "Changed body")
                 .expect_err("changed body must not inherit the approval");
-        assert!(
-            changed_body
-                .to_string()
-                .contains("no matching unconsumed review approval")
-        );
+        assert!(changed_body
+            .to_string()
+            .contains("no matching unconsumed review approval"));
 
         let _ = std::fs::remove_file(&db_path);
         let _ = fs::remove_dir_all(&root);
@@ -11036,10 +11023,9 @@ mod tests {
 
         let err = ack_leased_messages(&root, &[inbound_key.to_string()], "handled")
             .expect_err("founder inbound should not be handleable before reviewed send");
-        assert!(
-            err.to_string()
-                .contains("cannot mark founder/owner/admin inbound mail as handled")
-        );
+        assert!(err
+            .to_string()
+            .contains("cannot mark founder/owner/admin inbound mail as handled"));
 
         let _ = std::fs::remove_file(&db_path);
         let _ = fs::remove_dir_all(&root);
@@ -11420,10 +11406,8 @@ mod tests {
         )
         .expect("failed to upsert jami voice message");
 
-        assert!(
-            thread_prefers_voice_reply(&conn, "jami/thread-voice-1")
-                .expect("failed to resolve jami voice preference")
-        );
+        assert!(thread_prefers_voice_reply(&conn, "jami/thread-voice-1")
+            .expect("failed to resolve jami voice preference"));
 
         let _ = fs::remove_file(&db_path);
     }
@@ -11600,11 +11584,9 @@ mod tests {
         let search = search_messages(&conn, "nextcloud endpoint", Some("email"), None, 10)
             .expect("failed to search");
         assert_eq!(search.len(), 2);
-        assert!(
-            search
-                .iter()
-                .all(|item| item.thread_key == "email/thread-a")
-        );
+        assert!(search
+            .iter()
+            .all(|item| item.thread_key == "email/thread-a"));
 
         let sender_search =
             search_messages(&conn, "redis", Some("email"), Some("owner@example.com"), 10)
@@ -11752,19 +11734,15 @@ mod tests {
             Some("ctx-2")
         );
         assert!(!context.candidate_blockers.is_empty());
-        assert!(
-            context
-                .candidate_blockers
-                .iter()
-                .any(|item| item.message_key == "ctx-2")
-        );
+        assert!(context
+            .candidate_blockers
+            .iter()
+            .any(|item| item.message_key == "ctx-2"));
         assert!(!context.open_owner_questions.is_empty());
-        assert!(
-            context
-                .related_messages
-                .iter()
-                .any(|item| item.message_key == "ctx-4")
-        );
+        assert!(context
+            .related_messages
+            .iter()
+            .any(|item| item.message_key == "ctx-4"));
 
         let _ = fs::remove_file(&db_path);
     }
@@ -12506,13 +12484,11 @@ mod tests {
             metadata.get("transitioned_to").and_then(Value::as_str),
             Some("send_failed")
         );
-        assert!(
-            metadata
-                .get("provider_error")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .contains("smtp authentication failed")
-        );
+        assert!(metadata
+            .get("provider_error")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .contains("smtp authentication failed"));
 
         let _ = std::fs::remove_file(&db_path);
     }
