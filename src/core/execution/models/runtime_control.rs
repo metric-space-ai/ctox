@@ -2814,7 +2814,7 @@ mod tests {
             change.next_state.upstream_base_url,
             runtime_state::default_api_upstream_base_url()
         );
-        assert_eq!(change.next_state.configured_context_tokens, Some(131_072));
+        assert_eq!(change.next_state.configured_context_tokens, Some(262_144));
 
         let persisted = runtime_env::load_runtime_env_map(&root).unwrap();
         assert_eq!(
@@ -2825,7 +2825,7 @@ mod tests {
             persisted
                 .get("CTOX_CHAT_MODEL_MAX_CONTEXT")
                 .map(String::as_str),
-            Some("131072")
+            Some("262144")
         );
         assert!(!persisted.contains_key("CTOX_ENGINE_MODEL"));
         assert!(!persisted.contains_key("CTOX_CHAT_RUNTIME_PLAN_ACTIVE"));
@@ -2855,7 +2855,7 @@ mod tests {
             &root,
             "gpt-5.4-mini",
             Some("performance"),
-            Some("128k"),
+            Some("256k"),
         )
         .unwrap();
         assert_eq!(
@@ -2866,7 +2866,7 @@ mod tests {
             change.next_state.upstream_base_url,
             "https://inf-yoda-resource.cognitiveservices.azure.com/openai/v1"
         );
-        assert_eq!(change.next_state.configured_context_tokens, Some(131_072));
+        assert_eq!(change.next_state.configured_context_tokens, Some(262_144));
 
         let persisted = runtime_env::load_runtime_env_map(&root).unwrap();
         assert_eq!(
@@ -2880,6 +2880,12 @@ mod tests {
         assert_eq!(
             persisted.get("CTOX_UPSTREAM_BASE_URL").map(String::as_str),
             Some("https://inf-yoda-resource.cognitiveservices.azure.com/openai/v1")
+        );
+        assert_eq!(
+            persisted
+                .get("CTOX_CHAT_MODEL_MAX_CONTEXT")
+                .map(String::as_str),
+            Some("262144")
         );
     }
 
