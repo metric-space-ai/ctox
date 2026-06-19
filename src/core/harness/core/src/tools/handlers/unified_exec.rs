@@ -4,8 +4,8 @@ use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::EventMsg;
 use crate::protocol::TerminalInteractionEvent;
 use crate::sandboxing::SandboxPermissions;
-use crate::shell::Shell;
 use crate::shell::get_shell_by_model_provided_path;
+use crate::shell::Shell;
 use crate::skills::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -400,6 +400,11 @@ pub(crate) fn business_os_app_root_artifact_write_guard(
     {
         return Some(module_writer_guard_message(&path));
     }
+    if let Some(path) =
+        command_destructively_modifies_business_os_required_artifact(command, &workspace_root, cwd)
+    {
+        return Some(module_required_artifact_destructive_guard_message(&path));
+    }
     if let Some(path) = command_reads_runtime_module_self_audit(command, &workspace_root, cwd) {
         return Some(module_self_audit_read_guard_message(&path));
     }
@@ -475,6 +480,16 @@ fn module_noncanonical_helper_guard_message(path: &str) -> String {
 Keep initial runtime-installed apps bounded: use the scaffold helper files `core/records.mjs` and \
 `core/automation.mjs`, with simple DOM wiring in `index.js`. Do not create extra helper layers such \
 as ui/render/runtime/panel modules during one-shot app creation."
+    )
+}
+
+fn module_required_artifact_destructive_guard_message(path: &str) -> String {
+    format!(
+        "Business OS app module guard blocked a destructive or replacement operation on required generated-module artifact `{path}`. \
+Required App Creator files such as module.json, collections.schema.json, schema.js, index.html, index.css, \
+index.js, icon.svg, core helpers, locales, and tests must stay present after every edit. Do not rm/mv/cp/install \
+required artifacts while repairing an app. Use direct bounded exact-path rewrites, or run scaffold repair only \
+when a validator reports a missing required file, then rerun `ctox business-os app validate <id> --installed`."
     )
 }
 
@@ -1100,6 +1115,70 @@ fn command_reads_runtime_module_node_dump(
                 .or_else(|| first_runtime_business_os_module_artifact_substring(&compact))
                 .unwrap_or_else(|| "runtime-installed module artifact".to_string()),
         );
+    }
+    None
+}
+
+fn command_destructively_modifies_business_os_required_artifact(
+    command: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+) -> Option<String> {
+    let compact = command.replace("\\\n", " ").replace('\n', " ");
+    let lower = compact.to_ascii_lowercase();
+    if !command_targets_business_os_module(&lower, workspace_root, cwd) {
+        return None;
+    }
+
+    let tokens = shellish_tokens(&compact);
+    let cwd_is_module_dir = is_business_os_module_dir(workspace_root, cwd);
+    let module_cd_target = command_cd_target_business_os_module_dir(&tokens);
+
+    for (idx, token) in tokens.iter().enumerate() {
+        if !matches!(
+            token.as_str(),
+            "rm" | "unlink" | "rmdir" | "mv" | "cp" | "install"
+        ) {
+            continue;
+        }
+        for target in tokens.iter().skip(idx + 1) {
+            if target.starts_with('-') {
+                continue;
+            }
+            let normalized = target
+                .trim()
+                .trim_start_matches("./")
+                .trim_matches(|ch: char| matches!(ch, '\'' | '"' | '`'))
+                .to_string();
+            if normalized.is_empty() {
+                continue;
+            }
+
+            if let Some(path) =
+                business_os_module_artifact_token_name(&normalized, cwd_is_module_dir)
+            {
+                return Some(path);
+            }
+            if let Some(path) =
+                business_os_module_cd_artifact_token_name(&normalized, module_cd_target.as_deref())
+            {
+                return Some(path);
+            }
+            if let Some(path) = business_os_module_dir_token_name(&normalized) {
+                return Some(path);
+            }
+            if module_cd_target.is_some() && token_is_shell_variable_reference(&normalized) {
+                return module_cd_target.clone();
+            }
+            if cwd_is_module_dir
+                && (normalized == "."
+                    || normalized == "*"
+                    || normalized.contains('*')
+                    || business_os_module_artifact_name(&normalized.to_ascii_lowercase()))
+            {
+                return Some(normalized);
+            }
+        }
     }
     None
 }

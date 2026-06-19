@@ -421,8 +421,8 @@ fn business_os_guard_blocks_installed_module_whole_file_cat() -> anyhow::Result<
 }
 
 #[test]
-fn business_os_guard_blocks_installed_module_whole_file_cat_with_stderr_redirect()
--> anyhow::Result<()> {
+fn business_os_guard_blocks_installed_module_whole_file_cat_with_stderr_redirect(
+) -> anyhow::Result<()> {
     let root = tempdir()?;
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;
     let artifact = root
@@ -541,20 +541,16 @@ fn business_os_guard_allows_targeted_installed_module_reads() -> anyhow::Result<
     let root = tempdir()?;
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;
 
-    assert!(
-        business_os_app_root_artifact_write_guard(
-            "sed -n '1,40p' runtime/business-os/installed-modules/inventory/index.js",
-            root.path(),
-        )
-        .is_none()
-    );
-    assert!(
-        business_os_app_root_artifact_write_guard(
-            "cat runtime/business-os/installed-modules/inventory/index.css | head -30",
-            root.path(),
-        )
-        .is_none()
-    );
+    assert!(business_os_app_root_artifact_write_guard(
+        "sed -n '1,40p' runtime/business-os/installed-modules/inventory/index.js",
+        root.path(),
+    )
+    .is_none());
+    assert!(business_os_app_root_artifact_write_guard(
+        "cat runtime/business-os/installed-modules/inventory/index.css | head -30",
+        root.path(),
+    )
+    .is_none());
     Ok(())
 }
 
@@ -655,13 +651,11 @@ fn business_os_guard_allows_small_runtime_module_head_snippet() -> anyhow::Resul
         .join("runtime/business-os/installed-modules/subscriptions");
     fs::create_dir_all(&module_dir)?;
 
-    assert!(
-        business_os_app_root_artifact_write_guard(
-            "head -30 tests/subscriptions.test.mjs 2>&1",
-            &module_dir
-        )
-        .is_none()
-    );
+    assert!(business_os_app_root_artifact_write_guard(
+        "head -30 tests/subscriptions.test.mjs 2>&1",
+        &module_dir
+    )
+    .is_none());
     Ok(())
 }
 
@@ -1084,6 +1078,72 @@ fn business_os_guard_blocks_noncanonical_module_dir_core_helper() -> anyhow::Res
 }
 
 #[test]
+fn business_os_guard_blocks_required_artifact_removal() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+    let module_dir = root
+        .path()
+        .join("runtime/business-os/installed-modules/inventory");
+    fs::create_dir_all(&module_dir)?;
+
+    let err = business_os_app_root_artifact_write_guard("rm -f index.js", &module_dir)
+        .expect("removing required App Creator artifacts should be blocked");
+
+    assert!(err.contains("destructive or replacement operation"));
+    assert!(err.contains("index.js"));
+    assert!(err.contains("required"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_required_artifact_move() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "mv runtime/business-os/installed-modules/inventory/index.js runtime/business-os/installed-modules/inventory/index.mjs",
+        root.path(),
+    )
+    .expect("moving required App Creator artifacts should be blocked");
+
+    assert!(err.contains("destructive or replacement operation"));
+    assert!(err.contains("index.js"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_required_artifact_copy_replacement() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "cp runtime/business-os/installed-modules/inventory/core/records.mjs runtime/business-os/installed-modules/inventory/index.js",
+        root.path(),
+    )
+    .expect("copy replacements for required App Creator artifacts should be blocked");
+
+    assert!(err.contains("destructive or replacement operation"));
+    assert!(err.contains("records.mjs"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_module_directory_removal() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "rm -rf runtime/business-os/installed-modules/inventory",
+        root.path(),
+    )
+    .expect("removing generated App Creator module directories should be blocked");
+
+    assert!(err.contains("destructive or replacement operation"));
+    assert!(err.contains("runtime/business-os/installed-modules/inventory"));
+    Ok(())
+}
+
+#[test]
 fn business_os_guard_allows_scaffold_runtime_core_helpers() -> anyhow::Result<()> {
     let root = tempdir()?;
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;
@@ -1125,13 +1185,11 @@ fn business_os_guard_allows_node_module_tests() -> anyhow::Result<()> {
     let root = tempdir()?;
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;
 
-    assert!(
-        business_os_app_root_artifact_write_guard(
-            "node --test runtime/business-os/installed-modules/inventory/tests/inventory.test.mjs",
-            root.path(),
-        )
-        .is_none()
-    );
+    assert!(business_os_app_root_artifact_write_guard(
+        "node --test runtime/business-os/installed-modules/inventory/tests/inventory.test.mjs",
+        root.path(),
+    )
+    .is_none());
     Ok(())
 }
 
