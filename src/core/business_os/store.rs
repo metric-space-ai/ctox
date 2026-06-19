@@ -22178,9 +22178,13 @@ fn load_business_records_by_field(
     })?;
     let mut out = Vec::new();
     for row in rows {
-        if let Ok(parsed) = serde_json::from_str::<Value>(&row?) {
-            out.push(parsed);
-        }
+        let raw = row?;
+        // Fail closed: a corrupt credential/consent row must not silently vanish
+        // and let a server-authoritative gate pass as if it did not exist.
+        let parsed = serde_json::from_str::<Value>(&raw).with_context(|| {
+            format!("corrupt {collection} record while loading by {field}")
+        })?;
+        out.push(parsed);
     }
     Ok(out)
 }
@@ -22382,6 +22386,15 @@ fn record_ats_governance_event(
     )
 }
 
+/// Scale a money/hours amount to integer cents/thousandths, rejecting non-finite
+/// or out-of-range values that would saturate `as i64` into a bogus invoice.
+pub(super) fn checked_scaled(amount: f64, scale: f64) -> i64 {
+    if !amount.is_finite() {
+        return 0;
+    }
+    (amount.clamp(-1.0e12, 1.0e12) * scale).round() as i64
+}
+
 /// One canonical `accounting_invoices` line (postable shape): `quantity` in
 /// thousandths and `unit_price_cents` in cents, with the revenue `account_code`
 /// the invoice poster requires.
@@ -22390,7 +22403,7 @@ fn ats_invoice_line(position: i64, description: &str, amount_eur: f64, tax_rate:
         "position": position,
         "description": description,
         "quantity": 1000,
-        "unit_price_cents": (amount_eur * 100.0).round() as i64,
+        "unit_price_cents": checked_scaled(amount_eur, 100.0),
         "tax_rate": tax_rate,
         "account_code": "8400"
     })
@@ -22858,8 +22871,8 @@ fn handle_ats_mutating_command(
                             serde_json::json!({
                                 "position": i + 1,
                                 "description": format!("Arbeitsstunden ({})", l.category),
-                                "quantity": (l.hours * 1000.0).round() as i64,
-                                "unit_price_cents": (l.rate * 100.0).round() as i64,
+                                "quantity": checked_scaled(l.hours, 1000.0),
+                                "unit_price_cents": checked_scaled(l.rate, 100.0),
                                 "tax_rate": 0.19,
                                 "account_code": "8400"
                             })
@@ -23094,6 +23107,17 @@ fn handle_ats_mutating_command(
             let collection = "interview_meetings";
             let file_id = first_string_field(p, &["source_file_id"])
                 .context("ats.interview.transcribe requires source_file_id")?;
+            // DoS guard: bound the audio size before reconstructing/decoding every
+            // chunk into memory.
+            const MAX_AUDIO_BYTES: u64 = 256 * 1024 * 1024;
+            let declared_size = rxdb_desktop_file_document(root, &file_id)
+                .ok()
+                .and_then(|doc| doc.get("size_bytes").and_then(Value::as_u64))
+                .unwrap_or(0);
+            anyhow::ensure!(
+                declared_size <= MAX_AUDIO_BYTES,
+                "interview audio {file_id} is too large ({declared_size} bytes, max {MAX_AUDIO_BYTES})"
+            );
             let generation = first_string_field(p, &["generation_id"]);
             let materialized = materialize_business_chat_attachment(
                 root,

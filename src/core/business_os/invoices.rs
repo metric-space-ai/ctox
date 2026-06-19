@@ -581,6 +581,13 @@ fn post_invoice_in_conn(
         }));
     }
 
+    // Atomic post: number reservation, invoice mutation, journal header + lines
+    // and the final posted state commit together (or roll back together) so a
+    // crash can never leave a half-posted ledger or a reserved-but-unused
+    // number. The native peer is the single writer, so the savepoint also
+    // serialises the number-series reservation.
+    conn.execute_batch("SAVEPOINT post_invoice")?;
+    let posted = (|| -> anyhow::Result<Value> {
     let mut invoice = load_accounting_invoice(conn, invoice_id)?
         .ok_or_else(|| anyhow!("invoice {invoice_id} not found"))?;
     let state = invoice
@@ -710,6 +717,16 @@ fn post_invoice_in_conn(
         "invoice": invoice,
         "journal_entry": journal.header,
     }))
+    })();
+    match &posted {
+        Ok(_) => conn.execute_batch("RELEASE SAVEPOINT post_invoice")?,
+        Err(_) => {
+            let _ = conn.execute_batch(
+                "ROLLBACK TO SAVEPOINT post_invoice; RELEASE SAVEPOINT post_invoice",
+            );
+        }
+    }
+    posted
 }
 
 fn iso_year_from_ms(ms: i64) -> i64 {
@@ -1229,7 +1246,16 @@ fn invoices_invoice_cancel(root: &Path, command: &BusinessCommand) -> anyhow::Re
             // first means there is no "cancelled but unreversed" window; the post
             // step is idempotent by the credit note's journal entry.
             let cn_id = format!("cn_{invoice_id}_storno");
-            if load_accounting_invoice(&conn, &cn_id)?.is_none() {
+            // Rebuild the Storno draft from the authoritative original every time
+            // (overwriting any pre-existing/planted draft under that id) unless it
+            // is already posted — never trust a stored draft to be a correct
+            // reversal of THIS invoice.
+            let already_posted = load_accounting_invoice(&conn, &cn_id)?
+                .as_ref()
+                .and_then(|c| c.get("state"))
+                .and_then(Value::as_str)
+                == Some("posted");
+            if !already_posted {
                 let cn = build_credit_note_draft(&invoice, &cn_id, command, now)?;
                 invoices_upsert_invoice(&conn, &cn_id, &cn, now)?;
             }
@@ -1288,6 +1314,63 @@ fn invoices_invoice_create_credit_note(
         "credit note requires a posted invoice to correct (state: {state})"
     );
     let cn = build_credit_note_draft(&original, &new_id, command, now)?;
+    // Cumulative cap: the sum of all non-deleted credit notes for this invoice
+    // (existing + the new one) must not exceed its net, otherwise repeated
+    // explicit-id credit notes would over-credit the original.
+    let line_net = |inv: &Value| -> i64 {
+        inv.get("lines")
+            .and_then(Value::as_array)
+            .map(|lines| {
+                lines
+                    .iter()
+                    .map(|line| {
+                        let q = line.get("quantity").and_then(Value::as_i64).unwrap_or(0);
+                        let up = line
+                            .get("unit_price_cents")
+                            .and_then(Value::as_i64)
+                            .unwrap_or(0);
+                        let d = line
+                            .get("discount_percent")
+                            .and_then(Value::as_f64)
+                            .unwrap_or(0.0)
+                            .clamp(0.0, 100.0)
+                            / 100.0;
+                        let gross_unit = ((up as f64) * (1.0 - d)).round() as i64;
+                        ((gross_unit as f64) * (q as f64) / 1000.0).round() as i64
+                    })
+                    .sum()
+            })
+            .unwrap_or(0)
+    };
+    let original_net = original
+        .get("subtotal_cents")
+        .and_then(Value::as_i64)
+        .unwrap_or_else(|| line_net(&original));
+    let mut existing_net = 0i64;
+    {
+        let mut stmt = conn.prepare(
+            "SELECT record_id, payload_json FROM business_records
+             WHERE collection = 'accounting_invoices' AND deleted = 0
+               AND json_extract(payload_json, '$.credit_note_for_id') = ?1",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![credit_note_for_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (rid, raw) = row?;
+            if rid == new_id {
+                continue;
+            }
+            if let Ok(value) = serde_json::from_str::<Value>(&raw) {
+                existing_net += line_net(&value);
+            }
+        }
+    }
+    let new_net = line_net(&cn);
+    anyhow::ensure!(
+        existing_net + new_net <= original_net,
+        "credit notes for {credit_note_for_id} would exceed the invoice net ({existing_net} + {new_net} > {original_net})"
+    );
     invoices_upsert_invoice(&conn, &new_id, &cn, now)?;
     Ok(json!({ "ok": true, "invoice": cn }))
 }
