@@ -148,6 +148,12 @@ first requested-domain edit, do not read the generated scaffold back with `ls`,
 contract, make bounded direct final edits under `MODULE_DIR`, then use focused
 tests and the app validator.
 
+The first app-artifact tool action after the scaffold baseline must be a
+direct bounded requested-domain write under `MODULE_DIR`. A directory listing,
+required-file inventory, scaffold readback, validation run, module test, syntax
+check, or scaffold repair command is not an acceptable first app-artifact
+action on a complete fresh scaffold.
+
 If the app-specific validator is green, stop immediately. Do not inspect
 validator/checker source, search the source or runtime tree for prior bench
 apps, list `runtime/business-os/installed-modules/`, list
@@ -155,10 +161,12 @@ apps, list `runtime/business-os/installed-modules/`, list
 missed process steps. A green App Creator validator is the completion boundary.
 CTOX may still reject a green validator if the tool trace shows process
 violations after the scaffold baseline: validation before direct final module
-edits, partial skill reads, `src/skills` inspection, `/tmp` artifact
-staging/testing/copying, generated scaffold readback before implementation,
-source-module discovery or line-count sweeps, nonexistent few-shot paths, or
-broad source/generated-file dumps. Treat that feedback as validator rework.
+edits, a first app-artifact action that lists or reads the scaffold instead of
+writing requested-domain files, partial skill reads, `src/skills` inspection,
+`/tmp` artifact staging/testing/copying, generated scaffold readback before
+implementation, source-module discovery or line-count sweeps, nonexistent
+few-shot paths, or broad source/generated-file dumps. Treat that feedback as
+validator rework.
 Repair by writing bounded final files directly under `MODULE_DIR`, then run the
 app-specific validator once; do not repeat the same early validation or readback
 commands.
