@@ -460,7 +460,7 @@ fn module_self_audit_read_guard_message(path: &str) -> String {
     format!(
         "Business OS app module guard blocked a generated-module self-audit readback `{path}`. \
 Do not inspect runtime-installed App Creator files file-by-file, through broad line ranges, globs, \
-multi-file grep/sed/wc commands, or consecutive readback chunks. Use the scaffold inventory, focused \
+multi-file grep/sed/wc commands, large head/tail snippets, or consecutive readback chunks. Use the scaffold inventory, focused \
 node checks, tests, and `ctox business-os app validate <id> --installed`; inspect only one exact \
 failing selector/import/snippet after a concrete validator or syntax error."
     )
@@ -926,7 +926,9 @@ fn command_reads_runtime_module_self_audit(
         || lower_contains_shell_word(&lower, "grep")
         || lower_contains_shell_word(&lower, "rg")
         || lower_contains_shell_word(&lower, "wc")
-        || lower_contains_shell_word(&lower, "awk");
+        || lower_contains_shell_word(&lower, "awk")
+        || lower_contains_shell_word(&lower, "head")
+        || lower_contains_shell_word(&lower, "tail");
     if !read_like {
         return None;
     }
@@ -950,11 +952,18 @@ fn command_reads_runtime_module_self_audit(
         || lower.contains("\\necho");
     let wc_readback = lower_contains_shell_word(&lower, "wc") && lower.contains("-l");
     let large_sed_range = command_has_large_sed_read_range(&lower);
+    let large_head_tail = command_has_large_head_tail_read(&lower);
     let grep_audit = (lower_contains_shell_word(&lower, "grep")
         || lower_contains_shell_word(&lower, "rg"))
         && (lower.matches('|').count() >= 4 || lower.contains("\\|"));
 
-    if broad_module_glob || multi_readback || wc_readback || large_sed_range || grep_audit {
+    if broad_module_glob
+        || multi_readback
+        || wc_readback
+        || large_sed_range
+        || large_head_tail
+        || grep_audit
+    {
         return Some(module_path);
     }
     None
@@ -1001,6 +1010,27 @@ fn command_has_large_sed_read_range(command_lower: &str) -> bool {
             }
         } else {
             idx += 1;
+        }
+    }
+    false
+}
+
+fn command_has_large_head_tail_read(command_lower: &str) -> bool {
+    let tokens = shellish_tokens(command_lower);
+    for (idx, token) in tokens.iter().enumerate() {
+        if token != "head" && token != "tail" {
+            continue;
+        }
+        for option in tokens.iter().skip(idx + 1).take(4) {
+            let value = option
+                .trim_start_matches("-n")
+                .trim_start_matches('-')
+                .trim_matches(|ch: char| matches!(ch, '\'' | '"'));
+            if let Ok(lines) = value.parse::<u32>() {
+                if lines > 40 {
+                    return true;
+                }
+            }
         }
     }
     false

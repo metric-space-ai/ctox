@@ -591,6 +591,45 @@ fn business_os_guard_blocks_runtime_module_large_sed_range() -> anyhow::Result<(
 }
 
 #[test]
+fn business_os_guard_blocks_runtime_module_large_head_readback() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+    let module_dir = root
+        .path()
+        .join("runtime/business-os/installed-modules/subscriptions");
+    fs::create_dir_all(&module_dir)?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "head -60 tests/subscriptions.test.mjs 2>&1",
+        &module_dir,
+    )
+    .expect("large generated-file head snippets should be blocked");
+
+    assert!(err.contains("self-audit readback"));
+    assert!(err.contains("subscriptions.test.mjs"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_allows_small_runtime_module_head_snippet() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+    let module_dir = root
+        .path()
+        .join("runtime/business-os/installed-modules/subscriptions");
+    fs::create_dir_all(&module_dir)?;
+
+    assert!(
+        business_os_app_root_artifact_write_guard(
+            "head -30 tests/subscriptions.test.mjs 2>&1",
+            &module_dir
+        )
+        .is_none()
+    );
+    Ok(())
+}
+
+#[test]
 fn business_os_guard_blocks_python_installed_module_writer() -> anyhow::Result<()> {
     let root = tempdir()?;
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;
