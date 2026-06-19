@@ -11764,7 +11764,9 @@ pub(crate) fn ensure_app_validation_completion_has_post_lease_artifact_write(
     let mut newest_path: Option<PathBuf> = None;
     let mut records_written = false;
     let mut automation_written = false;
-    let mut ui_or_locale_written = false;
+    let mut index_html_written = false;
+    let mut index_js_written = false;
+    let mut locale_written = false;
     let mut tests_written = false;
     for relative in BUSINESS_OS_APP_REQUIRED_ARTIFACTS {
         let path = module_dir.join(relative);
@@ -11781,9 +11783,9 @@ pub(crate) fn ensure_app_validation_completion_has_post_lease_artifact_write(
             match *relative {
                 "core/records.mjs" => records_written = true,
                 "core/automation.mjs" => automation_written = true,
-                "index.html" | "index.css" | "index.js" | "locales/de.json" | "locales/en.json" => {
-                    ui_or_locale_written = true;
-                }
+                "index.html" => index_html_written = true,
+                "index.js" => index_js_written = true,
+                "locales/de.json" | "locales/en.json" => locale_written = true,
                 _ => {}
             }
         }
@@ -11820,7 +11822,13 @@ pub(crate) fn ensure_app_validation_completion_has_post_lease_artifact_write(
             }
         }
     }
-    if records_written && automation_written && ui_or_locale_written && tests_written {
+    if records_written
+        && automation_written
+        && index_html_written
+        && index_js_written
+        && locale_written
+        && tests_written
+    {
         return Ok(());
     }
     let mut missing = Vec::new();
@@ -11830,8 +11838,14 @@ pub(crate) fn ensure_app_validation_completion_has_post_lease_artifact_write(
     if !automation_written {
         missing.push("core/automation.mjs");
     }
-    if !ui_or_locale_written {
-        missing.push("one visible UI/locales file");
+    if !index_html_written {
+        missing.push("index.html");
+    }
+    if !index_js_written {
+        missing.push("index.js");
+    }
+    if !locale_written {
+        missing.push("one locale file");
     }
     if !tests_written {
         missing.push("one tests/*.test.mjs file");
@@ -11841,7 +11855,7 @@ pub(crate) fn ensure_app_validation_completion_has_post_lease_artifact_write(
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| module_dir.display().to_string());
     anyhow::bail!(
-        "Early or partial validation is rejected for queue task `{}`: required requested-domain app artifact categories were not all written after its app-build baseline ({cutoff_label}). Missing post-baseline edits: {}. The scaffold is only a starting point and partial helper rewrites must not be validated as the finished app. Immediately edit requested-domain files under `{}` before validating again: core/records.mjs, core/automation.mjs, one visible UI/locales file, and one tests/*.test.mjs file must move forward together. Newest checked artifact: {}",
+        "Early or partial validation is rejected for queue task `{}`: required requested-domain app artifact categories were not all written after its app-build baseline ({cutoff_label}). Missing post-baseline edits: {}. The scaffold is only a starting point and partial helper, locale, or test rewrites must not be validated as the finished app. Immediately edit requested-domain files under `{}` before validating again: core/records.mjs, core/automation.mjs, index.html, index.js, one locale file, and one tests/*.test.mjs file must move forward together. Locales alone do not count as visible UI implementation. Newest checked artifact: {}",
         task.message_key,
         missing.join(", "),
         artifact_directory,
@@ -25103,7 +25117,7 @@ Business OS app build target:
 - scaffold baseline rule: CTOX service preflight creates a validator-clean scaffold before the app-build turn when the target directory is missing or empty. Preserve core/automation.mjs, core/records.mjs, locales, tests, mount wiring, and helper export names unless every importer is updated in the same edit. Use the embedded customers, shiftflow, and outbound patterns as the default three few-shots. Keep the app small, but do not treat an untouched scaffold as the requested app. The scaffold is already structurally valid; auditing or validating it before requested-domain edits is a task failure, not progress.
 - one-shot data-model rule: for first-pass App Creator apps, preserve the scaffold's single primary module-owned collection and helper API by default. Add requested-domain fields, statuses, calculations, fixtures, labels, and automation facts to that collection instead of inventing extra collections. Introduce additional module-owned collections only when the user explicitly requires a relational workflow and you update module.json, collections.schema.json, schema.js, core/records.mjs, core/automation.mjs, index.js, locales, and tests in the same edit before validation. Never define collection-name constants for undeclared collections and never reference business_commands from runtime helpers; automation uses ctx.commandBus.dispatch only.
 - scaffold contract freeze rule: module.json installed-runtime fields, entry/install_scope/version, store.distribution/installable, layout without right, the scaffold primary collection name, collections.schema.json schema_format, schema.js, and core helper export names are fixed scaffold contract. Do not port module.json, collections.schema.json, or schema.js wholesale from a shipped/source module and do not rename the scaffold collection as a first-pass domain model. Add domain fields, labels, statuses, calculations, fixtures, and automation facts to the scaffold collection instead. If you already changed manifest/schema/collection names before core helpers, UI, locales, and tests are lockstep, restore the scaffold contract first.
-- stable core API rule: for first-pass runtime apps, keep `core/automation.mjs` exporting `buildFollowUpCommand(record = {{}})` and keep `core/records.mjs` exporting the scaffold record helpers. Make `buildFollowUpCommand` the compatibility facade that builds the requested-domain `business_os.chat.task` payload with both `type` and `command_type` plus `payload.record_snapshot`. Do not replace it with plan-only helpers such as `planFollowUpTasks`, move the command builder into `core/records.mjs`, or import helpers from `core/records.mjs` before exporting them there. If you add domain helpers such as needsAttention, budgetStatus, billingReadiness, or milestoneTotals, export them from `core/records.mjs`, update `core/automation.mjs`, `index.js`, and every tests/*.test.mjs in the same edit, and keep `buildFollowUpCommand` available until all importers deliberately change together.
+- stable core API rule: for first-pass runtime apps, keep `core/automation.mjs` exporting `buildFollowUpCommand(record = {{}})` and keep `core/records.mjs` exporting the scaffold record helpers `MODULE_ID`, `COLLECTION_NAME`, `createRecord`, `normalizeStatus`, `visibleRecords`, and `summarizeRecords`. Make `buildFollowUpCommand` the compatibility facade that builds the requested-domain `business_os.chat.task` payload with both `type` and `command_type` plus `payload.record_snapshot`. Do not replace it with plan-only helpers such as `planFollowUpTasks`, move the command builder into `core/records.mjs`, or import helpers from `core/records.mjs` before exporting them there. If you add domain helpers such as needsAttention, budgetStatus, billingReadiness, or milestoneTotals, export them from `core/records.mjs`, update `core/automation.mjs`, `index.js`, and every tests/*.test.mjs in the same edit, and keep `buildFollowUpCommand` available until all importers deliberately change together.
 - exact artifact rule: required artifacts are canonical files, not shell patterns. Write module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales, core helpers, and tests by exact path under {module_dir}/ only. Do not create temporary schema/manifest aliases, short alias files such as m.json, manifest.json, collections.json, or schema.mjs/schema.cjs, do not copy through globs or brace expansion, do not create files literally named co*ions.*json or colle{{ctions,ctions}}.schema.json, and do not run rm against required artifacts.
 - scaffold preservation rule: CTOX service preflight may already have created a validator-clean scaffold in {module_dir}/. Treat that scaffold as the baseline. Do not clean, delete, reset, replace, or rewrite it wholesale. Customize the smallest necessary scaffold files in place, preserve the mount wiring, core helpers, schema wrappers, locales, and tests. Run `ctox business-os app scaffold {module_id} {mode_flag} --repair-missing` only after the service prompt or validator report explicitly names a missing required file; never probe for missing files yourself, never run it on a complete scaffold, and never count scaffold repair output as requested-domain implementation work.
 - few-shot rule: CTOX embeds the required three shipped-module patterns for App Creator turns: customers for manifest/dependency shape and commandBus dispatch, shiftflow for shell-fragment mount and local CSS attachment, and outbound for commandBus-driven task orchestration. If a non-CTOX external agent needs source snippets, open only exact existing files such as `src/apps/business-os/modules/customers/module.json`, `src/apps/business-os/modules/customers/index.js`, `src/apps/business-os/modules/shiftflow/index.js`, `src/apps/business-os/modules/outbound/index.js`, and `src/apps/business-os/modules/outbound/core/audience.js`. Never invent core/automation.mjs few-shot files for outbound or shiftflow; those modules do not ship that pattern. Do not run `ls`, `find`, `rg`, `grep`, or `tree` over `src/apps/business-os/modules/` or over a source module directory to discover files. Use notes only as an optional fourth simple-CRUD reference; it is not a scaffold-helper template and may not contain core/automation.mjs or core/records.mjs. Never use generated installed modules, runtime/business-os/installed-modules, ~/.local/state/ctox/business-os/installed-modules, bench_* apps, previous App Creator outputs, or app-creator-bench artifacts as few-shot templates. Do not request complete file dumps, do not use combined multi-file snippets or broad line sweeps, do not delegate a broad module-reading sweep to a subagent, and do not keep reading examples after the three-module summary.
@@ -25111,11 +25125,11 @@ Business OS app build target:
 - current-contract rule: if an existing module conflicts with the required skill, this prompt, `ctox business-os app validate`, or `module_static_check.mjs`, the current contract wins and the existing pattern is an anti-pattern.
 - bounded-shell rule: do not run find/rg/grep/ls/tree over $HOME, /Users, /, ~/.local/state, the whole install root, the whole repo, `src/apps/business-os/modules/`, any source module directory, `src/apps/business-os/app.js`, `src/apps/business-os/shared/`, `src/apps/business-os/scripts/`, `src/apps/business-os/rxdb/`, or `src/core/business_os/` to discover validators, scripts, examples, shell loaders, schema internals, or guard internals. Inspect only exact files in {module_dir}/ and exact chosen few-shot source files. Do not read or write ~/.local/state/ctox/business-os/installed-modules directly; use the prompt's {module_dir}/ path only. Use `ctox business-os app validate {module_id} {mode_flag}`; do not search for validator filenames or Business OS loader code.
 - sequencing rule: after reading the required skill once, trust the service preflight scaffold and make bounded requested-domain edits under {module_dir}/. Do not list, dump, or inventory the generated scaffold before the first domain edit. If a later validator run reports a missing required file, repair only that exact scaffold gap; do not replace a green scaffold just because it is generic. Do not open validate-app-module.mjs, module_static_check.mjs, assert-module-conformance.mjs, or assert-rxdb-only.mjs until the app files exist and a validation command has reported a concrete failure.
-- pre-validation edit gate: after the optional complete skill read and the embedded few-shot patterns, your next app action must write requested-domain changes under {module_dir}/. Do not inspect or confirm the generated scaffold first with `ls`, `find`, `tree`, `stat`, `cat`, `head`, `tail`, `sed`, Node readFileSync, validation, tests, node --check, or scaffold repair. Before the first validation call, edit at least core/records.mjs, core/automation.mjs, index.html, index.js, one locale file, and one tests/*.test.mjs file so they contain concrete requested-domain fixture facts. Do not run `ctox business-os app validate`, module tests, node --check, or scaffold repair as the first action on a complete fresh scaffold.
+- pre-validation edit gate: after the optional complete skill read and the embedded few-shot patterns, your next app action must write requested-domain changes under {module_dir}/. Do not inspect or confirm the generated scaffold first with `ls`, `find`, `tree`, `stat`, `cat`, `head`, `tail`, `sed`, Node readFileSync, validation, tests, node --check, or scaffold repair. Before the first validation call, edit at least core/records.mjs, core/automation.mjs, index.html, index.js, one locale file, and one tests/*.test.mjs file so they contain concrete requested-domain fixture facts. A locale-only label change is not visible UI implementation and will be rejected when index.html and index.js remain scaffold-generic. Do not run `ctox business-os app validate`, module tests, node --check, or scaffold repair as the first action on a complete fresh scaffold.
 - scaffold action allowlist rule: first-pass runtime apps should keep the scaffold's existing action surface: the form submit flow plus data-action values `new`, `delete`, and `follow-up`. Prefer changing labels, copy, filters, and selected-record facts over inventing new visible action buttons. Do not add data-action="attention", bulk, renew, reorder, export, ai, or status-only buttons in index.html unless index.js gets an exact `else if (action === "...")` branch in the same edit with a real persistence or commandBus effect. If a new action has no handler yet, remove the button before validation.
 - lockstep edit rule: if you change helper exports, schema fields, collection names, status values, command payload fields, fixture records, labels, filters, UI selectors, or HTML data-action values, update every importer, every concrete index.js handler/branch/action-map entry, and tests/*.test.mjs in the same implementation pass before running validation. Partial helper rewrites such as automation imports for records helpers that do not exist yet are invalid intermediate deliverables. Every data-action="..." in index.html must have a real click handler or action branch in index.js; do not add visible buttons such as bulk/renewal/churn actions unless those exact actions work end to end. If index.html changes after the scaffold baseline, index.js must also change after the baseline so the DOM selectors, form fields, render output, and actions match the new fragment.
 - test-helper parity rule: when you change summarizeRecords, visibleRecords, needsAttention, budgetStatus, billingReadiness, milestoneTotals, or any aggregate helper, update every tests/*.test.mjs expectation in the same edit to match the helper's actual exported shape. Do not use assert.deepEqual(summary, {{...}}) with an expected object that omits fields returned by the helper. For generated App Creator tests, do not write `assert.deepEqual(summarizeRecords(...), {{...}})` directly; assign `const summary = summarizeRecords(...)` and assert named fields deliberately, or assert a full hand-computed object that includes every returned key. Keep fixture statuses aligned with normalizeStatus/normalizers. A validator diff between actual and expected summary counts is a test/logic mismatch to repair before UI polish or completion.
-- validator rule: validators and static checkers are black-box gates. Run `ctox business-os app validate {module_id} {mode_flag}` only after you have made the smallest requested-domain edits to records, labels, filters, automation payload, index.html, index.js, and tests; scaffold inspection alone is not a file pass. Validation completion is accepted only when core/records.mjs, core/automation.mjs, index.html, index.js, one locale file, and one tests/*.test.mjs file all changed after the scaffold baseline. If validation reports early or partial validation, immediately edit the requested-domain files under {module_dir}/ as one lockstep repair and validate again. Repair validator output bullets exactly. Do not reconstruct scanner regexes or plan around checker internals before writing the app.
+- validator rule: validators and static checkers are black-box gates. Run `ctox business-os app validate {module_id} {mode_flag}` only after you have made the smallest requested-domain edits to records, labels, filters, automation payload, index.html, index.js, and tests; scaffold inspection alone is not a file pass. Validation completion is accepted only when core/records.mjs, core/automation.mjs, index.html, index.js, one locale file, and one tests/*.test.mjs file all changed after the scaffold baseline. Locales, helper tests, icon changes, or domain-only helper rewrites cannot substitute for a real index.html/index.js workflow update. If validation reports early or partial validation, immediately edit the requested-domain files under {module_dir}/ as one lockstep repair and validate again. Repair validator output bullets exactly. Do not reconstruct scanner regexes or plan around checker internals before writing the app.
 - cwd warning: shell tools run from the install root, not from the module directory; never use bare redirects like > module.json, > collections.schema.json, > {module_id}/index.js, or mkdir {module_id}.
 - required shell write pattern: set MODULE_DIR="{module_dir}" and write every file as "$MODULE_DIR/<file>"; create "$MODULE_DIR/locales" and "$MODULE_DIR/tests" before writing nested files.
 - required artifact write pattern: use exact filenames only. Do not use `cp .tmp_schema.json co*.json`, `cp .csjson.tmp collections*.json`, `rm collections.schema.json`, `rm *.json`, `mv module*.json module.json`, short alias files such as `m.json`, or any glob/brace/wildcard repair for required files. If a required file must change, write the final content directly to "$MODULE_DIR/collections.schema.json" or the exact required target and parse/import it immediately.
@@ -27792,6 +27806,88 @@ mod tests {
                 && report.contains("Missing post-baseline edits")
                 && report.contains("core/records.mjs")
                 && report.contains("one tests/*.test.mjs file"),
+            "unexpected error: {report}"
+        );
+        let task = channels::load_queue_task(root, &task_id)?
+            .context("expected queue task after refused completion")?;
+        assert_eq!(task.route_status, "leased");
+        Ok(())
+    }
+
+    #[test]
+    fn app_validation_success_refuses_helper_locale_test_without_visible_ui_edit(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let module_id = "subscriptions";
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_app_locale_only_ui",
+                "module": "creator",
+                "type": "ctox.business_os.app.create",
+                "record_id": module_id,
+                "payload": {
+                    "title": "Build Subscriptions",
+                    "instruction": "Build a Business OS subscriptions app.",
+                    "module_id": module_id,
+                    "install_target": "runtime-installed-module",
+                    "target": "app"
+                },
+                "client_context": {
+                    "source": "business-os-app-creator-native-test",
+                    "target": "app"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queued task id")?
+            .to_string();
+        channels::lease_queue_task(root, &task_id, "ctox-service-test")?;
+        write_minimal_runtime_app_artifacts(root, module_id)?;
+        thread::sleep(Duration::from_millis(1100));
+        channels::set_queue_task_metadata_value(
+            root,
+            &task_id,
+            BUSINESS_OS_APP_SCAFFOLD_BASELINE_MS_METADATA_KEY,
+            Value::from(now_ms() as i64),
+        )?;
+        thread::sleep(Duration::from_millis(1100));
+        let module_dir = root
+            .join("runtime/business-os/installed-modules")
+            .join(module_id);
+        fs::write(
+            module_dir.join("core/records.mjs"),
+            "export const MODULE_ID = 'subscriptions';\nexport const COLLECTION_NAME = 'subscriptions_records';\nexport function createRecord(input = {}) { return { id: String(input.id || 'demo'), title: String(input.title || 'Subscription'), status: normalizeStatus(input.status), is_deleted: Boolean(input.is_deleted) }; }\nexport function normalizeStatus(value) { return String(value || 'active').trim().toLowerCase() || 'active'; }\nexport function visibleRecords(records = []) { return records.filter((record) => !record.is_deleted); }\nexport function summarizeRecords(records = []) { return { total: visibleRecords(records).length }; }\n",
+        )?;
+        fs::write(
+            module_dir.join("core/automation.mjs"),
+            "export function buildFollowUpCommand(record = {}) { return { type: 'business_os.chat.task', command_type: 'business_os.chat.task', payload: { record_snapshot: { ...record } } }; }\n",
+        )?;
+        fs::write(
+            module_dir.join("locales/en.json"),
+            "{ \"title\": \"Subscriptions\", \"new_record\": \"New subscription\" }\n",
+        )?;
+        fs::write(
+            module_dir.join("tests/basic.test.mjs"),
+            "import assert from 'node:assert/strict';\nimport { createRecord, summarizeRecords } from '../core/records.mjs';\nassert.equal(summarizeRecords([createRecord({ id: 's1' })]).total, 1);\n",
+        )?;
+
+        let error = complete_business_command_from_app_validation_success(
+            root,
+            &task_id,
+            Some(module_id),
+            "validated after helper locale and test edits without UI edit",
+        )
+        .expect_err("helper, locale, and tests without index.html/index.js must not complete");
+        let report = format!("{error:#}");
+        assert!(
+            report.contains("Early or partial validation is rejected")
+                && report.contains("index.html")
+                && report.contains("index.js")
+                && report.contains("Locales alone do not count as visible UI implementation"),
             "unexpected error: {report}"
         );
         let task = channels::load_queue_task(root, &task_id)?
