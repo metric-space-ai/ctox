@@ -6761,7 +6761,7 @@ fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
         return job.prompt.clone();
     };
     let prompt = format!(
-        "{}\n\nBusiness OS app module execution rules:\n\nTOP ACCEPTANCE GATE:\n- The final app must be requested-domain UI, logic, automation, and tests. Generic scaffold strings such as `New record`, `Search records`, `Select a record`, `Title`, `Owner`, `Due date`, `Open`, `Blocked`, `Done`, `record.title`, `due_at_ms`, `summary.total`, `summary.open`, and `summary.blocked` are allowed only as temporary scaffold internals before your first write; they must not remain in final `index.html`, `index.js`, or tests unless the user's domain literally uses those exact words.\n- Your first implementation must be a vertical requested-domain slice, not a helper phase: `index.html`, `index.js`, `core/records.mjs`, `core/automation.mjs`, one locale file, and one `tests/*.test.mjs` must be rewritten together before validation, tests, syntax checks, or any completion claim. If a tool-call limit forces separate writes, the immediately next app-artifact write must complete the missing UI/JS/test/helper parity; do not continue polishing helpers, add schema, or validate while `index.js` or tests still contain scaffold fields.\n- If you change `core/records.mjs` away from generic records, you must in the same implementation pass rewrite `index.html`, `index.js`, one locale file, and `tests/*.test.mjs` to use matching requested-domain fields, filters, summaries, fixture facts, and automation copy. A helper-only rewrite is a failed app.\n- Do not add new first-pass `data-action` values such as `restock`, `reorder`, `renew`, `attention`, `bulk`, `export`, `ai`, or status-only actions. Use only the scaffold action surface: form submit plus `data-action=\"new\"`, `data-action=\"delete\"`, and `data-action=\"follow-up\"`. Put domain-specific work into the follow-up command payload or normal form fields.\n- Before the first validation call, `index.html`, `index.js`, `core/records.mjs`, `core/automation.mjs`, one locale file, and one test must all contain concrete nouns from the user's prompt, not just the module id or title, and tests must not keep stale scaffold `assert.deepEqual` expectations for `total/open/blocked/done` after helpers return domain aggregates.\n\nIMMEDIATE START GATE:\n- CTOX service already created and recorded the scaffold baseline at `{}`. Do not check whether it exists. Do not run `ls`, `find`, `tree`, `stat`, `cat`, `head`, `tail`, `sed`, Node readFileSync, validation, tests, syntax checks, or scaffold repair before requested-domain writes. A first app-artifact command that lists, reads, validates, tests, or repairs the scaffold fails this turn.\n- Set `MODULE_DIR=\"{}\"`; the next tool action that touches `{}` or generated app artifacts must write bounded requested-domain content directly to `$MODULE_DIR/core/records.mjs`, `$MODULE_DIR/core/automation.mjs`, `$MODULE_DIR/index.html`, `$MODULE_DIR/index.js`, one locale file, and one `tests/*.test.mjs` file. Use the scaffold contract; do not read it first.\n\n- Your only deliverable is the runnable Business OS app/module under `{}`. Do not create plans, skill files, trace files, root aliases, or blocker/status notes as substitutes for the app.\n- The CTOX service owns queue and Business OS command lifecycle. Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, `ctox queue block`, or direct SQL against queue/command/runtime status tables. Do not act on queue IDs shown in context or open-work blocks; they are service context, not your completion target.\n- CTOX service preflight creates a validator-clean scaffold before this turn when the target directory is missing or empty. The scaffold inventory is already known: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, core/automation.mjs, core/records.mjs, locales/de.json, locales/en.json, and tests/*.test.mjs. Do not run `ls`, `find`, `tree`, `stat`, `cat`, `head`, `tail`, broad `sed`, or Node readFileSync to confirm that inventory before requested-domain edits. Do not hand-author module.json, schema.js, collections.schema.json, technical mount wiring, persistence helpers, automation dispatch plumbing, or the test harness from scratch; do replace the scaffold's generic UI fields, summary labels, fixture facts, and test expectations with requested-domain content.\n- If the service prompt explicitly says scaffold preflight failed, stop and report that scaffold failure. Do not probe the directory or invent a different structure.\n- Preserve scaffold invariants: do not delete `core/automation.mjs`, `core/records.mjs`, `locales/de.json`, `locales/en.json`, or `tests/*.test.mjs`. Preserve technical contracts, not generic labels. If you customize domain collections, helpers, UI selectors, form fields, summaries, or automation, update the matching tests in the same turn.\n- First app-artifact action rule: after an optional single complete `ctox skills system show business-os-app-module-development --body` read, the first tool action that mentions `{}` or generated app artifacts must be a direct bounded write to requested-domain files under `MODULE_DIR`, not a directory listing, scaffold readback, validation, test, syntax check, or repair command.\n- Inspect and edit with a narrow tool budget. Directory listings are not narrow inspection. Do not dump whole generated files, loop over all app artifacts with `cat`, or run broad repo/source scans. Use targeted `sed -n` ranges, exact `rg -n` selectors/imports, and validator output only after a concrete failing validator/test/syntax result names the snippet to inspect.\n- Do not use Python, base64 blobs, Node writer scripts, generated writer scripts, data URLs, or temporary file-copy wrappers to create or patch app files. If a direct edit becomes fragile, reduce scope, split the file into a smaller local ESM helper, or edit the smaller affected file.\n- Installed root artifact rule: the module root may contain only module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, core/, locales/, and tests/. Do not leave typo or scratch files such as m, modul.json, temporary manifests, status notes, or ad hoc folders in the module root.\n- Schema artifact rule: keep the canonical root `schema.js`; do not rename it, delete it, replace it with `schema.mjs`, or leave root-level `schema.mjs`/`schema.cjs` aliases. Put reusable ESM schema fragments under `core/*.mjs` and re-export them from `schema.js`.\n- Customize only files under `{}` for the requested domain and workflow. Preserve the generated persistence, mount, stylesheet, schema, and automation contracts; replace generic visible labels, fields, summaries, filters, fixture records, and tests with requested-domain content.\n- Exact mount rule: index.js must load `./index.html` with `fetch(new URL('./index.html', import.meta.url))`, assign the loaded HTML into `ctx.host.innerHTML`, and attach `./index.css` with `new URL('./index.css', import.meta.url)` before DOM queries or event wiring. Every `data-*` selector queried in index.js must exist in index.html or in generated markup.\n- CSS token rule: never define custom properties on `:root`, `html`, or `body`. Put module-local custom properties on the module root class from index.html, and never redefine shell token names such as `--surface`, `--text`, or `--line`.\n- Automation command rule: keep an exported command builder that returns `type: 'business_os.chat.task'`, `command_type: 'business_os.chat.task'`, and `payload.record_snapshot`. Use ctx.commandBus.dispatch for the visible automation action.\n- Use `MODULE_DIR=\"{}\"` and write every generated file as `$MODULE_DIR/<file>`. Do not write root-level app artifacts or `src/apps/business-os/installed-modules` for runtime-installed modules.\n- Use one/two panes plus modals or drawers by default. Remove `layout.right`, right panes, right-column CSS/resizers, and three-column grids unless the user explicitly requested a persistent third pane and the manifest carries a concrete workflow justification.\n- Every visible control must have a real handler that mutates a module-owned collection or dispatches a tested Business OS command payload. Remove decorative controls instead of leaving placeholders.\n- Tests are required app artifacts. Keep or replace `tests/*.test.mjs` in the same turn; do not leave the tests directory empty.\n- Tests must prove positive behavior only. Do not write negative source-text scans, forbidden-literal assertions, or tests that quote banned anti-pattern strings such as layout/right-pane keys; validators own those checks.\n- If the current validator report says the app is green but no required artifact was written after the scaffold baseline, or says the app still looks like the generic App Creator records scaffold, edit domain facts in `core/records.mjs`, `core/automation.mjs`, `index.html`, `index.js`, one locale file, and one `tests/*.test.mjs` file before running validation again. Running validation as the first or only action in that rework state is a task failure.\n- Before claiming success, run the module tests plus `ctox business-os app validate {} {}`. If validation reports any failure, repair the exact bullets and rerun. If validation is green, stop immediately and write the final response; do not run repository-wide conformance scripts, broad source RxDB scans, extra file dumps, cosmetic rewrites, or additional polishing passes.\n- Final response should only summarize app files and verification. Do not include queue IDs, command IDs, internal table names, or lifecycle claims.",
+        "{}\n\nBusiness OS app module execution rules:\n\nTOP ACCEPTANCE GATE:\n- The final app must be requested-domain UI, logic, automation, and tests. Generic scaffold strings such as `New record`, `Search records`, `Select a record`, `Title`, `Owner`, `Due date`, `Open`, `Blocked`, `Done`, `record.title`, `due_at_ms`, `summary.total`, `summary.open`, and `summary.blocked` are allowed only as temporary scaffold internals before your first write; they must not remain in final `index.html`, `index.js`, or tests unless the user's domain literally uses those exact words.\n- Your first implementation must be a vertical requested-domain slice, not a helper phase: `index.html`, `index.js`, `core/records.mjs`, `core/automation.mjs`, one locale file, and one `tests/*.test.mjs` must be rewritten together before validation, tests, syntax checks, or any completion claim. The first requested-domain app-artifact write must include `index.js` and a `tests/*.test.mjs` rewrite, either in the same command as the helper/UI files or as the immediately completing paired write before any validation or cosmetic/contract edit.\n- Do not edit `module.json`, `collections.schema.json`, `schema.js`, `index.css`, or `icon.svg` before `index.js` and tests have been rewritten for the requested domain. Those scaffold files are already structurally valid; schema, manifest, CSS, or icon changes before a working entry/test slice are trace failures.\n- If a tool-call limit forces separate writes, the immediately next app-artifact write must complete the missing UI/JS/test/helper parity; do not continue polishing helpers, add schema, edit CSS/icon, or validate while `index.js` or tests still contain scaffold fields.\n- If you change `core/records.mjs` away from generic records, you must in the same implementation pass rewrite `index.html`, `index.js`, one locale file, and `tests/*.test.mjs` to use matching requested-domain fields, filters, summaries, fixture facts, and automation copy. A helper-only rewrite is a failed app.\n- Do not add new first-pass `data-action` values such as `restock`, `reorder`, `renew`, `attention`, `bulk`, `export`, `ai`, or status-only actions. Use only the scaffold action surface: form submit plus `data-action=\"new\"`, `data-action=\"delete\"`, and `data-action=\"follow-up\"`. Put domain-specific work into the follow-up command payload or normal form fields.\n- Before the first validation call, `index.html`, `index.js`, `core/records.mjs`, `core/automation.mjs`, one locale file, and one test must all contain concrete nouns from the user's prompt, not just the module id or title, and tests must not keep stale scaffold `assert.deepEqual` expectations for `total/open/blocked/done` after helpers return domain aggregates.\n\nIMMEDIATE START GATE:\n- CTOX service already created and recorded the scaffold baseline at `{}`. Do not check whether it exists. Do not run `ls`, `find`, `tree`, `stat`, `cat`, `head`, `tail`, `sed`, Node readFileSync, validation, tests, syntax checks, or scaffold repair before requested-domain writes. A first app-artifact command that lists, reads, validates, tests, or repairs the scaffold fails this turn.\n- Set `MODULE_DIR=\"{}\"`; the next tool action that touches `{}` or generated app artifacts must write bounded requested-domain content directly to `$MODULE_DIR/core/records.mjs`, `$MODULE_DIR/core/automation.mjs`, `$MODULE_DIR/index.html`, `$MODULE_DIR/index.js`, one locale file, and one `tests/*.test.mjs` file. Use the scaffold contract; do not read it first. Keep `module.json`, `collections.schema.json`, `schema.js`, `index.css`, and `icon.svg` untouched until that entry/test vertical slice exists and is domain-specific.\n\n- Your only deliverable is the runnable Business OS app/module under `{}`. Do not create plans, skill files, trace files, root aliases, or blocker/status notes as substitutes for the app.\n- The CTOX service owns queue and Business OS command lifecycle. Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, `ctox queue block`, or direct SQL against queue/command/runtime status tables. Do not act on queue IDs shown in context or open-work blocks; they are service context, not your completion target.\n- CTOX service preflight creates a validator-clean scaffold before this turn when the target directory is missing or empty. The scaffold inventory is already known: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, core/automation.mjs, core/records.mjs, locales/de.json, locales/en.json, and tests/*.test.mjs. Do not run `ls`, `find`, `tree`, `stat`, `cat`, `head`, `tail`, broad `sed`, or Node readFileSync to confirm that inventory before requested-domain edits. Do not hand-author module.json, schema.js, collections.schema.json, technical mount wiring, persistence helpers, automation dispatch plumbing, or the test harness from scratch; do replace the scaffold's generic UI fields, summary labels, fixture facts, and test expectations with requested-domain content.\n- If the service prompt explicitly says scaffold preflight failed, stop and report that scaffold failure. Do not probe the directory or invent a different structure.\n- Preserve scaffold invariants: do not delete `core/automation.mjs`, `core/records.mjs`, `locales/de.json`, `locales/en.json`, or `tests/*.test.mjs`. Preserve technical contracts, not generic labels. If you customize domain collections, helpers, UI selectors, form fields, summaries, or automation, update the matching tests in the same turn.\n- First app-artifact action rule: after an optional single complete `ctox skills system show business-os-app-module-development --body` read, the first tool action that mentions `{}` or generated app artifacts must be a direct bounded write to requested-domain files under `MODULE_DIR`, not a directory listing, scaffold readback, validation, test, syntax check, repair command, or manifest/schema/CSS/icon edit.\n- Inspect and edit with a narrow tool budget. Directory listings are not narrow inspection. Do not dump whole generated files, loop over all app artifacts with `cat`, or run broad repo/source scans. Use targeted `sed -n` ranges, exact `rg -n` selectors/imports, and validator output only after a concrete failing validator/test/syntax result names the snippet to inspect.\n- Do not use Python, base64 blobs, Node writer scripts, generated writer scripts, data URLs, or temporary file-copy wrappers to create or patch app files. If a direct edit becomes fragile, reduce scope, split the file into a smaller local ESM helper, or edit the smaller affected file.\n- Installed root artifact rule: the module root may contain only module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, core/, locales/, and tests/. Do not leave typo or scratch files such as m, modul.json, temporary manifests, status notes, or ad hoc folders in the module root.\n- Schema artifact rule: keep the canonical root `schema.js`; do not rename it, delete it, replace it with `schema.mjs`, or leave root-level `schema.mjs`/`schema.cjs` aliases. Put reusable ESM schema fragments under `core/*.mjs` and re-export them from `schema.js`.\n- Customize only files under `{}` for the requested domain and workflow. Preserve the generated persistence, mount, stylesheet, schema, and automation contracts; replace generic visible labels, fields, summaries, filters, fixture records, and tests with requested-domain content.\n- Exact mount rule: index.js must load `./index.html` with `fetch(new URL('./index.html', import.meta.url))`, assign the loaded HTML into `ctx.host.innerHTML`, and attach `./index.css` with `new URL('./index.css', import.meta.url)` before DOM queries or event wiring. Every `data-*` selector queried in index.js must exist in index.html or in generated markup.\n- CSS token rule: never define custom properties on `:root`, `html`, or `body`. Put module-local custom properties on the module root class from index.html, and never redefine shell token names such as `--surface`, `--text`, or `--line`.\n- Automation command rule: keep an exported command builder that returns `type: 'business_os.chat.task'`, `command_type: 'business_os.chat.task'`, and `payload.record_snapshot`. Use ctx.commandBus.dispatch for the visible automation action.\n- Use `MODULE_DIR=\"{}\"` and write every generated file as `$MODULE_DIR/<file>`. Do not write root-level app artifacts or `src/apps/business-os/installed-modules` for runtime-installed modules.\n- Use one/two panes plus modals or drawers by default. Remove `layout.right`, right panes, right-column CSS/resizers, and three-column grids unless the user explicitly requested a persistent third pane and the manifest carries a concrete workflow justification.\n- Every visible control must have a real handler that mutates a module-owned collection or dispatches a tested Business OS command payload. Remove decorative controls instead of leaving placeholders.\n- Tests are required app artifacts. Keep or replace `tests/*.test.mjs` in the same turn; do not leave the tests directory empty.\n- Tests must prove positive behavior only. Do not write negative source-text scans, forbidden-literal assertions, or tests that quote banned anti-pattern strings such as layout/right-pane keys; validators own those checks.\n- If the current validator report says the app is green but no required artifact was written after the scaffold baseline, or says the app still looks like the generic App Creator records scaffold, edit domain facts in `core/records.mjs`, `core/automation.mjs`, `index.html`, `index.js`, one locale file, and one `tests/*.test.mjs` file before running validation again. Running validation as the first or only action in that rework state is a task failure.\n- Before claiming success, run the module tests plus `ctox business-os app validate {} {}`. If validation reports any failure, repair the exact bullets and rerun. If validation is green, stop immediately and write the final response; do not run repository-wide conformance scripts, broad source RxDB scans, extra file dumps, cosmetic rewrites, or additional polishing passes.\n- Final response should only summarize app files and verification. Do not include queue IDs, command IDs, internal table names, or lifecycle claims.",
         job.prompt,
         target.artifact_directory,
         target.artifact_directory,
@@ -7638,6 +7638,8 @@ fn business_os_app_module_tool_trace_policy_report(
     let mut findings: Vec<String> = Vec::new();
     let mut saw_requested_domain_artifact_write = false;
     let mut saw_app_artifact_action = false;
+    let mut saw_domain_entry_write = false;
+    let mut saw_domain_test_write = false;
     let module_marker = target.module_id.to_ascii_lowercase();
     let artifact_marker = target.artifact_directory.to_ascii_lowercase();
     let validate_marker =
@@ -7683,6 +7685,8 @@ fn business_os_app_module_tool_trace_policy_report(
             business_os_app_trace_command_is_requested_domain_write(&lowered, &artifact_marker);
         let is_any_final_artifact_write =
             business_os_app_trace_command_is_final_artifact_write(&lowered, &artifact_marker);
+        let write_categories =
+            business_os_app_trace_command_write_categories(&lowered, &artifact_marker);
         if mentions_app_artifact && !saw_app_artifact_action {
             saw_app_artifact_action = true;
             if !is_requested_domain_write
@@ -7703,8 +7707,44 @@ fn business_os_app_module_tool_trace_policy_report(
                 );
             }
         }
-        if is_requested_domain_write {
-            saw_requested_domain_artifact_write = true;
+        if is_any_final_artifact_write {
+            let entry_and_test_now_or_before = (saw_domain_entry_write || write_categories.entry)
+                && (saw_domain_test_write || write_categories.test);
+            if is_requested_domain_write
+                && !saw_requested_domain_artifact_write
+                && !(write_categories.entry && write_categories.test)
+            {
+                push_business_os_app_trace_finding(
+                    &mut findings,
+                    "first requested-domain app-artifact write did not rewrite index.js and tests",
+                );
+            }
+            if write_categories.domain_helper_or_ui()
+                && !entry_and_test_now_or_before
+                && !(write_categories.entry && write_categories.test)
+            {
+                push_business_os_app_trace_finding(
+                    &mut findings,
+                    "requested-domain helper or UI files were edited before index.js and tests were rewritten",
+                );
+            }
+            if (write_categories.contract || write_categories.cosmetic)
+                && !entry_and_test_now_or_before
+            {
+                push_business_os_app_trace_finding(
+                    &mut findings,
+                    "manifest, schema, CSS, or icon artifact was edited before index.js and tests were rewritten",
+                );
+            }
+            if write_categories.entry {
+                saw_domain_entry_write = true;
+            }
+            if write_categories.test {
+                saw_domain_test_write = true;
+            }
+            if is_requested_domain_write {
+                saw_requested_domain_artifact_write = true;
+            }
         }
         if lowered.contains(&validate_marker) && !saw_requested_domain_artifact_write {
             push_business_os_app_trace_finding(
@@ -7815,17 +7855,50 @@ fn business_os_app_trace_command_is_requested_domain_write(
     command: &str,
     artifact_marker: &str,
 ) -> bool {
-    business_os_app_trace_command_is_final_artifact_write(command, artifact_marker)
-        && [
-            "core/records.mjs",
-            "core/automation.mjs",
-            "index.html",
-            "index.js",
-            "locales/",
-            ".test.mjs",
-        ]
-        .iter()
-        .any(|marker| command.contains(marker))
+    business_os_app_trace_command_write_categories(command, artifact_marker).requested_domain()
+}
+
+#[derive(Default)]
+struct BusinessOsAppTraceWriteCategories {
+    records: bool,
+    automation: bool,
+    html: bool,
+    entry: bool,
+    locale: bool,
+    test: bool,
+    contract: bool,
+    cosmetic: bool,
+}
+
+impl BusinessOsAppTraceWriteCategories {
+    fn requested_domain(&self) -> bool {
+        self.records || self.automation || self.html || self.entry || self.locale || self.test
+    }
+
+    fn domain_helper_or_ui(&self) -> bool {
+        self.records || self.automation || self.html || self.locale
+    }
+}
+
+fn business_os_app_trace_command_write_categories(
+    command: &str,
+    artifact_marker: &str,
+) -> BusinessOsAppTraceWriteCategories {
+    if !business_os_app_trace_command_is_final_artifact_write(command, artifact_marker) {
+        return BusinessOsAppTraceWriteCategories::default();
+    }
+    BusinessOsAppTraceWriteCategories {
+        records: command.contains("core/records.mjs"),
+        automation: command.contains("core/automation.mjs"),
+        html: command.contains("index.html"),
+        entry: command.contains("index.js"),
+        locale: command.contains("locales/"),
+        test: command.contains(".test.mjs") || command.contains("tests/"),
+        contract: command.contains("module.json")
+            || command.contains("collections.schema.json")
+            || command.contains("schema.js"),
+        cosmetic: command.contains("index.css") || command.contains("icon.svg"),
+    }
 }
 
 fn business_os_app_trace_command_reads_generated_artifact(command: &str) -> bool {
@@ -22375,6 +22448,120 @@ Business OS command:
     }
 
     #[test]
+    fn business_os_app_tool_trace_policy_rejects_helper_and_schema_before_entry_tests() {
+        let root = temp_root("business-os-app-tool-trace-helper-first");
+        std::fs::create_dir_all(root.join("runtime")).expect("create runtime dir");
+        let module_id = "bench_subscriptions_trace";
+        let target = BusinessOsAppModuleTarget {
+            module_id: module_id.to_string(),
+            install_target: "runtime-installed-module".to_string(),
+            mode_flag: "--installed",
+            artifact_directory: format!("runtime/business-os/installed-modules/{module_id}"),
+        };
+        let prompt = format!(
+            "Build a subscriptions Business OS app.\nBusiness OS app build target:\n- module_id: {module_id}\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: {}\nBusiness OS command:\n- type: ctox.business_os.app.create\n",
+            target.artifact_directory
+        );
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create subscriptions app".to_string(),
+                prompt: prompt.clone(),
+                thread_key: "business-os/apps/subscriptions".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let baseline_ms = current_epoch_millis() as i64;
+        channels::set_queue_task_metadata_value(
+            &root,
+            &task.message_key,
+            BUSINESS_OS_APP_SCAFFOLD_BASELINE_MS_METADATA_KEY,
+            Value::from(baseline_ms),
+        )
+        .expect("record baseline metadata");
+        let job = QueuedPrompt {
+            prompt,
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "business-os:app-create".to_string(),
+            suggested_skill: task.suggested_skill.clone(),
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: task.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let module_dir = root.join(&target.artifact_directory);
+        let commands = [
+            format!(
+                "MODULE_DIR=\"{}\"; cat > \"$MODULE_DIR/core/records.mjs\" <<'EOF'\nexport const MODULE_ID = '{module_id}';\nEOF",
+                module_dir.display()
+            ),
+            format!(
+                "MODULE_DIR=\"{}\"; cat > \"$MODULE_DIR/collections.schema.json\" <<'EOF'\n{{}}\nEOF",
+                module_dir.display()
+            ),
+            format!(
+                "MODULE_DIR=\"{}\"; cat > \"$MODULE_DIR/index.html\" <<'EOF'\n<section>Subscriptions</section>\nEOF",
+                module_dir.display()
+            ),
+            format!(
+                "MODULE_DIR=\"{}\"; cat > \"$MODULE_DIR/index.css\" <<'EOF'\n.subscriptions {{ display: grid; }}\nEOF",
+                module_dir.display()
+            ),
+            format!(
+                "MODULE_DIR=\"{}\"; cat > \"$MODULE_DIR/index.js\" <<'EOF'\nexport async function mount() {{}}\nEOF",
+                module_dir.display()
+            ),
+            format!(
+                "MODULE_DIR=\"{}\"; cat > \"$MODULE_DIR/tests/subscriptions.test.mjs\" <<'EOF'\nimport assert from 'node:assert/strict';\nEOF",
+                module_dir.display()
+            ),
+        ];
+        let context_lines = commands
+            .iter()
+            .enumerate()
+            .map(|(idx, command)| {
+                serde_json::json!({
+                    "ts": baseline_ms + idx as i64 + 1,
+                    "event": "tool_call_begin",
+                    "command": command,
+                })
+                .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(
+            root.join("runtime/context-log.jsonl"),
+            format!("{context_lines}\n"),
+        )
+        .expect("write context log fixture");
+
+        let report = business_os_app_module_tool_trace_policy_report(&root, &root, &job, &target)
+            .expect("tool trace policy should run")
+            .expect("tool trace policy should report helper-first violation");
+
+        assert!(report.contains(
+            "first requested-domain app-artifact write did not rewrite index.js and tests"
+        ));
+        assert!(report.contains(
+            "requested-domain helper or UI files were edited before index.js and tests were rewritten"
+        ));
+        assert!(report.contains(
+            "manifest, schema, CSS, or icon artifact was edited before index.js and tests were rewritten"
+        ));
+    }
+
+    #[test]
     fn business_os_app_domain_relevance_allows_domain_terms_with_generic_placeholders() {
         let root = temp_root("business-os-app-domain-relevance-inventory");
         let module_id = "bench_inventory";
@@ -22451,6 +22638,9 @@ Business OS command:
         assert!(prompt.contains("The final app must be requested-domain UI"));
         assert!(prompt.contains("Generic scaffold strings such as `New record`"));
         assert!(prompt.contains("vertical requested-domain slice"));
+        assert!(prompt
+            .contains("The first requested-domain app-artifact write must include `index.js`"));
+        assert!(prompt.contains("Do not edit `module.json`, `collections.schema.json`, `schema.js`, `index.css`, or `icon.svg` before `index.js`"));
         assert!(prompt.contains("A helper-only rewrite is a failed app"));
         assert!(prompt.contains("Do not add new first-pass `data-action` values such as `restock`"));
         assert!(prompt.contains("stale scaffold `assert.deepEqual` expectations"));
@@ -22464,6 +22654,7 @@ Business OS command:
         assert!(prompt.contains("hand-author module.json, schema.js, collections.schema.json"));
         assert!(prompt.contains("First app-artifact action rule"));
         assert!(prompt.contains("must be a direct bounded write"));
+        assert!(prompt.contains("manifest/schema/CSS/icon edit"));
         assert!(prompt.contains("Exact mount rule: index.js must load `./index.html`"));
         assert!(prompt.contains("fetch(new URL('./index.html', import.meta.url))"));
         assert!(prompt.contains("ctx.host.innerHTML"));
