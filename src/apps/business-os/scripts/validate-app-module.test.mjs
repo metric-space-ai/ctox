@@ -484,11 +484,19 @@ function installedIndexJsWith(extraLines = []) {
     manifest: {
       entry: 'modules/badmanifest/index.html',
       install_scope: 'store',
+      source: 'local',
+      version: 'v1',
       layout: {
         shell: 'full-workspace',
         left: 'List',
         center: 'Details',
         right: 'Inspector',
+        right_resizer: false,
+      },
+      store: {
+        source_path: 'modules/badmanifest',
+        distribution: 'ctox-repo-module',
+        installable: true,
       },
     },
     schemaJs: [
@@ -503,7 +511,13 @@ function installedIndexJsWith(extraLines = []) {
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /module\.json entry must be installed-modules\/badmanifest\/index\.html/);
   assert.match(run.stderr, /module\.json install_scope must be installed/);
+  assert.match(run.stderr, /module\.json version must be SemVer x\.y\.z without a v prefix/);
+  assert.match(run.stderr, /module\.json source=local is a source\/store module manifest field/);
+  assert.match(run.stderr, /module\.json store\.source_path must be installed-modules\/badmanifest/);
+  assert.match(run.stderr, /module\.json store\.distribution must be ctox-runtime-installed-module/);
+  assert.match(run.stderr, /module\.json store\.installable must not be true/);
   assert.match(run.stderr, /layout\.right requires layout\.third_pane_justification/);
+  assert.match(run.stderr, /module\.json layout\.right_resizer is forbidden/);
   assert.match(run.stderr, /schema\.js exports shell-registered collection key business_commands/);
 }
 

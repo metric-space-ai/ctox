@@ -422,6 +422,18 @@ if (manifest) {
     } else if (parsedVersion.major === 0 && parsedVersion.minor === 0 && parsedVersion.patch === 0) {
       fail('module.json version 0.0.0 is not a valid Business OS app work version');
     }
+    if (manifest.source === 'local') {
+      fail('module.json source=local is a source/store module manifest field; omit it for runtime-installed App Creator modules');
+    }
+    if (manifest.store?.source_path && manifest.store.source_path !== `installed-modules/${moduleId}`) {
+      fail(`module.json store.source_path must be installed-modules/${moduleId} for installed App Creator modules`);
+    }
+    if (manifest.store?.distribution && manifest.store.distribution !== 'ctox-runtime-installed-module') {
+      fail('module.json store.distribution must be ctox-runtime-installed-module for installed App Creator modules');
+    }
+    if (manifest.store?.installable === true) {
+      fail('module.json store.installable must not be true for runtime-installed App Creator modules');
+    }
   }
   if (!Array.isArray(manifest.collections)) {
     fail('module.json collections must be an array');
@@ -437,6 +449,9 @@ if (manifest) {
     && !manifest.layout?.third_pane_justification
   ) {
     fail('module.json layout.drawers.right is third/right-panel metadata; remove it and use an in-module modal or focused two-pane flow unless a persistent third pane was explicitly requested');
+  }
+  if (Object.prototype.hasOwnProperty.call(manifest.layout || {}, 'right_resizer')) {
+    fail('module.json layout.right_resizer is forbidden; do not copy source-module resizer metadata into runtime-installed App Creator modules');
   }
   if (manifest.layout?.icon_svg) {
     fail('module.json layout.icon_svg is forbidden; keep icons in icon.svg instead of embedding SVG in the manifest');

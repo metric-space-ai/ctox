@@ -24565,7 +24565,7 @@ Business OS app build target:
 - exact mount rule: installed App Creator modules must make index.js load `./index.html` with exactly `fetch(new URL('./index.html', import.meta.url))`, assign the result into `ctx.host.innerHTML`, and attach `./index.css` with `new URL('./index.css', import.meta.url)` before DOM queries or event wiring. Do not use `fetch('./index.html')`, helper-wrapped template fetches, or any other runtime network fetch. Do not leave index.html unused while building the whole UI only with document.createElement.
 - HTML fragment rule: index.html must be a Business OS shell fragment only. Do not write a full browser document and do not include `<!doctype>`, `<html>`, `<head>`, `<body>`, `<link>`, `<script>`, `<meta>`, `<title>`, or `<style>` in index.html.
 - CSS scoping rule: index.css must scope module variables and selectors under the module root class. Do not define custom properties on `:root`, `html`, or `body`, do not redefine shell/base tokens such as `--surface`, `--text`, `--line`, or `--accent`, and do not create self-referential token aliases.
-- installed manifest rule: for runtime-installed-module, module.json must use entry="installed-modules/{module_id}/index.html", install_scope="installed", and version="0.1.0" or another valid SemVer x.y.z without a v prefix; parse module.json and collections.schema.json immediately after editing them. Do not embed inline SVG in module.json; never use layout.icon_svg, icon_svg, iconSvg, or layout.icon.
+- installed manifest rule: for runtime-installed-module, module.json must use entry="installed-modules/{module_id}/index.html", install_scope="installed", and version="0.1.0" or another valid SemVer x.y.z without a v prefix; parse module.json and collections.schema.json immediately after editing them. Preserve these installed fields when editing title, description, labels, or collections. Do not copy source/store module manifest shape: never use entry="index.html", entry="modules/.../index.html", install_scope="store", version values with a v prefix, source="local", store.source_path="modules/...", store.distribution="ctox-repo-module", store.installable=true, layout.icon_svg, icon_svg, iconSvg, layout.icon, layout.right_resizer, or right_resizer.
 - versioning rule: 0.0.x is for UI/UX, feature, and bug-fix work without data-shape changes; 0.x.0 is for schema/database or potentially breaking work before public release; 1.0.0 is the first release visible beyond the developer; 2.0.0+ starts a new parallel app line with its own module id/icon instead of mutating a legacy line in place.
 - schema rule: module.json may list shell collections such as business_commands, but schema.js and collections.schema.json must export only module-owned collections. Never declare or export business_commands, ctox_queue_tasks, business_module_catalog, or ctox_runtime_settings in collections.schema.json or schema.js for a generated app.
 - repair order: fix target path, complete required file inventory, valid JSON, manifest mode/version, schema ownership, UI layout, dependency/data-plane patterns, ESM syntax, tests, then shell smoke; do not patch tests to hide earlier failures.
@@ -26545,6 +26545,8 @@ mod tests {
             prompt.contains("Before the first validation call, edit at least core/records.mjs")
         );
         assert!(prompt.contains("short alias files such as m.json"));
+        assert!(prompt.contains("Do not copy source/store module manifest shape"));
+        assert!(prompt.contains("store.distribution=\"ctox-repo-module\""));
         assert!(prompt.contains("Do not run `ls`, `find`, `rg`, `grep`, or `tree` over"));
         assert!(prompt.contains("any source module directory"));
         assert!(prompt.contains(
@@ -26633,7 +26635,7 @@ mod tests {
         assert!(prompt.contains("Tests must prove positive current-contract behavior only"));
         assert!(prompt.contains("Do not use assert.doesNotMatch"));
         assert!(prompt.contains("replace it with a positive contract assertion"));
-        assert!(prompt.contains("never use layout.icon_svg"));
+        assert!(prompt.contains("layout.icon_svg, icon_svg, iconSvg"));
         assert!(prompt.contains(
             "There are no App Creator exceptions for ctox.business_os.ticket.followup.create"
         ));
@@ -26683,6 +26685,8 @@ mod tests {
         assert!(prompt.contains("lockstep edit rule"));
         assert!(prompt.contains("never run it on a complete scaffold"));
         assert!(prompt.contains("short alias files such as m.json"));
+        assert!(prompt.contains("Do not copy source/store module manifest shape"));
+        assert!(prompt.contains("store.distribution=\"ctox-repo-module\""));
         assert!(prompt.contains("Do not run `ls`, `find`, `rg`, `grep`, or `tree` over"));
         assert!(prompt.contains("any source module directory"));
         assert!(prompt.contains("customers, shiftflow, and outbound"));
