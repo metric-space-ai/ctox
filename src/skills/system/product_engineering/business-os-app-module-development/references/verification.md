@@ -137,17 +137,19 @@ selector/import/file to inspect.
 
 In a CTOX App Creator turn, a complete
 `ctox skills system show business-os-app-module-development --body` read is
-acceptable at most once, but do not read the skill through `head`, `tail`,
-`sed`, `src/skills`, or partial source inspection. The service prompt already
+acceptable at most once only when it is the exact unpiped command. Do not read
+the skill through `head`, `tail`, `sed`, redirection, `src/skills`, or partial
+source inspection. The service prompt already
 includes the operative rules and may embed the required three shipped-module
 few-shot patterns. Do not invent core/automation.mjs few-shot files under
 outbound or shiftflow; use real shipped paths such as `outbound/index.js` or
 `outbound/core/audience.js`. Before the
 first requested-domain edit, do not read the generated scaffold back with `ls`,
 `sed`, `cat`, `head`, `tail`, or multi-file commands, and do not run validation,
-tests, syntax checks, or scaffold repair to confirm the scaffold. Start from the
-scaffold contract, make bounded direct final edits under `MODULE_DIR`, then use
-focused tests and the app validator.
+tests, syntax checks, or scaffold repair to confirm the scaffold. Use scaffold
+repair only after a validator report explicitly names a missing required file.
+Start from the scaffold contract, make bounded direct final edits under
+`MODULE_DIR`, then use focused tests and the app validator.
 
 The first app-artifact tool action after the scaffold baseline must be a
 direct bounded requested-domain write under `MODULE_DIR`. A directory listing,
@@ -161,13 +163,14 @@ apps, list `runtime/business-os/installed-modules/`, list
 `runtime/business-os/template-store`, or run extra source-wide checks to satisfy
 missed process steps. A green App Creator validator is the completion boundary.
 CTOX may still reject a green validator if the tool trace shows process
-violations after the scaffold baseline: validation before direct final module
-edits, a first app-artifact action that lists or reads the scaffold instead of
-writing requested-domain files, partial skill reads, `src/skills` inspection,
-`/tmp` artifact staging/testing/copying, generated scaffold readback before
-implementation, source-module discovery or line-count sweeps, nonexistent
-few-shot paths, or broad source/generated-file dumps. Treat that feedback as
-validator rework.
+violations after the scaffold baseline: validation before direct
+requested-domain module edits, a first app-artifact action that lists or reads
+the scaffold instead of writing requested-domain files, a first manifest/schema
+write before the requested-domain files, partial skill reads, `src/skills`
+inspection, `/tmp` artifact staging/testing/copying, generated scaffold
+readback before implementation, source-module discovery or line-count sweeps,
+nonexistent few-shot paths, or broad source/generated-file dumps. Treat that
+feedback as validator rework.
 Repair by writing bounded final files directly under `MODULE_DIR`, then run the
 app-specific validator once; do not repeat the same early validation or readback
 commands.

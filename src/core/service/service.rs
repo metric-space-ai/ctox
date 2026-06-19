@@ -6791,6 +6791,10 @@ fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
             "- Inspect and edit with a narrow tool budget. Directory listings are not narrow inspection. A full `ctox skills system show business-os-app-module-development --body` read is allowed at most once; do not pipe it through `head`/`tail`/`sed`, inspect `src/skills`, dump whole generated files, loop over app artifacts with `cat`, run `wc -l`/`ls`/`head`/`tail`/Node readFileSync audits over generated app files, or run broad repo/source scans. CTOX has already embedded the scaffold contract and the required three-app few-shot patterns here: `customers` proves manifest/dependency shape and commandBus dispatch; `shiftflow` proves shell-fragment mount and local CSS attachment but its legacy chat event pattern is rejected for generated apps; `outbound` proves commandBus-driven task orchestration but its source fallbacks and large-module helper sprawl are rejected for generated apps. Do not invent core/automation.mjs few-shot files for outbound or shiftflow. Start implementation with direct bounded writes under `$MODULE_DIR` instead of auditing the scaffold.",
         )
         .replace(
+            "- First app-artifact action rule: after an optional single complete `ctox skills system show business-os-app-module-development --body` read, the first tool action that mentions",
+            "- First app-artifact action rule: after an optional single complete `ctox skills system show business-os-app-module-development --body` read with no pipe, no redirection, no `head`, no `tail`, and no `sed`, the first tool action that mentions",
+        )
+        .replace(
             "- Do not use Python, base64 blobs, Node writer scripts, generated writer scripts, data URLs, or temporary file-copy wrappers to create or patch app files. If a direct edit becomes fragile, reduce scope, split the file into a smaller local ESM helper, or edit the smaller affected file.",
             "- Do not use Python, base64 blobs, Node writer scripts, generated writer scripts, data URLs, `/tmp` scratch files, `/tmp/*.patch`, or temporary file-copy wrappers to create, test, stage, copy, move, or patch app files. If shell redirection is needed, write the bounded payload directly to `$MODULE_DIR/<file>` at the final module path; if that becomes fragile, reduce scope, split the file into a smaller local ESM helper, or edit the smaller affected file.",
         )
@@ -7519,6 +7523,40 @@ fn business_os_app_module_post_baseline_write_report(
     };
     let baseline_time = UNIX_EPOCH + Duration::from_millis(baseline_ms.max(0) as u64);
     let module_dir = app_workspace_root.join(&target.artifact_directory);
+    let required_domain_groups = [
+        (
+            "core/records.mjs",
+            vec![module_dir.join("core/records.mjs")],
+        ),
+        (
+            "core/automation.mjs",
+            vec![module_dir.join("core/automation.mjs")],
+        ),
+        ("index.html", vec![module_dir.join("index.html")]),
+        ("index.js", vec![module_dir.join("index.js")]),
+        (
+            "one locale file",
+            vec![
+                module_dir.join("locales/de.json"),
+                module_dir.join("locales/en.json"),
+            ],
+        ),
+    ];
+    let mut missing_domain_edits: Vec<&str> = Vec::new();
+    for (label, paths) in required_domain_groups {
+        if !paths
+            .iter()
+            .any(|path| business_os_app_file_modified_after(path, baseline_time))
+        {
+            missing_domain_edits.push(label);
+        }
+    }
+    if !business_os_app_any_test_modified_after(&module_dir, baseline_time) {
+        missing_domain_edits.push("one tests/*.test.mjs file");
+    }
+    if missing_domain_edits.is_empty() {
+        return Ok(None);
+    }
     let mut newest: Option<(SystemTime, PathBuf)> = None;
     for relative in BUSINESS_OS_APP_REQUIRED_ARTIFACTS {
         let path = module_dir.join(relative);
@@ -7547,9 +7585,37 @@ fn business_os_app_module_post_baseline_write_report(
         .map(|(_, path)| path.display().to_string())
         .unwrap_or_else(|| module_dir.display().to_string());
     Ok(Some(format!(
-        "Business OS app artifact validator is green, but no required app artifact was written after CTOX recorded the scaffold baseline for this turn (`{}`={baseline_ms}). The validator-clean scaffold is only a starting point; edit the requested domain app files under `{}` before validating again. Newest checked artifact before the baseline: {newest_label}",
-        BUSINESS_OS_APP_SCAFFOLD_BASELINE_MS_METADATA_KEY, target.artifact_directory
+        "Business OS app artifact validator is green, but no complete required domain app artifact set was written after CTOX recorded the scaffold baseline for this turn (`{}`={baseline_ms}). The validator-clean scaffold is only a starting point; edit the requested domain app files under `{}` before validating again. Missing post-baseline domain edits: {}. Newest checked artifact before the baseline: {newest_label}",
+        BUSINESS_OS_APP_SCAFFOLD_BASELINE_MS_METADATA_KEY,
+        target.artifact_directory,
+        missing_domain_edits.join(", ")
     )))
+}
+
+fn business_os_app_file_modified_after(path: &Path, baseline_time: SystemTime) -> bool {
+    std::fs::metadata(path)
+        .ok()
+        .filter(|metadata| metadata.is_file())
+        .and_then(|metadata| metadata.modified().ok())
+        .map(|modified| modified > baseline_time)
+        .unwrap_or(false)
+}
+
+fn business_os_app_any_test_modified_after(module_dir: &Path, baseline_time: SystemTime) -> bool {
+    let tests_dir = module_dir.join("tests");
+    let Ok(entries) = tests_dir.read_dir() else {
+        return false;
+    };
+    entries.filter_map(std::result::Result::ok).any(|entry| {
+        let path = entry.path();
+        path.extension().and_then(|extension| extension.to_str()) == Some("mjs")
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.ends_with(".test.mjs"))
+                .unwrap_or(false)
+            && business_os_app_file_modified_after(&path, baseline_time)
+    })
 }
 
 fn business_os_app_module_tool_trace_policy_report(
@@ -7566,7 +7632,7 @@ fn business_os_app_module_tool_trace_policy_report(
         return Ok(None);
     };
     let mut findings: Vec<String> = Vec::new();
-    let mut saw_final_artifact_write = false;
+    let mut saw_requested_domain_artifact_write = false;
     let mut saw_app_artifact_action = false;
     let module_marker = target.module_id.to_ascii_lowercase();
     let artifact_marker = target.artifact_directory.to_ascii_lowercase();
@@ -7609,11 +7675,13 @@ fn business_os_app_module_tool_trace_policy_report(
             ]
             .iter()
             .any(|marker| lowered.contains(marker));
-        let is_final_artifact_write =
+        let is_requested_domain_write =
+            business_os_app_trace_command_is_requested_domain_write(&lowered, &artifact_marker);
+        let is_any_final_artifact_write =
             business_os_app_trace_command_is_final_artifact_write(&lowered, &artifact_marker);
         if mentions_app_artifact && !saw_app_artifact_action {
             saw_app_artifact_action = true;
-            if !is_final_artifact_write
+            if !is_requested_domain_write
                 && (lowered.contains(&validate_marker)
                     || lowered.contains("ctox business-os app scaffold")
                     || lowered.contains("node --check")
@@ -7624,15 +7692,20 @@ fn business_os_app_module_tool_trace_policy_report(
                     &mut findings,
                     "first app-artifact action after scaffold baseline was not a direct requested-domain write",
                 );
+            } else if is_any_final_artifact_write && !is_requested_domain_write {
+                push_business_os_app_trace_finding(
+                    &mut findings,
+                    "first app-artifact write after scaffold baseline edited manifest or schema before requested-domain files",
+                );
             }
         }
-        if is_final_artifact_write {
-            saw_final_artifact_write = true;
+        if is_requested_domain_write {
+            saw_requested_domain_artifact_write = true;
         }
-        if lowered.contains(&validate_marker) && !saw_final_artifact_write {
+        if lowered.contains(&validate_marker) && !saw_requested_domain_artifact_write {
             push_business_os_app_trace_finding(
                 &mut findings,
-                "validation ran before the first direct module artifact write",
+                "validation ran before the first direct requested-domain module artifact write",
             );
         }
         if business_os_app_trace_command_is_partial_skill_read(&lowered) {
@@ -7692,7 +7765,7 @@ fn business_os_app_module_tool_trace_policy_report(
             );
         }
         if lowered.contains(&artifact_marker)
-            && !saw_final_artifact_write
+            && !saw_requested_domain_artifact_write
             && business_os_app_trace_command_reads_generated_artifact(&lowered)
         {
             push_business_os_app_trace_finding(
@@ -7734,6 +7807,23 @@ fn business_os_app_module_tool_trace_policy_report(
     )))
 }
 
+fn business_os_app_trace_command_is_requested_domain_write(
+    command: &str,
+    artifact_marker: &str,
+) -> bool {
+    business_os_app_trace_command_is_final_artifact_write(command, artifact_marker)
+        && [
+            "core/records.mjs",
+            "core/automation.mjs",
+            "index.html",
+            "index.js",
+            "locales/",
+            ".test.mjs",
+        ]
+        .iter()
+        .any(|marker| command.contains(marker))
+}
+
 fn business_os_app_trace_command_reads_generated_artifact(command: &str) -> bool {
     (command.contains(" sed -n")
         || command.starts_with("sed -n")
@@ -7758,6 +7848,10 @@ fn business_os_app_trace_command_is_partial_skill_read(command: &str) -> bool {
         && (command.contains("| head")
             || command.contains("| tail")
             || command.contains("| sed")
+            || command.contains("> /tmp/")
+            || command.contains(">/tmp/")
+            || command.contains("> runtime/")
+            || command.contains("> src/")
             || command.contains(" head ")
             || command.contains(" tail ")
             || command.contains(" sed -n")
@@ -8014,7 +8108,25 @@ fn render_business_os_app_module_validation_feedback(
         target.mode_flag,
         clip_text(&job.prompt, 6000),
     );
+    let immediate_repair_gate = format!(
+        "\n\nIMMEDIATE REPAIR START GATE:\n- Do not inspect, list, stat, validate, run tests, run node --check, or run scaffold repair as the first rework action. The validator report above is authoritative. Set `MODULE_DIR=\"{}\"`; the next app-artifact action must write requested-domain content directly to `$MODULE_DIR/core/records.mjs`, `$MODULE_DIR/core/automation.mjs`, `$MODULE_DIR/index.html`, `$MODULE_DIR/index.js`, one locale file, and one `tests/*.test.mjs` file. Do not check whether those files exist first.\n- Use `ctox business-os app scaffold {} {} --repair-missing` only after a validator report explicitly names a missing required file. Never run scaffold repair to discover whether files are missing.\n\nValidator-report routing:",
+        target.artifact_directory, target.module_id, target.mode_flag
+    );
+    let old_repair_start = format!(
+        "Immediate repair order:\n1. If required scaffold files are missing, run `ctox business-os app scaffold {} {} --repair-missing` from the workspace root. Use `--force` only to reset a failed new-app scaffold, never for an existing app modification.\n2. Create or repair every missing required file first:",
+        target.module_id, target.mode_flag
+    );
+    let new_repair_start = format!(
+        "Immediate repair order:\n1. Set `MODULE_DIR=\"{}\"` and directly rewrite requested-domain facts in `core/records.mjs`, `core/automation.mjs`, `index.html`, `index.js`, one locale file, and one `tests/*.test.mjs` file before validation or inspection.\n2. Run `ctox business-os app scaffold {} {} --repair-missing` only if the validator report above explicitly names a missing required file; never probe for missing files yourself. If a file is explicitly missing, create or repair only that exact file before continuing with the domain repair:",
+        target.artifact_directory, target.module_id, target.mode_flag
+    );
     feedback
+        .replace("\n\nValidator-report routing:", &immediate_repair_gate)
+        .replace(&old_repair_start, &new_repair_start)
+        .replace(
+            "If the report says the validator is green but no required artifact was written after the scaffold baseline, do not run validation first.",
+            "If the report says the validator is green but no complete required domain artifact set was written after the scaffold baseline, do not run validation first and do not inspect the scaffold first.",
+        )
         .replace(
             "8. Remove default third/right panes, right-column CSS/resizers, and three-column grids unless the workflow explicitly justifies a persistent third pane.",
             "8. Remove default third/right panes, layout.drawers.right/right-drawer manifest metadata, right-column CSS/resizers, and three-column grids unless the workflow explicitly justifies a persistent third pane.",
@@ -21983,8 +22095,12 @@ Business OS command:
             "schema.js and collections.schema.json must export only module-owned collections"
         ));
         assert!(feedback.contains("ctox business-os app validate contracts --installed"));
+        assert!(feedback.contains("IMMEDIATE REPAIR START GATE"));
         assert!(feedback.contains("Immediate repair order:"));
-        assert!(feedback.contains("Create or repair every missing required file first"));
+        assert!(feedback.contains("directly rewrite requested-domain facts"));
+        assert!(
+            feedback.contains("Never run scaffold repair to discover whether files are missing")
+        );
         assert!(feedback.contains("Once it is green, stop immediately"));
         assert!(feedback.contains("Do not dump whole generated files"));
         assert!(feedback.contains("run `wc -l`/`ls -la`/`head`/`tail`"));
@@ -22067,8 +22183,9 @@ Business OS command:
             .expect("validator hook failed")
             .expect("expected post-baseline/domain validation feedback");
         assert!(feedback.contains(
-            "no required app artifact was written after CTOX recorded the scaffold baseline"
+            "no complete required domain app artifact set was written after CTOX recorded the scaffold baseline"
         ));
+        assert!(feedback.contains("Missing post-baseline domain edits"));
         assert!(feedback.contains("generic App Creator records scaffold"));
         assert!(feedback.contains("Original task remains active"));
     }
@@ -22178,11 +22295,89 @@ Business OS command:
             "first app-artifact action after scaffold baseline was not a direct requested-domain write"
         ));
         assert!(report.contains("generated scaffold files were read back"));
-        assert!(report.contains("validation ran before the first direct module artifact write"));
+        assert!(report.contains(
+            "validation ran before the first direct requested-domain module artifact write"
+        ));
         assert!(report.contains("staged or tested under /tmp"));
         assert!(report.contains("source-module discovery, broad dump, or line-count sweep"));
         assert!(report.contains("nonexistent few-shot source paths"));
         assert!(report.contains("broad dumps or line-count/readback commands"));
+    }
+
+    #[test]
+    fn business_os_app_tool_trace_policy_rejects_manifest_first_write() {
+        let root = temp_root("business-os-app-tool-trace-manifest-first");
+        std::fs::create_dir_all(root.join("runtime")).expect("create runtime dir");
+        let module_id = "bench_contracts_trace";
+        let target = BusinessOsAppModuleTarget {
+            module_id: module_id.to_string(),
+            install_target: "runtime-installed-module".to_string(),
+            mode_flag: "--installed",
+            artifact_directory: format!("runtime/business-os/installed-modules/{module_id}"),
+        };
+        let prompt = format!(
+            "Build a contracts Business OS app.\nBusiness OS app build target:\n- module_id: {module_id}\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: {}\nBusiness OS command:\n- type: ctox.business_os.app.create\n",
+            target.artifact_directory
+        );
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create contracts app".to_string(),
+                prompt: prompt.clone(),
+                thread_key: "business-os/apps/contracts".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let baseline_ms = current_epoch_millis() as i64;
+        channels::set_queue_task_metadata_value(
+            &root,
+            &task.message_key,
+            BUSINESS_OS_APP_SCAFFOLD_BASELINE_MS_METADATA_KEY,
+            Value::from(baseline_ms),
+        )
+        .expect("record baseline metadata");
+        let job = QueuedPrompt {
+            prompt,
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "business-os:app-create".to_string(),
+            suggested_skill: task.suggested_skill.clone(),
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: task.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let module_json_path = root.join(&target.artifact_directory).join("module.json");
+        let command = format!("cat > {} <<'EOF'\n{{}}\nEOF", module_json_path.display());
+        std::fs::write(
+            root.join("runtime/context-log.jsonl"),
+            serde_json::json!({
+                "ts": baseline_ms + 1,
+                "event": "tool_call_begin",
+                "command": command,
+            })
+            .to_string()
+                + "\n",
+        )
+        .expect("write context log fixture");
+
+        let report = business_os_app_module_tool_trace_policy_report(&root, &root, &job, &target)
+            .expect("tool trace policy should run")
+            .expect("tool trace policy should report manifest-first violation");
+
+        assert!(report.contains(
+            "first app-artifact write after scaffold baseline edited manifest or schema before requested-domain files"
+        ));
     }
 
     #[test]
@@ -22874,6 +23069,11 @@ Business OS command:
             "console.error('missing index.js and tests'); process.exit(1);\n",
         )
         .expect("write red validator script fixture");
+        std::fs::write(
+            script_dir.join("scaffold-app-module.mjs"),
+            "process.stdout.write('{}\\n'); process.exit(0);\n",
+        )
+        .expect("write scaffold helper fixture");
         let task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
@@ -22907,6 +23107,10 @@ Business OS command:
         let state = Arc::new(Mutex::new(SharedState::default()));
         {
             let mut shared = lock_shared_state(&state);
+            // Keep the test scoped to delayed validation cleanup. In production
+            // a red app recovery may immediately dispatch the same rework item;
+            // this unit test only pins the lease-to-review_rework transition.
+            shared.busy = true;
             track_leased_keys_locked(&mut shared, &job.leased_message_keys, &[]);
         }
         {
