@@ -19389,8 +19389,11 @@ const CAPABILITY_TOKEN_TTL_MS: i64 = 12 * 60 * 60 * 1000;
 /// and is never shipped to the browser.
 fn capability_signing_secret(root: &Path) -> anyhow::Result<Vec<u8>> {
     if crate::secrets::secret_exists(root, CAPABILITY_SECRET_SCOPE, CAPABILITY_SECRET_NAME)? {
-        let value =
-            crate::secrets::read_secret_value(root, CAPABILITY_SECRET_SCOPE, CAPABILITY_SECRET_NAME)?;
+        let value = crate::secrets::read_secret_value(
+            root,
+            CAPABILITY_SECRET_SCOPE,
+            CAPABILITY_SECRET_NAME,
+        )?;
         if !value.trim().is_empty() {
             return Ok(value.into_bytes());
         }
@@ -25195,7 +25198,7 @@ fn business_os_app_command_target_prompt_block(command: &BusinessCommand) -> Str
     format!(
         r#"
 Business OS app build target:
-- top acceptance gate: the final app must be requested-domain UI, logic, automation, and tests. Generic scaffold strings such as `New record`, `Search records`, `Select a record`, `Title`, `Owner`, `Due date`, `Open`, `Blocked`, `Done`, `record.title`, `due_at_ms`, `summary.total`, `summary.open`, and `summary.blocked` may exist only as temporary scaffold internals before the first app-file write. They must not remain in final index.html, index.js, locales, or tests unless the user's domain literally uses those exact words. If core/records.mjs changes away from generic records, rewrite index.html, index.js, core/automation.mjs, one locale, and tests/*.test.mjs in the same pass so visible fields, filters, summaries, fixture facts, and automation copy all match. A helper-only rewrite is a failed app.
+- top acceptance gate: the final app must be requested-domain UI, logic, automation, and tests. Generic scaffold strings such as `New record`, `Search records`, `Select a record`, `Title`, `Owner`, `Due date`, `Open`, `Blocked`, `Done`, `record.title`, `due_at_ms`, `summary.total`, `summary.open`, and `summary.blocked` may exist only as temporary scaffold internals before the first app-file write. They must not remain in final index.html, index.js, locales, or tests unless the user's domain literally uses those exact words. Your first implementation must be a vertical requested-domain slice, not a helper phase: index.html, index.js, core/records.mjs, core/automation.mjs, one locale file, and one tests/*.test.mjs must be rewritten together before validation, tests, syntax checks, or any completion claim. If core/records.mjs changes away from generic records, rewrite index.html, index.js, core/automation.mjs, one locale, and tests/*.test.mjs in the same pass so visible fields, filters, summaries, fixture facts, and automation copy all match. A helper-only rewrite is a failed app. Do not add new first-pass data-action values such as restock, reorder, renew, attention, bulk, export, ai, or status-only actions; use only new, delete, and follow-up plus the form submit flow. Tests must not keep stale scaffold assert.deepEqual expectations for total/open/blocked/done after helpers return domain aggregates.
 - priority rule: CTOX-native App Creator/runtime app creation is the primary acceptance target. Build the runtime-installed Business OS app under the allowed directory first; external/source-checkout agent behavior is secondary evidence only.
 - immediate start gate: CTOX service preflight scaffold state is authoritative. Do not confirm the scaffold with `ls`, `find`, `tree`, `stat`, `cat`, `head`, `tail`, `sed`, Node readFileSync, validation, tests, syntax checks, or scaffold repair before requested-domain writes. If you read the skill, use exactly `ctox skills system show business-os-app-module-development --body` once with no pipe, no redirection, no `head`, no `tail`, and no `sed`. After that optional complete skill read, the next app-artifact action must set `MODULE_DIR="{module_dir}"` and write bounded requested-domain content directly to files under `$MODULE_DIR/`, including core helpers, visible UI, one locale, and one test.
 - deliverable: runnable Business OS app/module files, not documentation, plans, trace files, blocker notes, or skill files.
@@ -25218,8 +25221,8 @@ Business OS app build target:
 - bounded-shell rule: do not run find/rg/grep/ls/tree over $HOME, /Users, /, ~/.local/state, the whole install root, the whole repo, `src/apps/business-os/modules/`, any source module directory, `src/apps/business-os/app.js`, `src/apps/business-os/shared/`, `src/apps/business-os/scripts/`, `src/apps/business-os/rxdb/`, or `src/core/business_os/` to discover validators, scripts, examples, shell loaders, schema internals, or guard internals. Inspect only exact files in {module_dir}/ and exact chosen few-shot source files. Do not read or write ~/.local/state/ctox/business-os/installed-modules directly; use the prompt's {module_dir}/ path only. Use `ctox business-os app validate {module_id} {mode_flag}`; do not search for validator filenames or Business OS loader code.
 - sequencing rule: after reading the required skill once, trust the service preflight scaffold and make bounded requested-domain edits under {module_dir}/. Do not list, dump, or inventory the generated scaffold before the first domain edit. If a later validator run reports a missing required file, restore only that exact required file directly under {module_dir}/ and then repair imports/handlers/selectors; do not run repair-missing, and do not replace a green scaffold just because it is generic. Do not open validate-app-module.mjs, module_static_check.mjs, assert-module-conformance.mjs, or assert-rxdb-only.mjs until the app files exist and a validation command has reported a concrete failure.
 - pre-validation edit gate: after the optional complete skill read and the embedded few-shot patterns, your next app action must write requested-domain changes under {module_dir}/. Do not inspect or confirm the generated scaffold first with `ls`, `find`, `tree`, `stat`, `cat`, `head`, `tail`, `sed`, Node readFileSync, validation, tests, node --check, or scaffold repair. Before the first validation call, edit at least core/records.mjs, core/automation.mjs, index.html, index.js, one locale file, and one tests/*.test.mjs file so they contain concrete requested-domain fixture facts. A locale-only label change is not visible UI implementation and will be rejected when index.html and index.js remain scaffold-generic. Do not run `ctox business-os app validate`, module tests, node --check, `ctox business-os app repair-missing`, or scaffold repair as the first action on a complete fresh scaffold.
-- scaffold action allowlist rule: first-pass runtime apps should keep the scaffold's existing action surface: the form submit flow plus data-action values `new`, `delete`, and `follow-up`. Prefer changing labels, copy, filters, and selected-record facts over inventing new visible action buttons. Do not add data-action="attention", bulk, renew, reorder, export, ai, or status-only buttons in index.html unless index.js gets an exact `else if (action === "...")` branch in the same edit with a real persistence or commandBus effect. If a new action has no handler yet, remove the button before validation.
-- lockstep edit rule: if you change helper exports, schema fields, collection names, status values, command payload fields, fixture records, labels, filters, UI selectors, or HTML data-action values, update every importer, every concrete index.js handler/branch/action-map entry, and tests/*.test.mjs in the same implementation pass before running validation. Partial helper rewrites such as automation imports for records helpers that do not exist yet are invalid intermediate deliverables. Every data-action="..." in index.html must have a real click handler or action branch in index.js; do not add visible buttons such as bulk/renewal/churn actions unless those exact actions work end to end. If index.html changes after the scaffold baseline, index.js must also change after the baseline so the DOM selectors, form fields, render output, and actions match the new fragment.
+- scaffold action allowlist rule: first-pass runtime apps must keep the scaffold's existing action surface: the form submit flow plus data-action values `new`, `delete`, and `follow-up`. Prefer changing labels, copy, filters, selected-record facts, and the follow-up command payload over inventing new visible action buttons. Do not add data-action="restock", data-action="reorder", data-action="renew", data-action="attention", bulk, export, ai, or status-only buttons in index.html even when you could add a handler. Remove extra buttons before validation.
+- lockstep edit rule: if you change helper exports, schema fields, collection names, status values, command payload fields, fixture records, labels, filters, UI selectors, or HTML data-action values, update every importer, every concrete index.js handler/branch/action-map entry, and tests/*.test.mjs in the same implementation pass before running validation. Partial helper rewrites such as automation imports for records helpers that do not exist yet are invalid intermediate deliverables. Every allowed data-action="..." in index.html must have a real click handler or action branch in index.js; do not add visible buttons such as restock/reorder/renewal/bulk/churn actions. If index.html changes after the scaffold baseline, index.js and tests must also change after the baseline so the DOM selectors, form fields, render output, summaries, and actions match the new fragment.
 - test-helper parity rule: when you change summarizeRecords, visibleRecords, needsAttention, budgetStatus, billingReadiness, milestoneTotals, or any aggregate helper, update every tests/*.test.mjs expectation in the same edit to match the helper's actual exported shape. Do not use assert.deepEqual(summary, {{...}}) with an expected object that omits fields returned by the helper. For generated App Creator tests, do not write `assert.deepEqual(summarizeRecords(...), {{...}})` directly; assign `const summary = summarizeRecords(...)` and assert named fields deliberately, or assert a full hand-computed object that includes every returned key. Keep fixture statuses aligned with normalizeStatus/normalizers. A validator diff between actual and expected summary counts is a test/logic mismatch to repair before UI polish or completion.
 - visible UI/helper parity rule: if index.js reads aggregate fields such as `summary.total`, `summary.open`, `summary.blocked`, `summary.mrr`, or `summary.renewals_30d`, core/records.mjs must visibly return those exact fields from summarizeRecords and tests must assert them from concrete fixture records. Do not leave the generic Title/Status/Open/Blocked/Done/Search-records scaffold in index.html or matching `record.title`, `due_at_ms`, and `summary.open` branches in index.js after changing helpers to a requested domain.
 - test quality rule: generated tests must import both `../core/records.mjs` and `../core/automation.mjs`, exercise createRecord/visibleRecords/summarizeRecords or equivalent domain helpers, and assert a `business_os.chat.task` payload with concrete fixture facts in title, instruction/prompt, and record_snapshot. Do not write placeholder tests, tautologies such as `assert.equal(1, 1)` or `assert.equal(1 + 1, 2)`, automation-only type checks, or tests that pass without importing local app helpers.
@@ -27254,7 +27257,9 @@ mod tests {
         assert!(prompt.contains("top acceptance gate"));
         assert!(prompt.contains("the final app must be requested-domain UI"));
         assert!(prompt.contains("Generic scaffold strings such as `New record`"));
+        assert!(prompt.contains("vertical requested-domain slice"));
         assert!(prompt.contains("A helper-only rewrite is a failed app"));
+        assert!(prompt.contains("Do not add new first-pass data-action values such as restock"));
         assert!(prompt.contains("priority rule: CTOX-native App Creator/runtime app creation is the primary acceptance target"));
         assert!(prompt.contains("- module_id: subscriptions"));
         assert!(
@@ -27292,10 +27297,10 @@ mod tests {
         );
         assert!(prompt.contains("scaffold action allowlist rule"));
         assert!(prompt.contains("data-action values `new`, `delete`, and `follow-up`"));
-        assert!(prompt.contains("Do not add data-action=\"attention\""));
-        assert!(prompt.contains("index.js gets an exact `else if (action ==="));
+        assert!(prompt.contains("Do not add data-action=\"restock\""));
+        assert!(prompt.contains("even when you could add a handler"));
         assert!(prompt.contains("If index.html changes after the scaffold baseline"));
-        assert!(prompt.contains("index.js must also change after the baseline"));
+        assert!(prompt.contains("index.js and tests must also change after the baseline"));
         assert!(prompt.contains("test-helper parity rule"));
         assert!(prompt.contains("visible UI/helper parity rule"));
         assert!(prompt.contains("test quality rule"));
@@ -27313,7 +27318,7 @@ mod tests {
         assert!(!prompt.contains("after reading the skill and inspecting the scaffold/few-shots"));
         assert!(prompt.contains("lockstep edit rule"));
         assert!(prompt.contains("HTML data-action values"));
-        assert!(prompt.contains("Every data-action=\"...\" in index.html"));
+        assert!(prompt.contains("Every allowed data-action=\"...\" in index.html"));
         assert!(prompt.contains("Do not run `ctox business-os app repair-missing`"));
         assert!(prompt.contains("restore that exact file directly"));
         assert!(prompt.contains("do not run repair-missing"));
@@ -27447,7 +27452,9 @@ mod tests {
         assert!(prompt.contains("top acceptance gate"));
         assert!(prompt.contains("the final app must be requested-domain UI"));
         assert!(prompt.contains("Generic scaffold strings such as `New record`"));
+        assert!(prompt.contains("vertical requested-domain slice"));
         assert!(prompt.contains("A helper-only rewrite is a failed app"));
+        assert!(prompt.contains("Do not add new first-pass data-action values such as restock"));
         assert!(prompt.contains("scaffold preservation rule"));
         assert!(prompt.contains("Do not clean, delete, reset, replace, or rewrite it wholesale"));
         assert!(prompt.contains("Do not preserve generic visible labels"));
@@ -27470,10 +27477,10 @@ mod tests {
         );
         assert!(prompt.contains("scaffold action allowlist rule"));
         assert!(prompt.contains("data-action values `new`, `delete`, and `follow-up`"));
-        assert!(prompt.contains("Do not add data-action=\"attention\""));
-        assert!(prompt.contains("index.js gets an exact `else if (action ==="));
+        assert!(prompt.contains("Do not add data-action=\"restock\""));
+        assert!(prompt.contains("even when you could add a handler"));
         assert!(prompt.contains("If index.html changes after the scaffold baseline"));
-        assert!(prompt.contains("index.js must also change after the baseline"));
+        assert!(prompt.contains("index.js and tests must also change after the baseline"));
         assert!(prompt.contains("test-helper parity rule"));
         assert!(prompt.contains("Do not use assert.deepEqual(summary"));
         assert!(prompt.contains("do not write `assert.deepEqual(summarizeRecords(...), {...})`"));
@@ -27484,7 +27491,7 @@ mod tests {
         assert!(prompt.contains("pre-validation edit gate"));
         assert!(prompt.contains("lockstep edit rule"));
         assert!(prompt.contains("HTML data-action values"));
-        assert!(prompt.contains("Every data-action=\"...\" in index.html"));
+        assert!(prompt.contains("Every allowed data-action=\"...\" in index.html"));
         assert!(prompt.contains("Do not run `ctox business-os app repair-missing`"));
         assert!(prompt.contains("restore that exact file directly"));
         assert!(prompt.contains("do not run repair-missing"));

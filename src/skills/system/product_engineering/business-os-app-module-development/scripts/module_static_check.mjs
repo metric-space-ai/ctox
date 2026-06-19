@@ -67,6 +67,11 @@ const installedAllowedRootDirectories = new Set([
   'locales',
   'tests',
 ]);
+const installedFirstPassDataActions = new Set([
+  'new',
+  'delete',
+  'follow-up',
+]);
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1026,6 +1031,10 @@ if (installedMode) {
     fail('installed App Creator module index.html must not include document/head resource tags such as <link>, <script>, <meta>, <title>, or <style>; attach CSS from index.js and let the Business OS shell import index.js');
   }
   for (const action of htmlDataActions(indexHtmlText)) {
+    if (!installedFirstPassDataActions.has(action)) {
+      fail(`installed App Creator module index.html declares data-action="${action}", but first-pass runtime apps may only use data-action values new, delete, and follow-up; use the follow-up automation or form submit flow instead of decorative domain-specific action buttons`);
+      continue;
+    }
     if (!indexJsHandlesDataAction(indexJsText, action)) {
       fail(`installed App Creator module index.html declares data-action="${action}" but index.js has no concrete click handler, action branch, or action-map entry for it`);
     }

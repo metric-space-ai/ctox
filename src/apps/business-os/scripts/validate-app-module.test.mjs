@@ -412,7 +412,23 @@ function installedIndexJsWith(extraLines = []) {
   });
   const run = runValidator(root, 'unhandledaction', '--installed');
   assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /index\.html declares data-action="bulk-follow-up" but index\.js has no concrete click handler/);
+  assert.match(run.stderr, /first-pass runtime apps may only use data-action values new, delete, and follow-up/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'handledforbiddenaction', {
+    indexHtml: '<main class="good-module"><button type="button" data-action="follow-up">Review</button><button type="button" data-action="restock">Restock</button></main>\n',
+    indexJs: installedIndexJsWith([
+      "  ctx.host.querySelector('[data-action=\"restock\"]')?.addEventListener('click', () => {",
+      "    ctx.commandBus?.dispatch?.(buildFollowUpCommand({ id: 'sku-1', title: 'Safety gloves' }));",
+      '  });',
+    ]),
+  });
+  const run = runValidator(root, 'handledforbiddenaction', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /index\.html declares data-action="restock"/);
+  assert.match(run.stderr, /first-pass runtime apps may only use data-action values new, delete, and follow-up/);
 }
 
 {
