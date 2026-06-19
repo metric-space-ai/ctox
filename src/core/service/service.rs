@@ -2883,6 +2883,7 @@ fn recover_business_os_app_queue_tasks_for_idle_status_snapshot(
             root,
             state,
             BUSINESS_OS_APP_RECOVERY_SCAN_LIMIT,
+            BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS,
         )
     }));
     {
@@ -11669,19 +11670,28 @@ fn recover_stale_business_os_app_queue_tasks(
     state: &Arc<Mutex<SharedState>>,
     limit: usize,
 ) -> Result<usize> {
-    recover_stale_business_os_app_queue_task_summary(root, state, limit)
-        .map(BusinessOsAppQueueRecoverySummary::total)
+    recover_stale_business_os_app_queue_task_summary(
+        root,
+        state,
+        limit,
+        BUSINESS_OS_APP_RECOVERY_STALE_SECS,
+    )
+    .map(BusinessOsAppQueueRecoverySummary::total)
 }
 
 fn recover_stale_business_os_app_queue_task_summary(
     root: &Path,
     state: &Arc<Mutex<SharedState>>,
     limit: usize,
+    minimum_lease_age_secs: u64,
 ) -> Result<BusinessOsAppQueueRecoverySummary> {
     let tasks = channels::list_queue_tasks(root, &["leased".to_string()], limit.max(1))?;
     let mut summary = BusinessOsAppQueueRecoverySummary::default();
     for task in tasks {
         if active_or_pending_leased_message_key(state, &task.message_key) {
+            continue;
+        }
+        if !queue_task_lease_is_stale_enough(&task, minimum_lease_age_secs) {
             continue;
         }
         let Some(target) = business_os_app_module_target_from_prompt(&task.prompt) else {
@@ -11710,6 +11720,22 @@ fn recover_stale_business_os_app_queue_task_summary(
         }
     }
     Ok(summary)
+}
+
+fn queue_task_lease_is_stale_enough(
+    task: &channels::QueueTaskView,
+    minimum_lease_age_secs: u64,
+) -> bool {
+    let Some(leased_at) = task.leased_at.as_deref() else {
+        return false;
+    };
+    let Some(leased_at) = parse_rfc3339_system_time(leased_at) else {
+        return false;
+    };
+    SystemTime::now()
+        .duration_since(leased_at)
+        .map(|age| age >= Duration::from_secs(minimum_lease_age_secs))
+        .unwrap_or(false)
 }
 
 fn requeue_unstarted_business_os_app_queue_task(
@@ -17912,6 +17938,17 @@ mod tests {
         root
     }
 
+    fn age_queue_task_lease(root: &Path, message_key: &str, age_secs: u64) {
+        let leased_at = chrono_like_iso(current_epoch_secs().saturating_sub(age_secs));
+        let conn = channels::open_channel_db(&crate::paths::core_db(root))
+            .expect("open channel db to age queue lease");
+        conn.execute(
+            "UPDATE communication_routing_state SET leased_at = ?2, updated_at = ?2 WHERE message_key = ?1",
+            params![message_key, leased_at],
+        )
+        .expect("age queue task lease");
+    }
+
     fn seed_business_os_app_artifacts(root: &Path, module_id: &str) {
         let artifact_dir = root
             .join("runtime/business-os/installed-modules")
@@ -22436,8 +22473,14 @@ Business OS command:
             },
         )
         .expect("failed to create app queue task");
+        seed_business_os_app_artifacts(&root, "inventory");
         channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
             .expect("failed to lease app queue task");
+        age_queue_task_lease(
+            &root,
+            &task.message_key,
+            BUSINESS_OS_APP_RECOVERY_STALE_SECS + 5,
+        );
         let state = Arc::new(Mutex::new(SharedState::default()));
         {
             let mut shared = lock_shared_state(&state);
@@ -22470,6 +22513,11 @@ Business OS command:
         .expect("failed to create app queue task");
         channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
             .expect("failed to lease app queue task");
+        age_queue_task_lease(
+            &root,
+            &task.message_key,
+            BUSINESS_OS_APP_RECOVERY_STALE_SECS + 5,
+        );
         let state = Arc::new(Mutex::new(SharedState::default()));
 
         let updated = recover_stale_business_os_app_queue_tasks(&root, &state, 10)
@@ -22626,6 +22674,11 @@ Business OS command:
         seed_business_os_app_artifacts(&root, "projects");
         channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
             .expect("failed to lease app queue task");
+        age_queue_task_lease(
+            &root,
+            &task.message_key,
+            BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS + 5,
+        );
         let state = Arc::new(Mutex::new(SharedState::default()));
 
         status_from_shared_state(&root, &state).expect("status snapshot failed");
@@ -22637,6 +22690,42 @@ Business OS command:
         }
 
         assert_eq!(route_status_for(&root, &task.message_key), "handled");
+    }
+
+    #[test]
+    fn status_snapshot_recovery_skips_fresh_scaffolded_app_queue_lease() {
+        let root = temp_root("status-snapshot-fresh-scaffolded-app-skip");
+        let script_dir = root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "process.exit(0);\n",
+        )
+        .expect("write green validator script fixture");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create subscriptions app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/subscriptions".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        seed_business_os_app_artifacts(&root, "subscriptions");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        status_from_shared_state(&root, &state).expect("status snapshot failed");
+
+        assert_eq!(route_status_for(&root, &task.message_key), "leased");
+        let shared = lock_shared_state(&state);
+        assert!(shared.pending_prompts.is_empty());
     }
 
     #[test]
@@ -22666,6 +22755,11 @@ Business OS command:
         seed_business_os_app_artifacts(&root, "subscriptions");
         channels::lease_queue_task(&root, &completed_task.message_key, "ctox-service-test")
             .expect("failed to lease completed app queue task");
+        age_queue_task_lease(
+            &root,
+            &completed_task.message_key,
+            BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS + 5,
+        );
         let next_task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
@@ -22749,6 +22843,11 @@ Business OS command:
         seed_business_os_app_artifacts(&root, "contracts");
         channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
             .expect("failed to lease app queue task");
+        age_queue_task_lease(
+            &root,
+            &task.message_key,
+            BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS + 5,
+        );
         let state = Arc::new(Mutex::new(SharedState::default()));
         {
             let mut shared = lock_shared_state(&state);
@@ -22798,6 +22897,11 @@ Business OS command:
         seed_business_os_app_artifacts(&root, "subscriptions");
         channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
             .expect("failed to lease app queue task");
+        age_queue_task_lease(
+            &root,
+            &task.message_key,
+            BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS + 5,
+        );
         let state = Arc::new(Mutex::new(SharedState::default()));
         {
             let mut shared = lock_shared_state(&state);
@@ -22822,7 +22926,7 @@ Business OS command:
     }
 
     #[test]
-    fn status_snapshot_recovery_bypasses_fresh_idle_app_recovery_guard() {
+    fn status_snapshot_recovery_bypasses_fresh_idle_guard_for_stale_app_lease() {
         let root = temp_root("status-snapshot-fresh-app-recovery-guard");
         let script_dir = root.join("src/apps/business-os/scripts");
         std::fs::create_dir_all(&script_dir).expect("create validator script dir");
@@ -22848,6 +22952,11 @@ Business OS command:
         seed_business_os_app_artifacts(&root, "projects");
         channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
             .expect("failed to lease app queue task");
+        age_queue_task_lease(
+            &root,
+            &task.message_key,
+            BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS + 5,
+        );
         let state = Arc::new(Mutex::new(SharedState::default()));
         {
             let mut shared = lock_shared_state(&state);
@@ -22912,6 +23021,11 @@ Business OS command:
         seed_business_os_app_artifacts(&root, "subscriptions");
         channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
             .expect("failed to lease app queue task");
+        age_queue_task_lease(
+            &root,
+            &task.message_key,
+            BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS + 5,
+        );
         let state = Arc::new(Mutex::new(SharedState::default()));
 
         status_from_shared_state(&root, &state).expect("status snapshot failed");
@@ -22947,6 +23061,11 @@ Business OS command:
         seed_business_os_app_artifacts(&root, "projects");
         channels::lease_queue_task(&root, &red_task.message_key, "ctox-service-test")
             .expect("failed to lease red app queue task");
+        age_queue_task_lease(
+            &root,
+            &red_task.message_key,
+            BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS + 5,
+        );
         let pending_task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
@@ -23001,8 +23120,14 @@ Business OS command:
             },
         )
         .expect("failed to create app queue task");
+        seed_business_os_app_artifacts(&root, "quality");
         channels::lease_queue_task(&root, &task.message_key, CHANNEL_ROUTER_LEASE_OWNER)
             .expect("failed to lease app queue task");
+        age_queue_task_lease(
+            &root,
+            &task.message_key,
+            BUSINESS_OS_APP_RECOVERY_STALE_SECS + 5,
+        );
         let state = Arc::new(Mutex::new(SharedState::default()));
 
         route_external_messages(&root, &state).expect("router tick should complete green app");
@@ -23042,8 +23167,14 @@ Business OS command:
             },
         )
         .expect("failed to create app queue task");
+        seed_business_os_app_artifacts(&root, "quality");
         channels::lease_queue_task(&root, &task.message_key, CHANNEL_ROUTER_LEASE_OWNER)
             .expect("failed to lease app queue task");
+        age_queue_task_lease(
+            &root,
+            &task.message_key,
+            BUSINESS_OS_APP_RECOVERY_STALE_SECS + 5,
+        );
         let state = Arc::new(Mutex::new(SharedState {
             busy: false,
             worker_active_count: 1,
@@ -23093,6 +23224,11 @@ Business OS command:
         .expect("failed to create app queue task");
         channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
             .expect("failed to lease app queue task");
+        age_queue_task_lease(
+            &root,
+            &task.message_key,
+            BUSINESS_OS_APP_RECOVERY_STALE_SECS + 5,
+        );
         let state = Arc::new(Mutex::new(SharedState::default()));
         {
             let mut shared = lock_shared_state(&state);
@@ -23492,8 +23628,14 @@ Business OS command:
             },
         )
         .expect("failed to create stale app queue task");
+        seed_business_os_app_artifacts(&root, "contracts");
         channels::lease_queue_task(&root, &stale_task.message_key, "ctox-service-test")
             .expect("failed to lease stale app queue task");
+        age_queue_task_lease(
+            &root,
+            &stale_task.message_key,
+            BUSINESS_OS_APP_RECOVERY_STALE_SECS + 5,
+        );
         let fresh_task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
