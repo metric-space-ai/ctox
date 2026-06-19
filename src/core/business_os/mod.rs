@@ -4,6 +4,7 @@
 mod ats_gates;
 mod browser_runtime;
 mod importer;
+mod invoices;
 pub mod mcp_channel;
 pub mod policy;
 mod rxdb_peer;

@@ -84,14 +84,14 @@ pub fn handle_invoices_active_command(
         "invoices.invoice.update" => invoices_invoice_update_stub(root, command),
         "invoices.invoice.delete" => invoices_invoice_delete_stub(root, command),
         "invoices.invoice.post" => invoices_invoice_post_stub(root, command),
-        "invoices.invoice.cancel" => invoices_invoice_cancel_stub(command),
-        "invoices.invoice.create_credit_note" => invoices_invoice_create_credit_note_stub(command),
+        "invoices.invoice.cancel" => invoices_invoice_cancel(root, command),
+        "invoices.invoice.create_credit_note" => invoices_invoice_create_credit_note(root, command),
         "invoices.invoice.assign_payment_terms" => {
             invoices_invoice_assign_payment_terms_stub(command)
         }
-        "invoices.line.create" => invoices_line_create_stub(command),
-        "invoices.line.update" => invoices_line_update_stub(command),
-        "invoices.line.delete" => invoices_line_delete_stub(command),
+        "invoices.line.create" => invoices_line_create(root, command),
+        "invoices.line.update" => invoices_line_update(root, command),
+        "invoices.line.delete" => invoices_line_delete(root, command),
         "invoices.payment.allocate" => invoices_payment_allocate_stub(root, command),
         "invoices.payment.unallocate" => invoices_payment_unallocate_stub(root, command),
         "invoices.payment.match_suggestions" => invoices_payment_match_suggestions_stub(command),
@@ -1061,19 +1061,177 @@ fn upsert_business_record_helper(
     Ok(())
 }
 
-fn invoices_invoice_cancel_stub(_command: &BusinessCommand) -> anyhow::Result<Value> {
-    anyhow::bail!(
-        "invoices.invoice.cancel is not yet implemented (planned for Phase 7+ polish); \
-         posting a Storno (Gegenbuchung) for a posted invoice requires the credit-note handler"
-    )
+/// Build a draft credit note (Gegenrechnung) that reverses `original`. §17 UStG:
+/// a posted invoice is corrected by a credit note, never edited in place. The
+/// credit note copies the original's party/currency and its lines (or a
+/// caller-supplied partial `lines`) and references it via `credit_note_for_id`.
+/// Returned in `state=draft` so it goes through the normal post path (which
+/// builds the reversing journal entry and reserves a credit-note number).
+fn build_credit_note_draft(
+    original: &Value,
+    new_id: &str,
+    command: &BusinessCommand,
+    now: i64,
+) -> anyhow::Result<Value> {
+    let original_type = original
+        .get("invoice_type")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let cn_type = match original_type {
+        "sale_out" => "credit_note_out",
+        "sale_in" => "credit_note_in",
+        other => anyhow::bail!(
+            "cannot credit an invoice of type {other:?} (only sale_out / sale_in can be credited)"
+        ),
+    };
+    let credit_note_for_id = original
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let party_id = original
+        .get("party_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let currency = original
+        .get("currency")
+        .and_then(Value::as_str)
+        .unwrap_or("EUR")
+        .to_string();
+    let lines = command
+        .payload
+        .get("lines")
+        .cloned()
+        .or_else(|| original.get("lines").cloned())
+        .unwrap_or_else(|| json!([]));
+    let invoice_number = original
+        .get("invoice_number")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let search_text = format!("{} {}", party_id.to_lowercase(), currency.to_lowercase());
+    let cn = json!({
+        "id": new_id,
+        "invoice_type": cn_type,
+        "credit_note_for_id": credit_note_for_id,
+        "credit_note_for_number": invoice_number,
+        "party_id": party_id,
+        "currency": currency,
+        "invoice_date_ms": command.payload.get("invoice_date_ms").and_then(Value::as_i64).unwrap_or(now),
+        "lines": lines,
+        "reason": command.payload.get("reason").and_then(Value::as_str).unwrap_or("§17 UStG Korrektur"),
+        "small_business": original.get("small_business").cloned().unwrap_or(json!(false)),
+        "reverse_charge": original.get("reverse_charge").cloned().unwrap_or(json!(false)),
+        "state": "draft",
+        "is_deleted": false,
+        "search_text": search_text,
+        "subtotal_cents": 0,
+        "tax_cents": 0,
+        "total_cents": 0,
+        "paid_cents": 0,
+        "open_cents": 0,
+        "created_at_ms": now,
+        "updated_at_ms": now,
+    });
+    validate_invoice_for_command(&cn, false)?;
+    Ok(cn)
 }
 
-fn invoices_invoice_create_credit_note_stub(_command: &BusinessCommand) -> anyhow::Result<Value> {
-    anyhow::bail!(
-        "invoices.invoice.create_credit_note is not yet implemented (planned for Phase 7+ polish); \
-         §17 UStG corrections must go through the create_credit_note flow with a \
-         credit_note_for_id reference"
-    )
+/// §5.11 Storno: cancel an invoice. A draft is voided in place; a posted invoice
+/// is reversed by a credit note (GoBD: posted records are immutable) and marked
+/// `state=cancelled` with a link to the Storno credit note.
+fn invoices_invoice_cancel(root: &Path, command: &BusinessCommand) -> anyhow::Result<Value> {
+    let invoice_id = invoices_record_requirement(command, &["invoice_id", "id"])?;
+    let conn = open_business_os_store(root)?;
+    let mut invoice = load_accounting_invoice(&conn, &invoice_id)?
+        .ok_or_else(|| anyhow!("invoice {invoice_id} not found"))?;
+    let state = invoice
+        .get("state")
+        .and_then(Value::as_str)
+        .unwrap_or("draft")
+        .to_string();
+    let now = now_ms() as i64;
+    match state.as_str() {
+        "cancelled" => Ok(json!({
+            "ok": true,
+            "idempotent": true,
+            "invoice_id": invoice_id,
+            "state": "cancelled",
+        })),
+        "draft" => {
+            invoice["state"] = json!("cancelled");
+            invoice["is_deleted"] = json!(true);
+            invoice["cancelled_at_ms"] = json!(now);
+            invoice["updated_at_ms"] = json!(now);
+            invoices_upsert_invoice(&conn, &invoice_id, &invoice, now)?;
+            conn.execute(
+                "UPDATE business_records SET deleted = 1, updated_at_ms = ?1
+                 WHERE collection = ?2 AND record_id = ?3",
+                rusqlite::params![now, "accounting_invoices", &invoice_id],
+            )?;
+            Ok(json!({ "ok": true, "invoice_id": invoice_id, "state": "cancelled" }))
+        }
+        "posted" => {
+            let cn_id = format!("cn_{invoice_id}_storno");
+            let cn = if let Some(existing) = load_accounting_invoice(&conn, &cn_id)? {
+                existing
+            } else {
+                let cn = build_credit_note_draft(&invoice, &cn_id, command, now)?;
+                invoices_upsert_invoice(&conn, &cn_id, &cn, now)?;
+                cn
+            };
+            invoice["state"] = json!("cancelled");
+            invoice["cancelled_at_ms"] = json!(now);
+            invoice["storno_credit_note_id"] = json!(cn_id);
+            invoice["updated_at_ms"] = json!(now);
+            invoices_upsert_invoice(&conn, &invoice_id, &invoice, now)?;
+            Ok(json!({
+                "ok": true,
+                "invoice_id": invoice_id,
+                "state": "cancelled",
+                "storno_credit_note_id": cn_id,
+                "credit_note": cn,
+            }))
+        }
+        other => anyhow::bail!("cannot cancel invoice in state {other} (only draft or posted)"),
+    }
+}
+
+/// §5.11 §17 UStG credit note: create a draft credit note that references a
+/// posted invoice via `credit_note_for_id`. The draft is then posted through the
+/// normal post path.
+fn invoices_invoice_create_credit_note(
+    root: &Path,
+    command: &BusinessCommand,
+) -> anyhow::Result<Value> {
+    let credit_note_for_id =
+        invoices_record_requirement(command, &["credit_note_for_id", "invoice_id", "id"])?;
+    let now = now_ms() as i64;
+    let new_id = command
+        .payload
+        .get("credit_note_id")
+        .or_else(|| command.payload.get("new_invoice_id"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("cn_{now}"));
+    let conn = open_business_os_store(root)?;
+    if let Some(existing) = load_accounting_invoice(&conn, &new_id)? {
+        return Ok(json!({ "ok": true, "idempotent": true, "invoice": existing }));
+    }
+    let original = load_accounting_invoice(&conn, &credit_note_for_id)?
+        .ok_or_else(|| anyhow!("invoice {credit_note_for_id} not found"))?;
+    let state = original
+        .get("state")
+        .and_then(Value::as_str)
+        .unwrap_or("draft");
+    anyhow::ensure!(
+        state == "posted",
+        "credit note requires a posted invoice to correct (state: {state})"
+    );
+    let cn = build_credit_note_draft(&original, &new_id, command, now)?;
+    invoices_upsert_invoice(&conn, &new_id, &cn, now)?;
+    Ok(json!({ "ok": true, "invoice": cn }))
 }
 
 fn invoices_invoice_assign_payment_terms_stub(_command: &BusinessCommand) -> anyhow::Result<Value> {
@@ -1083,29 +1241,110 @@ fn invoices_invoice_assign_payment_terms_stub(_command: &BusinessCommand) -> any
     )
 }
 
-fn invoices_line_create_stub(command: &BusinessCommand) -> anyhow::Result<Value> {
-    let _invoice_id = invoices_record_requirement(command, &["invoice_id"])?;
-    anyhow::bail!(
-        "invoices.line.create is not yet implemented (planned for Phase 7+); \
-         the editor builds lines as part of the invoice draft and posts them via \
-         invoices.invoice.update with a full lines array"
-    )
+/// Load a draft invoice and its current lines array. Line edits are only valid
+/// while the invoice is a draft (a posted invoice is GoBD-immutable).
+fn load_draft_invoice_lines(
+    conn: &Connection,
+    invoice_id: &str,
+) -> anyhow::Result<(Value, Vec<Value>)> {
+    let invoice = load_accounting_invoice(conn, invoice_id)?
+        .ok_or_else(|| anyhow!("invoice {invoice_id} not found"))?;
+    let state = invoice
+        .get("state")
+        .and_then(Value::as_str)
+        .unwrap_or("draft");
+    anyhow::ensure!(
+        state == "draft",
+        "invoices.line.* is only allowed in state=draft (current: {state})"
+    );
+    let lines = invoice
+        .get("lines")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    Ok((invoice, lines))
 }
 
-fn invoices_line_update_stub(command: &BusinessCommand) -> anyhow::Result<Value> {
-    let _line_id = invoices_record_requirement(command, &["line_id"])?;
-    anyhow::bail!(
-        "invoices.line.update is not yet implemented (planned for Phase 7+); \
-         use invoices.invoice.update with the full lines array instead"
-    )
+fn save_draft_invoice_lines(
+    conn: &Connection,
+    invoice_id: &str,
+    mut invoice: Value,
+    lines: Vec<Value>,
+    now: i64,
+) -> anyhow::Result<Value> {
+    invoice["lines"] = json!(lines);
+    invoice["updated_at_ms"] = json!(now);
+    validate_invoice_for_command(&invoice, false)?;
+    invoices_upsert_invoice(conn, invoice_id, &invoice, now)?;
+    Ok(invoice)
 }
 
-fn invoices_line_delete_stub(command: &BusinessCommand) -> anyhow::Result<Value> {
-    let _line_id = invoices_record_requirement(command, &["line_id"])?;
-    anyhow::bail!(
-        "invoices.line.delete is not yet implemented (planned for Phase 7+); \
-         use invoices.invoice.update with the lines array minus the deleted line"
-    )
+fn invoices_line_create(root: &Path, command: &BusinessCommand) -> anyhow::Result<Value> {
+    let invoice_id = invoices_record_requirement(command, &["invoice_id"])?;
+    let line = command
+        .payload
+        .get("line")
+        .cloned()
+        .ok_or_else(|| anyhow!("invoices.line.create requires a 'line' object"))?;
+    anyhow::ensure!(line.is_object(), "invoices.line.create 'line' must be an object");
+    let conn = open_business_os_store(root)?;
+    let now = now_ms() as i64;
+    let (invoice, mut lines) = load_draft_invoice_lines(&conn, &invoice_id)?;
+    lines.push(line);
+    let invoice = save_draft_invoice_lines(&conn, &invoice_id, invoice, lines, now)?;
+    Ok(json!({ "ok": true, "invoice": invoice }))
+}
+
+fn invoices_line_update(root: &Path, command: &BusinessCommand) -> anyhow::Result<Value> {
+    let invoice_id = invoices_record_requirement(command, &["invoice_id"])?;
+    let index = command
+        .payload
+        .get("line_index")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| anyhow!("invoices.line.update requires a 'line_index'"))?
+        as usize;
+    let patch = command
+        .payload
+        .get("line")
+        .cloned()
+        .ok_or_else(|| anyhow!("invoices.line.update requires a 'line' object"))?;
+    let conn = open_business_os_store(root)?;
+    let now = now_ms() as i64;
+    let (invoice, mut lines) = load_draft_invoice_lines(&conn, &invoice_id)?;
+    let line_count = lines.len();
+    let target = lines
+        .get_mut(index)
+        .ok_or_else(|| anyhow!("line_index {index} out of range ({line_count} lines)"))?;
+    if let (Some(target_obj), Some(patch_obj)) = (target.as_object_mut(), patch.as_object()) {
+        for (key, value) in patch_obj {
+            target_obj.insert(key.clone(), value.clone());
+        }
+    } else {
+        *target = patch;
+    }
+    let invoice = save_draft_invoice_lines(&conn, &invoice_id, invoice, lines, now)?;
+    Ok(json!({ "ok": true, "invoice": invoice }))
+}
+
+fn invoices_line_delete(root: &Path, command: &BusinessCommand) -> anyhow::Result<Value> {
+    let invoice_id = invoices_record_requirement(command, &["invoice_id"])?;
+    let index = command
+        .payload
+        .get("line_index")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| anyhow!("invoices.line.delete requires a 'line_index'"))?
+        as usize;
+    let conn = open_business_os_store(root)?;
+    let now = now_ms() as i64;
+    let (invoice, mut lines) = load_draft_invoice_lines(&conn, &invoice_id)?;
+    anyhow::ensure!(
+        index < lines.len(),
+        "line_index {index} out of range ({} lines)",
+        lines.len()
+    );
+    lines.remove(index);
+    let invoice = save_draft_invoice_lines(&conn, &invoice_id, invoice, lines, now)?;
+    Ok(json!({ "ok": true, "invoice": invoice }))
 }
 
 fn invoices_payment_allocate_stub(root: &Path, command: &BusinessCommand) -> anyhow::Result<Value> {

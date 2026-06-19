@@ -14079,6 +14079,21 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
                 outcome,
             );
         }
+        command_type if super::invoices::is_invoices_active_command(command_type) => {
+            // §5.6/§5.11 invoices module: server-authoritative accounting
+            // mutations (draft CRUD, post, Storno/cancel, §17 credit notes).
+            // chef/admin role required, like the other mutating module families.
+            let session = rxdb_command_session(root, &command)?;
+            let outcome = super::invoices::handle_invoices_active_command(root, &session, &command)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                command.record_id.as_deref(),
+                Some("completed"),
+                outcome,
+            );
+        }
         command_type if command_type.starts_with("ctox.channel.") => {
             let mutation: ChannelCommandRequest = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.channel payload")?;
@@ -22233,6 +22248,7 @@ pub fn is_ats_mutating_command(command_type: &str) -> bool {
             | "ats.leistungsnachweis.signoff"
             | "ats.signature.request"
             | "ats.signature.sign"
+            | "ats.interview.transcribe"
     )
 }
 
@@ -22808,6 +22824,76 @@ fn handle_ats_mutating_command(
                 "clawback": clawback,
                 "credit_note_id": credit_note_id
             }))
+        }
+        "ats.interview.transcribe" => {
+            // §5.10 Interview transcription: transcribe an interview recording via
+            // the native STT runtime and write the transcript back onto the
+            // interview_meetings record. The audio is either a direct filesystem
+            // path (ops/testing) or a Business OS desktop file reconstructed from
+            // RxDB chunks (the browser-upload flow) — the data plane stays
+            // WebRTC-only, no HTTP. When the STT model weights are not installed
+            // the runtime returns a clear error; surface it as a non-fatal outcome
+            // so the command records a failed transcription instead of poisoning
+            // the meeting record.
+            let meeting_id = first_string_field(p, &["meeting_id", "record_id"])
+                .context("ats.interview.transcribe requires meeting_id")?;
+            let collection = p
+                .get("collection")
+                .and_then(Value::as_str)
+                .unwrap_or("interview_meetings");
+            let audio_path: std::path::PathBuf =
+                if let Some(path) = first_string_field(p, &["audio_path"]) {
+                    std::path::PathBuf::from(path)
+                } else if let Some(file_id) = first_string_field(p, &["source_file_id"]) {
+                    let generation = first_string_field(p, &["generation_id"]);
+                    let materialized = materialize_business_chat_attachment(
+                        root,
+                        command.id.as_deref().unwrap_or("ats-transcribe"),
+                        &serde_json::json!({}),
+                        &file_id,
+                        generation.as_deref(),
+                    )?;
+                    std::path::PathBuf::from(materialized.local_path)
+                } else {
+                    anyhow::bail!(
+                        "ats.interview.transcribe requires source_file_id or audio_path"
+                    );
+                };
+            match crate::execution::models::native_stt::transcribe_audio_file(root, &audio_path) {
+                Ok(resp) => {
+                    let transcript_id = format!("transcript_{now}");
+                    let existing = conn
+                        .query_row(
+                            "SELECT payload_json FROM business_records WHERE collection = ?1 AND record_id = ?2 AND deleted = 0",
+                            params![collection, meeting_id.as_str()],
+                            |row| row.get::<_, String>(0),
+                        )
+                        .optional()?;
+                    let mut payload = existing
+                        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+                        .unwrap_or_else(|| serde_json::json!({ "id": meeting_id }));
+                    let char_count = resp.text.chars().count();
+                    if let Some(obj) = payload.as_object_mut() {
+                        obj.insert("transcript_id".to_string(), Value::String(transcript_id.clone()));
+                        obj.insert("transcript_text".to_string(), Value::String(resp.text));
+                        obj.insert("transcript_model".to_string(), Value::String(resp.model));
+                        obj.insert("transcribed_at_ms".to_string(), Value::from(now));
+                    }
+                    upsert_business_record(&conn, collection, &meeting_id, now, payload)?;
+                    Ok(serde_json::json!({
+                        "ok": true,
+                        "meeting_id": meeting_id,
+                        "transcript_id": transcript_id,
+                        "transcript_chars": char_count
+                    }))
+                }
+                Err(err) => Ok(serde_json::json!({
+                    "ok": false,
+                    "meeting_id": meeting_id,
+                    "transcription_available": false,
+                    "error": err.to_string()
+                })),
+            }
         }
         other => Err(anyhow::anyhow!(
             "unsupported ats mutating command type: {other}"
