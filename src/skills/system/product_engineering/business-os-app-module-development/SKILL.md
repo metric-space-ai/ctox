@@ -23,7 +23,7 @@ For CTOX App Creator and runtime-installed app work, follow this short path befo
 6. Required artifacts are canonical files, not shell patterns. Write `module.json`, `collections.schema.json`, `schema.js`, `index.html`, `index.css`, `index.js`, `icon.svg`, `locales/en.json`, `locales/de.json`, `core/records.mjs`, `core/automation.mjs`, and tests by exact path only. For first-pass runtime-installed App Creator apps, do not create extra `core/*.mjs` layers such as `ui.mjs`, `render.mjs`, `runtime.mjs`, or `panel.mjs`; those are refactor work, not one-shot app creation. For runtime-installed App Creator apps, the module root may contain only those root files plus `core/`, `locales/`, and `tests/`. Do not create or leave temporary schema/manifest aliases, typo files such as `m` or `modul.json`, scratch notes, copied app roots, glob artifacts, or ad hoc helper directories in the module root.
 7. `schema.js` is invariant. Do not rename it, delete it, replace it with `schema.mjs`, or leave a root-level `schema.mjs`/`schema.cjs` alias next to it. Put reusable schema fragments in `core/*.mjs` and re-export them from `schema.js`.
 8. Tests must prove useful behavior, not only syntax. At minimum they must cover record visibility/summary logic and a `business_os.chat.task` command payload whose title/instruction/prompt/record_snapshot contain actual facts from the fixture records. Keep fixture expectations hand-computed and synchronized with the helper's exported shape. If `summarizeRecords()` or another helper returns extra fields, either assert the full updated shape or assert individual fields intentionally; do not leave a stale partial `deepEqual` that fails only because the helper grew. Do not write negative anti-pattern tests or assertion messages that contain forbidden layout/data/dependency literals; validators own those checks. All tests in `tests/*.test.mjs` must pass; adding a new green test while an old scaffold test imports a missing export is still red.
-9. Run `ctox business-os app validate <id> --installed` before claiming success, then repair every bullet exactly.
+9. Do not run final validation on an untouched scaffold. First make the smallest requested-domain edits to records, labels, filters, automation payload, and tests, then run `ctox business-os app validate <id> --installed` before claiming success and repair every bullet exactly. If validation says there were no post-lease app artifact writes, edit the runtime app files for the requested domain and validate again.
 10. Once `ctox business-os app validate ...` is green, stop. Do not backfill missed few-shot inspection, read checker internals, search prior bench apps, run repository-wide conformance scripts, source-wide RxDB scans, broad file dumps, cosmetic rewrites, helper refactors, or extra polishing passes. A green App Creator validator plus the required focused tests is the completion boundary.
 
 ## Priority Order
@@ -61,6 +61,7 @@ you are building a new runtime-installed App Creator app and neither the CTOX se
 you are about to delete, omit, or replace scaffold invariants such as core/automation.mjs, core/records.mjs, locales/de.json, locales/en.json, or tests/*.test.mjs instead of customizing them in place
 you are about to create extra runtime App Creator helper layers under `core/` such as `ui.mjs`, `render.mjs`, `runtime.mjs`, `panel.mjs`, `selectors.mjs`, or `view.mjs`; first-pass runtime apps must keep pure record logic in `core/records.mjs`, command payload logic in `core/automation.mjs`, and simple DOM wiring in `index.js`
 you are about to clean, reset, delete, or rewrite a validator-clean scaffold wholesale because it looks generic; keep it as the baseline and edit the smallest domain-specific parts
+you are about to treat an untouched validator-clean scaffold as a completed requested app; a scaffold is only the baseline, and at least the requested-domain record model, labels, visible workflow, automation payload, and tests must be customized before final validation can complete the task
 you are about to write, copy, rename, delete, or repair required app artifacts through shell globs, wildcard filenames, brace expansion, or fuzzy names such as co*.json, colle{ctions,ctions}.schema.json, *.schema.json, .tmp_schema.json, .csjson.tmp, module*.json, or tests/*.mjs; required artifacts must be exact-path edits only
 you are about to run rm, mv, cp, or install over required artifacts unless every source and destination is an exact path inside MODULE_DIR and the command cannot delete module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales, core helpers, or tests
 you are about to create or update a runtime-installed App Creator module whose module.json lacks a SemVer version in x.y.z form without a v prefix
@@ -229,9 +230,10 @@ is:
 1. inspect contracts and 3 modules
 2. choose MODULE_DIR and app scope
 3. for a new runtime-installed app, confirm the CTOX service preflight scaffold exists or run `ctox business-os app scaffold`; otherwise write the required files with a small two-pane/modal app
-4. parse JSON and run syntax/test/validator gates
-5. copy exact validator failure bullets into the repair checklist
-6. repair the module files and rerun the same gates
+4. customize the scaffold for the requested domain before final validation: update the owned collection shape, fixture records, labels, filters/statuses, visible workflow, `business_os.chat.task` payload, and positive tests
+5. parse JSON and run syntax/test/validator gates
+6. copy exact validator failure bullets into the repair checklist
+7. repair the module files and rerun the same gates
 ```
 
 Validators and static checkers are gates, not few-shot source material. Read

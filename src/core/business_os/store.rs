@@ -43,6 +43,19 @@ use url::Url;
 use uuid::Uuid;
 
 const STORE_FILE: &str = "business-os.sqlite3";
+const BUSINESS_OS_APP_REQUIRED_ARTIFACTS: &[&str] = &[
+    "module.json",
+    "collections.schema.json",
+    "schema.js",
+    "index.html",
+    "index.css",
+    "index.js",
+    "icon.svg",
+    "core/automation.mjs",
+    "core/records.mjs",
+    "locales/de.json",
+    "locales/en.json",
+];
 const RXDB_STORE_FILE: &str = "business-os-rxdb.sqlite3";
 const DEFAULT_SIGNALING_URL: &str = "wss://signaling.ctox.dev";
 const DEFAULT_STUN_URL: &str = "stun:stun.l.google.com:19302";
@@ -11440,13 +11453,20 @@ pub fn complete_business_command_from_app_validation_success(
             "queue task `{task_id}` belongs to Business OS app module `{module_id}`, not `{expected_module_id}`"
         );
     }
+    let mut terminal_queue_task = channels::load_queue_task(root, task_id)?;
+    if let Some(task) = terminal_queue_task.as_ref() {
+        ensure_app_validation_completion_has_post_lease_artifact_write(
+            root,
+            task,
+            &artifact_directory,
+        )?;
+    }
     let completed_at_ms = now_ms() as i64;
     conn.execute(
         "UPDATE business_commands SET status = 'completed', observed_at_ms = ?2 WHERE command_id = ?1",
         params![command_id.as_str(), completed_at_ms],
     )?;
 
-    let mut terminal_queue_task = channels::load_queue_task(root, task_id)?;
     if let Some(task) = terminal_queue_task.as_ref() {
         let message_key = task.message_key.clone();
         let status_note = "business-os:terminal-success: app validation passed";
@@ -11543,6 +11563,59 @@ pub fn complete_business_command_from_app_validation_success(
         );
     }
     Ok(Some(command_payload))
+}
+
+fn ensure_app_validation_completion_has_post_lease_artifact_write(
+    root: &Path,
+    task: &channels::QueueTaskView,
+    artifact_directory: &str,
+) -> anyhow::Result<()> {
+    let Some(leased_at) = task.leased_at.as_deref() else {
+        return Ok(());
+    };
+    let cutoff = chrono::DateTime::parse_from_rfc3339(leased_at)
+        .with_context(|| {
+            format!(
+                "queue task `{}` has invalid leased_at timestamp `{leased_at}`",
+                task.message_key
+            )
+        })?
+        .with_timezone(&chrono::Utc);
+    let cutoff_time = UNIX_EPOCH
+        + Duration::from_secs(cutoff.timestamp().max(0) as u64)
+        + Duration::from_nanos(cutoff.timestamp_subsec_nanos() as u64);
+    let module_dir = root.join(artifact_directory);
+    let mut newest: Option<SystemTime> = None;
+    let mut newest_path: Option<PathBuf> = None;
+    for relative in BUSINESS_OS_APP_REQUIRED_ARTIFACTS {
+        let path = module_dir.join(relative);
+        let Ok(metadata) = fs::metadata(&path) else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        if modified > cutoff_time {
+            return Ok(());
+        }
+        if newest.map(|current| modified > current).unwrap_or(true) {
+            newest = Some(modified);
+            newest_path = Some(path);
+        }
+    }
+    let newest_label = newest_path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| module_dir.display().to_string());
+    anyhow::bail!(
+        "Business OS app validation passed, but queue task `{}` has no required app artifact written after its lease at `{leased_at}`. New-app scaffolds may validate before the agent implements the requested app; edit the runtime app files under `{}` first, then run validation again. Newest checked artifact before the lease: {}",
+        task.message_key,
+        artifact_directory,
+        newest_label
+    )
 }
 
 pub fn complete_ready_documents_report_commands(
@@ -22293,7 +22366,9 @@ fn handle_ats_mutating_command(
                 }),
                 now,
             )?;
-            Ok(serde_json::json!({ "ok": true, "allowed": true, "placement_id": id, "fee_invoice_id": inv_id }))
+            Ok(
+                serde_json::json!({ "ok": true, "allowed": true, "placement_id": id, "fee_invoice_id": inv_id }),
+            )
         }
         "ats.submission.present" => {
             let candidate_id = first_string_field(p, &["candidate_id"])
@@ -24353,7 +24428,7 @@ Business OS app build target:
 - open-work context rule: queue IDs, current_queue_item_id, and open-work blocks in surrounding context are not your app-build target and must not redirect you to another task. Build only module_id={module_id} under {module_dir}/.
 - required file inventory: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, core/automation.mjs, core/records.mjs, locales/de.json, locales/en.json, and tests/*.test.mjs must exist before you can claim success.
 - schema invariant rule: schema.js is the only root schema module. Do not rename it, delete it, replace it with schema.mjs, or leave schema.mjs/schema.cjs as a root-level alias. Put reusable ESM schema fragments under core/*.mjs and re-export them from schema.js.
-- mandatory first screen: inspect the scaffold first, preserve core/automation.mjs, core/records.mjs, locales, tests, mount wiring, and helper export names unless every importer is updated in the same edit. Use shipped customers, shiftflow, and outbound as the default three few-shots. Keep the app small, validate early, and repair validator bullets exactly.
+- mandatory first screen: inspect the scaffold first, preserve core/automation.mjs, core/records.mjs, locales, tests, mount wiring, and helper export names unless every importer is updated in the same edit. Use shipped customers, shiftflow, and outbound as the default three few-shots. Keep the app small, but do not treat an untouched scaffold as the requested app.
 - exact artifact rule: required artifacts are canonical files, not shell patterns. Write module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales, core helpers, and tests by exact path under {module_dir}/ only. Do not create temporary schema/manifest aliases, do not copy through globs or brace expansion, do not create files literally named co*ions.*json or colle{{ctions,ctions}}.schema.json, and do not run rm against required artifacts.
 - scaffold preservation rule: CTOX service preflight may already have created a validator-clean scaffold in {module_dir}/. Treat that scaffold as the baseline. Do not clean, delete, reset, replace, or rewrite it wholesale. Customize the smallest necessary scaffold files in place, preserve the mount wiring, core helpers, schema wrappers, locales, and tests, and run `ctox business-os app scaffold {module_id} {mode_flag} --repair-missing` before domain edits if core/automation.mjs or core/records.mjs is missing.
 - few-shot rule: inspect exactly three shipped Business OS modules as short targeted pattern references, preferably customers, shiftflow, and outbound from the shipped `src/apps/business-os/modules/` tree. Use notes only as an optional fourth simple-CRUD reference; it is not a scaffold-helper template and may not contain core/automation.mjs or core/records.mjs. Never use generated installed modules, runtime/business-os/installed-modules, ~/.local/state/ctox/business-os/installed-modules, bench_* apps, previous App Creator outputs, or app-creator-bench artifacts as few-shot templates. Do not request complete file dumps, do not delegate a broad module-reading sweep to a subagent, and do not keep reading examples after the three-module summary.
@@ -24361,13 +24436,13 @@ Business OS app build target:
 - current-contract rule: if an existing module conflicts with the required skill, this prompt, `ctox business-os app validate`, or `module_static_check.mjs`, the current contract wins and the existing pattern is an anti-pattern.
 - bounded-shell rule: do not run find/rg/grep/ls over $HOME, /Users, /, ~/.local/state, the whole install root, or the whole repo to discover validators, scripts, examples, or guard internals. Inspect only exact files in {module_dir}/ and exact files in the three chosen shipped few-shot module directories. Do not read or write ~/.local/state/ctox/business-os/installed-modules directly; use the prompt's {module_dir}/ path only. Use `ctox business-os app validate {module_id} {mode_flag}`; do not search for validator filenames.
 - sequencing rule: after reading the required skill and inspecting three shipped modules, verify {module_dir}/ has the required file inventory before reading validator/checker source files. If the directory is missing or incomplete, repair the scaffold first; do not replace a green scaffold just because it is generic. Do not open validate-app-module.mjs, module_static_check.mjs, assert-module-conformance.mjs, or assert-rxdb-only.mjs until the required files exist and a validation command has reported a concrete failure.
-- validator rule: validators and static checkers are black-box gates. Run `ctox business-os app validate {module_id} {mode_flag}` after the first file pass; repair its output bullets. Do not reconstruct scanner regexes or plan around checker internals before writing the app.
+- validator rule: validators and static checkers are black-box gates. Run `ctox business-os app validate {module_id} {mode_flag}` only after you have made the smallest requested-domain edits to records, labels, filters, automation payload, and tests; scaffold inspection alone is not a file pass. If validation says there were no post-lease app artifact writes, edit files under {module_dir}/ for the requested domain and validate again. Repair validator output bullets exactly. Do not reconstruct scanner regexes or plan around checker internals before writing the app.
 - cwd warning: shell tools run from the install root, not from the module directory; never use bare redirects like > module.json, > collections.schema.json, > {module_id}/index.js, or mkdir {module_id}.
 - required shell write pattern: set MODULE_DIR="{module_dir}" and write every file as "$MODULE_DIR/<file>"; create "$MODULE_DIR/locales" and "$MODULE_DIR/tests" before writing nested files.
 - required artifact write pattern: use exact filenames only. Do not use `cp .tmp_schema.json co*.json`, `cp .csjson.tmp collections*.json`, `rm collections.schema.json`, `rm *.json`, `mv module*.json module.json`, or any glob/brace/wildcard repair for required files. If a required file must change, write the final content directly to "$MODULE_DIR/collections.schema.json" or the exact required target and parse/import it immediately.
 - path rule: every generated app artifact must be under {module_dir}/; do not write root-level module.json, root-level collections.schema.json, root-level {module_id}/, root-level blocker/status Markdown, src/skills/, or any skill-named path. Ignore stale artifact-contract/review examples that contradict this target block.
 - no guard probing: do not test shell aliases, wrapper behavior, root write behavior, hardlinks, symlinks, or guard behavior; implement only inside {module_dir}/.
-- first file action: inspect the existing scaffold in {module_dir}/. If it is missing, create {module_dir}/ and the required inventory; if it exists, do not clean or reset it. Edit only the bounded domain-specific parts needed for the requested app.
+- first file action: inspect the existing scaffold in {module_dir}/. If it is missing, create {module_dir}/ and the required inventory; if it exists, do not clean or reset it. Edit only the bounded domain-specific parts needed for the requested app, including the owned collection shape, fixture records, labels, visible workflow, automation command facts, and positive tests.
 - exact mount rule: installed App Creator modules must make index.js load `./index.html` with exactly `fetch(new URL('./index.html', import.meta.url))`, assign the result into `ctx.host.innerHTML`, and attach `./index.css` with `new URL('./index.css', import.meta.url)` before DOM queries or event wiring. Do not use `fetch('./index.html')`, helper-wrapped template fetches, or any other runtime network fetch. Do not leave index.html unused while building the whole UI only with document.createElement.
 - HTML fragment rule: index.html must be a Business OS shell fragment only. Do not write a full browser document and do not include `<!doctype>`, `<html>`, `<head>`, `<body>`, `<link>`, `<script>`, `<meta>`, `<title>`, or `<style>` in index.html.
 - CSS scoping rule: index.css must scope module variables and selectors under the module root class. Do not define custom properties on `:root`, `html`, or `body`, do not redefine shell/base tokens such as `--surface`, `--text`, `--line`, or `--accent`, and do not create self-referential token aliases.
@@ -25361,6 +25436,82 @@ mod tests {
         Ok(())
     }
 
+    fn write_minimal_runtime_app_artifacts(root: &Path, module_id: &str) -> anyhow::Result<()> {
+        let collection = format!("{}_records", module_id.to_ascii_lowercase());
+        let module_dir = root
+            .join("runtime/business-os/installed-modules")
+            .join(module_id);
+        fs::create_dir_all(module_dir.join("core"))?;
+        fs::create_dir_all(module_dir.join("locales"))?;
+        fs::create_dir_all(module_dir.join("tests"))?;
+        fs::write(
+            module_dir.join("module.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "id": module_id,
+                "title": "Bench App",
+                "version": "0.1.0",
+                "entry": format!("installed-modules/{module_id}/index.html"),
+                "install_scope": "installed",
+                "collections": ["business_commands", collection],
+                "layout": {
+                    "shell": "full-workspace",
+                    "left": "Records",
+                    "center": "Detail"
+                }
+            }))?,
+        )?;
+        fs::write(
+            module_dir.join("collections.schema.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_format": "ctox-business-os-module-collections-v1",
+                "collections": {
+                    collection: {
+                        "schema": {
+                            "title": "Bench record",
+                            "version": 0,
+                            "type": "object",
+                            "primaryKey": "id",
+                            "properties": {
+                                "id": {"type": "string", "maxLength": 128},
+                                "title": {"type": "string"}
+                            },
+                            "required": ["id", "title"]
+                        }
+                    }
+                }
+            }))?,
+        )?;
+        fs::write(module_dir.join("schema.js"), "export const schemas = {};\n")?;
+        fs::write(
+            module_dir.join("index.html"),
+            "<main data-module-root></main>\n",
+        )?;
+        fs::write(
+            module_dir.join("index.css"),
+            ".bench-app { display: block; }\n",
+        )?;
+        fs::write(module_dir.join("index.js"), "export function mount() {}\n")?;
+        fs::write(
+            module_dir.join("icon.svg"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" />\n",
+        )?;
+        fs::write(
+            module_dir.join("core/automation.mjs"),
+            "export function buildFollowUpCommand() { return {}; }\n",
+        )?;
+        fs::write(
+            module_dir.join("core/records.mjs"),
+            "export const visibleRecords = (records) => records;\n",
+        )?;
+        fs::write(module_dir.join("locales/de.json"), "{}\n")?;
+        fs::write(module_dir.join("locales/en.json"), "{}\n")?;
+        fs::write(
+            module_dir.join("tests/basic.test.mjs"),
+            "import assert from 'node:assert/strict';\nassert.equal(1, 1);\n",
+        )?;
+        Ok(())
+    }
+
     fn build_test_app_module_zip(module_id: &str) -> anyhow::Result<Vec<u8>> {
         let mut buffer = Cursor::new(Vec::new());
         {
@@ -26260,6 +26411,9 @@ mod tests {
         assert!(prompt.contains("schema.js is the only root schema module"));
         assert!(prompt.contains("Do not rename it, delete it, replace it with schema.mjs"));
         assert!(prompt.contains("mandatory first screen: inspect the scaffold first"));
+        assert!(prompt.contains("do not treat an untouched scaffold as the requested app"));
+        assert!(prompt.contains("scaffold inspection alone is not a file pass"));
+        assert!(prompt.contains("no post-lease app artifact writes"));
         assert!(prompt.contains(
             "Use shipped customers, shiftflow, and outbound as the default three few-shots"
         ));
@@ -26374,6 +26528,9 @@ mod tests {
         assert!(prompt.contains("Do not clean, delete, reset, replace, or rewrite it wholesale"));
         assert!(prompt.contains("inspect exactly three shipped Business OS modules"));
         assert!(prompt.contains("mandatory first screen: inspect the scaffold first"));
+        assert!(prompt.contains("do not treat an untouched scaffold as the requested app"));
+        assert!(prompt.contains("scaffold inspection alone is not a file pass"));
+        assert!(prompt.contains("no post-lease app artifact writes"));
         assert!(prompt.contains("customers, shiftflow, and outbound"));
         assert!(prompt.contains("Use notes only as an optional fourth simple-CRUD reference"));
         assert!(prompt.contains("Never use generated installed modules"));
@@ -26465,6 +26622,119 @@ mod tests {
             Some(BUSINESS_OS_APP_MODULE_SKILL_NAME)
         );
         assert!(task.prompt.contains("- type: ctox.business_os.app.create"));
+        Ok(())
+    }
+
+    #[test]
+    fn app_validation_success_refuses_prelease_scaffold_only_completion() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let module_id = "projects";
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_app_prelease_scaffold",
+                "module": "creator",
+                "type": "ctox.business_os.app.create",
+                "record_id": module_id,
+                "payload": {
+                    "title": "Build Projects",
+                    "instruction": "Build a Business OS projects app.",
+                    "module_id": module_id,
+                    "install_target": "runtime-installed-module",
+                    "target": "app"
+                },
+                "client_context": {
+                    "source": "business-os-app-creator-native-test",
+                    "target": "app"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queued task id")?
+            .to_string();
+        write_minimal_runtime_app_artifacts(root, module_id)?;
+        thread::sleep(Duration::from_millis(1100));
+        channels::lease_queue_task(root, &task_id, "ctox-service-test")?;
+
+        let error = complete_business_command_from_app_validation_success(
+            root,
+            &task_id,
+            Some(module_id),
+            "validated before any worker edit",
+        )
+        .expect_err("pre-lease scaffold must not complete an app command");
+        let report = format!("{error:#}");
+        assert!(
+            report.contains("has no required app artifact written after its lease"),
+            "unexpected error: {report}"
+        );
+        let task = channels::load_queue_task(root, &task_id)?
+            .context("expected queue task after refused completion")?;
+        assert_eq!(task.route_status, "leased");
+        let conn = open_store(root)?;
+        let status: String = conn.query_row(
+            "SELECT status FROM business_commands WHERE command_id = ?1",
+            params!["cmd_app_prelease_scaffold"],
+            |row| row.get(0),
+        )?;
+        assert_eq!(status, "accepted");
+        Ok(())
+    }
+
+    #[test]
+    fn app_validation_success_accepts_postlease_artifact_write() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let module_id = "inventory";
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_app_postlease_write",
+                "module": "creator",
+                "type": "ctox.business_os.app.create",
+                "record_id": module_id,
+                "payload": {
+                    "title": "Build Inventory",
+                    "instruction": "Build a Business OS inventory app.",
+                    "module_id": module_id,
+                    "install_target": "runtime-installed-module",
+                    "target": "app"
+                },
+                "client_context": {
+                    "source": "business-os-app-creator-native-test",
+                    "target": "app"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queued task id")?
+            .to_string();
+        channels::lease_queue_task(root, &task_id, "ctox-service-test")?;
+        thread::sleep(Duration::from_millis(1100));
+        write_minimal_runtime_app_artifacts(root, module_id)?;
+
+        let completed = complete_business_command_from_app_validation_success(
+            root,
+            &task_id,
+            Some(module_id),
+            "validated after app artifact write",
+        )?;
+        assert!(completed.is_some());
+        let task = channels::load_queue_task(root, &task_id)?
+            .context("expected queue task after completion")?;
+        assert_eq!(task.route_status, "handled");
+        let conn = open_store(root)?;
+        let status: String = conn.query_row(
+            "SELECT status FROM business_commands WHERE command_id = ?1",
+            params!["cmd_app_postlease_write"],
+            |row| row.get(0),
+        )?;
+        assert_eq!(status, "completed");
         Ok(())
     }
 
