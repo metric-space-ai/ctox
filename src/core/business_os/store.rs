@@ -19205,6 +19205,18 @@ fn rxdb_authenticated_session(
     rxdb_session_from_command(root, command, false)
 }
 
+// SECURITY (platform trust boundary — tracked finding, not yet fixed):
+// The actor identity below is taken from `client_context.actor` inside the
+// replicated command document, i.e. it is ASSERTED BY THE BROWSER. We only
+// verify that the claimed id is an active `business_users` row — never that the
+// sender actually IS that user. The sole authentication gate today is WebRTC
+// room access (the signaling token); any peer admitted to the room can therefore
+// write a command claiming any active chef/admin id and pass every
+// `require_manage_all` check. A real fix requires per-command authentication —
+// either a signature the browser produces with the logged-in user's key (native
+// verifies against a registered public key) or a server-issued, per-session
+// capability token verified here — which spans the browser, the WebRTC/RxDB sync
+// layer and key management. Do NOT assume this function authenticates the actor.
 fn rxdb_session_from_command(
     root: &Path,
     command: &BusinessCommand,
