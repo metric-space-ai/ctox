@@ -136,6 +136,33 @@ await ctx.commandBus.dispatch(command);
 
 Do not write directly to `business_commands` from app code. The shell command bus is the supported interface.
 
+## Chat And Ticket Automation
+
+Use `business_os.chat.task` for the normal intelligent workflow: ask CTOX to review a record, draft a reply, check a renewal, prepare a report, or continue work in the normal chat/task flow. Always include `payload.record_snapshot` so the worker has the current business context.
+
+Use a `ctox.ticket.*` command only when the app is explicitly creating or updating a real CTOX ticket. Dispatch it through the same command bus:
+
+```js
+await ctx.commandBus.dispatch({
+  type: 'ctox.ticket.local.create',
+  command_type: 'ctox.ticket.local.create',
+  module: MODULE_ID,
+  record_id: record.id,
+  inbound_channel: MODULE_ID,
+  payload: {
+    title: `Ticket: ${record.title}`,
+    body: record.description || '',
+    status: 'open',
+    priority: record.priority || 'normal',
+    source_module: MODULE_ID,
+    source_collection: COLLECTION_NAME,
+    source_record_id: record.id,
+  },
+});
+```
+
+Other local ticket lifecycle commands include `ctox.ticket.local.comment` and `ctox.ticket.local.transition`. Do not write ticket projection collections directly.
+
 ## UI Guidance
 
 Keep the app focused. A reliable small app is better than a decorative dashboard.

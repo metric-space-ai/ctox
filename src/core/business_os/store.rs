@@ -25035,7 +25035,7 @@ Business OS app build target:
 - Runtime apps write only under app_directory. Do not put runtime app artifacts under src/.
 - Files are no-build HTML fragment, CSS, and browser ESM. No framework, package manager, bundled dependency tree, or compile step.
 - Implement mount(ctx), render into ctx.host, persist records with ctx.db, and start automation with ctx.commandBus.dispatch(...).
-- Use business_os.chat.task for the normal CTOX chat/ticket flow and include payload.record_snapshot. Do not write directly to business_commands.
+- Use business_os.chat.task for normal CTOX chat/AI follow-up and include payload.record_snapshot. Use ctox.ticket.* only for real ticket lifecycle actions. Do not write directly to business_commands or ctox_ticket_* collections.
 - Keep the UI small and real: all visible controls work; use a third pane only when the workflow actually needs one.
 - Finish with: ctox business-os app validate {module_id} {mode_flag}
 "#
@@ -27093,7 +27093,8 @@ mod tests {
         assert!(prompt.contains("persist records with ctx.db"));
         assert!(prompt.contains("ctx.commandBus.dispatch"));
         assert!(prompt.contains("ctox business-os app validate inventory --installed"));
-        assert!(prompt.contains("normal CTOX chat/ticket flow"));
+        assert!(prompt.contains("normal CTOX chat/AI follow-up"));
+        assert!(prompt.contains("ctox.ticket.* only for real ticket lifecycle actions"));
         assert!(
             prompt.contains("First choose and inspect three shipped Business OS app references")
         );

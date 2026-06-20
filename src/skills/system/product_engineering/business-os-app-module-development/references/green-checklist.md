@@ -10,6 +10,7 @@ Use this before claiming a Business OS app is done.
 - `index.css` is loaded by the module or otherwise available through the app contract.
 - App records use `ctx.db` and declared module collections.
 - Automation uses `ctx.commandBus.dispatch(...)`.
+- Chat/AI actions use `business_os.chat.task` with `payload.record_snapshot`; real ticket lifecycle actions use `ctox.ticket.*`.
 - The UI has no decorative panes or dead controls.
 - Core workflows implemented in the UI actually work.
 - Tests cover record helper behavior and automation payloads.

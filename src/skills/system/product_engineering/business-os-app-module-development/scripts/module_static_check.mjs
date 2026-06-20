@@ -228,6 +228,10 @@ function hasBusinessOsChatTaskCommandType(text) {
   });
 }
 
+function hasCtoxTicketCommandType(text) {
+  return /(?:command_type\s*:\s*['"]ctox\.ticket\.[^'"]+['"]|["']command_type["']\s*:\s*["']ctox\.ticket\.[^'"]+["'])/.test(text);
+}
+
 if (!existsSync(moduleDir)) {
   fail(`${rel(moduleDir)} does not exist`);
 }
@@ -416,13 +420,14 @@ if (installedMode) {
   if (!/\b(?:ctx|state\.ctx)\??\.commandBus\??\.\s*dispatch\s*\(/.test(runtimeText)) {
     fail('installed module must dispatch at least one automation through ctx.commandBus.dispatch');
   }
-  if (!/\bbusiness_os\.chat\.task\b/.test(nonTestModuleText)) {
-    fail('installed module must include a business_os.chat.task automation command');
+  const hasChatTaskAutomation = /\bbusiness_os\.chat\.task\b/.test(nonTestModuleText)
+    && hasBusinessOsChatTaskCommandType(nonTestModuleText);
+  const hasTicketAutomation = /\bctox\.ticket\./.test(nonTestModuleText)
+    && hasCtoxTicketCommandType(nonTestModuleText);
+  if (!hasChatTaskAutomation && !hasTicketAutomation) {
+    fail('installed module must include a supported automation command: business_os.chat.task or ctox.ticket.*');
   }
-  if (!hasBusinessOsChatTaskCommandType(nonTestModuleText)) {
-    fail('installed module must include command_type: business_os.chat.task');
-  }
-  if (!/\brecord_snapshot\b/.test(nonTestModuleText)) {
+  if (hasChatTaskAutomation && !/\brecord_snapshot\b/.test(nonTestModuleText)) {
     fail('installed module automation must include payload.record_snapshot');
   }
 }

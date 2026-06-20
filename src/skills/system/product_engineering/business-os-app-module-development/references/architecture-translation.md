@@ -32,6 +32,8 @@ HTTP can serve static shell and module files. HTTP is not the app data bridge.
 | React component state | plain JS state inside `mount(ctx)` or local helpers |
 | REST API for records | `ctx.db` collection reads/writes |
 | Server action / background job | `ctx.commandBus.dispatch(...)` |
+| AI assistant action | `business_os.chat.task` through `ctx.commandBus.dispatch(...)` with `payload.record_snapshot` |
+| Create a real local ticket | `ctox.ticket.local.create` through `ctx.commandBus.dispatch(...)` |
 | Postgres table | module-owned CTOX DB collection declared in module files |
 | IndexedDB/localStorage | do not use; use `ctx.db` for durable app records |
 | npm package | only use local browser ESM already shipped with the app |

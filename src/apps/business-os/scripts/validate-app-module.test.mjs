@@ -340,6 +340,43 @@ function writeSourceModule(root, moduleId, overrides = {}) {
 
 {
   const root = makeWorkspace();
+  writeInstalledModule(root, 'ticketautomation', {
+    automationJs: [
+      'export function buildFollowUpCommand(record = {}) {',
+      '  return {',
+      "    type: 'ctox.ticket.local.create',",
+      "    command_type: 'ctox.ticket.local.create',",
+      "    module: 'ticketautomation',",
+      "    record_id: record.id || 'demo',",
+      "    inbound_channel: 'ticketautomation',",
+      '    payload: {',
+      "      title: `Ticket: ${record.title || 'record'}`,",
+      "      body: record.description || '',",
+      "      status: 'open',",
+      "      priority: 'normal',",
+      "      source_module: 'ticketautomation',",
+      "      source_collection: 'ticketautomation_records',",
+      '    },',
+      '  };',
+      '}',
+      '',
+    ].join('\n'),
+    testJs: [
+      "import assert from 'node:assert/strict';",
+      "import { buildFollowUpCommand } from '../core/automation.mjs';",
+      "const command = buildFollowUpCommand({ id: 'demo', title: 'Demo' });",
+      "assert.equal(command.type, 'ctox.ticket.local.create');",
+      "assert.equal(command.command_type, 'ctox.ticket.local.create');",
+      "assert.equal(command.payload.status, 'open');",
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'ticketautomation', '--installed');
+  assert.equal(run.status, 0, `${run.stderr}\n${run.stdout}`);
+}
+
+{
+  const root = makeWorkspace();
   writeInstalledModule(root, 'nodata', {
     indexJs: [
       "import { buildFollowUpCommand } from './core/automation.mjs';",
@@ -373,7 +410,7 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   const run = runValidator(root, 'noautomation', '--installed');
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /must dispatch at least one automation through ctx\.commandBus\.dispatch/);
-  assert.match(run.stderr, /must include a business_os\.chat\.task automation command/);
+  assert.match(run.stderr, /must include a supported automation command: business_os\.chat\.task or ctox\.ticket\.\*/);
 }
 
 {

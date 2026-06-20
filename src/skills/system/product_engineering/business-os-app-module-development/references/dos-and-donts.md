@@ -9,6 +9,8 @@
 - Render into `ctx.host`.
 - Persist app records through the shell-provided `ctx.db` collection handle.
 - Send workflow automation through `ctx.commandBus.dispatch(...)`.
+- Use `business_os.chat.task` for normal AI/chat follow-up with `payload.record_snapshot`.
+- Use `ctox.ticket.local.create/comment/transition` only for real local ticket lifecycle actions.
 - Keep the first version small, focused, and fully working.
 - Prefer one or two panes; use modals for occasional detail work.
 - Add tests for pure record helpers and automation command builders.
@@ -20,6 +22,7 @@
 - Do not create a separate HTTP, REST, IndexedDB, Postgres, or SQLite data path.
 - Do not write generated runtime apps under `src/` unless the task explicitly targets a source module.
 - Do not write directly to `business_commands`; use `ctx.commandBus.dispatch(...)`.
+- Do not write directly to `ctox_ticket_*` projection collections.
 - Do not use a full HTML document in `index.html`.
 - Do not add decorative third panes, fake buttons, or controls without handlers.
 - Do not add broad settings/export/AI/bulk features unless they really work.
