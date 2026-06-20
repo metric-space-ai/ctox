@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const moduleId = process.argv[2];
 const modeArg = process.argv[3] || '';
@@ -71,6 +72,186 @@ function readJson(path) {
     fail(`${rel(path)} is not valid JSON: ${error.message}`);
     return null;
   }
+}
+
+function schemaTypes(schema) {
+  const raw = schema && typeof schema === 'object' ? schema.type : undefined;
+  if (Array.isArray(raw)) return raw.map((item) => String(item)).filter(Boolean);
+  if (raw) return [String(raw)];
+  return [];
+}
+
+function actualJsonType(value) {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  return typeof value;
+}
+
+function normalizeRequired(value) {
+  return Array.isArray(value) ? value.map(String).sort() : [];
+}
+
+function schemaPropertySummary(schema) {
+  const properties = schema && typeof schema === 'object' && schema.properties && typeof schema.properties === 'object'
+    ? schema.properties
+    : {};
+  const out = {};
+  for (const [name, property] of Object.entries(properties)) {
+    const summary = {};
+    const types = schemaTypes(property);
+    if (types.length > 0) summary.type = types.length === 1 ? types[0] : types;
+    if (property && typeof property === 'object' && Object.prototype.hasOwnProperty.call(property, 'maxLength')) {
+      summary.maxLength = property.maxLength;
+    }
+    out[name] = summary;
+  }
+  return out;
+}
+
+function sameJsonValue(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function collectSchemaJsParityFailures(schemaDoc, schemaJsCollections) {
+  const messages = [];
+  const nativeCollections = schemaDoc?.collections && typeof schemaDoc.collections === 'object'
+    ? schemaDoc.collections
+    : {};
+  const browserCollections = schemaJsCollections && typeof schemaJsCollections === 'object'
+    ? schemaJsCollections
+    : {};
+  for (const name of Object.keys(nativeCollections)) {
+    const nativeSchema = nativeCollections[name];
+    const browserSchema = browserCollections[name];
+    if (!browserSchema) {
+      messages.push(`schema.js missing collection ${name} from collections.schema.json`);
+      continue;
+    }
+    for (const field of ['version', 'primaryKey', 'type', 'additionalProperties']) {
+      if (
+        Object.prototype.hasOwnProperty.call(nativeSchema || {}, field)
+        || Object.prototype.hasOwnProperty.call(browserSchema || {}, field)
+      ) {
+        if (!sameJsonValue(nativeSchema?.[field], browserSchema?.[field])) {
+          messages.push(`schema.js collection ${name} ${field} does not match collections.schema.json`);
+        }
+      }
+    }
+    if (!sameJsonValue(normalizeRequired(nativeSchema?.required), normalizeRequired(browserSchema?.required))) {
+      messages.push(`schema.js collection ${name} required fields do not match collections.schema.json`);
+    }
+    const nativeProps = schemaPropertySummary(nativeSchema);
+    const browserProps = schemaPropertySummary(browserSchema);
+    for (const prop of Object.keys(nativeProps)) {
+      if (!Object.prototype.hasOwnProperty.call(browserProps, prop)) {
+        messages.push(`schema.js collection ${name} missing property ${prop} from collections.schema.json`);
+      } else if (!sameJsonValue(nativeProps[prop], browserProps[prop])) {
+        messages.push(`schema.js collection ${name} property ${prop} does not match collections.schema.json`);
+      }
+    }
+    for (const prop of Object.keys(browserProps)) {
+      if (!Object.prototype.hasOwnProperty.call(nativeProps, prop)) {
+        messages.push(`schema.js collection ${name} property ${prop} is not declared in collections.schema.json`);
+      }
+    }
+  }
+  for (const name of Object.keys(browserCollections)) {
+    if (!Object.prototype.hasOwnProperty.call(nativeCollections, name) && !shellCollections.has(name)) {
+      messages.push(`schema.js exports collection ${name}, but collections.schema.json does not define it`);
+    }
+  }
+  return messages;
+}
+
+function sampleValueForSchema(schema) {
+  const types = schemaTypes(schema);
+  const type = types.find((item) => item !== 'null') || types[0] || 'string';
+  if (type === 'number' || type === 'integer') return 1;
+  if (type === 'boolean') return true;
+  if (type === 'array') return [];
+  if (type === 'object') return {};
+  return '2026-01-02';
+}
+
+function sampleRecordForSchemas(schemas) {
+  const sample = {};
+  for (const schema of schemas) {
+    const properties = schema?.properties && typeof schema.properties === 'object' ? schema.properties : {};
+    for (const [name, property] of Object.entries(properties)) {
+      if (!Object.prototype.hasOwnProperty.call(sample, name)) {
+        sample[name] = sampleValueForSchema(property);
+      }
+    }
+  }
+  return sample;
+}
+
+function allowedTypesByProperty(schemas) {
+  const out = new Map();
+  for (const schema of schemas) {
+    const properties = schema?.properties && typeof schema.properties === 'object' ? schema.properties : {};
+    for (const [name, property] of Object.entries(properties)) {
+      if (!out.has(name)) out.set(name, new Set());
+      for (const type of schemaTypes(property)) out.get(name).add(type);
+    }
+  }
+  return out;
+}
+
+async function importEsmModule(path) {
+  const url = pathToFileURL(path);
+  url.searchParams.set('ctox_static_check', `${Date.now()}_${Math.random().toString(36).slice(2)}`);
+  return import(url.href);
+}
+
+async function loadSchemaJsCollections(path) {
+  try {
+    const module = await importEsmModule(path);
+    if (!module.collections || typeof module.collections !== 'object' || Array.isArray(module.collections)) {
+      fail('schema.js must export a collections object');
+      return null;
+    }
+    return module.collections;
+  } catch (error) {
+    fail(`schema.js could not be imported as browser ESM: ${error.message}`);
+    return null;
+  }
+}
+
+async function collectRecordHelperSchemaFailures(moduleDir, schemaDoc) {
+  const messages = [];
+  const recordsPath = join(moduleDir, 'core/records.mjs');
+  const schemas = Object.values(schemaDoc?.collections || {});
+  if (!existsSync(recordsPath) || schemas.length === 0) return messages;
+  let module;
+  try {
+    module = await importEsmModule(recordsPath);
+  } catch (error) {
+    messages.push(`core/records.mjs could not be imported as browser ESM: ${error.message}`);
+    return messages;
+  }
+  const sample = sampleRecordForSchemas(schemas);
+  const allowedByProperty = allowedTypesByProperty(schemas);
+  for (const [name, value] of Object.entries(module)) {
+    if (!/^normalize[A-Z]/.test(name) || typeof value !== 'function') continue;
+    let record;
+    try {
+      record = value(sample, { nowMs: 1781990000000 });
+    } catch (error) {
+      messages.push(`core/records.mjs ${name} threw when called with schema-shaped sample input: ${error.message}`);
+      continue;
+    }
+    if (!record || typeof record !== 'object' || Array.isArray(record)) continue;
+    for (const [field, fieldValue] of Object.entries(record)) {
+      const allowed = allowedByProperty.get(field);
+      if (!allowed || allowed.size === 0) continue;
+      const actual = actualJsonType(fieldValue);
+      if (!allowed.has(actual)) {
+        messages.push(`core/records.mjs ${name} returns ${field} as ${actual}, but collections.schema.json declares ${Array.from(allowed).sort().join('|')}`);
+      }
+    }
+  }
+  return messages;
 }
 
 function walk(dir, out = []) {
@@ -411,12 +592,23 @@ if (manifest && schemaDoc?.collections) {
 }
 
 const schemaJsPath = join(moduleDir, 'schema.js');
+let schemaJsCollections = null;
 if (existsSync(schemaJsPath)) {
   const schemaJs = readText(schemaJsPath);
   for (const collection of shellCollections) {
     const pattern = new RegExp(String.raw`(?:^|[,{]\s*)(?:['"]${collection}['"]|${collection})\s*:`, 'm');
     if (pattern.test(schemaJs)) fail(`schema.js exports shell-registered collection key ${collection}`);
   }
+  if (installedMode && schemaDoc?.collections) {
+    schemaJsCollections = await loadSchemaJsCollections(schemaJsPath);
+    if (schemaJsCollections) {
+      for (const message of collectSchemaJsParityFailures(schemaDoc, schemaJsCollections)) fail(message);
+    }
+  }
+}
+
+if (installedMode && schemaDoc?.collections) {
+  for (const message of await collectRecordHelperSchemaFailures(moduleDir, schemaDoc)) fail(message);
 }
 
 if (!installedMode && manifest && existsSync(registryPath)) {

@@ -386,6 +386,78 @@ function writeSourceModule(root, moduleId, overrides = {}) {
 
 {
   const root = makeWorkspace();
+  writeInstalledModule(root, 'schemaversiondrift', {
+    collections: {
+      schemaversiondrift_records: {
+        version: 1,
+        primaryKey: 'id',
+        type: 'object',
+        properties: {
+          id: { type: 'string', maxLength: 120 },
+          title: { type: 'string' },
+          updated_at_ms: { type: 'number' },
+        },
+        required: ['id', 'title', 'updated_at_ms'],
+      },
+    },
+  });
+  const run = runValidator(root, 'schemaversiondrift', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /schema\.js collection schemaversiondrift_records version does not match collections\.schema\.json/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'recordtypemismatch', {
+    collections: {
+      recordtypemismatch_records: {
+        version: 0,
+        primaryKey: 'id',
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          id: { type: 'string', maxLength: 120 },
+          title: { type: 'string' },
+          start_date: { type: 'string' },
+          updated_at_ms: { type: 'number' },
+        },
+        required: ['id', 'title', 'updated_at_ms'],
+      },
+    },
+    schemaJs: [
+      'export const collections = {',
+      '  recordtypemismatch_records: {',
+      '    version: 0,',
+      "    primaryKey: 'id',",
+      "    type: 'object',",
+      '    additionalProperties: true,',
+      "    properties: { id: { type: 'string', maxLength: 120 }, title: { type: 'string' }, start_date: { type: 'string' }, updated_at_ms: { type: 'number' } },",
+      "    required: ['id', 'title', 'updated_at_ms'],",
+      '  },',
+      '};',
+      '',
+    ].join('\n'),
+    recordsJs: [
+      'export function visibleRecords(records = []) { return records.filter((record) => !record._deleted); }',
+      'export function summarizeRecords(records = []) { return { total: visibleRecords(records).length }; }',
+      'export function normalizeRecord(input = {}, { nowMs }) {',
+      '  return {',
+      "    id: input.id || 'demo',",
+      "    title: input.title || 'Demo',",
+      '    start_date: Date.parse(input.start_date || "2026-01-02"),',
+      '    updated_at_ms: nowMs,',
+      '  };',
+      '}',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'recordtypemismatch', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /core\/records\.mjs normalizeRecord returns start_date as number, but collections\.schema\.json declares string/);
+}
+
+{
+  const root = makeWorkspace();
   writeInstalledModule(root, 'domainaction', {
     indexHtml: '<main class="validator-module"><button type="button" data-action="create-record">Create record</button><button type="button" data-action="follow-up">Follow up</button><button type="button" data-action="restock">Restock</button></main>\n',
     indexJs: installedIndexJs('domainaction', 'domainaction_records', [

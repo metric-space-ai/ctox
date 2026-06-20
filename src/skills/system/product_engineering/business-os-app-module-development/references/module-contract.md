@@ -50,6 +50,13 @@ Keep extra files rare. Use extra local ESM helpers only when the app would other
   peer from `collections.schema.json`. If a collection is missing from either
   `module.json`, `collections.schema.json`, or `schema.js`, browser and native
   persistence will disagree.
+- Keep browser and native schema shapes aligned: `schema.js` and
+  `collections.schema.json` must use the same collection names, versions,
+  primary keys, required fields, property names, and property types.
+- Persist values in the type declared by the schema. For dates, either store
+  ISO date strings in `*_date` fields or declare numeric millisecond fields as
+  `*_date_ms`. Do not put `Date.parse(...)` numbers into fields declared as
+  `string`, and do not return `null` for fields declared only as `number`.
 
 ## Automation
 
