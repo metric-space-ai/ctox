@@ -84,6 +84,31 @@ payload_json`. The payload `id` must equal `record_id`; always include
 
 ---
 
+## 2c. Live-instance gotchas (learned the hard way on the `ninja` sandbox)
+
+These bit a real run; the bundled `tests/business-os/ats_synthetic_generate.sh`
+already handles them, but anyone adapting it must too:
+
+1. **Resolve the store path at runtime — never hardcode it.** The native store
+   moves across releases (e.g. `~/runtime/business-os.sqlite3` →
+   `~/.local/lib/ctox/current/runtime/business-os.sqlite3` after `ctox upgrade
+   --dev`). Seeding the wrong file makes every gate read an empty ledger and
+   *silently* deny. Resolve it:
+   `STORE=$(ctox business-os status | grep -oE 'Native store: .*' | sed 's/Native store: //')`.
+2. **Every `command_id` MUST be unique.** `accept_rxdb_business_command`
+   deduplicates by `command_id`: a repeat returns the *cached* outcome and
+   creates no record. In bash a counter does NOT work if you dispatch inside
+   `r=$(...)` (that runs in a subshell, so `n=$((n+1))` never reaches the
+   parent) — use a per-call `${BATCH}_$(date +%s%N)_${RANDOM}`. Symptom of
+   getting this wrong: the dispatch loop *reports* many successes (it greps the
+   cached `allowed:true`) but only one record actually lands.
+3. **Pretty-printed JSON.** `commands dispatch` emits `"allowed": true` (with a
+   space). Grep `'"allowed":[[:space:]]*true'`, not `'"allowed":true'`.
+4. **Command-created records carry no `batch_id`.** Only direct-seeded stammdaten
+   are tagged. Verify/purge submissions/placements/invoices by the synthetic
+   candidate-id prefix (`candidate_id LIKE 'syn_cand_<batch>_%'`) or the
+   `subm_`/`plac_`/`inv_` id prefixes, not `batch_id`.
+
 ## 3. Command coverage — which entity uses which mechanism
 
 Grounded in `src/core/business_os/store.rs` (the ATS handlers) — **verify before
