@@ -127,6 +127,7 @@ const BUSINESS_OS_APP_VALIDATION_CLEANUP_RETRY_DELAYS_MS: &[u64] = &[20, 100, 25
 #[cfg(not(test))]
 const BUSINESS_OS_APP_VALIDATION_CLEANUP_RETRY_DELAYS_MS: &[u64] = &[1_500, 5_000, 15_000];
 const BUSINESS_OS_APP_VALIDATION_MAX_REPAIR_ATTEMPTS: usize = 3;
+#[cfg(test)]
 const BUSINESS_OS_APP_REQUIRED_ARTIFACTS: &[&str] = &[
     "module.json",
     "collections.schema.json",
