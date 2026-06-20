@@ -79,6 +79,10 @@ def main(path):
     batch = data["batch"]
     actor = data.get("actor", "syn_chef")
     data = namespace(data, batch + "_")
+    # vacancy -> client account, to resolve a candidate's client when the LLM set
+    # only vacancy_id (common) and left client_account_id null.
+    vac_account = {v["id"]: v.get("client_account_id", "") for v in data.get("vacancies", []) if v.get("id")}
+    default_account = (data.get("accounts") or [{}])[0].get("id", "")  # each batch has one client
     sql(f"INSERT OR REPLACE INTO business_users(user_id,display_name,role,active,created_at_ms,updated_at_ms) "
         f"VALUES('{actor}','Synthetic Chef','chef',1,{NOW},{NOW});")
 
@@ -99,6 +103,7 @@ def main(path):
 
     for c in data["candidates"]:
         cid = c["id"]
+        acct = c.get("client_account_id") or vac_account.get(c.get("vacancy_id", ""), "") or default_account
         # rich candidate record (CV / work history / skills authored by the model)
         cand = {k: c[k] for k in c if k not in ("stage","vacancy_id","consent","credentials",
                 "submit","submit_note","client_account_id","placement","nachweis","interview")}
@@ -122,12 +127,18 @@ def main(path):
                 "expires_at_ms": NOW + int(cons["expires_in_days"])*DAY if cons.get("expires_in_days") else 0,
                 "basis_evidence": cons.get("evidence","")}))
             counts["consents"] += 1
-        # credentials (rich: issuer, expiry)
+        # credentials (rich: issuer, expiry) — LLMs vary the type key (credential_type/type/name)
         for j, cr in enumerate(c.get("credentials", []), 1):
+            if not isinstance(cr, dict):
+                continue
+            ctype = cr.get("credential_type") or cr.get("type") or cr.get("name")
+            if not ctype:
+                continue
             seed("business_credentials", f"cred_{cid}_{j}", mark({
-                "subject_id": cid, "credential_type": cr["credential_type"],
+                "subject_id": cid, "credential_type": ctype,
                 "deployment_blocking": cr.get("deployment_blocking", True),
-                "verified": cr.get("verified", True), "issuer": cr.get("issuer",""),
+                "verified": cr.get("verified", True),
+                "issuer": cr.get("issuer") or cr.get("issued_by", ""),
                 "valid_until_ms": NOW + int(cr.get("valid_until_days", 365))*DAY}))
             counts["credentials"] += 1
         # interview meeting + rich scorecard
@@ -142,18 +153,24 @@ def main(path):
             counts["interviews"] += 1
             sc = iv.get("scorecard")
             if sc:
-                seed("interview_scorecards", f"sc_{cid}", mark({"candidate_id": cid, **sc}))
+                scp = {"candidate_id": cid, "recommendation": iv.get("recommendation", ""),
+                       "interviewer": iv.get("interviewer", "")}
+                if isinstance(sc, dict):
+                    scp.update(sc)
+                else:  # LLMs often emit the scorecard as a list of competencies
+                    scp["competencies"] = sc
+                seed("interview_scorecards", f"sc_{cid}", mark(scp))
                 counts["scorecards"] += 1
         # --- gated flow via dispatch (real gates) ---
         if c.get("submit"):
             r = dispatch("ats.submission.present", "submissions", {
-                "candidate_id": cid, "client_account_id": c.get("client_account_id",""),
+                "candidate_id": cid, "client_account_id": acct,
                 "vacancy_id": c.get("vacancy_id","")}, actor)
             counts["submissions_ok" if r.get("allowed") else "submissions_blocked"] += 1
         pl = c.get("placement")
         if pl:
             r = dispatch("ats.placement.create", "placements", {
-                "candidate_id": cid, "client_account_id": c.get("client_account_id",""),
+                "candidate_id": cid, "client_account_id": acct,
                 "placement_type": pl.get("placement_type","festanstellung"),
                 "required_types": pl.get("required_types", []),
                 "fee": pl.get("fee_eur"), "guarantee_days": pl.get("guarantee_days", 90)}, actor)
@@ -162,14 +179,16 @@ def main(path):
             nw = c.get("nachweis")
             if ok and nw:
                 nwid = f"nw_{cid}"
+                sur = nw.get("surcharge_pct")
                 seed("planning_time_records", nwid, mark({
                     "subject_id": cid, "candidate_id": cid,
-                    "entleiher_account_id": c.get("client_account_id",""),
-                    "entries": nw["entries"], "surcharge_pct": nw.get("surcharge_pct", {})}))
+                    "entleiher_account_id": acct,
+                    "entries": nw.get("entries", []),
+                    "surcharge_pct": sur if isinstance(sur, dict) else {}}))
                 r2 = dispatch("ats.leistungsnachweis.signoff", "nachweise", {
                     "collection": "planning_time_records", "record_id": nwid,
                     "charge_rate": nw.get("charge_rate_eur", 35.0),
-                    "entleiher_account_id": c.get("client_account_id","")}, actor)
+                    "entleiher_account_id": acct}, actor)
                 if r2.get("billing_released"):
                     counts["nachweise_billed"] += 1
 
