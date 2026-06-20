@@ -1,0 +1,40 @@
+You generate synthetic but REALISTIC German Personalvermittler (staffing) data.
+Output ONLY a single valid JSON object — no markdown, no code fences, no prose
+before or after. It must match EXACTLY this schema:
+
+{ "batch": "BATCH_ID",
+  "accounts": [ {"id":"acc_…","name":"… GmbH","industry":"…","city":"…"} ],
+  "vacancies": [ {"id":"vac_…","title":"…","client_account_id":"acc_…","location":"…",
+                  "placement_type":"aue|festanstellung","tariff_group":"…","description":"3-5 Sätze",
+                  "requirements":["…"],"salary_range_eur":"…","open_positions":2} ],
+  "candidates": [ {
+    "id":"cand_…","first_name":"…","last_name":"…","email":"…","phone":"…","city":"…","birth_year":1990,
+    "headline":"…","summary":"2-4 Sätze rollenspezifisch","skills":["…"],
+    "languages":[{"lang":"…","level":"…"}],
+    "work_history":[{"company":"echt klingende dt. Firma","role":"…","from":"2019","to":"2023","desc":"1 Satz"}],
+    "education":[{"institution":"…","degree":"…","field":"…","year":2015}],
+    "certifications":[{"name":"…","issuer":"…","year":2021}],
+    "salary_expectation_eur":42000,"availability":"…","source_channel":"stepstone|indeed|arbeitsagentur|empfehlung|xing",
+    "stage":"neu|screening|telefoninterview|kundenvorstellung|vertragsangebot|eingestellt|abgelehnt|on-hold",
+    "vacancy_id":"vac_…","client_account_id":"acc_…",
+    "consent":{"purpose":"present_to_client","legal_basis":"consent","granted_days_ago":5},
+    "credentials":[{"credential_type":"…","verified":true,"valid_until_days":400,"issuer":"…"}],
+    "submit":true,
+    "placement":{"placement_type":"arbeitnehmerueberlassung|festanstellung","required_types":["…"],"fee_eur":6800,"guarantee_days":90},
+    "nachweis":{"entries":[{"type":"regular","hours":40},{"type":"nacht","hours":6}],"surcharge_pct":{"nacht":25},"charge_rate_eur":34.5},
+    "interview":{"scheduled_in_days":4,"mode":"onsite|video|phone","parties":[{"name":"…"}],
+                 "scorecard":{"overall":4,"competencies":[{"name":"…","rating":4,"note":"…"}],"recommendation":"…","notes":"…"}}
+  } ] }
+
+RULES:
+- 15 candidates. 1 account, 2 vacancies. Use batch id and theme given below.
+- REALISM: varied German AND migrant-background names (no repeats); varied real email
+  providers (gmx.de/web.de/t-online.de/gmail.com/outlook.de); varied phone formats;
+  full CVs (real-sounding companies, plausible dates, role-fitting skills).
+- FUNNEL: spread stages — most early (neu/screening), few hired (eingestellt).
+- GATE CONSISTENCY: only candidates at telefoninterview+ get submit:true and need a
+  valid consent; only those at vertragsangebot/eingestellt get a placement; an
+  AÜG placement needs credentials matching its required_types; AÜG placements get a
+  nachweis. Include ~2 EDGE cases (omit consent OR set a credential
+  "valid_until_days":-30 with "verified":false) so some submissions/placements block.
+- Optional fields can be omitted for early-stage candidates.
