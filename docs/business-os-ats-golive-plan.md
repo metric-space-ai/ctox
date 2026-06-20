@@ -43,16 +43,24 @@ seedet und die **gesamte** ATS-Befehlskette über `ctox business-os commands
 dispatch` fährt, jedes Gate (positiv + negativ) prüft und PASS/FAIL meldet. Das
 ist der bestmögliche „läuft wirklich"-Beweis ohne laufende Browser-Shell.
 
-- [ ] `tests/business-os/ats_golive_smoke.sh` — baut das Binary aus dem
-  Main-Checkout, legt einen Temp-Root an, seedet chef + Beispiel-Records, fährt:
-  `ats.intake.capture` → `ats.consent.check` → `ats.submission.present`
-  (positiv + doppelte-Vorstellung-Block) → `ats.placement.create` (AÜG-Gate
-  block ohne Nachweis, dann ok mit Nachweis) → `ats.deployment.check` →
-  `ats.leistungsnachweis.signoff` (block ohne charge_rate, ok mit) →
-  `ats.signature.request`/`sign` → `ats.subject.export` (Art.15) →
-  `ats.subject.erase` (Art.17) → `ats.retention.due`. Asserts je Schritt.
-- **Acceptance:** `bash tests/business-os/ats_golive_smoke.sh` endet mit
-  `ALL STEPS PASS` und nicht-leeren, semantisch korrekten Outcomes.
+- [x] `tests/business-os/ats_golive_smoke.sh` — baut das Binary aus dem
+  Main-Checkout, legt einen frischen isolierten Temp-Root an (`mktemp -d` +
+  Sentinel-Dateien + `CTOX_ROOT`, damit NICHT gegen die Live-Instanz gelaufen
+  wird), seedet chef + Beispiel-Records, fährt die volle Kette mit positiven UND
+  negativen Gate-Pfaden: `ats.intake.capture` → `ats.consent.check` →
+  `ats.submission.present` (ok + doppelte-Vorstellung-Block mit exaktem
+  `conflicting_submission_id`) → `ats.placement.create` (AÜG-Block
+  `aue_license=missing`, dann ok mit gültigem Nachweis) → `ats.deployment.check`
+  (ready / `medical_clearance=missing`) → `ats.leistungsnachweis.signoff`
+  (`missing_charge_rate`-Block, dann ok + `invoice_id` + `net_total=1575`) →
+  `ats.signature.request`/`sign` → `ats.subject.export` (Art.15, record_count=5)
+  → `ats.subject.erase` (Art.17, erased_count=5) → `ats.retention.due`. 15
+  Assertions, je Schritt spezifisch.
+- **Acceptance erfüllt:** `bash tests/business-os/ats_golive_smoke.sh` endet mit
+  `ALL STEPS PASS` (15/15), exit 0, deterministisch re-runnable; adversarial
+  unabhängig 2× nachgezogen (verdict clean: Assertions nicht-vakuös). *(Lief mit
+  Enforcement OFF = Default; unter `REQUIRE_CAPABILITY_TOKEN=1` bräuchten die
+  mutierenden Schritte ein signiertes Token — siehe G3.)*
 
 ---
 
@@ -62,15 +70,24 @@ Die „ATS-Einrichtung" ist **Konfiguration eines generischen Baukastens**, kein
 Code. Dieses Bundle liefert das Gerüst + dokumentierte Default-Werte; die
 endgültigen geschäftlichen Werte setzt der Operator.
 
-- [ ] `docs/ats-golive/tenant-config.md` — alle relevanten Runtime-Flags mit
-  empfohlenem Wert, Wirkung und exaktem Setz-Befehl (siehe G3-Tabelle).
-- [ ] `tests/business-os/ats_golive_seed.sql` — operator-editierbares
-  Seed-Template (chef/admin-User, Beispiel-Stammdaten, AÜG-Pflichtnachweis-Typen).
-- [ ] Konfig-Schicht-Hinweise: matching-Definition (`candidate_job.v1` als
-  Default), Pipeline-Stage-Labels, Dokument-Templates (Angebot / AÜG-Vertrag /
-  Leistungsnachweis), Locales `de.json` — alle als Config/Daten, nicht Code.
-- **Acceptance:** ein Operator kann mit dem Bundle eine frische Instanz für den
-  Personalvermittler-Tenant einrichten, ohne Modul-Code anzufassen.
+- [x] `docs/ats-golive/tenant-config.md` — jeder relevante Runtime-Flag mit
+  Wert/Wirkung/Setz-Befehl, **korrekt nach Mechanismus getrennt**: (A)
+  Runtime-Store (`env_or_config` → `runtime_env_kv`) für die 4 Legal/DSGVO-Flags +
+  `MODULE_ALLOWLIST`; (B) Prozess-Env (`env::var` beim Daemon-Start, systemd
+  `Environment=`) für `REQUIRE_LOGIN`/`LOGIN_URL`/`SIGNALING_URLS`/`ICE_SERVERS`/
+  `DEFAULT_ROLE`. *(Ein Verify-Lauf hatte die ursprünglich pauschale
+  „alles-Runtime-Store"-Behauptung als falsch markiert — gefixt.)*
+- [x] `tests/business-os/ats_golive_seed.sql` — operator-editierbares
+  Seed-Template (chef/admin `business_users`, Beispiel-Stammdaten,
+  AÜG-Pflichtnachweis-Typen); Tabellen/Spalten gegen die echten `CREATE TABLE`
+  in store.rs verifiziert (keine erfundenen Spalten).
+- [x] Konfig-Schicht-Hinweise: matching-Definition (`candidate_job.v1`),
+  Pipeline-Stage-Labels, Dokument-Templates (Angebot / AÜG-Vertrag /
+  Leistungsnachweis), Locales `de.json` — als Config/Daten dokumentiert.
+- **Acceptance erfüllt:** das Bundle richtet eine frische Instanz für den
+  Tenant ohne Modul-Code ein. Offene tenant-spezifische Werte sind als
+  **`operator must set`** markiert (v.a. `AUE_REQUIRED_CREDENTIALS` — kein
+  sicherer Default, leer = jede AÜG-Vermittlung fail-closed).
 
 ---
 
