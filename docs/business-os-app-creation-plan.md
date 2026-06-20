@@ -341,14 +341,15 @@ Current baseline:
   shows Projects leased by `ctox-service`, four tasks pending, and no app
   artifacts yet.
 - Latest `rfix5` status
-  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix5/status-1781993846314.json`
-  still shows Projects leased by `ctox-service` with four tasks pending.
-  Projects has partial artifacts only and is still missing `index.js` and
-  tests, so the current validation failure is in-progress evidence, not
-  terminal failure classification. The partial artifact already shows a
-  concerning shell collection redeclaration (`business_commands`), but no
-  patch should be made until the app task reaches terminal validation/rework
-  evidence.
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix5/status-1781994605567.json`
+  reports one handled app, one leased app, and three pending apps. Projects is
+  terminal-success with installed validation green, 12 required files present,
+  and 29 passing module tests. Quality is currently leased by `ctox-service`.
+  Subscriptions, Inventory, and Contracts remain pending with no artifacts yet.
+  `ctox status --json` reports `busy=true`, `worker_active_count=1`,
+  `current_goal_preview` for Quality, `manager=launchd-user`, and native RxDB
+  peer `replicationUp=true`. No failure class is assigned from this live
+  in-progress state.
 
 ## Current Execution Slice
 
@@ -376,7 +377,7 @@ Live execution board:
 | `ctx.db` persistence smoke for `rfix4` apps | `blocked` | `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/persistence-automation-smoke-20260620T213437Z/result.json`: Inventory and Quality persisted to native DB and survived reload; Subscriptions, Projects, and Contracts timed out waiting for native main collection rows although UI-local records and side event rows existed | Current Status, Tracker, Phase 5 checklist, Evidence Log, Open Issues |
 | `ctx.commandBus.dispatch` automation smoke for `rfix4` apps | `blocked` | Same smoke result: Inventory dispatched `business_os.chat.task`; Quality dispatched `ctox.ticket.local.create`; Subscriptions, Projects, and Contracts did not reach automation smoke because native main-record persistence timed out first | Current Status, Tracker, Phase 5 checklist, Evidence Log, Open Issues |
 | Root-cause and patch persistence blocker | `done` | Commit `ebfba103` is pushed and installed as `branch-main-20260620T220404Z`; installed validation now rejects all five old `rfix4` apps for schema/record parity drift, and `rfix4` status is red at `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781993473758.json` | Current Status, Tracker, Phase 5 checklist, Evidence Log, Open Issues |
-| Fresh post-schema-validator five-app bench | `in_progress` | Run id `rfix5` submitted five real app-create tasks through installed CTOX with `minimax-m3` and `256k`; latest status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix5/status-1781993846314.json` shows Projects still leased, four pending, and partial Projects artifacts only | Current Status, Tracker, Phase 5 checklist, Evidence Log |
+| Fresh post-schema-validator five-app bench | `in_progress` | Run id `rfix5` submitted five real app-create tasks through installed CTOX with `minimax-m3` and `256k`; latest status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix5/status-1781994605567.json` shows Projects handled and installed-validation green, Quality leased, and Subscriptions/Inventory/Contracts pending | Current Status, Tracker, Phase 5 checklist, Evidence Log |
 | Browser mount smoke for `rfix5` apps | `pending` | After all five tasks are terminal and installed validation-green, open each app in Business OS and record active module, console/page/request failures, and shell operational state | Current Status, Phase 5 checklist, Evidence Log |
 | `ctx.db` persistence smoke for `rfix5` apps | `pending` | Create or edit one record per app through the UI, reload, and prove the record remains visible and exists in the native dynamic module table | Current Status, Phase 5 checklist, Evidence Log, Open Issues |
 | `ctx.commandBus.dispatch` automation smoke for `rfix5` apps | `pending` | Dispatch one valid `business_os.chat.task` or allowed ticket command per app and prove it landed through normal Business OS command flow | Current Status, Phase 5 checklist, Evidence Log, Open Issues |
@@ -454,6 +455,12 @@ Immediate checklist:
 - [x] Confirm installed validation now rejects all five old `rfix4` apps and
       makes the `rfix4` bench status red.
 - [x] Start fresh post-parity-validator run `rfix5`.
+- [x] Confirm `bench_projects_rfix5` reached terminal app-validation success
+      with installed validation green and 29 passing module tests.
+- [x] Confirm CTOX leased `bench_quality_rfix5` after Projects without
+      generated-app edits or bench-runner repairs.
+- [ ] Let `bench_quality_rfix5` reach terminal evidence.
+- [ ] Continue pending `rfix5` tasks: Subscriptions, Inventory, and Contracts.
 - [ ] Poll `rfix5` until every task is terminal or the failure class is clear.
 - [ ] Run installed validation for every terminal `rfix5` app with complete
       artifacts.
@@ -579,7 +586,7 @@ Business OS app module ids and validator reports were present.
 | 5b. Queue continuation and worker liveness | done | Codex | commits `71183644`, `641bf86f`; releases `branch-main-20260620T172452Z`, `branch-main-20260620T180649Z`; `rfix3` validated status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix3/status-1781979433802.json`; source tests `cargo test --bin ctox worker_finalization_leases_pending_app_rework_despite_stale_inflight_key`, `cargo test --bin ctox idle_dispatch_ignores_stale_inflight_queue_key_without_live_worker`, `cargo test --bin ctox worker_finalization_can_lease_next_durable_queue_task_before_activity_drop`, `cargo test --bin ctox business_os_app_validation_rework_is_leased_before_fresh_pending_app_tasks`, `cargo test --bin ctox business_os_app_validation_worker_error_after_green_completes_business_command`, `cargo test --bin ctox app_bench_`; `rustfmt --check src/core/service/service.rs`; `git diff --check` | The installed liveness patches carried `rfix3` to all five handled without generated app edits. This closes the stale process-local queue-key failure class. |
 | 5c. Browser-runtime validator coverage | done | Codex | commit `c5939b54`; release `branch-main-20260620T183056Z`; Playwright console logs under `.playwright-cli/`; `node src/apps/business-os/scripts/validate-app-module.test.mjs`; `git diff --check`; installed status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix3/status-1781980973056.json` | Source and installed validators now catch duplicate runtime function declarations and submit-handler forms without visible Save/Submit controls. Historical `rfix3` is correctly red under the installed validator. |
 | 5d. Fresh post-runtime-validator bench | blocked | Codex | `ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k --run-id rfix4`; evidence `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/events.jsonl`; Contracts-green status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781982232527.json`; installed direct-handoff release `branch-main-20260620T192755Z`; four-green status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781985781354.json`; all-five-green status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781989262104.json`; post-upgrade all-five-green status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781990148609.json`; latest validation status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781991086468.json`; browser mount smoke `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/browser-mount-smoke-20260620T212626Z.json`; persistence/automation smoke `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/persistence-automation-smoke-20260620T213437Z/result.json`; installed lifecycle release `branch-main-20260620T210628Z`; initial lifecycle commit `51ba8fc2`; failed upgrade attempts `branch-main-20260620T203232Z` and `branch-main-20260620T204719Z`; manual launchctl replay; start-order commit `52763ea7`; source-upgrade lifecycle commit `03ec39b0`; source lifecycle tests `cargo test --bin ctox parse_launchd_pid_reads_main_pid_line`, `cargo test --bin ctox launchd_user_unit_installed_requires_matching_root_when_only_global_plist_exists`, `cargo test --bin ctox resolve_active_root_prefers_managed_current_when_install_root_is_known`; `cargo check --bin ctox`; `bash -n install.sh`; `git diff --check` | Direct-handoff install and manual launchd recovery resumed `rfix4` without app repairs and carried all five apps to terminal installed-validation success. The clean dev-upgrade lifecycle proof and browser mount proof are green on release `branch-main-20260620T210628Z`. The run is blocked, not production-green: Inventory and Quality pass UI create, native `ctx.db` persistence, reload, and command dispatch; Subscriptions, Projects, and Contracts create UI-local records but their main module collections do not reach the native DB before timeout while side event collections sync. |
-| 5e. Schema parity validator and fresh post-patch bench | in_progress | Codex | commit `ebfba103`; release `branch-main-20260620T220404Z`; source tests `node src/apps/business-os/scripts/validate-app-module.test.mjs`; `git diff --check`; source validator rechecked old `rfix4` app artifacts; installed status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781993473758.json`; fresh run `rfix5`; evidence `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix5/events.jsonl`; initial status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix5/status-1781993589002.json`; partial Projects snapshot `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix5/status-1781993846314.json` | Source and installed validators now reject browser/native schema parity drift and record helpers that return values incompatible with declared schema types. The historical `rfix4` run is correctly red under the installed validator. Fresh `rfix5` is active and must reach terminal validation, browser mount, `ctx.db` persistence, and automation evidence before production signoff. |
+| 5e. Schema parity validator and fresh post-patch bench | in_progress | Codex | commit `ebfba103`; release `branch-main-20260620T220404Z`; source tests `node src/apps/business-os/scripts/validate-app-module.test.mjs`; `git diff --check`; source validator rechecked old `rfix4` app artifacts; installed status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781993473758.json`; fresh run `rfix5`; evidence `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix5/events.jsonl`; initial status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix5/status-1781993589002.json`; Projects terminal/Quality leased snapshot `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix5/status-1781994605567.json` | Source and installed validators now reject browser/native schema parity drift and record helpers that return values incompatible with declared schema types. The historical `rfix4` run is correctly red under the installed validator. Fresh `rfix5` is active: Projects is terminal-green, Quality is leased, and three apps remain pending. Production signoff still requires all five terminal validation, browser mount, `ctx.db` persistence, and automation evidence. |
 | 6. Entry point coverage | pending |  |  | Verify App Creator, Chat, App Store/template flow, CLI, and external inbound paths bind the same skill/resource context. |
 | 7. Production signoff | pending |  |  | All entry points produce runnable validated apps with evidence. |
 
@@ -2989,6 +2996,35 @@ Append one entry per meaningful run.
   artifacts, classify it as a validator/resource/reference gap or model failure
   based on whether the same pattern repeats beyond Projects.
 
+### 2026-06-20 rfix5 Projects Terminal And Quality Leased
+
+- Phase: 5e
+- Owner: Codex
+- Run id / task ids:
+  `rfix5`; Projects `queue:system::0a6a72bdb295789065e82cf0`;
+  Quality `queue:system::19327b78a8dda35d19ce3cea`.
+- Commands:
+  `ctox business-os app bench status --run-id rfix5 --validate --json`;
+  `ctox status --json`;
+  `ctox queue list --status pending --limit 10`;
+  `ctox queue list --status leased --limit 10`.
+- Changed files:
+  `docs/business-os-app-creation-plan.md`.
+- Evidence path:
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix5/status-1781994605567.json`
+- Result:
+  Projects reached terminal success with installed validation green, 12
+  required runtime files, and 29 passing module tests. CTOX then leased Quality
+  through the normal queue path. The live service reports `busy=true`,
+  `worker_active_count=1`, `manager=launchd-user`, Business OS web and MCP
+  autostarted, and native RxDB peer `replicationUp=true`. Subscriptions,
+  Inventory, and Contracts are still pending with no artifacts yet.
+- Failure classification:
+  none. This is live in-progress evidence, not production signoff.
+- Follow-up:
+  let Quality reach terminal evidence, continue the remaining pending tasks,
+  and only classify failures after terminal validation/rework evidence exists.
+
 ## Handoff Notes
 
 Latest handoff:
@@ -3017,15 +3053,14 @@ Latest handoff:
   shows Projects leased by `ctox-service`, four tasks pending, and no module
   artifacts yet.
 - Latest `rfix5` status:
-  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix5/status-1781993846314.json`
-  shows Projects still leased by `ctox-service`, four tasks pending, and
-  partial Projects artifacts only. Validation is red because `index.js` and
-  tests are still missing; it also flags shell collection redeclaration in the
-  partial schema. Treat this as in-progress evidence until terminal validation
-  or rework.
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix5/status-1781994605567.json`
+  shows Projects handled with installed validation green, Quality leased by
+  `ctox-service`, and Subscriptions, Inventory, and Contracts still pending
+  with no artifacts.
 - `ctox status --json` at that point reports `running=true`,
-  `manager=launchd-user`, `busy=true`, Business OS web and MCP autostarted,
-  and native RxDB peer `replicationUp=true`.
+  `manager=launchd-user`, `busy=true`, `worker_active_count=1`, current goal
+  preview for Quality, Business OS web and MCP autostarted, and native RxDB
+  peer `replicationUp=true`.
 - Next required action: poll `rfix5` until all five tasks are terminal or a
   failure class is clear. Then run installed validation for complete app
   artifacts, browser mount smoke, `ctx.db` persistence smoke, and
