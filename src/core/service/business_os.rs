@@ -716,12 +716,331 @@ fn handle_business_os_app(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 "result": result,
             }))
         }
+        Some("bench") => {
+            let result = handle_business_os_app_bench(root, &args[1..])?;
+            print_json(&result)?;
+            if result.get("ok").and_then(serde_json::Value::as_bool) == Some(false) {
+                anyhow::bail!("Business OS app bench did not submit all tasks");
+            }
+            Ok(())
+        }
         Some("--help") | Some("-h") | None => {
             println!("{}", business_os_usage());
             Ok(())
         }
         Some(other) => anyhow::bail!("unknown business-os app command `{other}`"),
     }
+}
+
+const BUSINESS_OS_APP_BENCH_EVIDENCE_DIR: &str = "runtime/business-os/app-creation-bench";
+const BUSINESS_OS_APP_BENCH_SOURCE: &str = "ctox-cli.business-os-app-bench";
+const BUSINESS_OS_APP_BENCH_SKILL: &str = "business-os-app-module-development";
+
+#[derive(Clone, Copy)]
+struct BusinessOsAppBenchCase {
+    key: &'static str,
+    title: &'static str,
+    description: &'static str,
+    minimum_scope: &'static str,
+    automation: &'static str,
+}
+
+const BUSINESS_OS_APP_BENCH_CORE_FIVE: &[BusinessOsAppBenchCase] = &[
+    BusinessOsAppBenchCase {
+        key: "subscriptions",
+        title: "Subscriptions",
+        description: "Abo-Vertraege, MRR, renewal date, and churn risk.",
+        minimum_scope: "subscription contracts, MRR, renewal date, churn risk",
+        automation: "Create a CTOX follow-up for renewal or churn-risk review.",
+    },
+    BusinessOsAppBenchCase {
+        key: "inventory",
+        title: "Inventory",
+        description: "Items, stock locations, minimum stock, and stock movement.",
+        minimum_scope: "items, stock locations, minimum stock, stock movement",
+        automation: "Create a CTOX follow-up for low-stock review.",
+    },
+    BusinessOsAppBenchCase {
+        key: "projects",
+        title: "Projects",
+        description: "Time/material vs fixed-price, milestones, and budget vs actual.",
+        minimum_scope: "time/material vs fixed-price, milestones, budget vs actual",
+        automation: "Create a CTOX follow-up for over-budget or overdue milestone review.",
+    },
+    BusinessOsAppBenchCase {
+        key: "contracts",
+        title: "Contracts",
+        description: "Customer contracts, SLA, renewal, and termination window.",
+        minimum_scope: "customer contracts, SLA, renewal, termination window",
+        automation: "Create a CTOX follow-up for renewal or cancellation deadline review.",
+    },
+    BusinessOsAppBenchCase {
+        key: "quality",
+        title: "Quality",
+        description: "Complaints, corrective actions, audits, owner, and due date.",
+        minimum_scope: "complaints, corrective actions, audits, owner, due date",
+        automation: "Create a CTOX follow-up or local ticket for compliance action.",
+    },
+];
+
+fn handle_business_os_app_bench(root: &Path, args: &[String]) -> anyhow::Result<serde_json::Value> {
+    match args.first().map(String::as_str) {
+        Some("run") => run_business_os_app_bench(root, &args[1..]),
+        Some("--help") | Some("-h") | None => Ok(serde_json::json!({
+            "ok": true,
+            "usage": "ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]"
+        })),
+        Some(other) => anyhow::bail!("unknown business-os app bench command `{other}`"),
+    }
+}
+
+fn run_business_os_app_bench(root: &Path, args: &[String]) -> anyhow::Result<serde_json::Value> {
+    let suite = flag_value(args, "--suite").unwrap_or("core-five");
+    anyhow::ensure!(
+        suite == "core-five",
+        "unsupported Business OS app bench suite `{suite}`"
+    );
+    let model = flag_value(args, "--model").unwrap_or("minimax-m3");
+    let context = flag_value(args, "--context").unwrap_or("256k");
+    anyhow::ensure!(
+        context == "256k" || context == "262144",
+        "Business OS app bench must use the 256k context default"
+    );
+    let run_id = flag_value(args, "--run-id")
+        .map(sanitize_bench_run_id)
+        .transpose()?
+        .unwrap_or_else(|| format!("r{}", now_ms()));
+    let actor_id = flag_value(args, "--actor")
+        .or_else(|| flag_value(args, "--actor-user"))
+        .unwrap_or("rxdb-command");
+    let clean = !args.iter().any(|arg| arg == "--no-clean");
+    let run_dir = root.join(BUSINESS_OS_APP_BENCH_EVIDENCE_DIR).join(&run_id);
+    fs::create_dir_all(&run_dir)
+        .with_context(|| format!("failed to create bench evidence dir {}", run_dir.display()))?;
+    let events_path = run_dir.join("events.jsonl");
+    let mut events = Vec::new();
+    append_bench_event(
+        &events_path,
+        &serde_json::json!({
+            "event": "bench_started",
+            "run_id": run_id.as_str(),
+            "suite": suite,
+            "model": model,
+            "context": context,
+            "source": BUSINESS_OS_APP_BENCH_SOURCE,
+            "created_at_ms": now_ms()
+        }),
+    )?;
+
+    let removed_modules = if clean {
+        cleanup_business_os_app_bench_modules(root)?
+    } else {
+        Vec::new()
+    };
+    append_bench_event(
+        &events_path,
+        &serde_json::json!({
+            "event": "cleanup_finished",
+            "run_id": run_id.as_str(),
+            "removed_modules": removed_modules.clone(),
+            "created_at_ms": now_ms()
+        }),
+    )?;
+
+    for case in BUSINESS_OS_APP_BENCH_CORE_FIVE {
+        let module_id = format!("bench_{}_{}", case.key, run_id);
+        let command_id = format!("cmd_app_bench_{}_{}", case.key, run_id);
+        let document = business_os_app_bench_command_document(
+            &command_id,
+            case,
+            &module_id,
+            suite,
+            model,
+            context,
+            &run_id,
+            actor_id,
+        );
+        let accepted = crate::business_os::store::accept_rxdb_business_command(root, document)?;
+        let event = serde_json::json!({
+            "event": "task_submitted",
+            "run_id": run_id.as_str(),
+            "case": case.key,
+            "module_id": module_id,
+            "command_id": command_id,
+            "accepted": accepted,
+            "created_at_ms": now_ms()
+        });
+        append_bench_event(&events_path, &event)?;
+        events.push(event);
+    }
+
+    let submitted = events
+        .iter()
+        .filter_map(|event| event.get("accepted"))
+        .collect::<Vec<_>>();
+    let accepted_count = submitted
+        .iter()
+        .filter(|accepted| {
+            accepted.get("status").and_then(serde_json::Value::as_str) == Some("accepted")
+        })
+        .count();
+    let ok = accepted_count == BUSINESS_OS_APP_BENCH_CORE_FIVE.len();
+    let summary = serde_json::json!({
+        "ok": ok,
+        "run_id": run_id.as_str(),
+        "suite": suite,
+        "model": model,
+        "context": context,
+        "source": BUSINESS_OS_APP_BENCH_SOURCE,
+        "evidence_dir": run_dir.display().to_string(),
+        "events_path": events_path.display().to_string(),
+        "removed_modules": removed_modules,
+        "submitted_tasks": events,
+        "accepted_count": accepted_count,
+        "expected_count": BUSINESS_OS_APP_BENCH_CORE_FIVE.len(),
+        "runner_contract": {
+            "creates_app_files": false,
+            "repairs_app_files": false,
+            "submits_real_business_commands": true,
+            "install_target": "runtime-installed-module"
+        }
+    });
+    fs::write(
+        run_dir.join("summary.json"),
+        serde_json::to_vec_pretty(&summary)?,
+    )
+    .with_context(|| format!("failed to write bench summary in {}", run_dir.display()))?;
+    append_bench_event(
+        &events_path,
+        &serde_json::json!({
+            "event": "bench_finished",
+            "run_id": run_id.as_str(),
+            "ok": ok,
+            "accepted_count": accepted_count,
+            "expected_count": BUSINESS_OS_APP_BENCH_CORE_FIVE.len(),
+            "created_at_ms": now_ms()
+        }),
+    )?;
+    Ok(summary)
+}
+
+fn business_os_app_bench_command_document(
+    command_id: &str,
+    case: &BusinessOsAppBenchCase,
+    module_id: &str,
+    suite: &str,
+    model: &str,
+    context: &str,
+    run_id: &str,
+    actor_id: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": command_id,
+        "command_id": command_id,
+        "module": "creator",
+        "command_type": "ctox.business_os.app.create",
+        "type": "ctox.business_os.app.create",
+        "record_id": module_id,
+        "status": "pending_sync",
+        "payload": {
+            "title": format!("Build {}", case.title),
+            "instruction": format!(
+                "Build a small Business OS {} app for {}. Include one normal CTOX follow-up automation: {}",
+                case.title,
+                case.minimum_scope,
+                case.automation
+            ),
+            "module_id": module_id,
+            "app_id": module_id,
+            "app_title": case.title,
+            "description": case.description,
+            "category": "operations",
+            "install_target": "runtime-installed-module",
+            "target": "app",
+            "mode": "app",
+            "desired_version": "0.1.0",
+            "required_skills": [BUSINESS_OS_APP_BENCH_SKILL],
+            "bench": {
+                "suite": suite,
+                "run_id": run_id,
+                "case": case.key,
+                "minimum_scope": case.minimum_scope,
+                "required_automation": case.automation
+            }
+        },
+        "client_context": {
+            "source": BUSINESS_OS_APP_BENCH_SOURCE,
+            "target": "app",
+            "mode": "app",
+            "module_id": module_id,
+            "install_target": "runtime-installed-module",
+            "required_skills": [BUSINESS_OS_APP_BENCH_SKILL],
+            "bench": {
+                "suite": suite,
+                "run_id": run_id,
+                "case": case.key,
+                "model": model,
+                "context": context
+            },
+            "actor": {
+                "id": actor_id,
+                "display_name": "CTOX App Bench",
+                "role": "admin",
+                "is_admin": true
+            }
+        },
+        "created_at_ms": now_ms(),
+        "updated_at_ms": now_ms()
+    })
+}
+
+fn cleanup_business_os_app_bench_modules(root: &Path) -> anyhow::Result<Vec<String>> {
+    let installed_root = root.join("runtime/business-os/installed-modules");
+    if !installed_root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut removed = Vec::new();
+    for entry in fs::read_dir(&installed_root)
+        .with_context(|| format!("failed to read {}", installed_root.display()))?
+    {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !(name.starts_with("bench_") || name.starts_with("bench-")) {
+            continue;
+        }
+        fs::remove_dir_all(entry.path())
+            .with_context(|| format!("failed to remove bench app {}", entry.path().display()))?;
+        removed.push(name);
+    }
+    removed.sort();
+    Ok(removed)
+}
+
+fn append_bench_event(path: &Path, event: &serde_json::Value) -> anyhow::Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .with_context(|| format!("failed to open bench evidence {}", path.display()))?;
+    let line = serde_json::to_string(event)?;
+    std::io::Write::write_all(&mut file, line.as_bytes())
+        .and_then(|_| std::io::Write::write_all(&mut file, b"\n"))
+        .with_context(|| format!("failed to write bench evidence {}", path.display()))
+}
+
+fn sanitize_bench_run_id(raw: &str) -> anyhow::Result<String> {
+    let value = raw.trim();
+    anyhow::ensure!(!value.is_empty(), "bench run id must not be empty");
+    anyhow::ensure!(
+        value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'),
+        "bench run id may only contain ASCII letters, digits, '_' and '-'"
+    );
+    Ok(value.to_string())
 }
 
 fn business_os_app_reference_candidates(
@@ -1851,15 +2170,11 @@ fn business_os_usage() -> String {
 }
 
 fn business_os_usage_base() -> &'static str {
-    "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os mcp status\n  ctox business-os mcp tools\n  ctox business-os mcp policy\n  ctox business-os mcp policy keys\n  ctox business-os mcp policy set [--enabled true|false] [--allow-reads true|false] [--allow-writes true|false] [--allow-approvals true|false] [--allow-external-effects true|false] [--rate-limit-per-minute <n>] [--audit-retention-days <n>] [--allow-actor <id>]... [--allow-workspace <id>]... [--allow-module <id>]... [--allow-collection <name>]... [--deny-tool business_os.<tool>]... [--clear-deny-tools]\n  ctox business-os mcp call <tool-name> [--args <json>]\n  ctox business-os mcp audit [--limit <n>] [--format json|jsonl] [--output <path>] [--prune]\n  ctox business-os mcp serve [--addr 127.0.0.1:8788]\n  ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id> [--token <token>] [--once] [--max-reconnect-delay-ms <n>] [--heartbeat-interval-ms <n>] [--max-connection-age-ms <n>]\n  ctox business-os mcp gateway-status --url https://mcp.ctox.dev/status/<instance-id> [--token <token>]\n  ctox business-os peer status\n  ctox business-os peer rotate\n  ctox business-os peer start\n  ctox business-os desktop invite [--display-name <name>] [--ttl-hours <n> | --expires-at <rfc3339>] [--format json|link] [--output <path>]\n  ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]\n  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]\n  ctox business-os app finalize <module-id> --task-id <queue-task-id> [--installed|--source] [--reason <text>]\n  ctox business-os repair queue-projections (--dry-run | --apply)\n  ctox business-os backup restore-drill [--module <module-id>]\n  ctox business-os backup prune-drills [--dry-run]\n  ctox business-os install --target <empty-dir> [--init-git] [--dry-run] [--no-copy-env]\n  ctox business-os commands process <command-id>\n  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os web-stack person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--auto-auth-assist] [--task-id <id>] [--workspace <path>] [--no-workspace]\n  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-status --session-id <id>\n  ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]\n  ctox business-os web-stack context-extract --session-id <id> [--source-id <id>] [--capture-script <id>] [--task-id <id>]\n  ctox business-os web-stack redaction-audit --canary <value> [--canary <value>]... [--path <path>]...\n  ctox business-os web-stack browser-doctor [--dir <path>]\n  ctox business-os files sync <path>\n  ctox business-os files sync-workspace <path>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
+    "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os mcp status\n  ctox business-os mcp tools\n  ctox business-os mcp policy\n  ctox business-os mcp policy keys\n  ctox business-os mcp policy set [--enabled true|false] [--allow-reads true|false] [--allow-writes true|false] [--allow-approvals true|false] [--allow-external-effects true|false] [--rate-limit-per-minute <n>] [--audit-retention-days <n>] [--allow-actor <id>]... [--allow-workspace <id>]... [--allow-module <id>]... [--allow-collection <name>]... [--deny-tool business_os.<tool>]... [--clear-deny-tools]\n  ctox business-os mcp call <tool-name> [--args <json>]\n  ctox business-os mcp audit [--limit <n>] [--format json|jsonl] [--output <path>] [--prune]\n  ctox business-os mcp serve [--addr 127.0.0.1:8788]\n  ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id> [--token <token>] [--once] [--max-reconnect-delay-ms <n>] [--heartbeat-interval-ms <n>] [--max-connection-age-ms <n>]\n  ctox business-os mcp gateway-status --url https://mcp.ctox.dev/status/<instance-id> [--token <token>]\n  ctox business-os peer status\n  ctox business-os peer rotate\n  ctox business-os peer start\n  ctox business-os desktop invite [--display-name <name>] [--ttl-hours <n> | --expires-at <rfc3339>] [--format json|link] [--output <path>]\n  ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]\n  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]\n  ctox business-os app finalize <module-id> --task-id <queue-task-id> [--installed|--source] [--reason <text>]\n  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]\n  ctox business-os repair queue-projections (--dry-run | --apply)\n  ctox business-os backup restore-drill [--module <module-id>]\n  ctox business-os backup prune-drills [--dry-run]\n  ctox business-os install --target <empty-dir> [--init-git] [--dry-run] [--no-copy-env]\n  ctox business-os commands process <command-id>\n  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os web-stack person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--auto-auth-assist] [--task-id <id>] [--workspace <path>] [--no-workspace]\n  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-status --session-id <id>\n  ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]\n  ctox business-os web-stack context-extract --session-id <id> [--source-id <id>] [--capture-script <id>] [--task-id <id>]\n  ctox business-os web-stack redaction-audit --canary <value> [--canary <value>]... [--path <path>]...\n  ctox business-os web-stack browser-doctor [--dir <path>]\n  ctox business-os files sync <path>\n  ctox business-os files sync-workspace <path>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
 }
 
 fn exists_label(exists: bool) -> &'static str {
-    if exists {
-        "ok"
-    } else {
-        "missing"
-    }
+    if exists { "ok" } else { "missing" }
 }
 
 fn existing_file_path(root: &Path, candidates: &[&str]) -> PathBuf {
@@ -2605,6 +2920,109 @@ mod tests {
     }
 
     #[test]
+    fn app_bench_run_submits_real_tasks_without_writing_app_artifacts() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let installed_root = root.path().join("runtime/business-os/installed-modules");
+        fs::create_dir_all(installed_root.join("bench_old"))?;
+        fs::create_dir_all(installed_root.join("real_inventory"))?;
+
+        let args = vec![
+            "--run-id".to_string(),
+            "rtest".to_string(),
+            "--suite".to_string(),
+            "core-five".to_string(),
+            "--model".to_string(),
+            "minimax-m3".to_string(),
+            "--context".to_string(),
+            "256k".to_string(),
+        ];
+        let summary = run_business_os_app_bench(root.path(), &args)?;
+        assert_eq!(
+            summary.get("ok").and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            summary
+                .get("accepted_count")
+                .and_then(serde_json::Value::as_u64),
+            Some(5)
+        );
+        assert_eq!(
+            summary
+                .pointer("/runner_contract/creates_app_files")
+                .and_then(serde_json::Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            !installed_root.join("bench_old").exists(),
+            "bench cleanup should remove only old bench-tagged apps"
+        );
+        assert!(
+            installed_root.join("real_inventory").is_dir(),
+            "bench cleanup must preserve non-bench runtime apps"
+        );
+        for key in [
+            "subscriptions",
+            "inventory",
+            "projects",
+            "contracts",
+            "quality",
+        ] {
+            assert!(
+                !installed_root.join(format!("bench_{key}_rtest")).exists(),
+                "bench runner must not create app artifacts for {key}"
+            );
+        }
+
+        let events_path = root
+            .path()
+            .join(BUSINESS_OS_APP_BENCH_EVIDENCE_DIR)
+            .join("rtest/events.jsonl");
+        let summary_path = root
+            .path()
+            .join(BUSINESS_OS_APP_BENCH_EVIDENCE_DIR)
+            .join("rtest/summary.json");
+        assert!(events_path.is_file(), "bench JSONL evidence must exist");
+        assert!(summary_path.is_file(), "bench summary evidence must exist");
+
+        let tasks = channels::list_queue_tasks(root.path(), &[], 16)?;
+        assert_eq!(tasks.len(), 5);
+        for task in tasks {
+            assert_eq!(
+                task.suggested_skill.as_deref(),
+                Some(BUSINESS_OS_APP_BENCH_SKILL)
+            );
+            assert!(task.prompt.contains("ctox.business_os.app.create"));
+            assert!(
+                task.prompt
+                    .contains("runtime/business-os/installed-modules/bench_")
+            );
+            assert!(
+                task.prompt
+                    .contains("ctox business-os app references --json")
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn app_bench_rejects_retired_128k_context() {
+        let root = tempfile::tempdir().expect("temp root");
+        let args = vec![
+            "--run-id".to_string(),
+            "rtest".to_string(),
+            "--context".to_string(),
+            "128k".to_string(),
+        ];
+        let error =
+            run_business_os_app_bench(root.path(), &args).expect_err("128k must be rejected");
+        assert!(
+            format!("{error:#}").contains("256k context"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
     fn app_validate_success_marks_matching_leased_creator_task_handled() {
         let root = tempfile::tempdir().expect("temp root");
         let module_id = "projects";
@@ -2871,21 +3289,27 @@ mod tests {
                 .and_then(serde_json::Value::as_bool),
             Some(false)
         );
-        assert!(invite
-            .get("sync_room")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .starts_with("ctox-business-os:"));
-        assert!(invite
-            .get("signaling_urls")
-            .and_then(serde_json::Value::as_array)
-            .map(|urls| !urls.is_empty())
-            .unwrap_or(false));
-        assert!(!invite
-            .get("signaling_room_password")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .is_empty());
+        assert!(
+            invite
+                .get("sync_room")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .starts_with("ctox-business-os:")
+        );
+        assert!(
+            invite
+                .get("signaling_urls")
+                .and_then(serde_json::Value::as_array)
+                .map(|urls| !urls.is_empty())
+                .unwrap_or(false)
+        );
+        assert!(
+            !invite
+                .get("signaling_room_password")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .is_empty()
+        );
 
         let desktop_link = invite
             .get("desktop_link")

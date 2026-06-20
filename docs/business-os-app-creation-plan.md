@@ -45,6 +45,9 @@ Current baseline:
 - Skill resources are English and cover module contract, Do/Don't list, green
   checklist, and architecture translation.
 - `ctox upgrade --dev` installed the current main release after these changes.
+- `ctox business-os app bench run` now submits the core-five app-create bench
+  through the normal Business OS command path and writes JSONL evidence under
+  `runtime/business-os/app-creation-bench/`.
 - App creation is not yet production-ready until CTOX-native bench runs pass
   end to end.
 
@@ -54,8 +57,8 @@ Current baseline:
 | --- | --- | --- | --- | --- |
 | 0. Remove wrong architecture | done | Codex | `e8bec3b8`, `b142e4c8`, installed release `branch-main-20260620T102259Z` | App Creator no longer writes app files itself; resource-index skill installed. |
 | 1. Define acceptance gates | pending |  |  | Formalize what must pass for app creation, modification, validation, browser smoke, and automation. |
-| 2. Build CTOX-native bench runner | pending |  |  | Runner must submit real Business OS app-create tasks and collect evidence. |
-| 3. Run five-app bench in CTOX | pending |  |  | Use MiniMax M3 through CTOX, not Codex shortcuts. |
+| 2. Build CTOX-native bench runner | done | Codex | `cargo test --bin ctox app_bench_`; CLI run `rcli` | Runner submits real `ctox.business_os.app.create` tasks, writes runtime JSONL evidence, and does not write app artifacts. |
+| 3. Run five-app bench in CTOX | in_progress | Codex | run `rcli`, five queued task ids in Evidence Log | Five real app-create tasks are queued; worker completion, validation, browser smoke, and automation smoke are not done yet. |
 | 4. Classify failures | pending |  |  | Separate skill/resource gaps, validator gaps, runtime orchestration gaps, and model failures. |
 | 5. Patch only systemic gaps | pending |  |  | Fix repeated or architecture-level failures only. Avoid ad hoc app-specific fixes. |
 | 6. Repeat until green | pending |  |  | Reset bench apps, rerun, and update this plan with each round. |
@@ -263,7 +266,7 @@ Phase update checklist:
 
 ### Phase 2: CTOX-Native Bench Runner
 
-Status: `pending`
+Status: `done`
 
 Tasks:
 
@@ -280,15 +283,15 @@ Exit criteria:
 
 Phase update checklist:
 
-- [ ] CLI command or equivalent CTOX-native runner added.
-- [ ] Runner submits real `ctox.business_os.app.create` tasks.
-- [ ] Evidence path under ignored `runtime/` documented.
-- [ ] Cleanup only touches bench-tagged runtime apps.
-- [ ] Tests prove the runner does not write app artifacts.
+- [x] CLI command or equivalent CTOX-native runner added.
+- [x] Runner submits real `ctox.business_os.app.create` tasks.
+- [x] Evidence path under ignored `runtime/` documented.
+- [x] Cleanup only touches bench-tagged runtime apps.
+- [x] Tests prove the runner does not write app artifacts.
 
 ### Phase 3: First Five-App CTOX Run
 
-Status: `pending`
+Status: `in_progress`
 
 Tasks:
 
@@ -303,8 +306,8 @@ Exit criteria:
 
 Phase update checklist:
 
-- [ ] Run id recorded.
-- [ ] Five queue task ids recorded.
+- [x] Run id recorded.
+- [x] Five queue task ids recorded.
 - [ ] Produced module paths recorded.
 - [ ] Validation results recorded per app.
 - [ ] Browser smoke results recorded per app.
@@ -440,11 +443,41 @@ Append one entry per meaningful run.
 - Remaining blocker: CTOX-native five-app bench has not yet passed end to end
   after the cleanup.
 
+### 2026-06-20 CTOX-Native Bench Runner
+
+- Phase: 2 and Phase 3 start
+- Owner: Codex
+- Run id / task ids: `rcli`;
+  `queue:system::39a76fa1e7a3615e37395591`,
+  `queue:system::83f0021294eb8cb4a41c34a9`,
+  `queue:system::81a6b65f041a523efc1134a6`,
+  `queue:system::b669a5ad3773b56abbd2d5c9`,
+  `queue:system::7de58c08014601d6dcf2adfb`
+- Commands:
+  `cargo test --bin ctox app_bench_`;
+  `cargo run --bin ctox -- business-os app bench run --suite core-five --model minimax-m3 --context 256k --run-id rcli --actor rxdb-command`
+- Changed files:
+  `src/core/service/business_os.rs`,
+  `src/core/main.rs`,
+  `docs/business-os-app-creation-plan.md`
+- Evidence path:
+  `runtime/business-os/app-creation-bench/rcli/events.jsonl`,
+  `runtime/business-os/app-creation-bench/rcli/summary.json`
+- Result: runner submitted five real `ctox.business_os.app.create` commands
+  through `accept_rxdb_business_command`; tests prove it writes no app
+  artifacts and rejects retired `128k` context.
+- Failure classification: none for Phase 2; Phase 3 remains incomplete because
+  worker execution, validation, browser smoke, and automation smoke have not
+  been observed.
+- Follow-up: let CTOX workers process the five queued tasks, then collect
+  validation/browser/automation evidence and classify failures before patching.
+
 ## Open Issues
 
 - Define validator behavior for internal shell tools such as App Creator.
-- Build the CTOX-native bench runner.
-- Run fresh five-app bench through CTOX with MiniMax M3.
+- Complete the first five-app bench run through CTOX workers with MiniMax M3.
+- Add or wire wait/status collection for bench task completion.
+- Add browser smoke and automation smoke collection to bench evidence.
 - Rank reference apps so normal app creation does not overfit to internal
   developer tools.
 - Confirm every app creation entry point attaches the same structured skill

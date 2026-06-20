@@ -141,6 +141,8 @@ INSTALL / UPGRADE
                                  list local Business OS app reference candidates
   ctox business-os app validate <module-id> [--installed|--source]
                                  validate a Business OS app module artifact
+  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k
+                                 submit the five-app Business OS app creation bench
   ctox business-os skills list|enable|disable
                                  manage optional packed skills for Business OS
   ctox business-os repair queue-projections --dry-run|--apply
