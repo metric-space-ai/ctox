@@ -99,6 +99,12 @@ Current baseline:
   pending. The next proof must be one fresh five-app CTOX-native bench with
   validation, browser smoke, persistence, and automation evidence for all five
   apps.
+- Follow-up for the Inventory lease found a concrete runtime lifecycle bug:
+  direct `ctox business-os app validate bench_inventory_rfix2 --installed`
+  validated files successfully, then failed finalization with
+  `module bench-inventory-rfix2 was not found`. The source fix preserves
+  runtime-installed module ids with underscores when recording the initial app
+  version snapshot. It is tested in source but not installed yet.
 
 ## Current Execution Slice
 
@@ -153,8 +159,15 @@ Immediate checklist:
 - [ ] Record whether any app dispatched a real automation command.
 - [ ] Run browser smoke after the fresh bench has validation-green artifacts.
 - [ ] Classify every remaining failure before editing code or skill resources.
-- [ ] Decide whether idle pending `rfix2` tasks are a worker scheduling gap,
-      normal queue cadence, or require superseding/retry.
+- [x] Classify the Inventory finalization failure as runtime lifecycle
+      ID-normalization bug, not app-output failure.
+- [x] Patch runtime app-version snapshotting to preserve underscore module ids.
+- [ ] Commit, push, and install the underscore module-id finalization fix via
+      `ctox upgrade --dev`.
+- [ ] Re-run direct validation/finalization for `bench_inventory_rfix2` after
+      the installed fix.
+- [ ] Decide whether remaining idle pending `rfix2` tasks are a worker
+      scheduling gap, normal queue cadence, or require superseding/retry.
 - [x] Classify current failures before patching code, skill resources, or
       validation.
 - [x] Update Evidence Log and Open Issues before handoff.
@@ -175,7 +188,7 @@ the reference catalog.
 | 2. Build CTOX-native bench runner | done | Codex | `8a8cd236`; `cargo test --bin ctox app_bench_`; installed release `branch-main-20260620T113510Z`; CLI run `rcli` | Runner submits real `ctox.business_os.app.create` tasks, writes runtime JSONL evidence, and does not write app artifacts. |
 | 3. Run five-app bench in CTOX | blocked | Codex | run `rcli`; installed status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rcli/status-1781958189008.json`; browser smoke against `http://127.0.0.1:8765/#bench_subscriptions_rcli` | `rcli` produced two validation-green apps, but browser smoke showed validation-green private apps were not openable because creator/responsible lifecycle fields were empty. Superseded by Phase 4 fixes; continue with a fresh post-fix run in Phase 5. |
 | 4. Patch systemic gaps | done | Codex | lifecycle commit `212aa2d0`; reference commit `c1267d0d`; installed releases `branch-main-20260620T124515Z` and `branch-main-20260620T130820Z`; run `rfix1`; `cargo test --bin ctox app_bench_`; `cargo test --bin ctox app_validation_success_accepts_postlease_artifact_write`; `cargo test --bin ctox app_references_mark_source_only_manifest_fields_as_non_templates`; `ctox business-os app references --json` | Classification from `rcli`: project helper-test mismatch is `model_failure`; private app visibility is `runtime_orchestration_gap`. Classification from `rfix1`: raw source reference metadata is `reference_gap`. Patched only lifecycle/orchestration and reference-resource gaps. No app-output repair and no deterministic builder. |
-| 5. Repeat until green | in_progress | Codex | installed release `branch-main-20260620T130820Z`; `ctox status`; `ctox business-os app references --json`; `ctox queue cleanup-scope --match-run-id rfix1 --cancel-open`; `ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k --run-id rfix2`; latest status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix2/status-1781964567806.json` | Pre-reference `rfix1` tasks were cancelled as superseded; accidental run `r1781961729513` was cancelled after `bench run --help` unexpectedly submitted a task. Fresh `rfix2` uses actor `local-dev`. Inventory has validation-green artifacts, Quality is in no-artifact validation rework after worker error, three tasks remain pending, and there is no green proof yet. |
+| 5. Repeat until green | in_progress | Codex | installed release `branch-main-20260620T130820Z`; `ctox status`; `ctox business-os app references --json`; `ctox queue cleanup-scope --match-run-id rfix1 --cancel-open`; `ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k --run-id rfix2`; latest status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix2/status-1781964683902.json`; direct validation error `module bench-inventory-rfix2 was not found`; source tests `cargo test --bin ctox app_validation_success_`, `cargo test --bin ctox business_os_app_validation_worker_error_after_green_completes_business_command`, `cargo test --bin ctox app_bench_` | Pre-reference `rfix1` tasks were cancelled as superseded; accidental run `r1781961729513` was cancelled after `bench run --help` unexpectedly submitted a task. Fresh `rfix2` uses actor `local-dev`. Inventory has validation-green artifacts but installed finalization currently fails because the version snapshot path slugifies underscore ids; Quality is in no-artifact validation rework after worker error; three tasks remain pending; no green proof yet. |
 | 6. Entry point coverage | pending |  |  | Verify App Creator, Chat, App Store/template flow, CLI, and external inbound paths bind the same skill/resource context. |
 | 7. Production signoff | pending |  |  | All entry points produce runnable validated apps with evidence. |
 
@@ -979,6 +992,46 @@ Append one entry per meaningful run.
   adding skill rules. Browser and automation smoke should wait until a task is
   terminal and validation-green.
 
+### 2026-06-20 Runtime Module ID Finalization Gap
+
+- Phase: 5
+- Owner: Codex
+- Run id / task ids: `rfix2`;
+  `queue:system::33aefcd7d41e5428b182d0a1`
+- Commands:
+  `ctox business-os app validate bench_inventory_rfix2 --installed`;
+  `cargo test --bin ctox app_validation_success_preserves_runtime_module_id_with_underscores`;
+  `cargo test --bin ctox app_validation_success_`;
+  `cargo test --bin ctox business_os_app_validation_worker_error_after_green_completes_business_command`;
+  `cargo test --bin ctox app_bench_`;
+  `git diff --check -- src/core/business_os/store.rs docs/business-os-app-creation-plan.md`
+- Changed files:
+  `src/core/business_os/store.rs`,
+  `docs/business-os-app-creation-plan.md`
+- Evidence path:
+  direct installed CLI output from release `branch-main-20260620T130820Z`;
+  source regression test output in this work block
+- Result:
+  direct installed validation of `bench_inventory_rfix2` printed
+  `Business OS app artifact validation OK: bench_inventory_rfix2 (installed mode)`
+  and then failed finalization with
+  `Error: module bench-inventory-rfix2 was not found`. The source patch changes
+  app-version snapshot recording to preserve the validated runtime-installed
+  module id instead of reusing the source-module slug sanitizer. The regression
+  test proves that `bench_inventory_rfix2` completes as `handled`, records a
+  `business_module_versions` row under `bench_inventory_rfix2`, records none
+  under `bench-inventory-rfix2`, and remains present in the RxDB module
+  catalog.
+- Failure classification:
+  `runtime_orchestration_gap`. This was a CTOX lifecycle/versioning bug for
+  runtime-installed app ids with underscores, not a model failure, skill issue,
+  validator gap, or generated-app issue.
+- Follow-up:
+  commit and push the source fix, install it through `ctox upgrade --dev`, then
+  rerun direct validation/finalization for `bench_inventory_rfix2`. If
+  Inventory becomes handled, continue Phase 5 by checking whether the remaining
+  pending/rework tasks dispatch correctly or need a fresh post-fix bench.
+
 ## Handoff Notes
 
 Latest handoff:
@@ -1001,6 +1054,10 @@ Latest handoff:
 - In `rfix2`, Inventory validates green but is still leased; Quality has no
   artifacts and is in `review_rework`; Subscriptions, Projects, and Contracts
   are still pending.
+- Direct installed validation of Inventory exposed a source-level lifecycle bug:
+  finalization slugified `bench_inventory_rfix2` to `bench-inventory-rfix2`
+  during version snapshot recording. Source is patched and tested, but the fix
+  must still be installed via `ctox upgrade --dev`.
 - `ctox status` currently reports the service running but idle
   (`busy=false`, `worker_active_count=0`) while four queue items are pending or
   leased. Treat this as the next runtime-orchestration question before changing
@@ -1031,6 +1088,9 @@ Latest handoff:
   resource context.
 - Install the patched bench CLI help guard through `ctox upgrade --dev` after
   the active `rfix2` bench has terminal evidence or is explicitly superseded.
+- Install the runtime module-id finalization fix through `ctox upgrade --dev`
+  and verify `ctox business-os app validate bench_inventory_rfix2 --installed`
+  can complete the task instead of failing on `bench-inventory-rfix2`.
 - Investigate why `rfix2` can have pending/leased work while `ctox status`
   reports no active worker. Do this as orchestration forensics, not by changing
   the generated apps or adding skill rules.

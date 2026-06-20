@@ -6885,7 +6885,7 @@ fn record_module_version_with_conn(
     label: &str,
     created_by: &str,
 ) -> anyhow::Result<Option<Value>> {
-    let module_id = source_sanitize_slug(module_id);
+    let module_id = normalize_module_id_for_bundle_snapshot(module_id)?;
     if module_id.is_empty() {
         return Ok(None);
     }
@@ -6968,6 +6968,22 @@ fn record_module_version_with_conn(
     )?;
     sync_module_version_records(&conn, &module_id, now)?;
     Ok(Some(version_summary_row(&conn, &version_id)?))
+}
+
+fn normalize_module_id_for_bundle_snapshot(module_id: &str) -> anyhow::Result<String> {
+    let module_id = module_id.trim();
+    if module_id.is_empty() {
+        return Ok(String::new());
+    }
+    anyhow::ensure!(
+        module_id != "."
+            && module_id != ".."
+            && !module_id.contains('/')
+            && !module_id.contains('\\')
+            && !module_id.contains('\0'),
+        "invalid module id for bundle snapshot: {module_id}"
+    );
+    Ok(module_id.to_owned())
 }
 
 pub fn list_module_versions(
@@ -27295,6 +27311,76 @@ mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(founder_count, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn app_validation_success_preserves_runtime_module_id_with_underscores() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let module_id = "bench_inventory_rfix2";
+        seed_test_business_os_app_root(root)?;
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_app_underscore_module",
+                "module": "creator",
+                "type": "ctox.business_os.app.create",
+                "record_id": module_id,
+                "payload": {
+                    "title": "Build Bench Inventory",
+                    "instruction": "Build a Business OS inventory app.",
+                    "module_id": module_id,
+                    "install_target": "runtime-installed-module",
+                    "target": "app"
+                },
+                "client_context": {
+                    "source": "business-os-app-creator-native-test",
+                    "target": "app"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queued task id")?
+            .to_string();
+        channels::lease_queue_task(root, &task_id, "ctox-service-test")?;
+        thread::sleep(Duration::from_millis(1100));
+        write_minimal_runtime_app_artifacts(root, module_id)?;
+
+        let completed = complete_business_command_from_app_validation_success(
+            root,
+            &task_id,
+            Some(module_id),
+            "validated underscore runtime app id",
+        )?;
+        assert!(completed.is_some());
+        let task = channels::load_queue_task(root, &task_id)?
+            .context("expected queue task after completion")?;
+        assert_eq!(task.route_status, "handled");
+        let conn = open_store(root)?;
+        let version_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_module_versions WHERE module_id = ?1",
+            params![module_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(version_count, 1);
+        let hyphenated_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_module_versions WHERE module_id = 'bench-inventory-rfix2'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(hyphenated_count, 0);
+        let catalog =
+            load_rxdb_collection_record(root, "business_module_catalog", "module-catalog")?
+                .context("expected module catalog projection")?;
+        assert!(catalog
+            .get("modules")
+            .and_then(Value::as_array)
+            .is_some_and(|modules| modules
+                .iter()
+                .any(|module| module.get("id").and_then(Value::as_str) == Some(module_id))));
         Ok(())
     }
 
