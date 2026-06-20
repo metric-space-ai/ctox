@@ -227,13 +227,16 @@ Current baseline:
   repairs: Quality, Inventory, and Subscriptions reached terminal success, so
   four of five apps are handled and installed validation-green. Evidence:
   `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781985099846.json`.
-- App creation is still not production-ready. The latest `rfix4` snapshot
+- A prior `rfix4` snapshot
   `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781985781354.json`
   shows `handled=4`, `validation_passed=4`, and only Projects pending. A live
   `ctox status --json` check on the active release reports the CTOX service
   not running while Projects remains pending. The current blocking failure
-  class remains `runtime_orchestration_gap`, now narrowed to service/queue
-  liveness after a validation-green run has progressed to 4/5 apps.
+  class at that point was `runtime_orchestration_gap`, narrowed to
+  service/queue liveness after a validation-green run had progressed to 4/5
+  apps. Later evidence below shows `rfix4` reached all-five installed static
+  validation green after manual launchd recovery; the clean install lifecycle
+  proof remains open.
 - Source now patches the narrowed liveness gap as a host lifecycle issue:
   macOS installs and upgrades write a launchd user agent for the CTOX daemon,
   service status reports `launchd-user` when that agent owns the process, and
@@ -262,6 +265,25 @@ Current baseline:
   `replicationUp=true`, and Projects leased by `ctox-service`. This is useful
   forensic evidence, but not final proof for the source patch because it used a
   manual launchctl replay.
+- `rfix4` has now reached installed static-validation green for all five bench
+  apps. `ctox business-os app bench status --run-id rfix4 --validate --json`
+  wrote
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781989262104.json`
+  with `bench_green=true`, `handled=5`, `failed=0`, `validation_passed=5`,
+  and all five runtime-installed app artifact directories present.
+- App creation is still not production-ready. The next gates are browser mount,
+  `ctx.db` persistence, and `ctx.commandBus.dispatch` automation on the fresh
+  `rfix4` apps, plus a clean `ctox upgrade --dev` proof for the launchd
+  lifecycle fixes without manual launchctl recovery.
+- A source-binary `ctox upgrade --dev` attempt for
+  `branch-main-20260620T204719Z` reached service restart but rolled back after
+  `launchctl` returned an empty error. Source now has a diagnostic/lifecycle
+  patch in progress: source upgrades prefer the managed install `current`
+  symlink when `CTOX_INSTALL_ROOT` is known, `launchctl` failures include args,
+  status, stdout, and stderr, and `kickstart` is treated as diagnostic because
+  `bootstrap` plus `RunAtLoad` can already start the agent. This patch must be
+  verified, committed, pushed, and installed through the dev-upgrade path before
+  final signoff.
 
 ## Current Execution Slice
 
@@ -283,8 +305,11 @@ Live execution board:
 | Validator coverage for Browser E2E findings | `done` | Source and installed validators reject the hidden-modal and missing-create failures, accept the known-good Inventory app, validator test coverage is green, `git diff --check` is clean, commit `f2727698` is pushed, and release `branch-main-20260620T163623Z` is active | Immediate checklist, Evidence Log, Open Issues |
 | Worker-idle wakeup fix | `done` | Regression test plus fresh bench reaches all five handled without service restart | Tracker, Evidence Log, Open Issues |
 | Browser-runtime validator coverage | `done` | Commit `c5939b54` is pushed; `ctox upgrade --dev` installed `branch-main-20260620T183056Z`; installed `ctox business-os app bench status --run-id rfix3 --validate --json` rejects all five old `rfix3` apps for the browser-runtime failures | Current Status, Tracker, Evidence Log |
-| Fresh CTOX-native five-app bench | `blocked` | Run id `rfix4` on active release `branch-main-20260620T192755Z` has four terminal-green apps, installed validation passed for those four, and Projects still pending while CTOX service liveness is red | Current Status, Tracker, Phase 5 checklist, Evidence Log |
-| macOS service lifecycle patch | `in_progress` | Initial patch `51ba8fc2` is pushed; manual launchctl replay proved the plist works after enable-before-bootstrap; start-order patch `52763ea7` is pushed; it must be installed via `ctox upgrade --dev`, and the installed service must report `manager=launchd-user` without manual launchctl commands | Current Status, Tracker, Phase 5 checklist, Evidence Log, Open Issues |
+| Fresh CTOX-native five-app bench | `done` | Run id `rfix4` on installed CTOX reached `bench_green=true`, `handled=5`, `validation_passed=5`, and all required runtime app files present in `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781989262104.json` | Current Status, Tracker, Phase 5 checklist, Evidence Log |
+| macOS service lifecycle patch | `in_progress` | Initial patch `51ba8fc2` is pushed; start-order patch `52763ea7` is pushed; manual launchctl replay proved the plist works after enable-before-bootstrap; source-binary upgrade then exposed missing launchctl diagnostics and source-upgrade active-root selection. The current source patch must be committed, pushed, installed via `ctox upgrade --dev`, and the installed service must report `manager=launchd-user` without manual launchctl commands | Current Status, Tracker, Phase 5 checklist, Evidence Log, Open Issues |
+| Browser mount smoke for `rfix4` apps | `pending` | All five freshly generated `rfix4` apps open in Business OS without console/runtime errors | Current Status, Tracker, Phase 5 checklist, Evidence Log |
+| `ctx.db` persistence smoke for `rfix4` apps | `pending` | Create or edit one representative record per app through the UI, reload, and confirm the record remains visible through the shell-provided DB path | Current Status, Tracker, Phase 5 checklist, Evidence Log |
+| `ctx.commandBus.dispatch` automation smoke for `rfix4` apps | `pending` | Trigger one valid chat/ticket automation per app through the app UI and verify a normal CTOX command/ticket/chat flow is created | Current Status, Tracker, Phase 5 checklist, Evidence Log |
 | Entry-point coverage | `pending` | App Creator, Chat, App Store/template, CLI, and inbound/MCP paths use the same skill resource context | Tracker, Phase 6 checklist, Evidence Log |
 
 Update discipline:
@@ -295,10 +320,12 @@ Update discipline:
 - Do not mark the overall status production-ready until every Live execution
   board row is `done` or explicitly out of scope with evidence.
 
-Objective: convert the app-creation path into real browser, persistence,
-automation, and no-restart proof on the installed release path. Runs `rfix2`
-and `rfix3` remain forensic evidence only. The next production evidence must
-come from a fresh five-app run after release `branch-main-20260620T183056Z`.
+Objective: convert the app-creation path from installed static-validation green
+to real browser, persistence, automation, and no-restart proof on the installed
+release path. Runs `rfix2` and `rfix3` remain forensic evidence only. Fresh run
+`rfix4` is the active production-readiness run: static validation is green for
+all five apps, but browser, persistence, automation, and clean dev-upgrade proof
+are still open.
 
 Immediate checklist:
 
@@ -342,7 +369,8 @@ Immediate checklist:
       worker-idle wakeup/liveness gap after service restart immediately leased
       the task.
 - [x] Let currently leased `bench_subscriptions_rfix2` reach terminal evidence.
-- [ ] Record whether any app dispatched a real automation command.
+- [ ] Record whether each fresh `rfix4` app dispatched a real automation
+      command.
 - [x] Run browser smoke after the fresh bench has validation-green artifacts.
 - [x] Classify browser-smoke failure before editing code or skill resources.
 - [x] Patch native peer runtime-installed collection registration from
@@ -353,8 +381,10 @@ Immediate checklist:
       Rust tests.
 - [x] Install the dynamic collection patch with `ctox upgrade --dev`.
 - [x] Re-run browser smoke against all five `rfix2` apps after install.
-- [ ] Re-run persistence smoke through `ctx.db` after install.
-- [ ] Re-run automation smoke through `ctx.commandBus.dispatch` after install.
+- [ ] Re-run browser smoke against all five `rfix4` apps.
+- [ ] Re-run persistence smoke through `ctx.db` against all five `rfix4` apps.
+- [ ] Re-run automation smoke through `ctx.commandBus.dispatch` against all
+      five `rfix4` apps.
 - [x] Classify every remaining failure before further code or skill-resource
       edits.
 - [x] Patch installed-app validation for hidden modals that still intercept
@@ -436,13 +466,11 @@ patch is allowed because `rfix1` copied source-only manifest patterns exposed by
 the reference catalog. The current rework-detection patch is allowed because
 the dispatcher skipped durable validation-rework tasks even though their
 Business OS app module ids and validator reports were present.
-- Current `rfix4` status is the active production-readiness attempt.
-  Subscriptions, Inventory, Contracts, and Quality are terminal-green and
-  installed validation passes for those four apps. Projects is still pending,
-  has no app artifacts yet, and the latest live status check reports the CTOX
-  service not running. This is not production signoff because all five apps
-  still need terminal queue evidence, browser smoke, persistence smoke,
-  automation smoke, and no-restart service/queue continuation proof.
+- Current `rfix4` status is the active production-readiness attempt. All five
+  apps are terminal-green and installed validation passes for all five apps.
+  This is not production signoff because all five apps still need browser
+  smoke, persistence smoke, automation smoke, and clean dev-upgrade service
+  lifecycle proof without manual launchctl recovery.
 - `rfix2` is forensic evidence only. It proved dynamic runtime collection
   registration and exposed Browser E2E validator gaps. Do not patch generated
   app outputs from any run.
@@ -460,7 +488,7 @@ Business OS app module ids and validator reports were present.
 | 5a. Fresh post-validator bench | blocked | Codex | release `branch-main-20260620T163623Z`; `ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k --run-id rfix3`; evidence `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix3/events.jsonl`; validated status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix3/status-1781979433802.json`; Playwright console logs under `.playwright-cli/console-2026-06-20T18-*` | Fresh bench submitted through installed CTOX with `minimax-m3`, `256k`, and real Business OS app-create commands. All five tasks reached terminal success and passed the old installed validator, but browser smoke rejected the run: four apps hit duplicate `renderDetail` stack overflow and Projects cannot complete primary create because the modal has no visible Save/Submit control. |
 | 5b. Queue continuation and worker liveness | done | Codex | commits `71183644`, `641bf86f`; releases `branch-main-20260620T172452Z`, `branch-main-20260620T180649Z`; `rfix3` validated status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix3/status-1781979433802.json`; source tests `cargo test --bin ctox worker_finalization_leases_pending_app_rework_despite_stale_inflight_key`, `cargo test --bin ctox idle_dispatch_ignores_stale_inflight_queue_key_without_live_worker`, `cargo test --bin ctox worker_finalization_can_lease_next_durable_queue_task_before_activity_drop`, `cargo test --bin ctox business_os_app_validation_rework_is_leased_before_fresh_pending_app_tasks`, `cargo test --bin ctox business_os_app_validation_worker_error_after_green_completes_business_command`, `cargo test --bin ctox app_bench_`; `rustfmt --check src/core/service/service.rs`; `git diff --check` | The installed liveness patches carried `rfix3` to all five handled without generated app edits. This closes the stale process-local queue-key failure class. |
 | 5c. Browser-runtime validator coverage | done | Codex | commit `c5939b54`; release `branch-main-20260620T183056Z`; Playwright console logs under `.playwright-cli/`; `node src/apps/business-os/scripts/validate-app-module.test.mjs`; `git diff --check`; installed status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix3/status-1781980973056.json` | Source and installed validators now catch duplicate runtime function declarations and submit-handler forms without visible Save/Submit controls. Historical `rfix3` is correctly red under the installed validator. |
-| 5d. Fresh post-runtime-validator bench | in_progress | Codex | `ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k --run-id rfix4`; evidence `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/events.jsonl`; Contracts-green status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781982232527.json`; installed direct-handoff release `branch-main-20260620T192755Z`; four-green status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781985781354.json`; initial lifecycle commit `51ba8fc2`; failed upgrade attempt `branch-main-20260620T203232Z`; manual launchctl replay; start-order commit `52763ea7`; live status with Projects leased; source lifecycle tests `cargo test --bin ctox parse_launchd_pid_reads_main_pid_line`, `cargo test --bin ctox launchd_user_unit_installed_requires_matching_root_when_only_global_plist_exists`; `cargo check --bin ctox`; `bash -n install.sh`; `git diff --check` | Direct-handoff install resumed `rfix4` without app repairs and carried Quality, Inventory, and Subscriptions to terminal validation success after Contracts. The remaining service-death blocker is classified as a host lifecycle `runtime_orchestration_gap`. The first lifecycle patch wrote the LaunchAgent and restart logic, but bootstrap failed because start disabled the LaunchAgent before loading it. Manual enable-before-bootstrap proves the plist path; start-order fix `52763ea7` is pushed and still needs installed-upgrade proof. |
+| 5d. Fresh post-runtime-validator bench | in_progress | Codex | `ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k --run-id rfix4`; evidence `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/events.jsonl`; Contracts-green status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781982232527.json`; installed direct-handoff release `branch-main-20260620T192755Z`; four-green status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781985781354.json`; all-five-green status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781989262104.json`; initial lifecycle commit `51ba8fc2`; failed upgrade attempts `branch-main-20260620T203232Z` and `branch-main-20260620T204719Z`; manual launchctl replay; start-order commit `52763ea7`; source lifecycle tests `cargo test --bin ctox parse_launchd_pid_reads_main_pid_line`, `cargo test --bin ctox launchd_user_unit_installed_requires_matching_root_when_only_global_plist_exists`, `cargo test --bin ctox resolve_active_root_prefers_managed_current_when_install_root_is_known`; `cargo check --bin ctox`; `bash -n install.sh`; `git diff --check` | Direct-handoff install and manual launchd recovery resumed `rfix4` without app repairs and carried all five apps to terminal installed-validation success. The fresh bench is static-validation green, not production-green. Remaining required proof: clean `ctox upgrade --dev` service lifecycle on the managed install root, browser mount, `ctx.db` persistence, and `ctx.commandBus.dispatch` automation for all five `rfix4` apps. |
 | 6. Entry point coverage | pending |  |  | Verify App Creator, Chat, App Store/template flow, CLI, and external inbound paths bind the same skill/resource context. |
 | 7. Production signoff | pending |  |  | All entry points produce runnable validated apps with evidence. |
 
@@ -763,9 +791,9 @@ Exit criteria:
 Phase update checklist:
 
 - [ ] Previous bench apps removed by bench tag/prefix only.
-- [ ] Fresh five-app run completed.
-- [ ] Results compared with prior run.
-- [ ] Remaining failures classified.
+- [x] Fresh five-app run completed.
+- [x] Results compared with prior run.
+- [x] Remaining failures classified.
 - [x] Browser-runtime validator/resource patch installed through
       `ctox upgrade --dev` as release `branch-main-20260620T183056Z`.
 - [x] Historical `rfix3` validation rechecked on the installed release and
@@ -780,14 +808,14 @@ Phase update checklist:
 - [x] Confirm the installed release resumed `rfix4` without generated-app
       edits and carried Quality, Inventory, and Subscriptions to terminal
       validation success.
-- [ ] Fresh post-runtime-validator run passed installed validation.
+- [x] Fresh post-runtime-validator run passed installed validation.
 - [ ] Fresh post-runtime-validator run passed browser smoke.
 - [ ] Fresh post-runtime-validator run passed persistence smoke through
       `ctx.db`.
 - [ ] Fresh post-runtime-validator run passed automation smoke through
       `ctx.commandBus.dispatch`.
-- [ ] Fix the remaining service/queue liveness gap after `rfix4` reached four
-      terminal-green apps and Projects stayed pending.
+- [x] Fix or work around the remaining service/queue liveness gap enough for
+      `rfix4` to reach five terminal-green apps without generated-app edits.
 - [x] Classify the four-green `rfix4` service-death failure as host lifecycle
       `runtime_orchestration_gap`, not app output or skill failure.
 - [x] Patch source so macOS installs/upgrades write a launchd user agent for
@@ -808,11 +836,17 @@ Phase update checklist:
 - [x] Patch source so launchd start does bootout, enable, bootstrap,
       kickstart, and never disables during start.
 - [x] Commit and push the launchd start-order patch to `main` as `52763ea7`.
-- [ ] Install the launchd start-order patch through `ctox upgrade --dev`.
-- [ ] Confirm `ctox status --json` reports the installed service running under
-      `manager=launchd-user`.
-- [ ] Confirm `rfix4` leases or completes the remaining Projects task without
+- [x] Confirm `rfix4` completes the remaining Projects task without
       generated-app edits.
+- [x] Verify the latest source-upgrade lifecycle patch:
+      managed install root resolution for source-binary upgrades, detailed
+      launchctl errors, and best-effort kickstart.
+- [ ] Commit and push the latest source-upgrade lifecycle patch.
+- [ ] Install the latest launchd lifecycle patch through
+      `ctox upgrade --dev`.
+- [ ] Confirm `ctox status --json` reports the installed service running under
+      `manager=launchd-user` after that upgrade without manual launchctl
+      commands.
 
 ### Phase 6: Entry Point Coverage
 
@@ -2577,13 +2611,93 @@ Append one entry per meaningful run.
   `52763ea7` and verify `manager=launchd-user`, native peer
   `replicationUp=true`, and no manual service recovery.
 
+### 2026-06-20 rfix4 Static Validation Green
+
+- Phase: 5d
+- Owner: Codex
+- Run id / task ids:
+  `rfix4`;
+  `queue:system::e8c02582c37a2e861d6171bc`,
+  `queue:system::8eda6d3dd77a2779c7874b01`,
+  `queue:system::f115b955ee616f886464c54f`,
+  `queue:system::1ee89d974aaba0e9c2e0bc4d`,
+  `queue:system::85146e296c40b9a5e9498025`
+- Commands:
+  `ctox business-os app bench status --run-id rfix4 --validate --json`;
+  `ctox status --json`
+- Changed files:
+  `docs/business-os-app-creation-plan.md`
+- Evidence path:
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781989262104.json`
+- Result:
+  Installed CTOX finished all five `rfix4` app-create tasks without
+  generated-app repairs. The bench snapshot reports `bench_green=true`,
+  `needs_attention=false`, `handled=5`, `failed=0`,
+  `validation_passed=5`, `artifact_dirs_present=5`, and
+  `apps_with_missing_required_files=0`.
+- Failure classification:
+  no generated app-output failure at the static-validation gate. Production
+  signoff remains open because browser mount, `ctx.db` persistence,
+  `ctx.commandBus.dispatch` automation, and clean dev-upgrade service
+  lifecycle proof are not complete.
+- Follow-up:
+  run browser smoke, persistence smoke, and automation smoke against the fresh
+  `rfix4` apps only. Do not use older runs for signoff and do not patch
+  generated app artifacts.
+
+### 2026-06-20 Source-Binary Dev-Upgrade Lifecycle Gap
+
+- Phase: 5d
+- Owner: Codex
+- Run id / task ids:
+  `rfix4`
+- Commands:
+  `cargo run --bin ctox -- upgrade --dev`;
+  `ctox status --json`;
+  `ctox update status`;
+  `launchctl print gui/$(id -u)/com.metric-space.ctox.service`;
+  `rustfmt src/core/install/mod.rs src/core/service/service.rs`;
+  `git diff --check`;
+  `cargo check --bin ctox`;
+  `cargo test --bin ctox resolve_active_root_prefers_managed_current_when_install_root_is_known`;
+  `cargo test --bin ctox parse_launchd_pid_reads_main_pid_line`
+- Changed files:
+  `src/core/install/mod.rs`;
+  `src/core/service/service.rs`;
+  `docs/business-os-app-creation-plan.md`
+- Evidence path:
+  `ctox upgrade --dev` attempted `branch-main-20260620T204719Z` and rolled
+  back to `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260620T202511Z`;
+  `rfix4` status remains
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781989262104.json`
+- Result:
+  The source-binary upgrade reached service restart, then failed with an empty
+  `launchctl` error and rolled back. The running service recovered under
+  `launchd-user`, but the upgrade proof is not green. Source now improves the
+  diagnosis and source-upgrade path: when an install root is known,
+  `InstallLayout` resolves the active root to the managed `current` symlink;
+  `launchctl` errors include command arguments, status, stdout, and stderr; and
+  `kickstart` failure is a warning because `bootstrap` plus `RunAtLoad` can
+  already start the agent while the wait loop verifies the real service state.
+- Failure classification:
+  `runtime_orchestration_gap`. This is installer/service lifecycle behavior,
+  not app-output failure and not a reason to add deterministic app builders or
+  more prompt rules.
+- Follow-up:
+  commit and push the latest patch, then install through `ctox upgrade --dev`
+  with the managed install root and verify `ctox status --json` reports
+  `manager=launchd-user`, `running=true`, and native RxDB peer
+  `replicationUp=true` without manual launchctl recovery.
+
 ## Handoff Notes
 
 Latest handoff:
 
 - Continue Phase 5 from run id `rfix4`.
-- Active installed release is `branch-main-20260620T192755Z` from pushed commit
-  `9294efb2`.
+- Active installed release may still be an earlier rollback target until the
+  latest source-upgrade lifecycle patch is installed cleanly. Check
+  `readlink /Users/michaelwelsch/.local/lib/ctox/current` and
+  `ctox status --json` before assuming the active release.
 - Fresh run `rfix4` was started through installed CTOX with
   `ctox business-os app bench run --suite core-five --model minimax-m3
   --context 256k --run-id rfix4`.
@@ -2598,25 +2712,19 @@ Latest handoff:
   `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781983525257.json`,
   `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781984458819.json`, and
   `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781985099846.json`.
-- Latest status:
-  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781985781354.json`
-  reports `handled=4`, `pending=1`, `validation_passed=4`, and Projects
-  still pending with missing required files because no Projects artifacts have
-  been produced yet.
-- A live `ctox status --json` check on release `branch-main-20260620T192755Z`
-  reports the CTOX service not running while Projects remains pending in
-  `ctox queue list --status pending --limit 8 --json`.
-- Current failure class: `runtime_orchestration_gap`. This is now a
-  service/queue liveness problem after four terminal-green app-validation
-  workers, not a generated-app repair target.
-- Next required action: inspect why the installed service stopped or is
-  reported stopped after Subscriptions terminal success, patch only the
-  systemic liveness issue, install through `ctox upgrade --dev`, and continue
-  the same `rfix4` run until Projects reaches terminal evidence.
-- After all five `rfix4` tasks are terminal and installed validation passes,
-  run browser smoke, `ctx.db` persistence smoke, and
-  `ctx.commandBus.dispatch` automation smoke on the newly generated `rfix4`
-  apps only.
+- Latest static-validation status:
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781989262104.json`
+  reports `bench_green=true`, `handled=5`, `failed=0`,
+  `validation_passed=5`, and all required runtime app files present.
+- Current failure class: `runtime_orchestration_gap` for the dev-upgrade
+  service lifecycle proof only. The five generated `rfix4` apps are
+  static-validation green, but this is not production signoff.
+- Next required action: finish the latest source-upgrade lifecycle patch,
+  verify it with `cargo check --bin ctox`, commit and push it, then install it
+  through `ctox upgrade --dev` without manual launchctl recovery.
+- After clean dev-upgrade proof, run browser smoke, `ctx.db` persistence smoke,
+  and `ctx.commandBus.dispatch` automation smoke on the newly generated
+  `rfix4` apps only.
 - Do not use `rcli`, `rfix1`, `rfix2`, or `rfix3` as production signoff. They
   are forensic evidence only.
 - Do not patch generated app files.
@@ -2641,11 +2749,10 @@ Latest handoff:
   overfitting to internal developer tools.
 - Confirm every app creation entry point attaches the same structured skill
   resource context.
-- Inspect and fix why release `branch-main-20260620T192755Z` reports the CTOX
-  service not running after `rfix4` advanced to four terminal-green apps.
-- Continue `rfix4` after the next installed liveness fix and verify CTOX leases
-  the remaining Projects task without a manual service restart or generated-app
-  edit.
+- Finish and install the latest source-upgrade lifecycle patch so
+  source-binary `ctox upgrade --dev` uses the managed install root, emits
+  useful `launchctl` diagnostics, and proves service restart without manual
+  launchctl recovery.
 - Complete the final production proof on newly generated `rfix4` apps:
   installed validation, browser mount, `ctx.db` persistence, and
   `ctx.commandBus.dispatch` automation.

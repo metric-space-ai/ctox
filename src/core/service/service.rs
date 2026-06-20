@@ -17590,7 +17590,9 @@ fn launchd_bootstrap_and_start(root: &Path) -> Result<()> {
     let _ = launchd_bootout();
     let _ = launchctl_user(vec!["enable".to_string(), target.clone()]);
     launchctl_user(vec!["bootstrap".to_string(), domain.clone(), plist_display])?;
-    launchctl_user(vec!["kickstart".to_string(), "-k".to_string(), target])?;
+    if let Err(err) = launchctl_user(vec!["kickstart".to_string(), "-k".to_string(), target]) {
+        eprintln!("ctox service: launchctl kickstart warning: {err:#}");
+    }
     let marker = root.join(LAUNCHD_USER_MARKER_RELATIVE_PATH);
     if let Some(parent) = marker.parent() {
         std::fs::create_dir_all(parent)
@@ -17663,14 +17665,34 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
-    let output = launchctl_user_capture(args)?;
+    let rendered_args: Vec<String> = args
+        .into_iter()
+        .map(|entry| entry.as_ref().to_string())
+        .collect();
+    let output = launchctl_user_capture(rendered_args.iter().map(String::as_str))?;
     if output.status.success() {
         return Ok(());
     }
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let message = if !stderr.is_empty() { stderr } else { stdout };
-    anyhow::bail!("launchctl failed: {message}");
+    let message = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        "<empty stdout/stderr>".to_string()
+    };
+    let status = output
+        .status
+        .code()
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| output.status.to_string());
+    anyhow::bail!(
+        "launchctl {} failed with status {}: {}",
+        rendered_args.join(" "),
+        status,
+        message
+    );
 }
 
 fn launchctl_user_capture<I, S>(args: I) -> Result<Output>

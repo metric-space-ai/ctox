@@ -169,8 +169,8 @@ pub struct InstallLayout {
 impl InstallLayout {
     pub fn resolve(root: &Path) -> Result<Self> {
         let workspace_root = root.to_path_buf();
-        let active_root = resolve_active_root(root);
         let install_root = resolve_install_root(root);
+        let active_root = resolve_active_root(root, install_root.as_deref());
         let state_root = resolve_state_root(root, install_root.as_deref())?;
         let cache_root = resolve_cache_root(root)?;
         Ok(Self {
@@ -1524,13 +1524,19 @@ fn prune_old_releases(releases_dir: &Path, manifest: &InstallManifest) {
     }
 }
 
-fn resolve_active_root(root: &Path) -> PathBuf {
+fn resolve_active_root(root: &Path, install_root: Option<&Path>) -> PathBuf {
     if root
         .file_name()
         .and_then(OsStr::to_str)
         .is_some_and(|name| name == "current")
     {
         return root.to_path_buf();
+    }
+    if let Some(install_root) = install_root {
+        let current_root = install_root.join("current");
+        if current_root.exists() || current_root.symlink_metadata().is_ok() {
+            return current_root;
+        }
     }
     root.to_path_buf()
 }
@@ -3261,6 +3267,22 @@ mod tests {
         let contents = fs::read_to_string(&lock_path).unwrap();
         assert!(contents.contains("operation=apply"));
         assert!(contents.contains("target_release=branch-main-new"));
+    }
+
+    #[test]
+    fn resolve_active_root_prefers_managed_current_when_install_root_is_known() {
+        let temp = tempdir().unwrap();
+        let source_root = temp.path().join("source");
+        let install_root = temp.path().join("install");
+        let current_root = install_root.join("current");
+        std::fs::create_dir_all(&source_root).unwrap();
+        std::fs::create_dir_all(&current_root).unwrap();
+
+        assert_eq!(
+            resolve_active_root(&source_root, Some(&install_root)),
+            current_root
+        );
+        assert_eq!(resolve_active_root(&source_root, None), source_root);
     }
 
     #[cfg(target_os = "macos")]
