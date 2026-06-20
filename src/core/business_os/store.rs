@@ -8270,7 +8270,8 @@ fn list_business_activity_events(
             'business_os.ats.signature_requested',
             'business_os.ats.signature_signed',
             'business_os.ats.interview_transcribed',
-            'business_os.ats.subject_exported'
+            'business_os.ats.subject_exported',
+            'business_os.ats.subject_erased'
          )
          ORDER BY observed_at_ms DESC, event_id DESC
          LIMIT ?1",
@@ -22604,6 +22605,7 @@ pub fn is_ats_mutating_command(command_type: &str) -> bool {
             | "ats.signature.sign"
             | "ats.interview.transcribe"
             | "ats.subject.export"
+            | "ats.subject.erase"
     )
 }
 
@@ -23652,6 +23654,63 @@ fn handle_ats_mutating_command(
                 "record_count": record_count,
                 "collections": collections,
                 "audit_trail": audit
+            }))
+        }
+        "ats.subject.erase" => {
+            // §9.2 DSGVO Art. 17 erasure (right to be forgotten): redact +
+            // tombstone every PII record about a subject across the ATS
+            // collections, and return an erasure report. chef/admin gated; the
+            // erasure is itself recorded as a (non-PII) processing event.
+            let subject_id = first_string_field(p, &["subject_id", "candidate_id"])
+                .context("ats.subject.erase requires subject_id")?;
+            let mut erased = serde_json::Map::new();
+            for coll in ATS_WRITABLE_COLLECTIONS {
+                let mut ids: Vec<String> = Vec::new();
+                for field in ["subject_id", "candidate_id"] {
+                    for rec in load_business_records_by_field(&conn, coll, field, &subject_id)? {
+                        if let Some(id) = rec.get("id").and_then(Value::as_str) {
+                            if !ids.iter().any(|x| x == id) {
+                                ids.push(id.to_string());
+                            }
+                        }
+                    }
+                }
+                for id in &ids {
+                    let tombstone = serde_json::json!({
+                        "id": id,
+                        "_deleted": true,
+                        "redacted": true,
+                        "redacted_at_ms": now,
+                        "erasure_basis": "dsgvo_art17"
+                    });
+                    conn.execute(
+                        "UPDATE business_records SET deleted = 1, updated_at_ms = ?3, payload_json = ?4 WHERE collection = ?1 AND record_id = ?2",
+                        params![coll, id.as_str(), now, serde_json::to_string(&tombstone)?],
+                    )?;
+                }
+                if !ids.is_empty() {
+                    erased.insert((*coll).to_string(), Value::Array(ids.into_iter().map(Value::String).collect()));
+                }
+            }
+            let erased_count: usize = erased
+                .values()
+                .filter_map(Value::as_array)
+                .map(Vec::len)
+                .sum();
+            record_ats_governance_event(
+                &conn,
+                command,
+                &actor,
+                "business_os.ats.subject_erased",
+                serde_json::json!({ "candidate_id": subject_id, "erased_count": erased_count }),
+                now,
+            )?;
+            Ok(serde_json::json!({
+                "ok": true,
+                "subject_id": subject_id,
+                "erased_at_ms": now,
+                "erased_count": erased_count,
+                "erased": erased
             }))
         }
         other => Err(anyhow::anyhow!(
