@@ -11142,7 +11142,7 @@ fn maybe_lease_next_durable_queue_prompt(
     }
     let tasks = channels::list_queue_tasks(root, &["pending".to_string()], 16)?;
     for task in tasks {
-        if inflight_leased_message_key(state, &task.message_key) {
+        if durable_queue_task_already_enqueued_in_memory_or_clear_stale(state, &task.message_key) {
             continue;
         }
         let leased =
@@ -11489,7 +11489,7 @@ fn maybe_lease_business_os_app_validation_rework(
 ) -> Result<Option<QueuedPrompt>> {
     let tasks = channels::list_queue_tasks(root, &["review_rework".to_string()], 16)?;
     for task in tasks {
-        if inflight_leased_message_key(state, &task.message_key)
+        if durable_queue_task_already_enqueued_in_memory_or_clear_stale(state, &task.message_key)
             || !queue_task_is_business_os_app_validation_rework(&task)
         {
             continue;
@@ -16309,6 +16309,24 @@ fn queue_pressure_active(state: &Arc<Mutex<SharedState>>) -> bool {
 fn inflight_leased_message_key(state: &Arc<Mutex<SharedState>>, message_key: &str) -> bool {
     let shared = lock_shared_state(state);
     leased_message_key_has_live_owner_locked(&shared, message_key)
+}
+
+fn durable_queue_task_already_enqueued_in_memory_or_clear_stale(
+    state: &Arc<Mutex<SharedState>>,
+    message_key: &str,
+) -> bool {
+    let mut shared = lock_shared_state(state);
+    let in_memory_prompt_owns_key = shared.pending_prompts.iter().any(|prompt| {
+        prompt
+            .leased_message_keys
+            .iter()
+            .any(|key| key == message_key)
+    });
+    if in_memory_prompt_owns_key {
+        return true;
+    }
+    shared.leased_message_keys_inflight.remove(message_key);
+    false
 }
 
 fn active_or_pending_leased_message_key(
@@ -23160,6 +23178,53 @@ Business OS command:
             vec![next_task.message_key.clone()]
         );
         assert_eq!(route_status_for(&root, &next_task.message_key), "leased");
+    }
+
+    #[test]
+    fn worker_finalization_leases_pending_app_rework_despite_stale_inflight_key() {
+        let root = temp_root("business-os-worker-finalization-stale-rework-key");
+        let rework_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create subscriptions app".to_string(),
+                prompt: "Business OS app validation failed.\n\nBusiness OS app task metadata:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/subscriptions".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create pending app rework task");
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.busy = false;
+            shared.worker_active_count = 1;
+            shared
+                .leased_message_keys_inflight
+                .insert(rework_task.message_key.clone());
+        }
+
+        let leased = maybe_lease_next_durable_queue_prompt_for_worker_finalization(&root, &state)
+            .expect("worker-finalization dispatch should not fail")
+            .expect("stale process-local inflight state must not block pending app rework");
+
+        assert_eq!(
+            leased.leased_message_keys,
+            vec![rework_task.message_key.clone()]
+        );
+        assert_eq!(route_status_for(&root, &rework_task.message_key), "leased");
+        assert!(leased.prompt.contains("Business OS app validation failed."));
+        let shared = lock_shared_state(&state);
+        assert!(
+            !shared
+                .leased_message_keys_inflight
+                .contains(&rework_task.message_key),
+            "stale process-local key should be cleared before durable re-lease"
+        );
     }
 
     #[test]
