@@ -786,9 +786,10 @@ const BUSINESS_OS_APP_BENCH_CORE_FIVE: &[BusinessOsAppBenchCase] = &[
 fn handle_business_os_app_bench(root: &Path, args: &[String]) -> anyhow::Result<serde_json::Value> {
     match args.first().map(String::as_str) {
         Some("run") => run_business_os_app_bench(root, &args[1..]),
+        Some("status") => collect_business_os_app_bench_status(root, &args[1..]),
         Some("--help") | Some("-h") | None => Ok(serde_json::json!({
             "ok": true,
-            "usage": "ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]"
+            "usage": "ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]\nctox business-os app bench status --run-id <id> [--validate]"
         })),
         Some(other) => anyhow::bail!("unknown business-os app bench command `{other}`"),
     }
@@ -1041,6 +1042,308 @@ fn sanitize_bench_run_id(raw: &str) -> anyhow::Result<String> {
         "bench run id may only contain ASCII letters, digits, '_' and '-'"
     );
     Ok(value.to_string())
+}
+
+fn collect_business_os_app_bench_status(
+    root: &Path,
+    args: &[String],
+) -> anyhow::Result<serde_json::Value> {
+    let run_id = flag_value(args, "--run-id")
+        .or_else(|| args.iter().find(|arg| !arg.starts_with("--")).map(String::as_str))
+        .context("usage: ctox business-os app bench status --run-id <id> [--validate]")?;
+    let run_id = sanitize_bench_run_id(run_id)?;
+    let run_dir = root.join(BUSINESS_OS_APP_BENCH_EVIDENCE_DIR).join(&run_id);
+    let summary_path = run_dir.join("summary.json");
+    let events_path = run_dir.join("events.jsonl");
+    let summary_raw = fs::read_to_string(&summary_path)
+        .with_context(|| format!("failed to read bench summary {}", summary_path.display()))?;
+    let summary: serde_json::Value =
+        serde_json::from_str(&summary_raw).context("bench summary is not valid JSON")?;
+    let validate = args.iter().any(|arg| arg == "--validate");
+    let mut apps = Vec::new();
+    let mut counts = BenchStatusCounts::default();
+    let submitted = summary
+        .get("submitted_tasks")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let expected_count = submitted.len();
+    for item in submitted {
+        let case = item
+            .get("case")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let module_id = item
+            .get("module_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let command_id = item
+            .get("command_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let task_id = item
+            .pointer("/accepted/task_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let task = if task_id.is_empty() {
+            None
+        } else {
+            channels::load_queue_task(root, task_id)?
+        };
+        let route_status = task
+            .as_ref()
+            .map(|task| task.route_status.as_str())
+            .unwrap_or("missing");
+        counts.observe_route_status(route_status);
+        let module_dir = root
+            .join("runtime/business-os/installed-modules")
+            .join(module_id);
+        let artifacts = bench_app_artifact_report(&module_dir)?;
+        if artifacts
+            .get("exists")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            counts.artifact_dirs_present = counts.artifact_dirs_present.saturating_add(1);
+        } else {
+            counts.artifact_dirs_missing = counts.artifact_dirs_missing.saturating_add(1);
+        }
+        if artifacts
+            .get("required_missing")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|items| !items.is_empty())
+        {
+            counts.apps_with_missing_required_files =
+                counts.apps_with_missing_required_files.saturating_add(1);
+        }
+        let validation = if validate && module_dir.is_dir() {
+            let validator_args = vec!["--installed".to_string(), "--json".to_string()];
+            match run_business_os_app_validator(root, module_id, &validator_args) {
+                Ok(output) => {
+                    let success = output.status.success();
+                    counts.observe_validation(success);
+                    serde_json::json!({
+                        "ran": true,
+                        "ok": success,
+                        "status": output.status.code(),
+                        "stdout": truncate_bench_text(&String::from_utf8_lossy(&output.stdout), 12000),
+                        "stderr": truncate_bench_text(&String::from_utf8_lossy(&output.stderr), 4000)
+                    })
+                }
+                Err(error) => {
+                    counts.observe_validation(false);
+                    serde_json::json!({
+                        "ran": true,
+                        "ok": false,
+                        "error": error.to_string()
+                    })
+                }
+            }
+        } else {
+            counts.validation_skipped = counts.validation_skipped.saturating_add(1);
+            serde_json::json!({
+                "ran": false,
+                "reason": if validate { "module_dir_missing" } else { "not_requested" }
+            })
+        };
+        apps.push(serde_json::json!({
+            "case": case,
+            "module_id": module_id,
+            "command_id": command_id,
+            "task_id": task_id,
+            "queue": task.as_ref().map(|task| serde_json::json!({
+                "route_status": task.route_status.as_str(),
+                "status_note": task.status_note.as_deref(),
+                "lease_owner": task.lease_owner.as_deref(),
+                "leased_at": task.leased_at.as_deref(),
+                "acked_at": task.acked_at.as_deref(),
+                "created_at": task.created_at.as_str(),
+                "updated_at": task.updated_at.as_str(),
+                "workspace_root": task.workspace_root.as_deref(),
+                "suggested_skill": task.suggested_skill.as_deref()
+            })).unwrap_or_else(|| serde_json::json!({
+                "route_status": "missing"
+            })),
+            "module_dir": module_dir.display().to_string(),
+            "artifacts": artifacts,
+            "validation": validation
+        }));
+    }
+    let finished_at_ms = now_ms();
+    let status_path = run_dir.join(format!("status-{finished_at_ms}.json"));
+    let bench_green = expected_count > 0
+        && counts.handled == expected_count
+        && counts.artifact_dirs_present == expected_count
+        && counts.apps_with_missing_required_files == 0
+        && counts.validation_passed == expected_count;
+    let needs_attention = counts.failed > 0
+        || counts.blocked > 0
+        || counts.cancelled > 0
+        || counts.missing > 0
+        || counts.other > 0
+        || counts.artifact_dirs_missing > 0
+        || counts.apps_with_missing_required_files > 0
+        || counts.validation_failed > 0;
+    let report = serde_json::json!({
+        "ok": true,
+        "bench_green": bench_green,
+        "needs_attention": needs_attention,
+        "run_id": run_id,
+        "suite": summary.get("suite").cloned().unwrap_or(serde_json::Value::Null),
+        "model": summary.get("model").cloned().unwrap_or(serde_json::Value::Null),
+        "context": summary.get("context").cloned().unwrap_or(serde_json::Value::Null),
+        "expected_count": expected_count,
+        "status_collected_at_ms": finished_at_ms,
+        "validate": validate,
+        "counts": counts.to_json(),
+        "apps": apps,
+        "evidence_dir": run_dir.display().to_string(),
+        "status_path": status_path.display().to_string()
+    });
+    fs::write(&status_path, serde_json::to_vec_pretty(&report)?)
+        .with_context(|| format!("failed to write bench status {}", status_path.display()))?;
+    append_bench_event(
+        &events_path,
+        &serde_json::json!({
+            "event": "status_collected",
+            "run_id": report.get("run_id").and_then(serde_json::Value::as_str).unwrap_or_default(),
+            "status_path": status_path.display().to_string(),
+            "validate": validate,
+            "bench_green": bench_green,
+            "needs_attention": needs_attention,
+            "counts": report.get("counts").cloned().unwrap_or(serde_json::Value::Null),
+            "created_at_ms": finished_at_ms
+        }),
+    )?;
+    Ok(report)
+}
+
+#[derive(Default)]
+struct BenchStatusCounts {
+    pending: usize,
+    leased: usize,
+    handled: usize,
+    failed: usize,
+    blocked: usize,
+    cancelled: usize,
+    missing: usize,
+    other: usize,
+    validation_passed: usize,
+    validation_failed: usize,
+    validation_skipped: usize,
+    artifact_dirs_present: usize,
+    artifact_dirs_missing: usize,
+    apps_with_missing_required_files: usize,
+}
+
+impl BenchStatusCounts {
+    fn observe_route_status(&mut self, route_status: &str) {
+        match route_status {
+            "pending" => self.pending = self.pending.saturating_add(1),
+            "leased" => self.leased = self.leased.saturating_add(1),
+            "handled" => self.handled = self.handled.saturating_add(1),
+            "failed" => self.failed = self.failed.saturating_add(1),
+            "blocked" => self.blocked = self.blocked.saturating_add(1),
+            "cancelled" => self.cancelled = self.cancelled.saturating_add(1),
+            "missing" => self.missing = self.missing.saturating_add(1),
+            _ => self.other = self.other.saturating_add(1),
+        }
+    }
+
+    fn observe_validation(&mut self, success: bool) {
+        if success {
+            self.validation_passed = self.validation_passed.saturating_add(1);
+        } else {
+            self.validation_failed = self.validation_failed.saturating_add(1);
+        }
+    }
+
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "pending": self.pending,
+            "leased": self.leased,
+            "handled": self.handled,
+            "failed": self.failed,
+            "blocked": self.blocked,
+            "cancelled": self.cancelled,
+            "missing": self.missing,
+            "other": self.other,
+            "validation_passed": self.validation_passed,
+            "validation_failed": self.validation_failed,
+            "validation_skipped": self.validation_skipped,
+            "artifact_dirs_present": self.artifact_dirs_present,
+            "artifact_dirs_missing": self.artifact_dirs_missing,
+            "apps_with_missing_required_files": self.apps_with_missing_required_files
+        })
+    }
+}
+
+fn bench_app_artifact_report(module_dir: &Path) -> anyhow::Result<serde_json::Value> {
+    const REQUIRED: &[&str] = &[
+        "module.json",
+        "collections.schema.json",
+        "schema.js",
+        "index.html",
+        "index.css",
+        "index.js",
+        "icon.svg",
+        "locales/en.json",
+        "locales/de.json",
+    ];
+    let mut files = Vec::new();
+    if module_dir.is_dir() {
+        collect_relative_files(module_dir, module_dir, &mut files)?;
+    }
+    files.sort();
+    let file_set = files.iter().cloned().collect::<BTreeSet<_>>();
+    let mut required_missing = REQUIRED
+        .iter()
+        .filter(|path| !file_set.iter().any(|file| file == *path))
+        .map(|path| serde_json::Value::String((*path).to_string()))
+        .collect::<Vec<_>>();
+    let tests_present = files
+        .iter()
+        .any(|file| file.starts_with("tests/") && file.ends_with(".test.mjs"));
+    if !tests_present {
+        required_missing.push(serde_json::Value::String("tests/*.test.mjs".to_string()));
+    }
+    Ok(serde_json::json!({
+        "exists": module_dir.is_dir(),
+        "file_count": files.len(),
+        "files": files,
+        "tests_present": tests_present,
+        "required_missing": required_missing
+    }))
+}
+
+fn collect_relative_files(root: &Path, dir: &Path, output: &mut Vec<String>) -> anyhow::Result<()> {
+    if output.len() >= 512 {
+        return Ok(());
+    }
+    for entry in fs::read_dir(dir).with_context(|| format!("failed to read {}", dir.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            collect_relative_files(root, &path, output)?;
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+        if let Ok(relative) = path.strip_prefix(root) {
+            output.push(relative.to_string_lossy().replace('\\', "/"));
+        }
+    }
+    Ok(())
+}
+
+fn truncate_bench_text(raw: &str, max_chars: usize) -> String {
+    if raw.chars().count() <= max_chars {
+        return raw.to_string();
+    }
+    let kept = raw.chars().take(max_chars).collect::<String>();
+    format!("{kept}\n... truncated ...")
 }
 
 fn business_os_app_reference_candidates(
@@ -2164,6 +2467,10 @@ fn business_os_usage() -> String {
             "  ctox business-os app references [--query <text>] [--json]\n  ctox business-os app validate <module-id>",
         )
         .replace(
+            "  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]",
+            "  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]\n  ctox business-os app bench status --run-id <id> [--validate]",
+        )
+        .replace(
             "  ctox business-os backup prune-drills [--dry-run]",
             "  ctox business-os backup inspect-manifest --manifest <path>\n  ctox business-os backup key-escrow-status\n  ctox business-os backup prune-drills [--dry-run]",
         )
@@ -3002,6 +3309,126 @@ mod tests {
                     .contains("ctox business-os app references --json")
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn app_bench_status_records_partial_artifacts_without_marking_green() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let args = vec![
+            "--run-id".to_string(),
+            "rstatus".to_string(),
+            "--suite".to_string(),
+            "core-five".to_string(),
+            "--model".to_string(),
+            "minimax-m3".to_string(),
+            "--context".to_string(),
+            "256k".to_string(),
+        ];
+        let summary = run_business_os_app_bench(root.path(), &args)?;
+        let task_id = summary
+            .pointer("/submitted_tasks/0/accepted/task_id")
+            .and_then(serde_json::Value::as_str)
+            .context("missing first task id")?;
+        channels::lease_queue_task(root.path(), task_id, "ctox-service")?;
+
+        let module_dir = root
+            .path()
+            .join("runtime/business-os/installed-modules/bench_subscriptions_rstatus");
+        fs::create_dir_all(&module_dir)?;
+        fs::write(module_dir.join("module.json"), "{}")?;
+
+        let status_args = vec!["--run-id".to_string(), "rstatus".to_string()];
+        let report = collect_business_os_app_bench_status(root.path(), &status_args)?;
+        assert_eq!(
+            report.get("ok").and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            report
+                .get("bench_green")
+                .and_then(serde_json::Value::as_bool),
+            Some(false),
+            "partial artifacts must not be reported as a green bench"
+        );
+        assert_eq!(
+            report
+                .get("needs_attention")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            report
+                .get("expected_count")
+                .and_then(serde_json::Value::as_u64),
+            Some(5)
+        );
+        assert_eq!(
+            report
+                .pointer("/counts/leased")
+                .and_then(serde_json::Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            report
+                .pointer("/counts/pending")
+                .and_then(serde_json::Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            report
+                .pointer("/counts/artifact_dirs_present")
+                .and_then(serde_json::Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            report
+                .pointer("/counts/artifact_dirs_missing")
+                .and_then(serde_json::Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            report
+                .pointer("/counts/apps_with_missing_required_files")
+                .and_then(serde_json::Value::as_u64),
+            Some(5)
+        );
+        let first_app = report
+            .get("apps")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|apps| apps.first())
+            .context("missing app status")?;
+        assert_eq!(
+            first_app
+                .pointer("/artifacts/exists")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert!(
+            first_app
+                .pointer("/artifacts/required_missing")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|missing| {
+                    missing
+                        .iter()
+                        .any(|item| item.as_str() == Some("index.html"))
+                }),
+            "partial module report must list missing required files"
+        );
+        let status_path = report
+            .get("status_path")
+            .and_then(serde_json::Value::as_str)
+            .context("missing status path")?;
+        assert!(
+            Path::new(status_path).is_file(),
+            "bench status evidence must be written"
+        );
+        let events_path = root
+            .path()
+            .join(BUSINESS_OS_APP_BENCH_EVIDENCE_DIR)
+            .join("rstatus/events.jsonl");
+        let events = fs::read_to_string(events_path)?;
+        assert!(events.contains("\"event\":\"status_collected\""));
         Ok(())
     }
 

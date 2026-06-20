@@ -24,10 +24,26 @@ Update rules:
 - Mark a phase `done` only when its exit criteria are met with evidence.
 - Keep notes factual: command, commit, path, run id, task id, validator output,
   browser-smoke result, or failure classification.
+- Keep the Current Execution Slice below current. It is the first thing a
+  continuation agent should read and the last thing it should update.
 
 Do not use this plan as an app-building prompt. CTOX must still build apps
 through normal agent execution, the Business OS app-module skill resources, and
 the Business OS command/task pipeline.
+
+Editable sections:
+
+- Current Status
+- Current Execution Slice
+- Tracker
+- Phase update checklists
+- Evidence Log
+- Open Issues
+- Handoff Notes
+
+Do not edit stable sections such as Work Policy, Non-Negotiables, Acceptance
+Gates, or Failure Classification unless the Evidence Log shows that the current
+rule is wrong or incomplete.
 
 ## Current Status
 
@@ -48,8 +64,41 @@ Current baseline:
 - `ctox business-os app bench run` now submits the core-five app-create bench
   through the normal Business OS command path and writes JSONL evidence under
   `runtime/business-os/app-creation-bench/`.
+- `ctox business-os app bench status --run-id rcli --validate` now writes a
+  read-only status snapshot and distinguishes status collection from a green
+  bench.
 - App creation is not yet production-ready until CTOX-native bench runs pass
   end to end.
+
+## Current Execution Slice
+
+Owner: `Codex`
+
+Started: `2026-06-20`
+
+Active phase: `3. Run five-app bench in CTOX`
+
+Objective: finish evidence collection for bench run `rcli`, resolve the idle
+pending-task condition, then rerun or resume the five-app bench until all apps
+have validation, browser smoke, and automation smoke evidence.
+
+Immediate checklist:
+
+- [x] Collect queue status for all five `rcli` task ids.
+- [x] Record every produced module path under
+      `runtime/business-os/installed-modules/`.
+- [x] Run installed validation only for apps with module artifacts.
+- [x] Record missing files and validator failures per app.
+- [ ] Record whether any app dispatched a real automation command.
+- [ ] Run or schedule browser smoke only after validation has enough artifacts
+      to mount the app.
+- [x] Classify each failure before patching code, skill resources, or
+      validation.
+- [x] Update Evidence Log and Open Issues before handoff.
+
+Do not patch the app outputs directly. Do not add deterministic builders. Do not
+move to Phase 4 until the current bench evidence is specific enough to justify a
+systemic fix.
 
 ## Tracker
 
@@ -58,7 +107,7 @@ Current baseline:
 | 0. Remove wrong architecture | done | Codex | `e8bec3b8`, `b142e4c8`, installed release `branch-main-20260620T102259Z` | App Creator no longer writes app files itself; resource-index skill installed. |
 | 1. Define acceptance gates | pending |  |  | Formalize what must pass for app creation, modification, validation, browser smoke, and automation. |
 | 2. Build CTOX-native bench runner | done | Codex | `8a8cd236`; `cargo test --bin ctox app_bench_`; installed release `branch-main-20260620T113510Z`; CLI run `rcli` | Runner submits real `ctox.business_os.app.create` tasks, writes runtime JSONL evidence, and does not write app artifacts. |
-| 3. Run five-app bench in CTOX | in_progress | Codex | run `rcli`, five queued task ids in Evidence Log | Five real app-create tasks are queued; worker completion, validation, browser smoke, and automation smoke are not done yet. |
+| 3. Run five-app bench in CTOX | in_progress | Codex | run `rcli`; status `runtime/business-os/app-creation-bench/rcli/status-1781956817565.json`; `cargo test --bin ctox app_bench_` | Two apps handled and validation-green; one task leased; two tasks remain pending with no artifacts. Browser smoke and automation smoke are not done yet. |
 | 4. Classify failures | pending |  |  | Separate skill/resource gaps, validator gaps, runtime orchestration gaps, and model failures. |
 | 5. Patch only systemic gaps | pending |  |  | Fix repeated or architecture-level failures only. Avoid ad hoc app-specific fixes. |
 | 6. Repeat until green | pending |  |  | Reset bench apps, rerun, and update this plan with each round. |
@@ -476,11 +525,91 @@ Append one entry per meaningful run.
 - Follow-up: let CTOX workers process the five queued tasks, then collect
   validation/browser/automation evidence and classify failures before patching.
 
+### 2026-06-20 Editable Plan Ledger
+
+- Phase: 3
+- Owner: Codex
+- Run id / task ids: `rcli`
+- Commands: `sed -n '1,260p' docs/business-os-app-creation-plan.md`,
+  `git diff -- docs/business-os-app-creation-plan.md`
+- Changed files: `docs/business-os-app-creation-plan.md`
+- Evidence path: this file
+- Result: added a Current Execution Slice with concrete update checkboxes and
+  explicit editable/stable sections so continuation agents can track progress
+  in-place during execution.
+- Failure classification: none; planning/evidence hygiene update.
+- Follow-up: keep this section current while collecting bench status,
+  validation, browser smoke, automation smoke, and failure classifications.
+
+### 2026-06-20 Bench Status Snapshot
+
+- Phase: 3
+- Owner: Codex
+- Run id / task ids: `rcli`;
+  `queue:system::39a76fa1e7a3615e37395591`,
+  `queue:system::83f0021294eb8cb4a41c34a9`,
+  `queue:system::81a6b65f041a523efc1134a6`,
+  `queue:system::b669a5ad3773b56abbd2d5c9`,
+  `queue:system::7de58c08014601d6dcf2adfb`
+- Commands:
+  `cargo test --bin ctox app_bench_`;
+  `cargo run --bin ctox -- business-os app bench status --run-id rcli --validate`;
+  `ctox status`;
+  `jq '{bench_green,needs_attention,counts,status_path, apps: [.apps[] | {case,module_id, route_status:.queue.route_status, validation_ran:.validation.ran, validation_ok:.validation.ok, artifacts_exist:.artifacts.exists, tests_present:.artifacts.tests_present, missing:.artifacts.required_missing}]}' runtime/business-os/app-creation-bench/rcli/status-1781956817565.json`
+- Changed files:
+  `src/core/service/business_os.rs`,
+  `docs/business-os-app-creation-plan.md`
+- Evidence path:
+  `runtime/business-os/app-creation-bench/rcli/status-1781956817565.json`,
+  `runtime/business-os/app-creation-bench/rcli/events.jsonl`
+- Result:
+  `bench_green=false`, `needs_attention=true`; counts are `handled=2`,
+  `leased=1`, `pending=2`, `validation_passed=2`, `validation_skipped=3`,
+  `artifact_dirs_present=2`, `artifact_dirs_missing=3`,
+  `apps_with_missing_required_files=3`. `bench_subscriptions_rcli` and
+  `bench_quality_rcli` exist under `runtime/business-os/installed-modules/`
+  and pass `ctox business-os app validate <module-id> --installed`.
+  `bench_projects_rcli` is leased by `ctox-service` and currently has no module
+  directory. `bench_inventory_rcli` and `bench_contracts_rcli` remain pending
+  with no module directory. A first `ctox status` check reported the CTOX
+  service running but idle; a follow-up check reported `busy=true`,
+  `worker_active_count=1`, and `pending_count=3`.
+- Failure classification:
+  no app artifact or skill-resource failure is proven for the three unfinished
+  apps yet. Earlier service idleness is a `runtime_orchestration_gap` candidate,
+  but the follow-up status shows active work; continue observing before
+  patching orchestration.
+- Follow-up:
+  let the leased task finish or fail, then collect another status snapshot. Do
+  not patch app outputs or skill resources until unfinished tasks are terminal
+  or their failure class is clear. After the remaining tasks complete, collect
+  validation, browser smoke, and automation smoke evidence.
+
+## Handoff Notes
+
+Latest handoff:
+
+- Continue Phase 3.
+- Use run id `rcli` as the current CTOX-native five-app bench.
+- Queue/artifact/validator status has been captured in
+  `runtime/business-os/app-creation-bench/rcli/status-1781956817565.json`.
+- Next wait for or inspect the leased `bench_projects_rcli` task, then collect
+  another status snapshot.
+- Do not patch generated app files.
+- Do not patch skill resources, validators, or orchestration until the failure
+  class is recorded in Evidence Log.
+- Update Current Execution Slice checkboxes before ending the next work block.
+
 ## Open Issues
 
 - Define validator behavior for internal shell tools such as App Creator.
 - Complete the first five-app bench run through CTOX workers with MiniMax M3.
-- Add or wire wait/status collection for bench task completion.
+- Continue observing the service/queue wakeup path: an initial `ctox status`
+  reported `busy=false`, `worker_active_count=0`, and `pending_count=3`, but a
+  follow-up check reported `busy=true` and `worker_active_count=1` with
+  `bench_projects_rcli` leased.
+- Add or wire wait/status collection for bench task completion beyond the
+  current read-only status snapshot.
 - Add browser smoke and automation smoke collection to bench evidence.
 - Rank reference apps so normal app creation does not overfit to internal
   developer tools.
