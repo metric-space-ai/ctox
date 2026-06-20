@@ -1,6 +1,33 @@
 .ats-interviews { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; height: 100%; overflow: auto; box-sizing: border-box; }
 .ats-interviews .ats-head h1 { margin: 0; font-size: 18px; font-weight: 600; }
 .ats-interviews .ats-sub { margin: 2px 0 0; font-size: 13px; opacity: .7; }
+.ats-interviews .ats-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ats-interviews .ats-form input, .ats-interviews .ats-form select { padding: 6px 8px; border: 1px solid color-mix(in srgb, currentColor 16%, transparent); border-radius: 6px; background: transparent; color: inherit; font-size: 13px; }
+.ats-interviews .ats-form button { padding: 6px 12px; border: 1px solid color-mix(in srgb, currentColor 24%, transparent); border-radius: 6px; background: color-mix(in srgb, currentColor 8%, transparent); color: inherit; font-size: 13px; cursor: pointer; }
 .ats-interviews .ats-count { font-size: 13px; opacity: .8; }
+.ats-interviews .ats-group-head { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; opacity: .6; margin: 8px 0 2px; }
 .ats-interviews .ats-item { padding: 8px 12px; border: 1px solid color-mix(in srgb, currentColor 12%, transparent); border-radius: 8px; margin-bottom: 6px; font-size: 13px; }
+.ats-interviews .ats-item--rich { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; }
+.ats-interviews .ats-item-main { font-size: 13px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ats-interviews .ats-item-meta { margin-top: 3px; font-size: 12px; opacity: .7; }
 .ats-interviews .ats-empty { font-size: 13px; opacity: .6; padding: 20px 0; }
+.ats-interviews .ats-badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px solid color-mix(in srgb, currentColor 22%, transparent); }
+.ats-interviews .ats-badge--proposed { border-color: color-mix(in srgb, orange 40%, transparent); color: color-mix(in srgb, orange 70%, currentColor); }
+.ats-interviews .ats-badge--rescheduled { border-color: color-mix(in srgb, orange 40%, transparent); color: color-mix(in srgb, orange 70%, currentColor); }
+.ats-interviews .ats-badge--confirmed { border-color: color-mix(in srgb, dodgerblue 45%, transparent); color: color-mix(in srgb, dodgerblue 70%, currentColor); }
+.ats-interviews .ats-badge--completed { border-color: color-mix(in srgb, green 45%, transparent); color: color-mix(in srgb, green 65%, currentColor); }
+.ats-interviews .ats-badge--no_show { border-color: color-mix(in srgb, red 45%, transparent); color: color-mix(in srgb, red 65%, currentColor); }
+.ats-interviews .ats-badge--cancelled { border-color: color-mix(in srgb, currentColor 30%, transparent); opacity: .7; }
+.ats-interviews .ats-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.ats-interviews .ats-action { padding: 3px 10px; border: 1px solid color-mix(in srgb, currentColor 22%, transparent); border-radius: 6px; background: color-mix(in srgb, currentColor 6%, transparent); color: inherit; font-size: 12px; cursor: pointer; }
+.ats-interviews .ats-action:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
+.ats-interviews .ats-score { font-size: 18px; font-weight: 700; min-width: 36px; text-align: right; opacity: .85; }
+.ats-interviews .ats-gate { font-size: 13px; }
+.ats-interviews .ats-gate:empty { display: none; }
+.ats-interviews .ats-gate { padding: 8px 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
+.ats-interviews .ats-gate--ok { border-color: color-mix(in srgb, green 40%, transparent); }
+.ats-interviews .ats-gate--block { border-color: color-mix(in srgb, red 40%, transparent); }
+.ats-interviews .ats-gate--offline { border-color: color-mix(in srgb, orange 45%, transparent); opacity: .9; }
+.ats-interviews .ats-gate .ats-result-row { margin-top: 4px; font-size: 12px; opacity: .85; }
+.ats-interviews .ats-gate .ats-blockers { margin: 6px 0 0; padding-left: 18px; }
+.ats-interviews .ats-gate .ats-blockers li { font-size: 12px; margin: 2px 0; }

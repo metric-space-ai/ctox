@@ -1,9 +1,9 @@
-
-const MOD_BUILD = '20260618-ats2';
+const MOD_BUILD = '20260620-ats9';
 const MODULE_ID = 'esign';
 const PRIMARY = 'signature_requests';
-const TITLE = "esign";
-const COMMAND_TYPE = 'ats.signature.request';
+const TITLE = 'esign';
+const CREATE_COMMAND = 'ats.signature.request';
+const SIGN_COMMAND = 'ats.signature.sign';
 const SUBJECT_KINDS = ['arbeitsvertrag', 'vermittlungsvertrag', 'ueberlassungsvertrag'];
 
 export async function mount(ctx) {
@@ -25,6 +25,12 @@ export async function mount(ctx) {
   let rowsCache = [];
   const collection = () => { try { return ctx.db?.collection?.(PRIMARY) || ctx.db?.[PRIMARY] || null; } catch { return null; } };
 
+  function setGate(html, kind) {
+    if (!gateEl) return;
+    gateEl.className = 'ats-gate' + (kind ? ' ats-gate--' + kind : '');
+    gateEl.innerHTML = html || '';
+  }
+
   async function render() {
     const col = collection();
     let rows = [];
@@ -32,59 +38,105 @@ export async function mount(ctx) {
       try { const docs = await col.find({ selector: {} }).exec(); rows = docs.map((d) => (typeof d.toJSON === 'function' ? d.toJSON() : d)).filter((r) => !r._deleted); }
       catch (e) { console.error('[esign] load failed:', e); }
     }
+    rows.sort((a, b) => (b.updated_at_ms || 0) - (a.updated_at_ms || 0));
     rowsCache = rows;
     if (countEl) countEl.textContent = rows.length + ' Einträge';
-    if (listEl) listEl.innerHTML = rows.length ? rows.map((r) => '<div class="ats-item">' + esc(r.id || '') + '</div>').join('') : '<div class="ats-empty">Noch keine Einträge.</div>';
+    if (listEl) listEl.innerHTML = rows.length ? rows.map((r) => signatureRow(r)).join('') : '<div class="ats-empty">Noch keine Einträge.</div>';
   }
 
-  function setGate(html, kind) {
-    if (!gateEl) return;
-    gateEl.className = 'ats-gate' + (kind ? ' is-' + kind : '');
-    gateEl.innerHTML = html || '';
+  async function onListClick(event) {
+    const btn = event.target?.closest?.('[data-sign]');
+    if (!btn) return;
+    const requestId = btn.getAttribute('data-sign');
+    const signerId = btn.getAttribute('data-signer');
+    if (!requestId || !signerId) return;
+    setGate('');
+    const dispatch = ctx.commandBus?.dispatch;
+    if (typeof dispatch !== 'function') { setGate('Offline: Befehlsdienst nicht verfügbar.', 'offline'); return; }
+    let result;
+    try {
+      result = await ctx.commandBus?.dispatch?.({
+        module: MODULE_ID,
+        type: SIGN_COMMAND,
+        command_type: SIGN_COMMAND,
+        payload: { request_id: requestId, signer_id: signerId },
+      });
+    } catch (e) {
+      console.error('[esign] sign dispatch failed:', e);
+      setGate('Offline: Befehl konnte nicht gesendet werden.', 'offline');
+      return;
+    }
+
+    if (renderBlocked(result)) return;
+    const reqId = result?.request_id ?? requestId;
+    const status = result?.status ?? '';
+    setGate(
+      '<strong>Signatur erfasst.</strong>'
+      + '<div class="ats-result-row">Anfrage: ' + esc(reqId) + '</div>'
+      + '<div class="ats-result-row">Unterzeichner: ' + esc(signerId) + '</div>'
+      + (status ? '<div class="ats-result-row">Status: ' + esc(status) + '</div>' : ''),
+      'ok'
+    );
+    await render();
+  }
+  listEl?.addEventListener('click', onListClick);
+
+  function renderBlocked(result) {
+    const decision = result?.gate || result?.decision || null;
+    const blockers = result?.blockers || decision?.blockers || result?.errors || null;
+    const blocked = !result || result?.ok === false || result?.status === 'blocked'
+      || decision?.status === 'blocked' || decision?.decision === 'block'
+      || (Array.isArray(blockers) && blockers.length > 0);
+    if (!blocked) return false;
+    const items = (Array.isArray(blockers) ? blockers : [blockers])
+      .filter(Boolean)
+      .map((b) => '<li>' + esc(typeof b === 'string' ? b : (b?.message || b?.reason || JSON.stringify(b))) + '</li>')
+      .join('');
+    setGate('<strong>Blockiert.</strong>' + (items ? '<ul class="ats-blockers">' + items + '</ul>' : ''), 'block');
+    return true;
   }
 
   async function onSubmit(event) {
     event.preventDefault();
     setGate('');
+    const dispatch = ctx.commandBus?.dispatch;
+    if (typeof dispatch !== 'function') { setGate('Offline: Befehlsdienst nicht verfügbar.', 'offline'); return; }
     const data = new FormData(formEl);
     const f = Object.fromEntries(data.entries());
     const document_id = String(f.document_id || '').trim();
+    if (!document_id) { setGate('Dokument-ID erforderlich.', 'block'); return; }
     const subject_kind = SUBJECT_KINDS.includes(f.subject_kind) ? f.subject_kind : SUBJECT_KINDS[0];
-    if (!document_id) { setGate('Dokument-ID erforderlich.', 'error'); return; }
+    const signers = String(f.signers || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((id) => ({ id, state: 'pending' }));
+    const payload = { document_id, subject_kind, signers };
 
-    const payload = { document_id, subject_kind, signers: [] };
-    let result = null;
+    let result;
     try {
       result = await ctx.commandBus?.dispatch?.({
         module: MODULE_ID,
-        type: COMMAND_TYPE,
-        command_type: COMMAND_TYPE,
+        type: CREATE_COMMAND,
+        command_type: CREATE_COMMAND,
         payload,
       });
     } catch (e) {
       console.error('[esign] dispatch failed:', e);
-      setGate('Offline – Befehl konnte nicht gesendet werden.', 'error');
+      setGate('Offline: Befehl konnte nicht gesendet werden.', 'offline');
       return;
     }
 
-    if (!result) { setGate('Offline – kein Ergebnis vom Server.', 'error'); return; }
-
-    const blockers = Array.isArray(result.blockers) ? result.blockers
-      : (Array.isArray(result.gate?.blockers) ? result.gate.blockers : []);
-    const status = result.status || result.gate?.decision || '';
-    const blocked = (status === 'blocked' || status === 'denied' || result.gate?.decision === 'block') || blockers.length > 0;
-
-    if (blocked) {
-      const items = blockers.length
-        ? '<ul class="ats-blockers">' + blockers.map((b) => '<li>' + esc(typeof b === 'string' ? b : (b?.reason || b?.message || JSON.stringify(b))) + '</li>').join('') + '</ul>'
-        : '';
-      setGate('Gate blockiert' + (status ? ' (' + esc(status) + ')' : '') + items, 'error');
-      return;
-    }
-
-    const reqId = result.request_id || result.id || '';
-    setGate('Angelegt: ' + esc(reqId) + (status ? ' · ' + esc(status) : ''), 'ok');
-    formEl.reset();
+    if (renderBlocked(result)) return;
+    const reqId = result?.request_id ?? result?.data?.request_id ?? null;
+    const status = result?.status ?? result?.data?.status ?? null;
+    setGate(
+      '<strong>Signatur-Anfrage angelegt.</strong>'
+      + '<div class="ats-result-row">Anfrage: ' + esc(reqId ?? '—') + '</div>'
+      + '<div class="ats-result-row">Status: ' + esc(status ?? '—') + '</div>',
+      'ok'
+    );
+    try { formEl.reset(); } catch {}
     await render();
   }
   formEl?.addEventListener('submit', onSubmit);
@@ -94,7 +146,41 @@ export async function mount(ctx) {
   if (col?.find) { try { sub = col.find({ selector: {} }).$?.subscribe?.(() => { render().catch(() => {}); }); } catch {} }
   await render();
 
-  return () => { try { sub?.unsubscribe?.(); } catch {} formEl?.removeEventListener('submit', onSubmit); ctx.host.replaceChildren(); delete ctx.host.dataset.atsModule; };
+  return () => {
+    try { sub?.unsubscribe?.(); } catch {}
+    formEl?.removeEventListener('submit', onSubmit);
+    listEl?.removeEventListener('click', onListClick);
+    ctx.host.replaceChildren();
+    delete ctx.host.dataset.atsModule;
+  };
+}
+
+function signatureRow(r) {
+  const status = String(r.status || 'created');
+  const signers = Array.isArray(r.signers) ? r.signers : [];
+  const signed = signers.filter((s) => s && s.state === 'signed').length;
+  const total = signers.length;
+  const main = esc(r.document_id || r.id || '—')
+    + (r.subject_kind ? ' · ' + esc(r.subject_kind) : '');
+  const metaParts = [];
+  metaParts.push('Anfrage: ' + esc(r.id || '—'));
+  if (total) metaParts.push('Unterzeichner: ' + signed + '/' + total);
+  if (r.signed_artifact_id) metaParts.push('Artefakt: ' + esc(r.signed_artifact_id));
+  const meta = metaParts.join(' · ');
+
+  const completed = status === 'completed' || status === 'declined' || status === 'expired';
+  const actions = completed ? '' : signers
+    .filter((s) => s && s.id && s.state !== 'signed' && s.state !== 'declined')
+    .map((s) => '<button type="button" class="ats-action" data-sign="' + esc(r.id || '') + '" data-signer="' + esc(s.id) + '">Signieren: ' + esc(s.id) + '</button>')
+    .join('');
+
+  return '<div class="ats-item ats-item--rich">'
+    + '<div class="ats-item-main">'
+    + '<div><span class="ats-badge ats-badge--' + esc(status) + '">' + esc(status) + '</span> ' + main + '</div>'
+    + '<div class="ats-item-meta">' + meta + '</div>'
+    + '</div>'
+    + '<div class="ats-item-actions">' + actions + '</div>'
+    + '</div>';
 }
 
 async function ensureStyles() {

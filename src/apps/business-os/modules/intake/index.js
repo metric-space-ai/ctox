@@ -1,8 +1,8 @@
+const MOD_BUILD = '20260620-ats9';
 const MODULE_ID = 'intake';
-const MOD_BUILD = '20260618-ats2';
 const PRIMARY = 'applications';
 const TITLE = 'intake';
-const COMMAND_TYPE = 'ats.intake.capture';
+const CAPTURE_COMMAND = 'ats.intake.capture';
 
 export async function mount(ctx) {
   await ensureStyles();
@@ -15,7 +15,6 @@ export async function mount(ctx) {
   const countEl = root?.querySelector('[data-ats-count]');
   const formEl = root?.querySelector('[data-ats-form]');
   const gateEl = root?.querySelector('[data-ats-gate]');
-  const statusEl = root?.querySelector('[data-ats-status]');
   const titleEl = root?.querySelector('[data-ats-title]');
   const subEl = root?.querySelector('[data-ats-sub]');
   if (titleEl) titleEl.textContent = ctx.manifest?.title || TITLE;
@@ -24,12 +23,11 @@ export async function mount(ctx) {
   let rowsCache = [];
   const collection = () => { try { return ctx.db?.collection?.(PRIMARY) || ctx.db?.[PRIMARY] || null; } catch { return null; } };
 
-  function setStatus(html, kind) {
-    if (!statusEl) return;
-    statusEl.innerHTML = html || '';
-    statusEl.dataset.kind = kind || '';
+  function setGate(html, kind) {
+    if (!gateEl) return;
+    gateEl.className = 'ats-gate' + (kind ? ' ats-gate--' + kind : '');
+    gateEl.innerHTML = html || '';
   }
-  function setGate(html) { if (gateEl) gateEl.innerHTML = html || ''; }
 
   async function render() {
     const col = collection();
@@ -38,55 +36,90 @@ export async function mount(ctx) {
       try { const docs = await col.find({ selector: {} }).exec(); rows = docs.map((d) => (typeof d.toJSON === 'function' ? d.toJSON() : d)).filter((r) => !r._deleted); }
       catch (e) { console.error('[intake] load failed:', e); }
     }
+    rows.sort((a, b) => (Number(b.received_at_ms || b.created_at_ms || 0) - Number(a.received_at_ms || a.created_at_ms || 0)));
     rowsCache = rows;
     if (countEl) countEl.textContent = rows.length + ' Einträge';
-    if (listEl) listEl.innerHTML = rows.length ? rows.map((r) => '<div class="ats-item">' + esc(r.id || '') + '</div>').join('') : '<div class="ats-empty">Noch keine Einträge.</div>';
+    if (listEl) listEl.innerHTML = rows.length ? rows.map((r) => applicationRow(r)).join('') : '<div class="ats-empty">Noch keine Einträge.</div>';
   }
+
+  // Delegated row-action handler. The intake capture engine exposes no
+  // per-record native command, so rows carry no command buttons today; the
+  // handler stays wired (and is removed in cleanup) for forward-compat with
+  // secondary actions added to applicationRow().
+  async function onListClick(event) {
+    const btn = event.target?.closest?.('[data-action]');
+    if (!btn) return;
+    // No native row command yet — nothing to dispatch.
+  }
+  listEl?.addEventListener('click', onListClick);
 
   async function onSubmit(event) {
     event.preventDefault();
     setGate('');
-    setStatus('');
+    const dispatch = ctx.commandBus?.dispatch;
+    if (typeof dispatch !== 'function') {
+      setGate('Offline: Befehlsdienst nicht verfügbar.', 'offline');
+      return;
+    }
     const data = new FormData(formEl);
     const f = Object.fromEntries(data.entries());
     const name = String(f.name == null ? '' : f.name).trim();
+    if (!name) { setGate('Name ist erforderlich.', 'block'); return; }
     const email = String(f.email == null ? '' : f.email).trim();
-    const channel = String(f.channel == null ? '' : f.channel).trim();
-    if (!name) { setGate('<span class="ats-block">Name ist erforderlich.</span>'); return; }
+    const phone = String(f.phone == null ? '' : f.phone).trim();
+    const vacancy_id = String(f.vacancy_id == null ? '' : f.vacancy_id).trim();
+    const channel = String(f.channel == null ? '' : f.channel).trim() || 'email';
+    const payload = {
+      name,
+      email: email || null,
+      phone: phone || null,
+      vacancy_id: vacancy_id || null,
+      channel,
+    };
 
     const submitBtn = formEl?.querySelector('button[type="submit"]');
     if (submitBtn) submitBtn.disabled = true;
+    let result;
     try {
-      const dispatch = ctx.commandBus?.dispatch;
-      if (typeof dispatch !== 'function') {
-        setStatus('<span class="ats-offline">Offline — Befehl nicht verfügbar.</span>', 'offline');
-        return;
-      }
-      const result = await ctx.commandBus.dispatch({
+      result = await dispatch({
         module: MODULE_ID,
-        type: COMMAND_TYPE,
-        command_type: COMMAND_TYPE,
-        payload: { name, email, channel },
+        type: CAPTURE_COMMAND,
+        command_type: CAPTURE_COMMAND,
+        payload,
       });
-      const gate = result?.gate || result?.decision || null;
-      const blocked = result?.blocked === true || gate?.decision === 'block' || (Array.isArray(gate?.blockers) && gate.blockers.length > 0) || (Array.isArray(result?.blockers) && result.blockers.length > 0);
-      const blockers = (Array.isArray(gate?.blockers) ? gate.blockers : (Array.isArray(result?.blockers) ? result.blockers : []));
-      if (blocked) {
-        const items = blockers.length ? blockers.map((b) => '<li>' + esc(typeof b === 'string' ? b : (b?.message || b?.reason || JSON.stringify(b))) + '</li>').join('') : '<li>' + esc(gate?.reason || 'Eingang blockiert.') + '</li>';
-        setGate('<div class="ats-block"><strong>Gate blockiert:</strong><ul>' + items + '</ul></div>');
-        return;
-      }
-      const appId = result?.application_id || '';
-      const dedupeKey = result?.dedupe_key || '';
-      setStatus('<span class="ats-ok">Angelegt: ' + esc(appId) + (dedupeKey ? ' <small>(' + esc(dedupeKey) + ')</small>' : '') + '</span>', 'ok');
-      formEl.reset();
-      await render();
     } catch (e) {
       console.error('[intake] dispatch failed:', e);
-      setStatus('<span class="ats-offline">Offline — ' + esc(e?.message || String(e)) + '</span>', 'offline');
+      setGate('Offline: Befehl konnte nicht gesendet werden.', 'offline');
+      return;
     } finally {
       if (submitBtn) submitBtn.disabled = false;
     }
+
+    const decision = result?.gate || result?.decision || null;
+    const blockers = result?.blockers || decision?.blockers || result?.errors || null;
+    const blocked = result?.ok === false || result?.status === 'blocked' || result?.allowed === false
+      || decision?.status === 'blocked' || decision?.decision === 'block'
+      || (Array.isArray(blockers) && blockers.length > 0);
+
+    if (blocked) {
+      const items = (Array.isArray(blockers) ? blockers : [blockers])
+        .filter(Boolean)
+        .map((b) => '<li>' + esc(typeof b === 'string' ? b : (b?.message || b?.reason || JSON.stringify(b))) + '</li>')
+        .join('');
+      setGate('<strong>Eingang blockiert.</strong>' + (items ? '<ul class="ats-blockers">' + items + '</ul>' : ''), 'block');
+      return;
+    }
+
+    const appId = result?.application_id ?? result?.data?.application_id ?? null;
+    const dedupeKey = result?.dedupe_key ?? result?.data?.dedupe_key ?? null;
+    setGate(
+      '<strong>Bewerbung erfasst.</strong>'
+      + '<div class="ats-result-row">Application: ' + esc(appId ?? '—') + '</div>'
+      + '<div class="ats-result-row">Dedupe-Key: ' + esc(dedupeKey ?? '—') + '</div>',
+      'ok'
+    );
+    try { formEl.reset(); } catch {}
+    await render();
   }
   formEl?.addEventListener('submit', onSubmit);
 
@@ -95,7 +128,51 @@ export async function mount(ctx) {
   if (col?.find) { try { sub = col.find({ selector: {} }).$?.subscribe?.(() => { render().catch(() => {}); }); } catch {} }
   await render();
 
-  return () => { try { sub?.unsubscribe?.(); } catch {} formEl?.removeEventListener('submit', onSubmit); ctx.host.replaceChildren(); delete ctx.host.dataset.atsModule; };
+  return () => {
+    try { sub?.unsubscribe?.(); } catch {}
+    formEl?.removeEventListener('submit', onSubmit);
+    listEl?.removeEventListener('click', onListClick);
+    ctx.host.replaceChildren();
+    delete ctx.host.dataset.atsModule;
+  };
+}
+
+function applicationRow(r) {
+  const candidate = r && typeof r.candidate === 'object' && r.candidate ? r.candidate : {};
+  const name = candidate.name || r.name || '(ohne Namen)';
+  const email = candidate.email || r.email || '';
+  const phone = candidate.phone || r.phone || '';
+  const status = String(r.status || 'new');
+  const channel = r.channel || '—';
+  const id = r.id || '';
+  const dedupe = r.dedupe_key || '';
+  const vacancy = r.vacancy_id || '';
+  const docs = Array.isArray(r.documents) ? r.documents.length : 0;
+  const ts = Number(r.received_at_ms || r.created_at_ms || 0);
+
+  const contact = [email, phone].filter(Boolean).map(esc).join(' · ');
+  const metaParts = [];
+  if (id) metaParts.push('<span class="ats-tag">' + esc(id) + '</span>');
+  if (dedupe) metaParts.push('Dedupe: ' + esc(dedupe));
+  if (vacancy) metaParts.push('Vakanz: ' + esc(vacancy));
+  if (docs) metaParts.push(docs + ' Dok.');
+  if (ts) metaParts.push(esc(fmtDate(ts)));
+
+  return '<div class="ats-item ats-item--rich">'
+    + '<div class="ats-item-body">'
+    + '<div class="ats-item-main">'
+    + '<span class="ats-badge ats-badge--' + esc(status) + '">' + esc(status) + '</span>'
+    + '<span class="ats-channel">' + esc(channel) + '</span>'
+    + '<span class="ats-name">' + esc(name) + '</span>'
+    + '</div>'
+    + (contact ? '<div class="ats-item-sub">' + contact + '</div>' : '')
+    + '<div class="ats-item-meta">' + metaParts.join(' · ') + '</div>'
+    + '</div>'
+    + '</div>';
+}
+
+function fmtDate(ms) {
+  try { return new Date(ms).toISOString().slice(0, 16).replace('T', ' '); } catch { return ''; }
 }
 
 async function ensureStyles() {

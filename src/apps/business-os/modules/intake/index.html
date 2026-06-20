@@ -2,11 +2,20 @@
   <header class="ats-head"><h1 data-ats-title></h1><p class="ats-sub" data-ats-sub></p></header>
   <form class="ats-form" data-ats-form>
     <input type="text" name="name" placeholder="Name" required data-f />
-    <input type="text" name="email" placeholder="E-Mail" data-f />
-    <select name="channel" data-f><option value="career_site">career_site</option><option value="job_board">job_board</option><option value="email">email</option><option value="referral">referral</option><option value="qr">qr</option></select>
-    <button type="submit">Anlegen</button>
+    <input type="email" name="email" placeholder="E-Mail" data-f />
+    <input type="text" name="phone" placeholder="Telefon" data-f />
+    <input type="text" name="vacancy_id" placeholder="Vakanz-ID" data-f />
+    <select name="channel" data-f>
+      <option value="career_site">career_site</option>
+      <option value="job_board">job_board</option>
+      <option value="easy_apply">easy_apply</option>
+      <option value="email">email</option>
+      <option value="qr">qr</option>
+      <option value="walk_in">walk_in</option>
+      <option value="referral">referral</option>
+    </select>
+    <button type="submit">Erfassen</button>
   </form>
-  <div class="ats-status" data-ats-status></div>
   <div class="ats-gate" data-ats-gate></div>
   <div class="ats-count" data-ats-count></div>
   <div class="ats-list" data-ats-list></div>

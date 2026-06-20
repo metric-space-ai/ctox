@@ -1,15 +1,44 @@
 .ats-intake { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; height: 100%; overflow: auto; box-sizing: border-box; }
 .ats-intake .ats-head h1 { margin: 0; font-size: 18px; font-weight: 600; }
 .ats-intake .ats-sub { margin: 2px 0 0; font-size: 13px; opacity: .7; }
+.ats-intake .ats-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ats-intake .ats-form input, .ats-intake .ats-form select { font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 6px; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); background: transparent; color: inherit; }
+.ats-intake .ats-form button { font: inherit; font-size: 13px; padding: 6px 14px; border-radius: 6px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); background: color-mix(in srgb, currentColor 8%, transparent); color: inherit; cursor: pointer; }
+.ats-intake .ats-form button[disabled] { opacity: .5; cursor: default; }
 .ats-intake .ats-count { font-size: 13px; opacity: .8; }
-.ats-intake .ats-item { padding: 8px 12px; border: 1px solid color-mix(in srgb, currentColor 12%, transparent); border-radius: 8px; margin-bottom: 6px; font-size: 13px; }
 .ats-intake .ats-empty { font-size: 13px; opacity: .6; padding: 20px 0; }
-.ats-intake .ats-status { font-size: 13px; min-height: 0; }
-.ats-intake .ats-status:empty { display: none; }
-.ats-intake .ats-status .ats-ok { color: color-mix(in srgb, currentColor 55%, green); }
-.ats-intake .ats-status .ats-offline { color: color-mix(in srgb, currentColor 55%, orange); }
-.ats-intake .ats-status small { opacity: .7; }
+
+/* Gate (capture result / blockers) — shared class names with placements. */
+.ats-intake .ats-gate { font-size: 13px; }
 .ats-intake .ats-gate:empty { display: none; }
-.ats-intake .ats-block { color: color-mix(in srgb, currentColor 50%, red); font-size: 13px; }
-.ats-intake .ats-block ul { margin: 4px 0 0; padding-left: 18px; }
-.ats-intake .ats-block li { margin: 2px 0; }
+.ats-intake .ats-gate { padding: 8px 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
+.ats-intake .ats-gate--ok { border-color: color-mix(in srgb, green 40%, transparent); }
+.ats-intake .ats-gate--block { border-color: color-mix(in srgb, red 40%, transparent); }
+.ats-intake .ats-gate--offline { border-color: color-mix(in srgb, orange 45%, transparent); opacity: .9; }
+.ats-intake .ats-gate .ats-result-row { margin-top: 4px; font-size: 12px; opacity: .85; }
+.ats-intake .ats-gate .ats-blockers { margin: 6px 0 0; padding-left: 18px; }
+.ats-intake .ats-gate .ats-blockers li { font-size: 12px; margin: 2px 0; }
+
+/* Rich list rows. */
+.ats-intake .ats-list { display: flex; flex-direction: column; gap: 6px; }
+.ats-intake .ats-item { padding: 8px 12px; border: 1px solid color-mix(in srgb, currentColor 12%, transparent); border-radius: 8px; font-size: 13px; }
+.ats-intake .ats-item--rich { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
+.ats-intake .ats-item-body { min-width: 0; }
+.ats-intake .ats-item-main { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ats-intake .ats-item-main .ats-name { font-weight: 600; }
+.ats-intake .ats-item-main .ats-channel { font-size: 12px; opacity: .8; }
+.ats-intake .ats-item-sub { margin-top: 3px; font-size: 12px; opacity: .85; }
+.ats-intake .ats-item-meta { margin-top: 3px; font-size: 12px; opacity: .65; }
+.ats-intake .ats-tag { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; opacity: .9; }
+
+/* Status badges. */
+.ats-intake .ats-badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; text-transform: lowercase; border: 1px solid color-mix(in srgb, currentColor 22%, transparent); }
+.ats-intake .ats-badge--new { color: color-mix(in srgb, currentColor 55%, dodgerblue); border-color: color-mix(in srgb, dodgerblue 45%, transparent); }
+.ats-intake .ats-badge--screening { color: color-mix(in srgb, currentColor 55%, orange); border-color: color-mix(in srgb, orange 45%, transparent); }
+.ats-intake .ats-badge--duplicate { color: color-mix(in srgb, currentColor 55%, orange); border-color: color-mix(in srgb, orange 45%, transparent); }
+.ats-intake .ats-badge--rejected { color: color-mix(in srgb, currentColor 50%, red); border-color: color-mix(in srgb, red 40%, transparent); }
+.ats-intake .ats-badge--hired { color: color-mix(in srgb, currentColor 55%, green); border-color: color-mix(in srgb, green 40%, transparent); }
+
+/* Per-row action buttons (reserved for future native row commands). */
+.ats-intake .ats-action { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); background: transparent; color: inherit; cursor: pointer; }
+.ats-intake .ats-action:hover { background: color-mix(in srgb, currentColor 8%, transparent); }

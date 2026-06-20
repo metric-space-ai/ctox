@@ -2,8 +2,17 @@
   <header class="ats-head"><h1 data-ats-title></h1><p class="ats-sub" data-ats-sub></p></header>
   <form class="ats-form" data-ats-form>
     <input type="text" name="candidate_id" placeholder="Kandidat-ID" required data-f />
-    <input type="text" name="role_template" placeholder="Rollen-Template" data-f />
-    <button type="submit">Anlegen</button>
+    <input type="text" name="vacancy_id" placeholder="Vakanz-ID" data-f />
+    <input type="text" name="parties" placeholder="Parteien (Komma-getrennt)" data-f />
+    <input type="datetime-local" name="start" data-f />
+    <input type="number" name="duration_min" placeholder="Dauer (Min)" data-f />
+    <select name="location_mode" data-f>
+      <option value="video">Video</option>
+      <option value="onsite">Vor Ort</option>
+      <option value="phone">Telefon</option>
+    </select>
+    <input type="text" name="video_link" placeholder="Video-Link" data-f />
+    <button type="submit">Termin anlegen</button>
   </form>
   <div class="ats-gate" data-ats-gate></div>
   <div class="ats-count" data-ats-count></div>

@@ -1,6 +1,38 @@
 .ats-consent { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; height: 100%; overflow: auto; box-sizing: border-box; }
 .ats-consent .ats-head h1 { margin: 0; font-size: 18px; font-weight: 600; }
 .ats-consent .ats-sub { margin: 2px 0 0; font-size: 13px; opacity: .7; }
+.ats-consent .ats-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ats-consent .ats-form input { flex: 1 1 180px; min-width: 140px; padding: 6px 10px; border-radius: 8px; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); background: transparent; color: inherit; font-size: 13px; }
+.ats-consent .ats-form button { padding: 6px 14px; border-radius: 8px; border: 1px solid color-mix(in srgb, currentColor 22%, transparent); background: color-mix(in srgb, currentColor 8%, transparent); color: inherit; font-size: 13px; cursor: pointer; }
+.ats-consent .ats-form button:hover { background: color-mix(in srgb, currentColor 14%, transparent); }
+.ats-consent .ats-subject-actions { padding-top: 2px; border-top: 1px dashed color-mix(in srgb, currentColor 12%, transparent); }
 .ats-consent .ats-count { font-size: 13px; opacity: .8; }
-.ats-consent .ats-item { padding: 8px 12px; border: 1px solid color-mix(in srgb, currentColor 12%, transparent); border-radius: 8px; margin-bottom: 6px; font-size: 13px; }
 .ats-consent .ats-empty { font-size: 13px; opacity: .6; padding: 20px 0; }
+
+.ats-consent .ats-item { padding: 8px 12px; border: 1px solid color-mix(in srgb, currentColor 12%, transparent); border-radius: 8px; margin-bottom: 6px; font-size: 13px; }
+.ats-consent .ats-item--rich { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }
+.ats-consent .ats-item-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.ats-consent .ats-item-title { font-weight: 600; }
+.ats-consent .ats-item-meta { font-size: 12px; opacity: .7; }
+.ats-consent .ats-item-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+.ats-consent .ats-badge { display: inline-block; align-self: flex-start; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; border: 1px solid color-mix(in srgb, currentColor 25%, transparent); text-transform: uppercase; letter-spacing: .02em; }
+.ats-consent .ats-badge--active { color: color-mix(in srgb, green 75%, currentColor); border-color: color-mix(in srgb, green 45%, transparent); }
+.ats-consent .ats-badge--withdrawn { color: color-mix(in srgb, red 70%, currentColor); border-color: color-mix(in srgb, red 45%, transparent); }
+.ats-consent .ats-badge--expired { color: color-mix(in srgb, orange 75%, currentColor); border-color: color-mix(in srgb, orange 50%, transparent); }
+.ats-consent .ats-badge--pending { color: color-mix(in srgb, orange 70%, currentColor); border-color: color-mix(in srgb, orange 40%, transparent); opacity: .9; }
+
+.ats-consent .ats-action { padding: 4px 10px; border-radius: 7px; border: 1px solid color-mix(in srgb, currentColor 22%, transparent); background: transparent; color: inherit; font-size: 12px; cursor: pointer; }
+.ats-consent .ats-action:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
+.ats-consent .ats-action--danger { color: color-mix(in srgb, red 70%, currentColor); border-color: color-mix(in srgb, red 35%, transparent); }
+.ats-consent .ats-action--danger:hover { background: color-mix(in srgb, red 15%, transparent); }
+
+.ats-consent .ats-gate { font-size: 13px; padding: 8px 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
+.ats-consent .ats-gate:empty { display: none; }
+.ats-consent .ats-gate--ok { border-color: color-mix(in srgb, green 40%, transparent); }
+.ats-consent .ats-gate--block { border-color: color-mix(in srgb, red 40%, transparent); }
+.ats-consent .ats-gate--offline { border-color: color-mix(in srgb, orange 45%, transparent); opacity: .9; }
+.ats-consent .ats-gate .ats-result-row { margin-top: 4px; font-size: 12px; opacity: .85; }
+.ats-consent .ats-gate .ats-blockers { margin: 6px 0 0; padding-left: 18px; }
+.ats-consent .ats-gate .ats-blockers li { font-size: 12px; margin: 2px 0; }
+.ats-consent .ats-gate .ats-export { margin: 6px 0 0; padding: 8px 10px; border-radius: 6px; background: color-mix(in srgb, currentColor 6%, transparent); font-size: 11px; line-height: 1.4; max-height: 240px; overflow: auto; white-space: pre-wrap; word-break: break-word; }

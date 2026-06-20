@@ -1,20 +1,30 @@
-<section class="credentials-module" data-credentials-root>
-  <header class="credentials-head">
-    <h1>Nachweise</h1>
-    <p class="credentials-sub">Ablaufende, verifizierte Nachweise je Subjekt mit Einsatz-Gate.</p>
+<section class="ats-module ats-nachweise" data-ats-root data-credentials-root>
+  <header class="ats-head">
+    <h1 data-ats-title>Nachweise</h1>
+    <p class="ats-sub" data-ats-sub>Ablaufende, verifizierte Nachweise je Subjekt mit Einsatz-Gate und Leistungsnachweis-Freigabe.</p>
   </header>
-  <form class="credentials-form" data-credentials-form>
-    <input type="text" name="subject_id" placeholder="Subjekt-ID (Kandidat/Mitarbeiter)" required />
-    <select name="credential_type" data-credential-type></select>
-    <input type="text" name="issuer" placeholder="Aussteller" />
-    <input type="date" name="valid_until" />
+
+  <form class="ats-form" data-ats-form data-credentials-form>
+    <input type="text" name="subject_id" placeholder="Subjekt-ID (Kandidat/Mitarbeiter)" required data-f />
+    <select name="credential_type" data-credential-type data-f></select>
+    <input type="text" name="issuer" placeholder="Aussteller" data-f />
+    <input type="date" name="valid_until" data-f />
     <button type="submit">Nachweis hinzufügen</button>
   </form>
-  <form class="credentials-gate-form" data-credentials-gate-form>
-    <input type="text" name="subject_id" placeholder="Subjekt-ID für Einsatz-Prüfung" required />
-    <input type="text" name="required_types" placeholder="Pflicht-Typen (kommagetrennt)" />
+
+  <form class="ats-form ats-form--gate" data-ats-gate-form>
+    <input type="text" name="subject_id" placeholder="Subjekt-ID für Einsatz-Prüfung" required data-f />
+    <input type="text" name="required_types" placeholder="Pflicht-Typen (kommagetrennt)" data-f />
     <button type="submit">Einsatzbereitschaft prüfen</button>
-    <span class="credentials-gate-result" data-credentials-gate-result></span>
   </form>
-  <div class="credentials-list" data-credentials-list></div>
+
+  <form class="ats-form ats-form--signoff" data-ats-signoff-form>
+    <input type="text" name="record_id" placeholder="Leistungsnachweis-ID (Sign-off)" required data-f />
+    <input type="text" name="collection" placeholder="Collection (optional, Standard: planning_time_records)" data-f />
+    <button type="submit">Entleiher-Sign-off → Abrechnung freigeben</button>
+  </form>
+
+  <div class="ats-gate" data-ats-gate></div>
+  <div class="ats-count" data-ats-count></div>
+  <div class="ats-list" data-ats-list data-credentials-list></div>
 </section>

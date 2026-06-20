@@ -1,11 +1,18 @@
 <section class="ats-module ats-consent" data-ats-root>
   <header class="ats-head"><h1 data-ats-title></h1><p class="ats-sub" data-ats-sub></p></header>
+
   <form class="ats-form" data-ats-form>
     <input type="text" name="subject_id" placeholder="Subjekt-ID" required data-f />
-    <input type="text" name="purpose" placeholder="Zweck" required data-f />
-    <select name="legal_basis" data-f><option value="consent">consent</option><option value="contract">contract</option><option value="legitimate_interest">legitimate_interest</option><option value="legal_obligation">legal_obligation</option><option value="special_category_consent">special_category_consent</option></select>
-    <button type="submit">Anlegen</button>
+    <input type="text" name="purpose" placeholder="Zweck (optional — leer = nur Existenz)" data-f />
+    <button type="submit">Einwilligung prüfen</button>
   </form>
+
+  <form class="ats-form ats-subject-actions" data-ats-subject-form>
+    <input type="text" name="subject_id" placeholder="Subjekt-ID für Betroffenenrechte" data-f />
+    <button type="submit" data-subject-action="ats.subject.export" title="Recht auf Auskunft (DSGVO Art. 15)">Auskunft (Art. 15)</button>
+    <button type="submit" data-subject-action="ats.subject.erase" title="Recht auf Löschung (DSGVO Art. 17)">Löschen (Art. 17)</button>
+  </form>
+
   <div class="ats-gate" data-ats-gate></div>
   <div class="ats-count" data-ats-count></div>
   <div class="ats-list" data-ats-list></div>
