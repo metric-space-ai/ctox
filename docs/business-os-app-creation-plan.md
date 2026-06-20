@@ -68,8 +68,18 @@ Current baseline:
 - `ctox business-os app bench status --run-id rcli --validate` now writes a
   read-only status snapshot and distinguishes status collection from a green
   bench.
+- Browser smoke against a validation-green `rcli` app exposed a real runtime
+  lifecycle gap: private 0.x installed apps were projected into
+  `business_module_catalog`, but lacked creator/responsible assignment and an
+  initial app-version snapshot, so they were not openable by the local Business
+  OS user.
+- A source patch now makes app-create validation success seed the creating actor
+  as founder/responsible and records the initial `app_create` module version
+  before catalog projection. The bench runner also defaults to the local
+  Business OS session user instead of an artificial `rxdb-command` actor when
+  no actor is supplied.
 - App creation is not yet production-ready until CTOX-native bench runs pass
-  end to end.
+  end to end after this patch is installed through `ctox upgrade --dev`.
 
 ## Current Execution Slice
 
@@ -77,13 +87,13 @@ Owner: `Codex`
 
 Started: `2026-06-20`
 
-Active phase: `3. Run five-app bench in CTOX`
+Active phase: `4. Patch systemic lifecycle gap`
 
-Objective: finish evidence collection for bench run `rcli`, let CTOX finish or
-rework the remaining apps, and rerun only after every current result has a
-clear classification. The latest installed-run evidence shows two green apps,
-one project app with self-inconsistent generated tests/logic, one leased
-inventory task, and one pending contracts task.
+Objective: finish the lifecycle patch that makes validated private runtime apps
+visible/openable to the creating Business OS user, install it through
+`ctox upgrade --dev`, then start a fresh five-app bench. The existing `rcli`
+run remains useful forensic evidence, but it used the old actor/lifecycle path
+and must not be treated as the production-readiness proof.
 
 Immediate checklist:
 
@@ -92,16 +102,27 @@ Immediate checklist:
       `runtime/business-os/installed-modules/`.
 - [x] Run installed validation only for apps with module artifacts.
 - [x] Record missing files and validator failures per app.
+- [x] Run first browser smoke against a validation-green installed app.
+- [x] Classify the browser visibility failure as `runtime_orchestration_gap`.
+- [x] Patch app-create validation success to seed lifecycle assignment and an
+      initial app version for runtime-installed modules.
+- [x] Patch bench default actor to use the local Business OS session user.
+- [x] Verify the patched code with narrow Rust tests.
+- [x] Run `git diff --check` for changed files.
+- [ ] Commit and push the systemic fix.
+- [ ] Install with `ctox upgrade --dev`.
+- [ ] Start a fresh five-app bench without `--actor` so it uses the local
+      Business OS user.
 - [ ] Record whether any app dispatched a real automation command.
-- [ ] Run or schedule browser smoke only after validation has enough artifacts
-      to mount the app.
-- [x] Classify each failure before patching code, skill resources, or
+- [ ] Run browser smoke after the fresh bench has validation-green artifacts.
+- [x] Classify current failures before patching code, skill resources, or
       validation.
 - [x] Update Evidence Log and Open Issues before handoff.
 
 Do not patch the app outputs directly. Do not add deterministic builders. Do not
-move to Phase 4 until the current bench evidence is specific enough to justify a
-systemic fix.
+add skill rules for the old `rcli` project-app helper-test failure unless the
+same class repeats. The current patch is allowed because browser smoke proved a
+load-bearing Business OS lifecycle/orchestration gap, not a model-output issue.
 
 ## Tracker
 
@@ -110,10 +131,10 @@ systemic fix.
 | 0. Remove wrong architecture | done | Codex | `e8bec3b8`, `b142e4c8`, installed release `branch-main-20260620T102259Z` | App Creator no longer writes app files itself; resource-index skill installed. |
 | 1. Define acceptance gates | pending |  |  | Formalize what must pass for app creation, modification, validation, browser smoke, and automation. |
 | 2. Build CTOX-native bench runner | done | Codex | `8a8cd236`; `cargo test --bin ctox app_bench_`; installed release `branch-main-20260620T113510Z`; CLI run `rcli` | Runner submits real `ctox.business_os.app.create` tasks, writes runtime JSONL evidence, and does not write app artifacts. |
-| 3. Run five-app bench in CTOX | in_progress | Codex | run `rcli`; installed status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rcli/status-1781957954819.json`; release `branch-main-20260620T120455Z` | Two apps handled and validation-green; project app artifacts exist but validation is red due self-inconsistent generated tests/logic; inventory is leased; contracts is pending. Browser smoke and automation smoke are not done yet. |
-| 4. Classify failures | pending |  |  | Separate skill/resource gaps, validator gaps, runtime orchestration gaps, and model failures. |
-| 5. Patch only systemic gaps | pending |  |  | Fix repeated or architecture-level failures only. Avoid ad hoc app-specific fixes. |
-| 6. Repeat until green | pending |  |  | Reset bench apps, rerun, and update this plan with each round. |
+| 3. Run five-app bench in CTOX | blocked | Codex | run `rcli`; installed status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rcli/status-1781958189008.json`; browser smoke against `http://127.0.0.1:8765/#bench_subscriptions_rcli` | `rcli` produced two validation-green apps, but browser smoke showed validation-green private apps were not openable because creator/responsible lifecycle fields were empty. Continue with a fresh run after Phase 4 patch is installed. |
+| 4. Patch systemic gaps | in_progress | Codex | source patch in `src/core/business_os/store.rs` and `src/core/service/business_os.rs`; `cargo test --bin ctox app_bench_`; `cargo test --bin ctox app_validation_success_accepts_postlease_artifact_write` | Classification from `rcli`: project helper-test mismatch is `model_failure`; private app visibility is `runtime_orchestration_gap`. Patch only lifecycle/orchestration gap: app-create success assigns the creating actor as founder/responsible, records an initial app version, and bench defaults to local session user. No app-output repair and no deterministic builder. |
+| 5. Repeat until green | pending |  |  | Reset bench apps, rerun, and update this plan with each round. |
+| 6. Entry point coverage | pending |  |  | Verify App Creator, Chat, App Store/template flow, CLI, and external inbound paths bind the same skill/resource context. |
 | 7. Production signoff | pending |  |  | All entry points produce runnable validated apps with evidence. |
 
 Status values: `pending`, `in_progress`, `blocked`, `done`.
@@ -343,7 +364,7 @@ Phase update checklist:
 
 ### Phase 3: First Five-App CTOX Run
 
-Status: `in_progress`
+Status: `blocked`
 
 Tasks:
 
@@ -363,13 +384,13 @@ Phase update checklist:
 - [x] Produced module paths recorded for all apps that currently have
       artifacts.
 - [x] Validation results recorded for all apps that currently have artifacts.
-- [ ] Browser smoke results recorded per app.
+- [x] Initial browser smoke recorded for validation-green app.
 - [ ] Automation dispatch evidence recorded per app.
 - [x] Current failures classified before any patch.
 
 ### Phase 4: Systemic Fixes
 
-Status: `pending`
+Status: `in_progress`
 
 Tasks:
 
@@ -386,11 +407,13 @@ Exit criteria:
 
 Phase update checklist:
 
-- [ ] Failure class named before patching.
-- [ ] Patch scope limited to skill resource, validator, entry point, or
+- [x] Failure class named before patching.
+- [x] Patch scope limited to skill resource, validator, entry point, or
       orchestration gap.
-- [ ] No app-specific bench repair committed.
-- [ ] Regression test or evidence added.
+- [x] No app-specific bench repair committed.
+- [x] Regression test or evidence added.
+- [ ] Patched tree installed through `ctox upgrade --dev`.
+- [ ] Fresh CTOX-native bench started after install.
 
 ### Phase 5: Repeat Bench
 
@@ -637,30 +660,66 @@ Append one entry per meaningful run.
   contracts finish, then collect another installed `bench status --validate`
   snapshot. Patch only if a repeated architecture-level class appears.
 
+### 2026-06-20 App Lifecycle Visibility Gap
+
+- Phase: 3 classification and Phase 4 systemic fix
+- Owner: Codex
+- Run id / task ids: `rcli`; validation-green app
+  `bench_subscriptions_rcli`
+- Commands:
+  `ctox business-os app bench status --run-id rcli --validate`;
+  browser smoke against `http://127.0.0.1:8765/#bench_subscriptions_rcli`;
+  SQLite inspection of installed `business_module_catalog`,
+  `business_module_versions`, `business_module_acl`, and `business_users`;
+  `cargo test --bin ctox app_bench_`;
+  `cargo test --bin ctox app_validation_success_accepts_postlease_artifact_write`
+- Changed files:
+  `src/core/business_os/store.rs`,
+  `src/core/service/business_os.rs`,
+  `docs/business-os-app-creation-plan.md`
+- Evidence path:
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rcli/status-1781958189008.json`
+- Result:
+  browser smoke could not open the validation-green Subscriptions app. The
+  shell stayed on Desktop even with hash `#bench_subscriptions_rcli`. Installed
+  catalog inspection showed the bench apps existed, but their lifecycle fields
+  had empty `creator_user_id`, empty `responsible_user_ids`, and no founder ACL
+  rows. The local installed Business OS user was `local-dev`, while the old
+  bench run had used `rxdb-command`. The source patch now defaults fresh bench
+  tasks to the local Business OS user and makes app-create validation success
+  seed the creating actor as founder/responsible and record an initial
+  `app_create` module version before catalog projection.
+- Failure classification:
+  `runtime_orchestration_gap`. This was not a skill prompt issue, not an app
+  output issue, and not evidence for a deterministic builder.
+- Follow-up:
+  run `git diff --check`, commit and push the patch, install it via
+  `ctox upgrade --dev`, then start a fresh five-app bench without `--actor`.
+  Browser smoke must be repeated on the fresh validation-green apps.
+
 ## Handoff Notes
 
 Latest handoff:
 
-- Continue Phase 3.
-- Use run id `rcli` as the current CTOX-native five-app bench.
+- Continue Phase 4.
+- Use run id `rcli` as forensic evidence, not as the green proof. It was run
+  through the old actor/lifecycle path.
 - Latest installed queue/artifact/validator status has been captured in
-  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rcli/status-1781957954819.json`.
-- Next wait for or inspect `bench_projects_rcli` rework, the leased
-  `bench_inventory_rcli` task, and pending `bench_contracts_rcli`, then collect
-  another installed status snapshot.
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rcli/status-1781958189008.json`.
+- The next useful proof is a fresh bench after the lifecycle patch is installed
+  through `ctox upgrade --dev`.
 - Do not patch generated app files.
-- Do not patch skill resources, validators, or orchestration for the project
-  failure unless the same failure class repeats or exposes a real architecture
-  gap.
+- Do not patch skill resources, validators, or orchestration for the old
+  project helper-test failure unless the same failure class repeats or exposes
+  a real architecture gap.
 - Update Current Execution Slice checkboxes before ending the next work block.
 
 ## Open Issues
 
 - Define validator behavior for internal shell tools such as App Creator.
 - Complete the first five-app bench run through CTOX workers with MiniMax M3.
-- Continue observing the service/queue wakeup path until all five bench tasks
-  are terminal or actively leased; do not patch orchestration from one idle
-  snapshot alone.
+- Install and rerun after the lifecycle visibility patch; old `rcli` evidence
+  is not enough for production readiness because it used the old actor path.
 - Track `bench_projects_rcli` as a current model-output failure unless CTOX
   review/rework repairs it or the same inconsistency repeats across more runs.
 - Add or wire wait/status collection for bench task completion beyond the

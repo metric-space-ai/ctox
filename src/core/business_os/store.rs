@@ -11425,8 +11425,16 @@ pub fn complete_business_command_from_app_validation_success(
         );
     }
     let mut terminal_queue_task = channels::load_queue_task(root, task_id)?;
-    write_module_catalog_projection_to_rxdb_for_module(root, &module_id)?;
     let completed_at_ms = now_ms() as i64;
+    ensure_app_create_actor_lifecycle_assignment(
+        root,
+        &conn,
+        &command,
+        &module_id,
+        &install_target,
+        completed_at_ms,
+    )?;
+    write_module_catalog_projection_to_rxdb_for_module(root, &module_id)?;
     conn.execute(
         "UPDATE business_commands SET status = 'completed', observed_at_ms = ?2 WHERE command_id = ?1",
         params![command_id.as_str(), completed_at_ms],
@@ -11523,6 +11531,49 @@ pub fn complete_business_command_from_app_validation_success(
         completed_at_ms,
     )?;
     Ok(Some(command_payload))
+}
+
+fn ensure_app_create_actor_lifecycle_assignment(
+    root: &Path,
+    conn: &Connection,
+    command: &BusinessCommand,
+    module_id: &str,
+    install_target: &str,
+    observed_at_ms: i64,
+) -> anyhow::Result<Option<String>> {
+    if command.command_type != "ctox.business_os.app.create"
+        || install_target != "runtime-installed-module"
+    {
+        return Ok(None);
+    }
+    let session = rxdb_authenticated_session(root, command)?;
+    seed_session_user(conn, &session)?;
+    let Some(user_id) = session_user_id(&session)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    let assignment_id = upsert_module_founder_assignment_record(
+        conn,
+        &session,
+        module_id,
+        user_id,
+        true,
+        observed_at_ms,
+    )?;
+    let app_root = resolve_business_os_app_root(root)?;
+    let manifest_path = module_manifest_path(root, &app_root, module_id)?;
+    let version_app_root = app_root_for_module_manifest(&app_root, &manifest_path);
+    record_module_version_with_conn(
+        conn,
+        &version_app_root,
+        module_id,
+        "app_create",
+        "Initial app creation",
+        user_id,
+    )?;
+    Ok(Some(assignment_id))
 }
 
 pub fn complete_ready_documents_report_commands(
@@ -27205,6 +27256,45 @@ mod tests {
             module_present,
             "validated app must be present in the RxDB module catalog"
         );
+        let module = catalog
+            .get("modules")
+            .and_then(Value::as_array)
+            .and_then(|modules| {
+                modules
+                    .iter()
+                    .find(|module| module.get("id").and_then(Value::as_str) == Some(module_id))
+            })
+            .context("expected validated app in catalog")?;
+        assert_eq!(
+            module
+                .pointer("/lifecycle/creator_user_id")
+                .and_then(Value::as_str),
+            Some("rxdb-command")
+        );
+        assert!(
+            module
+                .pointer("/lifecycle/responsible_user_ids")
+                .and_then(Value::as_array)
+                .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some("rxdb-command"))),
+            "validated private app must be visible to its creating actor"
+        );
+        assert_eq!(
+            module
+                .pointer("/lifecycle/release_required_checks/source_snapshot")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let founder_count: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM business_module_acl
+             WHERE module_id = ?1
+               AND user_id = 'rxdb-command'
+               AND role = 'founder'
+               AND active = 1",
+            params![module_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(founder_count, 1);
         Ok(())
     }
 

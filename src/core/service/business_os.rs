@@ -813,7 +813,13 @@ fn run_business_os_app_bench(root: &Path, args: &[String]) -> anyhow::Result<ser
         .unwrap_or_else(|| format!("r{}", now_ms()));
     let actor_id = flag_value(args, "--actor")
         .or_else(|| flag_value(args, "--actor-user"))
-        .unwrap_or("rxdb-command");
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            crate::business_os::store::session(None, None)
+                .user
+                .map(|user| user.id)
+                .unwrap_or_else(|| "local-dev".to_owned())
+        });
     let clean = !args.iter().any(|arg| arg == "--no-clean");
     let run_dir = root.join(BUSINESS_OS_APP_BENCH_EVIDENCE_DIR).join(&run_id);
     fs::create_dir_all(&run_dir)
@@ -859,7 +865,7 @@ fn run_business_os_app_bench(root: &Path, args: &[String]) -> anyhow::Result<ser
             model,
             context,
             &run_id,
-            actor_id,
+            actor_id.as_str(),
         );
         let accepted = crate::business_os::store::accept_rxdb_business_command(root, document)?;
         let event = serde_json::json!({
@@ -3307,6 +3313,10 @@ mod tests {
             assert!(
                 task.prompt
                     .contains("ctox business-os app references --json")
+            );
+            assert!(
+                task.prompt.contains("\"id\": \"local-dev\""),
+                "bench tasks without --actor must target the local Business OS user"
             );
         }
         Ok(())
