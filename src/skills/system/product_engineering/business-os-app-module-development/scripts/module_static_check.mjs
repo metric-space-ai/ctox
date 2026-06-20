@@ -467,6 +467,31 @@ function hasVisibleSubmitOrSaveControl(text) {
     || />\s*(?:Save|Speichern)\s*</i.test(text);
 }
 
+function hasCommandBusDispatchInvocation(text) {
+  const source = stripJsComments(text);
+  const commandBusAccess = String.raw`(?:ctx|state\s*\.\s*ctx)\??\.\s*commandBus`;
+  const dispatchAccess = String.raw`${commandBusAccess}\??\.\s*dispatch`;
+  if (new RegExp(String.raw`\b${dispatchAccess}\s*(?:\(|\?\.\s*\()`).test(source)) return true;
+
+  const dispatchAliases = new Set();
+  for (const match of source.matchAll(new RegExp(String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*${dispatchAccess}\b`, 'g'))) {
+    dispatchAliases.add(match[1]);
+  }
+  for (const alias of dispatchAliases) {
+    if (new RegExp(String.raw`\b${escapeRegExp(alias)}\s*(?:\(|\?\.\s*\()`).test(source)) return true;
+  }
+
+  const busAliases = new Set();
+  for (const match of source.matchAll(new RegExp(String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*${commandBusAccess}\b`, 'g'))) {
+    busAliases.add(match[1]);
+  }
+  for (const alias of busAliases) {
+    if (new RegExp(String.raw`\b${escapeRegExp(alias)}\??\.\s*dispatch\s*(?:\(|\?\.\s*\()`).test(source)) return true;
+  }
+
+  return false;
+}
+
 function indexJsHandlesDataAction(indexJs, action) {
   const escaped = escapeRegExp(action);
   return new RegExp(String.raw`\[data-action\s*=\s*["']${escaped}["']\]`).test(indexJs)
@@ -690,7 +715,7 @@ if (installedMode) {
   if (!/\bctx\??\.db\b|\bstate\.ctx\??\.db\b/.test(runtimeText)) {
     fail('installed module must persist records through the shell-provided ctx.db collection handle');
   }
-  if (!/\b(?:ctx|state\.ctx)\??\.commandBus\??\.\s*dispatch\s*\(/.test(runtimeText)) {
+  if (!hasCommandBusDispatchInvocation(runtimeText)) {
     fail('installed module must dispatch at least one automation through ctx.commandBus.dispatch');
   }
   const hasChatTaskAutomation = /\bbusiness_os\.chat\.task\b/.test(nonTestModuleText)

@@ -7088,6 +7088,17 @@ fn complete_business_os_app_validation_success_to_leased_queue(
     let mut fallback_message_keys = Vec::new();
     let mut updated = 0usize;
     for message_key in &job.leased_message_keys {
+        let task = channels::load_queue_task(root, message_key)?.with_context(|| {
+            format!("Business OS app validation queue task {message_key} disappeared")
+        })?;
+        if task.route_status == "review_rework" {
+            release_business_os_app_validation_rework_to_pending(root, message_key)
+                .with_context(|| {
+                    format!(
+                        "failed to requeue green Business OS app validation rework task {message_key} before completion"
+                    )
+                })?;
+        }
         match crate::business_os::store::complete_business_command_from_app_validation_success(
             root,
             message_key,
@@ -11495,7 +11506,10 @@ fn complete_validated_business_os_app_queue_task(
     let Some(task) = channels::load_queue_task(root, message_key)? else {
         return Ok(false);
     };
-    if !matches!(task.route_status.as_str(), "leased" | "pending") {
+    if !matches!(
+        task.route_status.as_str(),
+        "leased" | "pending" | "review_rework"
+    ) {
         return Ok(false);
     }
     if business_os_app_module_target_from_prompt(&task.prompt).is_none() {
@@ -11518,7 +11532,10 @@ fn recover_business_os_app_queue_task_from_validation(
     let Some(task) = channels::load_queue_task(root, message_key)? else {
         return Ok(BusinessOsAppValidationQueueRecovery::Unchanged);
     };
-    if !matches!(task.route_status.as_str(), "leased" | "pending") {
+    if !matches!(
+        task.route_status.as_str(),
+        "leased" | "pending" | "review_rework"
+    ) {
         return Ok(BusinessOsAppValidationQueueRecovery::Unchanged);
     }
     if business_os_app_module_target_from_prompt(&task.prompt).is_none() {
@@ -11591,6 +11608,24 @@ fn maybe_lease_business_os_app_validation_rework(
         if durable_queue_task_already_enqueued_in_memory_or_clear_stale(state, &task.message_key)
             || !queue_task_is_business_os_app_validation_rework(&task)
         {
+            continue;
+        }
+        let job = queued_prompt_from_queue_task(task.clone());
+        if business_os_app_module_validation_feedback(root, &job)?.is_none() {
+            let updated = complete_business_os_app_validation_success_to_leased_queue(
+                root,
+                &job,
+                "Business OS app artifacts validated during validation rework leasing",
+            )?;
+            if updated > 0 {
+                push_event(
+                    state,
+                    format!(
+                        "Completed green Business OS app validation rework task {} before re-lease",
+                        task.message_key
+                    ),
+                );
+            }
             continue;
         }
         release_business_os_app_validation_rework_to_pending(root, &task.message_key)?;
@@ -21718,7 +21753,7 @@ Business OS command:
             .expect("missing queue task");
         assert!(reloaded
             .prompt
-            .contains("Business OS app artifact validation failed."));
+            .contains("Business OS app validation failed."));
         assert!(reloaded
             .prompt
             .contains("module.json install_scope must be installed"));
@@ -21806,7 +21841,7 @@ Business OS command:
         assert_eq!(route_status_for(&root, &task.message_key), "review_rework");
         assert!(reloaded
             .prompt
-            .contains("Business OS app artifact validation failed."));
+            .contains("Business OS app validation failed."));
         assert!(reloaded.prompt.contains("layout.right is not allowed"));
         assert!(reloaded.prompt.contains("Original task remains active"));
         let conn =
@@ -23521,6 +23556,84 @@ Business OS command:
             "pending"
         );
         assert!(leased.prompt.contains("Business OS app validation failed."));
+    }
+
+    #[test]
+    fn green_business_os_app_validation_rework_completes_before_fresh_pending_app_tasks() {
+        let root = temp_root("business-os-app-green-rework-completes-before-pending");
+        let script_dir = root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "process.exit(0);\n",
+        )
+        .expect("write green validator script fixture");
+        let prompt = "Business OS app task metadata:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
+        let rework_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create contracts app".to_string(),
+                prompt: prompt.clone(),
+                thread_key: "business-os/apps/contracts".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &rework_task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let mut job = queued_prompt_from_queue_task(rework_task.clone());
+        job.source_label = "business-os:app-create".to_string();
+        let target = business_os_app_module_target_from_prompt(&job.prompt)
+            .expect("expected app module target");
+        let feedback = render_business_os_app_module_validation_feedback(
+            &job,
+            &target,
+            "root-level app artifact is forbidden: module.json",
+        );
+        apply_business_os_app_validation_rework_to_leased_queue(
+            &root,
+            &job,
+            &feedback,
+            "Business OS app artifact validation failed for business-os:app-create",
+            1,
+        )
+        .expect("failed to move app task to validation rework");
+        assert_eq!(
+            route_status_for(&root, &rework_task.message_key),
+            "review_rework"
+        );
+        seed_business_os_app_artifacts(&root, "contracts");
+
+        let pending_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create inventory app".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/inventory".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create pending app queue task");
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let leased = maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state)
+            .expect("dispatcher should not fail")
+            .expect("expected pending task after green rework completion");
+
+        assert_eq!(route_status_for(&root, &rework_task.message_key), "handled");
+        assert_eq!(
+            leased.leased_message_keys,
+            vec![pending_task.message_key.clone()]
+        );
+        assert_eq!(route_status_for(&root, &pending_task.message_key), "leased");
     }
 
     #[test]

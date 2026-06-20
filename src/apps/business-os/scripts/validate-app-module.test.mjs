@@ -225,6 +225,33 @@ function writeSourceModule(root, moduleId, overrides = {}) {
 
 {
   const root = makeWorkspace();
+  writeInstalledModule(root, 'aliasautomation', {
+    indexJs: [
+      "import { buildFollowUpCommand } from './core/automation.mjs';",
+      'export async function mount(ctx) {',
+      "  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());",
+      "  const records = ctx.db.collection?.('aliasautomation_records') || ctx.db.collections?.aliasautomation_records;",
+      '  const state = { ctx, records };',
+      "  ctx.host.querySelector('[data-action=\"create-record\"]')?.addEventListener('click', () => {",
+      "    state.records?.upsert?.({ id: 'demo', title: 'Demo', updated_at_ms: Date.now() });",
+      '  });',
+      "  ctx.host.querySelector('[data-action=\"follow-up\"]')?.addEventListener('click', async () => {",
+      '    const dispatch = state.ctx?.commandBus?.dispatch;',
+      "    if (typeof dispatch === 'function') {",
+      "      await dispatch(buildFollowUpCommand({ id: 'demo', title: 'Demo', updated_at_ms: 1 }));",
+      '    }',
+      '  });',
+      '  return () => { ctx.host.innerHTML = ""; };',
+      '}',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'aliasautomation', '--installed');
+  assert.equal(run.status, 0, `${run.stderr}\n${run.stdout}`);
+}
+
+{
+  const root = makeWorkspace();
   writeSourceModule(root, 'sourcegood');
   const run = runValidator(root, 'sourcegood', '--source');
   assert.equal(run.status, 0, `${run.stderr}\n${run.stdout}`);
@@ -596,6 +623,33 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /must dispatch at least one automation through ctx\.commandBus\.dispatch/);
   assert.match(run.stderr, /must include a supported automation command: business_os\.chat\.task or ctox\.ticket\.\*/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'aliasnotcalled', {
+    indexJs: [
+      "import { buildFollowUpCommand } from './core/automation.mjs';",
+      'export async function mount(ctx) {',
+      "  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());",
+      "  const records = ctx.db.collection?.('aliasnotcalled_records') || ctx.db.collections?.aliasnotcalled_records;",
+      '  const dispatch = ctx.commandBus.dispatch;',
+      '  void dispatch;',
+      "  ctx.host.querySelector('[data-action=\"create-record\"]')?.addEventListener('click', () => {",
+      "    records?.upsert?.({ id: 'demo', title: 'Demo', updated_at_ms: Date.now() });",
+      '  });',
+      "  ctx.host.querySelector('[data-action=\"follow-up\"]')?.addEventListener('click', () => {",
+      "    buildFollowUpCommand({ id: 'demo', title: 'Demo', updated_at_ms: 1 });",
+      '  });',
+      '  return () => { ctx.host.innerHTML = ""; };',
+      '}',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'aliasnotcalled', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /must dispatch at least one automation through ctx\.commandBus\.dispatch/);
+  assert.doesNotMatch(run.stderr, /must include a supported automation command/);
 }
 
 {
