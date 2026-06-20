@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use crate::channels;
 use crate::inference::engine;
 use crate::inference::runtime_env;
 use crate::secrets;
@@ -25,6 +26,7 @@ const UPDATE_STATE_FILE_NAME: &str = "update_state.json";
 const DEFAULT_INSTALL_ROOT_RELATIVE_PATH: &str = ".local/lib/ctox";
 const DEFAULT_STATE_ROOT_RELATIVE_PATH: &str = ".local/state/ctox";
 const DEFAULT_CACHE_ROOT_RELATIVE_PATH: &str = ".cache/ctox";
+const LAUNCHD_USER_LABEL: &str = "com.metric-space.ctox.service";
 const DEFAULT_GITHUB_API_BASE: &str = "https://api.github.com";
 const DEFAULT_GITHUB_TOKEN_ENV: &str = "CTOX_UPDATE_GITHUB_TOKEN";
 const DEFAULT_RELEASE_REPO: &str = "metric-space-ai/ctox";
@@ -1103,6 +1105,7 @@ fn apply_update(
         progress_step("release installer finished");
     }
     let pre_switch_status = service::service_status_snapshot(&layout.active_root).ok();
+    let has_runnable_queue_work = has_runnable_durable_queue_work(&layout.active_root);
     // If we cannot read the pre-switch status (e.g. the service is in the
     // middle of a migration and answers slowly, or the socket has already
     // been torn down by a previous half-completed upgrade), default to
@@ -1110,7 +1113,7 @@ fn apply_update(
     // after exactly that scenario.
     let should_restart = pre_switch_status
         .as_ref()
-        .map(|status| status.running || status.autostart_enabled)
+        .map(|status| status.running || status.autostart_enabled || has_runnable_queue_work)
         .unwrap_or(true);
     persist_update_phase(&layout.update_state_path(), "switching", None)?;
     progress_step("switching current symlink and restarting service if required");
@@ -1233,8 +1236,9 @@ fn rollback_update(root: &Path) -> Result<RollbackResult> {
         .clone()
         .context("current release missing from manifest")?;
     let update_state = load_update_state(&layout.update_state_path())?;
+    let has_runnable_queue_work = has_runnable_durable_queue_work(&layout.active_root);
     let should_restart = service::service_status_snapshot(&layout.active_root)
-        .map(|status| status.running || status.autostart_enabled)
+        .map(|status| status.running || status.autostart_enabled || has_runnable_queue_work)
         .unwrap_or(false);
     let _ = service::stop_background(&layout.active_root);
     if let Some(backup_path) = update_state.and_then(|entry| entry.state_backup_path) {
@@ -2777,6 +2781,9 @@ fn refresh_service_unit(
     state_root: &Path,
     install_root: Option<&Path>,
 ) -> Result<()> {
+    if cfg!(target_os = "macos") {
+        return refresh_launchd_agent(current_root, state_root, install_root);
+    }
     if !cfg!(target_os = "linux") {
         return Ok(());
     }
@@ -2823,6 +2830,84 @@ fn refresh_service_unit(
     Ok(())
 }
 
+fn refresh_launchd_agent(
+    current_root: &Path,
+    state_root: &Path,
+    install_root: Option<&Path>,
+) -> Result<()> {
+    let Some(home_dir) = home_dir() else {
+        return Ok(());
+    };
+    let launch_agent_dir = home_dir.join("Library/LaunchAgents");
+    ensure_dir(&launch_agent_dir)?;
+    let runtime_dir = current_root.join("runtime");
+    ensure_dir(&runtime_dir)?;
+    let plist_path = launch_agent_dir.join(format!("{LAUNCHD_USER_LABEL}.plist"));
+    let wrapper = wrapper_path()?;
+    let log_path = runtime_dir.join("ctox_service.log");
+    let install_root_env = install_root
+        .map(|entry| {
+            format!(
+                "<key>CTOX_INSTALL_ROOT</key>\n    <string>{}</string>\n    ",
+                xml_escape_text(&entry.display().to_string())
+            )
+        })
+        .unwrap_or_default();
+    let contents = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+<plist version=\"1.0\">\n\
+<dict>\n\
+  <key>Label</key>\n\
+  <string>{}</string>\n\
+  <key>ProgramArguments</key>\n\
+  <array>\n\
+    <string>{}</string>\n\
+    <string>service</string>\n\
+    <string>--foreground</string>\n\
+  </array>\n\
+  <key>WorkingDirectory</key>\n\
+  <string>{}</string>\n\
+  <key>EnvironmentVariables</key>\n\
+  <dict>\n\
+    <key>CTOX_ROOT</key>\n\
+    <string>{}</string>\n\
+    <key>CTOX_STATE_ROOT</key>\n\
+    <string>{}</string>\n\
+    {}<key>PATH</key>\n\
+    <string>{}</string>\n\
+  </dict>\n\
+  <key>RunAtLoad</key>\n\
+  <true/>\n\
+  <key>KeepAlive</key>\n\
+  <true/>\n\
+  <key>StandardOutPath</key>\n\
+  <string>{}</string>\n\
+  <key>StandardErrorPath</key>\n\
+  <string>{}</string>\n\
+</dict>\n\
+</plist>\n",
+        xml_escape_text(LAUNCHD_USER_LABEL),
+        xml_escape_text(&wrapper.display().to_string()),
+        xml_escape_text(&current_root.display().to_string()),
+        xml_escape_text(&current_root.display().to_string()),
+        xml_escape_text(&state_root.display().to_string()),
+        install_root_env,
+        xml_escape_text(&default_launchd_path()),
+        xml_escape_text(&log_path.display().to_string()),
+        xml_escape_text(&log_path.display().to_string())
+    );
+    fs::write(&plist_path, contents)
+        .with_context(|| format!("failed to write {}", plist_path.display()))?;
+    let marker = current_root.join("runtime/ctox_launchd_user.installed");
+    if let Some(parent) = marker.parent() {
+        ensure_dir(parent)?;
+    }
+    fs::write(&marker, "installed\n")
+        .with_context(|| format!("failed to update {}", marker.display()))?;
+    Ok(())
+}
+
 /// Writes the watchdog timer + service that re-starts ctox.service if it ever
 /// drops out of the active state. `Restart=always` in the unit file does NOT
 /// trigger after an explicit `systemctl stop` (e.g. from an upgrade pipeline
@@ -2864,6 +2949,36 @@ WantedBy=timers.target\n";
     fs::write(&watchdog_timer, watchdog_timer_contents)
         .with_context(|| format!("failed to write {}", watchdog_timer.display()))?;
     Ok(())
+}
+
+fn has_runnable_durable_queue_work(root: &Path) -> bool {
+    let statuses = vec![
+        "pending".to_string(),
+        "leased".to_string(),
+        "review_rework".to_string(),
+    ];
+    channels::count_queue_tasks(root, &statuses).unwrap_or(0) > 0
+}
+
+fn default_launchd_path() -> String {
+    env::var("PATH").unwrap_or_else(|_| {
+        "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin".to_string()
+    })
+}
+
+fn xml_escape_text(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 fn wrapper_path() -> Result<PathBuf> {
@@ -3146,6 +3261,44 @@ mod tests {
         let contents = fs::read_to_string(&lock_path).unwrap();
         assert!(contents.contains("operation=apply"));
         assert!(contents.contains("target_release=branch-main-new"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn refresh_launchd_agent_writes_current_root_and_marker() {
+        let temp = tempdir().unwrap();
+        let home = temp.path().join("home");
+        let current_root = temp.path().join("install/current");
+        let state_root = temp.path().join("state");
+        let install_root = temp.path().join("install");
+        ensure_dir(&current_root).unwrap();
+        ensure_dir(&state_root).unwrap();
+
+        let original_home = std::env::var_os("HOME");
+        let original_path = std::env::var_os("PATH");
+        std::env::set_var("HOME", &home);
+        std::env::set_var("PATH", "/usr/bin:/bin");
+        refresh_launchd_agent(&current_root, &state_root, Some(&install_root)).unwrap();
+        match original_home {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+        match original_path {
+            Some(value) => std::env::set_var("PATH", value),
+            None => std::env::remove_var("PATH"),
+        }
+
+        let plist = home
+            .join("Library/LaunchAgents")
+            .join(format!("{LAUNCHD_USER_LABEL}.plist"));
+        let text = fs::read_to_string(&plist).unwrap();
+        assert!(text.contains("<key>WorkingDirectory</key>"));
+        assert!(text.contains(&current_root.display().to_string()));
+        assert!(text.contains(&state_root.display().to_string()));
+        assert!(text.contains(&install_root.display().to_string()));
+        assert!(current_root
+            .join("runtime/ctox_launchd_user.installed")
+            .exists());
     }
 
     #[test]

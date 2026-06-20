@@ -902,6 +902,10 @@ jami_daemon_binary_present() {
 
 # ── Process cleanup ──────────────────────────────────────────────────────────
 stop_ctox_services() {
+  if [[ "$PLATFORM" == "darwin" ]] && command -v launchctl >/dev/null 2>&1; then
+    launchctl bootout "gui/$(id -u)/com.metric-space.ctox.service" >/dev/null 2>&1 || true
+    return 0
+  fi
   if [[ "$PLATFORM" != "linux" ]] || ! command -v systemctl >/dev/null 2>&1; then return 0; fi
   systemctl --user stop ctox.service >/dev/null 2>&1 || true
   systemctl --user stop cto-jami-daemon.service >/dev/null 2>&1 || true
@@ -1027,7 +1031,85 @@ build_google_fetch_helper() {
 }
 
 # ── systemd services ─────────────────────────────────────────────────────────
+plist_escape() {
+  printf '%s' "$1" | sed \
+    -e 's/&/\&amp;/g' \
+    -e 's/</\&lt;/g' \
+    -e 's/>/\&gt;/g' \
+    -e 's/"/\&quot;/g' \
+    -e "s/'/\&apos;/g"
+}
+
+install_ctox_launchd_service() {
+  [[ "$PLATFORM" == "darwin" ]] || return 0
+  command -v launchctl >/dev/null 2>&1 || return 0
+  local wrapper_root="$1"
+  local label="com.metric-space.ctox.service"
+  local service_dir="$HOME/Library/LaunchAgents"
+  local plist_path="$service_dir/$label.plist"
+  local runtime_dir="$wrapper_root/runtime"
+  local log_path="$runtime_dir/ctox_service.log"
+  local uid; uid="$(id -u)"
+  local domain="gui/$uid"
+  local target="$domain/$label"
+  local launch_path="${PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
+  local install_root_block=""
+
+  mkdir -p "$service_dir" "$runtime_dir" "$STATE_ROOT"
+  if [[ -n "${CTOX_INSTALL_ROOT:-$INSTALL_ROOT}" ]]; then
+    install_root_block="    <key>CTOX_INSTALL_ROOT</key>
+    <string>$(plist_escape "$INSTALL_ROOT")</string>
+"
+  fi
+
+  cat > "$plist_path" <<PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$label</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$(plist_escape "$BIN_DIR/ctox")</string>
+    <string>service</string>
+    <string>--foreground</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>$(plist_escape "$wrapper_root")</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>CTOX_ROOT</key>
+    <string>$(plist_escape "$wrapper_root")</string>
+    <key>CTOX_STATE_ROOT</key>
+    <string>$(plist_escape "$STATE_ROOT")</string>
+$install_root_block    <key>PATH</key>
+    <string>$(plist_escape "$launch_path")</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>$(plist_escape "$log_path")</string>
+  <key>StandardErrorPath</key>
+  <string>$(plist_escape "$log_path")</string>
+</dict>
+</plist>
+PLISTEOF
+
+  printf 'installed\n' > "$runtime_dir/ctox_launchd_user.installed"
+  launchctl bootout "$target" >/dev/null 2>&1 || true
+  launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1 || true
+  launchctl enable "$target" >/dev/null 2>&1 || true
+  launchctl kickstart -k "$target" >/dev/null 2>&1 || true
+}
+
 install_ctox_service() {
+  if [[ "$PLATFORM" == "darwin" ]]; then
+    install_ctox_launchd_service "$1"
+    return 0
+  fi
   [[ "$PLATFORM" == "linux" ]] || return 0
   command -v systemctl >/dev/null 2>&1 || return 0
   local wrapper_root="$1"
@@ -2415,7 +2497,7 @@ main() {
   tui_start_step 10
   install_ctox_service "$active_root"
   install_jami_service "$active_root"
-  tui_complete_step 10 "systemd"
+  tui_complete_step 10 "service"
 
   # ── Step 11: Speaches + Browser ──
   tui_start_step 11

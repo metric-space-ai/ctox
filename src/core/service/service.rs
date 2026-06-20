@@ -102,6 +102,8 @@ const SERVICE_PID_RELATIVE_PATH: &str = "runtime/ctox_service.pid";
 const SERVICE_LOG_RELATIVE_PATH: &str = "runtime/ctox_service.log";
 const SERVICE_SOCKET_RELATIVE_PATH: &str = "runtime/ctox_service.sock";
 const SYSTEMD_USER_UNIT_NAME: &str = "ctox.service";
+const LAUNCHD_USER_LABEL: &str = "com.metric-space.ctox.service";
+const LAUNCHD_USER_MARKER_RELATIVE_PATH: &str = "runtime/ctox_launchd_user.installed";
 const CHANNEL_ROUTER_POLL_SECS: u64 = 8;
 const CHANNEL_SYNC_POLL_SECS: u64 = 60;
 const MISSION_MAINTENANCE_POLL_SECS: u64 = 15;
@@ -1665,6 +1667,37 @@ pub fn start_background(root: &Path) -> Result<String> {
             SYSTEMD_USER_UNIT_NAME,
         );
     }
+    if let Some(launchd) = launchd_unit_status(root)? {
+        if launchd.active {
+            return Ok(format!(
+                "CTOX service already running via launchd user agent on {}",
+                service_listen_addr(root)
+            ));
+        }
+        cleanup_stale_service_runtime(root)?;
+        let _ = launchd_bootout();
+        launchd_bootstrap_and_start(root)?;
+        let attempts: usize = 200;
+        let interval = Duration::from_millis(300);
+        for _ in 0..attempts {
+            thread::sleep(interval);
+            let status = service_status_snapshot(root)?;
+            if status.running {
+                return Ok(format!(
+                    "CTOX service enabled and started via launchd on {}",
+                    status.listen_addr
+                ));
+            }
+        }
+        anyhow::bail!(
+            "CTOX launchd service did not come up within {:?} of `launchctl kickstart {}`. Inspect `launchctl print {}/{}` and {} for the boot failure.",
+            interval * (attempts as u32),
+            launchd_target_label(),
+            launchd_user_domain(),
+            LAUNCHD_USER_LABEL,
+            service_log_path(root).display(),
+        );
+    }
     let status = service_status_snapshot(root)?;
     if status.running {
         return Ok(format!(
@@ -1798,6 +1831,50 @@ pub fn stop_background(root: &Path) -> Result<String> {
         anyhow::bail!(
             "CTOX service stop did not complete cleanly: {}",
             systemd_failures.join("; ")
+        );
+    }
+    if let Some(launchd) = launchd_unit_status(root)? {
+        let had_launchd_service = launchd.active || launchd.enabled || launchd.pid.is_some();
+        let mut launchd_failures = Vec::new();
+        if launchd.active || launchd.enabled || launchd.pid.is_some() {
+            if let Err(err) = launchd_bootout() {
+                launchd_failures.push(format!("launchd bootout: {err}"));
+            }
+            if let Err(err) = launchd_disable() {
+                launchd_failures.push(format!("launchd disable: {err}"));
+            }
+        }
+        let _ = std::fs::remove_file(service_pid_path(root));
+        if let Some(err) = preflight_backend_shutdown_error.as_ref() {
+            eprintln!("ctox preflight backend shutdown reported residue: {err}");
+        }
+        let cleaned = cleanup_orphan_service_processes(root, None)?;
+        if wait_for_service_shutdown(root, Duration::from_secs(SERVICE_SHUTDOWN_TIMEOUT_SECS))? {
+            if !supervisor::persistent_backends_idle(root)? {
+                anyhow::bail!(
+                    "CTOX service stop did not complete cleanly: {}",
+                    supervisor::persistent_backend_alerts(root)?.join("; ")
+                );
+            }
+            if had_launchd_service || had_service_processes || had_live_service_pid || had_backends
+            {
+                return Ok("CTOX service stopped and disabled.".to_string());
+            }
+            return Ok("CTOX service is already stopped and disabled.".to_string());
+        }
+        let mut residue = service_shutdown_residue(root)?;
+        if let Some(err) = preflight_backend_shutdown_error {
+            launchd_failures.push(format!("backend preflight: {err}"));
+        }
+        if cleaned > 0 {
+            launchd_failures.push(format!(
+                "service fallback signaled {cleaned} foreground process(es)"
+            ));
+        }
+        launchd_failures.append(&mut residue);
+        anyhow::bail!(
+            "CTOX service stop did not complete cleanly: {}",
+            launchd_failures.join("; ")
         );
     }
     let status = service_status_snapshot(root)?;
@@ -2064,6 +2141,7 @@ pub fn service_status_snapshot_with(
         Some(ttl) => systemd_unit_status_cached(root, ttl)?,
         None => systemd_unit_status(root)?,
     };
+    let launchd = launchd_unit_status(root)?;
     let lifecycle_alerts = |pid: Option<u32>, running: bool| -> Result<Vec<String>> {
         if probe.lifecycle_alerts {
             runtime_lifecycle_alerts(root, pid, running)
@@ -2083,6 +2161,14 @@ pub fn service_status_snapshot_with(
             if systemd.active {
                 status.manager = "systemd-user".to_string();
                 status.pid = systemd.pid.or(status.pid);
+            } else {
+                status.manager = "process".to_string();
+            }
+        } else if let Some(launchd) = launchd {
+            status.autostart_enabled = launchd.enabled;
+            if launchd.active || launchd.enabled {
+                status.manager = "launchd-user".to_string();
+                status.pid = launchd.pid.or(status.pid);
             } else {
                 status.manager = "process".to_string();
             }
@@ -2108,6 +2194,19 @@ pub fn service_status_snapshot_with(
         }
         status.autostart_enabled = systemd.enabled;
         status.manager = "systemd-user".to_string();
+        status.degraded_probe = degraded;
+        status.monitor_alerts = lifecycle_alerts(status.pid, status.running)?;
+        return Ok(status);
+    }
+    if let Some(launchd) = launchd {
+        let mut status = ServiceStatus::stopped_with_business_os(root, probe.include_business_os);
+        status.running = launchd.active || degraded;
+        status.pid = launchd.pid.or(status.pid);
+        if !status.running && status.pid.is_some_and(process_is_running) {
+            status.running = true;
+        }
+        status.autostart_enabled = launchd.enabled;
+        status.manager = "launchd-user".to_string();
         status.degraded_probe = degraded;
         status.monitor_alerts = lifecycle_alerts(status.pid, status.running)?;
         return Ok(status);
@@ -17259,6 +17358,13 @@ struct SystemdUnitStatus {
     pid: Option<u32>,
 }
 
+#[derive(Debug, Clone)]
+struct LaunchdUnitStatus {
+    active: bool,
+    enabled: bool,
+    pid: Option<u32>,
+}
+
 /// TTL-cached variant of `systemd_unit_status` for UI-cadence polling. The
 /// unit's enabled/active state changes on operator action, not between
 /// sub-second refresh ticks; a fresh probe costs three systemctl spawns.
@@ -17380,6 +17486,225 @@ fn systemd_user_unit_installed(root: &Path) -> bool {
         .lines()
         .map(str::trim)
         .any(|line| line == working_directory || line == ctox_root_env)
+}
+
+fn launchd_unit_status(root: &Path) -> Result<Option<LaunchdUnitStatus>> {
+    if !launchd_user_available() || !launchd_user_unit_installed(root) {
+        return Ok(None);
+    }
+    let enabled = !launchd_unit_disabled().unwrap_or(false);
+    let output = match launchctl_user_capture(vec!["print".to_string(), launchd_target_label()]) {
+        Ok(output) => output,
+        Err(_) => {
+            return Ok(Some(LaunchdUnitStatus {
+                active: false,
+                enabled,
+                pid: None,
+            }));
+        }
+    };
+    if !output.status.success() {
+        return Ok(Some(LaunchdUnitStatus {
+            active: false,
+            enabled,
+            pid: None,
+        }));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let pid = parse_launchd_pid(&stdout);
+    let active = pid.is_some_and(process_is_running)
+        || stdout
+            .lines()
+            .map(str::trim)
+            .any(|line| line == "state = running" || line == "state = spawn scheduled");
+    Ok(Some(LaunchdUnitStatus {
+        active,
+        enabled,
+        pid,
+    }))
+}
+
+fn launchd_user_available() -> bool {
+    cfg!(target_os = "macos")
+        && Command::new("launchctl")
+            .arg("help")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok()
+}
+
+fn launchd_user_unit_installed(root: &Path) -> bool {
+    if root.join(LAUNCHD_USER_MARKER_RELATIVE_PATH).exists() {
+        return true;
+    }
+    let Some(plist_path) = launchd_plist_path() else {
+        return false;
+    };
+    if !plist_path.exists() {
+        return false;
+    }
+    let Ok(plist_text) = std::fs::read_to_string(&plist_path) else {
+        return false;
+    };
+    let normalized_root = root.display().to_string();
+    plist_text.contains(&normalized_root) || plist_text.contains(&xml_escape_text(&normalized_root))
+}
+
+fn launchd_unit_disabled() -> Result<bool> {
+    let output = launchctl_user_capture(vec!["print-disabled".to_string(), launchd_user_domain()])?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let label = format!("\"{LAUNCHD_USER_LABEL}\"");
+    Ok(stdout.lines().map(str::trim).any(|line| {
+        line.contains(&label)
+            && line
+                .rsplit_once("=>")
+                .is_some_and(|(_, value)| value.trim().eq_ignore_ascii_case("true"))
+    }))
+}
+
+fn parse_launchd_pid(output: &str) -> Option<u32> {
+    output.lines().find_map(|line| {
+        let (key, value) = line.trim().split_once('=')?;
+        if key.trim() != "pid" {
+            return None;
+        }
+        value.trim().parse::<u32>().ok().filter(|pid| *pid > 0)
+    })
+}
+
+fn launchd_bootstrap_and_start(root: &Path) -> Result<()> {
+    let plist_path = launchd_plist_path().context("failed to resolve launchd plist path")?;
+    if !plist_path.exists() {
+        anyhow::bail!(
+            "CTOX launchd plist is missing: {}. Run `ctox upgrade --dev` or reinstall CTOX to refresh the user service.",
+            plist_path.display()
+        );
+    }
+    let plist_display = plist_path.display().to_string();
+    let domain = launchd_user_domain();
+    let target = launchd_target_label();
+    let _ = launchd_disable();
+    let _ = launchd_bootout();
+    launchctl_user(vec!["bootstrap".to_string(), domain.clone(), plist_display])?;
+    let _ = launchctl_user(vec!["enable".to_string(), target.clone()]);
+    launchctl_user(vec!["kickstart".to_string(), "-k".to_string(), target])?;
+    let marker = root.join(LAUNCHD_USER_MARKER_RELATIVE_PATH);
+    if let Some(parent) = marker.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    std::fs::write(&marker, "installed\n")
+        .with_context(|| format!("failed to update {}", marker.display()))?;
+    Ok(())
+}
+
+fn launchd_bootout() -> Result<()> {
+    let output = launchctl_user_capture(vec!["bootout".to_string(), launchd_target_label()])?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let message = format!("{stderr}\n{stdout}");
+    if message.contains("No such process")
+        || message.contains("service is not loaded")
+        || message.contains("Could not find service")
+    {
+        return Ok(());
+    }
+    anyhow::bail!("launchctl bootout failed: {}", message.trim())
+}
+
+fn launchd_disable() -> Result<()> {
+    let output = launchctl_user_capture(vec!["disable".to_string(), launchd_target_label()])?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let message = if stderr.trim().is_empty() {
+        stdout.trim().to_string()
+    } else {
+        stderr.trim().to_string()
+    };
+    anyhow::bail!("launchctl disable failed: {message}")
+}
+
+fn launchd_plist_path() -> Option<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    std::env::var_os("HOME").map(PathBuf::from).map(|home| {
+        home.join("Library/LaunchAgents")
+            .join(format!("{LAUNCHD_USER_LABEL}.plist"))
+    })
+}
+
+fn launchd_target_label() -> String {
+    format!("{}/{}", launchd_user_domain(), LAUNCHD_USER_LABEL)
+}
+
+fn launchd_user_domain() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        return format!("gui/{}", unsafe { geteuid() });
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "gui/0".to_string()
+    }
+}
+
+fn launchctl_user<I, S>(args: I) -> Result<()>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let output = launchctl_user_capture(args)?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let message = if !stderr.is_empty() { stderr } else { stdout };
+    anyhow::bail!("launchctl failed: {message}");
+}
+
+fn launchctl_user_capture<I, S>(args: I) -> Result<Output>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut command = Command::new("launchctl");
+    let mut rendered_args = Vec::new();
+    for arg in args {
+        rendered_args.push(arg.as_ref().to_string());
+        command.arg(arg.as_ref());
+    }
+    command_output_with_timeout(
+        &mut command,
+        Duration::from_secs(SYSTEMCTL_USER_TIMEOUT_SECS),
+        &format!("launchctl {}", rendered_args.join(" ")),
+    )
+}
+
+fn xml_escape_text(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 fn systemctl_user<I, S>(args: I) -> Result<()>
@@ -19834,6 +20159,45 @@ mod tests {
         match original_xdg {
             Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
             None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+
+        assert!(!installed);
+    }
+
+    #[test]
+    fn parse_launchd_pid_reads_main_pid_line() {
+        let output = "state = running\npid = 4242\n";
+        assert_eq!(parse_launchd_pid(output), Some(4242));
+        assert_eq!(parse_launchd_pid("state = running\npid = 0\n"), None);
+        assert_eq!(parse_launchd_pid("state = waiting\n"), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn launchd_user_unit_installed_requires_matching_root_when_only_global_plist_exists() {
+        let temp_home = std::env::temp_dir().join(format!(
+            "ctox-launchd-root-match-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let launch_agents = temp_home.join("Library/LaunchAgents");
+        std::fs::create_dir_all(&launch_agents).unwrap();
+        std::fs::write(
+            launch_agents.join(format!("{LAUNCHD_USER_LABEL}.plist")),
+            "<plist><dict><key>WorkingDirectory</key><string>/srv/ctox-installed</string><key>EnvironmentVariables</key><dict><key>CTOX_ROOT</key><string>/srv/ctox-installed</string></dict></dict></plist>",
+        )
+        .unwrap();
+        let mismatched_root = temp_home.join("isolated-root");
+        std::fs::create_dir_all(mismatched_root.join("runtime")).unwrap();
+
+        let original_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", &temp_home);
+        let installed = launchd_user_unit_installed(&mismatched_root);
+        match original_home {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
         }
 
         assert!(!installed);
