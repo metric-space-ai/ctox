@@ -15,6 +15,8 @@
 - Prefer one or two panes; use modals for occasional detail work.
 - Add tests for pure record helpers and automation command builders.
 - Run `ctox business-os app validate <module-id> --installed` or `--source`.
+- Treat shipped source apps as workflow examples, not as runtime manifest
+  templates. Adapt source manifests to the runtime contract.
 
 ## Don't
 
@@ -25,6 +27,11 @@
 - Do not write directly to `ctox_ticket_*` projection collections.
 - Do not use a full HTML document in `index.html`.
 - Do not add decorative third panes, fake buttons, or controls without handlers.
+- Do not copy `layout.icon_svg`, inline SVG, `store.installable`, or
+  `entry: modules/...` from a source manifest into a runtime-installed app.
+- Do not copy internal shell/developer apps such as App Creator, App Store,
+  Browser, CTOX, Credentials, or Coding Agents as default business-app UI
+  templates.
 - Do not add broad settings/export/AI/bulk features unless they really work.
 - Do not treat a generic empty template as the finished app.
 - Do not claim success while validation is red.

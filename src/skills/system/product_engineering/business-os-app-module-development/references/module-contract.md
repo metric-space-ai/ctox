@@ -76,3 +76,10 @@ For a runtime-installed app, `module.json` normally uses:
 ```
 
 Use existing shipped apps as concrete examples, but adapt them to the requested app. If an old app conflicts with this contract or the validator, the current contract wins.
+
+Do not copy these source-module manifest fields into runtime-installed apps:
+
+- `layout.icon_svg` or any inline SVG markup. Put SVG markup in `icon.svg`.
+- `store.installable`, `store.editable_after_install`, or source-store distribution flags.
+- `entry: modules/<id>/index.html`. Runtime apps use `installed-modules/<module-id>/index.html`.
+- `layout.right` unless the app truly needs a persistent third pane and `layout.third_pane_justification` explains the workflow need.

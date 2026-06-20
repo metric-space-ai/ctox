@@ -1421,21 +1421,49 @@ fn business_os_app_reference_candidates(
             if !query.is_empty() && !searchable.contains(&query) {
                 continue;
             }
+            let category = manifest
+                .get("category")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let reference_kind = business_os_app_reference_kind(&id, &category);
+            let layout = business_os_app_reference_layout(manifest.get("layout"));
+            let warnings = business_os_app_reference_warnings(&manifest, &reference_kind);
             modules.push(serde_json::json!({
                 "id": id,
                 "title": title,
                 "description": description,
                 "source": source,
+                "reference_kind": reference_kind,
+                "recommended_for_generated_business_app": reference_kind == "business-workflow-reference",
                 "path": module_dir.display().to_string(),
                 "manifest_path": manifest_path.display().to_string(),
                 "entry": manifest.get("entry").cloned().unwrap_or(serde_json::Value::Null),
                 "collections": manifest.get("collections").cloned().unwrap_or_else(|| serde_json::json!([])),
-                "layout": manifest.get("layout").cloned().unwrap_or(serde_json::Value::Null),
-                "category": manifest.get("category").cloned().unwrap_or(serde_json::Value::Null),
+                "layout": layout,
+                "category": category,
+                "warnings": warnings,
+                "runtime_manifest_contract": {
+                    "entry": format!("installed-modules/<module-id>/index.html"),
+                    "install_scope": "installed",
+                    "icon": "Use icon.svg. Do not copy layout.icon_svg or inline SVG into module.json.",
+                    "store": "Do not set store.installable for runtime-installed modules.",
+                    "layout": "Prefer left + center or a modal/drawer. Use layout.right only with layout.third_pane_justification."
+                }
             }));
         }
     }
     modules.sort_by(|a, b| {
+        let a_recommended = a
+            .get("recommended_for_generated_business_app")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let b_recommended = b
+            .get("recommended_for_generated_business_app")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if a_recommended != b_recommended {
+            return b_recommended.cmp(&a_recommended);
+        }
         let a_title = a
             .get("title")
             .and_then(serde_json::Value::as_str)
@@ -1459,9 +1487,96 @@ fn business_os_app_reference_candidates(
     Ok(serde_json::json!({
         "ok": true,
         "query": query,
-        "instruction": "Choose the three most relevant modules yourself by matching workflow, data shape, and UI shape.",
+        "instruction": "Choose the three most relevant business-workflow references yourself by matching workflow, data shape, and UI shape. Internal shell/developer modules are poor defaults unless the requested app is itself a shell/developer tool.",
+        "runtime_rules": [
+            "Do not copy source manifest entry paths. Runtime apps use entry installed-modules/<module-id>/index.html.",
+            "Do not copy layout.icon_svg or any inline SVG from source manifests. Runtime apps keep SVG markup in icon.svg.",
+            "Do not copy store.installable into runtime-installed module.json.",
+            "Do not copy layout.right unless the app truly needs a third pane and module.json includes layout.third_pane_justification.",
+            "The skill contract and validator override any source reference field that conflicts with runtime-installed app rules."
+        ],
         "modules": modules,
     }))
+}
+
+fn business_os_app_reference_kind(id: &str, category: &serde_json::Value) -> &'static str {
+    let category = category.as_str().unwrap_or("").trim().to_ascii_lowercase();
+    if matches!(
+        id,
+        "app-store" | "browser" | "coding-agents" | "creator" | "credentials" | "ctox"
+    ) || matches!(
+        category.as_str(),
+        "development" | "security" | "system" | "workspace"
+    ) {
+        "internal-shell-reference"
+    } else {
+        "business-workflow-reference"
+    }
+}
+
+fn business_os_app_reference_layout(layout: Option<&serde_json::Value>) -> serde_json::Value {
+    let Some(layout) = layout.and_then(serde_json::Value::as_object) else {
+        return serde_json::Value::Null;
+    };
+    let mut output = serde_json::Map::new();
+    for key in [
+        "shell",
+        "launch_kind",
+        "left",
+        "center",
+        "top",
+        "bottom",
+        "drawers",
+        "third_pane_justification",
+    ] {
+        if let Some(value) = layout.get(key) {
+            output.insert(key.to_string(), value.clone());
+        }
+    }
+    if let Some(value) = layout.get("right") {
+        output.insert("right".to_string(), value.clone());
+        output.insert(
+            "right_pane_is_exception".to_string(),
+            serde_json::Value::Bool(true),
+        );
+    }
+    output.insert(
+        "icon_source".to_string(),
+        serde_json::Value::String("icon.svg for generated runtime apps".to_string()),
+    );
+    serde_json::Value::Object(output)
+}
+
+fn business_os_app_reference_warnings(
+    manifest: &serde_json::Value,
+    reference_kind: &str,
+) -> Vec<&'static str> {
+    let mut warnings = Vec::new();
+    if reference_kind != "business-workflow-reference" {
+        warnings.push(
+            "Internal shell/developer module: inspect sparingly; do not use as a default business-app UI template.",
+        );
+    }
+    if manifest.pointer("/layout/icon_svg").is_some() {
+        warnings.push(
+            "Source manifest contains layout.icon_svg; generated runtime apps must use icon.svg instead.",
+        );
+    }
+    if manifest.pointer("/store/installable").is_some() {
+        warnings.push(
+            "Source manifest contains store.installable; runtime-installed module.json must not copy it.",
+        );
+    }
+    if manifest.pointer("/layout/right").is_some()
+        && manifest
+            .pointer("/layout/third_pane_justification")
+            .is_none()
+    {
+        warnings.push(
+            "Source manifest uses layout.right without third_pane_justification; generated apps should prefer two panes or modal/detail workflows.",
+        );
+    }
+    warnings
 }
 
 fn complete_leased_app_creator_tasks_after_validation(
@@ -3319,6 +3434,76 @@ mod tests {
                 "bench tasks without --actor must target the local Business OS user"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn app_references_mark_source_only_manifest_fields_as_non_templates() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let module_dir = root.path().join("src/apps/business-os/modules/app-store");
+        fs::create_dir_all(&module_dir)?;
+        fs::write(
+            module_dir.join("module.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "id": "app-store",
+                "title": "App Store",
+                "description": "Developer tool",
+                "entry": "modules/app-store/index.html",
+                "category": "Development",
+                "collections": ["business_commands"],
+                "layout": {
+                    "shell": "full-workspace",
+                    "icon_svg": "<svg></svg>",
+                    "left": "filters",
+                    "center": "catalog",
+                    "right": "details"
+                },
+                "store": {
+                    "installable": true
+                }
+            }))?,
+        )?;
+
+        let report = business_os_app_reference_candidates(root.path(), &[])?;
+        let module = report
+            .get("modules")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|modules| modules.first())
+            .context("expected reference module")?;
+        assert_eq!(
+            module
+                .get("reference_kind")
+                .and_then(serde_json::Value::as_str),
+            Some("internal-shell-reference")
+        );
+        assert_eq!(
+            module
+                .get("recommended_for_generated_business_app")
+                .and_then(serde_json::Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            module.pointer("/layout/icon_svg").is_none(),
+            "reference catalog must not expose source inline SVG as a template"
+        );
+        assert_eq!(
+            module
+                .pointer("/layout/right_pane_is_exception")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert!(module
+            .get("warnings")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|warnings| warnings
+                .iter()
+                .any(|warning| warning.as_str().unwrap_or("").contains("layout.icon_svg"))));
+        assert!(report
+            .get("runtime_rules")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|rules| rules
+                .iter()
+                .any(|rule| rule.as_str().unwrap_or("").contains("store.installable"))));
         Ok(())
     }
 

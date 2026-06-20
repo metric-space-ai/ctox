@@ -62,6 +62,8 @@ Current baseline:
   checklist, and architecture translation.
 - `ctox upgrade --dev` installed release `branch-main-20260620T120455Z`
   from current main after these changes.
+- `ctox upgrade --dev` then installed release `branch-main-20260620T124515Z`
+  with the lifecycle fix from commit `212aa2d0`.
 - `ctox business-os app bench run` now submits the core-five app-create bench
   through the normal Business OS command path and writes JSONL evidence under
   `runtime/business-os/app-creation-bench/`.
@@ -80,6 +82,11 @@ Current baseline:
   no actor is supplied.
 - App creation is not yet production-ready until CTOX-native bench runs pass
   end to end after this patch is installed through `ctox upgrade --dev`.
+- Fresh run `rfix1` proves the bench commands now default to actor `local-dev`,
+  but it also exposed a `reference_gap`: the current installed reference
+  catalog shows source app manifest fields that the runtime validator rejects
+  for generated apps, including `layout.icon_svg`, `store.installable`, and
+  unqualified `layout.right`.
 
 ## Current Execution Slice
 
@@ -87,13 +94,13 @@ Owner: `Codex`
 
 Started: `2026-06-20`
 
-Active phase: `4. Patch systemic lifecycle gap`
+Active phase: `4. Patch systemic reference gap`
 
-Objective: finish the lifecycle patch that makes validated private runtime apps
-visible/openable to the creating Business OS user, install it through
-`ctox upgrade --dev`, then start a fresh five-app bench. The existing `rcli`
-run remains useful forensic evidence, but it used the old actor/lifecycle path
-and must not be treated as the production-readiness proof.
+Objective: finish and install the reference-catalog/skill-resource patch that
+prevents agents from treating raw source manifests as runtime app templates,
+then rerun the five-app bench from a clean runtime. The existing `rfix1` run is
+useful evidence for the installed lifecycle fix and the reference gap, but it
+was started before the reference-catalog patch was installed.
 
 Immediate checklist:
 
@@ -109,10 +116,19 @@ Immediate checklist:
 - [x] Patch bench default actor to use the local Business OS session user.
 - [x] Verify the patched code with narrow Rust tests.
 - [x] Run `git diff --check` for changed files.
-- [ ] Commit and push the systemic fix.
-- [ ] Install with `ctox upgrade --dev`.
-- [ ] Start a fresh five-app bench without `--actor` so it uses the local
+- [x] Commit and push the systemic lifecycle fix.
+- [x] Install lifecycle fix with `ctox upgrade --dev`.
+- [x] Start a fresh five-app bench without `--actor` so it uses the local
       Business OS user.
+- [x] Confirm fresh bench command actor is `local-dev`.
+- [x] Classify first `rfix1` architecture failure as `reference_gap`.
+- [x] Patch the reference catalog to avoid presenting source-only manifest
+      fields as runtime app templates.
+- [x] Patch skill resources with the same source-reference adaptation rule.
+- [x] Verify the reference-catalog patch with a regression test.
+- [ ] Commit and push the reference-catalog/skill-resource fix.
+- [ ] Install reference fix with `ctox upgrade --dev`.
+- [ ] Start a fresh five-app bench after the reference fix is installed.
 - [ ] Record whether any app dispatched a real automation command.
 - [ ] Run browser smoke after the fresh bench has validation-green artifacts.
 - [x] Classify current failures before patching code, skill resources, or
@@ -121,8 +137,10 @@ Immediate checklist:
 
 Do not patch the app outputs directly. Do not add deterministic builders. Do not
 add skill rules for the old `rcli` project-app helper-test failure unless the
-same class repeats. The current patch is allowed because browser smoke proved a
-load-bearing Business OS lifecycle/orchestration gap, not a model-output issue.
+same class repeats. The lifecycle patch was allowed because browser smoke proved
+a load-bearing Business OS lifecycle/orchestration gap. The current reference
+patch is allowed because `rfix1` copied source-only manifest patterns exposed by
+the reference catalog.
 
 ## Tracker
 
@@ -132,7 +150,7 @@ load-bearing Business OS lifecycle/orchestration gap, not a model-output issue.
 | 1. Define acceptance gates | pending |  |  | Formalize what must pass for app creation, modification, validation, browser smoke, and automation. |
 | 2. Build CTOX-native bench runner | done | Codex | `8a8cd236`; `cargo test --bin ctox app_bench_`; installed release `branch-main-20260620T113510Z`; CLI run `rcli` | Runner submits real `ctox.business_os.app.create` tasks, writes runtime JSONL evidence, and does not write app artifacts. |
 | 3. Run five-app bench in CTOX | blocked | Codex | run `rcli`; installed status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rcli/status-1781958189008.json`; browser smoke against `http://127.0.0.1:8765/#bench_subscriptions_rcli` | `rcli` produced two validation-green apps, but browser smoke showed validation-green private apps were not openable because creator/responsible lifecycle fields were empty. Continue with a fresh run after Phase 4 patch is installed. |
-| 4. Patch systemic gaps | in_progress | Codex | source patch in `src/core/business_os/store.rs` and `src/core/service/business_os.rs`; `cargo test --bin ctox app_bench_`; `cargo test --bin ctox app_validation_success_accepts_postlease_artifact_write` | Classification from `rcli`: project helper-test mismatch is `model_failure`; private app visibility is `runtime_orchestration_gap`. Patch only lifecycle/orchestration gap: app-create success assigns the creating actor as founder/responsible, records an initial app version, and bench defaults to local session user. No app-output repair and no deterministic builder. |
+| 4. Patch systemic gaps | in_progress | Codex | lifecycle commit `212aa2d0`; installed release `branch-main-20260620T124515Z`; run `rfix1`; `cargo test --bin ctox app_bench_`; `cargo test --bin ctox app_validation_success_accepts_postlease_artifact_write`; `cargo test --bin ctox app_references_mark_source_only_manifest_fields_as_non_templates` | Classification from `rcli`: project helper-test mismatch is `model_failure`; private app visibility is `runtime_orchestration_gap`. Classification from `rfix1`: raw source reference metadata is `reference_gap`. Patch only lifecycle/orchestration and reference-resource gaps. No app-output repair and no deterministic builder. |
 | 5. Repeat until green | pending |  |  | Reset bench apps, rerun, and update this plan with each round. |
 | 6. Entry point coverage | pending |  |  | Verify App Creator, Chat, App Store/template flow, CLI, and external inbound paths bind the same skill/resource context. |
 | 7. Production signoff | pending |  |  | All entry points produce runnable validated apps with evidence. |
@@ -412,8 +430,10 @@ Phase update checklist:
       orchestration gap.
 - [x] No app-specific bench repair committed.
 - [x] Regression test or evidence added.
-- [ ] Patched tree installed through `ctox upgrade --dev`.
-- [ ] Fresh CTOX-native bench started after install.
+- [x] Lifecycle patched tree installed through `ctox upgrade --dev`.
+- [x] Fresh CTOX-native bench started after lifecycle install.
+- [ ] Reference-catalog patched tree installed through `ctox upgrade --dev`.
+- [ ] Fresh CTOX-native bench started after reference-catalog install.
 
 ### Phase 5: Repeat Bench
 
@@ -697,6 +717,53 @@ Append one entry per meaningful run.
   `ctox upgrade --dev`, then start a fresh five-app bench without `--actor`.
   Browser smoke must be repeated on the fresh validation-green apps.
 
+### 2026-06-20 Fresh Bench Reference Gap
+
+- Phase: 4 systemic fix
+- Owner: Codex
+- Run id / task ids: `rfix1`;
+  `queue:system::9033ab1f0861ebf354c6d054`,
+  `queue:system::c67e02fcd32f49606690ea7a`,
+  `queue:system::18367dff92b11256a37261ff`,
+  `queue:system::05e242d95bb62b270ea40562`,
+  `queue:system::1204449be9c9d74ad281e6c7`
+- Commands:
+  `ctox upgrade --dev`;
+  `ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k --run-id rfix1`;
+  `ctox business-os app bench status --run-id rfix1 --validate`;
+  SQLite inspection of `business_commands.client_context_json`;
+  `ctox business-os app references --json`;
+  `cargo test --bin ctox app_references_mark_source_only_manifest_fields_as_non_templates`;
+  `cargo test --bin ctox app_bench_`
+- Changed files:
+  `src/core/service/business_os.rs`,
+  `src/skills/system/product_engineering/business-os-app-module-development/references/module-contract.md`,
+  `src/skills/system/product_engineering/business-os-app-module-development/references/dos-and-donts.md`,
+  `src/skills/system/product_engineering/business-os-app-module-development/references/architecture-translation.md`,
+  `docs/business-os-app-creation-plan.md`
+- Evidence path:
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix1/status-1781960796182.json`
+- Result:
+  release `branch-main-20260620T124515Z` installed successfully and `rfix1`
+  submitted five real app-create commands. All five command contexts use actor
+  `local-dev`, proving the lifecycle default actor path is active. The
+  Inventory task produced partial artifacts under
+  `runtime/business-os/installed-modules/bench_inventory_rfix1`, but validation
+  remained red. The generated `module.json` copied source-only patterns:
+  `store.installable: true`, `layout.icon_svg`, inline SVG markup, and
+  `layout.right` without `layout.third_pane_justification`. It also had helper
+  test failures. The installed reference catalog exposed those source-manifest
+  patterns directly in `layout`, and internal developer tools appeared as
+  normal reference candidates.
+- Failure classification:
+  `reference_gap` for the source-manifest copying signal. Helper-test failures
+  in the same partial app remain `model_failure` until repeated after the
+  reference fix. The still-pending apps are not classified yet.
+- Follow-up:
+  commit and push the reference-catalog/skill-resource patch, install it
+  through `ctox upgrade --dev`, then start a fresh bench run. Do not repair
+  `bench_inventory_rfix1` directly.
+
 ## Handoff Notes
 
 Latest handoff:
@@ -704,10 +771,13 @@ Latest handoff:
 - Continue Phase 4.
 - Use run id `rcli` as forensic evidence, not as the green proof. It was run
   through the old actor/lifecycle path.
+- Use run id `rfix1` as evidence that the lifecycle actor fix works and that
+  the installed reference catalog still taught source-only manifest patterns.
+  It was started before the reference-catalog patch was installed.
 - Latest installed queue/artifact/validator status has been captured in
-  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rcli/status-1781958189008.json`.
-- The next useful proof is a fresh bench after the lifecycle patch is installed
-  through `ctox upgrade --dev`.
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix1/status-1781960796182.json`.
+- The next useful proof is a fresh bench after the reference-catalog patch is
+  installed through `ctox upgrade --dev`.
 - Do not patch generated app files.
 - Do not patch skill resources, validators, or orchestration for the old
   project helper-test failure unless the same failure class repeats or exposes
@@ -718,10 +788,12 @@ Latest handoff:
 
 - Define validator behavior for internal shell tools such as App Creator.
 - Complete the first five-app bench run through CTOX workers with MiniMax M3.
-- Install and rerun after the lifecycle visibility patch; old `rcli` evidence
-  is not enough for production readiness because it used the old actor path.
+- Install and rerun after the reference-catalog patch; old `rfix1` evidence is
+  not enough for production readiness because it used the old reference output.
 - Track `bench_projects_rcli` as a current model-output failure unless CTOX
   review/rework repairs it or the same inconsistency repeats across more runs.
+- Track `bench_inventory_rfix1` helper-test failures as model-output failures
+  unless they repeat after the reference-catalog patch is installed.
 - Add or wire wait/status collection for bench task completion beyond the
   current read-only status snapshot.
 - Add browser smoke and automation smoke collection to bench evidence.
