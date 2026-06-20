@@ -22542,7 +22542,14 @@ fn handle_ats_active_command(
                 "subject_id",
                 subject_id,
             )?;
-            let allowed = super::ats_gates::evaluate_consent_gate(purpose, &consents, now);
+            let require_evidence = crate::inference::runtime_env::env_or_config(
+                root,
+                "CTOX_BUSINESS_OS_REQUIRE_LEGAL_BASIS_EVIDENCE",
+            )
+            .as_deref()
+                == Some("1");
+            let allowed =
+                super::ats_gates::evaluate_consent_gate(purpose, &consents, now, require_evidence);
             Ok(serde_json::json!({ "ok": true, "allowed": allowed, "purpose": purpose }))
         }
         "ats.retention.due" => {
@@ -23090,8 +23097,18 @@ fn handle_ats_mutating_command(
                 "subject_id",
                 &candidate_id,
             )?;
-            let has_consent =
-                super::ats_gates::evaluate_consent_gate(Some("present_to_client"), &consents, now);
+            let require_evidence = crate::inference::runtime_env::env_or_config(
+                root,
+                "CTOX_BUSINESS_OS_REQUIRE_LEGAL_BASIS_EVIDENCE",
+            )
+            .as_deref()
+                == Some("1");
+            let has_consent = super::ats_gates::evaluate_consent_gate(
+                Some("present_to_client"),
+                &consents,
+                now,
+                require_evidence,
+            );
             let existing: Vec<Value> = load_all_business_records(&conn, "submissions")?
                 .into_iter()
                 .map(|(_, v)| v)

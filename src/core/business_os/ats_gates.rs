@@ -147,15 +147,27 @@ pub fn evaluate_deployment_readiness(
 
 /// A consent row is valid when granted, not withdrawn, and not expired. Bases
 /// other than (special-category) consent are not subject to withdrawal.
-pub fn consent_valid(consent: &Value, now_ms: i64) -> bool {
+pub fn consent_valid(consent: &Value, now_ms: i64, require_evidence: bool) -> bool {
     let basis = field_str(consent, "legal_basis").unwrap_or("");
     let withdrawable =
         basis.is_empty() || basis == "consent" || basis == "special_category_consent";
     if !withdrawable {
-        return matches!(
+        if !matches!(
             basis,
             "contract" | "legal_obligation" | "legitimate_interest"
-        );
+        ) {
+            return false;
+        }
+        // §9.2 DSGVO accountability: a non-consent legal basis is only valid when
+        // it carries documented evidence (balancing test / notice / contract
+        // reference) in `basis_evidence` — when evidence is required. Otherwise a
+        // bare `legitimate_interest` label would auto-pass the gate.
+        if require_evidence {
+            return field_str(consent, "basis_evidence")
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
+        }
+        return true;
     }
     if field_i64(consent, "granted_at_ms").unwrap_or(0) <= 0 {
         return false;
@@ -174,19 +186,29 @@ pub fn consent_valid(consent: &Value, now_ms: i64) -> bool {
 }
 
 /// Is there a valid consent for `purpose` in the subject's ledger?
-pub fn has_valid_consent(consents: &[Value], purpose: &str, now_ms: i64) -> bool {
-    consents
-        .iter()
-        .any(|c| field_str(c, "purpose") == Some(purpose) && consent_valid(c, now_ms))
+pub fn has_valid_consent(
+    consents: &[Value],
+    purpose: &str,
+    now_ms: i64,
+    require_evidence: bool,
+) -> bool {
+    consents.iter().any(|c| {
+        field_str(c, "purpose") == Some(purpose) && consent_valid(c, now_ms, require_evidence)
+    })
 }
 
 /// Gate a consent-requiring command: allow when no purpose is required or a valid
 /// consent exists; deny otherwise.
-pub fn evaluate_consent_gate(purpose: Option<&str>, consents: &[Value], now_ms: i64) -> bool {
+pub fn evaluate_consent_gate(
+    purpose: Option<&str>,
+    consents: &[Value],
+    now_ms: i64,
+    require_evidence: bool,
+) -> bool {
     match purpose {
         None => true,
         Some(p) if p.is_empty() => true,
-        Some(p) => has_valid_consent(consents, p, now_ms),
+        Some(p) => has_valid_consent(consents, p, now_ms, require_evidence),
     }
 }
 
@@ -491,13 +513,30 @@ mod tests {
     fn consent_validity_and_gate() {
         assert!(consent_valid(
             &json!({"legal_basis": "consent", "granted_at_ms": NOW - DAY_MS}),
-            NOW
+            NOW,
+            false
         ));
         assert!(!consent_valid(
             &json!({"legal_basis": "consent", "granted_at_ms": NOW - 10 * DAY_MS, "withdrawn_at_ms": NOW - DAY_MS}),
-            NOW
+            NOW,
+            false
         ));
-        assert!(consent_valid(&json!({"legal_basis": "contract"}), NOW));
+        assert!(consent_valid(&json!({"legal_basis": "contract"}), NOW, false));
+
+        // §9.2: with evidence required, a bare non-consent basis is rejected, but
+        // one carrying basis_evidence passes.
+        assert!(!consent_valid(&json!({"legal_basis": "legitimate_interest"}), NOW, true));
+        assert!(consent_valid(
+            &json!({"legal_basis": "legitimate_interest", "basis_evidence": "LIA documented 2026-06"}),
+            NOW,
+            true
+        ));
+        // consent basis is unaffected by the evidence flag.
+        assert!(consent_valid(
+            &json!({"legal_basis": "consent", "granted_at_ms": NOW - DAY_MS}),
+            NOW,
+            true
+        ));
 
         let ledger = vec![
             json!({"purpose": "present_to_client", "legal_basis": "consent", "granted_at_ms": NOW - DAY_MS}),
@@ -505,10 +544,11 @@ mod tests {
         assert!(evaluate_consent_gate(
             Some("present_to_client"),
             &ledger,
-            NOW
+            NOW,
+            false
         ));
-        assert!(!evaluate_consent_gate(Some("talent_pool"), &ledger, NOW));
-        assert!(evaluate_consent_gate(None, &[], NOW));
+        assert!(!evaluate_consent_gate(Some("talent_pool"), &ledger, NOW, false));
+        assert!(evaluate_consent_gate(None, &[], NOW, false));
     }
 
     #[test]
