@@ -95,18 +95,22 @@ Current baseline:
 - The installed reference catalog now emits explicit runtime rules, marks
   recommended business-workflow references, and warns that source-only manifest
   fields must not be copied into runtime-installed apps.
-- App creation is still not production-ready. The active post-reference run
-  `rfix2` now has two terminal-green apps: Inventory and Projects are both
-  `handled`, pass installed validation, and have complete runtime-installed
-  artifacts. Quality is stuck in validation rework with no artifact directory,
-  and Subscriptions plus Contracts are pending while the service is idle.
-  Source forensics found a queue rework-recognition bug: rework prompts now
-  begin with `Business OS app validation failed.`, but the dispatcher only
-  matched the older `Business OS app artifact validation failed.` marker. The
-  source patch accepts both markers and is verified by a targeted regression
-  test, but it is not installed yet. The next proof must be one fresh five-app
-  CTOX-native bench with validation, browser smoke, persistence, and automation
-  evidence for all five apps.
+- App creation is still not production-ready. Source forensics found and fixed
+  a queue rework-recognition bug: rework prompts now begin with
+  `Business OS app validation failed.`, but the dispatcher only matched the
+  older `Business OS app artifact validation failed.` marker. The patch accepts
+  both markers, was pushed in commit `0d315c66`, and is installed in release
+  `branch-main-20260620T144851Z`. Installed verification shows CTOX leased
+  `bench_quality_rfix2` rework instead of idling, and Quality then became
+  terminal-green. Current `rfix2` status is four-fifths terminal-green:
+  Inventory, Projects, Contracts, and Quality are `handled` and pass installed
+  validation. Subscriptions is leased by `ctox-service` and has runtime
+  artifacts, but it is still active and validation-red because `index.js` and
+  tests are not present yet. The service did not lease Subscriptions until a
+  clean service restart, which classifies the remaining queue progress issue
+  as a worker-idle wakeup/liveness gap. The next proof must be one fresh
+  five-app CTOX-native bench with validation, browser smoke, persistence, and
+  automation evidence for all five apps.
 - The Inventory finalization bug was a concrete runtime lifecycle bug: direct
   validation previously succeeded on files but failed finalization because
   app-version snapshot recording slugified `bench_inventory_rfix2` to
@@ -163,6 +167,12 @@ Immediate checklist:
       has validation-green artifacts so far.
 - [ ] Collect terminal installed validation status for all five fresh bench
       apps.
+- [x] Let `bench_quality_rfix2` reach terminal evidence after installed
+      rework-marker fix.
+- [x] Classify the remaining idle pending Subscriptions state as a
+      worker-idle wakeup/liveness gap after service restart immediately leased
+      the task.
+- [ ] Let currently leased `bench_subscriptions_rfix2` reach terminal evidence.
 - [ ] Record whether any app dispatched a real automation command.
 - [ ] Run browser smoke after the fresh bench has validation-green artifacts.
 - [ ] Classify every remaining failure before editing code or skill resources.
@@ -186,11 +196,11 @@ Immediate checklist:
       feedback header and the legacy artifact-validation marker.
 - [x] Verify rework priority with
       `cargo test --bin ctox business_os_app_validation_rework_is_leased_before_fresh_pending_app_tasks`.
-- [ ] Commit and push the rework-detection patch and this plan update.
-- [ ] Install the patch via `ctox upgrade --dev`.
-- [ ] Cleanup or cancel only superseded old-run `rcli` validation-rework tasks
+- [x] Commit and push the rework-detection patch and this plan update.
+- [x] Install the patch via `ctox upgrade --dev`.
+- [x] Cleanup or cancel only superseded old-run `rcli` validation-rework tasks
       before letting the installed dispatcher resume `rfix2`.
-- [ ] Verify the installed service leases `bench_quality_rfix2` rework or one
+- [x] Verify the installed service leases `bench_quality_rfix2` rework or one
       of the pending `rfix2` tasks instead of idling.
 - [ ] Collect terminal installed validation status for all five fresh bench
       apps.
@@ -204,6 +214,11 @@ patch is allowed because `rfix1` copied source-only manifest patterns exposed by
 the reference catalog. The current rework-detection patch is allowed because
 the dispatcher skipped durable validation-rework tasks even though their
 Business OS app module ids and validator reports were present.
+- Current `rfix2` status is four-fifths terminal-green. Inventory, Projects,
+  Contracts, and Quality are `handled` and pass installed validation.
+  Subscriptions is leased by `ctox-service` and has a runtime artifact
+  directory, but the app is not yet complete: the latest installed validation
+  snapshot still misses `index.js` and tests while the worker is active.
 
 ## Tracker
 
@@ -214,7 +229,7 @@ Business OS app module ids and validator reports were present.
 | 2. Build CTOX-native bench runner | done | Codex | `8a8cd236`; `cargo test --bin ctox app_bench_`; installed release `branch-main-20260620T113510Z`; CLI run `rcli` | Runner submits real `ctox.business_os.app.create` tasks, writes runtime JSONL evidence, and does not write app artifacts. |
 | 3. Run five-app bench in CTOX | blocked | Codex | run `rcli`; installed status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rcli/status-1781958189008.json`; browser smoke against `http://127.0.0.1:8765/#bench_subscriptions_rcli` | `rcli` produced two validation-green apps, but browser smoke showed validation-green private apps were not openable because creator/responsible lifecycle fields were empty. Superseded by Phase 4 fixes; continue with a fresh post-fix run in Phase 5. |
 | 4. Patch systemic gaps | done | Codex | lifecycle commit `212aa2d0`; reference commit `c1267d0d`; installed releases `branch-main-20260620T124515Z` and `branch-main-20260620T130820Z`; run `rfix1`; `cargo test --bin ctox app_bench_`; `cargo test --bin ctox app_validation_success_accepts_postlease_artifact_write`; `cargo test --bin ctox app_references_mark_source_only_manifest_fields_as_non_templates`; `ctox business-os app references --json` | Classification from `rcli`: project helper-test mismatch is `model_failure`; private app visibility is `runtime_orchestration_gap`. Classification from `rfix1`: raw source reference metadata is `reference_gap`. Patched only lifecycle/orchestration and reference-resource gaps. No app-output repair and no deterministic builder. |
-| 5. Repeat until green | in_progress | Codex | installed releases `branch-main-20260620T130820Z` and `branch-main-20260620T141728Z`; `ctox status`; `ctox business-os app references --json`; `ctox queue cleanup-scope --match-run-id rfix1 --cancel-open`; `ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k --run-id rfix2`; latest status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix2/status-1781966787521.json`; direct validation `ctox business-os app validate bench_inventory_rfix2 --installed`; source tests `cargo test --bin ctox app_validation_success_`, `cargo test --bin ctox business_os_app_validation_worker_error_after_green_completes_business_command`, `cargo test --bin ctox app_bench_`, `cargo test --bin ctox business_os_app_validation_rework_is_leased_before_fresh_pending_app_tasks` | Pre-reference `rfix1` tasks were cancelled as superseded; accidental run `r1781961729513` was cancelled after `bench run --help` unexpectedly submitted a task. Fresh `rfix2` uses actor `local-dev`. Inventory and Projects are terminal-green and `handled`. Quality is in no-artifact validation rework; Subscriptions and Contracts are pending; the service is idle because installed dispatch does not recognize the current rework feedback marker. Source patch fixes the marker mismatch but is not installed yet. No five-app green proof yet. |
+| 5. Repeat until green | in_progress | Codex | installed releases `branch-main-20260620T130820Z`, `branch-main-20260620T141728Z`, and `branch-main-20260620T144851Z`; `ctox status`; `ctox business-os app references --json`; `ctox queue cleanup-scope --match-run-id rfix1 --cancel-open`; `ctox queue cleanup-scope --match-run-id rcli --status review_rework --cancel-open`; `ctox stop`; `ctox start`; `ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k --run-id rfix2`; latest status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix2/status-1781968983457.json`; direct validation `ctox business-os app validate bench_inventory_rfix2 --installed`; source tests `cargo test --bin ctox app_validation_success_`, `cargo test --bin ctox business_os_app_validation_worker_error_after_green_completes_business_command`, `cargo test --bin ctox app_bench_`, `cargo test --bin ctox business_os_app_validation_rework_is_leased_before_fresh_pending_app_tasks` | Pre-reference `rfix1` tasks were cancelled as superseded; accidental run `r1781961729513` was cancelled after `bench run --help` unexpectedly submitted a task; stale old-run `rcli` validation rework was cancelled after dry-run showed exactly one match. Fresh `rfix2` uses actor `local-dev`. Inventory, Projects, Contracts, and Quality are terminal-green and `handled`. Subscriptions was stuck pending while service idle, then leased immediately after service restart; it now has partial artifacts but is still leased and validation-red while active. No five-app green proof yet. |
 | 6. Entry point coverage | pending |  |  | Verify App Creator, Chat, App Store/template flow, CLI, and external inbound paths bind the same skill/resource context. |
 | 7. Production signoff | pending |  |  | All entry points produce runnable validated apps with evidence. |
 
@@ -1157,6 +1172,134 @@ Append one entry per meaningful run.
   validation-rework tasks so `rfix2` Quality rework is not starved by stale
   forensic work. Do not patch generated app files.
 
+### 2026-06-20 Rework Fix Installed And Quality Resumed
+
+- Phase: 5
+- Owner: Codex
+- Run id / task ids: `rfix2`;
+  stale old-run task cancelled:
+  `queue:system::81a6b65f041a523efc1134a6`;
+  active rework task:
+  `queue:system::105d99183374108030b4ea9c`
+- Commands:
+  `git commit -m "Fix Business OS app validation rework dispatch"`;
+  `git push origin main`;
+  `ctox queue cleanup-scope --match-run-id rcli --status review_rework --dry-run --cancel-open`;
+  `ctox queue cleanup-scope --match-run-id rcli --status review_rework --cancel-open`;
+  `ctox upgrade --dev`;
+  `readlink /Users/michaelwelsch/.local/lib/ctox/current`;
+  `ctox status`;
+  `ctox queue list --status pending --status leased --status review_rework --limit 20`;
+  `ctox business-os app bench status --run-id rfix2 --validate`
+- Changed files:
+  `src/core/service/service.rs`,
+  `docs/business-os-app-creation-plan.md`
+- Evidence path:
+  installed release
+  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260620T144851Z`;
+  status snapshots
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix2/status-1781967668545.json`,
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix2/status-1781967909873.json`
+- Result:
+  commit `0d315c66` was pushed to `main`, and `ctox upgrade --dev` installed
+  release `branch-main-20260620T144851Z`. The old `rcli` validation-rework
+  task was cancelled only after dry-run matched exactly one stale old-run task.
+  After upgrade, CTOX no longer idled: the service leased
+  `bench_quality_rfix2` from validation rework with 256k context. `rfix2`
+  status improved to three terminal-green apps: Inventory, Projects, and
+  Contracts are `handled` and pass installed validation. Quality is still
+  leased and not terminal; it has partial artifacts and currently fails
+  validation because `index.js` and tests are missing. Subscriptions is still
+  pending with no artifacts.
+- Failure classification:
+  the prior idle state is confirmed as `runtime_orchestration_gap` and fixed on
+  the installed path. Quality's current missing files are not yet classified
+  because the worker is still active and may complete them in the same rework
+  slice.
+- Follow-up:
+  let the active Quality worker reach terminal evidence. If Quality becomes
+  validation-green, verify the service leases pending Subscriptions. If Quality
+  returns to rework or fails with missing files after the worker ends, classify
+  whether that is model failure, skill-resource gap, or another orchestration
+  issue before patching anything.
+
+### 2026-06-20 Quality Green And Final Pending Wakeup Gap
+
+- Phase: 5
+- Owner: Codex
+- Run id / task ids: `rfix2`;
+  Quality `queue:system::105d99183374108030b4ea9c`;
+  Subscriptions `queue:system::f4efcb9ad60fb6ab0c35a495`
+- Commands:
+  `ctox business-os app bench status --run-id rfix2 --validate`;
+  `ctox status`;
+  `ctox queue show --message-key queue:system::f4efcb9ad60fb6ab0c35a495`;
+  `ctox work-hours status`;
+  `tail -n 80 /Users/michaelwelsch/.local/state/ctox/ctox_service.log`;
+  `ctox stop`;
+  `ctox start`
+- Changed files:
+  `docs/business-os-app-creation-plan.md`
+- Evidence path:
+  status snapshots
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix2/status-1781968173323.json`,
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix2/status-1781968279283.json`,
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix2/status-1781968596145.json`;
+  service log `/Users/michaelwelsch/.local/state/ctox/ctox_service.log`
+- Result:
+  Quality completed after the installed rework-marker fix: the task is
+  `handled`, installed validation passes, and its helper test file
+  `tests/records.test.mjs` passes 17 tests. `rfix2` then had four terminal
+  green apps and exactly one pending app, Subscriptions. The service stayed
+  idle for more than one dispatch interval with `pending_count=1` and
+  `worker_active_count=0`; work-hours was not blocking. A clean service restart
+  immediately leased the pending Subscriptions task, proving the task was
+  valid/leasable and the remaining issue is service wakeup/liveness after
+  worker completion, not a bad app artifact or missing skill rule.
+- Failure classification:
+  `runtime_orchestration_gap`: worker-idle wakeup/liveness after terminal
+  Business OS app validation. This should be fixed in the service scheduling
+  path before declaring app creation production-ready; the restart is evidence
+  collection, not an acceptable production workaround.
+- Follow-up:
+  let the active Subscriptions worker reach terminal evidence. Then patch the
+  worker-idle wakeup path with a targeted regression test so a fresh five-app
+  bench can complete without service restart.
+
+### 2026-06-20 Subscriptions Leased With Partial Artifacts
+
+- Phase: 5
+- Owner: Codex
+- Run id / task ids: `rfix2`;
+  Subscriptions `queue:system::f4efcb9ad60fb6ab0c35a495`
+- Commands:
+  `ctox status`;
+  `ctox business-os app bench status --run-id rfix2 --validate`
+- Changed files:
+  `docs/business-os-app-creation-plan.md`
+- Evidence path:
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix2/status-1781968983457.json`
+- Result:
+  CTOX is busy with `worker_active_count=1` and current goal
+  `Build a small Business OS Subscriptions app...`. The latest bench status has
+  `handled=4`, `leased=1`, `validation_passed=4`, `validation_failed=1`,
+  `artifact_dirs_present=5`, and `apps_with_missing_required_files=1`.
+  Subscriptions has ten runtime files under
+  `runtime/business-os/installed-modules/bench_subscriptions_rfix2/`, including
+  `module.json`, `collections.schema.json`, `schema.js`, `index.html`,
+  `index.css`, `icon.svg`, `core/records.mjs`, `core/automation.mjs`, and
+  `locales/en.json` and `locales/de.json`. It is still missing `index.js` and
+  tests, so installed validation is red while the worker is still active.
+- Failure classification:
+  none yet for Subscriptions; the task is leased and active, so this is a
+  mid-run status, not terminal app-output evidence.
+- Follow-up:
+  wait for Subscriptions to finish, then collect terminal validation evidence.
+  If it becomes terminal-green, continue with browser/persistence/automation
+  smoke and the worker-idle wakeup fix. If it enters review rework or terminal
+  failure, classify from the final validator and queue evidence before editing
+  source, skill resources, or validation.
+
 ## Handoff Notes
 
 Latest handoff:
@@ -1174,25 +1317,19 @@ Latest handoff:
 - The runtime module-id finalization fix and bench help guard are installed in
   release `branch-main-20260620T141728Z`.
 - The next useful proof is the current `rfix2` bench or a later fresh bench
-  after release `branch-main-20260620T141728Z`; old queued `rfix1` tasks were
+  after release `branch-main-20260620T144851Z`; old queued `rfix1` tasks were
   created before the reference release and cannot prove production readiness.
 - Active run `rfix2` is the current proof attempt. Latest status is
-  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix2/status-1781966787521.json`.
-- In `rfix2`, Inventory and Projects are terminal-green and `handled`; direct
-  installed validation passes for both. Quality has no artifacts and is in
-  `review_rework`; Subscriptions and Contracts are still pending.
-- `ctox status` currently reports the service running but idle with
-  `pending_count=2`, `worker_active_count=0`, work-hours disabled, and no
-  active source label. This is explained by the installed dispatcher not
-  recognizing the current validation-rework prompt header.
-- Source patch in `src/core/service/service.rs` accepts both
-  `Business OS app validation failed.` and
-  `Business OS app artifact validation failed.` as validation-rework markers.
-  The targeted regression test is green. The patch still needs commit, push,
-  `ctox upgrade --dev`, and installed-path verification.
-- Before installed dispatcher verification, cancel only superseded old-run
-  `rcli` validation-rework tasks if they would otherwise take priority over
-  `rfix2`. Do not cancel current `rfix2` tasks.
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix2/status-1781968983457.json`.
+- In `rfix2`, Inventory, Projects, Contracts, and Quality are terminal-green
+  and `handled`; installed validation passes for all four. Subscriptions is
+  currently leased by `ctox-service` after a clean service restart, has partial
+  runtime artifacts, and is not yet terminal evidence.
+- The restart was needed because the service stayed idle with Subscriptions
+  pending after Quality completed. Classify this as a `runtime_orchestration_gap`
+  in worker-idle wakeup/liveness, not as an app-output or skill-resource issue.
+- Old `rcli` validation rework was cancelled as superseded after a dry-run
+  matched exactly one old-run task. Do not cancel current `rfix2` tasks.
 - Do not patch generated app files.
 - Do not patch skill resources, validators, or orchestration for the old
   project helper-test failure unless the same failure class repeats or exposes
@@ -1203,9 +1340,9 @@ Latest handoff:
 
 - Define validator behavior for internal shell tools such as App Creator.
 - Complete the first five-app bench run through CTOX workers with MiniMax M3.
-- Rerun or continue after installing the rework-marker patch; old `rfix1`
-  evidence is not enough for production readiness because it used the old
-  reference output, and current `rfix2` is only two-fifths green.
+- Continue `rfix2`; old `rfix1` evidence is not enough for production readiness
+  because it used the old reference output, and current `rfix2` is four-fifths
+  green with Subscriptions leased and active.
 - Track `bench_projects_rcli` as a current model-output failure unless CTOX
   review/rework repairs it or the same inconsistency repeats across more runs.
 - Track `bench_inventory_rfix1` helper-test failures as model-output failures
@@ -1217,10 +1354,6 @@ Latest handoff:
   overfitting to internal developer tools.
 - Confirm every app creation entry point attaches the same structured skill
   resource context.
-- Install and verify the rework-marker patch with `ctox upgrade --dev`; the
-  installed dispatcher must lease validation rework or pending app tasks
-  instead of staying idle.
-- Investigate `bench_quality_rfix2` as a no-artifact validation-rework case
-  after the installed dispatcher can actually pick up current rework prompts.
-  Do this as orchestration/model forensics, not by changing generated app
-  files.
+- Let currently leased `bench_subscriptions_rfix2` reach terminal evidence.
+- Patch the worker-idle wakeup/liveness gap so pending durable app tasks are
+  leased after a prior app task completes without requiring service restart.
