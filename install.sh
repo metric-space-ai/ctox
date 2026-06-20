@@ -1100,8 +1100,8 @@ PLISTEOF
 
   printf 'installed\n' > "$runtime_dir/ctox_launchd_user.installed"
   launchctl bootout "$target" >/dev/null 2>&1 || true
-  launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1 || true
   launchctl enable "$target" >/dev/null 2>&1 || true
+  launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1 || true
   launchctl kickstart -k "$target" >/dev/null 2>&1 || true
 }
 

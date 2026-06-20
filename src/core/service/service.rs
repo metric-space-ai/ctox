@@ -17587,10 +17587,9 @@ fn launchd_bootstrap_and_start(root: &Path) -> Result<()> {
     let plist_display = plist_path.display().to_string();
     let domain = launchd_user_domain();
     let target = launchd_target_label();
-    let _ = launchd_disable();
     let _ = launchd_bootout();
-    launchctl_user(vec!["bootstrap".to_string(), domain.clone(), plist_display])?;
     let _ = launchctl_user(vec!["enable".to_string(), target.clone()]);
+    launchctl_user(vec!["bootstrap".to_string(), domain.clone(), plist_display])?;
     launchctl_user(vec!["kickstart".to_string(), "-k".to_string(), target])?;
     let marker = root.join(LAUNCHD_USER_MARKER_RELATIVE_PATH);
     if let Some(parent) = marker.parent() {
