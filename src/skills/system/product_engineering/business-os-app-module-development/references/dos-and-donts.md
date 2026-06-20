@@ -13,8 +13,12 @@
 - Use `ctox.ticket.local.create/comment/transition` only for real local ticket lifecycle actions.
 - Keep the first version small, focused, and fully working.
 - Prefer one or two panes; use modals for occasional detail work.
+- Use unique function names in `index.js`; do not shadow a top-level render or
+  helper function with a nested function of the same name.
 - Include a visible create flow for the primary record type, especially in the
   empty state.
+- Create/edit forms must include a visible Save or Submit control that actually
+  completes the workflow.
 - If you implement a custom modal or overlay with a `hidden` attribute, add the
   matching CSS rule so it cannot block clicks while hidden.
 - Add tests for pure record helpers and automation command builders.

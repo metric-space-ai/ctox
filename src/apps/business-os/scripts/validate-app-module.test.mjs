@@ -400,6 +400,59 @@ function writeSourceModule(root, moduleId, overrides = {}) {
 
 {
   const root = makeWorkspace();
+  writeInstalledModule(root, 'duplicatefunction', {
+    indexJs: [
+      "import { buildFollowUpCommand } from './core/automation.mjs';",
+      'function renderDetail(record) { return record?.title || ""; }',
+      'export async function mount(ctx) {',
+      "  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());",
+      "  const records = ctx.db.collection?.('duplicatefunction_records');",
+      '  void records;',
+      '  function renderDetail() {',
+      '    return renderDetail({ title: "Demo" });',
+      '  }',
+      '  void renderDetail;',
+      "  ctx.host.querySelector('[data-action=\"create-record\"]')?.addEventListener('click', () => records?.upsert?.({ id: 'demo', title: 'Demo', updated_at_ms: Date.now() }));",
+      "  ctx.host.querySelector('[data-action=\"follow-up\"]')?.addEventListener('click', () => ctx.commandBus.dispatch(buildFollowUpCommand({ id: 'demo', title: 'Demo', updated_at_ms: 1 })));",
+      '  return () => { ctx.host.innerHTML = ""; };',
+      '}',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'duplicatefunction', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /declares function renderDetail more than once/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'nosubmitcontrol', {
+    indexJs: [
+      "import { buildFollowUpCommand } from './core/automation.mjs';",
+      'export async function mount(ctx) {',
+      "  ctx.host.innerHTML = '<form data-form><input name=\"title\" required></form><button type=\"button\" data-action=\"create-record\">Create record</button><button type=\"button\" data-action=\"follow-up\">Follow up</button>';",
+      "  const records = ctx.db.collection?.('nosubmitcontrol_records');",
+      '  void records;',
+      "  ctx.host.querySelector('[data-action=\"create-record\"]')?.addEventListener('click', () => {",
+      "    ctx.host.querySelector('[data-form]').hidden = false;",
+      '  });',
+      "  ctx.host.querySelector('[data-form]')?.addEventListener('submit', (event) => {",
+      '    event.preventDefault();',
+      "    records?.upsert?.({ id: 'demo', title: 'Demo', updated_at_ms: Date.now() });",
+      '  });',
+      "  ctx.host.querySelector('[data-action=\"follow-up\"]')?.addEventListener('click', () => ctx.commandBus.dispatch(buildFollowUpCommand({ id: 'demo', title: 'Demo', updated_at_ms: 1 })));",
+      '  return () => { ctx.host.innerHTML = ""; };',
+      '}',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'nosubmitcontrol', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /wires a form submit handler but renders no visible submit\/save control/);
+}
+
+{
+  const root = makeWorkspace();
   writeInstalledModule(root, 'ticketautomation', {
     automationJs: [
       'export function buildFollowUpCommand(record = {}) {',

@@ -254,6 +254,38 @@ function collectHiddenModalFailures(indexHtml, indexCss) {
   return messages;
 }
 
+function lineNumberForIndex(text, index) {
+  return String(text || '').slice(0, Math.max(0, index)).split(/\r?\n/).length;
+}
+
+function collectDuplicateFunctionDeclarationFailures(file, text) {
+  const declarations = new Map();
+  const source = stripJsComments(text);
+  const pattern = /\b(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/g;
+  for (const match of source.matchAll(pattern)) {
+    const name = match[1];
+    if (!declarations.has(name)) declarations.set(name, []);
+    declarations.get(name).push(lineNumberForIndex(source, match.index || 0));
+  }
+  const messages = [];
+  for (const [name, lines] of declarations.entries()) {
+    if (lines.length <= 1) continue;
+    messages.push(`${rel(file)} declares function ${name} more than once (lines ${lines.join(', ')}); duplicate function names shadow helpers and can break browser mount`);
+  }
+  return messages;
+}
+
+function hasFormSubmitHandler(text) {
+  return /\.addEventListener\s*\(\s*['"]submit['"]/.test(text)
+    || /\bonSubmitForm\b/.test(text);
+}
+
+function hasVisibleSubmitOrSaveControl(text) {
+  return /\btype\s*=\s*['"`]submit['"`]/.test(text)
+    || /\bdata-[a-z0-9-]*action\s*=\s*['"`][^'"`]*\bsave\b[^'"`]*['"`]/i.test(text)
+    || />\s*(?:Save|Speichern)\s*</i.test(text);
+}
+
 function indexJsHandlesDataAction(indexJs, action) {
   const escaped = escapeRegExp(action);
   return new RegExp(String.raw`\[data-action\s*=\s*["']${escaped}["']\]`).test(indexJs)
@@ -482,6 +514,9 @@ if (installedMode) {
   if (!hasPrimaryCreateAffordance(indexHtml, indexJs)) {
     fail('installed module must expose a primary create action for its main business record');
   }
+  if (hasFormSubmitHandler(indexJs) && !hasVisibleSubmitOrSaveControl(runtimeText)) {
+    fail('installed module wires a form submit handler but renders no visible submit/save control for the form');
+  }
 }
 
 const runtimeRules = [
@@ -503,6 +538,9 @@ for (const path of runtimeFiles) {
   const text = readText(path);
   for (const [label, regex] of runtimeRules) {
     if (regex.test(text)) fail(`${rel(path)} contains forbidden runtime pattern: ${label}`);
+  }
+  if (/\.(?:js|mjs)$/.test(path)) {
+    for (const message of collectDuplicateFunctionDeclarationFailures(path, text)) fail(message);
   }
 }
 
