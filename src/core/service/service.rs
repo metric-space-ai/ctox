@@ -5874,11 +5874,11 @@ fn start_prompt_worker(
                     match maybe_lease_next_durable_queue_prompt_for_worker_finalization(
                         &root, &state,
                     ) {
-                        Ok(Some(queued)) => enqueue_prompt(
+                        Ok(Some(queued)) => start_prompt_worker_with_active_state(
                             &root,
                             &state,
                             queued,
-                            "Queued durable queue task after worker completion".to_string(),
+                            "Started durable queue task after worker completion".to_string(),
                         ),
                         Ok(None) => {}
                         Err(err) => push_event(
@@ -5970,11 +5970,11 @@ fn start_prompt_worker(
                 start_prompt_worker(root.clone(), state.clone(), queued);
             } else {
                 match maybe_lease_next_durable_queue_prompt_for_worker_finalization(&root, &state) {
-                    Ok(Some(queued)) => enqueue_prompt(
+                    Ok(Some(queued)) => start_prompt_worker_with_active_state(
                         &root,
                         &state,
                         queued,
-                        "Queued durable queue task after worker panic".to_string(),
+                        "Started durable queue task after worker panic".to_string(),
                     ),
                     Ok(None) => {}
                     Err(err) => push_event(
@@ -12018,18 +12018,7 @@ fn enqueue_prompt(
                 true
             }
         } else {
-            track_leased_keys_locked(
-                &mut shared,
-                &prompt.leased_message_keys,
-                &prompt.leased_ticket_event_keys,
-            );
-            shared.busy = true;
-            shared.current_goal_preview = Some(prompt.preview.clone());
-            shared.active_source_label = Some(prompt.source_label.clone());
-            shared.last_error = None;
-            shared.last_reply_chars = None;
-            shared.last_progress_epoch_secs = current_epoch_secs();
-            push_event_locked(&mut shared, event);
+            activate_prompt_dispatch_locked(&mut shared, &prompt, event);
             false
         }
     };
@@ -12048,6 +12037,35 @@ fn enqueue_prompt(
     if !queued {
         start_prompt_worker(root.to_path_buf(), state.clone(), prompt);
     }
+}
+
+fn activate_prompt_dispatch_locked(shared: &mut SharedState, prompt: &QueuedPrompt, event: String) {
+    track_leased_keys_locked(
+        shared,
+        &prompt.leased_message_keys,
+        &prompt.leased_ticket_event_keys,
+    );
+    shared.busy = true;
+    shared.current_goal_preview = Some(prompt.preview.clone());
+    shared.active_source_label = Some(prompt.source_label.clone());
+    shared.last_error = None;
+    shared.last_reply_chars = None;
+    shared.last_progress_epoch_secs = current_epoch_secs();
+    push_event_locked(shared, event);
+}
+
+fn start_prompt_worker_with_active_state(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+    prompt: QueuedPrompt,
+    event: String,
+) {
+    let event = decorate_service_event_with_skill(&event, prompt.suggested_skill.as_deref());
+    {
+        let mut shared = lock_shared_state(state);
+        activate_prompt_dispatch_locked(&mut shared, &prompt, event);
+    }
+    start_prompt_worker(root.to_path_buf(), state.clone(), prompt);
 }
 
 fn queued_prompt_dispatch_rank(prompt: &QueuedPrompt) -> u8 {
@@ -23177,6 +23195,57 @@ Business OS command:
             leased.leased_message_keys,
             vec![next_task.message_key.clone()]
         );
+        assert_eq!(route_status_for(&root, &next_task.message_key), "leased");
+    }
+
+    #[test]
+    fn worker_finalization_direct_dispatch_tracks_durable_queue_lease() {
+        let root = temp_root("business-os-worker-finalization-direct-dispatch");
+        let next_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create inventory app".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/inventory".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create next app queue task");
+        let leased =
+            channels::lease_queue_task(&root, &next_task.message_key, CHANNEL_ROUTER_LEASE_OWNER)
+                .expect("failed to lease next app queue task");
+        let queued = queued_prompt_from_queue_task(leased);
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.busy = false;
+            shared.worker_active_count = 1;
+            activate_prompt_dispatch_locked(
+                &mut shared,
+                &queued,
+                "Started durable queue task after worker completion".to_string(),
+            );
+        }
+
+        let shared = lock_shared_state(&state);
+        assert!(shared.busy);
+        assert_eq!(
+            shared.current_goal_preview.as_deref(),
+            Some(queued.preview.as_str())
+        );
+        assert_eq!(shared.active_source_label.as_deref(), Some("queue"));
+        assert!(shared
+            .leased_message_keys_inflight
+            .contains(&next_task.message_key));
+        assert!(shared.recent_events.iter().any(|event| {
+            event.contains("Started durable queue task after worker completion")
+                && !event.contains("released durable queue lease")
+        }));
+        drop(shared);
         assert_eq!(route_status_for(&root, &next_task.message_key), "leased");
     }
 
