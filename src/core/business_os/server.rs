@@ -232,6 +232,42 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
         (Method::Get, "/api/business-os/status") => {
             respond_json(request, &store::status(root)?)?;
         }
+        (Method::Post, "/api/business-os/auth/capability") => {
+            // §9.1: issue a capability token bound to the SERVER-authenticated
+            // session user (id + role come from the validated session, never from
+            // caller-supplied input). The browser attaches the returned token to
+            // every command so native authorization stops trusting the
+            // browser-asserted client_context.actor.
+            let session = request_session(&request);
+            if !session.authenticated {
+                respond_status(request, 401, "login required")?;
+            } else {
+                let user_id = session
+                    .user
+                    .as_ref()
+                    .map(|user| user.id.clone())
+                    .unwrap_or_default();
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
+                match store::issue_business_os_capability_token(root, &user_id, now) {
+                    Ok((token, expires_at_ms)) => respond_json_value(
+                        request,
+                        serde_json::json!({
+                            "ok": true,
+                            "capability_token": token,
+                            "expires_at_ms": expires_at_ms
+                        }),
+                    )?,
+                    Err(err) => respond_status(
+                        request,
+                        403,
+                        &format!("capability token unavailable: {err}"),
+                    )?,
+                }
+            }
+        }
         (Method::Post, "/api/business-os/ctox/subscription-auth/start") => {
             let session = request_session(&request);
             if !session.authenticated {
@@ -642,6 +678,9 @@ fn is_business_os_control_plane_path(path: &str) -> bool {
         path,
         "/api/business-os/ctox/subscription-auth/start"
             | "/api/business-os/ctox/subscription-auth/callback"
+            // §9.1 auth/control-plane: issues a capability token bound to the
+            // server-authenticated session. No Business OS records flow here.
+            | "/api/business-os/auth/capability"
             // Peer-lifecycle control for the rxdb-soak rollover mode: restarts
             // the in-process native peer. No Business OS records flow here and
             // the route itself answers 403 unless

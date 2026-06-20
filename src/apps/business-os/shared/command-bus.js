@@ -9,9 +9,47 @@ export function createCommandBus({ db, sync = null, session = null } = {}) {
   };
 }
 
+// §9.1 capability token: the native side authorizes commands from a signed
+// token rather than the (spoofable) browser-asserted actor. We fetch a token
+// bound to the logged-in session from the control plane and attach it to every
+// command. Cached until just before expiry; if the control plane is unreachable
+// we dispatch without it (legacy claimed-actor path) so the UI keeps working.
+let capabilityTokenCache = { token: null, expiresAtMs: 0 };
+
+async function getCapabilityToken() {
+  const now = Date.now();
+  if (capabilityTokenCache.token && now < capabilityTokenCache.expiresAtMs - 60_000) {
+    return capabilityTokenCache.token;
+  }
+  try {
+    const res = await fetch('/api/business-os/auth/capability', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data && data.capability_token) {
+      capabilityTokenCache = {
+        token: data.capability_token,
+        expiresAtMs: Number(data.expires_at_ms) || now + 11 * 60 * 60 * 1000,
+      };
+      return capabilityTokenCache.token;
+    }
+  } catch {
+    // control plane unreachable — degrade to the legacy path
+  }
+  return null;
+}
+
 async function dispatchRxdbCommand({ db, sync, session, command }) {
   const commandId = command.id || `cmd_${crypto.randomUUID()}`;
-  const doc = commandDocument(command, commandId, resolveActorContext(command, session));
+  const capabilityToken = await getCapabilityToken();
+  const doc = commandDocument(
+    command,
+    commandId,
+    resolveActorContext(command, session),
+    capabilityToken,
+  );
   const currentDb = await resolveCommandDb(db);
   const collection = currentDb?.raw?.business_commands;
   if (!collection) throw commandError(commandId, 'business_commands collection is required.');
@@ -22,7 +60,7 @@ async function dispatchRxdbCommand({ db, sync, session, command }) {
   return waitForAuthoritativeQueueProjection(currentDb, commandId, commandWaitTimeoutMs(command));
 }
 
-function commandDocument(command, commandId, actor) {
+function commandDocument(command, commandId, actor, capabilityToken = null) {
   const now = Date.now();
   const commandClientContext = command.client_context && typeof command.client_context === 'object'
     ? command.client_context
@@ -47,6 +85,9 @@ function commandDocument(command, commandId, actor) {
     inboundChannel,
     actor,
   });
+  if (capabilityToken) {
+    clientContext.capability_token = capabilityToken;
+  }
   return {
     id: commandId,
     command_id: commandId,
