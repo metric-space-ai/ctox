@@ -178,8 +178,22 @@ Current baseline:
   submit/save control. `node src/apps/business-os/scripts/validate-app-module.test.mjs`
   and `git diff --check` pass. Running the source validator against installed
   `rfix3` artifacts rejects all five apps for those concrete browser-runtime
-  reasons. This patch still needs commit, push, `ctox upgrade --dev`, and a
-  fresh bench run before production signoff can move forward.
+  reasons.
+- Commit `c5939b54` is pushed to `main` and installed through
+  `ctox upgrade --dev` as release `branch-main-20260620T183056Z`. The active
+  install symlink points to
+  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260620T183056Z`,
+  and `ctox status --json` reports Business OS web and MCP autostarted, no
+  pending or blocked queue work, and native RxDB peer `replicationUp=true`.
+  Installed validation of historical run `rfix3` now rejects all five apps:
+  duplicate runtime function declarations in Subscriptions, Inventory,
+  Contracts, and Quality; missing visible Save/Submit controls in Inventory
+  and Projects. Status snapshot:
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix3/status-1781980973056.json`.
+- App creation is still not production-ready. The next proof must be a fresh
+  CTOX-native five-app run after release `branch-main-20260620T183056Z` that
+  passes installed validation, browser mount, `ctx.db` persistence, and
+  `ctx.commandBus.dispatch` automation without generated-app repairs.
 
 ## Current Execution Slice
 
@@ -200,8 +214,8 @@ Live execution board:
 | Automation smoke | `blocked` | One valid `business_os.chat.task` or allowed ticket command per app | Immediate checklist, Evidence Log |
 | Validator coverage for Browser E2E findings | `done` | Source and installed validators reject the hidden-modal and missing-create failures, accept the known-good Inventory app, validator test coverage is green, `git diff --check` is clean, commit `f2727698` is pushed, and release `branch-main-20260620T163623Z` is active | Immediate checklist, Evidence Log, Open Issues |
 | Worker-idle wakeup fix | `done` | Regression test plus fresh bench reaches all five handled without service restart | Tracker, Evidence Log, Open Issues |
-| Browser-runtime validator coverage | `in_progress` | Source validator rejects duplicate function declarations and submit-handler forms without visible save/submit controls; patch is pushed and installed | Current Status, Tracker, Evidence Log |
-| Fresh CTOX-native five-app bench | `blocked` | One new run id with validation, browser, persistence, and automation green; current `rfix3` has all five terminal but browser smoke failed | Current Status, Tracker, Phase 5 checklist, Evidence Log |
+| Browser-runtime validator coverage | `done` | Commit `c5939b54` is pushed; `ctox upgrade --dev` installed `branch-main-20260620T183056Z`; installed `ctox business-os app bench status --run-id rfix3 --validate --json` rejects all five old `rfix3` apps for the browser-runtime failures | Current Status, Tracker, Evidence Log |
+| Fresh CTOX-native five-app bench | `pending` | One new run id after `branch-main-20260620T183056Z` with validation, browser, persistence, and automation green; current `rfix3` is forensic evidence only | Current Status, Tracker, Phase 5 checklist, Evidence Log |
 | Entry-point coverage | `pending` | App Creator, Chat, App Store/template, CLI, and inbound/MCP paths use the same skill resource context | Tracker, Phase 6 checklist, Evidence Log |
 
 Update discipline:
@@ -213,10 +227,9 @@ Update discipline:
   board row is `done` or explicitly out of scope with evidence.
 
 Objective: convert the app-creation path into real browser, persistence,
-automation, and no-restart proof on the installed release path. Run `rfix2`
-remains forensic evidence: it proved the dynamic collection fix and exposed
-Browser E2E validator gaps. The next production evidence must come from a fresh
-five-app run after release `branch-main-20260620T163623Z`.
+automation, and no-restart proof on the installed release path. Runs `rfix2`
+and `rfix3` remain forensic evidence only. The next production evidence must
+come from a fresh five-app run after release `branch-main-20260620T183056Z`.
 
 Immediate checklist:
 
@@ -377,7 +390,8 @@ Business OS app module ids and validator reports were present.
 | 5. Repeat until green | in_progress | Codex | installed releases `branch-main-20260620T130820Z`, `branch-main-20260620T141728Z`, `branch-main-20260620T144851Z`, and `branch-main-20260620T160000Z`; `ctox status`; `ctox business-os app references --json`; `ctox queue cleanup-scope --match-run-id rfix1 --cancel-open`; `ctox queue cleanup-scope --match-run-id rcli --status review_rework --cancel-open`; `ctox stop`; `ctox start`; `ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k --run-id rfix2`; latest status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix2/status-1781972216259.json`; browser smoke for all five `rfix2` apps; UI persistence/automation smoke for `bench_inventory_rfix2`; source tests `cargo test --bin ctox app_validation_success_`, `cargo test --bin ctox business_os_app_validation_worker_error_after_green_completes_business_command`, `cargo test --bin ctox app_bench_`, `cargo test --bin ctox business_os_app_validation_rework_is_leased_before_fresh_pending_app_tasks`; installed release check `readlink /Users/michaelwelsch/.local/lib/ctox/current` | Fresh `rfix2` uses actor `local-dev`; all five apps are terminal-green and pass installed validation. Browser smoke now opens all five apps without data-plane console errors after release `branch-main-20260620T160000Z`. Production signoff is still blocked by Browser E2E findings: Subscriptions, Projects, and Contracts hide modal overlays without a matching CSS hidden rule, so hidden modals intercept pointer events; Quality lacks a primary create flow for empty-state records. Inventory proves the intended path: UI create, reload persistence through `ctx.db`, and a real `business_os.chat.task` command through `ctx.commandBus.dispatch`. |
 | 5a. Fresh post-validator bench | blocked | Codex | release `branch-main-20260620T163623Z`; `ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k --run-id rfix3`; evidence `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix3/events.jsonl`; validated status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix3/status-1781979433802.json`; Playwright console logs under `.playwright-cli/console-2026-06-20T18-*` | Fresh bench submitted through installed CTOX with `minimax-m3`, `256k`, and real Business OS app-create commands. All five tasks reached terminal success and passed the old installed validator, but browser smoke rejected the run: four apps hit duplicate `renderDetail` stack overflow and Projects cannot complete primary create because the modal has no visible Save/Submit control. |
 | 5b. Queue continuation and worker liveness | done | Codex | commits `71183644`, `641bf86f`; releases `branch-main-20260620T172452Z`, `branch-main-20260620T180649Z`; `rfix3` validated status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix3/status-1781979433802.json`; source tests `cargo test --bin ctox worker_finalization_leases_pending_app_rework_despite_stale_inflight_key`, `cargo test --bin ctox idle_dispatch_ignores_stale_inflight_queue_key_without_live_worker`, `cargo test --bin ctox worker_finalization_can_lease_next_durable_queue_task_before_activity_drop`, `cargo test --bin ctox business_os_app_validation_rework_is_leased_before_fresh_pending_app_tasks`, `cargo test --bin ctox business_os_app_validation_worker_error_after_green_completes_business_command`, `cargo test --bin ctox app_bench_`; `rustfmt --check src/core/service/service.rs`; `git diff --check` | The installed liveness patches carried `rfix3` to all five handled without generated app edits. This closes the stale process-local queue-key failure class. |
-| 5c. Browser-runtime validator coverage | in_progress | Codex | Playwright console logs under `.playwright-cli/`; source validator runs against installed `rfix3`; `node src/apps/business-os/scripts/validate-app-module.test.mjs`; `git diff --check` | Source validator now catches duplicate runtime function declarations and submit-handler forms without visible Save/Submit controls. Must be committed, pushed, installed, and proven with a fresh bench. |
+| 5c. Browser-runtime validator coverage | done | Codex | commit `c5939b54`; release `branch-main-20260620T183056Z`; Playwright console logs under `.playwright-cli/`; `node src/apps/business-os/scripts/validate-app-module.test.mjs`; `git diff --check`; installed status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix3/status-1781980973056.json` | Source and installed validators now catch duplicate runtime function declarations and submit-handler forms without visible Save/Submit controls. Historical `rfix3` is correctly red under the installed validator. |
+| 5d. Fresh post-runtime-validator bench | pending | Codex |  | Start a fresh five-app run after release `branch-main-20260620T183056Z`; do not reuse `rfix3` as production proof. |
 | 6. Entry point coverage | pending |  |  | Verify App Creator, Chat, App Store/template flow, CLI, and external inbound paths bind the same skill/resource context. |
 | 7. Production signoff | pending |  |  | All entry points produce runnable validated apps with evidence. |
 
@@ -683,6 +697,17 @@ Phase update checklist:
 - [ ] Fresh five-app run completed.
 - [ ] Results compared with prior run.
 - [ ] Remaining failures classified.
+- [x] Browser-runtime validator/resource patch installed through
+      `ctox upgrade --dev` as release `branch-main-20260620T183056Z`.
+- [x] Historical `rfix3` validation rechecked on the installed release and
+      correctly rejected all five apps for browser-runtime failures.
+- [ ] Fresh post-runtime-validator five-app run started.
+- [ ] Fresh post-runtime-validator run passed installed validation.
+- [ ] Fresh post-runtime-validator run passed browser smoke.
+- [ ] Fresh post-runtime-validator run passed persistence smoke through
+      `ctx.db`.
+- [ ] Fresh post-runtime-validator run passed automation smoke through
+      `ctx.commandBus.dispatch`.
 
 ### Phase 6: Entry Point Coverage
 
@@ -2114,6 +2139,47 @@ Append one entry per meaningful run.
   requires newly generated apps to pass installed validation, browser mount,
   persistence through `ctx.db`, and automation through `ctx.commandBus`.
 
+### 2026-06-20 Browser Runtime Validator Patch Installed
+
+- Phase: 5
+- Owner: Codex
+- Run id / task ids:
+  historical run `rfix3`
+- Commands:
+  `ctox upgrade --dev`;
+  `readlink /Users/michaelwelsch/.local/lib/ctox/current`;
+  `ctox status --json`;
+  `ctox business-os app bench status --run-id rfix3 --validate --json`
+- Changed files:
+  `docs/business-os-app-creation-plan.md`
+- Evidence path:
+  active release
+  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260620T183056Z`;
+  installed validation snapshot
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix3/status-1781980973056.json`
+- Result:
+  `ctox upgrade --dev` installed commit `c5939b54` as
+  `branch-main-20260620T183056Z`. A first upgrade attempt failed while
+  creating a local state backup because the disk was full; old CTOX
+  `update-*` backups were pruned before retrying, and the successful upgrade
+  created a fresh backup. The active install symlink points to the new release.
+  `ctox status --json` reports CTOX running, no pending or blocked queue work,
+  Business OS web on `http://127.0.0.1:8765`, MCP on
+  `http://127.0.0.1:8788/mcp`, and native RxDB peer `replicationUp=true`.
+  Installed validation of historical `rfix3` now reports `bench_green=false`,
+  `needs_attention=true`, `handled=5`, `validation_passed=0`, and
+  `validation_failed=5`. The failures match the browser evidence: duplicate
+  `renderDetail` declarations in Subscriptions, Inventory, Contracts, and
+  Quality; missing visible submit/save controls in Inventory and Projects.
+- Failure classification:
+  validator patch install proof; no new failure class. Historical `rfix3` is
+  now correctly red and remains forensic evidence only.
+- Follow-up:
+  start a fresh five-app bench after release `branch-main-20260620T183056Z`.
+  Production readiness requires the fresh run to pass installed validation,
+  browser smoke, persistence smoke, and automation smoke without generated-app
+  edits or deterministic app building.
+
 ## Handoff Notes
 
 Latest handoff:
@@ -2175,7 +2241,17 @@ Latest handoff:
 - The current source patch is validator/resource hardening, not an app-output
   repair: duplicate runtime function declarations and submit-handler forms
   without visible Save/Submit controls are now validation failures, with
-  concise skill Do/Don't guidance. It is tested but not installed yet.
+  concise skill Do/Don't guidance. It is committed as `c5939b54`, pushed to
+  `main`, and installed as release `branch-main-20260620T183056Z`.
+- Installed validation of historical `rfix3` after release
+  `branch-main-20260620T183056Z` is correctly red:
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix3/status-1781980973056.json`
+  reports `validation_failed=5`. Use this as validator proof, not as a green
+  app-creation proof.
+- The next required action is a fresh five-app bench after release
+  `branch-main-20260620T183056Z`, followed by browser, persistence, and
+  automation smoke. Do not reuse old `rfix2` or `rfix3` artifacts for
+  production signoff.
 - Old `rcli` validation rework was cancelled as superseded after a dry-run
   matched exactly one old-run task. Do not cancel current `rfix2` tasks.
 - Do not patch generated app files.
@@ -2187,9 +2263,9 @@ Latest handoff:
 ## Open Issues
 
 - Define validator behavior for internal shell tools such as App Creator.
-- Install the browser-runtime validator/resource patch, then run a fresh
-  five-app bench and complete browser, persistence, and automation smoke on
-  newly generated apps.
+- Run a fresh five-app bench after installed release
+  `branch-main-20260620T183056Z`, then complete browser, persistence, and
+  automation smoke on newly generated apps.
 - Track `bench_projects_rcli` as a current model-output failure unless CTOX
   review/rework repairs it or the same inconsistency repeats across more runs.
 - Track `bench_inventory_rfix1` helper-test failures as model-output failures
