@@ -179,6 +179,19 @@ export async function mount(ctx) {
     const collectionName = String(data.get('collection') || '').trim();
     const payload = { record_id: recordId };
     if (collectionName) payload.collection = collectionName;
+    // Billing-critical fields the native signoff handler reads (store.rs):
+    // charge_rate (Verrechnungssatz, must be a finite number > 0 unless already
+    // on the record), entleiher_account_id (invoice recipient), and
+    // signature_request_id (only consulted when Entleiher-signature is enforced).
+    const chargeRateRaw = String(data.get('charge_rate') || '').trim();
+    if (chargeRateRaw !== '') {
+      const chargeRate = Number(chargeRateRaw);
+      if (Number.isFinite(chargeRate)) payload.charge_rate = chargeRate;
+    }
+    const entleiherId = String(data.get('entleiher_account_id') || '').trim();
+    if (entleiherId) payload.entleiher_account_id = entleiherId;
+    const signatureRequestId = String(data.get('signature_request_id') || '').trim();
+    if (signatureRequestId) payload.signature_request_id = signatureRequestId;
     setGate('Sign-off läuft…');
     let result;
     try {
@@ -207,10 +220,14 @@ export async function mount(ctx) {
     }
     const signedId = result?.record_id ?? recordId;
     const released = result?.billing_released === true;
+    const invoiceId = result?.invoice_id ? String(result.invoice_id) : '';
+    const netTotal = result?.net_total;
     setGate(
       '<strong>Entleiher-Sign-off gespeichert.</strong>'
       + '<div class="ats-result-row">Leistungsnachweis: ' + esc(signedId) + '</div>'
-      + '<div class="ats-result-row">Abrechnung freigegeben: ' + (released ? 'ja' : 'nein') + '</div>',
+      + '<div class="ats-result-row">Abrechnung freigegeben: ' + (released ? 'ja' : 'nein') + '</div>'
+      + (invoiceId ? '<div class="ats-result-row">Rechnung: ' + esc(invoiceId) + '</div>' : '')
+      + (netTotal != null ? '<div class="ats-result-row">Netto: ' + esc(String(netTotal)) + ' €</div>' : ''),
       'ok'
     );
     try { signoffFormEl.reset(); } catch {}

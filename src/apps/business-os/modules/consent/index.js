@@ -100,22 +100,36 @@ export async function mount(ctx) {
   }
 
   function renderSubjectResult(commandType, label, subjectId, result) {
+    // Result keys are the native handler's exact shape (store.rs):
+    //   export -> { record_count, collections{coll:[rec]}, audit_trail[] }
+    //   erase  -> { erased_count, erased{coll:[id]} }
     const data = result?.data || result || {};
-    const exportPayload = data.export ?? data.record ?? data.records ?? data.subject ?? data.data ?? null;
-    const erasedIds = data.erased_ids ?? data.deleted_ids ?? data.removed_ids ?? data.ids ?? null;
-    const count = data.count ?? (Array.isArray(erasedIds) ? erasedIds.length : (Array.isArray(exportPayload) ? exportPayload.length : null));
     let body = '<div class="ats-result-row">Subjekt: ' + esc(subjectId) + '</div>';
-    if (count != null) body += '<div class="ats-result-row">Betroffene Datensätze: ' + esc(count) + '</div>';
-    if (Array.isArray(erasedIds) && erasedIds.length) {
-      body += '<div class="ats-result-row">Gelöschte IDs:</div><ul class="ats-blockers">'
-        + erasedIds.map((id) => '<li>' + esc(typeof id === 'string' ? id : (id?.id ?? JSON.stringify(id))) + '</li>').join('')
-        + '</ul>';
+
+    if (commandType === ERASE_COMMAND) {
+      const erased = data.erased && typeof data.erased === 'object' ? data.erased : {};
+      const count = data.erased_count ?? Object.values(erased).reduce((n, ids) => n + (Array.isArray(ids) ? ids.length : 0), 0);
+      body += '<div class="ats-result-row">Gelöschte Datensätze: ' + esc(count) + '</div>';
+      const collEntries = Object.entries(erased).filter(([, ids]) => Array.isArray(ids) && ids.length);
+      if (collEntries.length) {
+        body += '<ul class="ats-blockers">'
+          + collEntries.map(([coll, ids]) => '<li>' + esc(coll) + ': ' + esc(ids.length) + ' (' + esc(ids.join(', ')) + ')</li>').join('')
+          + '</ul>';
+      }
+      setGate('<strong>' + esc(label) + ' ausgeführt.</strong>' + body, 'ok');
+      return;
     }
-    if (commandType === EXPORT_COMMAND && exportPayload != null) {
-      let pretty;
-      try { pretty = JSON.stringify(exportPayload, null, 2); } catch { pretty = String(exportPayload); }
-      body += '<div class="ats-result-row">Auskunft (Art. 15):</div><pre class="ats-export">' + esc(pretty) + '</pre>';
-    }
+
+    // EXPORT_COMMAND (Art. 15 Auskunft)
+    const collections = data.collections && typeof data.collections === 'object' ? data.collections : {};
+    const auditTrail = Array.isArray(data.audit_trail) ? data.audit_trail : [];
+    const recordCount = data.record_count ?? Object.values(collections).reduce((n, recs) => n + (Array.isArray(recs) ? recs.length : 0), 0);
+    body += '<div class="ats-result-row">Betroffene Datensätze: ' + esc(recordCount)
+      + ' · Audit-Einträge: ' + esc(auditTrail.length) + '</div>';
+    const exportPayload = { subject_id: subjectId, record_count: recordCount, collections, audit_trail: auditTrail };
+    let pretty;
+    try { pretty = JSON.stringify(exportPayload, null, 2); } catch { pretty = String(exportPayload); }
+    body += '<div class="ats-result-row">Auskunft (Art. 15):</div><pre class="ats-export">' + esc(pretty) + '</pre>';
     setGate('<strong>' + esc(label) + ' ausgeführt.</strong>' + body, 'ok');
   }
 

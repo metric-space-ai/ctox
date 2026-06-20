@@ -20,6 +20,9 @@
 
   <form class="ats-form ats-form--signoff" data-ats-signoff-form>
     <input type="text" name="record_id" placeholder="Leistungsnachweis-ID (Sign-off)" required data-f />
+    <input type="number" name="charge_rate" step="0.01" min="0" placeholder="Verrechnungssatz €/h (Pflicht für Abrechnung)" data-f />
+    <input type="text" name="entleiher_account_id" placeholder="Entleiher-Account-ID (Rechnungsempfänger)" data-f />
+    <input type="text" name="signature_request_id" placeholder="Signatur-Anfrage-ID (falls Entleiher-Signatur erzwungen)" data-f />
     <input type="text" name="collection" placeholder="Collection (optional, Standard: planning_time_records)" data-f />
     <button type="submit">Entleiher-Sign-off → Abrechnung freigeben</button>
   </form>
