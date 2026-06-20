@@ -138,10 +138,10 @@ Immediate checklist:
 - [x] Install reference fix with `ctox upgrade --dev`.
 - [x] Verify installed reference output exposes runtime rules and source-field
       warnings.
-- [ ] Let any pre-patch queued bench tasks finish or explicitly record why they
+- [x] Let any pre-patch queued bench tasks finish or explicitly record why they
       were superseded.
-- [ ] Start a fresh five-app bench after the reference fix is installed.
-- [ ] Confirm fresh bench command actors are `local-dev`.
+- [x] Start a fresh five-app bench after the reference fix is installed.
+- [x] Confirm fresh bench command actors are `local-dev`.
 - [ ] Collect installed validation status for all five fresh bench apps.
 - [ ] Record whether any app dispatched a real automation command.
 - [ ] Run browser smoke after the fresh bench has validation-green artifacts.
@@ -166,7 +166,7 @@ the reference catalog.
 | 2. Build CTOX-native bench runner | done | Codex | `8a8cd236`; `cargo test --bin ctox app_bench_`; installed release `branch-main-20260620T113510Z`; CLI run `rcli` | Runner submits real `ctox.business_os.app.create` tasks, writes runtime JSONL evidence, and does not write app artifacts. |
 | 3. Run five-app bench in CTOX | blocked | Codex | run `rcli`; installed status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rcli/status-1781958189008.json`; browser smoke against `http://127.0.0.1:8765/#bench_subscriptions_rcli` | `rcli` produced two validation-green apps, but browser smoke showed validation-green private apps were not openable because creator/responsible lifecycle fields were empty. Superseded by Phase 4 fixes; continue with a fresh post-fix run in Phase 5. |
 | 4. Patch systemic gaps | done | Codex | lifecycle commit `212aa2d0`; reference commit `c1267d0d`; installed releases `branch-main-20260620T124515Z` and `branch-main-20260620T130820Z`; run `rfix1`; `cargo test --bin ctox app_bench_`; `cargo test --bin ctox app_validation_success_accepts_postlease_artifact_write`; `cargo test --bin ctox app_references_mark_source_only_manifest_fields_as_non_templates`; `ctox business-os app references --json` | Classification from `rcli`: project helper-test mismatch is `model_failure`; private app visibility is `runtime_orchestration_gap`. Classification from `rfix1`: raw source reference metadata is `reference_gap`. Patched only lifecycle/orchestration and reference-resource gaps. No app-output repair and no deterministic builder. |
-| 5. Repeat until green | in_progress | Codex | installed release `branch-main-20260620T130820Z`; `ctox status`; `ctox business-os app references --json` | Reset bench apps only through the bench runner, rerun after the reference fix, and update this plan with each round. A fresh post-reference-fix run has not yet produced green proof. |
+| 5. Repeat until green | in_progress | Codex | installed release `branch-main-20260620T130820Z`; `ctox status`; `ctox business-os app references --json`; `ctox queue cleanup-scope --match-run-id rfix1 --cancel-open`; `ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k --run-id rfix2`; status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix2/status-1781962112290.json` | Pre-reference `rfix1` tasks were cancelled as superseded; accidental run `r1781961729513` was cancelled after `bench run --help` unexpectedly submitted a task. Fresh `rfix2` is running with actor `local-dev`; no green proof yet. |
 | 6. Entry point coverage | pending |  |  | Verify App Creator, Chat, App Store/template flow, CLI, and external inbound paths bind the same skill/resource context. |
 | 7. Production signoff | pending |  |  | All entry points produce runnable validated apps with evidence. |
 
@@ -821,6 +821,114 @@ Append one entry per meaningful run.
   persistence/automation evidence, and classify failures before editing code or
   skill resources again.
 
+### 2026-06-20 Supersede Pre-Fix Bench Tasks
+
+- Phase: 5
+- Owner: Codex
+- Run id / task ids:
+  superseded run `rfix1`:
+  `queue:system::9033ab1f0861ebf354c6d054`,
+  `queue:system::c67e02fcd32f49606690ea7a`,
+  `queue:system::18367dff92b11256a37261ff`,
+  `queue:system::05e242d95bb62b270ea40562`,
+  `queue:system::1204449be9c9d74ad281e6c7`;
+  accidental run `r1781961729513`:
+  `queue:system::64c5db8a79db1abdc743b1fe`
+- Commands:
+  `ctox queue cleanup-scope --match-run-id rfix1 --status pending --status leased --dry-run --cancel-open`;
+  `ctox queue cleanup-scope --match-run-id rfix1 --status pending --status leased --cancel-open`;
+  `ctox queue cleanup-scope --match-run-id r1781961729513 --status pending --status leased --dry-run`;
+  `ctox queue cleanup-scope --match-run-id r1781961729513 --status pending --status leased --cancel-open`;
+  `ctox stop`;
+  `ctox start`;
+  `ctox status`
+- Changed files: `docs/business-os-app-creation-plan.md`
+- Evidence path:
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix1/status-1781961712898.json`;
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/r1781961729513/events.jsonl`
+- Result:
+  `rfix1` still had five open tasks after the reference fix was installed: four
+  pending and one leased. Because those tasks were created before the
+  reference-catalog fix, they were cancelled as superseded through the official
+  queue cleanup command. A CLI usability bug was also exposed: invoking
+  `ctox business-os app bench run --help` did not show help and instead started
+  an unintended default run `r1781961729513` far enough to submit one
+  Subscriptions task. That task was cancelled through the same cleanup path.
+  The service stayed busy in the already-running cancelled slice, so it was
+  restarted. After restart, `ctox status` reported `busy=false`,
+  `pending_count=0`, and Business OS web/MCP autostarted.
+- Failure classification:
+  `runtime_orchestration_gap` for the stale running cancelled slice;
+  `validator_gap` is not implicated. `bench run --help` is a
+  `bench_cli_guard_gap`, tracked as an Open Issue because the bench CLI must
+  never submit work for help/usage requests.
+- Follow-up:
+  commit and later install the bench CLI help/usage guard after the active
+  `rfix2` run is no longer running. Do not run `ctox upgrade --dev` while the
+  fresh bench is active.
+
+### 2026-06-20 Post-Reference Bench Started
+
+- Phase: 5
+- Owner: Codex
+- Run id / task ids: `rfix2`;
+  `queue:system::f4efcb9ad60fb6ab0c35a495`,
+  `queue:system::33aefcd7d41e5428b182d0a1`,
+  `queue:system::e48125df6171032164adb91c`,
+  `queue:system::ed23aa850a4334f4ab4f3303`,
+  `queue:system::105d99183374108030b4ea9c`
+- Commands:
+  `ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k --run-id rfix2`;
+  SQLite check of `business_commands.client_context_json`;
+  `ctox queue list --status pending --status leased --limit 10`;
+  `ctox business-os app bench status --run-id rfix2 --validate`
+- Changed files: `docs/business-os-app-creation-plan.md`
+- Evidence path:
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix2/events.jsonl`;
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix2/status-1781962112290.json`
+- Result:
+  fresh post-reference-fix run `rfix2` submitted five real app-create commands
+  and accepted all five. All command contexts use actor `local-dev` and
+  context `256k`. The latest snapshot shows `bench_green=false`,
+  `needs_attention=true`, `pending=4`, `leased=1`, `handled=0`,
+  `artifact_dirs_present=0`, and `validation_skipped=5`; Quality is leased by
+  `ctox-service` and still running with no app artifacts yet.
+- Failure classification:
+  none yet for app output. The run is in progress, so missing artifact
+  directories are expected until the leased worker writes files or terminates.
+- Follow-up:
+  keep monitoring `rfix2`. Do not patch skill resources, validation, or
+  generated app artifacts until there is terminal evidence or repeated failure
+  evidence from the post-reference-fix run.
+
+### 2026-06-20 Bench CLI Help Guard Patched
+
+- Phase: 5
+- Owner: Codex
+- Run id / task ids: not an app run; follows accidental run `r1781961729513`
+- Commands:
+  `cargo test --bin ctox app_bench_help_does_not_submit_or_cleanup`;
+  `cargo test --bin ctox app_bench_`;
+  `git diff --check -- src/core/service/business_os.rs docs/business-os-app-creation-plan.md`
+- Changed files:
+  `src/core/service/business_os.rs`,
+  `docs/business-os-app-creation-plan.md`
+- Evidence path: source test output in this work block
+- Result:
+  source patch makes `ctox business-os app bench run --help` and
+  `ctox business-os app bench status --help` return usage before cleanup,
+  evidence writes, or Business OS command submission. Regression test
+  `app_bench_help_does_not_submit_or_cleanup` passed, and the full
+  `app_bench_` test filter passed with 4 tests.
+- Failure classification:
+  `bench_cli_guard_gap`, limited to the bench evidence tool. This did not
+  change app-generation behavior, skill resources, validators, or generated app
+  artifacts.
+- Follow-up:
+  commit the source patch and plan update. Install it later with
+  `ctox upgrade --dev` only when doing so will not interrupt the active
+  post-reference bench evidence run.
+
 ## Handoff Notes
 
 Latest handoff:
@@ -862,3 +970,5 @@ Latest handoff:
   overfitting to internal developer tools.
 - Confirm every app creation entry point attaches the same structured skill
   resource context.
+- Install the patched bench CLI help guard through `ctox upgrade --dev` after
+  the active `rfix2` bench has terminal evidence or is explicitly superseded.

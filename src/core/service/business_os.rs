@@ -735,6 +735,7 @@ fn handle_business_os_app(root: &Path, args: &[String]) -> anyhow::Result<()> {
 const BUSINESS_OS_APP_BENCH_EVIDENCE_DIR: &str = "runtime/business-os/app-creation-bench";
 const BUSINESS_OS_APP_BENCH_SOURCE: &str = "ctox-cli.business-os-app-bench";
 const BUSINESS_OS_APP_BENCH_SKILL: &str = "business-os-app-module-development";
+const BUSINESS_OS_APP_BENCH_USAGE: &str = "ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]\nctox business-os app bench status --run-id <id> [--validate]";
 
 #[derive(Clone, Copy)]
 struct BusinessOsAppBenchCase {
@@ -789,13 +790,25 @@ fn handle_business_os_app_bench(root: &Path, args: &[String]) -> anyhow::Result<
         Some("status") => collect_business_os_app_bench_status(root, &args[1..]),
         Some("--help") | Some("-h") | None => Ok(serde_json::json!({
             "ok": true,
-            "usage": "ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]\nctox business-os app bench status --run-id <id> [--validate]"
+            "usage": BUSINESS_OS_APP_BENCH_USAGE
         })),
         Some(other) => anyhow::bail!("unknown business-os app bench command `{other}`"),
     }
 }
 
 fn run_business_os_app_bench(root: &Path, args: &[String]) -> anyhow::Result<serde_json::Value> {
+    if args_have_help(args) {
+        return Ok(serde_json::json!({
+            "ok": true,
+            "usage": BUSINESS_OS_APP_BENCH_USAGE,
+            "runner_contract": {
+                "creates_app_files": false,
+                "repairs_app_files": false,
+                "submits_real_business_commands": false,
+                "install_target": "runtime-installed-module"
+            }
+        }));
+    }
     let suite = flag_value(args, "--suite").unwrap_or("core-five");
     anyhow::ensure!(
         suite == "core-five",
@@ -1054,8 +1067,18 @@ fn collect_business_os_app_bench_status(
     root: &Path,
     args: &[String],
 ) -> anyhow::Result<serde_json::Value> {
+    if args_have_help(args) {
+        return Ok(serde_json::json!({
+            "ok": true,
+            "usage": BUSINESS_OS_APP_BENCH_USAGE
+        }));
+    }
     let run_id = flag_value(args, "--run-id")
-        .or_else(|| args.iter().find(|arg| !arg.starts_with("--")).map(String::as_str))
+        .or_else(|| {
+            args.iter()
+                .find(|arg| !arg.starts_with("--"))
+                .map(String::as_str)
+        })
         .context("usage: ctox business-os app bench status --run-id <id> [--validate]")?;
     let run_id = sanitize_bench_run_id(run_id)?;
     let run_dir = root.join(BUSINESS_OS_APP_BENCH_EVIDENCE_DIR).join(&run_id);
@@ -2626,6 +2649,10 @@ fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     args.get(index + 1).map(String::as_str)
 }
 
+fn args_have_help(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--help" || arg == "-h")
+}
+
 fn flag_values<'a>(args: &'a [String], flag: &str) -> Vec<&'a str> {
     args.windows(2)
         .filter_map(|window| {
@@ -3345,6 +3372,60 @@ mod tests {
             "matching skill pack missing at {}",
             skill_md.display()
         );
+    }
+
+    #[test]
+    fn app_bench_help_does_not_submit_or_cleanup() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let installed_root = root.path().join("runtime/business-os/installed-modules");
+        fs::create_dir_all(installed_root.join("bench_old"))?;
+        fs::create_dir_all(installed_root.join("real_inventory"))?;
+
+        let result =
+            handle_business_os_app_bench(root.path(), &["run".to_string(), "--help".to_string()])?;
+        assert_eq!(
+            result.get("ok").and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            result
+                .pointer("/runner_contract/submits_real_business_commands")
+                .and_then(serde_json::Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            installed_root.join("bench_old").is_dir(),
+            "help must not cleanup existing bench apps"
+        );
+        assert!(
+            installed_root.join("real_inventory").is_dir(),
+            "help must not touch non-bench apps"
+        );
+        assert!(
+            channels::list_queue_tasks(root.path(), &[], 16)?.is_empty(),
+            "help must not submit queue tasks"
+        );
+        assert!(
+            !root
+                .path()
+                .join(BUSINESS_OS_APP_BENCH_EVIDENCE_DIR)
+                .exists(),
+            "help must not write bench evidence"
+        );
+
+        let status_result = handle_business_os_app_bench(
+            root.path(),
+            &["status".to_string(), "--help".to_string()],
+        )?;
+        assert_eq!(
+            status_result.get("ok").and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert!(
+            channels::list_queue_tasks(root.path(), &[], 16)?.is_empty(),
+            "status help must not submit queue tasks"
+        );
+        Ok(())
     }
 
     #[test]
