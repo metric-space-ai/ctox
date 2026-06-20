@@ -57,7 +57,7 @@ Current baseline:
 | --- | --- | --- | --- | --- |
 | 0. Remove wrong architecture | done | Codex | `e8bec3b8`, `b142e4c8`, installed release `branch-main-20260620T102259Z` | App Creator no longer writes app files itself; resource-index skill installed. |
 | 1. Define acceptance gates | pending |  |  | Formalize what must pass for app creation, modification, validation, browser smoke, and automation. |
-| 2. Build CTOX-native bench runner | done | Codex | `cargo test --bin ctox app_bench_`; CLI run `rcli` | Runner submits real `ctox.business_os.app.create` tasks, writes runtime JSONL evidence, and does not write app artifacts. |
+| 2. Build CTOX-native bench runner | done | Codex | `8a8cd236`; `cargo test --bin ctox app_bench_`; installed release `branch-main-20260620T113510Z`; CLI run `rcli` | Runner submits real `ctox.business_os.app.create` tasks, writes runtime JSONL evidence, and does not write app artifacts. |
 | 3. Run five-app bench in CTOX | in_progress | Codex | run `rcli`, five queued task ids in Evidence Log | Five real app-create tasks are queued; worker completion, validation, browser smoke, and automation smoke are not done yet. |
 | 4. Classify failures | pending |  |  | Separate skill/resource gaps, validator gaps, runtime orchestration gaps, and model failures. |
 | 5. Patch only systemic gaps | pending |  |  | Fix repeated or architecture-level failures only. Avoid ad hoc app-specific fixes. |
@@ -455,7 +455,9 @@ Append one entry per meaningful run.
   `queue:system::7de58c08014601d6dcf2adfb`
 - Commands:
   `cargo test --bin ctox app_bench_`;
-  `cargo run --bin ctox -- business-os app bench run --suite core-five --model minimax-m3 --context 256k --run-id rcli --actor rxdb-command`
+  `cargo run --bin ctox -- business-os app bench run --suite core-five --model minimax-m3 --context 256k --run-id rcli --actor rxdb-command`;
+  `ctox upgrade --dev`;
+  `ctox business-os app bench --help`
 - Changed files:
   `src/core/service/business_os.rs`,
   `src/core/main.rs`,
@@ -465,7 +467,9 @@ Append one entry per meaningful run.
   `runtime/business-os/app-creation-bench/rcli/summary.json`
 - Result: runner submitted five real `ctox.business_os.app.create` commands
   through `accept_rxdb_business_command`; tests prove it writes no app
-  artifacts and rejects retired `128k` context.
+  artifacts and rejects retired `128k` context. Dev upgrade installed
+  `branch-main-20260620T113510Z`, and the installed CLI exposes the bench
+  command.
 - Failure classification: none for Phase 2; Phase 3 remains incomplete because
   worker execution, validation, browser smoke, and automation smoke have not
   been observed.
