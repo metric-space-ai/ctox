@@ -8269,7 +8269,8 @@ fn list_business_activity_events(
             'business_os.ats.retention_purged',
             'business_os.ats.signature_requested',
             'business_os.ats.signature_signed',
-            'business_os.ats.interview_transcribed'
+            'business_os.ats.interview_transcribed',
+            'business_os.ats.subject_exported'
          )
          ORDER BY observed_at_ms DESC, event_id DESC
          LIMIT ?1",
@@ -22602,6 +22603,7 @@ pub fn is_ats_mutating_command(command_type: &str) -> bool {
             | "ats.signature.request"
             | "ats.signature.sign"
             | "ats.interview.transcribe"
+            | "ats.subject.export"
     )
 }
 
@@ -23584,6 +23586,73 @@ fn handle_ats_mutating_command(
                     "error": err.to_string()
                 })),
             }
+        }
+        "ats.subject.export" => {
+            // §9.2 DSGVO Art. 15 access: gather every PII record held about a
+            // subject (candidate/worker) across the ATS collections plus the
+            // governance audit trail, for a data-subject access request. chef/
+            // admin gated (privileged read); the export itself is audited.
+            let subject_id = first_string_field(p, &["subject_id", "candidate_id"])
+                .context("ats.subject.export requires subject_id")?;
+            let mut collections = serde_json::Map::new();
+            for coll in ATS_WRITABLE_COLLECTIONS {
+                let mut records = load_business_records_by_field(&conn, coll, "subject_id", &subject_id)?;
+                for rec in load_business_records_by_field(&conn, coll, "candidate_id", &subject_id)? {
+                    let id = rec.get("id").and_then(Value::as_str).map(ToOwned::to_owned);
+                    let dup = id
+                        .as_deref()
+                        .map(|rid| records.iter().any(|r| r.get("id").and_then(Value::as_str) == Some(rid)))
+                        .unwrap_or(false);
+                    if !dup {
+                        records.push(rec);
+                    }
+                }
+                if !records.is_empty() {
+                    collections.insert((*coll).to_string(), Value::Array(records));
+                }
+            }
+            // The audit trail rows that name this subject (who shared/processed it).
+            let mut audit = Vec::new();
+            {
+                let mut stmt = conn.prepare(
+                    "SELECT payload_json FROM business_events
+                     WHERE command_type LIKE 'business_os.ats.%'
+                       AND json_extract(payload_json, '$.summary.candidate_id') = ?1
+                     ORDER BY observed_at_ms",
+                )?;
+                let rows = stmt.query_map(params![subject_id.as_str()], |row| row.get::<_, String>(0))?;
+                for row in rows {
+                    if let Ok(value) = serde_json::from_str::<Value>(&row?) {
+                        audit.push(value);
+                    }
+                }
+            }
+            let record_count: usize = collections
+                .values()
+                .filter_map(Value::as_array)
+                .map(Vec::len)
+                .sum();
+            // The export is itself a processing event — record it.
+            record_ats_governance_event(
+                &conn,
+                command,
+                &actor,
+                "business_os.ats.subject_exported",
+                serde_json::json!({
+                    "candidate_id": subject_id,
+                    "record_count": record_count,
+                    "audit_event_count": audit.len()
+                }),
+                now,
+            )?;
+            Ok(serde_json::json!({
+                "ok": true,
+                "subject_id": subject_id,
+                "exported_at_ms": now,
+                "record_count": record_count,
+                "collections": collections,
+                "audit_trail": audit
+            }))
         }
         other => Err(anyhow::anyhow!(
             "unsupported ats mutating command type: {other}"
