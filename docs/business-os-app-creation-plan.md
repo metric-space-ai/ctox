@@ -92,9 +92,13 @@ Current baseline:
 - The installed reference catalog now emits explicit runtime rules, marks
   recommended business-workflow references, and warns that source-only manifest
   fields must not be copied into runtime-installed apps.
-- App creation is still not production-ready. The next proof must be a fresh
-  five-app CTOX-native bench after release `branch-main-20260620T130820Z`, with
-  validation, browser smoke, persistence, and automation evidence.
+- App creation is still not production-ready. The active post-reference run
+  `rfix2` has one validation-green Inventory app artifact, but that task is
+  still leased; Quality reached validation rework with no artifact directory
+  after a worker error; Subscriptions, Projects, and Contracts are still
+  pending. The next proof must be one fresh five-app CTOX-native bench with
+  validation, browser smoke, persistence, and automation evidence for all five
+  apps.
 
 ## Current Execution Slice
 
@@ -142,10 +146,15 @@ Immediate checklist:
       were superseded.
 - [x] Start a fresh five-app bench after the reference fix is installed.
 - [x] Confirm fresh bench command actors are `local-dev`.
-- [ ] Collect installed validation status for all five fresh bench apps.
+- [x] Capture current `rfix2` status snapshot and record that only Inventory
+      has validation-green artifacts so far.
+- [ ] Collect terminal installed validation status for all five fresh bench
+      apps.
 - [ ] Record whether any app dispatched a real automation command.
 - [ ] Run browser smoke after the fresh bench has validation-green artifacts.
 - [ ] Classify every remaining failure before editing code or skill resources.
+- [ ] Decide whether idle pending `rfix2` tasks are a worker scheduling gap,
+      normal queue cadence, or require superseding/retry.
 - [x] Classify current failures before patching code, skill resources, or
       validation.
 - [x] Update Evidence Log and Open Issues before handoff.
@@ -166,7 +175,7 @@ the reference catalog.
 | 2. Build CTOX-native bench runner | done | Codex | `8a8cd236`; `cargo test --bin ctox app_bench_`; installed release `branch-main-20260620T113510Z`; CLI run `rcli` | Runner submits real `ctox.business_os.app.create` tasks, writes runtime JSONL evidence, and does not write app artifacts. |
 | 3. Run five-app bench in CTOX | blocked | Codex | run `rcli`; installed status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rcli/status-1781958189008.json`; browser smoke against `http://127.0.0.1:8765/#bench_subscriptions_rcli` | `rcli` produced two validation-green apps, but browser smoke showed validation-green private apps were not openable because creator/responsible lifecycle fields were empty. Superseded by Phase 4 fixes; continue with a fresh post-fix run in Phase 5. |
 | 4. Patch systemic gaps | done | Codex | lifecycle commit `212aa2d0`; reference commit `c1267d0d`; installed releases `branch-main-20260620T124515Z` and `branch-main-20260620T130820Z`; run `rfix1`; `cargo test --bin ctox app_bench_`; `cargo test --bin ctox app_validation_success_accepts_postlease_artifact_write`; `cargo test --bin ctox app_references_mark_source_only_manifest_fields_as_non_templates`; `ctox business-os app references --json` | Classification from `rcli`: project helper-test mismatch is `model_failure`; private app visibility is `runtime_orchestration_gap`. Classification from `rfix1`: raw source reference metadata is `reference_gap`. Patched only lifecycle/orchestration and reference-resource gaps. No app-output repair and no deterministic builder. |
-| 5. Repeat until green | in_progress | Codex | installed release `branch-main-20260620T130820Z`; `ctox status`; `ctox business-os app references --json`; `ctox queue cleanup-scope --match-run-id rfix1 --cancel-open`; `ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k --run-id rfix2`; status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix2/status-1781962112290.json` | Pre-reference `rfix1` tasks were cancelled as superseded; accidental run `r1781961729513` was cancelled after `bench run --help` unexpectedly submitted a task. Fresh `rfix2` is running with actor `local-dev`; no green proof yet. |
+| 5. Repeat until green | in_progress | Codex | installed release `branch-main-20260620T130820Z`; `ctox status`; `ctox business-os app references --json`; `ctox queue cleanup-scope --match-run-id rfix1 --cancel-open`; `ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k --run-id rfix2`; latest status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix2/status-1781964567806.json` | Pre-reference `rfix1` tasks were cancelled as superseded; accidental run `r1781961729513` was cancelled after `bench run --help` unexpectedly submitted a task. Fresh `rfix2` uses actor `local-dev`. Inventory has validation-green artifacts, Quality is in no-artifact validation rework after worker error, three tasks remain pending, and there is no green proof yet. |
 | 6. Entry point coverage | pending |  |  | Verify App Creator, Chat, App Store/template flow, CLI, and external inbound paths bind the same skill/resource context. |
 | 7. Production signoff | pending |  |  | All entry points produce runnable validated apps with evidence. |
 
@@ -929,6 +938,47 @@ Append one entry per meaningful run.
   `ctox upgrade --dev` only when doing so will not interrupt the active
   post-reference bench evidence run.
 
+### 2026-06-20 rfix2 Partial Status Snapshot
+
+- Phase: 5
+- Owner: Codex
+- Run id / task ids: `rfix2`;
+  `queue:system::f4efcb9ad60fb6ab0c35a495`,
+  `queue:system::33aefcd7d41e5428b182d0a1`,
+  `queue:system::e48125df6171032164adb91c`,
+  `queue:system::ed23aa850a4334f4ab4f3303`,
+  `queue:system::105d99183374108030b4ea9c`
+- Commands:
+  `ctox business-os app bench status --run-id rfix2 --validate`;
+  `ctox status`;
+  `ctox queue list --status pending --status leased --status review_rework --limit 20`
+- Changed files: `docs/business-os-app-creation-plan.md`
+- Evidence path:
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix2/status-1781964567806.json`
+- Result:
+  `bench_green=false`, `needs_attention=true`; counts are `pending=3`,
+  `leased=1`, `other=1`, `validation_passed=1`, `validation_skipped=4`,
+  `artifact_dirs_present=1`, and `artifact_dirs_missing=4`.
+  `bench_inventory_rfix2` has complete installed artifacts, 12 files, and
+  passes installed validation plus 17 helper tests. `bench_quality_rfix2` is in
+  `review_rework` with no artifact directory after worker-error validation.
+  Subscriptions, Projects, and Contracts are still pending with no artifact
+  directories. `ctox status` reports `busy=false`, `worker_active_count=0`,
+  and `pending_count=4`, with pending previews for Projects, Contracts,
+  Subscriptions, and Inventory.
+- Failure classification:
+  Inventory is not a failure yet because the app artifacts validate, but the
+  task has not finalized. Quality is a `runtime_orchestration_gap` candidate
+  because no app output exists and the task reached rework after worker error.
+  The idle pending queue state is also a `runtime_orchestration_gap` candidate,
+  but do not patch until the next status check confirms it is stuck rather than
+  normal cadence.
+- Follow-up:
+  keep Phase 5 active. Do not edit generated app artifacts. If the queue stays
+  idle with pending/leased work, investigate worker scheduling/recovery before
+  adding skill rules. Browser and automation smoke should wait until a task is
+  terminal and validation-green.
+
 ## Handoff Notes
 
 Latest handoff:
@@ -946,6 +996,15 @@ Latest handoff:
 - The next useful proof is a fresh bench after release
   `branch-main-20260620T130820Z`; old queued `rfix1` tasks were created before
   that release and cannot prove production readiness.
+- Active run `rfix2` is the current proof attempt. Latest status is
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix2/status-1781964567806.json`.
+- In `rfix2`, Inventory validates green but is still leased; Quality has no
+  artifacts and is in `review_rework`; Subscriptions, Projects, and Contracts
+  are still pending.
+- `ctox status` currently reports the service running but idle
+  (`busy=false`, `worker_active_count=0`) while four queue items are pending or
+  leased. Treat this as the next runtime-orchestration question before changing
+  skill text.
 - Do not patch generated app files.
 - Do not patch skill resources, validators, or orchestration for the old
   project helper-test failure unless the same failure class repeats or exposes
@@ -972,3 +1031,6 @@ Latest handoff:
   resource context.
 - Install the patched bench CLI help guard through `ctox upgrade --dev` after
   the active `rfix2` bench has terminal evidence or is explicitly superseded.
+- Investigate why `rfix2` can have pending/leased work while `ctox status`
+  reports no active worker. Do this as orchestration forensics, not by changing
+  the generated apps or adding skill rules.
