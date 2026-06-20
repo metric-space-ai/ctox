@@ -3,6 +3,11 @@
   <form class="ats-form" data-ats-form>
     <input type="text" name="candidate_id" placeholder="Kandidat-ID" required data-f />
     <input type="text" name="client_account_id" placeholder="Kunden-Account-ID" data-f />
+    <select name="placement_type" data-f>
+      <option value="">Festanstellung (Personalvermittlung)</option>
+      <option value="arbeitnehmerueberlassung">Arbeitnehmerüberlassung (Zeitarbeit)</option>
+    </select>
+    <input type="text" name="required_types" placeholder="Pflicht-Qualifikationen (Komma)" data-f />
     <input type="number" name="fee" placeholder="Honorar" data-f />
     <input type="number" name="guarantee_days" placeholder="Garantie (Tage)" data-f />
     <button type="submit">Anlegen</button>

@@ -1,4 +1,4 @@
-const MOD_BUILD = '20260618-ats3';
+const MOD_BUILD = '20260620-ats9';
 const MODULE_ID = 'placements';
 const PRIMARY = 'placements';
 const TITLE = 'placements';
@@ -38,8 +38,39 @@ export async function mount(ctx) {
     }
     rowsCache = rows;
     if (countEl) countEl.textContent = rows.length + ' Einträge';
-    if (listEl) listEl.innerHTML = rows.length ? rows.map((r) => '<div class="ats-item">' + esc(r.id || '') + '</div>').join('') : '<div class="ats-empty">Noch keine Einträge.</div>';
+    if (listEl) listEl.innerHTML = rows.length
+      ? rows.map((r) => placementRow(r)).join('')
+      : '<div class="ats-empty">Noch keine Einträge.</div>';
   }
+
+  async function onListClick(event) {
+    const btn = event.target?.closest?.('[data-early-leave]');
+    if (!btn) return;
+    const placementId = btn.getAttribute('data-early-leave');
+    if (!placementId) return;
+    setGate('');
+    try {
+      const result = await ctx.commandBus?.dispatch?.({
+        module: MODULE_ID,
+        type: 'ats.placement.early_leave',
+        command_type: 'ats.placement.early_leave',
+        payload: { placement_id: placementId, left_at_ms: Date.now() },
+      });
+      const cn = result?.credit_note_id ?? result?.data?.credit_note_id ?? null;
+      const clawback = result?.clawback ?? result?.data?.clawback ?? null;
+      setGate(
+        '<strong>Frühausstieg verbucht.</strong>'
+        + (clawback != null ? '<div class="ats-result-row">Clawback: ' + esc(String(clawback)) + '</div>' : '')
+        + (cn ? '<div class="ats-result-row">Gutschrift: ' + esc(cn) + '</div>' : ''),
+        'ok',
+      );
+      await render();
+    } catch (e) {
+      console.error('[placements] early_leave dispatch failed:', e);
+      setGate('Offline: Befehl konnte nicht gesendet werden.', 'offline');
+    }
+  }
+  listEl?.addEventListener('click', onListClick);
 
   async function onSubmit(event) {
     event.preventDefault();
@@ -53,9 +84,16 @@ export async function mount(ctx) {
     const f = Object.fromEntries(data.entries());
     const candidate_id = String(f.candidate_id || '').trim();
     if (!candidate_id) { setGate('Kandidat-ID erforderlich.', 'block'); return; }
+    const placementType = String(f.placement_type || '').trim();
+    const requiredTypes = String(f.required_types || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
     const payload = {
       candidate_id,
       client_account_id: String(f.client_account_id || '').trim() || null,
+      placement_type: placementType || null,
+      required_types: requiredTypes.length ? requiredTypes : undefined,
       fee: f.fee === '' || f.fee == null ? null : Number(f.fee),
       guarantee_days: f.guarantee_days === '' || f.guarantee_days == null ? null : Number(f.guarantee_days),
     };
@@ -105,7 +143,7 @@ export async function mount(ctx) {
   if (col?.find) { try { sub = col.find({ selector: {} }).$?.subscribe?.(() => { render().catch(() => {}); }); } catch {} }
   await render();
 
-  return () => { try { sub?.unsubscribe?.(); } catch {} formEl?.removeEventListener('submit', onSubmit); ctx.host.replaceChildren(); delete ctx.host.dataset.atsModule; };
+  return () => { try { sub?.unsubscribe?.(); } catch {} formEl?.removeEventListener('submit', onSubmit); listEl?.removeEventListener('click', onListClick); ctx.host.replaceChildren(); delete ctx.host.dataset.atsModule; };
 }
 
 async function ensureStyles() {
@@ -118,5 +156,21 @@ async function loadMarkup() {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((n) => n.remove());
   return doc.body.innerHTML;
+}
+function placementRow(r) {
+  const status = String(r.status || 'confirmed');
+  const active = status !== 'early_leave' && status !== 'cancelled';
+  const fee = r.fee == null ? '—' : esc(String(r.fee));
+  return '<div class="ats-item ats-item--rich" data-id="' + esc(r.id || '') + '">'
+    + '<div class="ats-item-main">'
+    + '<span class="ats-badge ats-badge--' + esc(status) + '">' + esc(status) + '</span> '
+    + '<strong>' + esc(r.candidate_id || '—') + '</strong> &rarr; ' + esc(r.client_account_id || '—')
+    + '</div>'
+    + '<div class="ats-item-meta">Honorar: ' + fee + ' &middot; Garantie: ' + esc(String(r.guarantee_days ?? '—')) + ' Tage'
+    + (r.fee_invoice_id ? ' &middot; Rechnung: ' + esc(r.fee_invoice_id) : '')
+    + (r.storno_credit_note_id ? ' &middot; Storno: ' + esc(r.storno_credit_note_id) : '')
+    + '</div>'
+    + (active ? '<button type="button" class="ats-action" data-early-leave="' + esc(r.id || '') + '">Fr&uuml;hausstieg</button>' : '')
+    + '</div>';
 }
 function esc(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }

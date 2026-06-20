@@ -13,3 +13,12 @@
 .ats-placements .ats-gate .ats-result-row { margin-top: 4px; font-size: 12px; opacity: .85; }
 .ats-placements .ats-gate .ats-blockers { margin: 6px 0 0; padding-left: 18px; }
 .ats-placements .ats-gate .ats-blockers li { font-size: 12px; margin: 2px 0; }
+.ats-placements .ats-item--rich { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 12px; }
+.ats-placements .ats-item-main { grid-column: 1; }
+.ats-placements .ats-item-meta { grid-column: 1; font-size: 12px; opacity: .75; }
+.ats-placements .ats-badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); vertical-align: middle; }
+.ats-placements .ats-badge--confirmed { border-color: color-mix(in srgb, green 45%, transparent); }
+.ats-placements .ats-badge--early_leave { border-color: color-mix(in srgb, orange 50%, transparent); }
+.ats-placements .ats-badge--cancelled { border-color: color-mix(in srgb, red 45%, transparent); opacity: .8; }
+.ats-placements .ats-action { grid-column: 2; grid-row: 1 / span 2; font-size: 12px; padding: 4px 10px; border-radius: 7px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); background: transparent; cursor: pointer; }
+.ats-placements .ats-action:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
