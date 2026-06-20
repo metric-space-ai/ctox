@@ -1644,7 +1644,9 @@ fn upsert_module_manifest(
     };
     let manifest_path = target.join("module.json");
     if !manifest_path.is_file() {
-        create_blank_installed_module(installed_app_root, &module_id, title, &request.description)?;
+        anyhow::bail!(
+            "module `{module_id}` does not exist. Create new Business OS apps through the App Creator (`ctox.business_os.app.create`) or install a shipped template; `ctox.module.save` only updates existing module manifests."
+        );
     }
     let mut manifest_value: Value = serde_json::from_str(
         &fs::read_to_string(&manifest_path)
@@ -1682,155 +1684,6 @@ fn upsert_module_manifest(
     manifest.editable = true;
     manifest.deletable = !is_core;
     Ok(manifest)
-}
-
-fn create_blank_installed_module(
-    app_root: &Path,
-    module_id: &str,
-    title: &str,
-    description: &str,
-) -> anyhow::Result<()> {
-    if is_core_module(module_id) {
-        anyhow::bail!("core module does not exist: {module_id}");
-    }
-    let target = app_root.join("installed-modules").join(module_id);
-    if target.exists() {
-        anyhow::bail!("target module already exists: {}", target.display());
-    }
-    fs::create_dir_all(&target)
-        .with_context(|| format!("failed to create module dir {}", target.display()))?;
-    fs::create_dir_all(target.join("core"))
-        .with_context(|| format!("failed to create core dir {}", target.display()))?;
-    fs::create_dir_all(target.join("locales"))
-        .with_context(|| format!("failed to create locales dir {}", target.display()))?;
-    fs::create_dir_all(target.join("tests"))
-        .with_context(|| format!("failed to create tests dir {}", target.display()))?;
-    let collection = installed_module_collection_name(module_id);
-    let description = if description.trim().is_empty() {
-        format!(
-            "{title} workspace for records, owner status, due dates, and CTOX chat task follow-up."
-        )
-    } else {
-        description.trim().to_owned()
-    };
-    let manifest = serde_json::json!({
-        "id": module_id,
-        "title": title,
-        "description": description.clone(),
-        "version": "0.1.0",
-        "entry": format!("installed-modules/{module_id}/index.html"),
-        "install_scope": "installed",
-        "default_installed": false,
-        "collections": ["business_commands", collection.clone()],
-        "layout": {
-            "shell": "full-workspace",
-            "left": "Records",
-            "center": "Detail"
-        },
-        "category": "Business",
-        "developer": "CTOX",
-        "license": "AGPL-3.0-only",
-        "tags": ["business-os", module_id, "workflow"],
-        "store": {
-            "summary": description.clone(),
-            "repository": "metric-space-ai/ctox",
-            "source_path": format!("installed-modules/{module_id}"),
-            "installable": false,
-            "editable_after_install": true,
-            "distribution": "ctox-runtime-installed-module"
-        },
-    });
-    fs::write(
-        target.join("module.json"),
-        serde_json::to_vec_pretty(&manifest)?,
-    )?;
-    let schema = installed_module_record_schema();
-    let mut collections = serde_json::Map::new();
-    collections.insert(collection.clone(), schema.clone());
-    let schema_doc = serde_json::json!({
-        "schema_format": "ctox-business-os-module-collections-v1",
-        "collections": Value::Object(collections),
-    });
-    fs::write(
-        target.join("collections.schema.json"),
-        serde_json::to_vec_pretty(&schema_doc)?,
-    )?;
-    fs::write(
-        target.join("schema.js"),
-        format!(
-            "const recordSchema = {};\n\nexport const collections = {{\n  {collection}: recordSchema,\n}};\n\nexport const migrationStrategies = {{\n  {collection}: {{}},\n}};\n",
-            serde_json::to_string_pretty(&schema)?
-        ),
-    )?;
-    fs::write(
-        target.join("core/automation.mjs"),
-        format!(
-            "const MODULE_ID = '{}';\nconst COLLECTION_NAME = '{}';\n\nexport function buildFollowUpCommand(record = {{}}) {{\n  const recordId = String(record.id || 'demo');\n  const title = String(record.title || 'Record');\n  const prompt = 'Review \"' + title + '\" and create the next CTOX follow-up if action is required.';\n  return {{\n    id: 'cmd_' + MODULE_ID + '_' + recordId,\n    module: MODULE_ID,\n    type: 'business_os.chat.task',\n    command_type: 'business_os.chat.task',\n    record_id: recordId,\n    payload: {{\n      title: 'Review: ' + title,\n      instruction: prompt,\n      prompt,\n      source_module: MODULE_ID,\n      source_collection: COLLECTION_NAME,\n      record_snapshot: {{ ...record, id: recordId }},\n    }},\n    client_context: {{ source: MODULE_ID, module_id: MODULE_ID, collection: COLLECTION_NAME }},\n  }};\n}}\n",
-            js_escape(module_id),
-            js_escape(&collection)
-        ),
-    )?;
-    fs::write(
-        target.join("core/records.mjs"),
-        format!(
-            "export const MODULE_ID = '{}';\nexport const COLLECTION_NAME = '{}';\n\nexport function createRecord(input = {{}}, time = Date.now()) {{\n  return {{\n    id: String(input.id || 'rec_' + time),\n    title: String(input.title || '').trim() || 'New record',\n    status: normalizeStatus(input.status),\n    owner: String(input.owner || '').trim(),\n    due_at_ms: Number(input.due_at_ms || 0),\n    notes: String(input.notes || '').trim(),\n    created_at_ms: Number(input.created_at_ms || time),\n    updated_at_ms: Number(input.updated_at_ms || time),\n    is_deleted: Boolean(input.is_deleted),\n  }};\n}}\n\nexport function normalizeStatus(value) {{\n  const status = String(value || '').trim().toLowerCase();\n  return status === 'done' || status === 'blocked' ? status : 'open';\n}}\n\nexport function visibleRecords(records = []) {{\n  return records.filter((record) => !record.is_deleted);\n}}\n\nexport function summarizeRecords(records = []) {{\n  const visible = visibleRecords(records);\n  return {{\n    total: visible.length,\n    open: visible.filter((record) => normalizeStatus(record.status) === 'open').length,\n    blocked: visible.filter((record) => normalizeStatus(record.status) === 'blocked').length,\n    done: visible.filter((record) => normalizeStatus(record.status) === 'done').length,\n  }};\n}}\n",
-            js_escape(module_id),
-            js_escape(&collection)
-        ),
-    )?;
-    fs::write(
-        target.join("index.html"),
-        format!(
-            "<main class=\"blank-module\" data-module-root>\n  <section class=\"blank-module__panel\">\n    <h1 data-title>{}</h1>\n    <p data-description>{}</p>\n    <p data-summary>No records yet.</p>\n  </section>\n</main>\n",
-            html_escape(title),
-            html_escape(&description)
-        ),
-    )?;
-    fs::write(
-        target.join("index.css"),
-        ".blank-module { display: grid; gap: 12px; padding: 16px; color: var(--text, #0f172a); }\n.blank-module__panel { border: 1px solid var(--line, #d1d5db); border-radius: 8px; padding: 16px; background: var(--surface, #fff); }\n.blank-module h1 { margin: 0 0 8px; font-size: 20px; }\n.blank-module p { margin: 0; color: var(--muted, #475569); }\n",
-    )?;
-    fs::write(
-        target.join("index.js"),
-        format!(
-            "function attachStylesheetOnce() {{\n  if (document.querySelector('link[data-module-styles=\"{}\"]')) return;\n  const link = document.createElement('link');\n  link.rel = 'stylesheet';\n  link.href = new URL('./index.css', import.meta.url).href;\n  link.dataset.moduleStyles = '{}';\n  document.head.append(link);\n}}\n\nexport async function mount(ctx) {{\n  attachStylesheetOnce();\n  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());\n  const title = ctx.host.querySelector('[data-title]');\n  const description = ctx.host.querySelector('[data-description]');\n  if (title) title.textContent = ctx.module?.title || '{}';\n  if (description) description.textContent = ctx.module?.description || '{}';\n  return () => {{ ctx.host.innerHTML = ''; }};\n}}\n",
-            html_escape(module_id),
-            html_escape(module_id),
-            html_escape(title)
-                .replace('\\', "\\\\")
-                .replace('\'', "\\'"),
-            html_escape(&description)
-                .replace('\\', "\\\\")
-                .replace('\'', "\\'")
-        ),
-    )?;
-    fs::write(
-        target.join("icon.svg"),
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" role=\"img\" aria-label=\"Business OS app\"><rect x=\"4\" y=\"4\" width=\"16\" height=\"16\" rx=\"3\" fill=\"#eff6ff\" stroke=\"#2563eb\" stroke-width=\"1.8\"/><path d=\"M8 9h8M8 13h8M8 17h5\" stroke=\"#2563eb\" stroke-width=\"1.8\" stroke-linecap=\"round\"/></svg>\n",
-    )?;
-    fs::write(
-        target.join("locales/en.json"),
-        serde_json::to_vec_pretty(
-            &serde_json::json!({ "title": title, "follow_up": "Follow up" }),
-        )?,
-    )?;
-    fs::write(
-        target.join("locales/de.json"),
-        serde_json::to_vec_pretty(
-            &serde_json::json!({ "title": title, "follow_up": "Nachfassen" }),
-        )?,
-    )?;
-    fs::write(
-        target.join(format!("tests/{module_id}.test.mjs")),
-        format!(
-            "import assert from 'node:assert/strict';\nimport {{ readFileSync }} from 'node:fs';\nimport {{ buildFollowUpCommand }} from '../core/automation.mjs';\nimport {{ createRecord, summarizeRecords, visibleRecords }} from '../core/records.mjs';\n\nconst manifest = JSON.parse(readFileSync(new URL('../module.json', import.meta.url), 'utf8'));\nassert.equal(manifest.id, '{}');\nassert.ok(manifest.collections.includes('{}'));\n\nconst schemaDoc = JSON.parse(readFileSync(new URL('../collections.schema.json', import.meta.url), 'utf8'));\nassert.equal(schemaDoc.schema_format, 'ctox-business-os-module-collections-v1');\nassert.ok(schemaDoc.collections['{}']);\n\nconst open = createRecord({{ id: 'open', title: 'Open item', status: 'open' }}, 1000);\nconst blocked = createRecord({{ id: 'blocked', title: 'Blocked item', status: 'blocked' }}, 2000);\nconst archived = createRecord({{ id: 'archived', title: 'Archived item', is_deleted: true }}, 3000);\nassert.equal(visibleRecords([open, blocked, archived]).length, 2);\nconst summary = summarizeRecords([open, blocked, archived]);\nassert.equal(summary.total, 2);\nassert.equal(summary.open, 1);\nassert.equal(summary.blocked, 1);\nassert.equal(summary.done, 0);\n\nconst command = buildFollowUpCommand(open);\nassert.equal(command.type, 'business_os.chat.task');\nassert.equal(command.command_type, 'business_os.chat.task');\nassert.equal(command.payload.source_collection, '{}');\nassert.deepEqual(command.payload.record_snapshot, open);\n",
-            js_escape(module_id),
-            js_escape(&collection),
-            js_escape(&collection),
-            js_escape(&collection)
-        ),
-    )?;
-    Ok(())
 }
 
 fn delete_installed_module(
@@ -1882,64 +1735,6 @@ fn html_escape(value: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
-}
-
-fn js_escape(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('\'', "\\'")
-}
-
-fn installed_module_collection_name(module_id: &str) -> String {
-    let mut out = String::new();
-    let mut last_underscore = false;
-    for ch in module_id.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
-            last_underscore = false;
-        } else if !last_underscore {
-            out.push('_');
-            last_underscore = true;
-        }
-    }
-    let trimmed = out.trim_matches('_').to_owned();
-    let base = if trimmed
-        .chars()
-        .next()
-        .map(|ch| ch.is_ascii_lowercase())
-        .unwrap_or(false)
-    {
-        trimmed
-    } else if trimmed.is_empty() {
-        "app_records".to_owned()
-    } else {
-        format!("app_{trimmed}")
-    };
-    format!("{base}_records")
-}
-
-fn installed_module_record_schema() -> Value {
-    serde_json::json!({
-        "version": 0,
-        "primaryKey": "id",
-        "type": "object",
-        "properties": {
-            "id": { "type": "string", "maxLength": 120 },
-            "title": { "type": "string" },
-            "status": { "type": "string" },
-            "owner": { "type": "string" },
-            "due_at_ms": { "type": "number" },
-            "notes": { "type": "string" },
-            "created_at_ms": { "type": "number" },
-            "updated_at_ms": { "type": "number" },
-            "is_deleted": { "type": "boolean" }
-        },
-        "required": ["id", "title", "status", "updated_at_ms", "is_deleted"],
-        "indexes": [
-            "updated_at_ms",
-            "status",
-            ["is_deleted", "updated_at_ms"]
-        ],
-        "additionalProperties": true
-    })
 }
 
 fn unique_module_id(app_root: &Path, requested_id: &str) -> String {
@@ -2812,74 +2607,6 @@ fn mime_for(path: &PathBuf) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    fn blank_installed_module_uses_runtime_app_contract() -> anyhow::Result<()> {
-        let temp = tempdir()?;
-        let app_root = temp.path();
-
-        create_blank_installed_module(
-            app_root,
-            "bench-subscriptions",
-            "Subscriptions",
-            "Subscription workspace",
-        )?;
-
-        let module_dir = app_root.join("installed-modules/bench-subscriptions");
-        let manifest: Value = serde_json::from_slice(&fs::read(module_dir.join("module.json"))?)?;
-        assert_eq!(
-            manifest["entry"].as_str(),
-            Some("installed-modules/bench-subscriptions/index.html")
-        );
-        assert_eq!(manifest["install_scope"].as_str(), Some("installed"));
-        assert_eq!(manifest["version"].as_str(), Some("0.1.0"));
-        assert_eq!(manifest["layout"]["shell"].as_str(), Some("full-workspace"));
-        assert_eq!(
-            manifest["store"]["distribution"].as_str(),
-            Some("ctox-runtime-installed-module")
-        );
-        assert_eq!(manifest["store"]["installable"].as_bool(), Some(false));
-        let collections = manifest["collections"]
-            .as_array()
-            .expect("collections array");
-        assert!(collections
-            .iter()
-            .any(|item| item.as_str() == Some("business_commands")));
-        assert!(collections
-            .iter()
-            .any(|item| item.as_str() == Some("bench_subscriptions_records")));
-
-        let schema_doc: Value =
-            serde_json::from_slice(&fs::read(module_dir.join("collections.schema.json"))?)?;
-        assert_eq!(
-            schema_doc["schema_format"].as_str(),
-            Some("ctox-business-os-module-collections-v1")
-        );
-        assert_eq!(
-            schema_doc["collections"]["bench_subscriptions_records"]["primaryKey"].as_str(),
-            Some("id")
-        );
-
-        let html = fs::read_to_string(module_dir.join("index.html"))?;
-        assert!(!html.contains("<!doctype"));
-        assert!(!html.contains("<html"));
-        assert!(html.contains("data-module-root"));
-        for path in [
-            "schema.js",
-            "index.css",
-            "index.js",
-            "icon.svg",
-            "core/automation.mjs",
-            "core/records.mjs",
-            "locales/en.json",
-            "locales/de.json",
-            "tests/bench-subscriptions.test.mjs",
-        ] {
-            assert!(module_dir.join(path).is_file(), "missing {path}");
-        }
-        Ok(())
-    }
 
     #[test]
     fn unauthenticated_shell_does_not_inject_sync_config() {

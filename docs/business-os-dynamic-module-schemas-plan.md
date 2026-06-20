@@ -302,8 +302,8 @@ New or updated guards:
 - Browser and native canonical schema hashes must match for runtime modules.
 - Installed test module with a new collection must replicate over WebRTC without
   a Rust contract entry.
-- Generated App Creator output must include JSON schemas, RxDB CRUD through the
-  shell DB handle, and CTOX task submission through `business_commands`.
+- App Creator output must include JSON schemas, RxDB CRUD through the shell DB
+  handle, and CTOX task submission through the shell command bus.
 
 Existing required gates:
 
@@ -312,7 +312,6 @@ Existing required gates:
 - `node src/apps/business-os/scripts/assert-rxdb-only.mjs`
 - `node src/apps/business-os/scripts/assert-module-conformance.mjs`
 - `node src/apps/business-os/scripts/assert-declarative-migrations.mjs`
-- `node src/apps/business-os/scripts/assert-app-creator-generated-module.mjs`
 - `node src/apps/business-os/rxdb/tests/run-all.mjs`
 - `cargo test --manifest-path src/core/rxdb/Cargo.toml`
 - Focused native peer tests for dynamic schema loading.
@@ -322,7 +321,8 @@ Exit criteria:
 - [x] Runtime module schema guard is in CI.
 - [x] Legacy build-time generator is explicitly scoped to native-owned schema
   fixtures, not the general app install path.
-- [x] App Creator generated-module guard is in CI.
+- [x] App Creator generated-module guard was replaced by the Business OS app
+  validator and skill contract.
 - [x] `schema.js` fallback has an owner and removal criteria, or is removed.
 
 ## Verification Notes
@@ -343,8 +343,7 @@ Exit criteria:
   23 modules.
 - `node src/apps/business-os/scripts/assert-declarative-migrations.mjs` passed:
   23 modules.
-- `node src/apps/business-os/scripts/assert-app-creator-generated-module.mjs`
-  passed.
+- Business OS app validation replaced the old generated-module guard.
 - `node src/apps/business-os/rxdb/tests/schema-hash-registry-smoke.mjs` passed.
 - `node src/apps/business-os/rxdb/tests/bundle-reproducible-smoke.mjs` passed.
 - `node src/apps/business-os/rxdb/tests/run-all.mjs` passed: 39/39.

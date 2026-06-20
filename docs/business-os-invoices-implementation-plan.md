@@ -597,7 +597,7 @@ Alle Tests in `tests/` als `*.test.mjs` (analog `customers/customers.test.mjs`).
 node --check src/apps/business-os/modules/invoices/index.js
 node --test src/apps/business-os/modules/invoices/tests/*.test.mjs
 node src/apps/business-os/scripts/assert-module-conformance.mjs
-node src/apps/business-os/scripts/assert-app-creator-generated-module.mjs
+ctox business-os app validate invoices --source
 cargo test --bin ctox --no-fail-fast invoices
 ```
 

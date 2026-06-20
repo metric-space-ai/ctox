@@ -11185,8 +11185,27 @@ mod tests {
             consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
                 .await
                 .expect("consume module save command");
+            let failed_module_save = commands
+                .find_one(Some(MangoQuery {
+                    selector: Some(json!({ "id": { "$eq": "cmd_gov_module_save" } })),
+                    ..Default::default()
+                }))
+                .expect("module save command query")
+                .exec(false)
+                .await
+                .expect("module save command document");
+            assert_eq!(
+                failed_module_save.get("status").and_then(Value::as_str),
+                Some("failed"),
+                "failed_module_save={failed_module_save}"
+            );
             assert!(
-                root.path()
+                failed_module_save.to_string().contains("does not exist"),
+                "failed_module_save={failed_module_save}"
+            );
+            assert!(
+                !root
+                    .path()
                     .join("runtime/business-os/installed-modules/new-module/module.json")
                     .is_file()
             );
@@ -11234,10 +11253,10 @@ mod tests {
                     "command_id": "cmd_gov_module_delete",
                     "module": "ctox",
                     "command_type": "ctox.module.delete",
-                    "record_id": "new-module",
+                    "record_id": "installed-from-template",
                     "status": "pending_sync",
-                    "inbound_channel": "new-module",
-                    "payload": { "module_id": "new-module" },
+                    "inbound_channel": "installed-from-template",
+                    "payload": { "module_id": "installed-from-template" },
                     "client_context": {
                         "actor": {
                             "id": "chef",
@@ -11257,7 +11276,7 @@ mod tests {
             assert!(
                 !root
                     .path()
-                    .join("runtime/business-os/installed-modules/new-module")
+                    .join("runtime/business-os/installed-modules/installed-from-template")
                     .exists()
             );
 

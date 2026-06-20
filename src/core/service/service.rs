@@ -127,8 +127,6 @@ const BUSINESS_OS_APP_VALIDATION_CLEANUP_RETRY_DELAYS_MS: &[u64] = &[20, 100, 25
 #[cfg(not(test))]
 const BUSINESS_OS_APP_VALIDATION_CLEANUP_RETRY_DELAYS_MS: &[u64] = &[1_500, 5_000, 15_000];
 const BUSINESS_OS_APP_VALIDATION_MAX_REPAIR_ATTEMPTS: usize = 3;
-const BUSINESS_OS_APP_SCAFFOLD_BASELINE_MS_METADATA_KEY: &str =
-    "business_os_app_scaffold_baseline_ms";
 const BUSINESS_OS_APP_REQUIRED_ARTIFACTS: &[&str] = &[
     "module.json",
     "collections.schema.json",
@@ -4018,24 +4016,19 @@ fn start_prompt_worker(
             };
             let execution_prompt =
                 outbound_email_first_execution_prompt(&job, base_execution_prompt);
-            let preflight_result =
-                ensure_business_os_app_scaffold_before_worker(&root, &state, &job);
-            let result = match preflight_result {
-                Ok(()) => turn_loop::run_chat_turn_with_events_extended_guarded(
-                    &root,
-                    &db_path,
-                    &execution_prompt,
-                    workspace_root,
-                    conversation_id,
-                    job.suggested_skill.as_deref(),
-                    force_continuity_refresh,
-                    None, // TUI service: per-turn clients (persistent session TODO)
-                    |event| {
-                        push_event(&event_state, format!("phase {} {}", event_source, event));
-                    },
-                ),
-                Err(err) => Err(err),
-            };
+            let result = turn_loop::run_chat_turn_with_events_extended_guarded(
+                &root,
+                &db_path,
+                &execution_prompt,
+                workspace_root,
+                conversation_id,
+                job.suggested_skill.as_deref(),
+                force_continuity_refresh,
+                None, // TUI service: per-turn clients (persistent session TODO)
+                |event| {
+                    push_event(&event_state, format!("phase {} {}", event_source, event));
+                },
+            );
             let timeout_follow_up_outcome = match &result {
                 Err(err) => maybe_enqueue_timeout_continuation(&root, &job, &err.to_string())
                     .ok()
@@ -6760,56 +6753,15 @@ fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
     let Some(target) = business_os_app_module_target_from_prompt(&job.prompt) else {
         return job.prompt.clone();
     };
-    let prompt = format!(
-        "{}\n\nBusiness OS app module execution rules:\n\nTOP ACCEPTANCE GATE:\n- The final app must be requested-domain UI, logic, automation, and tests. Generic scaffold strings such as `New record`, `Search records`, `Select a record`, `Title`, `Owner`, `Due date`, `Open`, `Blocked`, `Done`, `record.title`, `due_at_ms`, `summary.total`, `summary.open`, and `summary.blocked` are allowed only as temporary scaffold internals before your first write; they must not remain in final `index.html`, `index.js`, or tests unless the user's domain literally uses those exact words.\n- Your first implementation must be a vertical requested-domain slice, not a helper phase: `index.html`, `index.js`, `core/records.mjs`, `core/automation.mjs`, one locale file, and one `tests/*.test.mjs` must be rewritten together before validation, tests, syntax checks, or any completion claim. The first requested-domain app-artifact write must include `index.js` and a `tests/*.test.mjs` rewrite, either in the same command as the helper/UI files or as the immediately completing paired write before any validation or cosmetic/contract edit.\n- Do not edit `module.json`, `collections.schema.json`, `schema.js`, `index.css`, or `icon.svg` before `index.js` and tests have been rewritten for the requested domain. Those scaffold files are already structurally valid; schema, manifest, CSS, or icon changes before a working entry/test slice are trace failures.\n- If a tool-call limit forces separate writes, the immediately next app-artifact write must complete the missing UI/JS/test/helper parity; do not continue polishing helpers, add schema, edit CSS/icon, or validate while `index.js` or tests still contain scaffold fields.\n- If you change `core/records.mjs` away from generic records, you must in the same implementation pass rewrite `index.html`, `index.js`, one locale file, and `tests/*.test.mjs` to use matching requested-domain fields, filters, summaries, fixture facts, and automation copy. A helper-only rewrite is a failed app.\n- Do not add new first-pass `data-action` values such as `restock`, `reorder`, `renew`, `attention`, `bulk`, `export`, `ai`, or status-only actions. Use only the scaffold action surface: form submit plus `data-action=\"new\"`, `data-action=\"delete\"`, and `data-action=\"follow-up\"`. Put domain-specific work into the follow-up command payload or normal form fields.\n- Before the first validation call, `index.html`, `index.js`, `core/records.mjs`, `core/automation.mjs`, one locale file, and one test must all contain concrete nouns from the user's prompt, not just the module id or title, and tests must not keep stale scaffold `assert.deepEqual` expectations for `total/open/blocked/done` after helpers return domain aggregates.\n\nIMMEDIATE START GATE:\n- CTOX service already created and recorded the scaffold baseline at `{}`. Do not check whether it exists. Do not run `ls`, `find`, `tree`, `stat`, `cat`, `head`, `tail`, `sed`, Node readFileSync, validation, tests, syntax checks, or scaffold repair before requested-domain writes. A first app-artifact command that lists, reads, validates, tests, or repairs the scaffold fails this turn.\n- Set `MODULE_DIR=\"{}\"`; the next tool action that touches `{}` or generated app artifacts must write bounded requested-domain content directly to `$MODULE_DIR/core/records.mjs`, `$MODULE_DIR/core/automation.mjs`, `$MODULE_DIR/index.html`, `$MODULE_DIR/index.js`, one locale file, and one `tests/*.test.mjs` file. Use the scaffold contract; do not read it first. Keep `module.json`, `collections.schema.json`, `schema.js`, `index.css`, and `icon.svg` untouched until that entry/test vertical slice exists and is domain-specific.\n\n- Your only deliverable is the runnable Business OS app/module under `{}`. Do not create plans, skill files, trace files, root aliases, or blocker/status notes as substitutes for the app.\n- The CTOX service owns queue and Business OS command lifecycle. Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, `ctox queue block`, or direct SQL against queue/command/runtime status tables. Do not act on queue IDs shown in context or open-work blocks; they are service context, not your completion target.\n- CTOX service preflight creates a validator-clean scaffold before this turn when the target directory is missing or empty. The scaffold inventory is already known: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, core/automation.mjs, core/records.mjs, locales/de.json, locales/en.json, and tests/*.test.mjs. Do not run `ls`, `find`, `tree`, `stat`, `cat`, `head`, `tail`, broad `sed`, or Node readFileSync to confirm that inventory before requested-domain edits. Do not hand-author module.json, schema.js, collections.schema.json, technical mount wiring, persistence helpers, automation dispatch plumbing, or the test harness from scratch; do replace the scaffold's generic UI fields, summary labels, fixture facts, and test expectations with requested-domain content.\n- If the service prompt explicitly says scaffold preflight failed, stop and report that scaffold failure. Do not probe the directory or invent a different structure.\n- Preserve scaffold invariants: do not delete `core/automation.mjs`, `core/records.mjs`, `locales/de.json`, `locales/en.json`, or `tests/*.test.mjs`. Preserve technical contracts, not generic labels. If you customize domain collections, helpers, UI selectors, form fields, summaries, or automation, update the matching tests in the same turn.\n- First app-artifact action rule: after an optional single complete `ctox skills system show business-os-app-module-development --body` read, the first tool action that mentions `{}` or generated app artifacts must be a direct bounded write to requested-domain files under `MODULE_DIR`, not a directory listing, scaffold readback, validation, test, syntax check, repair command, or manifest/schema/CSS/icon edit.\n- Inspect and edit with a narrow tool budget. Directory listings are not narrow inspection. Do not dump whole generated files, loop over all app artifacts with `cat`, or run broad repo/source scans. Use targeted `sed -n` ranges, exact `rg -n` selectors/imports, and validator output only after a concrete failing validator/test/syntax result names the snippet to inspect.\n- Do not use Python, base64 blobs, Node writer scripts, generated writer scripts, data URLs, or temporary file-copy wrappers to create or patch app files. If a direct edit becomes fragile, reduce scope, split the file into a smaller local ESM helper, or edit the smaller affected file.\n- Installed root artifact rule: the module root may contain only module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, core/, locales/, and tests/. Do not leave typo or scratch files such as m, modul.json, temporary manifests, status notes, or ad hoc folders in the module root.\n- Schema artifact rule: keep the canonical root `schema.js`; do not rename it, delete it, replace it with `schema.mjs`, or leave root-level `schema.mjs`/`schema.cjs` aliases. Put reusable ESM schema fragments under `core/*.mjs` and re-export them from `schema.js`.\n- Customize only files under `{}` for the requested domain and workflow. Preserve the generated persistence, mount, stylesheet, schema, and automation contracts; replace generic visible labels, fields, summaries, filters, fixture records, and tests with requested-domain content.\n- Exact mount rule: index.js must load `./index.html` with `fetch(new URL('./index.html', import.meta.url))`, assign the loaded HTML into `ctx.host.innerHTML`, and attach `./index.css` with `new URL('./index.css', import.meta.url)` before DOM queries or event wiring. Every `data-*` selector queried in index.js must exist in index.html or in generated markup.\n- CSS token rule: never define custom properties on `:root`, `html`, or `body`. Put module-local custom properties on the module root class from index.html, and never redefine shell token names such as `--surface`, `--text`, or `--line`.\n- Automation command rule: keep an exported command builder that returns `type: 'business_os.chat.task'`, `command_type: 'business_os.chat.task'`, and `payload.record_snapshot`. Use ctx.commandBus.dispatch for the visible automation action.\n- Use `MODULE_DIR=\"{}\"` and write every generated file as `$MODULE_DIR/<file>`. Do not write root-level app artifacts or `src/apps/business-os/installed-modules` for runtime-installed modules.\n- Use one/two panes plus modals or drawers by default. Remove `layout.right`, right panes, right-column CSS/resizers, and three-column grids unless the user explicitly requested a persistent third pane and the manifest carries a concrete workflow justification.\n- Every visible control must have a real handler that mutates a module-owned collection or dispatches a tested Business OS command payload. Remove decorative controls instead of leaving placeholders.\n- Tests are required app artifacts. Keep or replace `tests/*.test.mjs` in the same turn; do not leave the tests directory empty.\n- Tests must prove positive behavior only. Do not write negative source-text scans, forbidden-literal assertions, or tests that quote banned anti-pattern strings such as layout/right-pane keys; validators own those checks.\n- If the current validator report says the app is green but no required artifact was written after the scaffold baseline, or says the app still looks like the generic App Creator records scaffold, edit domain facts in `core/records.mjs`, `core/automation.mjs`, `index.html`, `index.js`, one locale file, and one `tests/*.test.mjs` file before running validation again. Running validation as the first or only action in that rework state is a task failure.\n- Before claiming success, run the module tests plus `ctox business-os app validate {} {}`. If validation reports any failure, repair the exact bullets and rerun. If validation is green, stop immediately and write the final response; do not run repository-wide conformance scripts, broad source RxDB scans, extra file dumps, cosmetic rewrites, or additional polishing passes.\n- Final response should only summarize app files and verification. Do not include queue IDs, command IDs, internal table names, or lifecycle claims.",
+    format!(
+        "{}\n\nBusiness OS app execution:\n- Build the app, not a plan, spec, skill file, or generic web app.\n- First choose and inspect three shipped Business OS app references. Pick the best matches yourself; `customers`, `shiftflow`, and `outbound` are only examples. Use `ctox business-os app references --json` if you need a local catalog.\n- Target module_id: {}\n- Target install_target: {}\n- Target app_directory: {}\n- Runtime apps write only under app_directory. Use `src/apps/business-os/modules/<module-id>/` only for a source target.\n- Files are no-build HTML fragment, CSS, and browser ESM. No framework, package manager, bundled dependency tree, or compile step.\n- `index.js` exports `mount(ctx)`, renders into `ctx.host`, persists records with `ctx.db`, and starts automation with `ctx.commandBus.dispatch(...)`.\n- Use `business_os.chat.task` for the normal CTOX chat/ticket flow and include `payload.record_snapshot`. Do not write directly to `business_commands`.\n- Keep the UI small and real: all visible controls work; use a third pane only when the workflow actually needs one.\n- Finish with `ctox business-os app validate {} {}`.",
         job.prompt,
-        target.artifact_directory,
-        target.artifact_directory,
-        target.artifact_directory,
-        target.artifact_directory,
-        target.artifact_directory,
-        target.artifact_directory,
+        target.module_id,
+        target.install_target,
         target.artifact_directory,
         target.module_id,
         target.mode_flag,
-    );
-    prompt
-        .replace(
-            "- Use one/two panes plus modals or drawers by default. Remove `layout.right`, right panes, right-column CSS/resizers, and three-column grids unless the user explicitly requested a persistent third pane and the manifest carries a concrete workflow justification.",
-            "- Use one/two panes plus in-module modals or drawers by default. Remove `layout.right`, `layout.drawers.right`, right-drawer manifest metadata, right panes, right-column CSS/resizers, and three-column grids unless the user explicitly requested a persistent third pane and the manifest carries a concrete workflow justification.",
-        )
-        .replace(
-            "- Tests must prove positive behavior only. Do not write negative source-text scans, forbidden-literal assertions, or tests that quote banned anti-pattern strings such as layout/right-pane keys; validators own those checks.",
-            "- Tests must prove positive behavior only. Do not write negative source-text scans, forbidden-literal assertions, or tests that quote or access banned anti-pattern strings such as layout/right-pane keys; validators own those checks. Do not write `manifest.layout?.right`, `manifest.layout.drawers?.right`, or similar absence tests; assert the positive expected layout key set instead.",
-        )
-        .replace(
-            "- Tests must prove positive behavior only.",
-            "- ESM import/export rule: every named local import in index.js, core/*.mjs, and tests/*.mjs must be exported by the target file. Preserve scaffold helper exports such as COLLECTION_NAME, createRecord, normalizeStatus, summarizeRecords, and visibleRecords unless every importer is updated in the same turn.\n- Tests must prove positive behavior only.",
-        )
-        .replace(
-            "- Inspect and edit with a narrow tool budget. Directory listings are not narrow inspection. Do not dump whole generated files, loop over all app artifacts with `cat`, or run broad repo/source scans. Use targeted `sed -n` ranges, exact `rg -n` selectors/imports, and validator output only after a concrete failing validator/test/syntax result names the snippet to inspect.",
-            "- Inspect and edit with a narrow tool budget. Directory listings are not narrow inspection. A full `ctox skills system show business-os-app-module-development --body` read is allowed at most once; do not pipe it through `head`/`tail`/`sed`, inspect `src/skills`, dump whole generated files, loop over app artifacts with `cat`, run `wc -l`/`ls`/`head`/`tail`/Node readFileSync audits over generated app files, or run broad repo/source scans. CTOX has already embedded the scaffold contract and the required three-app few-shot patterns here: `customers` proves manifest/dependency shape and commandBus dispatch; `shiftflow` proves shell-fragment mount and local CSS attachment but its legacy chat event pattern is rejected for generated apps; `outbound` proves commandBus-driven task orchestration but its source fallbacks and large-module helper sprawl are rejected for generated apps. Do not invent core/automation.mjs few-shot files for outbound or shiftflow. Start implementation with direct bounded writes under `$MODULE_DIR` instead of auditing the scaffold.",
-        )
-        .replace(
-            "- First app-artifact action rule: after an optional single complete `ctox skills system show business-os-app-module-development --body` read, the first tool action that mentions",
-            "- First app-artifact action rule: after an optional single complete `ctox skills system show business-os-app-module-development --body` read with no pipe, no redirection, no `head`, no `tail`, and no `sed`, the first tool action that mentions",
-        )
-        .replace(
-            "- Do not use Python, base64 blobs, Node writer scripts, generated writer scripts, data URLs, or temporary file-copy wrappers to create or patch app files. If a direct edit becomes fragile, reduce scope, split the file into a smaller local ESM helper, or edit the smaller affected file.",
-            "- Do not use Python, base64 blobs, Node writer scripts, generated writer scripts, data URLs, `/tmp` scratch files, `/tmp/*.patch`, or temporary file-copy wrappers to create, test, stage, copy, move, or patch app files. If shell redirection is needed, write the bounded payload directly to `$MODULE_DIR/<file>` at the final module path; if that becomes fragile, reduce scope, split the file into a smaller local ESM helper, or edit the smaller affected file.",
-        )
-        .replace(
-            "- If the current validator report says the app is green but no required artifact was written after the scaffold baseline, or says the app still looks like the generic App Creator records scaffold, edit domain facts in `core/records.mjs`, `core/automation.mjs`, `index.html`, `index.js`, one locale file, and one `tests/*.test.mjs` file before running validation again. Running validation as the first or only action in that rework state is a task failure.",
-            "- If the current validator report says the app is green but no required artifact was written after the scaffold baseline, says the app still looks like the generic App Creator records scaffold, or reports an App Creator tool trace violation, edit domain facts in `core/records.mjs`, `core/automation.mjs`, `index.html`, `index.js`, one locale file, and one `tests/*.test.mjs` file before running validation again. Running validation, tests, or `node --check` as the first or only action in that rework state is a task failure.",
-        )
-        .replace(
-            "- Every visible control must have a real handler that mutates a module-owned collection or dispatches a tested Business OS command payload. Remove decorative controls instead of leaving placeholders.",
-            "- Every visible control must be part of the first-pass action surface or the form submit flow. First-pass installed apps may only use data-action values `new`, `delete`, and `follow-up`; do not add `restock`, `reorder`, `renew`, `attention`, `bulk`, `export`, `ai`, or status-only data-action buttons even with handlers. Put domain-specific work into the follow-up command payload or normal form fields.",
-        )
-        .replace(
-            "- Before claiming success, run the module tests plus `ctox business-os app validate",
-            "- Tool trace policy: after the scaffold baseline, CTOX may reject validation that was run before any direct final module edit, a first app-artifact action that lists or reads the scaffold instead of writing domain files, partial skill reads, `src/skills` inspection, app artifacts staged under `/tmp`, generated scaffold readback before implementation, source-module discovery/line-count sweeps, nonexistent few-shot paths, or broad source/generated-file dumps. If this happens, repair by writing bounded final files directly under `$MODULE_DIR`, then validate again.\n- Before claiming success, run the module tests plus `ctox business-os app validate",
-        )
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -6835,14 +6787,13 @@ fn business_os_app_module_target_from_prompt(prompt: &str) -> Option<BusinessOsA
     } else {
         "--source"
     };
-    let artifact_directory = prompt_line_value(prompt, "- only_allowed_app_artifact_directory:")
-        .unwrap_or_else(|| {
-            if mode_flag == "--installed" {
-                format!("runtime/business-os/installed-modules/{module_id}")
-            } else {
-                format!("src/apps/business-os/modules/{module_id}")
-            }
-        });
+    let artifact_directory = prompt_line_value(prompt, "- app_directory:").unwrap_or_else(|| {
+        if mode_flag == "--installed" {
+            format!("runtime/business-os/installed-modules/{module_id}")
+        } else {
+            format!("src/apps/business-os/modules/{module_id}")
+        }
+    });
     Some(BusinessOsAppModuleTarget {
         module_id,
         install_target,
@@ -6856,43 +6807,6 @@ fn prompt_line_value(prompt: &str, prefix: &str) -> Option<String> {
         let value = line.trim().strip_prefix(prefix)?.trim();
         (!value.is_empty()).then(|| value.to_string())
     })
-}
-
-fn ensure_business_os_app_scaffold_before_worker(
-    root: &Path,
-    state: &Arc<Mutex<SharedState>>,
-    job: &QueuedPrompt,
-) -> Result<()> {
-    let Some(target) = business_os_app_module_target_from_prompt(&job.prompt) else {
-        return Ok(());
-    };
-    let app_workspace_root = business_os_app_workspace_root(root, job);
-    if business_os_app_required_inventory_complete(&app_workspace_root, &target) {
-        record_business_os_app_scaffold_baseline(root, state, job, &target)?;
-        return Ok(());
-    }
-    let artifact_dir = app_workspace_root.join(&target.artifact_directory);
-    if business_os_app_artifact_dir_has_user_content(&artifact_dir)? {
-        push_event(
-            state,
-            format!(
-                "Business OS app scaffold preflight skipped non-empty incomplete target {}",
-                target.artifact_directory
-            ),
-        );
-        record_business_os_app_scaffold_baseline(root, state, job, &target)?;
-        return Ok(());
-    }
-    run_business_os_app_scaffold_preflight(&app_workspace_root, &target, job)?;
-    push_event(
-        state,
-        format!(
-            "Business OS app scaffold preflight created {}",
-            target.artifact_directory
-        ),
-    );
-    record_business_os_app_scaffold_baseline(root, state, job, &target)?;
-    Ok(())
 }
 
 fn business_os_app_workspace_root(root: &Path, job: &QueuedPrompt) -> PathBuf {
@@ -6921,74 +6835,6 @@ fn business_os_app_workspace_root_looks_valid(path: &Path) -> bool {
         || path.join("runtime/business-os/installed-modules").is_dir()
 }
 
-fn record_business_os_app_scaffold_baseline(
-    root: &Path,
-    state: &Arc<Mutex<SharedState>>,
-    job: &QueuedPrompt,
-    target: &BusinessOsAppModuleTarget,
-) -> Result<()> {
-    if job.leased_message_keys.is_empty() {
-        return Ok(());
-    }
-    let baseline_ms = current_epoch_millis() as i64;
-    for message_key in &job.leased_message_keys {
-        channels::set_queue_task_metadata_value(
-            root,
-            message_key,
-            BUSINESS_OS_APP_SCAFFOLD_BASELINE_MS_METADATA_KEY,
-            Value::from(baseline_ms),
-        )
-        .with_context(|| {
-            format!("failed to record Business OS app scaffold baseline for {message_key}")
-        })?;
-        let _ = crate::business_os::store::refresh_business_command_queue_task_projection(
-            root,
-            message_key,
-        );
-    }
-    push_event(
-        state,
-        format!(
-            "Business OS app scaffold baseline recorded for {} at {}",
-            target.artifact_directory, baseline_ms
-        ),
-    );
-    Ok(())
-}
-
-fn business_os_app_required_inventory_complete(
-    root: &Path,
-    target: &BusinessOsAppModuleTarget,
-) -> bool {
-    let artifact_dir = root.join(&target.artifact_directory);
-    [
-        "module.json",
-        "collections.schema.json",
-        "schema.js",
-        "index.html",
-        "index.css",
-        "index.js",
-        "icon.svg",
-        "locales/de.json",
-        "locales/en.json",
-    ]
-    .iter()
-    .all(|relative| artifact_dir.join(relative).is_file())
-        && artifact_dir
-            .join("tests")
-            .read_dir()
-            .ok()
-            .into_iter()
-            .flat_map(|entries| entries.filter_map(|entry| entry.ok()))
-            .any(|entry| {
-                entry
-                    .path()
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    == Some("mjs")
-            })
-}
-
 fn business_os_app_artifact_dir_has_user_content(path: &Path) -> Result<bool> {
     if !path.exists() {
         return Ok(false);
@@ -7003,106 +6849,6 @@ fn business_os_app_artifact_dir_has_user_content(path: &Path) -> Result<bool> {
         .read_dir()
         .with_context(|| format!("failed to read Business OS app target {}", path.display()))?;
     Ok(entries.next().transpose()?.is_some())
-}
-
-fn run_business_os_app_scaffold_preflight(
-    root: &Path,
-    target: &BusinessOsAppModuleTarget,
-    job: &QueuedPrompt,
-) -> Result<()> {
-    let script = root.join("src/apps/business-os/scripts/scaffold-app-module.mjs");
-    anyhow::ensure!(
-        script.is_file(),
-        "Business OS app scaffold helper is missing at {}",
-        script.display()
-    );
-    let mut command =
-        Command::new(crate::service::business_os::resolve_business_os_validator_node(root));
-    command
-        .current_dir(root)
-        .arg(&script)
-        .arg(&target.module_id)
-        .arg(target.mode_flag)
-        .arg("--workspace")
-        .arg(root)
-        .arg("--title")
-        .arg(business_os_app_scaffold_title(job))
-        .arg("--json");
-    let output = command_output_with_timeout(
-        &mut command,
-        Duration::from_secs(60),
-        "Business OS app scaffold preflight",
-    )?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let detail = if !stderr.is_empty() { stderr } else { stdout };
-    anyhow::bail!(
-        "Business OS app scaffold preflight failed for {}: {}",
-        target.module_id,
-        clip_text(&detail, 500)
-    )
-}
-
-fn run_business_os_app_scaffold_repair_missing(
-    root: &Path,
-    target: &BusinessOsAppModuleTarget,
-    job: &QueuedPrompt,
-) -> Result<()> {
-    let script = root.join("src/apps/business-os/scripts/scaffold-app-module.mjs");
-    anyhow::ensure!(
-        script.is_file(),
-        "Business OS app scaffold helper is missing at {}",
-        script.display()
-    );
-    let mut command =
-        Command::new(crate::service::business_os::resolve_business_os_validator_node(root));
-    command
-        .current_dir(root)
-        .arg(&script)
-        .arg(&target.module_id)
-        .arg(target.mode_flag)
-        .arg("--workspace")
-        .arg(root)
-        .arg("--title")
-        .arg(business_os_app_scaffold_title(job))
-        .arg("--repair-missing")
-        .arg("--json");
-    let output = command_output_with_timeout(
-        &mut command,
-        Duration::from_secs(60),
-        "Business OS app scaffold missing-file repair",
-    )?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let detail = if !stderr.is_empty() { stderr } else { stdout };
-    anyhow::bail!(
-        "Business OS app scaffold missing-file repair failed for {}: {}",
-        target.module_id,
-        clip_text(&detail, 500)
-    )
-}
-
-fn business_os_app_scaffold_title(job: &QueuedPrompt) -> String {
-    let title = job
-        .goal
-        .trim()
-        .strip_prefix("Build ")
-        .unwrap_or(job.goal.trim())
-        .strip_suffix(" Bench App")
-        .unwrap_or_else(|| job.goal.trim())
-        .trim();
-    let title = if title.is_empty() {
-        job.preview.trim()
-    } else {
-        title
-    };
-    clip_text(title, 80)
 }
 
 fn business_os_app_validation_repair_attempt_count(prompt: &str) -> usize {
@@ -7387,20 +7133,6 @@ fn business_os_app_module_validation_feedback(
             ),
         )));
     }
-    let scaffold_script =
-        app_workspace_root.join("src/apps/business-os/scripts/scaffold-app-module.mjs");
-    if target.mode_flag == "--installed" && scaffold_script.exists() {
-        if let Err(err) =
-            run_business_os_app_scaffold_repair_missing(&app_workspace_root, &target, job)
-        {
-            return Ok(Some(render_business_os_app_module_validation_feedback(
-                job,
-                &target,
-                &format!("Business OS app scaffold missing-file repair could not run: {err}"),
-            )));
-        }
-    }
-
     let mut command =
         Command::new(crate::service::business_os::resolve_business_os_validator_node(root));
     command
@@ -7424,16 +7156,6 @@ fn business_os_app_module_validation_feedback(
         }
     };
     if output.status.success() {
-        if let Some(report) = business_os_app_module_completion_policy_report(
-            root,
-            &app_workspace_root,
-            job,
-            &target,
-        )? {
-            return Ok(Some(render_business_os_app_module_validation_feedback(
-                job, &target, &report,
-            )));
-        }
         return Ok(None);
     }
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -7453,774 +7175,22 @@ fn business_os_app_module_validation_feedback(
     )))
 }
 
-fn business_os_app_module_completion_policy_report(
-    state_root: &Path,
-    app_workspace_root: &Path,
-    job: &QueuedPrompt,
-    target: &BusinessOsAppModuleTarget,
-) -> Result<Option<String>> {
-    let mut reports = Vec::new();
-    if let Some(report) = business_os_app_module_post_baseline_write_report(
-        state_root,
-        app_workspace_root,
-        job,
-        target,
-    )? {
-        reports.push(report);
-    }
-    if let Some(report) = business_os_app_module_tool_trace_policy_report(
-        state_root,
-        app_workspace_root,
-        job,
-        target,
-    )? {
-        reports.push(report);
-    }
-    if let Some(report) =
-        business_os_app_module_domain_relevance_report(app_workspace_root, job, target)?
-    {
-        reports.push(report);
-    }
-    if reports.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(reports.join("\n\n")))
-    }
-}
-
-fn business_os_app_scaffold_baseline_ms(
-    state_root: &Path,
-    job: &QueuedPrompt,
-) -> Result<Option<i64>> {
-    let Some(message_key) = job.leased_message_keys.first() else {
-        return Ok(None);
-    };
-    let Some(value) = channels::queue_task_metadata_value(
-        state_root,
-        message_key,
-        BUSINESS_OS_APP_SCAFFOLD_BASELINE_MS_METADATA_KEY,
-    )?
-    else {
-        return Ok(None);
-    };
-    let baseline_ms = value
-        .as_i64()
-        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
-        .or_else(|| value.as_str().and_then(|value| value.parse::<i64>().ok()))
-        .with_context(|| {
-            format!(
-                "queue task `{message_key}` has invalid `{}` metadata value `{value}`",
-                BUSINESS_OS_APP_SCAFFOLD_BASELINE_MS_METADATA_KEY
-            )
-        })?;
-    Ok(Some(baseline_ms))
-}
-
-fn business_os_app_module_post_baseline_write_report(
-    state_root: &Path,
-    app_workspace_root: &Path,
-    job: &QueuedPrompt,
-    target: &BusinessOsAppModuleTarget,
-) -> Result<Option<String>> {
-    let Some(baseline_ms) = business_os_app_scaffold_baseline_ms(state_root, job)? else {
-        return Ok(None);
-    };
-    let baseline_time = UNIX_EPOCH + Duration::from_millis(baseline_ms.max(0) as u64);
-    let module_dir = app_workspace_root.join(&target.artifact_directory);
-    let required_domain_groups = [
-        (
-            "core/records.mjs",
-            vec![module_dir.join("core/records.mjs")],
-        ),
-        (
-            "core/automation.mjs",
-            vec![module_dir.join("core/automation.mjs")],
-        ),
-        ("index.html", vec![module_dir.join("index.html")]),
-        ("index.js", vec![module_dir.join("index.js")]),
-        (
-            "one locale file",
-            vec![
-                module_dir.join("locales/de.json"),
-                module_dir.join("locales/en.json"),
-            ],
-        ),
-    ];
-    let mut missing_domain_edits: Vec<&str> = Vec::new();
-    for (label, paths) in required_domain_groups {
-        if !paths
-            .iter()
-            .any(|path| business_os_app_file_modified_after(path, baseline_time))
-        {
-            missing_domain_edits.push(label);
-        }
-    }
-    if !business_os_app_any_test_modified_after(&module_dir, baseline_time) {
-        missing_domain_edits.push("one tests/*.test.mjs file");
-    }
-    if missing_domain_edits.is_empty() {
-        return Ok(None);
-    }
-    let mut newest: Option<(SystemTime, PathBuf)> = None;
-    for relative in BUSINESS_OS_APP_REQUIRED_ARTIFACTS {
-        let path = module_dir.join(relative);
-        let Ok(metadata) = std::fs::metadata(&path) else {
-            continue;
-        };
-        if !metadata.is_file() {
-            continue;
-        }
-        let Ok(modified) = metadata.modified() else {
-            continue;
-        };
-        if modified > baseline_time {
-            return Ok(None);
-        }
-        if newest
-            .as_ref()
-            .map(|(current, _)| modified > *current)
-            .unwrap_or(true)
-        {
-            newest = Some((modified, path));
-        }
-    }
-    let newest_label = newest
-        .as_ref()
-        .map(|(_, path)| path.display().to_string())
-        .unwrap_or_else(|| module_dir.display().to_string());
-    Ok(Some(format!(
-        "Business OS app artifact validator is green, but no complete required domain app artifact set was written after CTOX recorded the scaffold baseline for this turn (`{}`={baseline_ms}). The validator-clean scaffold is only a starting point; edit the requested domain app files under `{}` before validating again. Missing post-baseline domain edits: {}. Newest checked artifact before the baseline: {newest_label}",
-        BUSINESS_OS_APP_SCAFFOLD_BASELINE_MS_METADATA_KEY,
-        target.artifact_directory,
-        missing_domain_edits.join(", ")
-    )))
-}
-
-fn business_os_app_file_modified_after(path: &Path, baseline_time: SystemTime) -> bool {
-    std::fs::metadata(path)
-        .ok()
-        .filter(|metadata| metadata.is_file())
-        .and_then(|metadata| metadata.modified().ok())
-        .map(|modified| modified > baseline_time)
-        .unwrap_or(false)
-}
-
-fn business_os_app_any_test_modified_after(module_dir: &Path, baseline_time: SystemTime) -> bool {
-    let tests_dir = module_dir.join("tests");
-    let Ok(entries) = tests_dir.read_dir() else {
-        return false;
-    };
-    entries.filter_map(std::result::Result::ok).any(|entry| {
-        let path = entry.path();
-        path.extension().and_then(|extension| extension.to_str()) == Some("mjs")
-            && path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .map(|name| name.ends_with(".test.mjs"))
-                .unwrap_or(false)
-            && business_os_app_file_modified_after(&path, baseline_time)
-    })
-}
-
-fn business_os_app_module_tool_trace_policy_report(
-    state_root: &Path,
-    app_workspace_root: &Path,
-    job: &QueuedPrompt,
-    target: &BusinessOsAppModuleTarget,
-) -> Result<Option<String>> {
-    let Some(baseline_ms) = business_os_app_scaffold_baseline_ms(state_root, job)? else {
-        return Ok(None);
-    };
-    let context_log = app_workspace_root.join("runtime/context-log.jsonl");
-    let Ok(file) = std::fs::File::open(&context_log) else {
-        return Ok(None);
-    };
-    let mut findings: Vec<String> = Vec::new();
-    let mut saw_requested_domain_artifact_write = false;
-    let mut saw_app_artifact_action = false;
-    let mut saw_domain_entry_write = false;
-    let mut saw_domain_test_write = false;
-    let module_marker = target.module_id.to_ascii_lowercase();
-    let artifact_marker = target.artifact_directory.to_ascii_lowercase();
-    let validate_marker =
-        format!("ctox business-os app validate {}", target.module_id).to_ascii_lowercase();
-    for line in BufReader::new(file)
-        .lines()
-        .map_while(std::result::Result::ok)
-    {
-        if !line.contains("\"event\":\"tool_call_begin\"") {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
-        let Some(ts) = value.get("ts").and_then(Value::as_i64) else {
-            continue;
-        };
-        if ts < baseline_ms {
-            continue;
-        }
-        let Some(command) = value.get("command").and_then(Value::as_str) else {
-            continue;
-        };
-        let lowered = command.to_ascii_lowercase();
-        let mentions_module =
-            lowered.contains(&module_marker) || lowered.contains(&artifact_marker);
-        let mentions_app_artifact = mentions_module
-            || [
-                "module.json",
-                "collections.schema.json",
-                "schema.js",
-                "index.html",
-                "index.css",
-                "index.js",
-                "icon.svg",
-                "records.mjs",
-                "automation.mjs",
-                ".test.mjs",
-            ]
-            .iter()
-            .any(|marker| lowered.contains(marker));
-        let is_requested_domain_write =
-            business_os_app_trace_command_is_requested_domain_write(&lowered, &artifact_marker);
-        let is_any_final_artifact_write =
-            business_os_app_trace_command_is_final_artifact_write(&lowered, &artifact_marker);
-        let write_categories =
-            business_os_app_trace_command_write_categories(&lowered, &artifact_marker);
-        if mentions_app_artifact && !saw_app_artifact_action {
-            saw_app_artifact_action = true;
-            if !is_requested_domain_write
-                && (lowered.contains(&validate_marker)
-                    || lowered.contains("ctox business-os app scaffold")
-                    || lowered.contains("node --check")
-                    || lowered.contains("node --test")
-                    || business_os_app_trace_command_reads_generated_artifact(&lowered))
-            {
-                push_business_os_app_trace_finding(
-                    &mut findings,
-                    "first app-artifact action after scaffold baseline was not a direct requested-domain write",
-                );
-            } else if is_any_final_artifact_write && !is_requested_domain_write {
-                push_business_os_app_trace_finding(
-                    &mut findings,
-                    "first app-artifact write after scaffold baseline edited manifest or schema before requested-domain files",
-                );
-            }
-        }
-        if is_any_final_artifact_write {
-            let entry_and_test_now_or_before = (saw_domain_entry_write || write_categories.entry)
-                && (saw_domain_test_write || write_categories.test);
-            if is_requested_domain_write
-                && !saw_requested_domain_artifact_write
-                && !(write_categories.entry && write_categories.test)
-            {
-                push_business_os_app_trace_finding(
-                    &mut findings,
-                    "first requested-domain app-artifact write did not rewrite index.js and tests",
-                );
-            }
-            if write_categories.domain_helper_or_ui()
-                && !entry_and_test_now_or_before
-                && !(write_categories.entry && write_categories.test)
-            {
-                push_business_os_app_trace_finding(
-                    &mut findings,
-                    "requested-domain helper or UI files were edited before index.js and tests were rewritten",
-                );
-            }
-            if (write_categories.contract || write_categories.cosmetic)
-                && !entry_and_test_now_or_before
-            {
-                push_business_os_app_trace_finding(
-                    &mut findings,
-                    "manifest, schema, CSS, or icon artifact was edited before index.js and tests were rewritten",
-                );
-            }
-            if write_categories.entry {
-                saw_domain_entry_write = true;
-            }
-            if write_categories.test {
-                saw_domain_test_write = true;
-            }
-            if is_requested_domain_write {
-                saw_requested_domain_artifact_write = true;
-            }
-        }
-        if lowered.contains(&validate_marker) && !saw_requested_domain_artifact_write {
-            push_business_os_app_trace_finding(
-                &mut findings,
-                "validation ran before the first direct requested-domain module artifact write",
-            );
-        }
-        if business_os_app_trace_command_is_partial_skill_read(&lowered) {
-            push_business_os_app_trace_finding(
-                &mut findings,
-                "App Creator skill was partially read instead of loaded as one complete body",
-            );
-        }
-        if lowered
-            .contains("src/skills/system/product_engineering/business-os-app-module-development")
-        {
-            push_business_os_app_trace_finding(
-                &mut findings,
-                "App Creator skill source was inspected during generated app implementation",
-            );
-        }
-        if lowered.contains("/tmp/")
-            && mentions_app_artifact
-            && (lowered.contains("cat >")
-                || lowered.contains("tee ")
-                || lowered.contains("node --check /tmp/")
-                || lowered.contains("import('/tmp/")
-                || lowered.contains("cp /tmp/")
-                || lowered.contains("mv /tmp/"))
-        {
-            push_business_os_app_trace_finding(
-                &mut findings,
-                "app artifact content was staged or tested under /tmp instead of being written directly to MODULE_DIR",
-            );
-        }
-        if lowered.contains("src/apps/business-os/modules")
-            && (lowered.contains("wc -l")
-                || lowered.contains(" ls ")
-                || lowered.contains(" ls -")
-                || lowered.contains("find ")
-                || lowered.contains(" rg ")
-                || lowered.contains(" grep ")
-                || lowered.starts_with("cat ")
-                || lowered.contains(" cat ")
-                || lowered.starts_with("head ")
-                || lowered.contains(" head ")
-                || lowered.starts_with("tail ")
-                || lowered.contains(" tail ")
-                || business_os_app_trace_command_has_sed_range_over(&lowered, 80))
-        {
-            push_business_os_app_trace_finding(
-                &mut findings,
-                "source-module discovery, broad dump, or line-count sweep was used instead of exact few-shot file snippets",
-            );
-        }
-        if lowered.contains("outbound/core/automation.mjs")
-            || lowered.contains("shiftflow/core/automation.mjs")
-        {
-            push_business_os_app_trace_finding(
-                &mut findings,
-                "nonexistent few-shot source paths were probed instead of using embedded shipped-module patterns",
-            );
-        }
-        if lowered.contains(&artifact_marker)
-            && !saw_requested_domain_artifact_write
-            && business_os_app_trace_command_reads_generated_artifact(&lowered)
-        {
-            push_business_os_app_trace_finding(
-                &mut findings,
-                "generated scaffold files were read back before requested-domain implementation edits",
-            );
-        }
-        if lowered.contains(&artifact_marker)
-            && (lowered.contains("ls -la")
-                || lowered.contains("wc -l")
-                || lowered.starts_with("ls ")
-                || lowered.contains(" ls ")
-                || lowered.contains(" ls -")
-                || ((lowered.starts_with("cat ") || lowered.contains(" cat "))
-                    && !lowered.contains("cat >"))
-                || lowered.starts_with("head ")
-                || lowered.contains(" head ")
-                || lowered.starts_with("tail ")
-                || lowered.contains(" tail ")
-                || lowered.contains("readfilesync")
-                || business_os_app_trace_command_has_sed_range_over(&lowered, 60))
-        {
-            push_business_os_app_trace_finding(
-                &mut findings,
-                "generated app files were audited through broad dumps or line-count/readback commands",
-            );
-        }
-        if findings.len() >= 10 {
-            break;
-        }
-    }
-    if findings.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(format!(
-        "Business OS App Creator tool trace violated the runtime app contract after the scaffold baseline. Repair by editing `{}` directly with bounded exact-path writes, then validate again. Findings: {}.",
-        target.artifact_directory,
-        findings.join("; ")
-    )))
-}
-
-fn business_os_app_trace_command_is_requested_domain_write(
-    command: &str,
-    artifact_marker: &str,
-) -> bool {
-    business_os_app_trace_command_write_categories(command, artifact_marker).requested_domain()
-}
-
-#[derive(Default)]
-struct BusinessOsAppTraceWriteCategories {
-    records: bool,
-    automation: bool,
-    html: bool,
-    entry: bool,
-    locale: bool,
-    test: bool,
-    contract: bool,
-    cosmetic: bool,
-}
-
-impl BusinessOsAppTraceWriteCategories {
-    fn requested_domain(&self) -> bool {
-        self.records || self.automation || self.html || self.entry || self.locale || self.test
-    }
-
-    fn domain_helper_or_ui(&self) -> bool {
-        self.records || self.automation || self.html || self.locale
-    }
-}
-
-fn business_os_app_trace_command_write_categories(
-    command: &str,
-    artifact_marker: &str,
-) -> BusinessOsAppTraceWriteCategories {
-    if !business_os_app_trace_command_is_final_artifact_write(command, artifact_marker) {
-        return BusinessOsAppTraceWriteCategories::default();
-    }
-    BusinessOsAppTraceWriteCategories {
-        records: command.contains("core/records.mjs"),
-        automation: command.contains("core/automation.mjs"),
-        html: command.contains("index.html"),
-        entry: command.contains("index.js"),
-        locale: command.contains("locales/"),
-        test: command.contains(".test.mjs") || command.contains("tests/"),
-        contract: command.contains("module.json")
-            || command.contains("collections.schema.json")
-            || command.contains("schema.js"),
-        cosmetic: command.contains("index.css") || command.contains("icon.svg"),
-    }
-}
-
-fn business_os_app_trace_command_reads_generated_artifact(command: &str) -> bool {
-    (command.contains(" sed -n")
-        || command.starts_with("sed -n")
-        || command.starts_with("cat ")
-        || command.contains(" cat ")
-        || command.starts_with("head ")
-        || command.contains(" head ")
-        || command.starts_with("tail ")
-        || command.contains(" tail ")
-        || command.starts_with("ls ")
-        || command.contains(" ls ")
-        || command.contains(" ls -")
-        || command.contains("readfilesync"))
-        && !command.contains("cat >")
-        && !command.contains("tee ")
-        && !command.contains("writefile")
-        && !command.contains("writefilesync")
-}
-
-fn business_os_app_trace_command_is_partial_skill_read(command: &str) -> bool {
-    command.contains("ctox skills system show business-os-app-module-development")
-        && (command.contains("| head")
-            || command.contains("| tail")
-            || command.contains("| sed")
-            || command.contains("> /tmp/")
-            || command.contains(">/tmp/")
-            || command.contains("> runtime/")
-            || command.contains("> src/")
-            || command.contains(" head ")
-            || command.contains(" tail ")
-            || command.contains(" sed -n")
-            || command.contains("head -")
-            || command.contains("tail -"))
-}
-
-fn business_os_app_trace_command_has_sed_range_over(command: &str, max_lines: u64) -> bool {
-    if !command.contains("sed -n") {
-        return false;
-    }
-    command.split_whitespace().any(|token| {
-        let token = token.trim_matches(|ch| ch == '\'' || ch == '"' || ch == '`' || ch == ';');
-        let Some(range) = token.strip_suffix('p') else {
-            return false;
-        };
-        let Some((start, end)) = range.split_once(',') else {
-            return false;
-        };
-        let Ok(start) = start.parse::<u64>() else {
-            return false;
-        };
-        let Ok(end) = end.parse::<u64>() else {
-            return false;
-        };
-        end >= start && (end - start + 1) > max_lines
-    })
-}
-
-fn business_os_app_trace_command_is_final_artifact_write(
-    command: &str,
-    artifact_marker: &str,
-) -> bool {
-    command.contains(artifact_marker)
-        && (command.contains("cat >")
-            || command.contains("tee ")
-            || command.contains("printf ")
-            || command.contains("echo ")
-            || command.contains("writefile")
-            || command.contains("writefilesync"))
-        && !command.contains("/tmp/")
-}
-
-fn push_business_os_app_trace_finding(findings: &mut Vec<String>, finding: &str) {
-    if !findings.iter().any(|existing| existing == finding) {
-        findings.push(finding.to_string());
-    }
-}
-
-fn business_os_app_module_domain_relevance_report(
-    app_workspace_root: &Path,
-    job: &QueuedPrompt,
-    target: &BusinessOsAppModuleTarget,
-) -> Result<Option<String>> {
-    let module_dir = app_workspace_root.join(&target.artifact_directory);
-    let text = business_os_app_module_artifact_text(&module_dir)?;
-    if text.trim().is_empty() {
-        return Ok(None);
-    }
-    let lower = text.to_ascii_lowercase();
-    let terms = business_os_app_prompt_domain_terms(job, &target.module_id);
-    if terms.len() < 4 {
-        return Ok(None);
-    }
-    let found: Vec<&str> = terms
-        .iter()
-        .map(String::as_str)
-        .filter(|term| lower.contains(*term))
-        .take(3)
-        .collect();
-    if found.len() >= 2 {
-        return Ok(None);
-    }
-    let generic_hits = [
-        "durable records and ctox follow-up work",
-        "new record",
-        "search records",
-        "select a record",
-        "no records match the current view",
-        "open item",
-        "blocked item",
-    ]
-    .iter()
-    .filter(|needle| lower.contains(**needle))
-    .count();
-    if generic_hits >= 3 {
-        return Ok(Some(format!(
-            "The generated app still looks like the generic App Creator records scaffold ({generic_hits} scaffold markers found, domain terms found: {}). Replace generic records with domain-specific schema fields, fixture records, labels, filters, UI copy, automation payload facts, and tests for the requested app.",
-            if found.is_empty() {
-                "none".to_string()
-            } else {
-                found.join(", ")
-            }
-        )));
-    }
-    Ok(Some(format!(
-        "The app artifacts do not yet reflect the requested domain. Expected at least two concrete terms from the task prompt to appear in the generated app behavior, schema, tests, or UI; found {}. Candidate prompt terms: {}. Add domain-specific fields, sample records, filters, calculations, and automation text before validating again.",
-        if found.is_empty() {
-            "none".to_string()
-        } else {
-            found.join(", ")
-        },
-        terms.iter().take(8).cloned().collect::<Vec<_>>().join(", ")
-    )))
-}
-
-fn business_os_app_module_artifact_text(module_dir: &Path) -> Result<String> {
-    let mut text = String::new();
-    for relative in BUSINESS_OS_APP_REQUIRED_ARTIFACTS {
-        let path = module_dir.join(relative);
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            text.push_str(&content);
-            text.push('\n');
-        }
-    }
-    let tests_dir = module_dir.join("tests");
-    if let Ok(entries) = tests_dir.read_dir() {
-        let mut test_paths: Vec<PathBuf> = entries
-            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-            .filter(|path| path.extension().and_then(|extension| extension.to_str()) == Some("mjs"))
-            .collect();
-        test_paths.sort();
-        for path in test_paths {
-            if let Ok(content) = std::fs::read_to_string(path) {
-                text.push_str(&content);
-                text.push('\n');
-            }
-        }
-    }
-    Ok(text)
-}
-
-fn business_os_app_prompt_domain_terms(job: &QueuedPrompt, module_id: &str) -> Vec<String> {
-    let mut terms = Vec::new();
-    let mut current = String::new();
-    let source = format!("{} {}", job.goal, job.prompt);
-    let module_tokens = tokenize_business_os_app_text(module_id);
-    for ch in source.chars() {
-        if ch.is_ascii_alphanumeric() {
-            current.push(ch.to_ascii_lowercase());
-        } else if !current.is_empty() {
-            push_business_os_app_domain_term(&mut terms, &module_tokens, &current);
-            current.clear();
-        }
-    }
-    if !current.is_empty() {
-        push_business_os_app_domain_term(&mut terms, &module_tokens, &current);
-    }
-    terms
-}
-
-fn tokenize_business_os_app_text(value: &str) -> Vec<String> {
-    let mut terms = Vec::new();
-    let mut current = String::new();
-    for ch in value.chars() {
-        if ch.is_ascii_alphanumeric() {
-            current.push(ch.to_ascii_lowercase());
-        } else if !current.is_empty() {
-            terms.push(current.clone());
-            current.clear();
-        }
-    }
-    if !current.is_empty() {
-        terms.push(current);
-    }
-    terms
-}
-
-fn push_business_os_app_domain_term(terms: &mut Vec<String>, module_tokens: &[String], raw: &str) {
-    let term = raw
-        .trim_matches(|ch: char| ch.is_ascii_digit())
-        .trim()
-        .to_string();
-    if term.len() < 4
-        || business_os_app_prompt_stop_word(&term)
-        || module_tokens.iter().any(|token| token == &term)
-        || terms.iter().any(|existing| existing == &term)
-    {
-        return;
-    }
-    terms.push(term);
-}
-
-fn business_os_app_prompt_stop_word(term: &str) -> bool {
-    matches!(
-        term,
-        "build"
-            | "ctox"
-            | "business"
-            | "module"
-            | "modules"
-            | "creator"
-            | "runtime"
-            | "installed"
-            | "install"
-            | "target"
-            | "app"
-            | "apps"
-            | "bench"
-            | "keep"
-            | "small"
-            | "runnable"
-            | "focused"
-            | "include"
-            | "visible"
-            | "automation"
-            | "action"
-            | "dispatch"
-            | "dispatches"
-            | "standard"
-            | "normal"
-            | "chat"
-            | "task"
-            | "through"
-            | "flow"
-            | "follow"
-            | "records"
-            | "record"
-            | "track"
-            | "management"
-            | "manager"
-            | "system"
-            | "source"
-            | "local"
-            | "module_id"
-            | "record_id"
-            | "payload"
-            | "client"
-            | "context"
-            | "instruction"
-            | "title"
-    )
-}
-
 fn render_business_os_app_module_validation_feedback(
     job: &QueuedPrompt,
     target: &BusinessOsAppModuleTarget,
     report: &str,
 ) -> String {
-    let feedback = format!(
-        "Business OS app artifact validation failed. Continue the same app-build task and repair the generated module before finishing.\n\nTask source: {}\n\nBusiness OS app build target:\n- module_id: {}\n- install_target: {}\n- only_allowed_app_artifact_directory: {}\n\nallowed artifact directory: {}\n\nValidator report:\n{}\n\nValidator-report routing:\n- If the report says the validator is green but no required artifact was written after the scaffold baseline, do not run validation first. Edit requested-domain facts in `core/records.mjs`, `core/automation.mjs`, `index.html`, `index.js`, one locale file, and one `tests/*.test.mjs` file before validating again.\n- If the report says the app still looks like the generic App Creator records scaffold, replace generic labels, empty-state copy, fixture names, automation text, `index.html`, `index.js`, and tests with requested-domain language before validating again.\n- If the report says the App Creator tool trace violated the runtime app contract, repair by writing bounded files directly under `MODULE_DIR`; do not repeat early validation, `/tmp` staging, source-module sweeps, or broad generated-file readbacks.\n\nImmediate repair order:\n1. Set `MODULE_DIR=\"{}\"` and directly rewrite requested-domain facts in `core/records.mjs`, `core/automation.mjs`, `index.html`, `index.js`, one locale file, and one `tests/*.test.mjs` file before validation or inspection.\n2. If the validator names a missing required file, restore that exact file directly at `$MODULE_DIR/<file>` and reconnect it to the current helpers, UI, locales, and tests before validating again. Do not run `ctox business-os app repair-missing` or `ctox business-os app scaffold ... --repair-missing` from an App Creator worker turn.\n3. Do not delete scaffold invariants. Preserve core/automation.mjs, core/records.mjs, locales, and tests; if domain collections/helpers/UI change, update the matching tests in the same turn.\n4. If the validator reports selector or mount drift, edit index.html and index.js together so mount(ctx) loads `./index.html` with `fetch(new URL('./index.html', import.meta.url))`, assigns it into `ctx.host.innerHTML`, attaches `./index.css` with `new URL('./index.css', import.meta.url)`, and every `data-*` selector queried by index.js exists in index.html or generated markup.\n5. If the validator reports CSS token drift or `:root`, move module custom properties from `:root`, `html`, or `body` onto the module root class used in index.html. Do not redefine shell token names.\n6. If the validator reports automation, keep a command builder that returns `type: 'business_os.chat.task'`, `command_type: 'business_os.chat.task'`, and `payload.record_snapshot`, then dispatch that command through ctx.commandBus.dispatch from a real visible action.\n7. If module tests fail, verify the failing fixture by hand: expected counts/totals must be internally consistent with the domain rules and helper logic. Fix app logic when the rule is violated; fix generated test expectations when they are mathematically impossible.\n8. Remove default third/right panes, layout.drawers.right/right-drawer manifest metadata, right-column CSS/resizers, and three-column grids unless the workflow explicitly justifies a persistent third pane.\n9. If tests mention or access forbidden anti-pattern strings only to prove absence, including `manifest.layout?.right` or `manifest.layout.drawers?.right`, delete those negative layout/source-text tests and replace them with positive behavior/schema/helper/layout-key assertions.\n10. Re-run the app-specific validator and keep repairing exact bullets until it is green. Once it is green, stop immediately and return the final response; do not run repository-wide conformance scripts, broad source RxDB scans, extra file dumps, cosmetic rewrites, or polishing passes.\n\nRepair rules:\n- Edit only files under {}.\n- Do not dump whole generated files, loop over all app artifacts with `cat`, run `wc -l`/`ls -la`/`head`/`tail`/Node readFileSync audits over generated app files, or run broad source/repo scans. Use targeted `sed -n` ranges, exact `rg -n` selectors/imports, and the validator report for concrete repairs.\n- Do not use Python, base64 blobs, Node writer scripts, generated writer scripts, data URLs, `/tmp` scratch files, `/tmp/*.patch`, or temporary file-copy wrappers to create, test, stage, copy, move, or patch app files. If shell redirection is needed, write the bounded payload directly to `$MODULE_DIR/<file>` at the final module path; if that becomes fragile, reduce scope, split the file into a smaller local ESM helper, or edit the smaller affected file.\n- Do not create root-level module.json, root-level collections.schema.json, src/skills output, package-manager files, node_modules, or HTTP/database fallbacks.\n- Do not run or rely on npm, npx, pnpm, yarn, bun, esbuild, Vite, Rollup, Webpack, bundlers, transpilers, package installs, package.json, or node_modules as syntax, import, test, or readiness proof. Business OS apps are no-build vanilla HTML/CSS/browser ESM.\n- Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or direct SQL against queue/command/runtime status rows. CTOX service owns lifecycle completion after green validation.\n- For installed modules, module.json.entry must be installed-modules/{}/index.html and module.json.install_scope must be installed.\n- schema.js and collections.schema.json must export only module-owned collections; shell collections such as business_commands stay dependencies in module.json.collections only.\n- Remove default third/right panes unless there is a concrete persistent workflow justification.\n- Tests must not quote forbidden anti-pattern strings for absence checks; validators own source-text bans.\n- Run the validator again before claiming completion:\n  ctox business-os app validate {} {}\n\nOriginal task remains active:\n{}",
+    format!(
+        "Business OS app artifact validation failed. Continue the same app-build task and repair the app before finishing.\n\nTask source: {}\n\nBusiness OS app build target:\n- module_id: {}\n- install_target: {}\n- app_directory: {}\n\nValidator report:\n{}\n\nRepair guidance:\n- Edit only the app files under the app_directory.\n- Keep the app as plain HTML fragment, CSS, and browser ESM. Do not add React, Next.js, package managers, bundlers, node_modules, or a compile step.\n- `index.js` must export `mount(ctx)`, render into `ctx.host`, and wire real controls.\n- Persist records through the shell-provided `ctx.db` collection handle; do not add HTTP, REST, IndexedDB, Postgres, SQLite, localStorage, or sessionStorage data paths.\n- Automation must use `ctx.commandBus.dispatch(...)`, normally a `business_os.chat.task` command with both `type` and `command_type`, `module`, `record_id`, and `payload.record_snapshot`. Do not write directly to `business_commands`.\n- If the UI has dead buttons, fake settings/export/AI/bulk controls, or an unnecessary third pane, remove them or implement them fully.\n- Re-run `ctox business-os app validate {} {}` after the repair.\n\nOriginal task remains active:\n{}",
         job.source_label,
         target.module_id,
         target.install_target,
         target.artifact_directory,
-        target.artifact_directory,
         clip_text(report.trim(), 6000),
-        target.artifact_directory,
-        target.artifact_directory,
-        target.module_id,
         target.module_id,
         target.mode_flag,
         clip_text(&job.prompt, 6000),
-    );
-    let immediate_repair_gate = format!(
-        "\n\nIMMEDIATE REPAIR START GATE:\n- Do not inspect, list, stat, validate, run tests, run node --check, or run scaffold repair as the first rework action. The validator report above is authoritative. Set `MODULE_DIR=\"{}\"`; the next app-artifact action must write requested-domain content directly to `$MODULE_DIR/core/records.mjs`, `$MODULE_DIR/core/automation.mjs`, `$MODULE_DIR/index.html`, `$MODULE_DIR/index.js`, one locale file, and one `tests/*.test.mjs` file. Do not check whether those files exist first.\n- If the validator explicitly names a missing required file, restore only that exact file directly at `$MODULE_DIR/<file>` and then reconnect helpers, UI, locales, and tests. Never run scaffold repair from an App Creator worker turn and never probe for missing files yourself.\n\nValidator-report routing:",
-        target.artifact_directory
-    );
-    feedback
-        .replace("\n\nValidator-report routing:", &immediate_repair_gate)
-        .replace(
-            "If the report says the validator is green but no required artifact was written after the scaffold baseline, do not run validation first.",
-            "If the report says the validator is green but no complete required domain artifact set was written after the scaffold baseline, do not run validation first and do not inspect the scaffold first.",
-        )
-        .replace(
-            "8. Remove default third/right panes, right-column CSS/resizers, and three-column grids unless the workflow explicitly justifies a persistent third pane.",
-            "8. Remove default third/right panes, layout.drawers.right/right-drawer manifest metadata, right-column CSS/resizers, and three-column grids unless the workflow explicitly justifies a persistent third pane.",
-        )
-        .replace(
-            "9. If tests mention forbidden anti-pattern strings only to prove absence, delete those negative source-text tests and replace them with positive behavior/schema/helper assertions.",
-            "9. If tests mention or access forbidden anti-pattern strings only to prove absence, including `manifest.layout?.right` or `manifest.layout.drawers?.right`, delete those negative layout/source-text tests and replace them with positive behavior/schema/helper/layout-key assertions.",
-        )
-        .replace(
-            "- Remove default third/right panes unless there is a concrete persistent workflow justification.",
-            "- Remove default third/right panes and right-drawer manifest metadata unless there is a concrete persistent workflow justification.",
-        )
-        .replace(
-            "- Tests must not quote forbidden anti-pattern strings for absence checks; validators own source-text bans.",
-            "- Tests must not quote or access forbidden anti-pattern strings for absence checks; validators own source-text bans. Use positive layout key assertions instead of `manifest.layout?.right` or `manifest.layout.drawers?.right`.",
-        )
-        .replace(
-            "8. Remove default third/right panes",
-            "8. If the validator or module tests report `does not provide an export named`, update every importer and helper export together. Preserve scaffold exports such as COLLECTION_NAME, createRecord, normalizeStatus, summarizeRecords, and visibleRecords unless index.js and tests no longer import them.\n9. Remove default third/right panes",
-        )
-        .replace(
-            "9. If tests mention or access forbidden anti-pattern strings",
-            "10. If tests mention or access forbidden anti-pattern strings",
-        )
-        .replace(
-            "10. Re-run the validator",
-            "11. Re-run the validator",
-        )
+    )
 }
 
 fn is_business_os_chat_queue_job(root: &Path, job: &QueuedPrompt) -> bool {
@@ -18433,13 +17403,6 @@ fn current_epoch_secs() -> u64 {
         .as_secs()
 }
 
-fn current_epoch_millis() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-}
-
 fn chrono_like_iso(epoch_seconds: u64) -> String {
     use std::fmt::Write as _;
 
@@ -22097,7 +21060,7 @@ mod tests {
 Business OS app build target:
 - module_id: contracts
 - install_target: runtime-installed-module
-- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/contracts
+- app_directory: runtime/business-os/installed-modules/contracts
 Business OS command:
 - type: ctox.business_os.app.modify
 ";
@@ -22117,7 +21080,7 @@ Business OS command:
     #[test]
     fn business_os_app_validation_feedback_is_repair_oriented() {
         let job = QueuedPrompt {
-            prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/contracts\n".to_string(),
+            prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\n".to_string(),
             goal: "Build contracts app".to_string(),
             preview: "Build contracts app".to_string(),
             source_label: "business-os:contracts".to_string(),
@@ -22144,481 +21107,35 @@ Business OS command:
         );
 
         assert!(feedback.contains("Continue the same app-build task"));
-        assert!(feedback.contains(
-            "allowed artifact directory: runtime/business-os/installed-modules/contracts"
-        ));
+        assert!(feedback.contains("- module_id: contracts"));
+        assert!(feedback.contains("- install_target: runtime-installed-module"));
         assert!(
-            feedback.contains("module.json.entry must be installed-modules/contracts/index.html")
+            feedback.contains("- app_directory: runtime/business-os/installed-modules/contracts")
         );
-        assert!(feedback.contains("mount(ctx) loads `./index.html`"));
-        assert!(feedback.contains("fetch(new URL('./index.html', import.meta.url))"));
-        assert!(feedback.contains("ctx.host.innerHTML"));
-        assert!(feedback.contains("new URL('./index.css', import.meta.url)"));
-        assert!(feedback.contains("If the validator reports CSS token drift or `:root`"));
-        assert!(feedback.contains("Do not redefine shell token names"));
-        assert!(feedback.contains("does not provide an export named"));
-        assert!(feedback.contains(
-            "schema.js and collections.schema.json must export only module-owned collections"
-        ));
+        assert!(feedback.contains("module.json install_scope must be installed"));
+        assert!(feedback.contains("Edit only the app files under the app_directory"));
+        assert!(feedback.contains("plain HTML fragment, CSS, and browser ESM"));
+        assert!(feedback.contains("Do not add React, Next.js"));
+        assert!(feedback.contains("index.js` must export `mount(ctx)"));
+        assert!(feedback.contains("render into `ctx.host`"));
+        assert!(feedback.contains("ctx.db"));
+        assert!(feedback.contains("ctx.commandBus.dispatch"));
+        assert!(feedback.contains("business_os.chat.task"));
+        assert!(feedback.contains("payload.record_snapshot"));
+        assert!(feedback.contains("dead buttons"));
+        assert!(feedback.contains("unnecessary third pane"));
         assert!(feedback.contains("ctox business-os app validate contracts --installed"));
-        assert!(feedback.contains("IMMEDIATE REPAIR START GATE"));
-        assert!(feedback.contains("Immediate repair order:"));
-        assert!(feedback.contains("directly rewrite requested-domain facts"));
-        assert!(feedback.contains("restore only that exact file directly"));
-        assert!(feedback.contains("Never run scaffold repair from an App Creator worker turn"));
         assert!(!feedback.contains("Use `ctox business-os app scaffold"));
         assert!(!feedback.contains("Run `ctox business-os app scaffold"));
-        assert!(feedback.contains("Once it is green, stop immediately"));
-        assert!(feedback.contains("Do not dump whole generated files"));
-        assert!(feedback.contains("run `wc -l`/`ls -la`/`head`/`tail`"));
-        assert!(feedback.contains("Do not use Python, base64 blobs, Node writer scripts"));
-        assert!(feedback.contains("`/tmp` scratch files"));
-        assert!(feedback.contains("tool trace violated"));
-        assert!(feedback.contains("Do not call `ctox queue ack`"));
-    }
-
-    #[test]
-    fn business_os_app_validation_feedback_rejects_green_scaffold_without_post_baseline_edit() {
-        let root = temp_root("business-os-app-validation-baseline");
-        let script_dir = root.join("src/apps/business-os/scripts");
-        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
-        std::fs::write(
-            script_dir.join("validate-app-module.mjs"),
-            "process.exit(0);\n",
-        )
-        .expect("write validator script fixture");
-        let module_id = "subscriptions";
-        let artifact_dir = root
-            .join("runtime/business-os/installed-modules")
-            .join(module_id);
-        std::fs::create_dir_all(artifact_dir.join("core")).expect("create core dir");
-        std::fs::create_dir_all(artifact_dir.join("locales")).expect("create locales dir");
-        std::fs::create_dir_all(artifact_dir.join("tests")).expect("create tests dir");
-        for relative in BUSINESS_OS_APP_REQUIRED_ARTIFACTS {
-            let path = artifact_dir.join(relative);
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).expect("create parent dir");
-            }
-            std::fs::write(
-                path,
-                "durable records and CTOX follow-up work\nNew record\nSearch records\nSelect a record\n",
-            )
-            .expect("write generic artifact fixture");
-        }
-        std::fs::write(artifact_dir.join("tests/basic.test.mjs"), "export {};\n")
-            .expect("write test fixture");
-        let prompt = "Build a CTOX Business OS app for subscription and recurring revenue management. Track customer subscriptions, plans, MRR, renewal dates, churn risk, and renewal follow-up.\nBusiness OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
-        let task = channels::create_queue_task(
-            &root,
-            channels::QueueTaskCreateRequest {
-                title: "Create subscriptions app".to_string(),
-                prompt: prompt.clone(),
-                thread_key: "business-os/apps/subscriptions".to_string(),
-                workspace_root: Some(root.display().to_string()),
-                priority: "high".to_string(),
-                suggested_skill: Some("business-os-app-module-development".to_string()),
-                parent_message_key: None,
-                extra_metadata: None,
-            },
-        )
-        .expect("failed to create app queue task");
-        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
-            .expect("failed to lease app queue task");
-        channels::set_queue_task_metadata_value(
-            &root,
-            &task.message_key,
-            BUSINESS_OS_APP_SCAFFOLD_BASELINE_MS_METADATA_KEY,
-            Value::from(current_epoch_millis() as i64),
-        )
-        .expect("record baseline metadata");
-        let job = QueuedPrompt {
-            prompt,
-            goal: task.title.clone(),
-            preview: task.title.clone(),
-            source_label: "business-os:app-create".to_string(),
-            suggested_skill: task.suggested_skill.clone(),
-            leased_message_keys: vec![task.message_key.clone()],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some(task.thread_key.clone()),
-            workspace_root: task.workspace_root.clone(),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-
-        let feedback = business_os_app_module_validation_feedback(&root, &job)
-            .expect("validator hook failed")
-            .expect("expected post-baseline/domain validation feedback");
-        assert!(feedback.contains(
-            "no complete required domain app artifact set was written after CTOX recorded the scaffold baseline"
-        ));
-        assert!(feedback.contains("Missing post-baseline domain edits"));
-        assert!(feedback.contains("generic App Creator records scaffold"));
-        assert!(feedback.contains("Original task remains active"));
-    }
-
-    #[test]
-    fn business_os_app_tool_trace_policy_rejects_tmp_and_early_validation() {
-        let root = temp_root("business-os-app-tool-trace-policy");
-        std::fs::create_dir_all(root.join("runtime")).expect("create runtime dir");
-        let module_id = "bench_inventory_trace";
-        let target = BusinessOsAppModuleTarget {
-            module_id: module_id.to_string(),
-            install_target: "runtime-installed-module".to_string(),
-            mode_flag: "--installed",
-            artifact_directory: format!("runtime/business-os/installed-modules/{module_id}"),
-        };
-        let prompt = format!(
-            "Build an inventory Business OS app.\nBusiness OS app build target:\n- module_id: {module_id}\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: {}\nBusiness OS command:\n- type: ctox.business_os.app.create\n",
-            target.artifact_directory
-        );
-        let task = channels::create_queue_task(
-            &root,
-            channels::QueueTaskCreateRequest {
-                title: "Create inventory app".to_string(),
-                prompt: prompt.clone(),
-                thread_key: format!("business-os/apps/{module_id}"),
-                workspace_root: Some(root.display().to_string()),
-                priority: "high".to_string(),
-                suggested_skill: Some("business-os-app-module-development".to_string()),
-                parent_message_key: None,
-                extra_metadata: None,
-            },
-        )
-        .expect("failed to create app queue task");
-        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
-            .expect("failed to lease app queue task");
-        let baseline_ms = current_epoch_millis() as i64;
-        channels::set_queue_task_metadata_value(
-            &root,
-            &task.message_key,
-            BUSINESS_OS_APP_SCAFFOLD_BASELINE_MS_METADATA_KEY,
-            Value::from(baseline_ms),
-        )
-        .expect("record baseline metadata");
-        let job = QueuedPrompt {
-            prompt,
-            goal: task.title.clone(),
-            preview: task.title.clone(),
-            source_label: "business-os:app-create".to_string(),
-            suggested_skill: task.suggested_skill.clone(),
-            leased_message_keys: vec![task.message_key.clone()],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some(task.thread_key.clone()),
-            workspace_root: task.workspace_root.clone(),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-        let commands = [
-            "ctox skills system show business-os-app-module-development --body 2>&1 | head -200".to_string(),
-            format!(
-                "ls {}/core/ {}/locales/ {}/tests/",
-                root.join(&target.artifact_directory).display(),
-                root.join(&target.artifact_directory).display(),
-                root.join(&target.artifact_directory).display(),
-            ),
-            format!(
-                "sed -n '1,60p' {}/module.json 2>&1",
-                root.join(&target.artifact_directory).display()
-            ),
-            "cat src/apps/business-os/modules/shiftflow/index.js 2>&1 | head -200".to_string(),
-            "sed -n '200,400p' src/apps/business-os/modules/shiftflow/index.js 2>&1".to_string(),
-            format!(
-                "cd {} && ctox business-os app validate {module_id} --installed 2>&1 | head -200",
-                root.display()
-            ),
-            "mkdir -p /tmp/inv-payloads && cat > /tmp/inv-payloads/records.mjs <<'EOF'\nexport const MODULE_ID = 'bench_inventory_trace';\nEOF".to_string(),
-            "node --check /tmp/inv-payloads/records.mjs".to_string(),
-            "cd src/apps/business-os/modules && wc -l customers/module.json shiftflow/index.js outbound/core/automation.mjs".to_string(),
-            format!("ls -la {}", root.join(&target.artifact_directory).display()),
-        ];
-        let context_lines = commands
-            .iter()
-            .enumerate()
-            .map(|(idx, command)| {
-                serde_json::json!({
-                    "ts": baseline_ms + idx as i64 + 1,
-                    "event": "tool_call_begin",
-                    "command": command,
-                })
-                .to_string()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        std::fs::write(
-            root.join("runtime/context-log.jsonl"),
-            format!("{context_lines}\n"),
-        )
-        .expect("write context log fixture");
-
-        let report = business_os_app_module_tool_trace_policy_report(&root, &root, &job, &target)
-            .expect("tool trace policy should run")
-            .expect("tool trace policy should report violations");
-
-        assert!(report.contains("tool trace violated"));
-        assert!(report.contains("App Creator skill was partially read"));
-        assert!(report.contains(
-            "first app-artifact action after scaffold baseline was not a direct requested-domain write"
-        ));
-        assert!(report.contains("generated scaffold files were read back"));
-        assert!(report.contains(
-            "validation ran before the first direct requested-domain module artifact write"
-        ));
-        assert!(report.contains("staged or tested under /tmp"));
-        assert!(report.contains("source-module discovery, broad dump, or line-count sweep"));
-        assert!(report.contains("nonexistent few-shot source paths"));
-        assert!(report.contains("broad dumps or line-count/readback commands"));
-    }
-
-    #[test]
-    fn business_os_app_tool_trace_policy_rejects_manifest_first_write() {
-        let root = temp_root("business-os-app-tool-trace-manifest-first");
-        std::fs::create_dir_all(root.join("runtime")).expect("create runtime dir");
-        let module_id = "bench_contracts_trace";
-        let target = BusinessOsAppModuleTarget {
-            module_id: module_id.to_string(),
-            install_target: "runtime-installed-module".to_string(),
-            mode_flag: "--installed",
-            artifact_directory: format!("runtime/business-os/installed-modules/{module_id}"),
-        };
-        let prompt = format!(
-            "Build a contracts Business OS app.\nBusiness OS app build target:\n- module_id: {module_id}\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: {}\nBusiness OS command:\n- type: ctox.business_os.app.create\n",
-            target.artifact_directory
-        );
-        let task = channels::create_queue_task(
-            &root,
-            channels::QueueTaskCreateRequest {
-                title: "Create contracts app".to_string(),
-                prompt: prompt.clone(),
-                thread_key: "business-os/apps/contracts".to_string(),
-                workspace_root: Some(root.display().to_string()),
-                priority: "high".to_string(),
-                suggested_skill: Some("business-os-app-module-development".to_string()),
-                parent_message_key: None,
-                extra_metadata: None,
-            },
-        )
-        .expect("failed to create app queue task");
-        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
-            .expect("failed to lease app queue task");
-        let baseline_ms = current_epoch_millis() as i64;
-        channels::set_queue_task_metadata_value(
-            &root,
-            &task.message_key,
-            BUSINESS_OS_APP_SCAFFOLD_BASELINE_MS_METADATA_KEY,
-            Value::from(baseline_ms),
-        )
-        .expect("record baseline metadata");
-        let job = QueuedPrompt {
-            prompt,
-            goal: task.title.clone(),
-            preview: task.title.clone(),
-            source_label: "business-os:app-create".to_string(),
-            suggested_skill: task.suggested_skill.clone(),
-            leased_message_keys: vec![task.message_key.clone()],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some(task.thread_key.clone()),
-            workspace_root: task.workspace_root.clone(),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-        let module_json_path = root.join(&target.artifact_directory).join("module.json");
-        let command = format!("cat > {} <<'EOF'\n{{}}\nEOF", module_json_path.display());
-        std::fs::write(
-            root.join("runtime/context-log.jsonl"),
-            serde_json::json!({
-                "ts": baseline_ms + 1,
-                "event": "tool_call_begin",
-                "command": command,
-            })
-            .to_string()
-                + "\n",
-        )
-        .expect("write context log fixture");
-
-        let report = business_os_app_module_tool_trace_policy_report(&root, &root, &job, &target)
-            .expect("tool trace policy should run")
-            .expect("tool trace policy should report manifest-first violation");
-
-        assert!(report.contains(
-            "first app-artifact write after scaffold baseline edited manifest or schema before requested-domain files"
-        ));
-    }
-
-    #[test]
-    fn business_os_app_tool_trace_policy_rejects_helper_and_schema_before_entry_tests() {
-        let root = temp_root("business-os-app-tool-trace-helper-first");
-        std::fs::create_dir_all(root.join("runtime")).expect("create runtime dir");
-        let module_id = "bench_subscriptions_trace";
-        let target = BusinessOsAppModuleTarget {
-            module_id: module_id.to_string(),
-            install_target: "runtime-installed-module".to_string(),
-            mode_flag: "--installed",
-            artifact_directory: format!("runtime/business-os/installed-modules/{module_id}"),
-        };
-        let prompt = format!(
-            "Build a subscriptions Business OS app.\nBusiness OS app build target:\n- module_id: {module_id}\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: {}\nBusiness OS command:\n- type: ctox.business_os.app.create\n",
-            target.artifact_directory
-        );
-        let task = channels::create_queue_task(
-            &root,
-            channels::QueueTaskCreateRequest {
-                title: "Create subscriptions app".to_string(),
-                prompt: prompt.clone(),
-                thread_key: "business-os/apps/subscriptions".to_string(),
-                workspace_root: Some(root.display().to_string()),
-                priority: "high".to_string(),
-                suggested_skill: Some("business-os-app-module-development".to_string()),
-                parent_message_key: None,
-                extra_metadata: None,
-            },
-        )
-        .expect("failed to create app queue task");
-        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
-            .expect("failed to lease app queue task");
-        let baseline_ms = current_epoch_millis() as i64;
-        channels::set_queue_task_metadata_value(
-            &root,
-            &task.message_key,
-            BUSINESS_OS_APP_SCAFFOLD_BASELINE_MS_METADATA_KEY,
-            Value::from(baseline_ms),
-        )
-        .expect("record baseline metadata");
-        let job = QueuedPrompt {
-            prompt,
-            goal: task.title.clone(),
-            preview: task.title.clone(),
-            source_label: "business-os:app-create".to_string(),
-            suggested_skill: task.suggested_skill.clone(),
-            leased_message_keys: vec![task.message_key.clone()],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some(task.thread_key.clone()),
-            workspace_root: task.workspace_root.clone(),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-        let module_dir = root.join(&target.artifact_directory);
-        let commands = [
-            format!(
-                "MODULE_DIR=\"{}\"; cat > \"$MODULE_DIR/core/records.mjs\" <<'EOF'\nexport const MODULE_ID = '{module_id}';\nEOF",
-                module_dir.display()
-            ),
-            format!(
-                "MODULE_DIR=\"{}\"; cat > \"$MODULE_DIR/collections.schema.json\" <<'EOF'\n{{}}\nEOF",
-                module_dir.display()
-            ),
-            format!(
-                "MODULE_DIR=\"{}\"; cat > \"$MODULE_DIR/index.html\" <<'EOF'\n<section>Subscriptions</section>\nEOF",
-                module_dir.display()
-            ),
-            format!(
-                "MODULE_DIR=\"{}\"; cat > \"$MODULE_DIR/index.css\" <<'EOF'\n.subscriptions {{ display: grid; }}\nEOF",
-                module_dir.display()
-            ),
-            format!(
-                "MODULE_DIR=\"{}\"; cat > \"$MODULE_DIR/index.js\" <<'EOF'\nexport async function mount() {{}}\nEOF",
-                module_dir.display()
-            ),
-            format!(
-                "MODULE_DIR=\"{}\"; cat > \"$MODULE_DIR/tests/subscriptions.test.mjs\" <<'EOF'\nimport assert from 'node:assert/strict';\nEOF",
-                module_dir.display()
-            ),
-        ];
-        let context_lines = commands
-            .iter()
-            .enumerate()
-            .map(|(idx, command)| {
-                serde_json::json!({
-                    "ts": baseline_ms + idx as i64 + 1,
-                    "event": "tool_call_begin",
-                    "command": command,
-                })
-                .to_string()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        std::fs::write(
-            root.join("runtime/context-log.jsonl"),
-            format!("{context_lines}\n"),
-        )
-        .expect("write context log fixture");
-
-        let report = business_os_app_module_tool_trace_policy_report(&root, &root, &job, &target)
-            .expect("tool trace policy should run")
-            .expect("tool trace policy should report helper-first violation");
-
-        assert!(report.contains(
-            "first requested-domain app-artifact write did not rewrite index.js and tests"
-        ));
-        assert!(report.contains(
-            "requested-domain helper or UI files were edited before index.js and tests were rewritten"
-        ));
-        assert!(report.contains(
-            "manifest, schema, CSS, or icon artifact was edited before index.js and tests were rewritten"
-        ));
-    }
-
-    #[test]
-    fn business_os_app_domain_relevance_allows_domain_terms_with_generic_placeholders() {
-        let root = temp_root("business-os-app-domain-relevance-inventory");
-        let module_id = "bench_inventory";
-        let target = BusinessOsAppModuleTarget {
-            module_id: module_id.to_string(),
-            install_target: "runtime-installed-module".to_string(),
-            mode_flag: "--installed",
-            artifact_directory: format!("runtime/business-os/installed-modules/{module_id}"),
-        };
-        let module_dir = root.join(&target.artifact_directory);
-        std::fs::create_dir_all(module_dir.join("core")).expect("create core dir");
-        std::fs::create_dir_all(module_dir.join("locales")).expect("create locales dir");
-        std::fs::create_dir_all(module_dir.join("tests")).expect("create tests dir");
-        for relative in BUSINESS_OS_APP_REQUIRED_ARTIFACTS {
-            let path = module_dir.join(relative);
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).expect("create parent dir");
-            }
-            std::fs::write(
-                path,
-                "Inventory stock items, warehouse locations, reorder levels, pick lists, batches, and stock follow-up.\nNew record\nSelect a record\nopen items\n",
-            )
-            .expect("write inventory artifact fixture");
-        }
-        std::fs::write(
-            module_dir.join("tests/inventory.test.mjs"),
-            "export const fixture = 'stock reorder batch pick list';\n",
-        )
-        .expect("write inventory test fixture");
-        let job = QueuedPrompt {
-            prompt: format!(
-                "Build a small Business OS app for inventory. Track stock items, locations, reorder levels, pick lists, and batches.\nBusiness OS app build target:\n- module_id: {module_id}\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: {}\nBusiness OS command:\n- type: ctox.business_os.app.create\n",
-                target.artifact_directory
-            ),
-            goal: "Build inventory app".to_string(),
-            preview: "Build inventory app".to_string(),
-            source_label: "business-os:app-create".to_string(),
-            suggested_skill: Some("business-os-app-module-development".to_string()),
-            leased_message_keys: vec!["queue:system::inventory".to_string()],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("business-os/apps/inventory".to_string()),
-            workspace_root: Some(root.display().to_string()),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-
-        let report = business_os_app_module_domain_relevance_report(&root, &job, &target)
-            .expect("domain relevance check failed");
-
-        assert_eq!(report, None);
+        assert!(!feedback.contains("IMMEDIATE REPAIR START GATE"));
+        assert!(!feedback.contains("tool trace violated"));
+        assert!(!feedback.contains("Do not call `ctox queue ack`"));
     }
 
     #[test]
     fn business_os_app_execution_prompt_forbids_queue_lifecycle() {
         let job = QueuedPrompt {
-            prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+            prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
             goal: "Build contracts app".to_string(),
             preview: "Build contracts app".to_string(),
             source_label: "queue".to_string(),
@@ -22634,79 +21151,36 @@ Business OS command:
 
         let prompt = business_os_app_module_execution_prompt(&job);
 
-        assert!(prompt.contains("TOP ACCEPTANCE GATE"));
-        assert!(prompt.contains("The final app must be requested-domain UI"));
-        assert!(prompt.contains("Generic scaffold strings such as `New record`"));
-        assert!(prompt.contains("vertical requested-domain slice"));
+        assert!(prompt.contains("Build the app, not a plan, spec, skill file, or generic web app"));
+        assert!(
+            prompt.contains("First choose and inspect three shipped Business OS app references")
+        );
+        assert!(prompt.contains("Pick the best matches yourself"));
+        assert!(prompt.contains("`customers`, `shiftflow`, and `outbound` are only examples"));
+        assert!(prompt.contains("ctox business-os app references --json"));
+        assert!(prompt.contains("Target module_id: contracts"));
+        assert!(prompt.contains("Target install_target: runtime-installed-module"));
         assert!(prompt
-            .contains("The first requested-domain app-artifact write must include `index.js`"));
-        assert!(prompt.contains("Do not edit `module.json`, `collections.schema.json`, `schema.js`, `index.css`, or `icon.svg` before `index.js`"));
-        assert!(prompt.contains("A helper-only rewrite is a failed app"));
-        assert!(prompt.contains("Do not add new first-pass `data-action` values such as `restock`"));
-        assert!(prompt.contains("stale scaffold `assert.deepEqual` expectations"));
-        assert!(prompt.contains("concrete nouns from the user's prompt"));
-        assert!(prompt.contains("The CTOX service owns queue and Business OS command lifecycle"));
-        assert!(prompt.contains("`ctox queue complete`"));
-        assert!(prompt.contains("Do not act on queue IDs shown in context"));
-        assert!(prompt.contains("CTOX service preflight creates a validator-clean scaffold"));
-        assert!(prompt.contains("The scaffold inventory is already known"));
-        assert!(prompt.contains("Do not run `ls`, `find`, `tree`, `stat`, `cat`, `head`, `tail`"));
-        assert!(prompt.contains("hand-author module.json, schema.js, collections.schema.json"));
-        assert!(prompt.contains("First app-artifact action rule"));
-        assert!(prompt.contains("must be a direct bounded write"));
-        assert!(prompt.contains("manifest/schema/CSS/icon edit"));
-        assert!(prompt.contains("Exact mount rule: index.js must load `./index.html`"));
-        assert!(prompt.contains("fetch(new URL('./index.html', import.meta.url))"));
-        assert!(prompt.contains("ctx.host.innerHTML"));
-        assert!(prompt.contains("new URL('./index.css', import.meta.url)"));
-        assert!(prompt.contains("CSS token rule: never define custom properties on `:root`"));
-        assert!(prompt.contains("Installed root artifact rule"));
-        assert!(prompt.contains("modul.json"));
-        assert!(prompt.contains("Schema artifact rule: keep the canonical root `schema.js`"));
-        assert!(prompt.contains("Tests are required app artifacts"));
-        assert!(prompt.contains("ESM import/export rule"));
-        assert!(prompt.contains("Inspect and edit with a narrow tool budget"));
-        assert!(prompt.contains("Directory listings are not narrow inspection"));
-        assert!(prompt.contains("dump whole generated files"));
-        assert!(prompt.contains("ctox skills system show business-os-app-module-development"));
-        assert!(prompt.contains("Node readFileSync audits"));
-        assert!(prompt.contains("Do not use Python, base64 blobs, Node writer scripts"));
-        assert!(prompt.contains("`/tmp` scratch files"));
-        assert!(prompt.contains("Tool trace policy"));
-        assert!(prompt.contains("If validation is green, stop immediately"));
+            .contains("Target app_directory: runtime/business-os/installed-modules/contracts"));
+        assert!(prompt.contains("Runtime apps write only under app_directory"));
+        assert!(prompt.contains("no-build HTML fragment, CSS, and browser ESM"));
+        assert!(prompt.contains("No framework, package manager"));
+        assert!(prompt.contains("`index.js` exports `mount(ctx)`"));
+        assert!(prompt.contains("renders into `ctx.host`"));
+        assert!(prompt.contains("persists records with `ctx.db`"));
+        assert!(prompt.contains("ctx.commandBus.dispatch"));
+        assert!(prompt.contains("business_os.chat.task"));
+        assert!(prompt.contains("payload.record_snapshot"));
+        assert!(prompt.contains("Do not write directly to `business_commands`"));
+        assert!(prompt.contains("all visible controls work"));
         assert!(prompt.contains("ctox business-os app validate contracts --installed"));
-    }
-
-    #[test]
-    fn business_os_app_scaffold_inventory_requires_tests() -> Result<()> {
-        let root = temp_root("business-os-app-scaffold-inventory");
-        let target = BusinessOsAppModuleTarget {
-            module_id: "contracts".to_string(),
-            install_target: "runtime-installed-module".to_string(),
-            mode_flag: "--installed",
-            artifact_directory: "runtime/business-os/installed-modules/contracts".to_string(),
-        };
-        let dir = root.join(&target.artifact_directory);
-        std::fs::create_dir_all(dir.join("locales"))?;
-        std::fs::create_dir_all(dir.join("tests"))?;
-        for relative in [
-            "module.json",
-            "collections.schema.json",
-            "schema.js",
-            "index.html",
-            "index.css",
-            "index.js",
-            "icon.svg",
-            "locales/de.json",
-            "locales/en.json",
-        ] {
-            std::fs::write(dir.join(relative), "{}")?;
-        }
-
-        assert!(!business_os_app_required_inventory_complete(&root, &target));
-        std::fs::write(dir.join("tests/contracts.test.mjs"), "export {};")?;
-        assert!(business_os_app_required_inventory_complete(&root, &target));
-        Ok(())
+        assert!(!prompt.contains("TOP ACCEPTANCE GATE"));
+        assert!(!prompt.contains("Generic scaffold strings"));
+        assert!(!prompt.contains("CTOX service preflight creates a validator-clean scaffold"));
+        assert!(!prompt.contains("Tool trace policy"));
+        assert!(!prompt.contains("First app-artifact action rule"));
+        assert!(!prompt.contains("Do not act on queue IDs shown in context"));
+        assert!(!prompt.contains("`ctox queue complete`"));
     }
 
     #[test]
@@ -22733,7 +21207,7 @@ Business OS command:
             "console.error('module.json install_scope must be installed'); process.exit(1);\n",
         )
         .expect("write validator script fixture");
-        let prompt = "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
+        let prompt = "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
         let task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
@@ -22834,7 +21308,7 @@ Business OS command:
             "console.error('module.json layout.right is not allowed'); process.exit(1);\n",
         )
         .expect("write validator script fixture");
-        let prompt = "Business OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
+        let prompt = "Business OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
         let task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
@@ -22912,7 +21386,7 @@ Business OS command:
     #[test]
     fn business_os_app_validation_worker_error_after_green_marks_same_task_handled() {
         let root = temp_root("business-os-app-validation-worker-error-green");
-        let prompt = "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
+        let prompt = "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
         let task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
@@ -22961,7 +21435,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create subscriptions app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/subscriptions".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -23028,7 +21502,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create inventory app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/inventory".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -23090,7 +21564,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create contracts app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/contracts".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -23148,7 +21622,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create inventory app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/inventory".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -23262,16 +21736,11 @@ Business OS command:
             "console.error('missing index.js and tests'); process.exit(1);\n",
         )
         .expect("write red validator script fixture");
-        std::fs::write(
-            script_dir.join("scaffold-app-module.mjs"),
-            "process.stdout.write('{}\\n'); process.exit(0);\n",
-        )
-        .expect("write scaffold helper fixture");
         let task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create subscriptions app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/subscriptions".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -23361,7 +21830,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create subscriptions app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/subscriptions".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -23410,7 +21879,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create inventory app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/inventory".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -23456,7 +21925,7 @@ Business OS command:
             &state_root,
             channels::QueueTaskCreateRequest {
                 title: "Create subscriptions app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/subscriptions".to_string(),
                 workspace_root: Some(app_workspace_root.display().to_string()),
                 priority: "high".to_string(),
@@ -23493,7 +21962,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create quality app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: quality\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: quality\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/quality".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -23528,7 +21997,7 @@ Business OS command:
             !root
                 .join("runtime/business-os/installed-modules/quality")
                 .exists(),
-            "requeue must not scaffold or complete the app"
+            "requeue must not generate or complete the app"
         );
     }
 
@@ -23546,7 +22015,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create subscriptions app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/subscriptions".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -23591,7 +22060,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create quality app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: quality\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: quality\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/quality".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -23653,7 +22122,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create projects app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/projects".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -23685,8 +22154,8 @@ Business OS command:
     }
 
     #[test]
-    fn status_snapshot_recovery_skips_fresh_scaffolded_app_queue_lease() {
-        let root = temp_root("status-snapshot-fresh-scaffolded-app-skip");
+    fn status_snapshot_recovery_skips_fresh_written_app_queue_lease() {
+        let root = temp_root("status-snapshot-fresh-written-app-skip");
         let script_dir = root.join("src/apps/business-os/scripts");
         std::fs::create_dir_all(&script_dir).expect("create validator script dir");
         std::fs::write(
@@ -23698,7 +22167,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create subscriptions app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/subscriptions".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -23734,7 +22203,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create subscriptions app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/subscriptions".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -23756,7 +22225,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create inventory app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/inventory".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -23786,7 +22255,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create inventory app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/inventory".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -23822,7 +22291,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create contracts app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/contracts".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -23876,7 +22345,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create subscriptions app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/subscriptions".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -23931,7 +22400,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create projects app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/projects".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -24000,7 +22469,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create subscriptions app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/subscriptions".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -24040,7 +22509,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Projects Bench".to_string(),
-                prompt: "Business OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/projects".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -24062,7 +22531,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Quality Bench".to_string(),
-                prompt: "Business OS app build target:\n- module_id: quality\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: quality\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/quality".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -24102,7 +22571,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create quality app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: quality\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: quality\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/quality".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -24149,7 +22618,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create quality app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: quality\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: quality\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/quality".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -24204,7 +22673,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create projects app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/projects".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -24471,7 +22940,7 @@ Business OS command:
             .expect("failed to load app queue task")
             .expect("missing app queue task");
         let job = QueuedPrompt {
-            prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+            prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
             goal: task.title.clone(),
             preview: task.title.clone(),
             source_label: "business-os:app-create".to_string(),
@@ -24514,7 +22983,7 @@ Business OS command:
     #[test]
     fn business_os_app_validation_rework_is_leased_before_fresh_pending_app_tasks() {
         let root = temp_root("business-os-app-validation-rework-priority");
-        let prompt = "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
+        let prompt = "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
         let rework_task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
@@ -24579,7 +23048,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create inventory app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/inventory".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -24623,7 +23092,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create contracts app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/contracts".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -24645,7 +23114,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create inventory app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/inventory".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -27553,7 +26022,7 @@ Use shell tools to create or update these files."
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create subscriptions app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/subscriptions".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -27595,7 +26064,7 @@ Use shell tools to create or update these files."
             &state_root,
             channels::QueueTaskCreateRequest {
                 title: "Create subscriptions app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/subscriptions".to_string(),
                 workspace_root: Some(app_workspace_root.display().to_string()),
                 priority: "high".to_string(),
@@ -31084,7 +29553,7 @@ The controller must create preparation queue/tickets and record queue:system::* 
     #[test]
     fn business_os_app_tasks_do_not_queue_generic_artifact_outcome_recovery() {
         let job = QueuedPrompt {
-            prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n\nOnly required durable files for this controller turn:\n- runtime/business-os/installed-modules/contracts/module.json\n- runtime/business-os/installed-modules/contracts/index.js\n".to_string(),
+            prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n\nOnly required durable files for this controller turn:\n- runtime/business-os/installed-modules/contracts/module.json\n- runtime/business-os/installed-modules/contracts/index.js\n".to_string(),
             goal: "Create contracts app".to_string(),
             preview: "Create contracts app".to_string(),
             source_label: "business-os:app-create".to_string(),
@@ -31104,7 +29573,7 @@ The controller must create preparation queue/tickets and record queue:system::* 
     #[test]
     fn business_os_app_tasks_do_not_infer_root_workspace_file_artifacts() {
         let job = QueuedPrompt {
-            prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\n- first file action: create runtime/business-os/installed-modules/subscriptions/, then write module.json, index.html, index.css, index.js with mount(ctx), schema.js, collections.schema.json, icon.svg, locales, and tests inside that directory.\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+            prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\n- first file action: create runtime/business-os/installed-modules/subscriptions/, then write module.json, index.html, index.css, index.js with mount(ctx), schema.js, collections.schema.json, icon.svg, locales, and tests inside that directory.\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
             goal: "Create subscriptions app".to_string(),
             preview: "Create subscriptions app".to_string(),
             source_label: "business-os:app-create".to_string(),

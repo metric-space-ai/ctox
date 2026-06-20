@@ -231,9 +231,10 @@ authoring skill is
 
 1. Receive the queue task; build **only** the given `module_id` in
    `runtime/business-os/installed-modules/<id>/`.
-2. If a validator-clean scaffold exists, **preserve it** and customize in place;
-   if `core/*.mjs` missing → `ctox business-os app scaffold <id> --installed --repair-missing`;
-   if dir missing → `ctox business-os app scaffold <id> --installed --title "<Title>"`.
+2. If an installed app directory already exists, inspect and repair it in place.
+   If it does not exist, the App Creator agent must build the app files itself
+   in `runtime/business-os/installed-modules/<id>/` using the Business OS app
+   module skill. Do not use a scaffold command or generic generated app.
 3. Customize with **bounded edits** (no Python/Node writer scripts, no base64,
    no here-doc dumps). Keep the app small: one workbench + one create/edit + one
    automation.
@@ -763,4 +764,3 @@ seven ATS module UIs are promoted from record lists to engine-grounded surfaces.
 The residual is an operational enforcement flip (9.1), one sync-layer audit (9.2)
 to coordinate with the parallel agent, and absent infra (9.3 STT weights + a live
 shell/WebRTC round-trip). The plan is the single source of truth for that residual.
-

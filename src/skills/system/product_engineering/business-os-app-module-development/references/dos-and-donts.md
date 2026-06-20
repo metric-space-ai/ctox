@@ -1,0 +1,27 @@
+# Business OS App Do's And Don'ts
+
+## Do
+
+- Build a real app for the user's request.
+- Choose three relevant shipped Business OS apps as references before coding.
+- Use plain HTML fragments, CSS, and browser ESM.
+- Export `mount(ctx)` from `index.js`.
+- Render into `ctx.host`.
+- Persist app records through the shell-provided `ctx.db` collection handle.
+- Send workflow automation through `ctx.commandBus.dispatch(...)`.
+- Keep the first version small, focused, and fully working.
+- Prefer one or two panes; use modals for occasional detail work.
+- Add tests for pure record helpers and automation command builders.
+- Run `ctox business-os app validate <module-id> --installed` or `--source`.
+
+## Don't
+
+- Do not build a React, Next.js, Vite, bundled, or package-managed app.
+- Do not create a separate HTTP, REST, IndexedDB, Postgres, or SQLite data path.
+- Do not write generated runtime apps under `src/` unless the task explicitly targets a source module.
+- Do not write directly to `business_commands`; use `ctx.commandBus.dispatch(...)`.
+- Do not use a full HTML document in `index.html`.
+- Do not add decorative third panes, fake buttons, or controls without handlers.
+- Do not add broad settings/export/AI/bulk features unless they really work.
+- Do not treat a generic empty template as the finished app.
+- Do not claim success while validation is red.

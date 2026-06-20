@@ -25,7 +25,6 @@ use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
-use crate::tools::handlers::unified_exec::business_os_app_root_artifact_write_guard;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -192,11 +191,6 @@ impl ToolHandler for ShellHandler {
                 let cwd = resolve_workdir_base_path(&arguments, turn.cwd.as_path())?;
                 let params: ShellToolCallParams =
                     parse_arguments_with_base_path(&arguments, cwd.as_path())?;
-                let raw_command = ctox_shell_command::parse_command::shlex_join(&params.command);
-                if let Some(message) = business_os_app_root_artifact_write_guard(&raw_command, &cwd)
-                {
-                    return Err(FunctionCallError::RespondToModel(message));
-                }
                 let prefix_rule = params.prefix_rule.clone();
                 let exec_params =
                     Self::to_exec_params(&params, turn.as_ref(), session.conversation_id);
@@ -215,12 +209,6 @@ impl ToolHandler for ShellHandler {
                 .await
             }
             ToolPayload::LocalShell { params } => {
-                let raw_command = ctox_shell_command::parse_command::shlex_join(&params.command);
-                let cwd = turn.resolve_path(params.workdir.clone());
-                if let Some(message) = business_os_app_root_artifact_write_guard(&raw_command, &cwd)
-                {
-                    return Err(FunctionCallError::RespondToModel(message));
-                }
                 let exec_params =
                     Self::to_exec_params(&params, turn.as_ref(), session.conversation_id);
                 Self::run_exec_like(RunExecLikeArgs {
@@ -297,9 +285,6 @@ impl ToolHandler for ShellCommandHandler {
         let cwd = resolve_workdir_base_path(&arguments, turn.cwd.as_path())?;
         let params: ShellCommandToolCallParams =
             parse_arguments_with_base_path(&arguments, cwd.as_path())?;
-        if let Some(message) = business_os_app_root_artifact_write_guard(&params.command, &cwd) {
-            return Err(FunctionCallError::RespondToModel(message));
-        }
         maybe_emit_implicit_skill_invocation(
             session.as_ref(),
             turn.as_ref(),

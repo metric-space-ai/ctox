@@ -610,20 +610,6 @@ fn handle_business_os_rxdb(root: &Path, args: &[String]) -> anyhow::Result<()> {
 
 fn handle_business_os_app(root: &Path, args: &[String]) -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
-        Some("scaffold") => {
-            let module_id = args
-                .get(1)
-                .filter(|value| !value.starts_with("--"))
-                .context(
-                    "usage: ctox business-os app scaffold <module-id> [--installed|--source] [--title <title>] [--collection <name>] [--description <text>] [--force] [--repair-missing] [--json]",
-                )?;
-            let output = run_business_os_app_scaffold(root, module_id, &args[2..])?;
-            print_process_output(&output);
-            if !output.status.success() {
-                anyhow::bail!("Business OS app scaffold failed for `{module_id}`");
-            }
-            Ok(())
-        }
         Some("validate") => {
             let module_id = args
                 .get(1)
@@ -636,7 +622,6 @@ fn handle_business_os_app(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 print_process_output(&output);
                 anyhow::bail!("Business OS app validation failed for `{module_id}`");
             }
-            enforce_leased_app_creator_post_baseline_validation_gate(root, module_id)?;
             print_process_output(&output);
             let completed = complete_leased_app_creator_tasks_after_validation(
                 root,
@@ -649,6 +634,50 @@ fn handle_business_os_app(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 );
             }
             Ok(())
+        }
+        Some("references") => {
+            let output = business_os_app_reference_candidates(root, &args[1..])?;
+            if args.iter().any(|arg| arg == "--json") {
+                print_json(&output)
+            } else {
+                let modules = output
+                    .get("modules")
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                println!("Business OS app reference candidates:");
+                for module in modules {
+                    let id = module
+                        .get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("");
+                    let title = module
+                        .get("title")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or(id);
+                    let path = module
+                        .get("path")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("");
+                    let collections = module
+                        .get("collections")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        })
+                        .unwrap_or_default();
+                    println!("- {id}: {title}");
+                    if !collections.is_empty() {
+                        println!("  collections: {collections}");
+                    }
+                    println!("  path: {path}");
+                }
+                Ok(())
+            }
         }
         Some("finalize") => {
             let module_id = args
@@ -695,68 +724,116 @@ fn handle_business_os_app(root: &Path, args: &[String]) -> anyhow::Result<()> {
     }
 }
 
-fn run_business_os_app_scaffold(
+fn business_os_app_reference_candidates(
     root: &Path,
-    module_id: &str,
     args: &[String],
-) -> anyhow::Result<std::process::Output> {
-    if module_id.is_empty()
-        || module_id == "."
-        || module_id == ".."
-        || module_id.contains('/')
-        || module_id.contains('\\')
-    {
-        anyhow::bail!("invalid Business OS app module id `{module_id}`");
-    }
-    let script = root.join("src/apps/business-os/scripts/scaffold-app-module.mjs");
-    anyhow::ensure!(
-        script.is_file(),
-        "Business OS app scaffold helper is not available at {}",
-        script.display()
-    );
-    let mut command = Command::new(resolve_business_os_validator_node(root));
-    command.current_dir(root).arg(script).arg(module_id);
-    let mut workspace_root = root.to_path_buf();
-    let mut idx = 0;
-    while idx < args.len() {
-        match args[idx].as_str() {
-            "--installed" | "--source" | "--force" | "--repair-missing" | "--json" => {
-                command.arg(&args[idx]);
-                idx += 1;
+) -> anyhow::Result<serde_json::Value> {
+    let query = flag_value(args, "--query")
+        .or_else(|| {
+            args.iter()
+                .find(|arg| !arg.starts_with("--"))
+                .map(String::as_str)
+        })
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let source_app_root = existing_dir_path(root, BUSINESS_OS_APP_CANDIDATES);
+    let mut roots = vec![("source", source_app_root.join("modules"))];
+    let installed_app_root =
+        if root.join("runtime").exists() || root.join("runtime/business-os").exists() {
+            root.join("runtime/business-os")
+        } else {
+            root.join("business-os")
+        };
+    roots.push(("installed", installed_app_root.join("installed-modules")));
+
+    let mut modules = Vec::new();
+    for (source, modules_root) in roots {
+        if !modules_root.is_dir() {
+            continue;
+        }
+        for entry in fs::read_dir(&modules_root)
+            .with_context(|| format!("failed to read {}", modules_root.display()))?
+        {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
             }
-            "--title" | "--collection" | "--description" => {
-                let value = args
-                    .get(idx + 1)
-                    .with_context(|| format!("{} requires a value", args[idx]))?;
-                command.arg(&args[idx]).arg(value);
-                idx += 2;
+            let module_dir = entry.path();
+            let manifest_path = module_dir.join("module.json");
+            if !manifest_path.is_file() {
+                continue;
             }
-            "--workspace" => {
-                let value = args
-                    .get(idx + 1)
-                    .with_context(|| format!("{} requires a value", args[idx]))?;
-                workspace_root = PathBuf::from(value);
-                idx += 2;
+            let manifest_text = fs::read_to_string(&manifest_path)
+                .with_context(|| format!("failed to read {}", manifest_path.display()))?;
+            let manifest: serde_json::Value = serde_json::from_str(&manifest_text)
+                .with_context(|| format!("failed to parse {}", manifest_path.display()))?;
+            let fallback_id = entry.file_name().to_string_lossy().to_string();
+            let id = manifest
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(fallback_id.as_str())
+                .to_owned();
+            if id.trim().is_empty() {
+                continue;
             }
-            value if value.starts_with("--") => {
-                anyhow::bail!("unsupported business-os app scaffold option `{value}`")
+            let title = manifest
+                .get("title")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(id.as_str())
+                .to_owned();
+            let description = manifest
+                .get("description")
+                .or_else(|| manifest.get("store").and_then(|store| store.get("summary")))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let searchable =
+                format!("{id} {title} {description} {}", manifest_text).to_ascii_lowercase();
+            if !query.is_empty() && !searchable.contains(&query) {
+                continue;
             }
-            _ => idx += 1,
+            modules.push(serde_json::json!({
+                "id": id,
+                "title": title,
+                "description": description,
+                "source": source,
+                "path": module_dir.display().to_string(),
+                "manifest_path": manifest_path.display().to_string(),
+                "entry": manifest.get("entry").cloned().unwrap_or(serde_json::Value::Null),
+                "collections": manifest.get("collections").cloned().unwrap_or_else(|| serde_json::json!([])),
+                "layout": manifest.get("layout").cloned().unwrap_or(serde_json::Value::Null),
+                "category": manifest.get("category").cloned().unwrap_or(serde_json::Value::Null),
+            }));
         }
     }
-    if !args
-        .iter()
-        .any(|arg| arg == "--installed" || arg == "--source")
-        && workspace_root
-            .join("runtime/business-os/installed-modules")
-            .is_dir()
-    {
-        command.arg("--installed");
-    }
-    command.arg("--workspace").arg(&workspace_root);
-    command
-        .output()
-        .context("failed to run Business OS app scaffold helper")
+    modules.sort_by(|a, b| {
+        let a_title = a
+            .get("title")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let b_title = b
+            .get("title")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        a_title.cmp(b_title).then_with(|| {
+            let a_id = a
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let b_id = b
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            a_id.cmp(b_id)
+        })
+    });
+    Ok(serde_json::json!({
+        "ok": true,
+        "query": query,
+        "instruction": "Choose the three most relevant modules yourself by matching workflow, data shape, and UI shape.",
+        "modules": modules,
+    }))
 }
 
 fn complete_leased_app_creator_tasks_after_validation(
@@ -799,27 +876,6 @@ fn complete_leased_app_creator_tasks_after_validation(
     Ok(completed)
 }
 
-fn enforce_leased_app_creator_post_baseline_validation_gate(
-    root: &Path,
-    module_id: &str,
-) -> anyhow::Result<usize> {
-    let tasks = channels::list_queue_tasks(root, &["leased".to_string()], 512)?;
-    let mut matched = 0usize;
-    for task in tasks {
-        if !queue_task_matches_validated_app_module(&task, module_id) {
-            continue;
-        }
-        let artifact_directory = app_validation_artifact_directory_for_task(&task, module_id);
-        crate::business_os::store::ensure_app_validation_completion_has_post_lease_artifact_write(
-            root,
-            &task,
-            &artifact_directory,
-        )?;
-        matched = matched.saturating_add(1);
-    }
-    Ok(matched)
-}
-
 fn queue_task_matches_validated_app_module(
     task: &channels::QueueTaskView,
     module_id: &str,
@@ -832,13 +888,15 @@ fn queue_task_matches_validated_app_module(
     let exact_json_target = format!("\"module_id\": \"{module_id}\"");
     let exact_dir_target = format!("runtime/business-os/installed-modules/{module_id}");
     let exact_source_dir_target = format!("src/apps/business-os/modules/{module_id}");
-    prompt.contains("ctox.business_os.app.create")
+    (prompt.contains("ctox.business_os.app.create")
+        || prompt.contains("ctox.business_os.app.modify"))
         && (prompt.contains(&exact_yaml_target)
             || prompt.contains(&exact_json_target)
             || prompt.contains(&exact_dir_target)
             || prompt.contains(&exact_source_dir_target))
 }
 
+#[cfg(test)]
 fn app_validation_artifact_directory_for_task(
     task: &channels::QueueTaskView,
     module_id: &str,
@@ -1784,7 +1842,7 @@ fn business_os_usage() -> String {
     business_os_usage_base()
         .replace(
             "  ctox business-os app validate <module-id>",
-            "  ctox business-os app scaffold <module-id> [--installed|--source] [--workspace <path>] [--title <title>] [--collection <name>] [--description <text>] [--force] [--repair-missing] [--json]\n  ctox business-os app validate <module-id>",
+            "  ctox business-os app references [--query <text>] [--json]\n  ctox business-os app validate <module-id>",
         )
         .replace(
             "  ctox business-os backup prune-drills [--dry-run]",
@@ -2466,7 +2524,6 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Value;
 
     #[test]
     fn web_stack_redaction_audit_reports_canary_without_echoing_value() {
@@ -2552,7 +2609,7 @@ mod tests {
         let root = tempfile::tempdir().expect("temp root");
         let module_id = "projects";
         let prompt = format!(
-            "Business OS app build target:\n- module_id: {module_id}\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/{module_id}\nBusiness OS command:\n- type: ctox.business_os.app.create\nRequired CTOX skills: business-os-app-module-development\n"
+            "Business OS app build target:\n- module_id: {module_id}\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/{module_id}\nBusiness OS command:\n- type: ctox.business_os.app.create\nRequired CTOX skills: business-os-app-module-development\n"
         );
         let created = channels::create_queue_task(
             root.path(),
@@ -2595,7 +2652,7 @@ mod tests {
             message_key: "queue:system::projects".to_string(),
             thread_key: "business-os/creator".to_string(),
             title: "Projects Bench".to_string(),
-            prompt: "Build a Business OS projects app.\nBusiness OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+            prompt: "Build a Business OS projects app.\nBusiness OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
             workspace_root: None,
             ticket_self_work_id: None,
             priority: "urgent".to_string(),
@@ -2616,79 +2673,17 @@ mod tests {
             app_validation_artifact_directory_for_task(&task, "projects"),
             "runtime/business-os/installed-modules/projects"
         );
-    }
 
-    #[test]
-    fn app_validate_gate_rejects_baseline_only_creator_task_without_skill_id() {
-        let root = tempfile::tempdir().expect("temp root");
-        let module_id = "projects";
-        let prompt = format!(
-            "Build a Business OS projects app.\nBusiness OS app build target:\n- module_id: {module_id}\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/{module_id}\nBusiness OS command:\n- type: ctox.business_os.app.create\n"
-        );
-        let created = channels::create_queue_task(
-            root.path(),
-            channels::QueueTaskCreateRequest {
-                title: "Projects Bench".to_string(),
-                prompt,
-                thread_key: "business-os/creator".to_string(),
-                workspace_root: Some(root.path().display().to_string()),
-                priority: "urgent".to_string(),
-                suggested_skill: None,
-                parent_message_key: None,
-                extra_metadata: None,
-            },
-        )
-        .expect("create queue task");
-        channels::lease_queue_task(root.path(), &created.message_key, "ctox-service")
-            .expect("lease queue task");
-
-        let module_dir = root
-            .path()
-            .join("runtime/business-os/installed-modules")
-            .join(module_id);
-        for relative in [
-            "module.json",
-            "collections.schema.json",
-            "schema.js",
-            "index.html",
-            "index.css",
-            "index.js",
-            "icon.svg",
-            "core/automation.mjs",
-            "core/records.mjs",
-            "locales/de.json",
-            "locales/en.json",
-            "tests/projects.test.mjs",
-        ] {
-            let path = module_dir.join(relative);
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).expect("create artifact parent");
-            }
-            fs::write(path, "scaffold artifact\n").expect("write artifact");
-        }
-        std::thread::sleep(std::time::Duration::from_millis(1100));
-        let baseline_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock before epoch")
-            .as_millis() as i64;
-        channels::set_queue_task_metadata_value(
-            root.path(),
-            &created.message_key,
-            "business_os_app_scaffold_baseline_ms",
-            Value::from(baseline_ms),
-        )
-        .expect("set baseline");
-
-        let error =
-            enforce_leased_app_creator_post_baseline_validation_gate(root.path(), module_id)
-                .expect_err("baseline-only app creator validation must be rejected");
-        let report = format!("{error:#}");
-        assert!(
-            report.contains("Early or partial validation is rejected")
-                && report.contains("core/records.mjs")
-                && report.contains("one tests/*.test.mjs file"),
-            "unexpected report: {report}"
-        );
+        let modify_task = channels::QueueTaskView {
+            prompt: task
+                .prompt
+                .replace("ctox.business_os.app.create", "ctox.business_os.app.modify"),
+            ..task
+        };
+        assert!(queue_task_matches_validated_app_module(
+            &modify_task,
+            "projects"
+        ));
     }
 
     #[test]

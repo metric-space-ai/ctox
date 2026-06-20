@@ -1,23 +1,15 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const validator = fileURLToPath(new URL('./validate-app-module.mjs', import.meta.url));
-const scaffold = fileURLToPath(new URL('./scaffold-app-module.mjs', import.meta.url));
 
 function runValidator(workspace, moduleId, ...args) {
   return spawnSync(process.execPath, [validator, moduleId, ...args, '--workspace', workspace], {
-    encoding: 'utf8',
-    maxBuffer: 16 * 1024 * 1024,
-  });
-}
-
-function runScaffold(workspace, moduleId, ...args) {
-  return spawnSync(process.execPath, [scaffold, moduleId, ...args, '--workspace', workspace], {
     encoding: 'utf8',
     maxBuffer: 16 * 1024 * 1024,
   });
@@ -35,7 +27,36 @@ function makeWorkspace() {
   return root;
 }
 
+function installedIndexJs(moduleId, collectionName, extraLines = []) {
+  return [
+    "import { buildFollowUpCommand } from './core/automation.mjs';",
+    '',
+    'function attachStylesheetOnce() {',
+    "  if (document.querySelector('link[data-module-styles=\"validator\"]')) return;",
+    "  const link = document.createElement('link');",
+    "  link.rel = 'stylesheet';",
+    "  link.href = new URL('./index.css', import.meta.url).href;",
+    "  link.dataset.moduleStyles = 'validator';",
+    '  document.head.append(link);',
+    '}',
+    '',
+    'export async function mount(ctx) {',
+    '  attachStylesheetOnce();',
+    "  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());",
+    `  const records = ctx.db.collection?.('${collectionName}') || ctx.db.collections?.${collectionName};`,
+    '  void records;',
+    ...extraLines,
+    "  ctx.host.querySelector('[data-action=\"follow-up\"]')?.addEventListener('click', () => {",
+    "    ctx.commandBus.dispatch(buildFollowUpCommand({ id: 'demo', title: 'Demo', updated_at_ms: 1 }));",
+    '  });',
+    '  return () => { ctx.host.innerHTML = ""; };',
+    '}',
+    '',
+  ].join('\n');
+}
+
 function writeInstalledModule(root, moduleId, overrides = {}) {
+  const collectionName = `${moduleId}_records`;
   const dir = join(root, 'runtime/business-os/installed-modules', moduleId);
   mkdirSync(join(dir, 'locales'), { recursive: true });
   mkdirSync(join(dir, 'tests'), { recursive: true });
@@ -43,138 +64,15 @@ function writeInstalledModule(root, moduleId, overrides = {}) {
   writeJson(join(dir, 'module.json'), {
     id: moduleId,
     title: `${moduleId} Workbench`,
-    description: `${moduleId} records, owner status, due dates, and CTOX chat task follow-up.`,
+    description: `${moduleId} records and CTOX chat task follow-up.`,
     version: '0.1.0',
     entry: `installed-modules/${moduleId}/index.html`,
     install_scope: 'installed',
-    collections: ['business_commands', `${moduleId}_records`],
+    collections: ['business_commands', collectionName],
     layout: { shell: 'full-workspace', left: 'List', center: 'Details' },
     tags: ['business-os', moduleId, 'workflow'],
     ...overrides.manifest,
   });
-  writeJson(join(dir, 'collections.schema.json'), {
-    schema_format: 'ctox-business-os-module-collections-v1',
-    collections: {
-      [`${moduleId}_records`]: {
-        version: 0,
-        primaryKey: 'id',
-        type: 'object',
-        properties: {
-          id: { type: 'string', maxLength: 120 },
-          title: { type: 'string' },
-          updated_at_ms: { type: 'number' },
-        },
-        required: ['id', 'title', 'updated_at_ms'],
-      },
-      ...overrides.collections,
-    },
-  });
-  writeFileSync(join(dir, 'schema.js'), overrides.schemaJs || [
-    'export const collections = {',
-    `  ${moduleId}_records: {`,
-    '    version: 0,',
-    "    primaryKey: 'id',",
-    "    type: 'object',",
-    "    properties: { id: { type: 'string', maxLength: 120 }, title: { type: 'string' }, updated_at_ms: { type: 'number' } },",
-    "    required: ['id', 'title', 'updated_at_ms'],",
-    '  },',
-    '};',
-    '',
-  ].join('\n'));
-  writeFileSync(join(dir, 'core/automation.mjs'), overrides.automationJs || [
-    'export function buildFollowUpCommand(record = {}) {',
-    '  return {',
-    "    id: `cmd_${record.id || 'demo'}`,",
-    "    module: 'good-module',",
-    "    type: 'business_os.chat.task',",
-    "    command_type: 'business_os.chat.task',",
-    "    record_id: record.id || 'demo',",
-    '    payload: {',
-    "      title: `Review ${record.title || 'record'}`,",
-    "      instruction: `Review ${record.title || 'record'} and create the next CTOX follow-up.`,",
-    "      prompt: `Review ${record.title || 'record'} and create the next CTOX follow-up.`,",
-    '      record_snapshot: record,',
-    "      outbound_channel: 'business_os_chat',",
-    "      response_channel: 'business_os_chat',",
-    '    },',
-    "    client_context: { source: 'validator-fixture', surface: 'validator-fixture.follow-up' },",
-    '  };',
-    '}',
-    '',
-  ].join('\n'));
-  writeFileSync(join(dir, 'core/records.mjs'), overrides.recordsJs || [
-    'export const fixtureRecords = [',
-    "  { id: 'demo', title: 'Demo', updated_at_ms: 1 },",
-    '];',
-    '',
-    'export function visibleRecords(records = fixtureRecords) {',
-    '  return records;',
-    '}',
-    '',
-    'export function summarizeRecords(records = fixtureRecords) {',
-    '  return { total: records.length };',
-    '}',
-    '',
-  ].join('\n'));
-  writeFileSync(join(dir, 'index.html'), overrides.indexHtml || '<main class="good-module"><button type="button" data-action="follow-up">Review</button></main>\n');
-  writeFileSync(join(dir, 'index.css'), overrides.indexCss || '.good-module { --good-accent: #2563eb; color: inherit; }\n');
-  writeFileSync(join(dir, 'index.js'), overrides.indexJs || [
-    "import { buildFollowUpCommand } from './core/automation.mjs';",
-    '',
-    'async function ensureStyles() {',
-    "  if (document.querySelector('link[data-module-styles=\"good\"]')) return;",
-    "  const link = document.createElement('link');",
-    "  link.rel = 'stylesheet';",
-    "  link.href = new URL('./index.css', import.meta.url).href;",
-    "  link.dataset.moduleStyles = 'good';",
-    "  document.head.append(link);",
-    '}',
-    '',
-    'export async function mount(ctx) {',
-    '  await ensureStyles();',
-    "  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());",
-    "  ctx.host.querySelector('[data-action=\"follow-up\"]')?.addEventListener('click', () => {",
-    "    ctx.commandBus.dispatch(buildFollowUpCommand({ id: 'demo', title: 'Demo' }));",
-    '  });',
-    '  return () => { ctx.host.textContent = ""; };',
-    '}',
-    '',
-  ].join('\n'));
-  writeFileSync(join(dir, 'icon.svg'), '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"></svg>\n');
-  writeJson(join(dir, 'locales/de.json'), { title: moduleId });
-  writeJson(join(dir, 'locales/en.json'), { title: moduleId });
-  writeFileSync(join(dir, 'tests/basic.test.mjs'), overrides.testJs || [
-    "import assert from 'node:assert/strict';",
-    "import { buildFollowUpCommand } from '../core/automation.mjs';",
-    "import { summarizeRecords, visibleRecords } from '../core/records.mjs';",
-    "const record = { id: 'demo', title: 'Demo', updated_at_ms: 1 };",
-    "assert.equal(visibleRecords([record]).length, 1);",
-    "assert.equal(summarizeRecords([record]).total, 1);",
-    "const command = buildFollowUpCommand({ id: 'demo', title: 'Demo' });",
-    "assert.equal(command.type, 'business_os.chat.task');",
-    "assert.equal(command.command_type, 'business_os.chat.task');",
-    '',
-  ].join('\n'));
-  return dir;
-}
-
-function writeSourceModule(root, moduleId, overrides = {}) {
-  const dir = join(root, 'src/apps/business-os/modules', moduleId);
-  const docsDir = join(root, 'docs');
-  mkdirSync(join(dir, 'locales'), { recursive: true });
-  mkdirSync(join(dir, 'tests'), { recursive: true });
-  mkdirSync(docsDir, { recursive: true });
-  const collectionName = `${moduleId}_records`;
-  const manifest = {
-    id: moduleId,
-    title: moduleId,
-    entry: `modules/${moduleId}/index.html`,
-    install_scope: 'store',
-    collections: ['business_commands', collectionName],
-    layout: { shell: 'full-workspace', left: 'List', center: 'Details' },
-    ...overrides.manifest,
-  };
-  writeJson(join(dir, 'module.json'), manifest);
   writeJson(join(dir, 'collections.schema.json'), {
     schema_format: 'ctox-business-os-module-collections-v1',
     collections: {
@@ -204,110 +102,113 @@ function writeSourceModule(root, moduleId, overrides = {}) {
     '};',
     '',
   ].join('\n'));
-  writeFileSync(join(dir, 'index.html'), overrides.indexHtml || '<main class="source-module"><section>Ready</section></main>\n');
-  writeFileSync(join(dir, 'index.css'), overrides.indexCss || '.source-module { --source-accent: #2563eb; color: inherit; }\n');
-  writeFileSync(join(dir, 'index.js'), overrides.indexJs || [
-    'export async function mount(ctx) {',
-    "  ctx.host.textContent = 'Ready';",
-    '  return () => { ctx.host.textContent = ""; };',
+  writeFileSync(join(dir, 'core/automation.mjs'), overrides.automationJs || [
+    'export function buildFollowUpCommand(record = {}) {',
+    '  return {',
+    `    module: '${moduleId}',`,
+    "    type: 'business_os.chat.task',",
+    "    command_type: 'business_os.chat.task',",
+    "    record_id: record.id || 'demo',",
+    '    payload: {',
+    "      title: `Review ${record.title || 'record'}`,",
+    "      instruction: `Review ${record.title || 'record'} and continue the normal CTOX workflow.`,",
+    '      record_snapshot: record,',
+    '    },',
+    `    client_context: { source: '${moduleId}', collection: '${collectionName}' },`,
+    '  };',
     '}',
     '',
   ].join('\n'));
+  writeFileSync(join(dir, 'core/records.mjs'), overrides.recordsJs || [
+    'export function visibleRecords(records = []) {',
+    '  return records.filter((record) => !record.is_deleted);',
+    '}',
+    '',
+    'export function summarizeRecords(records = []) {',
+    '  return { total: visibleRecords(records).length };',
+    '}',
+    '',
+  ].join('\n'));
+  writeFileSync(join(dir, 'index.html'), overrides.indexHtml || [
+    '<main class="validator-module">',
+    '  <section data-list></section>',
+    '  <button type="button" data-action="follow-up">Follow up</button>',
+    '</main>',
+    '',
+  ].join('\n'));
+  writeFileSync(join(dir, 'index.css'), overrides.indexCss || '.validator-module { display: grid; gap: 12px; }\n');
+  writeFileSync(join(dir, 'index.js'), overrides.indexJs || installedIndexJs(moduleId, collectionName));
   writeFileSync(join(dir, 'icon.svg'), '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"></svg>\n');
   writeJson(join(dir, 'locales/de.json'), { title: moduleId });
   writeJson(join(dir, 'locales/en.json'), { title: moduleId });
   writeFileSync(join(dir, 'tests/basic.test.mjs'), overrides.testJs || [
     "import assert from 'node:assert/strict';",
-    'assert.equal(1 + 1, 2);',
+    "import { buildFollowUpCommand } from '../core/automation.mjs';",
+    "import { summarizeRecords, visibleRecords } from '../core/records.mjs';",
+    "const record = { id: 'demo', title: 'Demo', updated_at_ms: 1 };",
+    "assert.equal(visibleRecords([record]).length, 1);",
+    "assert.equal(summarizeRecords([record]).total, 1);",
+    'const command = buildFollowUpCommand(record);',
+    "assert.equal(command.type, 'business_os.chat.task');",
+    "assert.equal(command.command_type, 'business_os.chat.task');",
+    "assert.deepEqual(command.payload.record_snapshot, record);",
     '',
   ].join('\n'));
-  writeFileSync(join(dir, 'README.md'), `# ${moduleId}\n\nTwo-pane Business OS app module.\n`);
-  writeFileSync(join(docsDir, `business-os-${moduleId}-implementation-plan.md`), [
-    `# ${moduleId} implementation plan`,
-    '',
-    '- Build a focused two-pane Business OS module.',
-    '- Persist only module-owned records through the provided module data contracts.',
-    '- Run the module validator before completion.',
-    '',
-  ].join('\n'));
-  if (overrides.registry !== false) {
-    writeJson(join(root, 'src/apps/business-os/modules/registry.json'), {
-      modules: [
-        {
-          id: moduleId,
-          title: moduleId,
-          entry: manifest.entry,
-          install_scope: manifest.install_scope,
-          collections: manifest.collections,
-        },
-      ],
-    });
-  }
   return dir;
 }
 
-function installedIndexJsWith(extraLines = []) {
-  return [
-    "import { buildFollowUpCommand } from './core/automation.mjs';",
-    '',
-    'async function ensureStyles() {',
-    "  if (document.querySelector('link[data-module-styles=\"guard\"]')) return;",
-    "  const link = document.createElement('link');",
-    "  link.rel = 'stylesheet';",
-    "  link.href = new URL('./index.css', import.meta.url).href;",
-    "  link.dataset.moduleStyles = 'guard';",
-    "  document.head.append(link);",
-    '}',
-    '',
-    'export async function mount(ctx) {',
-    '  await ensureStyles();',
-    "  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());",
-    ...extraLines,
-    "  ctx.host.querySelector('[data-action=\"follow-up\"]')?.addEventListener('click', () => {",
-    "    ctx.commandBus.dispatch(buildFollowUpCommand({ id: 'demo', title: 'Demo' }));",
-    '  });',
-    '  return () => { ctx.host.textContent = ""; };',
-    '}',
-    '',
-  ].join('\n');
-}
-
-{
-  const root = makeWorkspace();
-  const scaffoldRun = runScaffold(root, 'scaffolded', '--installed', '--title', 'Scaffolded App');
-  assert.equal(scaffoldRun.status, 0, `${scaffoldRun.stderr}\n${scaffoldRun.stdout}`);
-  const validateRun = runValidator(root, 'scaffolded', '--installed');
-  assert.notEqual(validateRun.status, 0);
-  assert.match(validateRun.stderr, /generic records scaffold/);
-
-  const overwriteRun = runScaffold(root, 'scaffolded', '--installed');
-  assert.notEqual(overwriteRun.status, 0);
-  assert.match(overwriteRun.stderr, /already contains app files/);
-}
-
-{
-  const root = makeWorkspace();
-  const scaffoldRun = runScaffold(root, 'repairmissing', '--installed', '--title', 'Repair Missing');
-  assert.equal(scaffoldRun.status, 0, `${scaffoldRun.stderr}\n${scaffoldRun.stdout}`);
-  const dir = join(root, 'runtime/business-os/installed-modules/repairmissing');
-  rmSync(join(dir, 'core'), { recursive: true, force: true });
-  rmSync(join(dir, 'locales'), { recursive: true, force: true });
-  rmSync(join(dir, 'tests'), { recursive: true, force: true });
-  const repairRun = runScaffold(root, 'repairmissing', '--installed', '--repair-missing', '--json');
-  assert.equal(repairRun.status, 0, `${repairRun.stderr}\n${repairRun.stdout}`);
-  assert.match(repairRun.stdout, /"repaired": true/);
-  const validateRun = runValidator(root, 'repairmissing', '--installed');
-  assert.notEqual(validateRun.status, 0);
-  assert.match(validateRun.stderr, /generic records scaffold/);
-}
-
-{
-  const root = makeWorkspace();
-  const scaffoldRun = runScaffold(root, 'sourcescaffold', '--source', '--title', 'Source Scaffold');
-  assert.equal(scaffoldRun.status, 0, `${scaffoldRun.stderr}\n${scaffoldRun.stdout}`);
-  const validateRun = runValidator(root, 'sourcescaffold', '--source');
-  assert.equal(validateRun.status, 0, `${validateRun.stderr}\n${validateRun.stdout}`);
-  assert.match(validateRun.stdout, /validation OK: sourcescaffold \(source mode\)/);
+function writeSourceModule(root, moduleId, overrides = {}) {
+  const collectionName = `${moduleId}_records`;
+  const dir = join(root, 'src/apps/business-os/modules', moduleId);
+  mkdirSync(join(dir, 'locales'), { recursive: true });
+  mkdirSync(join(dir, 'tests'), { recursive: true });
+  const manifest = {
+    id: moduleId,
+    title: moduleId,
+    version: '0.1.0',
+    entry: `modules/${moduleId}/index.html`,
+    install_scope: 'store',
+    collections: ['business_commands', collectionName],
+    layout: { shell: 'full-workspace', left: 'List', center: 'Details' },
+    ...overrides.manifest,
+  };
+  writeJson(join(dir, 'module.json'), manifest);
+  writeJson(join(dir, 'collections.schema.json'), {
+    schema_format: 'ctox-business-os-module-collections-v1',
+    collections: {
+      [collectionName]: {
+        version: 0,
+        primaryKey: 'id',
+        type: 'object',
+        properties: {
+          id: { type: 'string', maxLength: 120 },
+          title: { type: 'string' },
+          updated_at_ms: { type: 'number' },
+        },
+        required: ['id', 'title', 'updated_at_ms'],
+      },
+    },
+  });
+  writeFileSync(join(dir, 'schema.js'), `export const collections = { ${collectionName}: { version: 0, primaryKey: 'id', type: 'object', properties: { id: { type: 'string', maxLength: 120 } } } };\n`);
+  writeFileSync(join(dir, 'index.html'), '<main class="source-module">Ready</main>\n');
+  writeFileSync(join(dir, 'index.css'), '.source-module { display: block; }\n');
+  writeFileSync(join(dir, 'index.js'), 'export async function mount(ctx) { ctx.host.textContent = "Ready"; return () => { ctx.host.textContent = ""; }; }\n');
+  writeFileSync(join(dir, 'icon.svg'), '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"></svg>\n');
+  writeJson(join(dir, 'locales/de.json'), { title: moduleId });
+  writeJson(join(dir, 'locales/en.json'), { title: moduleId });
+  writeFileSync(join(dir, 'tests/basic.test.mjs'), "import assert from 'node:assert/strict';\nassert.equal(1 + 1, 2);\n");
+  if (overrides.registry !== false) {
+    writeJson(join(root, 'src/apps/business-os/modules/registry.json'), {
+      modules: [{
+        id: moduleId,
+        title: moduleId,
+        entry: manifest.entry,
+        install_scope: manifest.install_scope,
+        collections: manifest.collections,
+      }],
+    });
+  }
+  return dir;
 }
 
 {
@@ -316,198 +217,6 @@ function installedIndexJsWith(extraLines = []) {
   const run = runValidator(root, 'good', '--installed');
   assert.equal(run.status, 0, `${run.stderr}\n${run.stdout}`);
   assert.match(run.stdout, /validation OK: good \(installed mode\)/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'genericmanifest', {
-    manifest: {
-      title: 'Quality Compliance Bench',
-      description: 'Quality Compliance Bench Business OS app for durable records and CTOX follow-up work.',
-      tags: ['business-os', 'app'],
-    },
-  });
-  const run = runValidator(root, 'genericmanifest', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /module\.json description must describe the requested app domain/);
-  assert.match(run.stderr, /module\.json tags must include at least one requested-domain tag/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'constantcommand', {
-    automationJs: [
-      "const CHAT_COMMAND_TYPE = 'business_os.chat.task';",
-      'export function buildFollowUpCommand(record = {}) {',
-      '  return {',
-      "    id: `cmd_${record.id || 'demo'}`,",
-      "    module: 'constantcommand',",
-      '    type: CHAT_COMMAND_TYPE,',
-      '    command_type: CHAT_COMMAND_TYPE,',
-      "    record_id: record.id || 'demo',",
-      '    payload: { record_snapshot: record },',
-      "    client_context: { source: 'constantcommand', surface: 'constantcommand.follow-up' },",
-      '  };',
-      '}',
-      '',
-    ].join('\n'),
-  });
-  const run = runValidator(root, 'constantcommand', '--installed');
-  assert.equal(run.status, 0, `${run.stderr}\n${run.stdout}`);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'missingimport', {
-    indexJs: installedIndexJsWith().replace(
-      "import { buildFollowUpCommand } from './core/automation.mjs';",
-      [
-        "import { missingThing } from './core/missing.mjs';",
-        "import { buildFollowUpCommand } from './core/automation.mjs';",
-        'void missingThing;',
-      ].join('\n'),
-    ),
-  });
-  const run = runValidator(root, 'missingimport', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /relative import \.\/core\/missing\.mjs does not exist/);
-}
-
-{
-  const root = makeWorkspace();
-  const dir = writeInstalledModule(root, 'namedimportmismatch', {
-    indexJs: installedIndexJsWith().replace(
-      "import { buildFollowUpCommand } from './core/automation.mjs';",
-      [
-        "import { createRecord } from './core/records.mjs';",
-        "import { buildFollowUpCommand } from './core/automation.mjs';",
-        'void createRecord;',
-      ].join('\n'),
-    ),
-  });
-  writeFileSync(join(dir, 'core/records.mjs'), 'export function normalizeRecord(record = {}) { return record; }\n');
-  const run = runValidator(root, 'namedimportmismatch', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /does not provide an export named `createRecord`/);
-  assert.match(run.stderr, /Preserve scaffold exports or update every importer/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'selectordrift', {
-    indexHtml: '<main class="good-module"><button type="button" data-action="follow-up">Review</button><div data-list></div></main>\n',
-    indexJs: installedIndexJsWith([
-      "  ctx.host.querySelector('[data-form]')?.addEventListener('submit', () => {});",
-    ]),
-  });
-  const run = runValidator(root, 'selectordrift', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /index\.js queries \[data-form\]/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'unhandledaction', {
-    indexHtml: '<main class="good-module"><button type="button" data-action="follow-up">Review</button><button type="button" data-action="bulk-follow-up">Bulk</button></main>\n',
-  });
-  const run = runValidator(root, 'unhandledaction', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /first-pass runtime apps may only use data-action values new, delete, and follow-up/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'handledforbiddenaction', {
-    indexHtml: '<main class="good-module"><button type="button" data-action="follow-up">Review</button><button type="button" data-action="restock">Restock</button></main>\n',
-    indexJs: installedIndexJsWith([
-      "  ctx.host.querySelector('[data-action=\"restock\"]')?.addEventListener('click', () => {",
-      "    ctx.commandBus?.dispatch?.(buildFollowUpCommand({ id: 'sku-1', title: 'Safety gloves' }));",
-      '  });',
-    ]),
-  });
-  const run = runValidator(root, 'handledforbiddenaction', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /index\.html declares data-action="restock"/);
-  assert.match(run.stderr, /first-pass runtime apps may only use data-action values new, delete, and follow-up/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'rootalias');
-  writeFileSync(join(root, 'harness-module.json'), '{}\n');
-  writeFileSync(join(root, 'harness-collections.schema.json'), '{}\n');
-  writeFileSync(join(root, 'harness-artifact-status.md'), 'blocked\n');
-  const run = runValidator(root, 'rootalias', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /root-level app artifact is forbidden: harness-module\.json/);
-  assert.match(run.stderr, /root-level app artifact is forbidden: harness-collections\.schema\.json/);
-  assert.match(run.stderr, /root-level app artifact is forbidden: harness-artifact-status\.md/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'rootprobe');
-  writeFileSync(join(root, '_test_guard.txt'), 'probe\n');
-  const run = runValidator(root, 'rootprobe', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /root-level app artifact is forbidden: _test_guard\.txt/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'testfileprobe');
-  writeFileSync(join(root, 'test-file.json'), '{"test":1}\n');
-  const run = runValidator(root, 'testfileprobe', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /root-level app artifact is forbidden: test-file\.json/);
-}
-
-{
-  const root = makeWorkspace();
-  const dir = writeInstalledModule(root, 'moduleharnessnote');
-  writeFileSync(join(dir, 'HARNESS_ARTIFACT_CONFLICT.md'), 'do not accept this\n');
-  const run = runValidator(root, 'moduleharnessnote', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /forbidden module artifact .*HARNESS_ARTIFACT_CONFLICT\.md/);
-}
-
-{
-  const root = makeWorkspace();
-  const dir = writeInstalledModule(root, 'shortalias');
-  writeFileSync(join(dir, 'm.json'), '{}\n');
-  const run = runValidator(root, 'shortalias', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(
-    run.stderr,
-    /unexpected installed-module root entry is forbidden: runtime\/business-os\/installed-modules\/shortalias\/m\.json/,
-  );
-}
-
-{
-  const root = makeWorkspace();
-  const dir = writeInstalledModule(root, 'moduledependencies');
-  writeFileSync(join(dir, 'package.json'), '{"type":"module"}\n');
-  mkdirSync(join(dir, 'node_modules'), { recursive: true });
-  const run = runValidator(root, 'moduledependencies', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /forbidden module artifact .*package\.json/);
-  assert.match(run.stderr, /forbidden module artifact .*node_modules/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'stalechecker', {
-    manifest: { entry: 'modules/stalechecker/index.html' },
-  });
-  const staleCheckerDir = join(
-    root,
-    'src/skills/system/product_engineering/business-os-app-module-development/scripts',
-  );
-  mkdirSync(staleCheckerDir, { recursive: true });
-  writeFileSync(join(staleCheckerDir, 'module_static_check.mjs'), 'process.exit(0);\n');
-  const run = runValidator(root, 'stalechecker', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /module\.json entry must be installed-modules\/stalechecker\/index\.html/);
 }
 
 {
@@ -534,18 +243,8 @@ function installedIndexJsWith(extraLines = []) {
       install_scope: 'store',
       source: 'local',
       version: 'v1',
-      layout: {
-        shell: 'full-workspace',
-        left: 'List',
-        center: 'Details',
-        right: 'Inspector',
-        right_resizer: false,
-      },
-      store: {
-        source_path: 'modules/badmanifest',
-        distribution: 'ctox-repo-module',
-        installable: true,
-      },
+      layout: { shell: 'full-workspace', left: 'List', center: 'Details', right: 'Inspector', right_resizer: false },
+      store: { source_path: 'modules/badmanifest', distribution: 'ctox-repo-module', installable: true },
     },
     schemaJs: [
       'export const collections = {',
@@ -571,46 +270,7 @@ function installedIndexJsWith(extraLines = []) {
 
 {
   const root = makeWorkspace();
-  writeInstalledModule(root, 'embeddedicon', {
-    manifest: {
-      layout: {
-        shell: 'full-workspace',
-        left: 'List',
-        center: 'Details',
-        icon_svg: '<svg></svg>',
-      },
-    },
-  });
-  const run = runValidator(root, 'embeddedicon', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /module\.json layout\.icon_svg is forbidden/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'missingversion', {
-    manifest: { version: undefined },
-  });
-  const run = runValidator(root, 'missingversion', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /module\.json version must be SemVer x\.y\.z without a v prefix/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'legacyversion', {
-    manifest: { version: 'v1' },
-  });
-  const run = runValidator(root, 'legacyversion', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /module\.json version must be SemVer x\.y\.z without a v prefix/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'zeroversion', {
-    manifest: { version: '0.0.0' },
-  });
+  writeInstalledModule(root, 'zeroversion', { manifest: { version: '0.0.0' } });
   const run = runValidator(root, 'zeroversion', '--installed');
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /module\.json version 0\.0\.0 is not a valid Business OS app work version/);
@@ -618,367 +278,153 @@ function installedIndexJsWith(extraLines = []) {
 
 {
   const root = makeWorkspace();
-  writeInstalledModule(root, 'webstorage', {
+  writeInstalledModule(root, 'wrongicon', {
+    manifest: { icon_svg: '<svg></svg>' },
+  });
+  const run = runValidator(root, 'wrongicon', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /module\.json inline icon fields are forbidden/);
+  assert.match(run.stderr, /module\.json must not embed inline SVG markup/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'missingimport', {
+    indexJs: installedIndexJs('missingimport', 'missingimport_records').replace(
+      "import { buildFollowUpCommand } from './core/automation.mjs';",
+      "import { buildFollowUpCommand } from './core/automation.mjs';\nimport { missingThing } from './core/missing.mjs';\nvoid missingThing;",
+    ),
+  });
+  const run = runValidator(root, 'missingimport', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /relative import \.\/core\/missing\.mjs does not exist/);
+}
+
+{
+  const root = makeWorkspace();
+  const dir = writeInstalledModule(root, 'namedimportmismatch', {
+    indexJs: installedIndexJs('namedimportmismatch', 'namedimportmismatch_records').replace(
+      "import { buildFollowUpCommand } from './core/automation.mjs';",
+      "import { buildFollowUpCommand } from './core/automation.mjs';\nimport { createRecord } from './core/records.mjs';\nvoid createRecord;",
+    ),
+  });
+  writeFileSync(join(dir, 'core/records.mjs'), 'export function visibleRecords(records = []) { return records; }\nexport function summarizeRecords(records = []) { return { total: records.length }; }\n');
+  const run = runValidator(root, 'namedimportmismatch', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /does not provide an export named `createRecord`/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'deadbutton', {
+    indexHtml: '<main class="validator-module"><button type="button" data-action="follow-up">Follow up</button><button type="button" data-action="bulk-follow-up">Bulk follow up</button></main>\n',
+  });
+  const run = runValidator(root, 'deadbutton', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /data-action="bulk-follow-up" but index\.js has no visible handler/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'domainaction', {
+    indexHtml: '<main class="validator-module"><button type="button" data-action="follow-up">Follow up</button><button type="button" data-action="restock">Restock</button></main>\n',
+    indexJs: installedIndexJs('domainaction', 'domainaction_records', [
+      "  ctx.host.querySelector('[data-action=\"restock\"]')?.addEventListener('click', () => {",
+      "    ctx.commandBus.dispatch(buildFollowUpCommand({ id: 'sku-1', title: 'Safety gloves', updated_at_ms: 1 }));",
+      '  });',
+    ]),
+  });
+  const run = runValidator(root, 'domainaction', '--installed');
+  assert.equal(run.status, 0, `${run.stderr}\n${run.stdout}`);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'nodata', {
     indexJs: [
+      "import { buildFollowUpCommand } from './core/automation.mjs';",
       'export async function mount(ctx) {',
-      "  localStorage.setItem('webstorage.lastView', 'list');",
-      "  ctx.host.textContent = 'Ready';",
-      '  return () => { ctx.host.textContent = ""; };',
+      "  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());",
+      "  ctx.host.querySelector('[data-action=\"follow-up\"]')?.addEventListener('click', () => ctx.commandBus.dispatch(buildFollowUpCommand({ id: 'demo', title: 'Demo' })));",
+      '  return () => { ctx.host.innerHTML = ""; };',
       '}',
       '',
     ].join('\n'),
   });
-  const run = runValidator(root, 'webstorage', '--installed');
+  const run = runValidator(root, 'nodata', '--installed');
   assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /localStorage\/sessionStorage persistence/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'networkfetch', {
-    indexJs: installedIndexJsWith([
-      "  await fetch('/external-service/status');",
-    ]),
-  });
-  const run = runValidator(root, 'networkfetch', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /forbidden installed-app network fetch/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'dynamicimport', {
-    indexJs: installedIndexJsWith([
-      "  await import('./extra.js');",
-    ]),
-  });
-  const run = runValidator(root, 'dynamicimport', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /forbidden installed-app runtime capability: dynamic import/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'shellglobal', {
-    indexJs: installedIndexJsWith([
-      "  window.CTOX_BUSINESS_OS_APP.openModule('ctox');",
-    ]),
-  });
-  const run = runValidator(root, 'shellglobal', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /forbidden installed-app runtime capability: Business OS shell global state access/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'cachedfacade', {
-    indexJs: installedIndexJsWith([
-      '  const db = ctx.db;',
-      "  db.collection('cachedfacade_records').find().exec();",
-    ]),
-  });
-  const run = runValidator(root, 'cachedfacade', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /forbidden installed-app runtime capability: cached ctx\.db facade handle/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'controlcommand', {
-    indexJs: installedIndexJsWith([
-      "  ctx.commandBus.dispatch({ type: 'ctox.module.release', command_type: 'ctox.module.release', payload: {} });",
-    ]),
-  });
-  const run = runValidator(root, 'controlcommand', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /forbidden installed-app runtime capability: direct CTOX control command/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'workerlaunch', {
-    indexJs: installedIndexJsWith([
-      "  const worker = new Worker(new URL('./worker.js', import.meta.url));",
-      '  worker.terminate();',
-    ]),
-  });
-  const run = runValidator(root, 'workerlaunch', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /forbidden installed-app runtime capability: Worker runtime/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'selfrefcss', {
-    indexCss: '.good-module { --good-bg: var(--good-bg); color: var(--good-bg); }\n',
-  });
-  const run = runValidator(root, 'selfrefcss', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /self-referential CSS custom property --good-bg/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'legacychatevent', {
-    indexJs: [
-      'export async function mount(ctx) {',
-      "  window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', { detail: { prompt: 'legacy' } }));",
-      "  ctx.host.textContent = 'Ready';",
-      '  return () => { ctx.host.textContent = ""; };',
-      '}',
-      '',
-    ].join('\n'),
-  });
-  const run = runValidator(root, 'legacychatevent', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /legacy shell event dispatch/);
-  assert.match(run.stderr, /forbidden legacy shell chat event literal/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'directcommandwrite', {
-    indexJs: [
-      'export async function mount(ctx) {',
-      "  const commands = ctx.db.collection('business_commands');",
-      "  await commands.upsert({ id: 'cmd_direct', status: 'submitted' });",
-      "  ctx.host.textContent = 'Ready';",
-      '  return () => { ctx.host.textContent = ""; };',
-      '}',
-      '',
-    ].join('\n'),
-  });
-  const run = runValidator(root, 'directcommandwrite', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /direct business_commands write fallback/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'undeclaredcollections', {
-    recordsJs: [
-      "export const COLLECTIONS = { items: 'undeclaredcollections_items' };",
-      '',
-      'export function visibleRecords(records = []) { return records; }',
-      'export function summarizeRecords(records = []) { return { total: records.length }; }',
-      '',
-    ].join('\n'),
-  });
-  const run = runValidator(root, 'undeclaredcollections', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /references module collection undeclaredcollections_items/);
-  assert.match(run.stderr, /module\.json does not declare it/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'runtimecommandsref', {
-    recordsJs: [
-      "export const COMMAND_COLLECTION = 'business_commands';",
-      '',
-      'export function visibleRecords(records = []) { return records; }',
-      'export function summarizeRecords(records = []) { return { total: records.length }; }',
-      '',
-    ].join('\n'),
-  });
-  const run = runValidator(root, 'runtimecommandsref', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /references shell collection business_commands/);
-  assert.match(run.stderr, /ctx\.commandBus\.dispatch/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'inlineiconmanifest', {
-    manifest: {
-      layout: {
-        shell: 'full-workspace',
-        left: 'List',
-        center: 'Details',
-        icon_svg: '<svg viewBox="0 0 24 24"></svg>',
-      },
-    },
-  });
-  const run = runValidator(root, 'inlineiconmanifest', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /layout\.icon_svg is forbidden/);
-  assert.match(run.stderr, /must not embed inline SVG markup/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'fallbacktestliteral', {
-    testJs: [
-      "import assert from 'node:assert/strict';",
-      "import { buildFollowUpCommand } from '../core/automation.mjs';",
-      "const command = buildFollowUpCommand({ id: 'demo', title: 'Demo' });",
-      "assert.equal(command.type, 'business_os.chat.task');",
-      "assert.ok('with business_commands fallback');",
-      '',
-    ].join('\n'),
-  });
-  const run = runValidator(root, 'fallbacktestliteral', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /forbidden direct command fallback literal/);
+  assert.match(run.stderr, /must persist records through the shell-provided ctx\.db collection handle/);
 }
 
 {
   const root = makeWorkspace();
   writeInstalledModule(root, 'noautomation', {
-    automationJs: [
-      'export function buildFollowUpCommand(record = {}) {',
-      "  return { type: 'noop', record_id: record.id || '' };",
-      '}',
-      '',
-    ].join('\n'),
     indexJs: [
       'export async function mount(ctx) {',
       "  ctx.host.textContent = 'Ready';",
+      "  const records = ctx.db.collection?.('noautomation_records');",
+      '  void records;',
       '  return () => { ctx.host.textContent = ""; };',
       '}',
       '',
     ].join('\n'),
-    testJs: [
-      "import assert from 'node:assert/strict';",
-      'assert.equal(1 + 1, 2);',
-      '',
-    ].join('\n'),
+    automationJs: 'export function buildFollowUpCommand(record = {}) { return { type: "noop", payload: { record_snapshot: record } }; }\n',
   });
   const run = runValidator(root, 'noautomation', '--installed');
   assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /must dispatch at least one real automation through ctx\.commandBus\.dispatch/);
+  assert.match(run.stderr, /must dispatch at least one automation through ctx\.commandBus\.dispatch/);
   assert.match(run.stderr, /must include a business_os\.chat\.task automation command/);
 }
 
 {
   const root = makeWorkspace();
-  writeInstalledModule(root, 'missinghtmlmount', {
-    indexJs: [
-      "import { buildFollowUpCommand } from './core/automation.mjs';",
-      '',
-      'export async function mount(ctx) {',
-      '  const { host } = ctx;',
-      "  host.querySelector('[data-action=\"follow-up\"]')?.addEventListener('click', () => {",
-      "    ctx.commandBus.dispatch(buildFollowUpCommand({ id: 'demo', title: 'Demo' }));",
-      '  });',
-      '  return () => { host.innerHTML = ""; };',
-      '}',
-      '',
-    ].join('\n'),
+  writeInstalledModule(root, 'badpatterns', {
+    indexJs: installedIndexJs('badpatterns', 'badpatterns_records', [
+      "  localStorage.setItem('badpatterns', '1');",
+      "  await fetch('/api/business-os/records');",
+      "  const element = React.createElement('div', null, 'bad');",
+      "  const commands = ctx.db.collection('business_commands');",
+      "  await commands.upsert({ id: 'cmd_direct' });",
+      '  void element;',
+    ]),
   });
-  const run = runValidator(root, 'missinghtmlmount', '--installed');
+  const run = runValidator(root, 'badpatterns', '--installed');
   assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /index\.js must load \.\/index\.html/);
-  assert.match(run.stderr, /must render index\.html into ctx\.host\.innerHTML/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'missingcommandtype', {
-    automationJs: [
-      'export function buildFollowUpCommand(record = {}) {',
-      '  return {',
-      "    module: 'missingcommandtype',",
-      "    type: 'business_os.chat.task',",
-      "    record_id: record.id || 'demo',",
-      "    payload: { record_snapshot: record },",
-      '  };',
-      '}',
-      '',
-    ].join('\n'),
-  });
-  const run = runValidator(root, 'missingcommandtype', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /must preserve command_type: business_os\.chat\.task/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'wrongautomation', {
-    automationJs: [
-      'export function buildFollowUpCommand(record = {}) {',
-      '  return {',
-      "    module: 'ctox',",
-      "    type: 'ctox.business_os.ticket.followup.create',",
-      "    command_type: 'ctox.business_os.ticket.followup.create',",
-      "    record_id: record.id || 'demo',",
-      "    payload: { record_snapshot: record },",
-      '  };',
-      '}',
-      '',
-    ].join('\n'),
-    testJs: [
-      "import assert from 'node:assert/strict';",
-      "assert.equal('automation fixture', 'automation fixture');",
-      '',
-    ].join('\n'),
-  });
-  const run = runValidator(root, 'wrongautomation', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /alternate App Creator automation command/);
-  assert.match(run.stderr, /business_os\.chat\.task automation command/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'missingsnapshot', {
-    automationJs: [
-      'export function buildFollowUpCommand(record = {}) {',
-      '  return {',
-      "    module: 'missingsnapshot',",
-      "    type: 'business_os.chat.task',",
-      "    command_type: 'business_os.chat.task',",
-      "    record_id: record.id || 'demo',",
-      "    payload: { title: record.title || 'Demo' },",
-      '  };',
-      '}',
-      '',
-    ].join('\n'),
-  });
-  const run = runValidator(root, 'missingsnapshot', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /automation must include a source record_snapshot/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'frameworkruntime', {
-    indexJs: [
-      'export async function mount(ctx) {',
-      "  const view = React.createElement('div', null, 'Nope');",
-      '  ctx.host.textContent = String(view);',
-      '  return () => { ctx.host.textContent = ""; };',
-      '}',
-      '',
-    ].join('\n'),
-  });
-  const run = runValidator(root, 'frameworkruntime', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /vanilla HTML\/CSS\/browser ESM; found React framework runtime/);
+  assert.match(run.stderr, /localStorage\/sessionStorage persistence/);
+  assert.match(run.stderr, /Business OS HTTP data path/);
+  assert.match(run.stderr, /React framework runtime/);
+  assert.match(run.stderr, /direct business_commands write/);
 }
 
 {
   const root = makeWorkspace();
   writeInstalledModule(root, 'fulldocumenthtml', {
-    indexHtml: [
-      '<!doctype html>',
-      '<html lang="de">',
-      '  <head>',
-      '    <meta charset="utf-8" />',
-      '    <title>Full document</title>',
-      '    <link rel="stylesheet" href="index.css" />',
-      '  </head>',
-      '  <body>',
-      '    <main class="good-module"><button type="button" data-action="follow-up">Review</button></main>',
-      '  </body>',
-      '</html>',
-      '',
-    ].join('\n'),
+    indexHtml: '<!doctype html><html><head><title>Bad</title><link rel="stylesheet" href="index.css"></head><body><main><button data-action="follow-up">Follow up</button></main></body></html>\n',
   });
   const run = runValidator(root, 'fulldocumenthtml', '--installed');
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /index\.html must be a shell fragment, not a full HTML document/);
   assert.match(run.stderr, /index\.html must not include document\/head resource tags/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'moduledependencies');
+  writeFileSync(join(root, 'runtime/business-os/installed-modules/moduledependencies/package.json'), '{"type":"module"}\n');
+  mkdirSync(join(root, 'runtime/business-os/installed-modules/moduledependencies/node_modules'), { recursive: true });
+  const run = runValidator(root, 'moduledependencies', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /forbidden module artifact .*package\.json/);
+  assert.match(run.stderr, /unexpected installed-module root entry.*node_modules/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'rootalias');
+  writeFileSync(join(root, 'harness-module.json'), '{}\n');
+  const run = runValidator(root, 'rootalias', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /root-level app artifact is forbidden: harness-module\.json/);
 }
 
 {
@@ -994,173 +440,11 @@ function installedIndexJsWith(extraLines = []) {
 {
   const root = makeWorkspace();
   writeInstalledModule(root, 'testbad', {
-    testJs: [
-      "import assert from 'node:assert/strict';",
-      "assert.equal('actual', 'expected');",
-      '',
-    ].join('\n'),
+    testJs: "import assert from 'node:assert/strict';\nassert.equal('actual', 'expected');\n",
   });
   const run = runValidator(root, 'testbad', '--installed');
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /module test failed: runtime\/business-os\/installed-modules\/testbad\/tests\/basic\.test\.mjs/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'placeholdertest', {
-    testJs: [
-      "import { test } from 'node:test';",
-      "import assert from 'node:assert/strict';",
-      "test('placeholder', () => assert.equal(1, 1));",
-      '',
-    ].join('\n'),
-  });
-  const run = runValidator(root, 'placeholdertest', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /placeholder or tautological assertions/);
-  assert.match(run.stderr, /must import \.\.\/core\/records\.mjs/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'summarymismatch', {
-    indexJs: installedIndexJsWith([
-      '  const summary = {};',
-      "  ctx.host.dataset.mrr = String(summary.mrr || '');",
-    ]),
-  });
-  const run = runValidator(root, 'summarymismatch', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /index\.js reads summary\.mrr/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'genericscaffoldui', {
-    indexHtml: [
-      '<main class="good-module" data-module-root>',
-      '  <section aria-label="Records">',
-      '    <input type="search" data-search placeholder="Search records" />',
-      '    <select data-status-filter><option value="open">Open</option><option value="blocked">Blocked</option><option value="done">Done</option></select>',
-      '    <button type="button" data-action="follow-up">Follow up</button>',
-      '  </section>',
-      '  <section aria-label="Detail">',
-      '    <h2>Select a record</h2>',
-      '    <p>Use the list to open or create a record.</p>',
-      '    <form data-form>',
-      '      <label>Title<input name="title" /></label>',
-      '      <label>Status<select name="status"><option>Open</option><option>Blocked</option><option>Done</option></select></label>',
-      '      <label>Owner<input name="owner" /></label>',
-      '      <label>Due date<input name="due_at" type="date" /></label>',
-      '    </form>',
-      '  </section>',
-      '</main>',
-      '',
-    ].join('\n'),
-    indexJs: installedIndexJsWith([
-      '  const summary = { total: 0, open: 0, blocked: 0 };',
-      "  ctx.host.dataset.summary = `${summary.total}:${summary.open}:${summary.blocked}`;",
-      "  const record = { title: 'New record', owner: '', notes: '', due_at_ms: 0 };",
-      '  ctx.host.dataset.record = `${record.title}:${record.owner}:${record.notes}:${record.due_at_ms}`;',
-    ]),
-  });
-  const run = runValidator(root, 'genericscaffoldui', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /generic records scaffold/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'dataurltest', {
-    testJs: [
-      "import { readFile } from 'node:fs/promises';",
-      "import { Buffer } from 'node:buffer';",
-      "const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');",
-      "await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));",
-      '',
-    ].join('\n'),
-  });
-  const run = runValidator(root, 'dataurltest', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /imports local app source through a data: URL/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'directentrytest', {
-    testJs: [
-      "import { mount } from '../index.js';",
-      "if (typeof mount !== 'function') throw new Error('missing mount');",
-      '',
-    ].join('\n'),
-  });
-  const run = runValidator(root, 'directentrytest', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /imports browser \.js entrypoints directly/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'rightreasontest', {
-    testJs: [
-      "import assert from 'node:assert/strict';",
-      "import { buildFollowUpCommand } from '../core/automation.mjs';",
-      "import { summarizeRecords, visibleRecords } from '../core/records.mjs';",
-      "const record = { id: 'demo', title: 'Demo', updated_at_ms: 1 };",
-      "assert.equal(visibleRecords([record]).length, 1);",
-      "assert.equal(summarizeRecords([record]).total, 1);",
-      "assert.equal('right reason', 'right reason');",
-      "assert.equal('right selectors', 'right selectors');",
-      "assert.equal(buildFollowUpCommand({ id: 'demo' }).command_type, 'business_os.chat.task');",
-      '',
-    ].join('\n'),
-  });
-  const run = runValidator(root, 'rightreasontest', '--installed');
-  assert.equal(run.status, 0, `${run.stderr}\n${run.stdout}`);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'rightresizertestliteral', {
-    testJs: [
-      "import assert from 'node:assert/strict';",
-      "assert.equal('right-resizer', 'right-resizer');",
-      '',
-    ].join('\n'),
-  });
-  const run = runValidator(root, 'rightresizertestliteral', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /forbidden third-pane literal right-resizer/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'scannerevasiontest', {
-    testJs: [
-      "import assert from 'node:assert/strict';",
-      'const legacyTokens = [String.fromCharCode(120)];',
-      "assert.equal(legacyTokens[0], 'x');",
-      '',
-    ].join('\n'),
-  });
-  const run = runValidator(root, 'scannerevasiontest', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /validator scanner-evasion/);
-}
-
-{
-  const root = makeWorkspace();
-  writeInstalledModule(root, 'sourceabsence', {
-    testJs: [
-      "import assert from 'node:assert/strict';",
-      "const indexSource = 'export async function mount(ctx) {}';",
-      "assert.doesNotMatch(indexSource, /ctx\\.db\\.raw/);",
-      '',
-    ].join('\n'),
-  });
-  const run = runValidator(root, 'sourceabsence', '--installed');
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /source absence assertion/);
 }
 
 console.log('[validate-app-module.test] OK');
