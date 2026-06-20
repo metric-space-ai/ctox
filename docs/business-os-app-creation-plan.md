@@ -8,6 +8,27 @@ app-module skill resources and normal CTOX validation.
 This is an editable work plan. Agents working on this must update the tracker,
 phase notes, evidence log, and open issues in this file before handing off.
 
+## How To Use This Plan
+
+This file is the running project ledger for Business OS app creation. Every
+agent that works on app creation must edit this file during the work, not only
+at the end.
+
+Update rules:
+
+- Move exactly one active phase to `in_progress` before starting material work.
+- Add owner, date, and concrete evidence for every phase update.
+- Append an Evidence Log entry after every meaningful run, failed run, patch,
+  validator change, or release-install test.
+- Add blockers to Open Issues immediately when work cannot continue.
+- Mark a phase `done` only when its exit criteria are met with evidence.
+- Keep notes factual: command, commit, path, run id, task id, validator output,
+  browser-smoke result, or failure classification.
+
+Do not use this plan as an app-building prompt. CTOX must still build apps
+through normal agent execution, the Business OS app-module skill resources, and
+the Business OS command/task pipeline.
+
 ## Current Status
 
 Status: `in_progress`
@@ -41,6 +62,35 @@ Current baseline:
 | 7. Production signoff | pending |  |  | All entry points produce runnable validated apps with evidence. |
 
 Status values: `pending`, `in_progress`, `blocked`, `done`.
+
+## Work Policy
+
+The goal is a simple and robust app-creation path, not a deterministic app
+generator.
+
+Allowed work:
+
+- Improve the Business OS app-module skill resources when repeated evidence
+  shows that agents miss a CTOX-specific architecture concept.
+- Improve validation when bad app artifacts are accepted.
+- Improve CTOX task orchestration when app creation, review, validation,
+  rework, or evidence collection is not durable.
+- Add CLI commands that submit, inspect, validate, or benchmark real CTOX app
+  tasks.
+- Add tests and smoke checks that prove apps created through CTOX run on the
+  release install path.
+
+Forbidden work:
+
+- Do not add a deterministic app generator that writes the app files itself.
+- Do not add hidden templates that pretend to be agent-created apps.
+- Do not repair bench apps inside the bench runner.
+- Do not make source-checkout assumptions for runtime-created apps.
+- Do not add long prompt templates to the skill or App Creator.
+- Do not hide failures with validator bypasses, legacy exceptions, or fallback
+  data paths.
+- Do not expand the rule set for one-off model oddities unless the same failure
+  repeats across runs or exposes a real architecture gap.
 
 ## Non-Negotiables
 
@@ -92,6 +142,11 @@ kind of Business OS app task:
 
 Each entry point must pass module id, requested app description, install target,
 mode, desired version, and required skill metadata as structured task context.
+
+The app task should carry structured context, not a classic long prompt. It may
+include the user request, target module id, install target, version intent,
+required skill id, and validation expectations. The skill and references carry
+the implementation rules.
 
 ## Acceptance Gates
 
@@ -157,6 +212,10 @@ ctox business-os app bench run --suite core-five --model minimax-m3 --context 25
 The command shape is a suggestion for operator ergonomics, not a builder
 contract.
 
+The runner is only an evidence and orchestration tool. It must prove what CTOX
+and the selected coding model do; it must not improve app output by writing or
+rewriting app artifacts.
+
 ## Failure Classification
 
 Each failed run must be classified before changing code:
@@ -195,6 +254,13 @@ Exit criteria:
   runtime apps.
 - Internal shell tools do not pollute normal generated-app validation evidence.
 
+Phase update checklist:
+
+- [ ] Validator audit recorded in Evidence Log.
+- [ ] Known-bad fixtures or tests added where gaps exist.
+- [ ] Known-good installed runtime app still validates.
+- [ ] No validator bypass added for generated apps.
+
 ### Phase 2: CTOX-Native Bench Runner
 
 Status: `pending`
@@ -208,8 +274,17 @@ Tasks:
 
 Exit criteria:
 
-- A dry run can create tasks and collect evidence.
+- A controlled run can submit tasks and collect evidence.
 - A stopped run leaves enough evidence to explain what happened.
+- The runner does not create, edit, or repair app files.
+
+Phase update checklist:
+
+- [ ] CLI command or equivalent CTOX-native runner added.
+- [ ] Runner submits real `ctox.business_os.app.create` tasks.
+- [ ] Evidence path under ignored `runtime/` documented.
+- [ ] Cleanup only touches bench-tagged runtime apps.
+- [ ] Tests prove the runner does not write app artifacts.
 
 ### Phase 3: First Five-App CTOX Run
 
@@ -225,6 +300,16 @@ Tasks:
 Exit criteria:
 
 - Every failure has an evidence-backed classification.
+
+Phase update checklist:
+
+- [ ] Run id recorded.
+- [ ] Five queue task ids recorded.
+- [ ] Produced module paths recorded.
+- [ ] Validation results recorded per app.
+- [ ] Browser smoke results recorded per app.
+- [ ] Automation dispatch evidence recorded per app.
+- [ ] Failures classified before any patch.
 
 ### Phase 4: Systemic Fixes
 
@@ -243,6 +328,14 @@ Exit criteria:
 - Each patch maps to a repeated failure class or a clearly load-bearing
   architecture gap.
 
+Phase update checklist:
+
+- [ ] Failure class named before patching.
+- [ ] Patch scope limited to skill resource, validator, entry point, or
+      orchestration gap.
+- [ ] No app-specific bench repair committed.
+- [ ] Regression test or evidence added.
+
 ### Phase 5: Repeat Bench
 
 Status: `pending`
@@ -259,6 +352,13 @@ Exit criteria:
 
 - One clean five-app run from a fresh bench root.
 
+Phase update checklist:
+
+- [ ] Previous bench apps removed by bench tag/prefix only.
+- [ ] Fresh five-app run completed.
+- [ ] Results compared with prior run.
+- [ ] Remaining failures classified.
+
 ### Phase 6: Entry Point Coverage
 
 Status: `pending`
@@ -273,6 +373,15 @@ Exit criteria:
 
 - App Creator, Chat, App Store, CLI, and external/inbound route are covered by
   tests or evidence.
+
+Phase update checklist:
+
+- [ ] App Creator route covered.
+- [ ] Business OS Chat route covered.
+- [ ] App Store or template route covered.
+- [ ] CTOX CLI route covered.
+- [ ] External MCP or inbound communication route covered.
+- [ ] All covered routes attach the same skill/resource metadata.
 
 ### Phase 7: Production Signoff
 
@@ -289,6 +398,33 @@ Exit criteria:
 
 - CTOX can create and modify small Business OS apps on the release install path
   without source-checkout assumptions.
+
+Phase update checklist:
+
+- [ ] `ctox upgrade --dev` release path tested.
+- [ ] Fresh installed runtime path tested.
+- [ ] No generated app artifact under `src/`.
+- [ ] Five-app bench green in CTOX with MiniMax M3.
+- [ ] Modification flow tested for at least one generated app.
+- [ ] Main pushed.
+
+## Evidence Entry Template
+
+Copy this template into the Evidence Log for every material run or patch.
+
+```md
+### YYYY-MM-DD <short title>
+
+- Phase:
+- Owner:
+- Run id / task ids:
+- Commands:
+- Changed files:
+- Evidence path:
+- Result:
+- Failure classification:
+- Follow-up:
+```
 
 ## Evidence Log
 
