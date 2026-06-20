@@ -705,7 +705,8 @@ unless a capability token is present and enforced. The native half is done
 
 ### 9.5 P3 — Surface maturity (UX, not correctness)
 
-- [ ] Promote the minimal record-list mounts of the new ATS modules (intake, submissions, placements, interviews, esign, nachweise, consent) to full forms/boards/detail per the App-Creator contract (§3), shell-delivered DB handles only.
+- [x] *(commit 925f6d21 — placements)* Placements promoted from a record list to a working surface: `placement_type` select (Festanstellung vs Arbeitnehmerüberlassung) + a `required_types` field so the §9.2 server-derived AÜG gate fires from the UI; rich rows (status badge, candidate → client, fee, guarantee days, fee-invoice id, Storno credit-note id); a per-placement **Frühausstieg** action that dispatches `ats.placement.early_leave` and surfaces the clawback + credit-note. node --check clean; placements engine tests 11/0. *(Dynamic mount behaviour needs the live shell+RxDB; verified via syntax + engine tests.)*
+- [ ] Promote the remaining minimal record-list mounts (intake, submissions, interviews, esign, nachweise, consent) to full forms/boards/detail per the App-Creator contract (§3), shell-delivered DB handles only — same pattern as placements, one module at a time.
 - **Acceptance:** a recruiter can run each step from a real UI, not a record list.
 
 ### 9.6 P4 — Out-of-ATS-core billing (optional, separate project)
@@ -724,26 +725,36 @@ usable UI). 9.6 explicitly out of scope. Until 9.1 is closed the instance is
 
 Everything in §9 that is closeable **inside this environment without touching
 guard-protected/parallel-agent-owned layers or absent infrastructure** is done
-and on `main`: 9.1 native capability foundation, 9.2 AÜG-mandatory gate, 9.2
-external Entleiher signature proof, 9.2 retention erasure (records), 9.4 bulk
-auto-scoring wiring. The boxes still open are open for a specific reason, not for
-lack of work:
+and on `main`: 9.1 native capability foundation + the control-plane issuance
+endpoint (`/api/business-os/auth/capability`, commit 3b89185b) + browser token
+attachment (`command-bus.js` `getCapabilityToken()`, commit 3b89185b), 9.2
+AÜG-mandatory gate, 9.2 external Entleiher signature proof, 9.2 retention erasure
+(records), 9.4 bulk auto-scoring wiring, 9.5 placements rich UI (commit 925f6d21).
+The boxes still open are open for a specific reason, not for lack of work:
 
-- **Coordination-gated (sync layer / control plane is guard-protected and the
-  parallel Codex agent's domain):** 9.1 browser token attachment + the
-  control-plane issuance endpoint + flipping enforcement; 9.2 command-gated audit
-  for direct RxDB writes. Editing these unilaterally would fight the data-plane
-  guards and risk a collision — they need a coordinated change, not an ATS-side
-  patch.
+- **Rollout decision (not coordination-gated, but a deliberate cut-over):** 9.1
+  flipping `CTOX_BUSINESS_OS_REQUIRE_CAPABILITY_TOKEN=1` in the runtime store to
+  move from "verify-if-present" to "reject-if-absent". The full path
+  (issue → attach → verify) is live end-to-end; enforcement stays off until every
+  client demonstrably sends a token, so flipping it is an operational go/no-go, not
+  more engineering.
+- **Coordination-gated (sync layer is guard-protected and the parallel Codex
+  agent's domain):** 9.2 command-gated audit for direct RxDB writes. Editing the
+  replication accept path unilaterally would fight the data-plane guards and risk
+  a collision — it needs a coordinated change, not an ATS-side patch.
 - **Infrastructure-blocked:** 9.3 STT (no Voxtral Q4 GGUF weights here); 9.3 live
   LLM matching turn + full WebRTC round-trip (the only running instance belongs
   to the parallel agent; CLI dispatch exercises the sync native handler, not the
   harness skill path).
 - **Larger design (out of an ATS hardening pass):** 9.2 legal-basis evidence
-  model; 9.5 rich module UIs (per-module App-Creator work).
+  model; 9.5 rich UIs for the remaining six modules (placements done as the
+  reference; intake/submissions/interviews/esign/nachweise/consent follow the same
+  per-module App-Creator pattern).
 
 So: the ATS-core native logic is hardened to the limit of what this session can
-own; the residual is a coordinated platform step (9.1 close + sync-layer audit) +
-infra (9.3) + UI build-out (9.5), which the team should sequence with the parallel
-agent. The plan is the single source of truth for that residual.
+own, and the capability-token path now ships end-to-end (issue → attach → verify);
+the residual is an operational enforcement flip (9.1), one sync-layer audit (9.2)
+to coordinate with the parallel agent, absent infra (9.3), and per-module UI
+build-out (9.5, placements landed as the template). The plan is the single source
+of truth for that residual.
 
