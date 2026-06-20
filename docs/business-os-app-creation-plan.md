@@ -282,8 +282,8 @@ Current baseline:
   symlink when `CTOX_INSTALL_ROOT` is known, `launchctl` failures include args,
   status, stdout, and stderr, and `kickstart` is treated as diagnostic because
   `bootstrap` plus `RunAtLoad` can already start the agent. This patch must be
-  verified, committed, pushed, and installed through the dev-upgrade path before
-  final signoff.
+  verified and was committed/pushed as `03ec39b0`; it still must be installed
+  through the dev-upgrade path before final signoff.
 
 ## Current Execution Slice
 
@@ -306,7 +306,7 @@ Live execution board:
 | Worker-idle wakeup fix | `done` | Regression test plus fresh bench reaches all five handled without service restart | Tracker, Evidence Log, Open Issues |
 | Browser-runtime validator coverage | `done` | Commit `c5939b54` is pushed; `ctox upgrade --dev` installed `branch-main-20260620T183056Z`; installed `ctox business-os app bench status --run-id rfix3 --validate --json` rejects all five old `rfix3` apps for the browser-runtime failures | Current Status, Tracker, Evidence Log |
 | Fresh CTOX-native five-app bench | `done` | Run id `rfix4` on installed CTOX reached `bench_green=true`, `handled=5`, `validation_passed=5`, and all required runtime app files present in `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781989262104.json` | Current Status, Tracker, Phase 5 checklist, Evidence Log |
-| macOS service lifecycle patch | `in_progress` | Initial patch `51ba8fc2` is pushed; start-order patch `52763ea7` is pushed; manual launchctl replay proved the plist works after enable-before-bootstrap; source-binary upgrade then exposed missing launchctl diagnostics and source-upgrade active-root selection. The current source patch must be committed, pushed, installed via `ctox upgrade --dev`, and the installed service must report `manager=launchd-user` without manual launchctl commands | Current Status, Tracker, Phase 5 checklist, Evidence Log, Open Issues |
+| macOS service lifecycle patch | `in_progress` | Initial patch `51ba8fc2` is pushed; start-order patch `52763ea7` is pushed; manual launchctl replay proved the plist works after enable-before-bootstrap; source-binary upgrade then exposed missing launchctl diagnostics and source-upgrade active-root selection. Diagnostics/root patch `03ec39b0` is pushed and must be installed via `ctox upgrade --dev`; the installed service must report `manager=launchd-user` without manual launchctl commands | Current Status, Tracker, Phase 5 checklist, Evidence Log, Open Issues |
 | Browser mount smoke for `rfix4` apps | `pending` | All five freshly generated `rfix4` apps open in Business OS without console/runtime errors | Current Status, Tracker, Phase 5 checklist, Evidence Log |
 | `ctx.db` persistence smoke for `rfix4` apps | `pending` | Create or edit one representative record per app through the UI, reload, and confirm the record remains visible through the shell-provided DB path | Current Status, Tracker, Phase 5 checklist, Evidence Log |
 | `ctx.commandBus.dispatch` automation smoke for `rfix4` apps | `pending` | Trigger one valid chat/ticket automation per app through the app UI and verify a normal CTOX command/ticket/chat flow is created | Current Status, Tracker, Phase 5 checklist, Evidence Log |
@@ -488,7 +488,7 @@ Business OS app module ids and validator reports were present.
 | 5a. Fresh post-validator bench | blocked | Codex | release `branch-main-20260620T163623Z`; `ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k --run-id rfix3`; evidence `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix3/events.jsonl`; validated status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix3/status-1781979433802.json`; Playwright console logs under `.playwright-cli/console-2026-06-20T18-*` | Fresh bench submitted through installed CTOX with `minimax-m3`, `256k`, and real Business OS app-create commands. All five tasks reached terminal success and passed the old installed validator, but browser smoke rejected the run: four apps hit duplicate `renderDetail` stack overflow and Projects cannot complete primary create because the modal has no visible Save/Submit control. |
 | 5b. Queue continuation and worker liveness | done | Codex | commits `71183644`, `641bf86f`; releases `branch-main-20260620T172452Z`, `branch-main-20260620T180649Z`; `rfix3` validated status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix3/status-1781979433802.json`; source tests `cargo test --bin ctox worker_finalization_leases_pending_app_rework_despite_stale_inflight_key`, `cargo test --bin ctox idle_dispatch_ignores_stale_inflight_queue_key_without_live_worker`, `cargo test --bin ctox worker_finalization_can_lease_next_durable_queue_task_before_activity_drop`, `cargo test --bin ctox business_os_app_validation_rework_is_leased_before_fresh_pending_app_tasks`, `cargo test --bin ctox business_os_app_validation_worker_error_after_green_completes_business_command`, `cargo test --bin ctox app_bench_`; `rustfmt --check src/core/service/service.rs`; `git diff --check` | The installed liveness patches carried `rfix3` to all five handled without generated app edits. This closes the stale process-local queue-key failure class. |
 | 5c. Browser-runtime validator coverage | done | Codex | commit `c5939b54`; release `branch-main-20260620T183056Z`; Playwright console logs under `.playwright-cli/`; `node src/apps/business-os/scripts/validate-app-module.test.mjs`; `git diff --check`; installed status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix3/status-1781980973056.json` | Source and installed validators now catch duplicate runtime function declarations and submit-handler forms without visible Save/Submit controls. Historical `rfix3` is correctly red under the installed validator. |
-| 5d. Fresh post-runtime-validator bench | in_progress | Codex | `ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k --run-id rfix4`; evidence `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/events.jsonl`; Contracts-green status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781982232527.json`; installed direct-handoff release `branch-main-20260620T192755Z`; four-green status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781985781354.json`; all-five-green status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781989262104.json`; initial lifecycle commit `51ba8fc2`; failed upgrade attempts `branch-main-20260620T203232Z` and `branch-main-20260620T204719Z`; manual launchctl replay; start-order commit `52763ea7`; source lifecycle tests `cargo test --bin ctox parse_launchd_pid_reads_main_pid_line`, `cargo test --bin ctox launchd_user_unit_installed_requires_matching_root_when_only_global_plist_exists`, `cargo test --bin ctox resolve_active_root_prefers_managed_current_when_install_root_is_known`; `cargo check --bin ctox`; `bash -n install.sh`; `git diff --check` | Direct-handoff install and manual launchd recovery resumed `rfix4` without app repairs and carried all five apps to terminal installed-validation success. The fresh bench is static-validation green, not production-green. Remaining required proof: clean `ctox upgrade --dev` service lifecycle on the managed install root, browser mount, `ctx.db` persistence, and `ctx.commandBus.dispatch` automation for all five `rfix4` apps. |
+| 5d. Fresh post-runtime-validator bench | in_progress | Codex | `ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k --run-id rfix4`; evidence `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/events.jsonl`; Contracts-green status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781982232527.json`; installed direct-handoff release `branch-main-20260620T192755Z`; four-green status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781985781354.json`; all-five-green status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix4/status-1781989262104.json`; initial lifecycle commit `51ba8fc2`; failed upgrade attempts `branch-main-20260620T203232Z` and `branch-main-20260620T204719Z`; manual launchctl replay; start-order commit `52763ea7`; source-upgrade lifecycle commit `03ec39b0`; source lifecycle tests `cargo test --bin ctox parse_launchd_pid_reads_main_pid_line`, `cargo test --bin ctox launchd_user_unit_installed_requires_matching_root_when_only_global_plist_exists`, `cargo test --bin ctox resolve_active_root_prefers_managed_current_when_install_root_is_known`; `cargo check --bin ctox`; `bash -n install.sh`; `git diff --check` | Direct-handoff install and manual launchd recovery resumed `rfix4` without app repairs and carried all five apps to terminal installed-validation success. The fresh bench is static-validation green, not production-green. Remaining required proof: clean `ctox upgrade --dev` service lifecycle on the managed install root, browser mount, `ctx.db` persistence, and `ctx.commandBus.dispatch` automation for all five `rfix4` apps. |
 | 6. Entry point coverage | pending |  |  | Verify App Creator, Chat, App Store/template flow, CLI, and external inbound paths bind the same skill/resource context. |
 | 7. Production signoff | pending |  |  | All entry points produce runnable validated apps with evidence. |
 
@@ -841,7 +841,8 @@ Phase update checklist:
 - [x] Verify the latest source-upgrade lifecycle patch:
       managed install root resolution for source-binary upgrades, detailed
       launchctl errors, and best-effort kickstart.
-- [ ] Commit and push the latest source-upgrade lifecycle patch.
+- [x] Commit and push the latest source-upgrade lifecycle patch as
+      `03ec39b0`.
 - [ ] Install the latest launchd lifecycle patch through
       `ctox upgrade --dev`.
 - [ ] Confirm `ctox status --json` reports the installed service running under
@@ -2684,8 +2685,8 @@ Append one entry per meaningful run.
   not app-output failure and not a reason to add deterministic app builders or
   more prompt rules.
 - Follow-up:
-  commit and push the latest patch, then install through `ctox upgrade --dev`
-  with the managed install root and verify `ctox status --json` reports
+  install pushed commit `03ec39b0` through `ctox upgrade --dev` with the
+  managed install root and verify `ctox status --json` reports
   `manager=launchd-user`, `running=true`, and native RxDB peer
   `replicationUp=true` without manual launchctl recovery.
 
@@ -2719,9 +2720,8 @@ Latest handoff:
 - Current failure class: `runtime_orchestration_gap` for the dev-upgrade
   service lifecycle proof only. The five generated `rfix4` apps are
   static-validation green, but this is not production signoff.
-- Next required action: finish the latest source-upgrade lifecycle patch,
-  verify it with `cargo check --bin ctox`, commit and push it, then install it
-  through `ctox upgrade --dev` without manual launchctl recovery.
+- Next required action: install pushed commit `03ec39b0` through
+  `ctox upgrade --dev` without manual launchctl recovery.
 - After clean dev-upgrade proof, run browser smoke, `ctx.db` persistence smoke,
   and `ctx.commandBus.dispatch` automation smoke on the newly generated
   `rfix4` apps only.
