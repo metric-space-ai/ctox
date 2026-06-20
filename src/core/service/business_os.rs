@@ -2608,14 +2608,14 @@ mod tests {
     fn app_validate_success_marks_matching_leased_creator_task_handled() {
         let root = tempfile::tempdir().expect("temp root");
         let module_id = "projects";
-        let prompt = format!(
-            "Business OS app build target:\n- module_id: {module_id}\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/{module_id}\nBusiness OS command:\n- type: ctox.business_os.app.create\nRequired CTOX skills: business-os-app-module-development\n"
+        let task_context = format!(
+            "Business OS app task metadata:\n- module_id: {module_id}\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/{module_id}\nBusiness OS command:\n- type: ctox.business_os.app.create\nRequired CTOX resources: business-os-app-module-development\n"
         );
         let created = channels::create_queue_task(
             root.path(),
             channels::QueueTaskCreateRequest {
                 title: "Projects Bench".to_string(),
-                prompt,
+                prompt: task_context,
                 thread_key: "business-os/creator".to_string(),
                 workspace_root: Some(root.path().display().to_string()),
                 priority: "urgent".to_string(),
@@ -2647,12 +2647,12 @@ mod tests {
     }
 
     #[test]
-    fn app_validate_matcher_accepts_creator_prompt_without_skill_id() {
+    fn app_validate_matcher_accepts_creator_task_without_skill_id() {
         let task = channels::QueueTaskView {
             message_key: "queue:system::projects".to_string(),
             thread_key: "business-os/creator".to_string(),
             title: "Projects Bench".to_string(),
-            prompt: "Build a Business OS projects app.\nBusiness OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+            prompt: "Business OS app task metadata:\n- module_id: projects\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
             workspace_root: None,
             ticket_self_work_id: None,
             priority: "urgent".to_string(),

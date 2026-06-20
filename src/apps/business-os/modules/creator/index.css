@@ -53,7 +53,7 @@
   background: var(--accent);
 }
 
-/* Right column: installed apps + CTOX prompt suggestions */
+/* Right column: installed apps + CTOX app requests */
 .creator-right {
   background: color-mix(in srgb, var(--surface) 80%, transparent);
   border: 1px solid var(--line);

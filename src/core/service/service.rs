@@ -4302,7 +4302,7 @@ fn start_prompt_worker(
                         push_event(
                             &state,
                             format!(
-                                "Business OS app validation passed before completion review for {}; deterministic app validator owns completion",
+                                "Business OS app validation passed before completion review for {}; app validator owns completion",
                                 job.source_label
                             ),
                         );
@@ -6755,7 +6755,7 @@ fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
         return job.prompt.clone();
     };
     format!(
-        "{}\n\nBusiness OS app execution:\n- Build the app, not a plan, spec, skill file, or generic web app.\n- First choose and inspect three shipped Business OS app references. Pick the best matches yourself; `customers`, `shiftflow`, and `outbound` are only examples. Use `ctox business-os app references --json` if you need a local catalog.\n- Target module_id: {}\n- Target install_target: {}\n- Target app_directory: {}\n- Runtime apps write only under app_directory. Use `src/apps/business-os/modules/<module-id>/` only for a source target.\n- Files are no-build HTML fragment, CSS, and browser ESM. No framework, package manager, bundled dependency tree, or compile step.\n- `index.js` exports `mount(ctx)`, renders into `ctx.host`, persists records with `ctx.db`, and starts automation with `ctx.commandBus.dispatch(...)`.\n- Use `business_os.chat.task` for normal CTOX chat/AI follow-up and include `payload.record_snapshot`. Use `ctox.ticket.*` only for real ticket lifecycle actions. Do not write directly to `business_commands` or `ctox_ticket_*` collections.\n- Keep the UI small and real: all visible controls work; use a third pane only when the workflow actually needs one.\n- Finish with `ctox business-os app validate {} {}`.",
+        "{}\n\nBusiness OS app resource context:\n- module_id: {}\n- install_target: {}\n- app_directory: {}\n- skill: business-os-app-module-development\n- resource.module_contract: src/skills/system/product_engineering/business-os-app-module-development/references/module-contract.md\n- resource.dos_and_donts: src/skills/system/product_engineering/business-os-app-module-development/references/dos-and-donts.md\n- resource.green_checklist: src/skills/system/product_engineering/business-os-app-module-development/references/green-checklist.md\n- resource.architecture_translation: src/skills/system/product_engineering/business-os-app-module-development/references/architecture-translation.md\n- reference_catalog: ctox business-os app references --json\n- validation: ctox business-os app validate {} {}",
         job.prompt,
         target.module_id,
         target.install_target,
@@ -6774,7 +6774,8 @@ struct BusinessOsAppModuleTarget {
 }
 
 fn business_os_app_module_target_from_prompt(prompt: &str) -> Option<BusinessOsAppModuleTarget> {
-    if !prompt.contains("Business OS app build target:")
+    if !prompt.contains("Business OS app task metadata:")
+        && !prompt.contains("Business OS app resource context:")
         && !prompt.contains("ctox.business_os.app.modify")
         && !prompt.contains("ctox.business_os.app.create")
     {
@@ -7182,14 +7183,14 @@ fn render_business_os_app_module_validation_feedback(
     report: &str,
 ) -> String {
     format!(
-        "Business OS app artifact validation failed. Continue the same app-build task and repair the app before finishing.\n\nTask source: {}\n\nBusiness OS app build target:\n- module_id: {}\n- install_target: {}\n- app_directory: {}\n\nValidator report:\n{}\n\nRepair guidance:\n- Edit only the app files under the app_directory.\n- Keep the app as plain HTML fragment, CSS, and browser ESM. Do not add React, Next.js, package managers, bundlers, node_modules, or a compile step.\n- `index.js` must export `mount(ctx)`, render into `ctx.host`, and wire real controls.\n- Persist records through the shell-provided `ctx.db` collection handle; do not add HTTP, REST, IndexedDB, Postgres, SQLite, localStorage, or sessionStorage data paths.\n- Automation must use `ctx.commandBus.dispatch(...)`, normally a `business_os.chat.task` command with both `type` and `command_type`, `module`, `record_id`, and `payload.record_snapshot`. Use `ctox.ticket.*` only for real ticket lifecycle actions. Do not write directly to `business_commands` or `ctox_ticket_*` collections.\n- If the UI has dead buttons, fake settings/export/AI/bulk controls, or an unnecessary third pane, remove them or implement them fully.\n- Re-run `ctox business-os app validate {} {}` after the repair.\n\nOriginal task remains active:\n{}",
+        "Business OS app validation failed.\n\nTask source: {}\n\nBusiness OS app task metadata:\n- module_id: {}\n- install_target: {}\n- app_directory: {}\n- resource.module_contract: src/skills/system/product_engineering/business-os-app-module-development/references/module-contract.md\n- resource.dos_and_donts: src/skills/system/product_engineering/business-os-app-module-development/references/dos-and-donts.md\n- resource.green_checklist: src/skills/system/product_engineering/business-os-app-module-development/references/green-checklist.md\n- validation: ctox business-os app validate {} {}\n\nValidator report:\n{}\n\nOriginal task remains active:\n{}",
         job.source_label,
         target.module_id,
         target.install_target,
         target.artifact_directory,
-        clip_text(report.trim(), 6000),
         target.module_id,
         target.mode_flag,
+        clip_text(report.trim(), 6000),
         clip_text(&job.prompt, 6000),
     )
 }
@@ -21056,9 +21057,9 @@ mod tests {
     }
 
     #[test]
-    fn business_os_app_module_target_parses_installed_prompt_contract() {
+    fn business_os_app_module_target_parses_installed_task_metadata() {
         let prompt = "\
-Business OS app build target:
+Business OS app task metadata:
 - module_id: contracts
 - install_target: runtime-installed-module
 - app_directory: runtime/business-os/installed-modules/contracts
@@ -21081,7 +21082,7 @@ Business OS command:
     #[test]
     fn business_os_app_validation_feedback_is_repair_oriented() {
         let job = QueuedPrompt {
-            prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\n".to_string(),
+            prompt: "Business OS app task metadata:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\n".to_string(),
             goal: "Build contracts app".to_string(),
             preview: "Build contracts app".to_string(),
             source_label: "business-os:contracts".to_string(),
@@ -21107,25 +21108,23 @@ Business OS command:
             "module.json install_scope must be installed",
         );
 
-        assert!(feedback.contains("Continue the same app-build task"));
+        assert!(feedback.contains("Business OS app validation failed."));
         assert!(feedback.contains("- module_id: contracts"));
         assert!(feedback.contains("- install_target: runtime-installed-module"));
         assert!(
             feedback.contains("- app_directory: runtime/business-os/installed-modules/contracts")
         );
         assert!(feedback.contains("module.json install_scope must be installed"));
-        assert!(feedback.contains("Edit only the app files under the app_directory"));
-        assert!(feedback.contains("plain HTML fragment, CSS, and browser ESM"));
-        assert!(feedback.contains("Do not add React, Next.js"));
-        assert!(feedback.contains("index.js` must export `mount(ctx)"));
-        assert!(feedback.contains("render into `ctx.host`"));
-        assert!(feedback.contains("ctx.db"));
-        assert!(feedback.contains("ctx.commandBus.dispatch"));
-        assert!(feedback.contains("business_os.chat.task"));
-        assert!(feedback.contains("payload.record_snapshot"));
-        assert!(feedback.contains("dead buttons"));
-        assert!(feedback.contains("unnecessary third pane"));
-        assert!(feedback.contains("ctox business-os app validate contracts --installed"));
+        assert!(feedback.contains("resource.module_contract:"));
+        assert!(feedback.contains("resource.dos_and_donts:"));
+        assert!(feedback.contains("resource.green_checklist:"));
+        assert!(
+            feedback.contains("validation: ctox business-os app validate contracts --installed")
+        );
+        assert!(!feedback.contains("Edit only the app files under the app_directory"));
+        assert!(!feedback.contains("Do not add React, Next.js"));
+        assert!(!feedback.contains("index.js` must export `mount(ctx)"));
+        assert!(!feedback.contains("ctx.commandBus.dispatch"));
         assert!(!feedback.contains("Use `ctox business-os app scaffold"));
         assert!(!feedback.contains("Run `ctox business-os app scaffold"));
         assert!(!feedback.contains("IMMEDIATE REPAIR START GATE"));
@@ -21134,9 +21133,9 @@ Business OS command:
     }
 
     #[test]
-    fn business_os_app_execution_prompt_forbids_queue_lifecycle() {
+    fn business_os_app_execution_context_uses_resources_not_rule_prompt() {
         let job = QueuedPrompt {
-            prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+            prompt: "Business OS app task metadata:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
             goal: "Build contracts app".to_string(),
             preview: "Build contracts app".to_string(),
             source_label: "queue".to_string(),
@@ -21152,36 +21151,17 @@ Business OS command:
 
         let prompt = business_os_app_module_execution_prompt(&job);
 
-        assert!(prompt.contains("Build the app, not a plan, spec, skill file, or generic web app"));
-        assert!(
-            prompt.contains("First choose and inspect three shipped Business OS app references")
-        );
-        assert!(prompt.contains("Pick the best matches yourself"));
-        assert!(prompt.contains("`customers`, `shiftflow`, and `outbound` are only examples"));
-        assert!(prompt.contains("ctox business-os app references --json"));
-        assert!(prompt.contains("Target module_id: contracts"));
-        assert!(prompt.contains("Target install_target: runtime-installed-module"));
-        assert!(prompt
-            .contains("Target app_directory: runtime/business-os/installed-modules/contracts"));
-        assert!(prompt.contains("Runtime apps write only under app_directory"));
-        assert!(prompt.contains("no-build HTML fragment, CSS, and browser ESM"));
-        assert!(prompt.contains("No framework, package manager"));
-        assert!(prompt.contains("`index.js` exports `mount(ctx)`"));
-        assert!(prompt.contains("renders into `ctx.host`"));
-        assert!(prompt.contains("persists records with `ctx.db`"));
-        assert!(prompt.contains("ctx.commandBus.dispatch"));
-        assert!(prompt.contains("business_os.chat.task"));
-        assert!(prompt.contains("payload.record_snapshot"));
-        assert!(prompt.contains("Do not write directly to `business_commands`"));
-        assert!(prompt.contains("all visible controls work"));
-        assert!(prompt.contains("ctox business-os app validate contracts --installed"));
-        assert!(!prompt.contains("TOP ACCEPTANCE GATE"));
-        assert!(!prompt.contains("Generic scaffold strings"));
-        assert!(!prompt.contains("CTOX service preflight creates a validator-clean scaffold"));
-        assert!(!prompt.contains("Tool trace policy"));
-        assert!(!prompt.contains("First app-artifact action rule"));
-        assert!(!prompt.contains("Do not act on queue IDs shown in context"));
-        assert!(!prompt.contains("`ctox queue complete`"));
+        assert!(prompt.contains("Business OS app resource context:"));
+        assert!(prompt.contains("- module_id: contracts"));
+        assert!(prompt.contains("- install_target: runtime-installed-module"));
+        assert!(prompt.contains("- app_directory: runtime/business-os/installed-modules/contracts"));
+        assert!(prompt.contains("- skill: business-os-app-module-development"));
+        assert!(prompt.contains("resource.module_contract:"));
+        assert!(prompt.contains("resource.dos_and_donts:"));
+        assert!(prompt.contains("resource.green_checklist:"));
+        assert!(prompt.contains("resource.architecture_translation:"));
+        assert!(prompt.contains("reference_catalog: ctox business-os app references --json"));
+        assert!(prompt.contains("validation: ctox business-os app validate contracts --installed"));
     }
 
     #[test]
@@ -21208,7 +21188,7 @@ Business OS command:
             "console.error('module.json install_scope must be installed'); process.exit(1);\n",
         )
         .expect("write validator script fixture");
-        let prompt = "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
+        let prompt = "Business OS app task metadata:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
         let task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
@@ -21309,7 +21289,7 @@ Business OS command:
             "console.error('module.json layout.right is not allowed'); process.exit(1);\n",
         )
         .expect("write validator script fixture");
-        let prompt = "Business OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
+        let prompt = "Business OS app task metadata:\n- module_id: projects\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
         let task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
@@ -21387,7 +21367,7 @@ Business OS command:
     #[test]
     fn business_os_app_validation_worker_error_after_green_marks_same_task_handled() {
         let root = temp_root("business-os-app-validation-worker-error-green");
-        let prompt = "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
+        let prompt = "Business OS app task metadata:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
         let task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
@@ -21436,7 +21416,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create subscriptions app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/subscriptions".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -21503,7 +21483,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create inventory app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/inventory".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -21565,7 +21545,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create contracts app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/contracts".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -21623,7 +21603,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create inventory app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/inventory".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -21741,7 +21721,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create subscriptions app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/subscriptions".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -21831,7 +21811,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create subscriptions app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/subscriptions".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -21880,7 +21860,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create inventory app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/inventory".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -21926,7 +21906,7 @@ Business OS command:
             &state_root,
             channels::QueueTaskCreateRequest {
                 title: "Create subscriptions app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/subscriptions".to_string(),
                 workspace_root: Some(app_workspace_root.display().to_string()),
                 priority: "high".to_string(),
@@ -21963,7 +21943,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create quality app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: quality\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: quality\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/quality".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -22016,7 +21996,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create subscriptions app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/subscriptions".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -22061,7 +22041,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create quality app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: quality\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: quality\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/quality".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -22123,7 +22103,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create projects app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: projects\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/projects".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -22168,7 +22148,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create subscriptions app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/subscriptions".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -22204,7 +22184,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create subscriptions app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/subscriptions".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -22226,7 +22206,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create inventory app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/inventory".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -22256,7 +22236,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create inventory app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/inventory".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -22292,7 +22272,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create contracts app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/contracts".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -22346,7 +22326,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create subscriptions app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/subscriptions".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -22401,7 +22381,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create projects app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: projects\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/projects".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -22470,7 +22450,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create subscriptions app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/subscriptions".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -22510,7 +22490,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Projects Bench".to_string(),
-                prompt: "Business OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: projects\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/projects".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -22532,7 +22512,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Quality Bench".to_string(),
-                prompt: "Business OS app build target:\n- module_id: quality\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: quality\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/quality".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -22572,7 +22552,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create quality app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: quality\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: quality\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/quality".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -22619,7 +22599,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create quality app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: quality\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: quality\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/quality".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -22674,7 +22654,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create projects app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: projects\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/projects".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -22941,7 +22921,7 @@ Business OS command:
             .expect("failed to load app queue task")
             .expect("missing app queue task");
         let job = QueuedPrompt {
-            prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+            prompt: "Business OS app task metadata:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
             goal: task.title.clone(),
             preview: task.title.clone(),
             source_label: "business-os:app-create".to_string(),
@@ -22984,7 +22964,7 @@ Business OS command:
     #[test]
     fn business_os_app_validation_rework_is_leased_before_fresh_pending_app_tasks() {
         let root = temp_root("business-os-app-validation-rework-priority");
-        let prompt = "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
+        let prompt = "Business OS app task metadata:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
         let rework_task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
@@ -23049,7 +23029,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create inventory app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/inventory".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -23093,7 +23073,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create contracts app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/contracts".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -23115,7 +23095,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create inventory app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/inventory".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -26023,7 +26003,7 @@ Use shell tools to create or update these files."
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create subscriptions app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/subscriptions".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -26065,7 +26045,7 @@ Use shell tools to create or update these files."
             &state_root,
             channels::QueueTaskCreateRequest {
                 title: "Create subscriptions app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/subscriptions".to_string(),
                 workspace_root: Some(app_workspace_root.display().to_string()),
                 priority: "high".to_string(),
@@ -29554,7 +29534,7 @@ The controller must create preparation queue/tickets and record queue:system::* 
     #[test]
     fn business_os_app_tasks_do_not_queue_generic_artifact_outcome_recovery() {
         let job = QueuedPrompt {
-            prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n\nOnly required durable files for this controller turn:\n- runtime/business-os/installed-modules/contracts/module.json\n- runtime/business-os/installed-modules/contracts/index.js\n".to_string(),
+            prompt: "Business OS app task metadata:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n\nOnly required durable files for this controller turn:\n- runtime/business-os/installed-modules/contracts/module.json\n- runtime/business-os/installed-modules/contracts/index.js\n".to_string(),
             goal: "Create contracts app".to_string(),
             preview: "Create contracts app".to_string(),
             source_label: "business-os:app-create".to_string(),
@@ -29574,7 +29554,7 @@ The controller must create preparation queue/tickets and record queue:system::* 
     #[test]
     fn business_os_app_tasks_do_not_infer_root_workspace_file_artifacts() {
         let job = QueuedPrompt {
-            prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\n- first file action: create runtime/business-os/installed-modules/subscriptions/, then write module.json, index.html, index.css, index.js with mount(ctx), schema.js, collections.schema.json, icon.svg, locales, and tests inside that directory.\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+            prompt: "Business OS app task metadata:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
             goal: "Create subscriptions app".to_string(),
             preview: "Create subscriptions app".to_string(),
             source_label: "business-os:app-create".to_string(),

@@ -15,10 +15,11 @@ const bundledModule = await build({
 
 const [{ text: bundledSource }] = bundledModule.outputFiles;
 const {
+  buildAppCreateCommand,
   computeCreatorActionState,
-  deriveSpecFromPrompt,
+  deriveSpecFromRequest,
   normalizeCreatorInstalledApps,
-  normalizeCreatorPromptSuggestions,
+  normalizeCreatorRequestSuggestions,
   normalizeCollectionName,
   normalizeModuleId,
   validateCreatorSpec,
@@ -26,10 +27,10 @@ const {
   `data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`
 );
 
-test('empty prompt blocks optimize and deploy', () => {
+test('empty request blocks specification and app creation', () => {
   const state = computeCreatorActionState({
-    prompt: '',
-    specPrompt: '',
+    request: '',
+    specRequest: '',
     appId: 'lagerverwaltung',
     appTitle: 'Lagerverwaltung',
     appDesc: 'Beschreibung',
@@ -38,13 +39,13 @@ test('empty prompt blocks optimize and deploy', () => {
 
   assert.equal(state.optimizeReady, false);
   assert.equal(state.deployReady, false);
-  assert.match(state.diagnostic, /Prompt fehlt/);
+  assert.match(state.diagnostic, /Auftrag fehlt/);
 });
 
-test('stale prompt blocks install until spec is regenerated', () => {
+test('stale request blocks install until spec is applied again', () => {
   const state = computeCreatorActionState({
-    prompt: 'Erstelle eine Zeiterfassung',
-    specPrompt: 'Erstelle eine Lagerverwaltung',
+    request: 'Erstelle eine Zeiterfassung',
+    specRequest: 'Erstelle eine Lagerverwaltung',
     appId: 'zeiterfassung',
     appTitle: 'Zeiterfassung',
     appDesc: 'Beschreibung',
@@ -57,10 +58,10 @@ test('stale prompt blocks install until spec is regenerated', () => {
 });
 
 test('fresh valid spec enables deploy', () => {
-  const prompt = 'Erstelle eine App fuer Support Tickets';
+  const request = 'Erstelle eine App fuer Support Tickets';
   const state = computeCreatorActionState({
-    prompt,
-    specPrompt: prompt,
+    request,
+    specRequest: request,
     appId: 'supportdesk',
     appTitle: 'Support Desk',
     appDesc: 'Beschreibung',
@@ -73,10 +74,10 @@ test('fresh valid spec enables deploy', () => {
 });
 
 test('manual advanced edits keep a fresh spec but still surface validation errors', () => {
-  const prompt = 'Erstelle eine Support Desk App';
+  const request = 'Erstelle eine Support Desk App';
   const state = computeCreatorActionState({
-    prompt,
-    specPrompt: prompt,
+    request,
+    specRequest: request,
     appId: 'supportdesk',
     appTitle: '',
     appDesc: 'Beschreibung',
@@ -88,8 +89,8 @@ test('manual advanced edits keep a fresh spec but still surface validation error
   assert.match(state.diagnostic, /Titel fehlt/);
 });
 
-test('prompt derivation normalizes generated ids and collections', () => {
-  const spec = deriveSpecFromPrompt('Eine CRM App fuer Kunden und Kontakte');
+test('request derivation normalizes ids and collections', () => {
+  const spec = deriveSpecFromRequest('Eine CRM App fuer Kunden und Kontakte');
 
   assert.equal(spec.id, 'crm-kontakte');
   assert.equal(spec.category, 'Finance');
@@ -115,7 +116,7 @@ test('slug and collection normalization reject unsafe names', () => {
   );
 });
 
-test('creator right rail only treats generated installed modules as custom apps', () => {
+test('creator right rail only treats installed modules as custom apps', () => {
   const apps = normalizeCreatorInstalledApps({
     modules: [
       { id: 'creator', title: 'App Creator', entry: 'modules/creator/index.html', source: 'core' },
@@ -128,13 +129,39 @@ test('creator right rail only treats generated installed modules as custom apps'
   assert.equal(apps[0].version, 'v2');
 });
 
-test('creator prompt suggestions are sorted and trimmed to actionable prompts', () => {
-  const prompts = normalizeCreatorPromptSuggestions([
-    { id: 'ignore', module: 'notes', command_type: 'notes.create', payload: { prompt: 'Keine Creator App' }, updated_at_ms: 10 },
-    { id: 'old', module: 'creator', command_type: 'business_os.chat.task', payload: { prompt: 'Alte App', title: 'Alt' }, status: 'done', updated_at_ms: 20 },
+test('creator request suggestions are sorted and trimmed to actionable requests', () => {
+  const requests = normalizeCreatorRequestSuggestions([
+    { id: 'ignore', module: 'notes', command_type: 'notes.create', payload: { instruction: 'Keine Creator App' }, updated_at_ms: 10 },
+    { id: 'old', module: 'creator', command_type: 'business_os.chat.task', payload: { instruction: 'Alte App', title: 'Alt' }, status: 'done', updated_at_ms: 20 },
     { id: 'new', command_type: 'ctox.business_os.app.modify', payload: { instruction: 'Neue App bauen', title: 'Neu' }, status: 'pending', updated_at_ms: 30 },
   ]);
 
-  assert.deepEqual(prompts.map((item) => item.id), ['new', 'old']);
-  assert.equal(prompts[0].prompt, 'Neue App bauen');
+  assert.deepEqual(requests.map((item) => item.id), ['new', 'old']);
+  assert.equal(requests[0].request, 'Neue App bauen');
+});
+
+test('creator builds an app create command instead of writing module source directly', () => {
+  const command = buildAppCreateCommand({
+    appId: 'Meine Inventar App',
+    appTitle: 'Inventar',
+    appDesc: 'Bestand verwalten',
+    appCategory: 'Management',
+    appLayout: 'full-workspace',
+    appCollections: ['items', 'stock events'],
+    appVersion: '0.2.0',
+    instruction: 'Baue eine Inventar App.',
+    actor: { id: 'admin' },
+    now: 1234,
+  });
+
+  assert.equal(command.type, 'ctox.business_os.app.create');
+  assert.equal(command.command_type, 'ctox.business_os.app.create');
+  assert.equal(command.record_id, 'meine-inventar-app');
+  assert.equal(command.payload.module_id, 'meine-inventar-app');
+  assert.equal(command.payload.install_target, 'runtime-installed-module');
+  assert.equal(command.payload.target, 'app');
+  assert.deepEqual(command.payload.required_skills, ['business-os-app-module-development']);
+  assert.deepEqual(command.payload.collections_hint, ['items', 'stock_events']);
+  assert.equal(command.client_context.source, 'business-os-creator');
+  assert.equal(command.client_context.install_target, 'runtime-installed-module');
 });

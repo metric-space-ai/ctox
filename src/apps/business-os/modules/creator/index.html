@@ -1,21 +1,19 @@
 <main class="creator-module" data-creator-root data-resize-frame>
-  <!-- Linke Spalte: Sidebar mit Glassmorphic Design -->
-  <section class="creator-pane creator-left" aria-label="Configuration & Prompts">
+  <section class="creator-pane creator-left" aria-label="App request configuration">
     <div class="creator-sidebar-content">
       <header class="ctox-pane-header">
         <div class="ctox-pane-title-row">
           <div class="ctox-pane-titles">
-            <span class="ctox-pane-kicker" data-t="kicker">AI Engine</span>
-            <h2 class="ctox-pane-title" data-t="title">Generator</h2>
+            <span class="ctox-pane-kicker" data-t="kicker">CTOX</span>
+            <h2 class="ctox-pane-title" data-t="title">App Creator</h2>
           </div>
         </div>
       </header>
 
       <div class="creator-sidebar-body">
-        <!-- 1. Quickstart presets dropdown -->
         <div class="form-group">
-          <label class="form-label" for="select-preset-prompt" data-t="presetLabel">Schnellstart-Vorlage laden</label>
-          <select id="select-preset-prompt" class="os-select">
+          <label class="form-label" for="select-preset-request" data-t="presetLabel">Schnellstart-Vorlage laden</label>
+          <select id="select-preset-request" class="os-select">
             <option value="" selected disabled data-t="presetPlaceholder">Vorlage auswählen</option>
             <option value="standard-mgmt">Lagerverwaltung</option>
             <option value="notes-style">Notizbuch</option>
@@ -26,15 +24,14 @@
           </select>
         </div>
 
-        <!-- 2. AI Prompt Textarea -->
         <div class="form-group">
-          <label class="form-label" for="ai-prompt-input" data-t="promptLabel">Wunsch-App Prompt</label>
-          <textarea id="ai-prompt-input" class="os-textarea" placeholder="Beschreibe deine Anwendung. Zum Beispiel: 'Eine App zum Verwalten von IT-Geräten im Büro mit Zustand, Seriennummer...'" data-t-placeholder="promptPlaceholder"></textarea>
-          <button type="button" id="btn-apply-prompt" class="os-btn is-accent creator-wide-action" disabled>
+          <label class="form-label" for="app-request-input" data-t="requestLabel">App-Auftrag</label>
+          <textarea id="app-request-input" class="os-textarea" placeholder="Beschreibe deine Anwendung. Zum Beispiel: 'Eine App zum Verwalten von IT-Geräten im Büro mit Zustand, Seriennummer...'" data-t-placeholder="requestPlaceholder"></textarea>
+          <button type="button" id="btn-apply-request" class="os-btn is-accent creator-wide-action" disabled>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
-            <span data-t="applyPrompt">Spezifikation optimieren &amp; anwenden</span>
+            <span data-t="applyRequest">Spezifikation anwenden</span>
           </button>
-          <p class="creator-spec-diagnostics" id="creator-spec-diagnostics" data-state="blocked" aria-live="polite" data-t="promptMissing">Prompt fehlt. Beschreibe zuerst die App.</p>
+          <p class="creator-spec-diagnostics" id="creator-spec-diagnostics" data-state="blocked" aria-live="polite" data-t="requestMissing">Auftrag fehlt. Beschreibe zuerst die App.</p>
         </div>
 
         <!-- 3. Advanced Settings Accordion -->
@@ -108,21 +105,19 @@
 
   <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--creator-left-width" data-resizer-min="260" data-resizer-max="550" aria-label="Linke Spaltenbreite anpassen" data-t-aria="resizeLeft"></button>
 
-  <!-- Mittlere Spalte: Workbench / Editor & Live Terminal -->
-  <section class="creator-pane creator-center" aria-label="Build & Deployment Workbench">
+  <section class="creator-pane creator-center" aria-label="App creation workbench">
     <div class="creator-card">
       <header class="creator-card-header">
-        <span class="os-kicker" data-t="centerKicker">KI App Generator</span>
+        <span class="os-kicker" data-t="centerKicker">CTOX App Creator</span>
         <h2 class="os-title" data-t="centerTitle">Neue App beschreiben &amp; installieren</h2>
-        <p class="os-subtitle" data-t="centerSubtitle">Beschreibe deine Wunsch-App in natürlicher Sprache. Das Business OS generiert Datenmodell, Benutzeroberfläche und App-Struktur vollautomatisch.</p>
+        <p class="os-subtitle" data-t="centerSubtitle">Beschreibe die App. CTOX legt einen Business-OS-App-Auftrag an und baut das Modul im Installationsbereich.</p>
       </header>
 
       <div class="creator-card-body">
-        <!-- Deployment Action -->
         <div class="deploy-action-section">
           <button type="button" id="btn-deploy-app" class="os-btn is-primary" disabled>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right: 6px;"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
-            <span data-t="deployButton">App jetzt generieren &amp; installieren</span>
+            <span data-t="deployButton">App-Erstellung starten</span>
           </button>
 
           <div class="sync-status">
@@ -132,7 +127,6 @@
         </div>
       </div>
 
-      <!-- Integrated High-Tech Build Terminal -->
       <footer class="creator-card-footer">
         <div class="terminal-header">
           <div class="terminal-dots">
@@ -140,10 +134,10 @@
             <span class="t-dot"></span>
             <span class="t-dot"></span>
           </div>
-          <span class="terminal-title" data-t="terminalTitle">Build &amp; Deployment Logs</span>
+          <span class="terminal-title" data-t="terminalTitle">Auftragsstatus</span>
         </div>
         <div id="console-logs-container" class="console-logs os-scrollbar">
-          <div class="console-log-entry info">[SYSTEM] App Creator initialisiert. Bereit zur Prompt-Eingabe...</div>
+          <div class="console-log-entry info">[SYSTEM] App Creator bereit.</div>
         </div>
       </footer>
     </div>
@@ -151,8 +145,7 @@
 
   <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--creator-right-width" data-resizer-min="240" data-resizer-max="520" aria-label="Rechte Spaltenbreite anpassen" data-t-aria="resizeRight"></button>
 
-  <!-- Rechte Spalte: Bestehende Custom-Apps & CTOX-Generator-Prompts -->
-  <section class="creator-pane creator-right" aria-label="Installierte Custom-Apps und CTOX-Prompts">
+  <section class="creator-pane creator-right" aria-label="Installed custom apps and CTOX app requests">
     <header class="ctox-pane-header">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
@@ -166,14 +159,14 @@
         <span class="ctox-pane-kicker" data-creator-installed-heading data-t="installedHeading">Bestehende Apps</span>
         <div class="creator-right-list" data-creator-installed-list></div>
         <div class="creator-right-empty" data-creator-installed-empty data-t="installedEmpty">
-          Noch keine eigenen Apps installiert. Sobald über den Generator eine App erstellt wurde, erscheint sie hier zum erneuten Öffnen oder Upgrade.
+          Noch keine eigenen Apps installiert. Sobald CTOX eine App erstellt hat, erscheint sie hier zum erneuten Öffnen oder Upgrade.
         </div>
       </section>
       <section class="creator-right-block">
-        <span class="ctox-pane-kicker" data-creator-prompts-heading data-t="promptsHeading">CTOX-Generator-Prompts</span>
-        <div class="creator-right-list" data-creator-prompts-list></div>
-        <div class="creator-right-empty" data-creator-prompts-empty data-t="promptsEmpty">
-          Lass CTOX über die Chatleiste eine neue App-Spezifikation entwerfen — Prompts und Vorschläge erscheinen hier als Vorlage für den Generator links.
+        <span class="ctox-pane-kicker" data-creator-requests-heading data-t="requestsHeading">CTOX-App-Aufträge</span>
+        <div class="creator-right-list" data-creator-requests-list></div>
+        <div class="creator-right-empty" data-creator-requests-empty data-t="requestsEmpty">
+          App-Aufträge aus Chat und Creator erscheinen hier zur Weiterarbeit.
         </div>
       </section>
     </div>

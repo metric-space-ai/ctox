@@ -9,7 +9,7 @@ const PRESETS = {
     category: 'Management',
     layout: 'full-workspace',
     collections: ['inventory_records', 'inventory_transactions'],
-    prompt: 'Erstelle eine Echtzeit-Lagerverwaltung für mein Unternehmen. Ich möchte Artikel mit Bildern, Beschreibungen, Barcodes und Beständen auflisten. Es soll Buchungen für Wareneingang und Warenausgang geben, um den Bestand automatisch zu aktualisieren.'
+    request: 'Erstelle eine Echtzeit-Lagerverwaltung für mein Unternehmen. Ich möchte Artikel mit Bildern, Beschreibungen, Barcodes und Beständen auflisten. Es soll Buchungen für Wareneingang und Warenausgang geben, um den Bestand automatisch zu aktualisieren.'
   },
   'notes-style': {
     id: 'notizen',
@@ -18,7 +18,7 @@ const PRESETS = {
     category: 'Productivity',
     layout: 'full-workspace',
     collections: ['notes_records'],
-    prompt: 'Erstelle ein digitales Notizbuch für mein Team. Man soll Notizen erstellen, editieren und löschen können. Die Notizen sollen Tags haben und einen integrierten Markdown-Editor für schöne Formatierungen bieten.'
+    request: 'Erstelle ein digitales Notizbuch für mein Team. Man soll Notizen erstellen, editieren und löschen können. Die Notizen sollen Tags haben und einen integrierten Markdown-Editor für schöne Formatierungen bieten.'
   },
   'kanban-style': {
     id: 'taskboard',
@@ -27,7 +27,7 @@ const PRESETS = {
     category: 'Productivity',
     layout: 'pane',
     collections: ['board_tasks'],
-    prompt: 'Erstelle ein agiles Kanban-Taskboard. Es soll drei Spalten geben: \'Zu tun\', \'In Arbeit\' und \'Erledigt\'. Aufgaben sollen Titel, Prioritäten (hoch, mittel, niedrig) und Zuweisungen zu Teammitgliedern enthalten und sich verschieben lassen.'
+    request: 'Erstelle ein agiles Kanban-Taskboard. Es soll drei Spalten geben: \'Zu tun\', \'In Arbeit\' und \'Erledigt\'. Aufgaben sollen Titel, Prioritäten (hoch, mittel, niedrig) und Zuweisungen zu Teammitgliedern enthalten und sich verschieben lassen.'
   },
   'support-style': {
     id: 'supportdesk',
@@ -36,7 +36,7 @@ const PRESETS = {
     category: 'Management',
     layout: 'pane',
     collections: ['tickets', 'ticket_comments'],
-    prompt: 'Erstelle ein professionelles Support-Ticket-System. Kunden sollen Tickets mit einer Beschreibung und Priorität erstellen können. Support-Mitarbeiter sollen Kommentare hinterlassen und den Status des Tickets auf Gelöst ändern.'
+    request: 'Erstelle ein professionelles Support-Ticket-System. Kunden sollen Tickets mit einer Beschreibung und Priorität erstellen können. Support-Mitarbeiter sollen Kommentare hinterlassen und den Status des Tickets auf Gelöst ändern.'
   },
   'time-style': {
     id: 'zeiterfassung',
@@ -45,7 +45,7 @@ const PRESETS = {
     category: 'Productivity',
     layout: 'full-workspace',
     collections: ['time_logs', 'projects'],
-    prompt: 'Erstelle eine Zeiterfassungs-App für Dienstleister. Mitarbeiter sollen Zeiteinträge für Projekte erfassen, Start- und Endzeiten eintragen und eine Auswertung der geleisteten Stunden pro Projekt und Monat anzeigen.'
+    request: 'Erstelle eine Zeiterfassungs-App für Dienstleister. Mitarbeiter sollen Zeiteinträge für Projekte erfassen, Start- und Endzeiten eintragen und eine Auswertung der geleisteten Stunden pro Projekt und Monat anzeigen.'
   },
   'plant-style': {
     id: 'pflanzen-tracker',
@@ -54,7 +54,7 @@ const PRESETS = {
     category: 'Utilities',
     layout: 'pane',
     collections: ['plants', 'watering_logs'],
-    prompt: 'Erstelle einen Pflanzen-Tracker für unsere Büropflanzen. Jede Pflanze hat einen Namen, einen Standort (z. B. Konferenzraum) und ein Gießintervall. Die App soll anzeigen, wann das nächste Gießen fällig ist und Gieß-Logs speichern.'
+    request: 'Erstelle einen Pflanzen-Tracker für unsere Büropflanzen. Jede Pflanze hat einen Namen, einen Standort (z. B. Konferenzraum) und ein Gießintervall. Die App soll anzeigen, wann das nächste Gießen fällig ist und Gieß-Logs speichern.'
   }
 };
 
@@ -68,15 +68,14 @@ const state = {
   appLayout: 'full-workspace',
   appCollections: ['inventory_records', 'inventory_transactions'],
   appVersion: 'v1',
-  specPrompt: '',
-  generatedFiles: {},
+  specRequest: '',
   contextMenu: null,
   contextMenuCleanup: null,
   resizerCleanup: null,
   catalogSubscription: null,
   commandSubscription: null,
   installedApps: [],
-  creatorPrompts: [],
+  creatorRequests: [],
   isOptimizing: false,
   isDeploying: false
 };
@@ -99,52 +98,52 @@ export function normalizeCollectionName(value) {
     .replace(/^_|_$/g, '');
 }
 
-export function deriveSpecFromPrompt(prompt) {
-  const cleanPrompt = String(prompt || '').trim();
-  const lowerPrompt = cleanPrompt.toLowerCase();
+export function deriveSpecFromRequest(request) {
+  const cleanRequest = String(request || '').trim();
+  const lowerRequest = cleanRequest.toLowerCase();
   let guessedTitle = 'Spezialanwendung';
   let guessedId = 'spezialapp';
-  let guessedDesc = cleanPrompt;
+  let guessedDesc = cleanRequest;
   let guessedCategory = 'Management';
   let guessedLayout = 'full-workspace';
   let guessedCollections = ['records'];
 
-  if (lowerPrompt.includes('pflanze') || lowerPrompt.includes('blume') || lowerPrompt.includes('garten') || lowerPrompt.includes('botanik')) {
+  if (lowerRequest.includes('pflanze') || lowerRequest.includes('blume') || lowerRequest.includes('garten') || lowerRequest.includes('botanik')) {
     guessedTitle = 'Pflanzen-Tracker';
     guessedId = 'pflanzen-tracker';
     guessedDesc = 'Übersicht über Büropflanzen, deren Standorte und Gieß-Erinnerungen.';
     guessedCategory = 'Utilities';
     guessedLayout = 'pane';
     guessedCollections = ['plants', 'watering_logs'];
-  } else if (lowerPrompt.includes('auto') || lowerPrompt.includes('fahrzeug') || lowerPrompt.includes('fleet') || lowerPrompt.includes('fuhrpark') || lowerPrompt.includes('kfz')) {
+  } else if (lowerRequest.includes('auto') || lowerRequest.includes('fahrzeug') || lowerRequest.includes('fleet') || lowerRequest.includes('fuhrpark') || lowerRequest.includes('kfz')) {
     guessedTitle = 'Fuhrparkverwaltung';
     guessedId = 'fuhrpark';
     guessedDesc = 'Fahrzeuge, Kilometerstände, TÜV-Termine und Wartungsprotokolle im Überblick.';
     guessedCategory = 'Management';
     guessedLayout = 'full-workspace';
     guessedCollections = ['vehicles', 'maintenance_logs', 'refuels'];
-  } else if (lowerPrompt.includes('kunde') || lowerPrompt.includes('crm') || lowerPrompt.includes('sales') || lowerPrompt.includes('kontakt')) {
+  } else if (lowerRequest.includes('kunde') || lowerRequest.includes('crm') || lowerRequest.includes('sales') || lowerRequest.includes('kontakt')) {
     guessedTitle = 'Kundenverwaltung (CRM)';
     guessedId = 'crm-kontakte';
     guessedDesc = 'Zentrales CRM zur Verwaltung von Leads, Kontakten und Interaktionsberichten.';
     guessedCategory = 'Finance';
     guessedLayout = 'full-workspace';
     guessedCollections = ['customers', 'interactions'];
-  } else if (lowerPrompt.includes('ticket') || lowerPrompt.includes('support') || lowerPrompt.includes('helpdesk') || lowerPrompt.includes('fehler')) {
+  } else if (lowerRequest.includes('ticket') || lowerRequest.includes('support') || lowerRequest.includes('helpdesk') || lowerRequest.includes('fehler')) {
     guessedTitle = 'Support Desk';
     guessedId = 'supportdesk';
     guessedDesc = 'Helpdesk-System zur Bearbeitung von Kundenanfragen, Störungstickets und Fehlermeldungen.';
     guessedCategory = 'Management';
     guessedLayout = 'pane';
     guessedCollections = ['tickets', 'ticket_comments'];
-  } else if (lowerPrompt.includes('zeit') || lowerPrompt.includes('stunde') || lowerPrompt.includes('timer') || lowerPrompt.includes('time')) {
+  } else if (lowerRequest.includes('zeit') || lowerRequest.includes('stunde') || lowerRequest.includes('timer') || lowerRequest.includes('time')) {
     guessedTitle = 'Zeiterfassung';
     guessedId = 'zeiterfassung';
     guessedDesc = 'Tool zur schnellen Erfassung von Arbeitszeiten und Projektstunden.';
     guessedCategory = 'Productivity';
     guessedLayout = 'full-workspace';
     guessedCollections = ['time_logs', 'projects'];
-  } else if (lowerPrompt.includes('möbel') || lowerPrompt.includes('inventar') || lowerPrompt.includes('office') || lowerPrompt.includes('anlage') || lowerPrompt.includes('lager')) {
+  } else if (lowerRequest.includes('möbel') || lowerRequest.includes('inventar') || lowerRequest.includes('office') || lowerRequest.includes('anlage') || lowerRequest.includes('lager')) {
     guessedTitle = 'Inventarverwaltung';
     guessedId = 'inventar';
     guessedDesc = 'Schnelles Tracken von Büroausstattung, Mobiliar und IT-Hardware.';
@@ -152,14 +151,14 @@ export function deriveSpecFromPrompt(prompt) {
     guessedLayout = 'full-workspace';
     guessedCollections = ['inventory_items', 'audits'];
   } else {
-    const cleanPromptStr = cleanPrompt.replace(/[^a-zA-Z0-9\s]/g, '').trim();
-    const words = cleanPromptStr.split(/\s+/).filter(w => w.length > 3);
+    const cleanRequestStr = cleanRequest.replace(/[^a-zA-Z0-9\s]/g, '').trim();
+    const words = cleanRequestStr.split(/\s+/).filter(w => w.length > 3);
     if (words.length > 0) {
       guessedTitle = words[0].charAt(0).toUpperCase() + words[0].slice(1);
       if (words[1]) guessedTitle += ` ${words[1].charAt(0).toUpperCase()}${words[1].slice(1)}`;
       guessedId = normalizeModuleId(guessedTitle) || guessedId;
     }
-    guessedDesc = cleanPrompt.length > 100 ? `${cleanPrompt.substring(0, 97)}...` : cleanPrompt;
+    guessedDesc = cleanRequest.length > 100 ? `${cleanRequest.substring(0, 97)}...` : cleanRequest;
     guessedCollections = [`${guessedId}_records`, `${guessedId}_history`];
   }
 
@@ -183,23 +182,23 @@ export function validateCreatorSpec({ appId, appTitle, appDesc, appCollections }
   return errors;
 }
 
-export function computeCreatorActionState({ prompt, specPrompt, appId, appTitle, appDesc, appCollections, isOptimizing = false, isDeploying = false }) {
-  const promptText = String(prompt || '').trim();
-  const specText = String(specPrompt || '').trim();
+export function computeCreatorActionState({ request, specRequest, appId, appTitle, appDesc, appCollections, isOptimizing = false, isDeploying = false }) {
+  const requestText = String(request || '').trim();
+  const specText = String(specRequest || '').trim();
   const validationErrors = validateCreatorSpec({ appId, appTitle, appDesc, appCollections });
-  const hasPrompt = Boolean(promptText);
-  const hasFreshSpec = hasPrompt && specText === promptText;
+  const hasRequest = Boolean(requestText);
+  const hasFreshSpec = hasRequest && specText === requestText;
   const isBusy = Boolean(isOptimizing || isDeploying);
-  const optimizeReady = hasPrompt && !isBusy;
+  const optimizeReady = hasRequest && !isBusy;
   const deployReady = hasFreshSpec && validationErrors.length === 0 && !isBusy;
-  let diagnostic = 'Prompt fehlt. Beschreibe zuerst die App.';
+  let diagnostic = 'Auftrag fehlt. Beschreibe zuerst die App.';
   if (isOptimizing) diagnostic = 'Spezifikation wird aktualisiert.';
-  else if (isDeploying) diagnostic = 'Installation läuft.';
-  else if (hasPrompt && !hasFreshSpec) diagnostic = 'Spezifikation ist nicht aktuell. Bitte zuerst optimieren.';
+  else if (isDeploying) diagnostic = 'CTOX App-Auftrag läuft.';
+  else if (hasRequest && !hasFreshSpec) diagnostic = 'Spezifikation ist nicht aktuell. Bitte zuerst anwenden.';
   else if (hasFreshSpec && validationErrors.length > 0) diagnostic = validationErrors[0];
-  else if (deployReady) diagnostic = 'Spezifikation ist aktuell und installierbar.';
+  else if (deployReady) diagnostic = 'Spezifikation ist aktuell und kann an CTOX übergeben werden.';
 
-  return { hasPrompt, hasFreshSpec, validationErrors, optimizeReady, deployReady, diagnostic };
+  return { hasRequest, hasFreshSpec, validationErrors, optimizeReady, deployReady, diagnostic };
 }
 
 export function normalizeCreatorInstalledApps(catalog) {
@@ -214,7 +213,6 @@ export function normalizeCreatorInstalledApps(catalog) {
           entry.startsWith('installed-modules/')
           || source === 'installed'
           || source.includes('installed-module')
-          || mod?.generated_by === 'creator'
         );
     })
     .map((mod) => ({
@@ -229,7 +227,7 @@ export function normalizeCreatorInstalledApps(catalog) {
     .sort((a, b) => a.title.localeCompare(b.title, 'de'));
 }
 
-export function normalizeCreatorPromptSuggestions(commands, limit = 5) {
+export function normalizeCreatorRequestSuggestions(commands, limit = 5) {
   const items = Array.isArray(commands) ? commands : [];
   return items
     .filter((command) => {
@@ -245,16 +243,16 @@ export function normalizeCreatorPromptSuggestions(commands, limit = 5) {
     .map((command) => {
       const payload = command?.payload || {};
       const context = payload.context || {};
-      const prompt = String(payload.prompt || payload.instruction || payload.user_message || command?.title || '').trim();
+      const request = String(payload.instruction || payload.request || payload.user_message || command?.title || '').trim();
       return {
-        id: String(command?.id || command?.command_id || `${Date.now()}-${prompt}`),
-        title: String(payload.title || context.app_title || command?.title || 'CTOX Prompt'),
-        prompt,
+        id: String(command?.id || command?.command_id || `${Date.now()}-${request}`),
+        title: String(payload.title || context.app_title || command?.title || 'CTOX App-Auftrag'),
+        request,
         status: String(command?.status || 'pending'),
         updated_at_ms: Number(command?.updated_at_ms || command?.created_at_ms || 0),
       };
     })
-    .filter((item) => item.prompt)
+    .filter((item) => item.request)
     .sort((a, b) => b.updated_at_ms - a.updated_at_ms)
     .slice(0, limit);
 }
@@ -277,10 +275,7 @@ export async function mount(ctx) {
   // 3. Wire UI events & presets loading
   wireUi(ctx.host);
 
-  // 4. Generate starting files
-  generateAllFiles();
-
-  // 5. Load catalog-backed right rail data
+  // 4. Load catalog-backed right rail data
   await startCreatorDataStreams(ctx, ctx.host);
 
   // 5. Initialize CTOX unified context menu
@@ -387,9 +382,9 @@ async function startCreatorDataStreams(ctx, host) {
 
   try {
     const commandDocs = await commandColl?.find?.()?.exec?.();
-    state.creatorPrompts = normalizeCreatorPromptSuggestions(commandDocs?.map((doc) => doc?.toJSON?.() || doc) || []);
+    state.creatorRequests = normalizeCreatorRequestSuggestions(commandDocs?.map((doc) => doc?.toJSON?.() || doc) || []);
   } catch (error) {
-    addConsoleLog(`[WARN] CTOX-Prompts konnten nicht geladen werden: ${error.message}`, 'warning');
+    addConsoleLog(`[WARN] CTOX App-Auftraege konnten nicht geladen werden: ${error.message}`, 'warning');
   }
 
   state.catalogSubscription = catalogColl?.findOne?.('module-catalog')?.$?.subscribe?.((doc) => {
@@ -398,7 +393,7 @@ async function startCreatorDataStreams(ctx, host) {
   }) || null;
 
   state.commandSubscription = commandColl?.find?.()?.$?.subscribe?.((docs) => {
-    state.creatorPrompts = normalizeCreatorPromptSuggestions(docs?.map((doc) => doc?.toJSON?.() || doc) || []);
+    state.creatorRequests = normalizeCreatorRequestSuggestions(docs?.map((doc) => doc?.toJSON?.() || doc) || []);
     renderCreatorRightRail(host);
   }) || null;
 
@@ -420,8 +415,8 @@ function cleanupSubscription(subscription) {
 function renderCreatorRightRail(host) {
   const installedList = host.querySelector('[data-creator-installed-list]');
   const installedEmpty = host.querySelector('[data-creator-installed-empty]');
-  const promptsList = host.querySelector('[data-creator-prompts-list]');
-  const promptsEmpty = host.querySelector('[data-creator-prompts-empty]');
+  const requestsList = host.querySelector('[data-creator-requests-list]');
+  const requestsEmpty = host.querySelector('[data-creator-requests-empty]');
 
   if (installedList && installedEmpty) {
     installedList.innerHTML = state.installedApps.map(renderInstalledAppCard).join('');
@@ -429,10 +424,10 @@ function renderCreatorRightRail(host) {
     installedList.hidden = state.installedApps.length === 0;
   }
 
-  if (promptsList && promptsEmpty) {
-    promptsList.innerHTML = state.creatorPrompts.map(renderCreatorPromptCard).join('');
-    promptsEmpty.hidden = state.creatorPrompts.length > 0;
-    promptsList.hidden = state.creatorPrompts.length === 0;
+  if (requestsList && requestsEmpty) {
+    requestsList.innerHTML = state.creatorRequests.map(renderCreatorRequestCard).join('');
+    requestsEmpty.hidden = state.creatorRequests.length > 0;
+    requestsList.hidden = state.creatorRequests.length === 0;
   }
 }
 
@@ -456,17 +451,17 @@ function renderInstalledAppCard(app) {
   `;
 }
 
-function renderCreatorPromptCard(item) {
-  const prompt = item.prompt.length > 140 ? `${item.prompt.slice(0, 137)}...` : item.prompt;
+function renderCreatorRequestCard(item) {
+  const request = item.request.length > 140 ? `${item.request.slice(0, 137)}...` : item.request;
   return `
-    <article class="creator-mini-card" data-creator-prompt="${escapeHtml(item.id)}">
+    <article class="creator-mini-card" data-creator-request="${escapeHtml(item.id)}">
       <div class="creator-mini-card-main">
         <strong>${escapeHtml(item.title)}</strong>
         <span>${escapeHtml(item.status)}</span>
-        <p>${escapeHtml(prompt)}</p>
+        <p>${escapeHtml(request)}</p>
       </div>
       <div class="creator-mini-actions">
-        <button type="button" class="os-icon-btn" data-use-creator-prompt="${escapeHtml(item.id)}" title="Prompt übernehmen" aria-label="Prompt übernehmen">
+        <button type="button" class="os-icon-btn" data-use-creator-request="${escapeHtml(item.id)}" title="Auftrag uebernehmen" aria-label="Auftrag uebernehmen">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" aria-hidden="true"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
         </button>
       </div>
@@ -483,13 +478,13 @@ function wireUi(host) {
   const btnAddColl = host.querySelector('#btn-add-collection');
   const inputNewColl = host.querySelector('#input-new-collection');
   const btnDeploy = host.querySelector('#btn-deploy-app');
-  const selectPreset = host.querySelector('#select-preset-prompt');
-  const inputPrompt = host.querySelector('#ai-prompt-input');
-  const btnApplyPrompt = host.querySelector('#btn-apply-prompt');
+  const selectPreset = host.querySelector('#select-preset-request');
+  const inputRequest = host.querySelector('#app-request-input');
+  const btnApplyRequest = host.querySelector('#btn-apply-request');
   const specDiagnostics = host.querySelector('#creator-spec-diagnostics');
   const syncDot = host.querySelector('#deploy-sync-dot');
   const syncText = host.querySelector('#deploy-sync-text');
-  state.specPrompt = '';
+  state.specRequest = '';
   state.isOptimizing = false;
   state.isDeploying = false;
 
@@ -515,7 +510,7 @@ function wireUi(host) {
     if (!presetKey || !PRESETS[presetKey]) return;
 
     const preset = PRESETS[presetKey];
-    inputPrompt.value = preset.prompt;
+    inputRequest.value = preset.request;
 
     // Automatically fill advanced values
     inputId.value = normalizeModuleId(preset.id);
@@ -527,42 +522,42 @@ function wireUi(host) {
 
     renderCollectionsList(host);
     syncStateFromInputs();
-    state.specPrompt = inputPrompt.value.trim();
+    state.specRequest = inputRequest.value.trim();
     updateCreatorActionState();
 
     addConsoleLog(`[INFO] Vorlage '${preset.title}' erfolgreich geladen. Spezifikation im Hintergrund angepasst.`, 'info');
   });
 
-  // AI Prompt Spec Optimizer Trigger
-  btnApplyPrompt.addEventListener('click', async () => {
-    const prompt = inputPrompt.value.trim();
-    if (!prompt) {
+  // Local metadata helper. It prepares module fields only; CTOX builds the app.
+  btnApplyRequest.addEventListener('click', async () => {
+    const request = inputRequest.value.trim();
+    if (!request) {
       state.ctx.notifications.show({
-        title: 'Leerer Prompt',
-        message: 'Bitte gib eine kurze Beschreibung in das Prompt-Feld ein.',
+        title: 'Leerer Auftrag',
+        message: 'Bitte gib eine kurze Beschreibung der gewünschten App ein.',
         type: 'warning'
       });
       return;
     }
 
     state.isOptimizing = true;
-    btnApplyPrompt.innerHTML = `
+    btnApplyRequest.innerHTML = `
       <svg class="animate-spin" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation: pulse-sync 1s infinite alternate; margin-right: 6px;"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
-      KI analysiert Prompt...
+      CTOX analysiert Auftrag...
     `;
     updateCreatorActionState();
 
     try {
       addConsoleLog('==================================================', 'info');
-      addConsoleLog('[KI-OPERATOR] Analysiere Anwendungsbeschreibung...', 'info');
+      addConsoleLog('[CTOX] Analysiere Anwendungsbeschreibung...', 'info');
       await new Promise(r => setTimeout(r, 600));
 
-      const spec = deriveSpecFromPrompt(prompt);
+      const spec = deriveSpecFromRequest(request);
 
-      addConsoleLog(`[KI-OPERATOR] Erkenne Domäne & Absicht: ${spec.category}`, 'info');
+      addConsoleLog(`[CTOX] Erkenne Domäne & Absicht: ${spec.category}`, 'info');
       await new Promise(r => setTimeout(r, 300));
-      addConsoleLog(`[KI-OPERATOR] Bestimme Layout-Struktur: ${spec.layout === 'pane' ? 'Spalten-Tracker' : 'Tabellen-Workspace'}`, 'info');
-      addConsoleLog(`[KI-OPERATOR] Generiere Datentabellen: [${spec.collections.join(', ')}]`, 'info');
+      addConsoleLog(`[CTOX] Bestimme Layout-Hinweis: ${spec.layout === 'pane' ? 'kompakter Arbeitsbereich' : 'breiter Arbeitsbereich'}`, 'info');
+      addConsoleLog(`[CTOX] Schlage Datentabellen vor: [${spec.collections.join(', ')}]`, 'info');
 
       inputId.value = spec.id;
       inputTitle.value = spec.title;
@@ -573,18 +568,18 @@ function wireUi(host) {
 
       renderCollectionsList(host);
       syncStateFromInputs({ preserveFreshSpec: true });
-      state.specPrompt = prompt;
+      state.specRequest = request;
 
-      addConsoleLog(`[SUCCESS] Spezifikation für '${spec.title}' erfolgreich generiert.`, 'success');
+      addConsoleLog(`[SUCCESS] Spezifikation für '${spec.title}' erfolgreich aktualisiert.`, 'success');
       addConsoleLog('==================================================', 'success');
 
       state.ctx.notifications.show({
-        title: 'Spezifikation optimiert',
+        title: 'Spezifikation aktualisiert',
         message: `Die App-Spezifikation für '${spec.title}' wurde aktualisiert.`,
         type: 'success'
       });
     } catch (error) {
-      state.specPrompt = '';
+      state.specRequest = '';
       addConsoleLog(`[ERROR] Spezifikation konnte nicht aktualisiert werden: ${error.message}`, 'error');
       state.ctx.notifications.show({
         title: 'Spezifikation fehlgeschlagen',
@@ -593,9 +588,9 @@ function wireUi(host) {
       });
     } finally {
       state.isOptimizing = false;
-      btnApplyPrompt.innerHTML = `
+      btnApplyRequest.innerHTML = `
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
-        Spezifikation optimieren & anwenden
+        Spezifikation anwenden
       `;
       updateCreatorActionState();
     }
@@ -608,16 +603,15 @@ function wireUi(host) {
     state.appDesc = inputDesc.value.trim();
     state.appCategory = selectCategory.value;
     state.appLayout = selectLayout.value;
-    if (!preserveFreshSpec) state.specPrompt = '';
+    if (!preserveFreshSpec) state.specRequest = '';
 
-    generateAllFiles();
     updateCreatorActionState();
   };
 
   const updateCreatorActionState = () => {
     const actionState = computeCreatorActionState({
-      prompt: inputPrompt.value,
-      specPrompt: state.specPrompt,
+      request: inputRequest.value,
+      specRequest: state.specRequest,
       appId: inputId.value,
       appTitle: inputTitle.value,
       appDesc: inputDesc.value,
@@ -625,20 +619,20 @@ function wireUi(host) {
       isOptimizing: state.isOptimizing,
       isDeploying: state.isDeploying
     });
-    btnApplyPrompt.disabled = !actionState.optimizeReady;
+    btnApplyRequest.disabled = !actionState.optimizeReady;
     btnDeploy.disabled = !actionState.deployReady;
-    btnApplyPrompt.setAttribute('aria-disabled', String(btnApplyPrompt.disabled));
+    btnApplyRequest.setAttribute('aria-disabled', String(btnApplyRequest.disabled));
     btnDeploy.setAttribute('aria-disabled', String(btnDeploy.disabled));
-    btnApplyPrompt.title = actionState.hasPrompt
-      ? 'Prompt analysieren und Spezifikation aktualisieren'
-      : 'Bitte zuerst einen Prompt eingeben.';
+    btnApplyRequest.title = actionState.hasRequest
+      ? 'Beschreibung analysieren und Spezifikation aktualisieren'
+      : 'Bitte zuerst eine App-Beschreibung eingeben.';
     btnDeploy.title = actionState.deployReady
-      ? 'Frische Spezifikation generieren und installieren'
+      ? 'App-Erstellung durch CTOX starten'
       : actionState.diagnostic;
     btnDeploy.dataset.state = actionState.deployReady ? 'ready' : 'blocked';
     if (specDiagnostics) {
       specDiagnostics.textContent = actionState.diagnostic;
-      specDiagnostics.dataset.state = actionState.deployReady ? 'ready' : actionState.hasPrompt ? 'pending' : 'blocked';
+      specDiagnostics.dataset.state = actionState.deployReady ? 'ready' : actionState.hasRequest ? 'pending' : 'blocked';
     }
     if (!state.isDeploying && syncText && syncDot) {
       syncDot.style.background = '';
@@ -648,14 +642,14 @@ function wireUi(host) {
     return actionState;
   };
 
-  inputPrompt.addEventListener('input', () => {
-    state.specPrompt = '';
+  inputRequest.addEventListener('input', () => {
+    state.specRequest = '';
     updateCreatorActionState();
   });
 
   // Text inputs changed manually inside the expandable accordion
   [inputId, inputTitle, inputDesc, selectCategory, selectLayout].forEach(el => {
-    el.addEventListener('input', () => syncStateFromInputs({ preserveFreshSpec: Boolean(inputPrompt.value.trim()) }));
+    el.addEventListener('input', () => syncStateFromInputs({ preserveFreshSpec: Boolean(inputRequest.value.trim()) }));
   });
 
   // DB Collection Visual builder in advanced accordion
@@ -683,7 +677,7 @@ function wireUi(host) {
         if (!confirmed) return;
         state.appCollections.splice(removeIdx, 1);
         renderCollectionsList(h);
-        syncStateFromInputs({ preserveFreshSpec: Boolean(inputPrompt.value.trim()) });
+        syncStateFromInputs({ preserveFreshSpec: Boolean(inputRequest.value.trim()) });
       });
       listEl.appendChild(row);
     });
@@ -699,7 +693,7 @@ function wireUi(host) {
     state.appCollections.push(newName);
     inputNewColl.value = '';
     renderCollectionsList(host);
-    syncStateFromInputs({ preserveFreshSpec: Boolean(inputPrompt.value.trim()) });
+    syncStateFromInputs({ preserveFreshSpec: Boolean(inputRequest.value.trim()) });
     addConsoleLog(`[INFO] Datentabelle '${newName}' hinzugefügt.`, 'info');
   });
 
@@ -712,7 +706,7 @@ function wireUi(host) {
   host.querySelector('[data-creator-right-body]')?.addEventListener('click', (event) => {
     const openButton = event.target.closest('[data-open-installed-app]');
     const upgradeButton = event.target.closest('[data-upgrade-installed-app]');
-    const promptButton = event.target.closest('[data-use-creator-prompt]');
+    const requestButton = event.target.closest('[data-use-creator-request]');
 
     if (openButton) {
       window.location.hash = `#${encodeURIComponent(openButton.dataset.openInstalledApp || '')}`;
@@ -724,14 +718,14 @@ function wireUi(host) {
       return;
     }
 
-    if (promptButton) {
-      const prompt = state.creatorPrompts.find((item) => item.id === promptButton.dataset.useCreatorPrompt);
-      if (!prompt) return;
-      inputPrompt.value = prompt.prompt;
-      state.specPrompt = '';
+    if (requestButton) {
+      const request = state.creatorRequests.find((item) => item.id === requestButton.dataset.useCreatorRequest);
+      if (!request) return;
+      inputRequest.value = request.request;
+      state.specRequest = '';
       updateCreatorActionState();
-      addConsoleLog(`[INFO] CTOX-Prompt '${prompt.title}' übernommen.`, 'info');
-      inputPrompt.focus();
+      addConsoleLog(`[INFO] CTOX App-Auftrag '${request.title}' uebernommen.`, 'info');
+      inputRequest.focus();
     }
   });
 
@@ -741,31 +735,31 @@ function wireUi(host) {
   // Install / Deploy Button
   btnDeploy.addEventListener('click', async () => {
     try {
-      const currentPrompt = inputPrompt.value.trim();
-      if (!currentPrompt || state.specPrompt !== currentPrompt) {
+      const currentRequest = inputRequest.value.trim();
+      if (!currentRequest || state.specRequest !== currentRequest) {
         state.ctx.notifications.show({
           title: 'Spezifikation nicht bereit',
-          message: 'Bitte gib einen Prompt ein und aktualisiere die Spezifikation, bevor du installierst.',
+          message: 'Bitte beschreibe die App und wende die Spezifikation an, bevor du den CTOX-Auftrag startest.',
           type: 'warning'
         });
-        addConsoleLog('[BLOCKED] Installation verhindert: Prompt fehlt oder Spezifikation ist nicht frisch.', 'warning');
+        addConsoleLog('[BLOCKED] App-Auftrag verhindert: Beschreibung fehlt oder Spezifikation ist nicht frisch.', 'warning');
         updateCreatorActionState();
         return;
       }
 
       const actionState = updateCreatorActionState();
       if (!actionState.deployReady) {
-        addConsoleLog(`[BLOCKED] Installation verhindert: ${actionState.diagnostic}`, 'warning');
+        addConsoleLog(`[BLOCKED] App-Auftrag verhindert: ${actionState.diagnostic}`, 'warning');
         return;
       }
 
-      const confirmed = await showBusinessConfirm(`Modul "${state.appTitle}" (${state.appId}) jetzt installieren? Die generierten Dateien werden in installed-modules/${state.appId}/ geschrieben.`, {
-        title: 'Installation bestätigen',
-        confirmLabel: 'Installieren',
+      const confirmed = await showBusinessConfirm(`CTOX soll die App "${state.appTitle}" (${state.appId}) jetzt bauen? Die App wird als runtime-installed Business-OS-Modul erstellt.`, {
+        title: 'App-Erstellung starten',
+        confirmLabel: 'Starten',
         cancelLabel: 'Abbrechen'
       });
       if (!confirmed) {
-        addConsoleLog('[INFO] Installation abgebrochen. Es wurden keine Dateien geschrieben.', 'info');
+        addConsoleLog('[INFO] App-Erstellung abgebrochen. Es wurde kein CTOX-Auftrag angelegt.', 'info');
         return;
       }
 
@@ -798,8 +792,8 @@ function wireUi(host) {
         if (inputDesc) inputDesc.value = manifest.description || '';
         if (selectCategory) selectCategory.value = manifest.category || 'Management';
         if (selectLayout) selectLayout.value = manifest.layout?.shell || 'full-workspace';
-        if (inputPrompt) {
-          inputPrompt.value = `Upgrade für ${manifest.title || upgradeAppId}: ${manifest.description || ''}`;
+        if (inputRequest) {
+          inputRequest.value = `Upgrade für ${manifest.title || upgradeAppId}: ${manifest.description || ''}`;
         }
 
         // Increment version
@@ -817,9 +811,9 @@ function wireUi(host) {
 
         renderCollectionsList(host);
         syncStateFromInputs({ preserveFreshSpec: true });
-        state.specPrompt = inputPrompt.value.trim();
+        state.specRequest = inputRequest.value.trim();
 
-        addConsoleLog(`[SUCCESS] Spezifikation für '${manifest.title || upgradeAppId}' erfolgreich geladen. Passen Sie die Prompt-Eingabe an und starten Sie das Deployment!`, 'success');
+        addConsoleLog(`[SUCCESS] Spezifikation für '${manifest.title || upgradeAppId}' erfolgreich geladen. Passe die Beschreibung an und starte die App-Erstellung.`, 'success');
         updateCreatorActionState();
       } catch (err) {
         addConsoleLog(`[ERROR] Fehler beim Laden des Upgrades: ${err.message}`, 'error');
@@ -840,566 +834,61 @@ function addConsoleLog(text, type = '') {
   container.scrollTop = container.scrollHeight;
 }
 
-function generateSvgLogo(appId, category) {
-  const cat = String(category || '').trim().toLowerCase();
-
-  if (cat === 'productivity') {
-    return `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" class="svg-icon svg-${appId}">
-  <defs>
-    <linearGradient id="grad-${appId}" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#f59e0b" />
-      <stop offset="100%" stop-color="#ea580c" />
-    </linearGradient>
-  </defs>
-  <rect x="3" y="4" width="18" height="16" rx="3" ry="3" fill="url(#grad-${appId})" fill-opacity="0.12" stroke="url(#grad-${appId})" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></rect>
-  <line x1="3" y1="9" x2="21" y2="9" stroke="url(#grad-${appId})" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></line>
-  <path d="M9 2v4M15 2v4" stroke="url(#grad-${appId})" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
-  <path d="M8 14l2 2 4-4" stroke="url(#grad-${appId})" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
-</svg>`;
-  } else if (cat === 'finance') {
-    return `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" class="svg-icon svg-${appId}">
-  <defs>
-    <linearGradient id="grad-${appId}" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#10b981" />
-      <stop offset="100%" stop-color="#059669" />
-    </linearGradient>
-  </defs>
-  <rect x="3" y="3" width="18" height="18" rx="3" ry="3" fill="url(#grad-${appId})" fill-opacity="0.12" stroke="url(#grad-${appId})" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></rect>
-  <path d="M18 17V9M12 17v-4M6 17v-2" stroke="url(#grad-${appId})" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
-  <path d="M6 14l4-3 4 2 4-5" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
-  <circle cx="18" cy="8" r="1.5" fill="url(#grad-${appId})" stroke="#ffffff" stroke-width="1"></circle>
-</svg>`;
-  } else if (cat === 'utilities') {
-    return `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" class="svg-icon svg-${appId}">
-  <defs>
-    <linearGradient id="grad-${appId}" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#f43f5e" />
-      <stop offset="100%" stop-color="#e11d48" />
-    </linearGradient>
-  </defs>
-  <circle cx="12" cy="12" r="9" fill="url(#grad-${appId})" fill-opacity="0.12" stroke="url(#grad-${appId})" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></circle>
-  <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" stroke="url(#grad-${appId})" stroke-width="2" stroke-linecap="round"></path>
-  <circle cx="12" cy="12" r="3.5" fill="#ffffff" stroke="url(#grad-${appId})" stroke-width="1.5"></circle>
-</svg>`;
-  } else if (cat === 'development') {
-    return `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" class="svg-icon svg-${appId}">
-  <defs>
-    <linearGradient id="grad-${appId}" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#8b5cf6" />
-      <stop offset="100%" stop-color="#6366f1" />
-    </linearGradient>
-  </defs>
-  <rect x="3" y="3" width="18" height="18" rx="3" ry="3" fill="url(#grad-${appId})" fill-opacity="0.12" stroke="url(#grad-${appId})" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></rect>
-  <polyline points="7 8 11 12 7 16" stroke="url(#grad-${appId})" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
-  <line x1="13" y1="16" x2="17" y2="16" stroke="url(#grad-${appId})" stroke-width="2" stroke-linecap="round"></line>
-</svg>`;
-  } else {
-    return `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" class="svg-icon svg-${appId}">
-  <defs>
-    <linearGradient id="grad-${appId}" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#3b82f6" />
-      <stop offset="100%" stop-color="#06b6d4" />
-    </linearGradient>
-  </defs>
-  <rect x="3" y="3" width="18" height="18" rx="3" ry="3" fill="url(#grad-${appId})" fill-opacity="0.12" stroke="url(#grad-${appId})" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></rect>
-  <rect x="6" y="6" width="12" height="3" rx="1" fill="url(#grad-${appId})" fill-opacity="0.2" stroke="url(#grad-${appId})" stroke-width="1.5"></rect>
-  <rect x="6" y="11" width="12" height="3" rx="1" fill="url(#grad-${appId})" fill-opacity="0.2" stroke="url(#grad-${appId})" stroke-width="1.5"></rect>
-  <path d="M6 16h6" stroke="url(#grad-${appId})" stroke-width="2" stroke-linecap="round"></path>
-  <circle cx="16" cy="16" r="1.5" fill="#ffffff" stroke="url(#grad-${appId})" stroke-width="1"></circle>
-</svg>`;
-  }
-}
-
-function generateAllFiles() {
-  const appId = state.appId || 'lagerverwaltung';
-  const appTitle = state.appTitle || 'Lagerverwaltung';
-  const appDesc = state.appDesc || 'Beschreibung';
-  const appCategory = state.appCategory || 'Management';
-  const appLayout = state.appLayout || 'full-workspace';
-  const collections = state.appCollections.length > 0 ? state.appCollections : ['items'];
-  const primaryColl = collections[0];
-  const appVersion = /^\d+\.\d+\.\d+$/.test(String(state.appVersion || '').trim())
-    ? String(state.appVersion).trim()
+export function buildAppCreateCommand({
+  appId,
+  appTitle,
+  appDesc,
+  appCategory,
+  appLayout,
+  appCollections,
+  appVersion,
+  instruction,
+  actor,
+  now = Date.now(),
+}) {
+  const moduleId = normalizeModuleId(appId);
+  const collections = Array.isArray(appCollections)
+    ? appCollections.map(normalizeCollectionName).filter(Boolean)
+    : [];
+  const version = /^\d+\.\d+\.\d+$/.test(String(appVersion || '').trim())
+    ? String(appVersion).trim()
     : '0.1.0';
-  const appCollectionVersion = `v${appVersion.replace(/\./g, '_')}`;
-  const versionedCollections = collections.map(coll => `${coll}_${appCollectionVersion}`);
-  const moduleCollections = Array.from(new Set(['business_commands', ...versionedCollections]));
+  const title = String(appTitle || moduleId || 'Business OS App').trim();
+  const description = String(appDesc || '').trim();
+  const request = String(instruction || description || title).trim();
 
-  const iconSvg = generateSvgLogo(appId, appCategory);
-  state.generatedFiles['icon.svg'] = iconSvg;
-
-  // 1. module.json
-  state.generatedFiles['module.json'] = JSON.stringify({
-    id: appId,
-    title: appTitle,
-    description: appDesc,
-    entry: `installed-modules/${appId}/index.html`,
-    install_scope: 'installed',
-    collections: moduleCollections,
-    layout: {
-      shell: appLayout,
-      left: `${appTitle} Navigation`,
-      center: `${appTitle} Workbench`
-    },
-    category: appCategory,
-    version: appVersion,
-    developer: 'CTOX Developer App',
-    license: 'AGPL-3.0-only',
-    tags: [appId, 'installed-module', appCategory.toLowerCase()]
-  }, null, 2);
-
-  // 2. schemas. Installed modules persist via shell-provided CTOX DB collections.
-  const collectionSchemas = Object.fromEntries(versionedCollections.map((collectionName) => [collectionName, {
-    title: `${collectionName} schema`,
-    version: 0,
-    primaryKey: 'id',
-    type: 'object',
-    properties: {
-      id: { type: 'string', maxLength: 120 },
-      title: { type: 'string' },
-      status: { type: 'string' },
-      updated_at_ms: { type: 'number' },
-      data: { type: 'object', additionalProperties: true },
-    },
-    required: ['id', 'title', 'status', 'updated_at_ms'],
-  }]));
-  state.generatedFiles['collections.schema.json'] = JSON.stringify({
-    schema_format: 'ctox-business-os-module-collections-v1',
-    collections: collectionSchemas,
-  }, null, 2);
-  state.generatedFiles['core/schemas.mjs'] = `export const primaryCollection = '${primaryColl}_${appCollectionVersion}';
-export const collectionSchemas = ${JSON.stringify(collectionSchemas, null, 2)};
-`;
-  state.generatedFiles['schema.js'] = `import { collectionSchemas } from './core/schemas.mjs';
-
-export const collections = Object.fromEntries(
-  Object.entries(collectionSchemas).map(([name, schema]) => [name, { schema }])
-);
-`;
-
-  // 3. index.html — built on the shared design system (shared/base.css).
-  // The shell loads base.css once; generated apps use its classes directly and
-  // get the declarative shell column resizer ([data-resize-frame] +
-  // .ctox-column-resizer[data-resizer-var]) without any module JS.
-  const detailCardHtml = `      <div id="detail-card" class="ctox-card" hidden>
-        <div class="ctox-card-body" style="padding-top: 12px; display: grid; gap: 14px;">
-          <div>
-            <label class="ctox-field-label" data-t="fieldTitle">Titel des Eintrags</label>
-            <input type="text" id="record-detail-title" class="ctox-input">
-          </div>
-          <div>
-            <label class="ctox-field-label" data-t="fieldStatus">Status</label>
-            <select id="record-detail-status" class="ctox-select">
-              <option value="Aktiv">Aktiv</option>
-              <option value="Entwurf">Entwurf</option>
-              <option value="Archiviert">Archiviert</option>
-            </select>
-          </div>
-          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-            <button type="button" class="ctox-button is-primary" id="btn-save-record" data-t="saveRecord">Speichern</button>
-            <button type="button" class="ctox-button" id="btn-request-review" data-t="requestReview">Review anfordern</button>
-          </div>
-        </div>
-      </div>`;
-  if (appLayout === 'full-workspace') {
-    state.generatedFiles['index.html'] = `<main class="ctox-workspace ctox-workspace--two-pane ${appId}-module" data-module-root="${appId}" data-resize-frame>
-  <aside class="ctox-pane" aria-label="${appTitle} Navigation">
-    <header class="ctox-pane-band ctox-pane-header">
-      <div class="ctox-pane-title-row">
-        <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-t="backlog">Kategorie</span>
-          <h2 class="ctox-pane-title" data-t="itemsTitle">${appTitle}</h2>
-        </div>
-      </div>
-    </header>
-    <div class="ctox-list" data-list-container></div>
-  </aside>
-
-  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="220" data-resizer-max="550" aria-label="Spaltenbreite anpassen"></button>
-
-  <section class="ctox-pane" aria-label="${appTitle} Workbench">
-    <header class="ctox-pane-band ctox-pane-header">
-      <div class="ctox-pane-title-row">
-        <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-t="workbench">Arbeitsfläche</span>
-          <h2 class="ctox-pane-title" id="selected-item-title" data-t="noSelection">Kein Eintrag gewählt</h2>
-        </div>
-        <button type="button" class="ctox-button is-primary" id="btn-create-record" data-t="createRecord">Eintrag erstellen</button>
-      </div>
-    </header>
-    <main class="ctox-pane-scroll" style="padding: 16px;">
-      <div class="ctox-empty" id="empty-state">
-        <span data-t="selectPrompt">Wähle einen Datensatz links aus oder erstelle einen neuen.</span>
-      </div>
-${detailCardHtml}
-    </main>
-  </section>
-</main>
-`;
-  } else {
-    state.generatedFiles['index.html'] = `<div class="${appId}-module" data-module-root="${appId}">
-  <!-- Pane layout: the shell renders the outer left/right panes; the module owns only the center workbench. -->
-  <div style="display: flex; flex-direction: column; width: 100%; height: 100%;">
-    <header class="ctox-toolbar">
-      <div class="ctox-pane-titles" style="flex: 1 1 auto;">
-        <span class="ctox-pane-kicker" data-t="workbench">Arbeitsbereich</span>
-        <h2 class="ctox-pane-title" id="selected-item-title">${appTitle} Workbench</h2>
-      </div>
-      <button type="button" class="ctox-button is-primary" id="btn-create-record" data-t="createRecord">Eintrag erstellen</button>
-    </header>
-
-    <main class="ctox-pane-scroll" style="flex: 1; padding: 16px;">
-      <div class="ctox-empty" id="empty-state">
-        <span data-t="selectPromptPane">Nutze die linke Navigationsspalte zur Auswahl und Bearbeitung.</span>
-      </div>
-${detailCardHtml}
-    </main>
-  </div>
-</div>
-`;
-  }
-
-  // 4. index.css — module-specific styles only. Frame, panes, lists, buttons,
-  // inputs, cards, empty states all come from the shell design system
-  // (app.css tokens + shared/base.css classes), so the module stylesheet
-  // stays nearly empty and dark/light theming follows the shell automatically.
-  state.generatedFiles['index.css'] = `/* ${appId} — module-specific styles.
-   The layout frame and controls come from shared/base.css (.ctox-workspace,
-   .ctox-pane, .ctox-list, .ctox-button, .ctox-input, .ctox-card, .ctox-empty).
-   Resolve every color through the shell tokens (--bg, --surface, --text,
-   --muted, --accent, ...). Do not define tokens on :root and do not redefine
-   shell tokens — the module conformance guard enforces this. */
-
-.${appId}-record-meta {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: 4px;
-  font-size: 11px;
-  color: var(--muted);
-}
-
-@media (max-width: 768px) {
-  .${appId}-module.ctox-workspace {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .${appId}-module .ctox-column-resizer,
-  .${appId}-module aside.ctox-pane {
-    display: none !important;
-  }
-}
-`;
-
-  // 5. locales — same keys as the inline fallback labels in index.js.
-  const localeDe = {
-    backlog: 'Datenkatalog',
-    itemsTitle: appTitle,
-    workbench: 'Arbeitsfläche',
-    noSelection: 'Kein Eintrag gewählt',
-    createRecord: 'Eintrag erstellen',
-    saveRecord: 'Speichern',
-    requestReview: 'Review anfordern',
-    fieldTitle: 'Titel des Eintrags',
-    fieldStatus: 'Status',
-    selectPrompt: 'Wähle einen Datensatz links aus oder erstelle einen neuen.',
-    selectPromptPane: 'Nutze die linke Navigationsspalte zur Auswahl und Bearbeitung.',
-    emptyList: 'Keine Einträge vorhanden',
-  };
-  const localeEn = {
-    backlog: 'Data catalog',
-    itemsTitle: appTitle,
-    workbench: 'Workbench',
-    noSelection: 'No record selected',
-    createRecord: 'Create record',
-    saveRecord: 'Save',
-    requestReview: 'Request review',
-    fieldTitle: 'Record title',
-    fieldStatus: 'Status',
-    selectPrompt: 'Select a record on the left or create a new one.',
-    selectPromptPane: 'Use the left navigation pane to select and edit records.',
-    emptyList: 'No records yet',
-  };
-  state.generatedFiles['locales/de.json'] = JSON.stringify(localeDe, null, 2);
-  state.generatedFiles['locales/en.json'] = JSON.stringify(localeEn, null, 2);
-
-  // 6. automation helper and self-checks for installed modules.
-  state.generatedFiles['core/automation.mjs'] = `export function buildFollowUpCommand(record = {}) {
-  const title = record.title || 'Unbenannter Datensatz';
   return {
-    id: \`cmd_\${record.id || Date.now()}\`,
-    module: '${appId}',
-    type: 'business_os.chat.task',
-    command_type: 'business_os.chat.task',
-    record_id: record.id || null,
+    command_id: `app-create-${moduleId}-${now}`,
+    module: 'creator',
+    type: 'ctox.business_os.app.create',
+    command_type: 'ctox.business_os.app.create',
+    record_id: moduleId,
     payload: {
-      title: \`Review: \${title}\`,
-      instruction: \`Review "\${title}" in ${appTitle} and create the next CTOX follow-up if action is required.\`,
-      prompt: \`Review "\${title}" in ${appTitle} and create the next CTOX follow-up if action is required.\`,
-      source_module: '${appId}',
-      source_collection: '${primaryColl}_${appCollectionVersion}',
-      record_snapshot: record,
-      outbound_channel: 'business_os_chat',
-      response_channel: 'business_os_chat',
+      title: `Create ${title}`,
+      instruction: request,
+      module_id: moduleId,
+      app_id: moduleId,
+      app_title: title,
+      description,
+      category: String(appCategory || '').trim(),
+      layout_hint: String(appLayout || '').trim(),
+      collections_hint: collections,
+      desired_version: version,
+      install_target: 'runtime-installed-module',
+      target: 'app',
+      mode: 'app',
+      required_skills: ['business-os-app-module-development'],
     },
     client_context: {
-      source: '${appId}',
-      surface: '${appId}.record-review',
+      source: 'business-os-creator',
+      target: 'app',
+      mode: 'app',
+      module_id: moduleId,
+      app_id: moduleId,
+      install_target: 'runtime-installed-module',
+      actor: actor || null,
     },
   };
-}
-`;
-  state.generatedFiles[`tests/${appId}.test.mjs`] = `import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { buildFollowUpCommand } from '../core/automation.mjs';
-
-const schemaDoc = JSON.parse(readFileSync(new URL('../collections.schema.json', import.meta.url), 'utf8'));
-assert.equal(schemaDoc.schema_format, 'ctox-business-os-module-collections-v1');
-assert.ok(schemaDoc.collections['${primaryColl}_${appCollectionVersion}']);
-
-const command = buildFollowUpCommand({ id: 'demo', title: 'Demo' });
-assert.equal(command.type, 'business_os.chat.task');
-assert.equal(command.command_type, 'business_os.chat.task');
-assert.deepEqual(command.payload.record_snapshot, { id: 'demo', title: 'Demo' });
-`;
-
-  // 7. index.js
-  state.generatedFiles['index.js'] = `import { loadModuleMessages } from '../../shared/i18n.js';
-import { buildFollowUpCommand } from './core/automation.mjs';
-
-const labels = {
-  de: ${JSON.stringify(localeDe, null, 2).replace(/\n/g, '\n  ')},
-  en: ${JSON.stringify(localeEn, null, 2).replace(/\n/g, '\n  ')}
-};
-
-const APP_METADATA = {
-  version: '${appVersion}',
-  collectionVersion: '${appCollectionVersion}',
-  primaryCollection: '${primaryColl}_${appCollectionVersion}',
-  collections: ${JSON.stringify(collections)}
-};
-
-const PRIMARY_COLL = APP_METADATA.primaryCollection;
-
-const state = {
-  ctx: null,
-  t: (key, fallback) => fallback ?? key,
-  records: [],
-  selectedId: null,
-  dbSubscription: null
-};
-
-export async function mount(ctx) {
-  state.ctx = ctx;
-  await ensureStyles();
-
-  const messages = await loadModuleMessages(import.meta.url, ctx.locale, labels);
-  state.t = (key, fallback) => messages[key] ?? fallback ?? key;
-
-  const html = await fetch(new URL('./index.html', import.meta.url)).then(res => res.text());
-  ctx.host.innerHTML = html;
-  applyTranslations(ctx.host, state.t);
-
-  await Promise.allSettled([
-    state.ctx.sync?.startCollection?.(PRIMARY_COLL),
-    state.ctx.sync?.startCollection?.('business_commands')
-  ]);
-
-  await loadInitialData();
-  state.dbSubscription = wireReactiveSync();
-  wireUi(ctx.host);
-
-  return () => {
-    if (typeof state.dbSubscription === 'function') {
-      state.dbSubscription();
-    } else if (state.dbSubscription && typeof state.dbSubscription.unsubscribe === 'function') {
-      state.dbSubscription.unsubscribe();
-    }
-  };
-}
-
-async function ensureStyles() {
-  if (document.querySelector('link[data-module-styles="${appId}"]')) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = new URL('./index.css', import.meta.url).href;
-  link.dataset.moduleStyles = '${appId}';
-  document.head.append(link);
-}
-
-function applyTranslations(root, t) {
-  root.querySelectorAll('[data-t]').forEach((el) => {
-    el.textContent = t(el.dataset.t, el.textContent);
-  });
-}
-
-function getCollection(name) {
-  return state.ctx?.db?.collection?.(name) || null;
-}
-
-async function loadInitialData() {
-  const collection = getCollection(PRIMARY_COLL);
-  if (!collection) {
-    state.records = [];
-    renderList();
-    return;
-  }
-  const items = await collection.find().exec();
-  state.records = items.map(item => item.toJSON ? item.toJSON() : item);
-  renderList();
-}
-
-function wireReactiveSync() {
-  const collection = getCollection(PRIMARY_COLL);
-  if (!collection?.find) return () => {};
-  const query = collection.find();
-  if (!query?.$?.subscribe) return () => {};
-
-  const sub = query.$.subscribe((items) => {
-    state.records = items.map(item => item.toJSON ? item.toJSON() : item);
-    renderList();
-    if (state.selectedId) {
-      const activeItem = state.records.find(record => record.id === state.selectedId);
-      if (activeItem) showDetail(activeItem);
-    }
-  });
-  return sub;
-}
-
-function renderList() {
-  const container = state.ctx.host.querySelector('[data-list-container]') || state.ctx.left?.querySelector('[data-list-container]');
-  if (!container) return;
-  container.innerHTML = '';
-
-  if (state.records.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'ctox-empty';
-    empty.textContent = state.t('emptyList', 'Keine Einträge vorhanden');
-    container.appendChild(empty);
-    return;
-  }
-
-  state.records.forEach((record) => {
-    const card = document.createElement('button');
-    card.type = 'button';
-    card.className = 'ctox-list-item';
-    card.setAttribute('aria-selected', state.selectedId === record.id ? 'true' : 'false');
-    card.dataset.id = record.id;
-    card.setAttribute('data-context-module', '${appId}');
-    card.setAttribute('data-context-record-type', PRIMARY_COLL);
-    card.setAttribute('data-context-record-id', record.id);
-    card.setAttribute('data-context-label', record.title || record.id);
-
-    const title = document.createElement('div');
-    title.style.fontWeight = '600';
-    title.style.fontSize = '13px';
-    title.textContent = record.title || 'Unbenannt';
-
-    const meta = document.createElement('div');
-    meta.className = '${appId}-record-meta';
-    const status = document.createElement('span');
-    status.textContent = 'Status: ' + (record.status || 'Entwurf');
-    const updated = document.createElement('span');
-    updated.textContent = new Date(record.updated_at_ms || Date.now()).toLocaleTimeString();
-    meta.append(status, updated);
-
-    card.append(title, meta);
-    card.addEventListener('click', () => selectRecord(record.id));
-    container.appendChild(card);
-  });
-}
-
-function selectRecord(id) {
-  state.selectedId = id;
-  const record = state.records.find(item => item.id === id);
-  if (record) {
-    showDetail(record);
-    renderList();
-  }
-}
-
-function showDetail(record) {
-  const emptyState = state.ctx.host.querySelector('#empty-state');
-  const detailCard = state.ctx.host.querySelector('#detail-card');
-  const titleHeader = state.ctx.host.querySelector('#selected-item-title');
-  const inputTitle = state.ctx.host.querySelector('#record-detail-title');
-  const selectStatus = state.ctx.host.querySelector('#record-detail-status');
-
-  if (emptyState) emptyState.hidden = true;
-  if (detailCard) detailCard.hidden = false;
-  if (titleHeader) titleHeader.textContent = record.title || 'Unbenannt';
-  if (inputTitle) inputTitle.value = record.title || '';
-  if (selectStatus) selectStatus.value = record.status || 'Entwurf';
-}
-
-function notify(title, message, type = 'success') {
-  state.ctx.notifications?.show?.({ title, message, type });
-}
-
-function wireUi(host) {
-  const btnCreate = host.querySelector('#btn-create-record') || state.ctx.left?.querySelector('#btn-create-record');
-  const btnSave = host.querySelector('#btn-save-record');
-  const btnReview = host.querySelector('#btn-request-review');
-
-  if (btnCreate) {
-    btnCreate.addEventListener('click', async () => {
-      const collection = getCollection(PRIMARY_COLL);
-      if (!collection) return;
-      const newId = 'rec-' + Date.now();
-      const record = {
-        id: newId,
-        title: 'Neuer Eintrag',
-        status: 'Entwurf',
-        updated_at_ms: Date.now(),
-        data: {}
-      };
-      await collection.insert({
-        ...record
-      });
-      state.records = [record, ...state.records.filter(item => item.id !== newId)];
-      selectRecord(newId);
-      notify('Eintrag erstellt', 'Ein neuer Datensatz wurde erfolgreich angelegt.');
-    });
-  }
-
-  if (btnSave) {
-    btnSave.addEventListener('click', async () => {
-      const collection = getCollection(PRIMARY_COLL);
-      if (!state.selectedId || !collection) return;
-      const inputTitle = host.querySelector('#record-detail-title');
-      const selectStatus = host.querySelector('#record-detail-status');
-      const doc = await collection.findOne(state.selectedId).exec();
-      if (!doc) return;
-      await doc.patch({
-        title: inputTitle?.value || 'Unbenannt',
-        status: selectStatus?.value || 'Entwurf',
-        updated_at_ms: Date.now()
-      });
-      await loadInitialData();
-      const updatedRecord = state.records.find(item => item.id === state.selectedId);
-      if (updatedRecord) showDetail(updatedRecord);
-      notify('Gespeichert', 'Die Änderungen wurden erfolgreich synchronisiert.');
-    });
-  }
-
-  if (btnReview) {
-    btnReview.addEventListener('click', async () => {
-      const record = state.records.find(item => item.id === state.selectedId);
-      if (!record || !state.ctx.commandBus?.dispatch) return;
-      const command = buildFollowUpCommand(record);
-      await state.ctx.commandBus.dispatch({
-        ...command,
-        type: 'business_os.chat.task',
-        command_type: 'business_os.chat.task',
-        payload: {
-          ...command.payload,
-          record_snapshot: record
-        }
-      });
-      notify('Review angefordert', 'Der CTOX Chat hat eine Follow-up Aufgabe erhalten.');
-    });
-  }
-}
-`;
 }
 
 async function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
@@ -1415,13 +904,10 @@ async function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
   const appVersion = /^\d+\.\d+\.\d+$/.test(String(state.appVersion || '').trim())
     ? String(state.appVersion).trim()
     : '0.1.0';
-  const appCollectionVersion = `v${appVersion.replace(/\./g, '_')}`;
-  const versionedCollections = collections.map(coll => `${coll}_${appCollectionVersion}`);
-  const moduleCollections = Array.from(new Set(['business_commands', ...versionedCollections]));
 
   if (!appId || !appTitle || !appDesc) {
     state.ctx.notifications.show({
-      title: 'Fehler beim Generieren',
+      title: 'Fehler beim Vorbereiten',
       message: 'Bitte fülle alle Pflichtfelder (Modul ID, Titel, Beschreibung) aus.',
       type: 'error'
     });
@@ -1433,21 +919,11 @@ async function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
   state.isDeploying = true;
   btnDeploy.disabled = true;
   syncDot.className = 'sync-dot is-saving';
-  syncText.textContent = state.t('deploySaving', 'Speichere Modul...');
+  syncText.textContent = state.t('deploySaving', 'Lege CTOX-Auftrag an...');
   updateCreatorActionState();
 
-  // Visual delay logs for the static module generator.
   addConsoleLog('==================================================', 'info');
-  addConsoleLog(`[START] Erzeuge statische Business OS Moduldateien für '${appTitle}' (${appId})...`, 'info');
-
-  await new Promise(r => setTimeout(r, 400));
-  addConsoleLog(`[1/3] Generiere module.json manifest für layout.shell: '${appLayout}'...`, 'info');
-
-  await new Promise(r => setTimeout(r, 300));
-  addConsoleLog(`[2/3] Bereite RxDB Schema Definition für [${versionedCollections.join(', ')}] vor...`, 'info');
-
-  await new Promise(r => setTimeout(r, 300));
-  addConsoleLog('[3/3] Schreibe Vanilla HTML/CSS/browser-ESM Dateien ohne Build-Schritt...', 'info');
+  addConsoleLog(`[START] Übergabe an CTOX App Creator Agent für '${appTitle}' (${appId})...`, 'info');
 
   try {
     const actorContext = (session) => {
@@ -1460,95 +936,43 @@ async function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
       };
     };
 
-    const clientContext = {
-      source: 'business-os-creator',
+    const command = buildAppCreateCommand({
+      appId,
+      appTitle,
+      appDesc,
+      appCategory: state.appCategory,
+      appLayout,
+      appCollections: collections,
+      appVersion,
+      instruction: state.specRequest || appDesc,
       actor: actorContext(state.ctx.session),
-    };
-
-    // 1. Scaffold the module under installed-modules/<appId>
-    addConsoleLog(`[WRITE] Sende ctox.module.save Befehl für ${appId}...`, 'info');
-    await state.ctx.commandBus.dispatch({
-      command_id: `save-module-${Date.now()}`,
-      module: 'creator',
-      type: 'ctox.module.save',
-      command_type: 'ctox.module.save',
-      payload: {
-        id: appId,
-        title: appTitle,
-        description: appDesc,
-        version: appVersion,
-        entry: `installed-modules/${appId}/index.html`,
-        install_scope: 'installed',
-        collections: moduleCollections,
-        layout: {
-          shell: appLayout,
-          left: `${appTitle} Navigation`,
-          center: `${appTitle} Workbench`
-        }
-      },
-      client_context: clientContext
     });
 
-    await new Promise(r => setTimeout(r, 600));
-
-    // 2. Loop through generated templates and dispatch ctox.source.save
-    const filesToSave = [
-      'module.json',
-      'collections.schema.json',
-      'schema.js',
-      'core/schemas.mjs',
-      'core/automation.mjs',
-      'index.html',
-      'index.css',
-      'index.js',
-      'icon.svg',
-      'locales/de.json',
-      'locales/en.json',
-      `tests/${appId}.test.mjs`
-    ];
-    for (const file of filesToSave) {
-      addConsoleLog(`[WRITE] Schreibe Datei: installed-modules/${appId}/${file}...`, 'info');
-      await state.ctx.commandBus.dispatch({
-        command_id: `save-source-${file}-${Date.now()}`,
-        module: 'creator',
-        type: 'ctox.source.save',
-        command_type: 'ctox.source.save',
-        payload: {
-          module_id: appId,
-          path: file,
-          content: state.generatedFiles[file]
-        },
-        client_context: clientContext
-      });
-      await new Promise(r => setTimeout(r, 150));
-    }
+    addConsoleLog(`[QUEUE] Sende ${command.command_type} für ${appId}...`, 'info');
+    const result = await state.ctx.commandBus.dispatch(command);
 
     addConsoleLog('==================================================', 'success');
-    addConsoleLog(`[SUCCESS] Modul '${appTitle}' wurde erfolgreich generiert und im System installiert!`, 'success');
-    addConsoleLog(`[SUCCESS] Die Dateien befinden sich unter: installed-modules/${appId}/`, 'success');
-    addConsoleLog('[INFO] Lade Workspace neu um die Änderungen anzuwenden...', 'info');
+    addConsoleLog(`[SUCCESS] CTOX App-Erstellung für '${appTitle}' wurde gestartet.`, 'success');
+    if (result?.task_id) addConsoleLog(`[TASK] ${result.task_id}`, 'info');
 
     state.ctx.notifications.show({
-      title: 'Modul installiert',
-      message: `Das Modul '${appTitle}' wurde erfolgreich generiert und geladen!`,
+      title: 'App-Erstellung gestartet',
+      message: `CTOX baut '${appTitle}' jetzt als Business-OS-App.`,
       type: 'success'
     });
 
     syncDot.className = 'sync-dot';
-    syncText.textContent = state.t('deployInstalled', 'Erfolgreich installiert');
-
-    // Reload the app catalog in the background so it shows up in desktop
-    setTimeout(() => {
-      window.location.reload();
-    }, 1500);
+    syncText.textContent = state.t('deployInstalled', 'CTOX-Auftrag angelegt');
+    state.isDeploying = false;
+    updateCreatorActionState();
 
   } catch (error) {
-    addConsoleLog(`[FEHLER] Fehler bei der Code-Generierung: ${error.message}`, 'error');
+    addConsoleLog(`[FEHLER] App-Auftrag konnte nicht angelegt werden: ${error.message}`, 'error');
     console.error(error);
 
     state.ctx.notifications.show({
-      title: 'Fehler bei der Installation',
-      message: `Das Modul konnte nicht vollständig registriert werden: ${error.message}`,
+      title: 'App-Erstellung fehlgeschlagen',
+      message: `Der CTOX-Auftrag konnte nicht angelegt werden: ${error.message}`,
       type: 'error'
     });
 
@@ -1703,7 +1127,7 @@ async function dispatchCreatorContextChat(state, context, message, mode = 'data'
       payload: {
         title,
         instruction,
-        prompt: trimmed,
+        request: trimmed,
         user_message: trimmed,
         mode: safeMode,
         target: safeMode === 'app' ? 'app' : 'data',
@@ -1851,7 +1275,7 @@ function escapeHtml(value) {
 
 
 // --- Creator module i18n -----------------------------------------------------
-// Loads locales/<lang>.json for the creator UI itself (the generator templates
+// Loads locales/<lang>.json for the creator UI itself (the request templates
 // carry their own labels). German markup text is the fallback.
 async function loadCreatorMessages(locale) {
   const lang = locale === 'en' ? 'en' : 'de';

@@ -24919,7 +24919,7 @@ fn command_prompt(
         String::new()
     } else {
         format!(
-            "\nRequired CTOX skills: {}\n{}\n",
+            "\nBusiness OS task resources:\n- required_skills: {}\n- skill_context: {}\n",
             required_skill_names.join(", "),
             business_os_required_skill_prompt_contract()
         )
@@ -25009,7 +25009,7 @@ fn is_business_os_app_module_command(command: &BusinessCommand) -> bool {
 }
 
 fn business_os_required_skill_prompt_contract() -> &'static str {
-    "Skill handling contract: required skills are instruction context, not deliverables. Read and follow them through CTOX skill tooling only. Do not create, copy, mirror, export, or edit skill files or skill-named directories in the workspace unless the user explicitly asked to change a skill."
+    "read-only; edit the requested app artifacts, not skill files, unless the task explicitly targets skill maintenance"
 }
 
 fn business_os_app_command_target_prompt_block(command: &BusinessCommand) -> String {
@@ -25025,19 +25025,17 @@ fn business_os_app_command_target_prompt_block(command: &BusinessCommand) -> Str
     };
     format!(
         r#"
-Business OS app build target:
-- Build the app, not documentation, a plan, a skill file, or a generic web app.
+Business OS app task metadata:
 - module_id: {module_id}
 - install_target: {install_target}
 - app_directory: {module_dir}
-- Required skill: business-os-app-module-development.
-- First choose and inspect three shipped Business OS app references. Pick the best matches yourself; customers, shiftflow, and outbound are only examples. Use `ctox business-os app references --json` if you need a local catalog.
-- Runtime apps write only under app_directory. Do not put runtime app artifacts under src/.
-- Files are no-build HTML fragment, CSS, and browser ESM. No framework, package manager, bundled dependency tree, or compile step.
-- Implement mount(ctx), render into ctx.host, persist records with ctx.db, and start automation with ctx.commandBus.dispatch(...).
-- Use business_os.chat.task for normal CTOX chat/AI follow-up and include payload.record_snapshot. Use ctox.ticket.* only for real ticket lifecycle actions. Do not write directly to business_commands or ctox_ticket_* collections.
-- Keep the UI small and real: all visible controls work; use a third pane only when the workflow actually needs one.
-- Finish with: ctox business-os app validate {module_id} {mode_flag}
+- skill: business-os-app-module-development
+- resource.module_contract: src/skills/system/product_engineering/business-os-app-module-development/references/module-contract.md
+- resource.dos_and_donts: src/skills/system/product_engineering/business-os-app-module-development/references/dos-and-donts.md
+- resource.green_checklist: src/skills/system/product_engineering/business-os-app-module-development/references/green-checklist.md
+- resource.architecture_translation: src/skills/system/product_engineering/business-os-app-module-development/references/architecture-translation.md
+- reference_catalog: ctox business-os app references --json
+- validation: ctox business-os app validate {module_id} {mode_flag}
 "#
     )
 }
@@ -27033,32 +27031,24 @@ mod tests {
         };
 
         let prompt = command_prompt("cmd_app_bench", &command, &[]);
-        assert!(prompt.contains("Required CTOX skills: business-os-app-module-development"));
-        assert!(prompt.contains("Business OS app build target:"));
-        assert!(prompt.contains("Build the app, not documentation, a plan"));
+        assert!(prompt.contains("Business OS task resources:"));
+        assert!(prompt.contains("- required_skills: business-os-app-module-development"));
+        assert!(prompt.contains("Business OS app task metadata:"));
         assert!(prompt.contains("- module_id: subscriptions"));
         assert!(prompt.contains("- install_target: runtime-installed-module"));
         assert!(
             prompt.contains("- app_directory: runtime/business-os/installed-modules/subscriptions")
         );
-        assert!(
-            prompt.contains("First choose and inspect three shipped Business OS app references")
-        );
-        assert!(prompt.contains("Pick the best matches yourself"));
-        assert!(prompt.contains("customers, shiftflow, and outbound are only examples"));
-        assert!(prompt.contains("ctox business-os app references --json"));
-        assert!(prompt.contains("no-build HTML fragment, CSS, and browser ESM"));
-        assert!(prompt.contains("No framework, package manager"));
-        assert!(prompt.contains("Implement mount(ctx)"));
-        assert!(prompt.contains("persist records with ctx.db"));
-        assert!(prompt.contains("ctx.commandBus.dispatch"));
-        assert!(prompt.contains("ctox business-os app validate subscriptions --installed"));
+        assert!(prompt.contains("- skill: business-os-app-module-development"));
+        assert!(prompt.contains("resource.module_contract:"));
+        assert!(prompt.contains("resource.dos_and_donts:"));
+        assert!(prompt.contains("resource.green_checklist:"));
+        assert!(prompt.contains("resource.architecture_translation:"));
+        assert!(prompt.contains("- reference_catalog: ctox business-os app references --json"));
+        assert!(prompt
+            .contains("- validation: ctox business-os app validate subscriptions --installed"));
         assert!(!prompt.contains("business-basic-module-development"));
         assert!(!prompt.contains("product_engineering/business-basic-module-development"));
-        assert!(!prompt.contains("top acceptance gate"));
-        assert!(!prompt.contains("Generic scaffold strings"));
-        assert!(!prompt.contains("scaffold action allowlist"));
-        assert!(!prompt.contains("Do not add data-action=\"restock\""));
         assert_eq!(
             suggested_skill_for_command(&command).as_deref(),
             Some(BUSINESS_OS_APP_MODULE_SKILL_NAME)
@@ -27084,26 +27074,19 @@ mod tests {
         };
 
         let prompt = command_prompt("cmd_app_create", &command, &[]);
-        assert!(prompt.contains("Required CTOX skills: business-os-app-module-development"));
-        assert!(prompt.contains("Build the app, not documentation, a plan"));
+        assert!(prompt.contains("Business OS task resources:"));
+        assert!(prompt.contains("- required_skills: business-os-app-module-development"));
+        assert!(prompt.contains("Business OS app task metadata:"));
         assert!(prompt.contains("- module_id: inventory"));
         assert!(prompt.contains("- install_target: runtime-installed-module"));
         assert!(prompt.contains("- app_directory: runtime/business-os/installed-modules/inventory"));
-        assert!(prompt.contains("no-build HTML fragment, CSS, and browser ESM"));
-        assert!(prompt.contains("persist records with ctx.db"));
-        assert!(prompt.contains("ctx.commandBus.dispatch"));
-        assert!(prompt.contains("ctox business-os app validate inventory --installed"));
-        assert!(prompt.contains("normal CTOX chat/AI follow-up"));
-        assert!(prompt.contains("ctox.ticket.* only for real ticket lifecycle actions"));
+        assert!(prompt.contains("- skill: business-os-app-module-development"));
+        assert!(prompt.contains("resource.module_contract:"));
+        assert!(prompt.contains("- reference_catalog: ctox business-os app references --json"));
         assert!(
-            prompt.contains("First choose and inspect three shipped Business OS app references")
+            prompt.contains("- validation: ctox business-os app validate inventory --installed")
         );
-        assert!(prompt.contains("only examples"));
-        assert!(prompt.contains("ctox business-os app references --json"));
         assert!(!prompt.contains("business-basic-module-development"));
-        assert!(!prompt.contains("top acceptance gate"));
-        assert!(!prompt.contains("Generic scaffold strings"));
-        assert!(!prompt.contains("Do not add data-action=\"restock\""));
     }
 
     #[test]
