@@ -240,7 +240,10 @@ export async function shortlistObjectsForRequirement({
   requirementId,
   objectIds = [],
   topN = 5,
-  knockoutRules = []
+  knockoutRules = [],
+  llmChat = null,
+  sourceId = null,
+  maxObjectsInPrompt = 25
 }) {
   const ids = Array.isArray(objectIds) ? objectIds.filter(Boolean) : [];
   const db = await getDatabase();
@@ -260,11 +263,34 @@ export async function shortlistObjectsForRequirement({
     };
   });
 
+  // §9.4 bulk auto-scoring: for unscored, non-knocked-out candidates, trigger LLM
+  // scoring through the harness (computeRequirementMatch enqueues a matching.match
+  // command; scores land asynchronously). Bounded by maxObjectsInPrompt. Without
+  // llmChat this stays the read-only ranking it always was. A follow-up call
+  // returns the full ranking instead of "noch nicht bewertet".
+  const scoringTriggered = [];
+  if (typeof llmChat === 'function') {
+    const unscored = scored
+      .filter((s) => !s.evaluated && !s.knockoutFailed)
+      .map((s) => s.objectId)
+      .slice(0, Math.max(0, Number(maxObjectsInPrompt) || 0));
+    for (const objectId of unscored) {
+      try {
+        await computeRequirementMatch({ llmChat, sourceId, requirementId, objectId });
+        scoringTriggered.push(objectId);
+      } catch {
+        // best-effort: a single failed enqueue must not block the shortlist
+      }
+    }
+  }
+
   return {
     requirementId,
     consideredObjectIds: ids,
     knockedOut: scored.filter((s) => s.knockoutFailed).map((s) => ({ objectId: s.objectId, reasons: s.knockoutReasons })),
-    shortlist: rankShortlist(scored, { topN })
+    shortlist: rankShortlist(scored, { topN }),
+    scoringTriggered,
+    scoringPending: scoringTriggered.length > 0
   };
 }
 
