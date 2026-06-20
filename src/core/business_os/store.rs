@@ -26532,6 +26532,67 @@ mod tests {
         Ok(())
     }
 
+    // §9.1 regression: with capability-token enforcement on, the role MUST come
+    // from a valid native-signed token, not the browser-asserted actor. Pins the
+    // security fix so it cannot silently regress.
+    #[test]
+    fn capability_token_enforcement_gates_privileged_commands() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        seed_business_user(root.path(), "chef1", "chef")?;
+        seed_business_user(root.path(), "user1", "user")?;
+        let mut env = std::collections::BTreeMap::new();
+        env.insert(
+            "CTOX_BUSINESS_OS_REQUIRE_CAPABILITY_TOKEN".to_string(),
+            "1".to_string(),
+        );
+        crate::inference::runtime_env::save_runtime_env_map(root.path(), &env)?;
+
+        let cmd = |cid: &str, ctx: Value| {
+            serde_json::json!({
+                "id": cid,
+                "command_id": cid,
+                "module": "ats",
+                "command_type": "ats.intake.capture",
+                "payload": { "name": "T", "email": format!("{cid}@example.test") },
+                "client_context": ctx,
+            })
+        };
+
+        // No token, claiming chef → denied (cannot trust the unsigned actor).
+        let denied = accept_rxdb_business_command(
+            root.path(),
+            cmd("c1", serde_json::json!({ "actor": { "id": "chef1" } })),
+        );
+        assert!(
+            denied.is_err(),
+            "no-token privileged command must be denied: {denied:?}"
+        );
+
+        // Valid chef token → allowed (role from the signed token).
+        let now = now_ms() as i64;
+        let (chef_token, _) = issue_business_os_capability_token(root.path(), "chef1", now)?;
+        let allowed = accept_rxdb_business_command(
+            root.path(),
+            cmd("c2", serde_json::json!({ "capability_token": chef_token })),
+        )?;
+        assert_eq!(
+            allowed.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+
+        // A user-role token must not satisfy a manage-all command.
+        let (user_token, _) = issue_business_os_capability_token(root.path(), "user1", now)?;
+        let user_denied = accept_rxdb_business_command(
+            root.path(),
+            cmd("c3", serde_json::json!({ "capability_token": user_token })),
+        );
+        assert!(
+            user_denied.is_err(),
+            "user-role token must not pass a manage-all command: {user_denied:?}"
+        );
+        Ok(())
+    }
+
     fn seed_module_founder_acl(root: &Path, module_id: &str, user_id: &str) -> anyhow::Result<()> {
         let conn = open_store(root)?;
         let now = now_ms() as i64;
