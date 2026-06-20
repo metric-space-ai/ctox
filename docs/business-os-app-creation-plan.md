@@ -115,6 +115,14 @@ Current baseline:
   app-version snapshot recording slugified `bench_inventory_rfix2` to
   `bench-inventory-rfix2`. Release `branch-main-20260620T141728Z` fixes this
   on the installed path.
+- Browser smoke against static-green `bench_subscriptions_rfix2` opened the
+  module but logged `QUERY_NOT_SUPPORTED: collection is not V1.5-enabled` for
+  module-owned collections. This is a native CTOX DB data-plane gap: runtime
+  app schemas were registered in the browser from `schema.js`, but the native
+  peer only registered the static Business OS schema contract. The source patch
+  now loads runtime-installed `collections.schema.json` schemas into the
+  native peer and refreshes a running in-process peer after app validation
+  success. Source verification is green; this patch is not installed proof yet.
 
 ## Current Execution Slice
 
@@ -122,13 +130,34 @@ Owner: `Codex`
 
 Started: `2026-06-20`
 
-Active phase: `5. Repeat bench after installed reference fix`
+Active phase: `5. Browser and persistence hardening after static-green bench`
 
-Objective: produce a fresh five-app CTOX-native bench after the installed
-reference-catalog/skill-resource fix, then classify remaining failures from
-evidence before changing code or resources. The existing `rfix1` run remains
-useful lifecycle and reference-gap evidence, but it was started before the
-reference-catalog patch was installed and must not be treated as green proof.
+Live execution board:
+
+| Work item | Status | Required evidence before closing | Plan fields to update |
+| --- | --- | --- | --- |
+| Dynamic runtime collection patch | `done` | Targeted Rust tests green and `git diff --check` clean | Immediate checklist, Evidence Log, Open Issues |
+| Install patched CTOX release | `pending` | `ctox upgrade --dev` release id and active `readlink` path | Current Status, Tracker, Evidence Log |
+| Browser smoke for `rfix2` apps | `pending` | All five apps open without console data-plane errors | Immediate checklist, Evidence Log |
+| Persistence smoke | `pending` | Create or edit one record per app, reload, record still visible | Immediate checklist, Evidence Log |
+| Automation smoke | `pending` | One valid `business_os.chat.task` or allowed ticket command per app | Immediate checklist, Evidence Log |
+| Worker-idle wakeup fix | `pending` | Regression test plus fresh bench reaches all five handled without service restart | Tracker, Evidence Log, Open Issues |
+| Fresh CTOX-native five-app bench | `pending` | One new run id with validation, browser, persistence, and automation green | Current Status, Tracker, Phase 5 checklist, Evidence Log |
+| Entry-point coverage | `pending` | App Creator, Chat, App Store/template, CLI, and inbound/MCP paths use the same skill resource context | Tracker, Phase 6 checklist, Evidence Log |
+
+Update discipline:
+
+- Change a row to `in_progress` before starting it and to `done` only after the
+  listed evidence exists.
+- If a row becomes blocked, add the blocker to Open Issues in the same edit.
+- Do not mark the overall status production-ready until every Live execution
+  board row is `done` or explicitly out of scope with evidence.
+
+Objective: convert the static-green `rfix2` result into real browser,
+persistence, automation, and no-restart proof. Browser smoke already exposed a
+native CTOX DB dynamic-collection gap, so the current slice patches that
+systemic data-plane issue and must verify it on the installed release path
+before another fresh five-app run is treated as production evidence.
 
 Immediate checklist:
 
@@ -173,8 +202,20 @@ Immediate checklist:
       the task.
 - [x] Let currently leased `bench_subscriptions_rfix2` reach terminal evidence.
 - [ ] Record whether any app dispatched a real automation command.
-- [ ] Run browser smoke after the fresh bench has validation-green artifacts.
-- [ ] Classify every remaining failure before editing code or skill resources.
+- [x] Run browser smoke after the fresh bench has validation-green artifacts.
+- [x] Classify browser-smoke failure before editing code or skill resources.
+- [x] Patch native peer runtime-installed collection registration from
+      `collections.schema.json`.
+- [x] Patch app-validation finalization to refresh a running in-process native
+      peer after runtime app schema changes.
+- [x] Verify dynamic native runtime app collection registration with targeted
+      Rust tests.
+- [ ] Install the dynamic collection patch with `ctox upgrade --dev`.
+- [ ] Re-run browser smoke against all five `rfix2` apps after install.
+- [ ] Re-run persistence smoke through `ctx.db` after install.
+- [ ] Re-run automation smoke through `ctx.commandBus.dispatch` after install.
+- [ ] Classify every remaining failure before further code or skill-resource
+      edits.
 - [x] Classify the Inventory finalization failure as runtime lifecycle
       ID-normalization bug, not app-output failure.
 - [x] Patch runtime app-version snapshotting to preserve underscore module ids.
@@ -218,6 +259,9 @@ Business OS app module ids and validator reports were present.
   validation. This is not production signoff yet because browser smoke,
   persistence smoke, automation smoke, and the worker-idle wakeup fix remain
   open.
+- First browser smoke against `bench_subscriptions_rfix2` is red due native
+  dynamic collection registration, not app-file placement or static validation.
+  Do not patch generated app outputs.
 
 ## Tracker
 
@@ -228,7 +272,7 @@ Business OS app module ids and validator reports were present.
 | 2. Build CTOX-native bench runner | done | Codex | `8a8cd236`; `cargo test --bin ctox app_bench_`; installed release `branch-main-20260620T113510Z`; CLI run `rcli` | Runner submits real `ctox.business_os.app.create` tasks, writes runtime JSONL evidence, and does not write app artifacts. |
 | 3. Run five-app bench in CTOX | blocked | Codex | run `rcli`; installed status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rcli/status-1781958189008.json`; browser smoke against `http://127.0.0.1:8765/#bench_subscriptions_rcli` | `rcli` produced two validation-green apps, but browser smoke showed validation-green private apps were not openable because creator/responsible lifecycle fields were empty. Superseded by Phase 4 fixes; continue with a fresh post-fix run in Phase 5. |
 | 4. Patch systemic gaps | done | Codex | lifecycle commit `212aa2d0`; reference commit `c1267d0d`; installed releases `branch-main-20260620T124515Z` and `branch-main-20260620T130820Z`; run `rfix1`; `cargo test --bin ctox app_bench_`; `cargo test --bin ctox app_validation_success_accepts_postlease_artifact_write`; `cargo test --bin ctox app_references_mark_source_only_manifest_fields_as_non_templates`; `ctox business-os app references --json` | Classification from `rcli`: project helper-test mismatch is `model_failure`; private app visibility is `runtime_orchestration_gap`. Classification from `rfix1`: raw source reference metadata is `reference_gap`. Patched only lifecycle/orchestration and reference-resource gaps. No app-output repair and no deterministic builder. |
-| 5. Repeat until green | in_progress | Codex | installed releases `branch-main-20260620T130820Z`, `branch-main-20260620T141728Z`, and `branch-main-20260620T144851Z`; `ctox status`; `ctox business-os app references --json`; `ctox queue cleanup-scope --match-run-id rfix1 --cancel-open`; `ctox queue cleanup-scope --match-run-id rcli --status review_rework --cancel-open`; `ctox stop`; `ctox start`; `ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k --run-id rfix2`; latest status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix2/status-1781969124918.json`; direct validation `ctox business-os app validate bench_inventory_rfix2 --installed`; source tests `cargo test --bin ctox app_validation_success_`, `cargo test --bin ctox business_os_app_validation_worker_error_after_green_completes_business_command`, `cargo test --bin ctox app_bench_`, `cargo test --bin ctox business_os_app_validation_rework_is_leased_before_fresh_pending_app_tasks` | Pre-reference `rfix1` tasks were cancelled as superseded; accidental run `r1781961729513` was cancelled after `bench run --help` unexpectedly submitted a task; stale old-run `rcli` validation rework was cancelled after dry-run showed exactly one match. Fresh `rfix2` uses actor `local-dev`. All five apps are terminal-green and pass installed validation. This is static-validation green, not production signoff: Subscriptions required a service restart to lease, and browser/persistence/automation smoke are still open. |
+| 5. Repeat until green | in_progress | Codex | installed releases `branch-main-20260620T130820Z`, `branch-main-20260620T141728Z`, and `branch-main-20260620T144851Z`; `ctox status`; `ctox business-os app references --json`; `ctox queue cleanup-scope --match-run-id rfix1 --cancel-open`; `ctox queue cleanup-scope --match-run-id rcli --status review_rework --cancel-open`; `ctox stop`; `ctox start`; `ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k --run-id rfix2`; latest status `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix2/status-1781969124918.json`; browser smoke `http://127.0.0.1:8765/#bench_subscriptions_rfix2`; source tests `cargo test --bin ctox app_validation_success_`, `cargo test --bin ctox business_os_app_validation_worker_error_after_green_completes_business_command`, `cargo test --bin ctox app_bench_`, `cargo test --bin ctox business_os_app_validation_rework_is_leased_before_fresh_pending_app_tasks` | Fresh `rfix2` uses actor `local-dev`; all five apps are terminal-green and pass installed validation. This is static-validation green, not production signoff. Browser smoke exposed native dynamic collection registration failure (`QUERY_NOT_SUPPORTED: collection is not V1.5-enabled`) for module-owned runtime app collections. Source patch now registers runtime `collections.schema.json` in the native peer and refreshes the peer after app validation success; install/browser/persistence/automation proof remains open. |
 | 6. Entry point coverage | pending |  |  | Verify App Creator, Chat, App Store/template flow, CLI, and external inbound paths bind the same skill/resource context. |
 | 7. Production signoff | pending |  |  | All entry points produce runnable validated apps with evidence. |
 
@@ -1331,6 +1375,92 @@ Append one entry per meaningful run.
   record and one command-bus automation per app, then patch the worker-idle
   wakeup gap and rerun a fresh five-app bench without a service restart.
 
+### 2026-06-20 Browser Smoke Dynamic Collection Gap
+
+- Phase: 5
+- Owner: Codex
+- Run id / task ids: `rfix2`; browser target
+  `bench_subscriptions_rfix2`
+- Commands:
+  Playwright CLI open of
+  `http://127.0.0.1:8765/#bench_subscriptions_rfix2`;
+  console inspection of `.playwright-cli/console-2026-06-20T15-35-51-157Z.log`;
+  generated app inspection under
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/installed-modules/bench_subscriptions_rfix2/`;
+  source inspection of `src/apps/business-os/rxdb/src/query-demand-loader.mjs`,
+  `src/core/rxdb/src/plugins/replication_webrtc/query_fetch_handler.rs`, and
+  `src/core/business_os/rxdb_peer.rs`
+- Changed files:
+  `src/core/business_os/rxdb_peer.rs`,
+  `src/core/business_os/store.rs`,
+  `src/skills/system/product_engineering/business-os-app-module-development/references/module-contract.md`,
+  `src/skills/system/product_engineering/business-os-app-module-development/references/architecture-translation.md`,
+  `docs/ctox-rxdb.md`,
+  `docs/business-os-app-creation-plan.md`
+- Evidence path:
+  `.playwright-cli/console-2026-06-20T15-35-51-157Z.log`
+- Result:
+  browser routing opened the module after catalog refresh, but the app logged
+  `[bench_subscriptions_rfix2] initial load failed: QUERY_NOT_SUPPORTED:
+  collection is not V1.5-enabled`. Source forensics showed the browser
+  registers runtime module collections from each app's `schema.js`, while the
+  native peer registered only the static Business OS schema contract from
+  `business_os_schema_contract.json`. Query fetch therefore rejected
+  module-owned runtime app collections even though installed validation was
+  green.
+- Failure classification:
+  `runtime_orchestration_gap` with a concrete CTOX DB data-plane cause. This is
+  not a generated-app output fix and not a deterministic builder issue.
+- Follow-up:
+  verify the source patch with targeted Rust tests, install it with
+  `ctox upgrade --dev`, rerun browser smoke for all five `rfix2` apps, then run
+  persistence and automation smoke. After this, run a fresh five-app bench
+  without manual service restart.
+
+### 2026-06-20 Dynamic Collection Patch Source Verification
+
+- Phase: 5
+- Owner: Codex
+- Run id / task ids: source verification for `rfix2` browser-smoke failure
+- Commands:
+  `cargo test --bin ctox runtime_installed_module_schemas_extend_native_collection_creators`;
+  `cargo test --bin ctox app_validation_success_accepts_postlease_artifact_write`;
+  `cargo test --bin ctox worker_finalization_can_lease_next_durable_queue_task_before_activity_drop`;
+  `cargo test --bin ctox business_os_app_validation_rework_is_leased_before_fresh_pending_app_tasks`;
+  `cargo test --bin ctox app_validation_success_`;
+  `cargo test --bin ctox app_bench_`;
+  `rustfmt --edition 2021 --check src/core/business_os/rxdb_peer.rs src/core/business_os/store.rs src/core/service/service.rs`;
+  `git diff --check`;
+  `cargo check`;
+  `cargo test --manifest-path src/core/rxdb/Cargo.toml`;
+  `cargo fmt --check --manifest-path src/core/rxdb/Cargo.toml`;
+  `node src/apps/business-os/rxdb/tests/run-all.mjs`
+- Changed files:
+  `src/core/business_os/rxdb_peer.rs`,
+  `src/core/business_os/store.rs`,
+  `src/core/service/service.rs`,
+  `src/skills/system/product_engineering/business-os-app-module-development/references/module-contract.md`,
+  `src/skills/system/product_engineering/business-os-app-module-development/references/architecture-translation.md`,
+  `docs/ctox-rxdb.md`,
+  `docs/business-os-app-creation-plan.md`
+- Evidence path:
+  local command output in this work block; prior browser console
+  `.playwright-cli/console-2026-06-20T15-35-51-157Z.log`
+- Result:
+  source verification is green. The new regression proves runtime-installed
+  `collections.schema.json` extends native collection creators. Existing
+  app-validation, rework-dispatch, bench, root `cargo check`, native RxDB
+  crate tests, and browser RxDB smokes all pass. The browser RxDB suite
+  reports 37 passed, 0 failed, and 2 skipped cross-process tests because the
+  local wire daemon is not built.
+- Failure classification:
+  confirms the source fix for the `runtime_orchestration_gap`; installed
+  browser/persistence/automation proof is still pending.
+- Follow-up:
+  commit and push the verified source patch, install it with
+  `ctox upgrade --dev`, then rerun browser, persistence, and automation smoke
+  on the installed `rfix2` apps.
+
 ## Handoff Notes
 
 Latest handoff:
@@ -1361,6 +1491,12 @@ Latest handoff:
 - Do not treat `rfix2` as production signoff yet. It proves the static
   installed-artifact path, but not browser openability, persistence through
   `ctx.db`, automation command dispatch, or no-restart queue liveness.
+- Browser smoke against `bench_subscriptions_rfix2` reached the module but
+  failed on native query fetch for module-owned runtime app collections:
+  `QUERY_NOT_SUPPORTED: collection is not V1.5-enabled`. The active source
+  patch registers runtime `collections.schema.json` schemas in the native peer
+  and refreshes a running in-process peer after app validation success. This is
+  not installed proof yet.
 - Old `rcli` validation rework was cancelled as superseded after a dry-run
   matched exactly one old-run task. Do not cancel current `rfix2` tasks.
 - Do not patch generated app files.
@@ -1387,5 +1523,8 @@ Latest handoff:
   resource context.
 - Patch the worker-idle wakeup/liveness gap so pending durable app tasks are
   leased after a prior app task completes without requiring service restart.
+- Install and prove the native runtime app collection registration patch. A
+  validation-green app is not production-ready until its module-owned
+  collections read/write/sync through the native CTOX DB peer in the browser.
 - Rerun a fresh five-app bench after the wakeup fix and smoke checks; the final
   production proof must complete without manual service restart.

@@ -5871,7 +5871,9 @@ fn start_prompt_worker(
                     start_prompt_worker(root.clone(), state.clone(), queued);
                 } else {
                     worker_activity.set_phase(&job.source_label, "leasing-next");
-                    match maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state) {
+                    match maybe_lease_next_durable_queue_prompt_for_worker_finalization(
+                        &root, &state,
+                    ) {
                         Ok(Some(queued)) => enqueue_prompt(
                             &root,
                             &state,
@@ -5967,7 +5969,7 @@ fn start_prompt_worker(
             if let Some(queued) = next_prompt {
                 start_prompt_worker(root.clone(), state.clone(), queued);
             } else {
-                match maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state) {
+                match maybe_lease_next_durable_queue_prompt_for_worker_finalization(&root, &state) {
                     Ok(Some(queued)) => enqueue_prompt(
                         &root,
                         &state,
@@ -11085,11 +11087,32 @@ fn maybe_next_idle_dispatch_prompt(
         .map(|prompt| prompt.map(IdleDispatchPrompt::Durable))
 }
 
-fn maybe_lease_next_durable_queue_prompt_for_idle_dispatch(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DurableQueueDispatchGuard {
+    StrictIdle,
+    CurrentWorkerFinalizing,
+}
+
+fn durable_queue_dispatch_blocked(
+    state: &Arc<Mutex<SharedState>>,
+    guard: DurableQueueDispatchGuard,
+) -> bool {
+    let shared = lock_shared_state(state);
+    if shared.busy {
+        return true;
+    }
+    match guard {
+        DurableQueueDispatchGuard::StrictIdle => shared.worker_active_count > 0,
+        DurableQueueDispatchGuard::CurrentWorkerFinalizing => shared.worker_active_count > 1,
+    }
+}
+
+fn maybe_lease_next_durable_queue_prompt(
     root: &Path,
     state: &Arc<Mutex<SharedState>>,
+    guard: DurableQueueDispatchGuard,
 ) -> Result<Option<QueuedPrompt>> {
-    if active_agent_loop_in_progress(state) {
+    if durable_queue_dispatch_blocked(state, guard) {
         return Ok(None);
     }
     match recover_stale_business_os_app_queue_tasks(
@@ -11142,13 +11165,28 @@ fn maybe_lease_next_durable_queue_prompt_for_idle_dispatch(
     Ok(None)
 }
 
+fn maybe_lease_next_durable_queue_prompt_for_idle_dispatch(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+) -> Result<Option<QueuedPrompt>> {
+    maybe_lease_next_durable_queue_prompt(root, state, DurableQueueDispatchGuard::StrictIdle)
+}
+
+fn maybe_lease_next_durable_queue_prompt_for_worker_finalization(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+) -> Result<Option<QueuedPrompt>> {
+    maybe_lease_next_durable_queue_prompt(
+        root,
+        state,
+        DurableQueueDispatchGuard::CurrentWorkerFinalizing,
+    )
+}
+
 fn maybe_lease_next_durable_queue_after_worker_idle(
     root: &Path,
     state: &Arc<Mutex<SharedState>>,
 ) -> Result<Option<QueuedPrompt>> {
-    if active_agent_loop_in_progress(state) {
-        return Ok(None);
-    }
     maybe_lease_next_durable_queue_prompt_for_idle_dispatch(root, state)
 }
 
@@ -23057,6 +23095,66 @@ Business OS command:
             "pending"
         );
         assert!(leased.prompt.contains("Business OS app validation failed."));
+    }
+
+    #[test]
+    fn worker_finalization_can_lease_next_durable_queue_task_before_activity_drop() {
+        let root = temp_root("business-os-worker-finalization-leases-next");
+        let current_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create quality app".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: quality\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/quality".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create current app queue task");
+        channels::lease_queue_task(&root, &current_task.message_key, "ctox-service-test")
+            .expect("failed to lease current app queue task");
+        let next_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create subscriptions app".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/subscriptions".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create next app queue task");
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.busy = false;
+            shared.worker_active_count = 1;
+        }
+
+        let strict_idle = maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state)
+            .expect("strict idle dispatch should not fail");
+        assert!(
+            strict_idle.is_none(),
+            "strict idle dispatch must not lease while a worker is still finalizing"
+        );
+        assert_eq!(route_status_for(&root, &next_task.message_key), "pending");
+
+        let leased = maybe_lease_next_durable_queue_prompt_for_worker_finalization(&root, &state)
+            .expect("worker-finalization dispatch should not fail")
+            .expect("expected the next durable app task to lease during worker finalization");
+
+        assert_eq!(
+            leased.leased_message_keys,
+            vec![next_task.message_key.clone()]
+        );
+        assert_eq!(route_status_for(&root, &next_task.message_key), "leased");
     }
 
     #[test]

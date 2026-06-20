@@ -1323,7 +1323,7 @@ async fn run_native_peer(
     // aborts the peer (the daemon depends on those). The strict
     // all-or-nothing `add_collections` is no longer used here.
     let (collections, failed_collections) = database
-        .add_collections_tolerant(collection_creators())
+        .add_collections_tolerant(collection_creators_for_root(&root))
         .await
         .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
     for (collection_name, err) in &failed_collections {
@@ -6639,6 +6639,14 @@ async fn open_database(database_path: PathBuf) -> anyhow::Result<Arc<RxDatabase>
     .map_err(|err| anyhow::anyhow!("open native Business OS RxDB database: {err}"))
 }
 
+fn collection_creators_for_root(root: &Path) -> HashMap<String, RxCollectionCreator> {
+    let mut creators = collection_creators();
+    for (name, creator) in runtime_installed_module_collection_creators(root) {
+        creators.entry(name).or_insert(creator);
+    }
+    creators
+}
+
 fn collection_creators() -> HashMap<String, RxCollectionCreator> {
     business_os_collections()
         .iter()
@@ -6653,6 +6661,200 @@ fn collection_creators() -> HashMap<String, RxCollectionCreator> {
             )
         })
         .collect()
+}
+
+fn runtime_installed_module_collection_creators(
+    root: &Path,
+) -> HashMap<String, RxCollectionCreator> {
+    let modules_root =
+        resolve_business_os_installed_app_root_for_native_peer(root).join("installed-modules");
+    let mut creators = HashMap::new();
+    if !modules_root.is_dir() {
+        return creators;
+    }
+    let entries = match fs::read_dir(&modules_root) {
+        Ok(entries) => entries,
+        Err(err) => {
+            eprintln!(
+                "[business-os] could not read installed module schemas from {}: {err:#}",
+                modules_root.display()
+            );
+            return creators;
+        }
+    };
+    let static_collections = business_os_schema_contract();
+    for entry in entries.flatten() {
+        let module_dir = entry.path();
+        if !module_dir.is_dir() {
+            continue;
+        }
+        for (name, schema) in runtime_installed_module_collection_schemas(&module_dir) {
+            if static_collections.contains_key(&name) || creators.contains_key(&name) {
+                continue;
+            }
+            creators.insert(
+                name,
+                RxCollectionCreator {
+                    schema,
+                    conflict_handler: None,
+                    options: HashMap::new(),
+                },
+            );
+        }
+    }
+    creators
+}
+
+fn runtime_installed_module_collection_schemas(module_dir: &Path) -> Vec<(String, RxJsonSchema)> {
+    let manifest_path = module_dir.join("module.json");
+    let schema_path = module_dir.join("collections.schema.json");
+    if !manifest_path.is_file() || !schema_path.is_file() {
+        return Vec::new();
+    }
+    let manifest = match read_json_file(&manifest_path) {
+        Ok(value) => value,
+        Err(err) => {
+            eprintln!(
+                "[business-os] skipping installed module schema {}: invalid module.json: {err:#}",
+                module_dir.display()
+            );
+            return Vec::new();
+        }
+    };
+    if !manifest_value_is_runtime_installed_for_native_peer(&manifest) {
+        return Vec::new();
+    }
+    let declared = manifest
+        .get("collections")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .collect::<HashSet<_>>()
+        })
+        .unwrap_or_default();
+    if declared.is_empty() {
+        return Vec::new();
+    }
+    let schema_doc = match read_json_file(&schema_path) {
+        Ok(value) => value,
+        Err(err) => {
+            eprintln!(
+                "[business-os] skipping installed module schema {}: invalid collections.schema.json: {err:#}",
+                module_dir.display()
+            );
+            return Vec::new();
+        }
+    };
+    if schema_doc.get("schema_format").and_then(Value::as_str)
+        != Some("ctox-business-os-module-collections-v1")
+    {
+        eprintln!(
+            "[business-os] skipping installed module schema {}: unsupported schema_format",
+            schema_path.display()
+        );
+        return Vec::new();
+    }
+    let Some(collections) = schema_doc.get("collections").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    collections
+        .iter()
+        .filter_map(|(name, schema)| {
+            if !declared.contains(name) || !is_runtime_module_collection_name(name) {
+                return None;
+            }
+            match rx_schema_from_runtime_module_schema(name, schema.clone()) {
+                Ok(schema) => Some((name.clone(), schema)),
+                Err(err) => {
+                    eprintln!(
+                        "[business-os] skipping installed module collection `{name}` from {}: {err:#}",
+                        schema_path.display()
+                    );
+                    None
+                }
+            }
+        })
+        .collect()
+}
+
+fn read_json_file(path: &Path) -> anyhow::Result<Value> {
+    let text =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    serde_json::from_str(&text).with_context(|| format!("failed to parse {}", path.display()))
+}
+
+fn rx_schema_from_runtime_module_schema(
+    name: &str,
+    mut schema: Value,
+) -> anyhow::Result<RxJsonSchema> {
+    let object = schema
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("collection schema must be a JSON object"))?;
+    object
+        .entry("version".to_owned())
+        .or_insert_with(|| Value::Number(0.into()));
+    object
+        .entry("type".to_owned())
+        .or_insert_with(|| Value::String("object".to_owned()));
+    anyhow::ensure!(
+        object.get("primaryKey").and_then(Value::as_str).is_some(),
+        "collection `{name}` schema must define primaryKey"
+    );
+    anyhow::ensure!(
+        object
+            .get("properties")
+            .and_then(Value::as_object)
+            .is_some(),
+        "collection `{name}` schema must define properties"
+    );
+    normalize_schema_indexes(&mut schema);
+    serde_json::from_value(schema)
+        .with_context(|| format!("collection `{name}` schema must match CTOX DB schema type"))
+}
+
+fn is_runtime_module_collection_name(name: &str) -> bool {
+    let name = name.trim();
+    !name.is_empty()
+        && name.len() <= 160
+        && name
+            .chars()
+            .all(|ch| ch == '_' || ch.is_ascii_lowercase() || ch.is_ascii_digit())
+        && name
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_lowercase())
+}
+
+fn manifest_value_is_runtime_installed_for_native_peer(manifest: &Value) -> bool {
+    manifest.get("install_scope").and_then(Value::as_str) == Some("installed")
+        || manifest
+            .get("entry")
+            .and_then(Value::as_str)
+            .is_some_and(|entry| entry.starts_with("installed-modules/"))
+}
+
+fn resolve_business_os_installed_app_root_for_native_peer(root: &Path) -> PathBuf {
+    if root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "runtime")
+    {
+        return root.join("business-os");
+    }
+    let runtime = root.join("runtime");
+    if runtime.exists() {
+        return runtime.join("business-os");
+    }
+    let direct = root.join("business-os");
+    if direct.exists() {
+        return direct;
+    }
+    root.join("business-os")
 }
 
 fn business_os_schema(name: &str, primary_key: &str) -> RxJsonSchema {
@@ -7183,6 +7385,52 @@ mod tests {
         // single-writer rule, same as knowledge_tables.
         assert!(!collections.iter().any(|name| name == "desktop_files"));
         assert!(collections.iter().any(|name| name == "browser_tabs"));
+    }
+
+    #[test]
+    fn runtime_installed_module_schemas_extend_native_collection_creators() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let module_dir = temp
+            .path()
+            .join("runtime/business-os/installed-modules/subscriptions");
+        fs::create_dir_all(&module_dir)?;
+        fs::write(
+            module_dir.join("module.json"),
+            serde_json::to_vec_pretty(&json!({
+                "id": "subscriptions",
+                "entry": "installed-modules/subscriptions/index.html",
+                "install_scope": "installed",
+                "collections": ["subscriptions_records"]
+            }))?,
+        )?;
+        fs::write(
+            module_dir.join("collections.schema.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schema_format": "ctox-business-os-module-collections-v1",
+                "collections": {
+                    "subscriptions_records": {
+                        "primaryKey": "id",
+                        "properties": {
+                            "id": { "type": "string", "maxLength": 120 },
+                            "title": { "type": "string" },
+                            "updated_at_ms": { "type": "number" }
+                        },
+                        "required": ["id", "title"]
+                    }
+                }
+            }))?,
+        )?;
+
+        let creators = collection_creators_for_root(temp.path());
+        assert!(creators.contains_key("business_module_catalog"));
+        let schema = &creators
+            .get("subscriptions_records")
+            .context("expected dynamic runtime app collection")?
+            .schema;
+        assert_eq!(schema.version, 0);
+        assert_eq!(schema.primary_key.primary_field(), "id");
+        assert_eq!(schema.schema_type, "object");
+        Ok(())
     }
 
     #[test]

@@ -38,9 +38,18 @@ Keep extra files rare. Use extra local ESM helpers only when the app would other
 ## Data
 
 - Module records persist through the shell-provided `ctx.db` collection handle.
+- Get collection handles from the shell, for example
+  `const records = ctx.db.collection?.('<collection>') || ctx.db.collections?.<collection> || ctx.db?.<collection>;`.
+- For small first versions, read a module-owned collection with
+  `await records.find().exec()`, convert docs with `toJSON()`, then filter and
+  sort in plain JavaScript.
 - Do not create a separate REST, HTTP, IndexedDB, Postgres, SQLite, localStorage, or sessionStorage data path.
 - For a first app, prefer one module-owned collection for the main business object.
 - If you add collections, list them in `module.json`, declare them in `collections.schema.json`, and export matching schemas from `schema.js`.
+- Runtime-installed module collections are registered into the native CTOX DB
+  peer from `collections.schema.json`. If a collection is missing from either
+  `module.json`, `collections.schema.json`, or `schema.js`, browser and native
+  persistence will disagree.
 
 ## Automation
 

@@ -19,6 +19,7 @@ CTOX data plane
   browser CTOX DB/RxDB
   WebRTC replication
   native CTOX peer
+  runtime module schemas from collections.schema.json
   local runtime storage owned by CTOX
 ```
 
@@ -73,3 +74,16 @@ When adapting a known app idea:
 5. Leave future dashboards, exports, AI buttons, and bulk operations out unless they are fully implemented.
 
 The app should feel like a Business OS work surface, not a generic SaaS landing page or a React demo.
+
+## Data Plane Discipline
+
+For runtime-created apps, every module-owned collection must exist in all three
+places: `module.json` `collections`, `collections.schema.json`, and `schema.js`.
+The browser registers `schema.js`; the native CTOX DB peer registers
+`collections.schema.json`. If those disagree, the app may appear in the shell
+but fail when reading, writing, or syncing records.
+
+For a small app, prefer whole-collection reads (`find().exec()`) and plain
+JavaScript filtering/sorting. Reach for selector/sort queries only when the
+collection is declared correctly and the app actually needs query-window
+behavior.

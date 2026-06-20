@@ -11451,6 +11451,8 @@ pub fn complete_business_command_from_app_validation_success(
         completed_at_ms,
     )?;
     write_module_catalog_projection_to_rxdb_for_module(root, &module_id)?;
+    let native_schema_refresh =
+        refresh_native_peer_after_runtime_app_schema_change(root, &module_id, &install_target)?;
     conn.execute(
         "UPDATE business_commands SET status = 'completed', observed_at_ms = ?2 WHERE command_id = ?1",
         params![command_id.as_str(), completed_at_ms],
@@ -11520,7 +11522,8 @@ pub fn complete_business_command_from_app_validation_success(
             "artifact_directory": artifact_directory,
             "validator": "business_os_app_module_validator",
             "validation_status": "passed",
-            "completion_reason": reason
+            "completion_reason": reason,
+            "native_schema_refresh": native_schema_refresh
         },
         "updated_at_ms": completed_at_ms
     });
@@ -11547,6 +11550,35 @@ pub fn complete_business_command_from_app_validation_success(
         completed_at_ms,
     )?;
     Ok(Some(command_payload))
+}
+
+fn refresh_native_peer_after_runtime_app_schema_change(
+    root: &Path,
+    module_id: &str,
+    install_target: &str,
+) -> anyhow::Result<Value> {
+    if install_target != "runtime-installed-module" {
+        return Ok(serde_json::json!({
+            "required": false,
+            "status": "not_runtime_installed"
+        }));
+    }
+    if !super::rxdb_peer::is_native_peer_running() {
+        return Ok(serde_json::json!({
+            "required": true,
+            "status": "deferred_until_native_peer_start",
+            "module_id": module_id
+        }));
+    }
+    let restarted = super::rxdb_peer::restart_native_peer(root).with_context(|| {
+        format!("failed to refresh native RxDB peer after app `{module_id}` schema change")
+    })?;
+    Ok(serde_json::json!({
+        "required": true,
+        "status": "restarted",
+        "module_id": module_id,
+        "native_peer": restarted
+    }))
 }
 
 fn ensure_app_create_actor_lifecycle_assignment(
@@ -22455,18 +22487,15 @@ fn placement_type_requires_deployment_gate(placement_type: &str) -> bool {
 /// profile owns it (Baukasten) — but §9.2 makes the GATE itself mandatory
 /// whenever placement_type is AÜG, never caller-optional.
 fn aue_mandatory_required_types(root: &Path) -> Vec<String> {
-    crate::inference::runtime_env::env_or_config(
-        root,
-        "CTOX_BUSINESS_OS_AUE_REQUIRED_CREDENTIALS",
-    )
-    .map(|raw| {
-        raw.split([',', ';', '\n', '\t', ' '])
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(ToOwned::to_owned)
-            .collect()
-    })
-    .unwrap_or_default()
+    crate::inference::runtime_env::env_or_config(root, "CTOX_BUSINESS_OS_AUE_REQUIRED_CREDENTIALS")
+        .map(|raw| {
+            raw.split([',', ';', '\n', '\t', ' '])
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn handle_ats_mutating_command(
@@ -22588,8 +22617,7 @@ fn handle_ats_mutating_command(
             // mandatory AÜG set when placement_type is an Arbeitnehmerüberlassung
             // arrangement. The gate is mandatory for AÜG (never caller-optional);
             // direct/permanent placement with no required types skips it.
-            let placement_type =
-                first_string_field(p, &["placement_type"]).unwrap_or_default();
+            let placement_type = first_string_field(p, &["placement_type"]).unwrap_or_default();
             let is_aue = placement_type_requires_deployment_gate(&placement_type);
             let mut required: Vec<String> = p
                 .get("required_types")
@@ -23251,12 +23279,18 @@ fn handle_ats_mutating_command(
                 .context("ats.subject.export requires subject_id")?;
             let mut collections = serde_json::Map::new();
             for coll in ATS_WRITABLE_COLLECTIONS {
-                let mut records = load_business_records_by_field(&conn, coll, "subject_id", &subject_id)?;
-                for rec in load_business_records_by_field(&conn, coll, "candidate_id", &subject_id)? {
+                let mut records =
+                    load_business_records_by_field(&conn, coll, "subject_id", &subject_id)?;
+                for rec in load_business_records_by_field(&conn, coll, "candidate_id", &subject_id)?
+                {
                     let id = rec.get("id").and_then(Value::as_str).map(ToOwned::to_owned);
                     let dup = id
                         .as_deref()
-                        .map(|rid| records.iter().any(|r| r.get("id").and_then(Value::as_str) == Some(rid)))
+                        .map(|rid| {
+                            records
+                                .iter()
+                                .any(|r| r.get("id").and_then(Value::as_str) == Some(rid))
+                        })
                         .unwrap_or(false);
                     if !dup {
                         records.push(rec);
@@ -23275,7 +23309,8 @@ fn handle_ats_mutating_command(
                        AND json_extract(payload_json, '$.summary.candidate_id') = ?1
                      ORDER BY observed_at_ms",
                 )?;
-                let rows = stmt.query_map(params![subject_id.as_str()], |row| row.get::<_, String>(0))?;
+                let rows =
+                    stmt.query_map(params![subject_id.as_str()], |row| row.get::<_, String>(0))?;
                 for row in rows {
                     if let Ok(value) = serde_json::from_str::<Value>(&row?) {
                         audit.push(value);
@@ -23342,7 +23377,10 @@ fn handle_ats_mutating_command(
                     )?;
                 }
                 if !ids.is_empty() {
-                    erased.insert((*coll).to_string(), Value::Array(ids.into_iter().map(Value::String).collect()));
+                    erased.insert(
+                        (*coll).to_string(),
+                        Value::Array(ids.into_iter().map(Value::String).collect()),
+                    );
                 }
             }
             let erased_count: usize = erased
@@ -27246,7 +27284,13 @@ mod tests {
             Some(module_id),
             "validated after app artifact write",
         )?;
-        assert!(completed.is_some());
+        let completed = completed.context("expected app validation completion payload")?;
+        assert_eq!(
+            completed
+                .pointer("/result/native_schema_refresh/status")
+                .and_then(Value::as_str),
+            Some("deferred_until_native_peer_start")
+        );
         let task = channels::load_queue_task(root, &task_id)?
             .context("expected queue task after completion")?;
         assert_eq!(task.route_status, "handled");

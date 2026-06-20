@@ -167,6 +167,15 @@ through `collectionStartQueue` (500 ms spacing). Key mechanics, all in
 `shared/sync-contract.js` supplies `collectionTopic`, `batchSizeFor`
 (chunk-ish collections get small batches), and the `nativeRxdbPeerReady` gate.
 
+Runtime-installed Business OS app collections are dynamic but still part of
+the CTOX DB data plane. The browser registers them from each module's
+`schema.js`; the native peer registers matching schemas from
+`runtime/business-os/installed-modules/<module-id>/collections.schema.json`
+when it starts. App creation finalization refreshes a running in-process native
+peer so newly validated app collections are immediately available over WebRTC.
+The three declarations must agree: `module.json` `collections`,
+`collections.schema.json`, and `schema.js`.
+
 ---
 
 ## 4. Architecture — native side
