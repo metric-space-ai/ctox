@@ -16308,7 +16308,7 @@ fn queue_pressure_active(state: &Arc<Mutex<SharedState>>) -> bool {
 
 fn inflight_leased_message_key(state: &Arc<Mutex<SharedState>>, message_key: &str) -> bool {
     let shared = lock_shared_state(state);
-    shared.leased_message_keys_inflight.contains(message_key)
+    leased_message_key_has_live_owner_locked(&shared, message_key)
 }
 
 fn active_or_pending_leased_message_key(
@@ -16316,7 +16316,12 @@ fn active_or_pending_leased_message_key(
     message_key: &str,
 ) -> bool {
     let shared = lock_shared_state(state);
-    (shared.worker_active_count > 0 && shared.leased_message_keys_inflight.contains(message_key))
+    leased_message_key_has_live_owner_locked(&shared, message_key)
+}
+
+fn leased_message_key_has_live_owner_locked(shared: &SharedState, message_key: &str) -> bool {
+    ((shared.busy || shared.worker_active_count > 0)
+        && shared.leased_message_keys_inflight.contains(message_key))
         || shared.pending_prompts.iter().any(|prompt| {
             prompt
                 .leased_message_keys
@@ -23155,6 +23160,42 @@ Business OS command:
             vec![next_task.message_key.clone()]
         );
         assert_eq!(route_status_for(&root, &next_task.message_key), "leased");
+    }
+
+    #[test]
+    fn idle_dispatch_ignores_stale_inflight_queue_key_without_live_worker() {
+        let root = temp_root("business-os-idle-dispatch-stale-inflight-key");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create subscriptions app".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/subscriptions".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create pending app queue task");
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.busy = false;
+            shared.worker_active_count = 0;
+            shared
+                .leased_message_keys_inflight
+                .insert(task.message_key.clone());
+        }
+
+        let leased = maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state)
+            .expect("idle dispatch should not fail")
+            .expect("stale process-local inflight state must not block durable queue leasing");
+
+        assert_eq!(leased.leased_message_keys, vec![task.message_key.clone()]);
+        assert_eq!(route_status_for(&root, &task.message_key), "leased");
     }
 
     #[test]
