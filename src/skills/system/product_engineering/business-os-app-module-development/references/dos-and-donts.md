@@ -13,6 +13,10 @@
 - Use `ctox.ticket.local.create/comment/transition` only for real local ticket lifecycle actions.
 - Keep the first version small, focused, and fully working.
 - Prefer one or two panes; use modals for occasional detail work.
+- Include a visible create flow for the primary record type, especially in the
+  empty state.
+- If you implement a custom modal or overlay with a `hidden` attribute, add the
+  matching CSS rule so it cannot block clicks while hidden.
 - Add tests for pure record helpers and automation command builders.
 - Run `ctox business-os app validate <module-id> --installed` or `--source`.
 - Treat shipped source apps as workflow examples, not as runtime manifest

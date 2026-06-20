@@ -12,6 +12,8 @@ Use this before claiming a Business OS app is done.
 - Automation uses `ctx.commandBus.dispatch(...)`.
 - Chat/AI actions use `business_os.chat.task` with `payload.record_snapshot`; real ticket lifecycle actions use `ctox.ticket.*`.
 - The UI has no decorative panes or dead controls.
+- The empty state lets the user create at least one primary business record.
+- Hidden modals, drawers, and overlays really stop intercepting clicks when hidden.
 - Core workflows implemented in the UI actually work.
 - Tests cover record helper behavior and automation payloads.
 - `ctox business-os app validate <module-id> --installed` or `--source` passes.

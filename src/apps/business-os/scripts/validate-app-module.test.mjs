@@ -46,6 +46,9 @@ function installedIndexJs(moduleId, collectionName, extraLines = []) {
     `  const records = ctx.db.collection?.('${collectionName}') || ctx.db.collections?.${collectionName};`,
     '  void records;',
     ...extraLines,
+    "  ctx.host.querySelector('[data-action=\"create-record\"]')?.addEventListener('click', () => {",
+    "    records?.upsert?.({ id: 'demo', title: 'Demo', updated_at_ms: Date.now() });",
+    '  });',
     "  ctx.host.querySelector('[data-action=\"follow-up\"]')?.addEventListener('click', () => {",
     "    ctx.commandBus.dispatch(buildFollowUpCommand({ id: 'demo', title: 'Demo', updated_at_ms: 1 }));",
     '  });',
@@ -132,6 +135,7 @@ function writeInstalledModule(root, moduleId, overrides = {}) {
   writeFileSync(join(dir, 'index.html'), overrides.indexHtml || [
     '<main class="validator-module">',
     '  <section data-list></section>',
+    '  <button type="button" data-action="create-record">Create record</button>',
     '  <button type="button" data-action="follow-up">Follow up</button>',
     '</main>',
     '',
@@ -317,7 +321,7 @@ function writeSourceModule(root, moduleId, overrides = {}) {
 {
   const root = makeWorkspace();
   writeInstalledModule(root, 'deadbutton', {
-    indexHtml: '<main class="validator-module"><button type="button" data-action="follow-up">Follow up</button><button type="button" data-action="bulk-follow-up">Bulk follow up</button></main>\n',
+    indexHtml: '<main class="validator-module"><button type="button" data-action="create-record">Create record</button><button type="button" data-action="follow-up">Follow up</button><button type="button" data-action="bulk-follow-up">Bulk follow up</button></main>\n',
   });
   const run = runValidator(root, 'deadbutton', '--installed');
   assert.notEqual(run.status, 0);
@@ -326,8 +330,64 @@ function writeSourceModule(root, moduleId, overrides = {}) {
 
 {
   const root = makeWorkspace();
+  writeInstalledModule(root, 'nocreate', {
+    indexHtml: '<main class="validator-module"><button type="button" data-action="follow-up">Follow up</button></main>\n',
+    indexJs: [
+      "import { buildFollowUpCommand } from './core/automation.mjs';",
+      'export async function mount(ctx) {',
+      "  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());",
+      "  const records = ctx.db.collection?.('nocreate_records') || ctx.db.collections?.nocreate_records;",
+      '  void records;',
+      "  ctx.host.querySelector('[data-action=\"follow-up\"]')?.addEventListener('click', () => ctx.commandBus.dispatch(buildFollowUpCommand({ id: 'demo', title: 'Demo', updated_at_ms: 1 })));",
+      '  return () => { ctx.host.innerHTML = ""; };',
+      '}',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'nocreate', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /must expose a primary create action/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'hiddenmodal', {
+    indexHtml: [
+      '<main class="validator-module">',
+      '  <button type="button" data-action="create-record">Create record</button>',
+      '  <button type="button" data-action="follow-up">Follow up</button>',
+      '  <div class="hiddenmodal-modal" hidden>Modal</div>',
+      '</main>',
+      '',
+    ].join('\n'),
+    indexCss: '.validator-module { display: grid; }\n.hiddenmodal-modal { position: fixed; inset: 0; display: flex; }\n',
+  });
+  const run = runValidator(root, 'hiddenmodal', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /hidden modal \.hiddenmodal-modal has a display rule but no CSS rule/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'hiddenmodalok', {
+    indexHtml: [
+      '<main class="validator-module">',
+      '  <button type="button" data-action="create-record">Create record</button>',
+      '  <button type="button" data-action="follow-up">Follow up</button>',
+      '  <div class="hiddenmodalok-modal" hidden>Modal</div>',
+      '</main>',
+      '',
+    ].join('\n'),
+    indexCss: '.validator-module { display: grid; }\n.hiddenmodalok-modal { position: fixed; inset: 0; display: flex; }\n.hiddenmodalok-modal[hidden] { display: none; }\n',
+  });
+  const run = runValidator(root, 'hiddenmodalok', '--installed');
+  assert.equal(run.status, 0, `${run.stderr}\n${run.stdout}`);
+}
+
+{
+  const root = makeWorkspace();
   writeInstalledModule(root, 'domainaction', {
-    indexHtml: '<main class="validator-module"><button type="button" data-action="follow-up">Follow up</button><button type="button" data-action="restock">Restock</button></main>\n',
+    indexHtml: '<main class="validator-module"><button type="button" data-action="create-record">Create record</button><button type="button" data-action="follow-up">Follow up</button><button type="button" data-action="restock">Restock</button></main>\n',
     indexJs: installedIndexJs('domainaction', 'domainaction_records', [
       "  ctx.host.querySelector('[data-action=\"restock\"]')?.addEventListener('click', () => {",
       "    ctx.commandBus.dispatch(buildFollowUpCommand({ id: 'sku-1', title: 'Safety gloves', updated_at_ms: 1 }));",

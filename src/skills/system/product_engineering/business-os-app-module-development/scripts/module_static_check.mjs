@@ -207,6 +207,53 @@ function htmlDataActions(html) {
   return actions;
 }
 
+function hasPrimaryCreateAffordance(html, indexJs) {
+  const combined = `${html || ''}\n${indexJs || ''}`;
+  if (/\bdata-[a-z0-9]+-add\b/i.test(combined)) return true;
+  if (/\bdata-action\s*=\s*(['"])(?!(?:follow-?up|create-?follow-?up)\1)(?:add|new|create|create-record|new-record|add-record)[^'"]*\1/i.test(html)) {
+    return true;
+  }
+  return /\b(?:add|new|create)(?:Primary)?Record\s*\(/i.test(indexJs)
+    || /\bopen(?:Form|Modal)\s*\(\s*['"`](?:add|new|create|record|primary)/i.test(indexJs);
+}
+
+function collectHiddenModalClasses(html) {
+  const classes = new Set();
+  const tagPattern = /<[^>]*\bhidden\b[^>]*\bclass\s*=\s*(['"])([^'"]+)\1[^>]*>|<[^>]*\bclass\s*=\s*(['"])([^'"]+)\3[^>]*\bhidden\b[^>]*>/gi;
+  for (const match of String(html || '').matchAll(tagPattern)) {
+    const raw = match[2] || match[4] || '';
+    for (const cls of raw.split(/\s+/).map((item) => item.trim()).filter(Boolean)) {
+      if (/modal/i.test(cls)) classes.add(cls);
+    }
+  }
+  return Array.from(classes);
+}
+
+function cssHasDisplayRuleForClass(css, className) {
+  const escaped = escapeRegExp(className);
+  return new RegExp(String.raw`\.[\w-]*\s*\.?${escaped}\b[^{]*\{[^}]*\bdisplay\s*:`, 'i').test(css)
+    || new RegExp(String.raw`\.${escaped}\b[^{]*\{[^}]*\bdisplay\s*:`, 'i').test(css);
+}
+
+function cssHidesHiddenClass(css, className) {
+  const escaped = escapeRegExp(className);
+  const classHidden = new RegExp(String.raw`\.${escaped}\s*\[\s*hidden\s*\][^{]*\{[^}]*\bdisplay\s*:\s*none\b`, 'i');
+  const scopedClassHidden = new RegExp(String.raw`\.[\w-]+\s+\.${escaped}\s*\[\s*hidden\s*\][^{]*\{[^}]*\bdisplay\s*:\s*none\b`, 'i');
+  const globalHidden = /\[\s*hidden\s*\][^{]*\{[^}]*\bdisplay\s*:\s*none\b/i;
+  return classHidden.test(css) || scopedClassHidden.test(css) || globalHidden.test(css);
+}
+
+function collectHiddenModalFailures(indexHtml, indexCss) {
+  const messages = [];
+  for (const className of collectHiddenModalClasses(indexHtml)) {
+    if (!cssHasDisplayRuleForClass(indexCss, className)) continue;
+    if (!cssHidesHiddenClass(indexCss, className)) {
+      messages.push(`hidden modal .${className} has a display rule but no CSS rule that hides .${className}[hidden]`);
+    }
+  }
+  return messages;
+}
+
 function indexJsHandlesDataAction(indexJs, action) {
   const escaped = escapeRegExp(action);
   return new RegExp(String.raw`\[data-action\s*=\s*["']${escaped}["']\]`).test(indexJs)
@@ -397,8 +444,10 @@ for (const message of collectEsmImportExportFailures(jsFiles)) fail(`ESM import/
 
 const indexJsPath = join(moduleDir, 'index.js');
 const indexHtmlPath = join(moduleDir, 'index.html');
+const indexCssPath = join(moduleDir, 'index.css');
 const indexJs = existsSync(indexJsPath) ? readText(indexJsPath) : '';
 const indexHtml = existsSync(indexHtmlPath) ? readText(indexHtmlPath) : '';
+const indexCss = existsSync(indexCssPath) ? readText(indexCssPath) : '';
 const runtimeText = runtimeFiles.map((file) => readText(file)).join('\n');
 const nonTestModuleText = files
   .filter((file) => /\.(?:js|mjs|html|css|json)$/.test(file))
@@ -430,6 +479,9 @@ if (installedMode) {
   if (hasChatTaskAutomation && !/\brecord_snapshot\b/.test(nonTestModuleText)) {
     fail('installed module automation must include payload.record_snapshot');
   }
+  if (!hasPrimaryCreateAffordance(indexHtml, indexJs)) {
+    fail('installed module must expose a primary create action for its main business record');
+  }
 }
 
 const runtimeRules = [
@@ -460,6 +512,7 @@ if (/<!doctype\b|<\s*html\b|<\s*head\b|<\s*body\b/i.test(indexHtml)) {
 if (/<\s*(?:link|script|meta|title|style)\b/i.test(indexHtml)) {
   fail('index.html must not include document/head resource tags such as <link>, <script>, <meta>, <title>, or <style>');
 }
+for (const message of collectHiddenModalFailures(indexHtml, indexCss)) fail(message);
 for (const action of htmlDataActions(indexHtml)) {
   if (!indexJsHandlesDataAction(indexJs, action)) {
     fail(`index.html declares data-action="${action}" but index.js has no visible handler for it`);
