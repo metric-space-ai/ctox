@@ -705,9 +705,15 @@ unless a capability token is present and enforced. The native half is done
 
 ### 9.5 P3 — Surface maturity (UX, not correctness)
 
-- [x] *(commit 925f6d21 — placements)* Placements promoted from a record list to a working surface: `placement_type` select (Festanstellung vs Arbeitnehmerüberlassung) + a `required_types` field so the §9.2 server-derived AÜG gate fires from the UI; rich rows (status badge, candidate → client, fee, guarantee days, fee-invoice id, Storno credit-note id); a per-placement **Frühausstieg** action that dispatches `ats.placement.early_leave` and surfaces the clawback + credit-note. node --check clean; placements engine tests 11/0. *(Dynamic mount behaviour needs the live shell+RxDB; verified via syntax + engine tests.)*
-- [ ] Promote the remaining minimal record-list mounts (intake, submissions, interviews, esign, nachweise, consent) to full forms/boards/detail per the App-Creator contract (§3), shell-delivered DB handles only — same pattern as placements, one module at a time.
-- **Acceptance:** a recruiter can run each step from a real UI, not a record list.
+- [x] *(commit 925f6d21 — placements)* Placements promoted from a record list to a working surface: `placement_type` select (Festanstellung vs Arbeitnehmerüberlassung) + a `required_types` field so the §9.2 server-derived AÜG gate fires from the UI; rich rows (status badge, candidate → client, fee, guarantee days, fee-invoice id, Storno credit-note id); a per-placement **Frühausstieg** action that dispatches `ats.placement.early_leave` and surfaces the clawback + credit-note. node --check clean; placements engine tests 11/0.
+- [x] *(commit 954b336e — six modules)* The remaining mounts promoted to engine-grounded surfaces, payload fields + result shapes grounded in the real native handlers (`src/core/business_os/store.rs`), node --check clean on all six:
+  - **intake** — `ats.intake.capture` (name/email/phone/vacancy_id/channel); rich `applications` rows (status badge, contact, dedupe_key, doc count).
+  - **submissions** — `ats.submission.present` (handler-exact fields + blocker rendering); candidate → client rows (status, vacancy, consent, feedback).
+  - **interviews** — schedules into `interview_meetings` (plain RxDB write — no native command); renders meetings + scorecards with engine-computed state/score + per-meeting state-transition actions.
+  - **esign** — `ats.signature.request` + per-row `ats.signature.sign` action; rows show signer counts + `signature_request` status.
+  - **nachweise** — `business_credentials` rows with `credentialStatus`/`isDeploymentBlocking` badges + per-row `ats.deployment.check`; standalone `ats.leistungsnachweis.signoff` form.
+  - **consent** — DSGVO surface: `ats.consent.check` form, `business_consents` ledger rows, per-subject Art. 15 (`ats.subject.export`) / Art. 17 (`ats.subject.erase`) actions; export payload rendered `esc()`'d.
+- **Acceptance:** a recruiter can run each step from a real UI, not a record list. *(Dynamic mount behaviour — live RxDB handles + WebRTC dispatch round-trip — still needs the running shell to render-verify; this pass verified syntax + handler-field grounding + an adversarial field/XSS/cleanup review against the live handlers.)*
 
 ### 9.6 P4 — Out-of-ATS-core billing (optional, separate project)
 
@@ -747,14 +753,14 @@ The boxes still open are open for a specific reason, not for lack of work:
   to the parallel agent; CLI dispatch exercises the sync native handler, not the
   harness skill path).
 - **Larger design (out of an ATS hardening pass):** 9.2 legal-basis evidence
-  model; 9.5 rich UIs for the remaining six modules (placements done as the
-  reference; intake/submissions/interviews/esign/nachweise/consent follow the same
-  per-module App-Creator pattern).
+  model. *(9.5 module UIs are now done — placements (925f6d21) + the remaining six
+  intake/submissions/interviews/esign/nachweise/consent (954b336e), each grounded
+  in the live native handlers and adversarially field/XSS/cleanup-reviewed.)*
 
 So: the ATS-core native logic is hardened to the limit of what this session can
-own, and the capability-token path now ships end-to-end (issue → attach → verify);
-the residual is an operational enforcement flip (9.1), one sync-layer audit (9.2)
-to coordinate with the parallel agent, absent infra (9.3), and per-module UI
-build-out (9.5, placements landed as the template). The plan is the single source
-of truth for that residual.
+own, the capability-token path ships end-to-end (issue → attach → verify), and all
+seven ATS module UIs are promoted from record lists to engine-grounded surfaces.
+The residual is an operational enforcement flip (9.1), one sync-layer audit (9.2)
+to coordinate with the parallel agent, and absent infra (9.3 STT weights + a live
+shell/WebRTC round-trip). The plan is the single source of truth for that residual.
 
