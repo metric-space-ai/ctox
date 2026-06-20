@@ -11476,8 +11476,10 @@ fn release_business_os_app_validation_rework_to_pending(
 }
 
 fn queue_task_is_business_os_app_validation_rework(task: &channels::QueueTaskView) -> bool {
-    task.prompt
-        .contains("Business OS app artifact validation failed.")
+    (task.prompt.contains("Business OS app validation failed.")
+        || task
+            .prompt
+            .contains("Business OS app artifact validation failed."))
         && business_os_app_module_target_from_prompt(&task.prompt).is_some()
 }
 
@@ -23054,9 +23056,7 @@ Business OS command:
             route_status_for(&root, &pending_task.message_key),
             "pending"
         );
-        assert!(leased
-            .prompt
-            .contains("Business OS app artifact validation failed."));
+        assert!(leased.prompt.contains("Business OS app validation failed."));
     }
 
     #[test]
