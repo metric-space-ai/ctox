@@ -22783,6 +22783,45 @@ fn ensure_ats_collection_allowed(collection: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// True when a placement type is a temp-staffing / Arbeitnehmerüberlassung
+/// (Zeitarbeit) arrangement, which legally requires a deployment-readiness gate.
+/// Direct/permanent placement (Personalvermittlung) does not.
+fn placement_type_requires_deployment_gate(placement_type: &str) -> bool {
+    matches!(
+        placement_type.trim().to_ascii_lowercase().as_str(),
+        "arbeitnehmerueberlassung"
+            | "arbeitnehmerüberlassung"
+            | "aue"
+            | "anü"
+            | "anue"
+            | "temp"
+            | "temp_staffing"
+            | "zeitarbeit"
+            | "ueberlassung"
+            | "überlassung"
+    )
+}
+
+/// The mandatory credential types an Arbeitnehmerüberlassung placement must
+/// check, read from the runtime config (CTOX_BUSINESS_OS_AUE_REQUIRED_CREDENTIALS,
+/// comma/space separated). The legal list stays in config so the recruiting
+/// profile owns it (Baukasten) — but §9.2 makes the GATE itself mandatory
+/// whenever placement_type is AÜG, never caller-optional.
+fn aue_mandatory_required_types(root: &Path) -> Vec<String> {
+    crate::inference::runtime_env::env_or_config(
+        root,
+        "CTOX_BUSINESS_OS_AUE_REQUIRED_CREDENTIALS",
+    )
+    .map(|raw| {
+        raw.split([',', ';', '\n', '\t', ' '])
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned)
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
 fn handle_ats_mutating_command(
     root: &Path,
     session: &BusinessOsSession,
@@ -22897,11 +22936,15 @@ fn handle_ats_mutating_command(
         "ats.placement.create" => {
             let candidate_id = first_string_field(p, &["candidate_id"])
                 .context("ats.placement.create requires candidate_id")?;
-            // §5.8 AÜG deployment-readiness gate: when the caller names the
-            // required credential types (temp staffing / Arbeitnehmerüberlassung),
-            // the candidate must be deployment-ready before the placement is
-            // created. Permanent placement (no required_types) skips the gate.
-            let required: Vec<String> = p
+            // §5.8/§9.2 deployment-readiness gate. The required credential set is
+            // SERVER-DERIVED: the caller's required_types unioned with the
+            // mandatory AÜG set when placement_type is an Arbeitnehmerüberlassung
+            // arrangement. The gate is mandatory for AÜG (never caller-optional);
+            // direct/permanent placement with no required types skips it.
+            let placement_type =
+                first_string_field(p, &["placement_type"]).unwrap_or_default();
+            let is_aue = placement_type_requires_deployment_gate(&placement_type);
+            let mut required: Vec<String> = p
                 .get("required_types")
                 .and_then(Value::as_array)
                 .map(|arr| {
@@ -22910,6 +22953,34 @@ fn handle_ats_mutating_command(
                         .collect()
                 })
                 .unwrap_or_default();
+            if is_aue {
+                for ty in aue_mandatory_required_types(root) {
+                    if !required.iter().any(|r| r == &ty) {
+                        required.push(ty);
+                    }
+                }
+                // Fail closed: an AÜG placement must run a credential gate. An
+                // empty set here is a misconfiguration, not a licence to skip.
+                if required.is_empty() {
+                    record_ats_governance_event(
+                        &conn,
+                        command,
+                        &actor,
+                        "business_os.ats.placement_denied",
+                        serde_json::json!({
+                            "candidate_id": candidate_id,
+                            "decision": "denied",
+                            "reason_codes": ["aue_required_credentials_unconfigured"]
+                        }),
+                        now,
+                    )?;
+                    return Ok(serde_json::json!({
+                        "ok": true,
+                        "allowed": false,
+                        "blockers": [{ "reason": "aue_required_credentials_unconfigured" }],
+                    }));
+                }
+            }
             if !required.is_empty() {
                 let required_refs: Vec<&str> = required.iter().map(String::as_str).collect();
                 let credentials = load_business_records_by_field(
@@ -23107,9 +23178,49 @@ fn handle_ats_mutating_command(
             let mut payload = existing
                 .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
                 .unwrap_or_else(|| serde_json::json!({ "id": record_id }));
-            if let Some(obj) = payload.as_object_mut() {
-                obj.insert("entleiher_signed".to_string(), Value::Bool(true));
-                obj.insert("signed_at_ms".to_string(), Value::from(now));
+            // §9.2 external sign-off proof: when enabled, the Entleiher signature
+            // must be backed by a COMPLETED signature_request (by
+            // signature_request_id or one whose document_id is this Nachweis) —
+            // not just an internal admin assertion. Off by default (backward
+            // compatible); on for hardened instances.
+            let require_signature = crate::inference::runtime_env::env_or_config(
+                root,
+                "CTOX_BUSINESS_OS_REQUIRE_ENTLEIHER_SIGNATURE",
+            )
+            .as_deref()
+                == Some("1");
+            let signature_proven = if require_signature {
+                let raw = match first_string_field(p, &["signature_request_id"]) {
+                    Some(sig_id) => conn
+                        .query_row(
+                            "SELECT payload_json FROM business_records WHERE collection = 'signature_requests' AND record_id = ?1 AND deleted = 0",
+                            params![sig_id.as_str()],
+                            |row| row.get::<_, String>(0),
+                        )
+                        .optional()?,
+                    None => conn
+                        .query_row(
+                            "SELECT payload_json FROM business_records WHERE collection = 'signature_requests' AND deleted = 0 AND json_extract(payload_json, '$.document_id') = ?1 ORDER BY updated_at_ms DESC LIMIT 1",
+                            params![record_id.as_str()],
+                            |row| row.get::<_, String>(0),
+                        )
+                        .optional()?,
+                };
+                raw.and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+                    .and_then(|v| {
+                        v.get("status")
+                            .and_then(Value::as_str)
+                            .map(|s| s == "completed")
+                    })
+                    .unwrap_or(false)
+            } else {
+                true
+            };
+            if signature_proven {
+                if let Some(obj) = payload.as_object_mut() {
+                    obj.insert("entleiher_signed".to_string(), Value::Bool(true));
+                    obj.insert("signed_at_ms".to_string(), Value::from(now));
+                }
             }
             // §5.9 Entleiher sign-off → billing gate. Billing requires the signed
             // Nachweis to carry positive billable hours AND a finite positive
@@ -23119,6 +23230,9 @@ fn handle_ats_mutating_command(
                 .iter()
                 .map(|s| (*s).to_string())
                 .collect();
+            if require_signature && !signature_proven {
+                blockers.push("entleiher_signature_proof_missing".to_string());
+            }
             let charge_rate = p
                 .get("charge_rate")
                 .and_then(Value::as_f64)
