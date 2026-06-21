@@ -635,6 +635,21 @@ fn handle_business_os_app(root: &Path, args: &[String]) -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Some("smoke") => {
+            let module_id = args
+                .get(1)
+                .filter(|value| !value.starts_with("--"))
+                .context(
+                    "usage: ctox business-os app smoke <module-id> [--url <business-os-url>] [--json] [--create-action <action>] [--timeout-ms <n>] [--output <path>] [--screenshot <path>]",
+                )?;
+            let output = run_business_os_app_smoke(root, module_id, &args[2..])?;
+            if !output.status.success() {
+                print_process_output(&output);
+                anyhow::bail!("Business OS app browser smoke failed for `{module_id}`");
+            }
+            print_process_output(&output);
+            Ok(())
+        }
         Some("references") => {
             let output = business_os_app_reference_candidates(root, &args[1..])?;
             if args.iter().any(|arg| arg == "--json") {
@@ -1745,6 +1760,54 @@ fn run_business_os_app_validator(
         .context("failed to run Business OS app validator")
 }
 
+fn run_business_os_app_smoke(
+    root: &Path,
+    module_id: &str,
+    args: &[String],
+) -> anyhow::Result<std::process::Output> {
+    if module_id.is_empty()
+        || module_id == "."
+        || module_id == ".."
+        || module_id.contains('/')
+        || module_id.contains('\\')
+    {
+        anyhow::bail!("invalid Business OS app module id `{module_id}`");
+    }
+    let script = root.join("src/apps/business-os/scripts/smoke-app-module.mjs");
+    anyhow::ensure!(
+        script.is_file(),
+        "Business OS app browser smoke is not available at {}",
+        script.display()
+    );
+    let mut command = Command::new(resolve_business_os_validator_node(root));
+    command.current_dir(root).arg(script).arg(module_id);
+    let mut idx = 0;
+    while idx < args.len() {
+        match args[idx].as_str() {
+            "--installed" | "--source" | "--json" => {
+                command.arg(&args[idx]);
+                idx += 1;
+            }
+            "--url" | "--create-action" | "--timeout-ms" | "--output" | "--screenshot" => {
+                let value = args
+                    .get(idx + 1)
+                    .with_context(|| format!("{} requires a value", args[idx]))?;
+                command.arg(&args[idx]).arg(value);
+                idx += 2;
+            }
+            value if value.starts_with("--") => {
+                anyhow::bail!("unsupported business-os app smoke option `{value}`")
+            }
+            _ => {
+                idx += 1;
+            }
+        }
+    }
+    command
+        .output()
+        .context("failed to run Business OS app browser smoke")
+}
+
 pub(crate) fn resolve_business_os_validator_node(_root: &Path) -> PathBuf {
     let mut candidates = Vec::new();
     if let Ok(path) = env::var("PATH") {
@@ -2608,7 +2671,7 @@ fn business_os_usage() -> String {
     business_os_usage_base()
         .replace(
             "  ctox business-os app validate <module-id>",
-            "  ctox business-os app references [--query <text>] [--json]\n  ctox business-os app validate <module-id>",
+            "  ctox business-os app references [--query <text>] [--json]\n  ctox business-os app validate <module-id>\n  ctox business-os app smoke <module-id>",
         )
         .replace(
             "  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]",

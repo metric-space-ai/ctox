@@ -23,10 +23,14 @@
   empty state.
 - Create/edit forms must include a visible Save or Submit control that actually
   completes the workflow.
+- Query modals and forms from the DOM parent that actually contains them.
+  `root.querySelector(...)` is wrong when the modal is a sibling of `root`.
 - If you implement a custom modal or overlay with a `hidden` attribute, add the
   matching CSS rule so it cannot block clicks while hidden.
 - Add tests for pure record helpers and automation command builders.
 - Run `ctox business-os app validate <module-id> --installed` or `--source`.
+- Run `ctox business-os app smoke <module-id> --installed` against the real
+  Business OS shell and fix any dead create flow, mount error, or console error.
 - Treat shipped source apps as workflow examples, not as runtime manifest
   templates. Adapt source manifests to the runtime contract.
 
@@ -45,6 +49,8 @@
 - Do not write directly to `ctox_ticket_*` projection collections.
 - Do not use a full HTML document in `index.html`.
 - Do not add decorative third panes, fake buttons, or controls without handlers.
+- Do not claim a visible Create/New/Add button works until it has been clicked
+  in the real Business OS shell.
 - Do not copy `layout.icon_svg`, inline SVG, `store.installable`, or
   `entry: modules/...` from a source manifest into a runtime-installed app.
 - Do not copy internal shell/developer apps such as App Creator, App Store,

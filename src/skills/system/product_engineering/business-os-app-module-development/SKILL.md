@@ -27,6 +27,7 @@ This file is a resource index. Use the linked contracts and checklists as the wo
 
 - Runtime app: `ctox business-os app validate <module-id> --installed`
 - Source app: `ctox business-os app validate <module-id> --source`
+- Browser proof: `ctox business-os app smoke <module-id> --installed`
 
 Validation failures are app defects or contract defects. Fix the app or the contract; do not hide failures by weakening validation.
 

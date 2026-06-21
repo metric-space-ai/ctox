@@ -141,6 +141,8 @@ INSTALL / UPGRADE
                                  list local Business OS app reference candidates
   ctox business-os app validate <module-id> [--installed|--source]
                                  validate a Business OS app module artifact
+  ctox business-os app smoke <module-id> [--url <business-os-url>]
+                                 run a real browser smoke for a Business OS app module
   ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k
                                  submit the five-app Business OS app creation bench
   ctox business-os skills list|enable|disable

@@ -52,8 +52,8 @@ Installed CTOX:
   `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/installed-modules/<module-id>`
   which resolves into the managed runtime/state root. Runtime apps must not be
   written into source paths.
-- CTOX status at latest check: `running=true`, `busy=true`,
-  `worker_active_count=1`, `pending_count=1`
+- CTOX status at latest check: `running=true`, `busy=false`,
+  `worker_active_count=0`, `pending_count=0`
 - Business OS status at latest check: `ok=true`, native RxDB peer
   `replicationUp=true`, `http_bridge_available=false`
 
@@ -67,28 +67,27 @@ Current proof run:
 - Evidence dir:
   `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7`
 - Latest status snapshot:
-  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7/status-1782025474262.json`
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7/status-1782025675994.json`
 
 Latest result:
 
-- `rfix7` is still running and must not be judged as final yet.
-- Inventory reached `handled` with installed validation green and 26/26 module
-  tests passing.
-- Projects reached `handled` with installed validation green and 30/30 module
-  tests passing.
-- Quality reached `handled` with installed validation green and 10/10 module
-  tests passing after CTOX asked the same app task to repair missing artifacts.
-- Subscriptions was previously `leased` without artifacts while CTOX was idle.
-  After `ctox upgrade --dev`, boot recovery requeued it to `pending` with
-  `business-os:requeued-unstarted-app: app target missing or empty`. Classify
-  this incident as `runtime_orchestration_gap` evidence unless later source
-  inspection proves a narrower lifecycle cause.
-- Contracts reached `handled` with installed validation green and 32/32 module
-  tests passing after the service restart.
-- Subscriptions is currently `leased` and running through normal CTOX rework.
-  Its runtime module directory now has all required files, `module_static_check`
-  is green, and `node --check` is green. Installed validation is still red
-  because `tests/records.test.mjs` fails 4/35 app-local assertions.
+- `rfix7` reached terminal static success: five handled tasks, zero leased
+  tasks, five installed validations green.
+- Browser proof is red and blocks production readiness. The first five-app E2E
+  showed four generated apps with visible Create/New buttons that did not open
+  their dialogs/forms; Quality created a complaint, persisted it through the
+  browser collection, replicated it into native SQLite, and showed it after
+  reload.
+- Focused browser smoke classified the repeated failure as
+  `skill_resource_gap` plus `validator_gap`: several generated apps put dialog
+  elements outside the module root section, then queried them with
+  `root.querySelector(...)`. Inventory crashes during mount; Contracts records
+  the click but no handler reveals a dialog/form. Static validation did not
+  catch this because it saw buttons, handlers, and tests but no real browser
+  interaction.
+- A new app smoke tool/CLI is under source test:
+  `ctox business-os app smoke <module-id> --installed`. It is a validation
+  tool only; it does not generate, repair, or rewrite app artifacts.
 - No generated `rfix7` app files may be patched by hand.
 
 Latest source fix under test:
@@ -113,6 +112,22 @@ Latest source fix under test:
   `/Users/michaelwelsch/.local/lib/ctox/current/src/core/service/service.rs`
   contains the lock release before Business OS workspace sync and the recovery
   regression test.
+
+Current source patch under test:
+
+- Added `src/apps/business-os/scripts/smoke-app-module.mjs`.
+- Added `ctox business-os app smoke <module-id>` CLI wiring in
+  `src/core/service/business_os.rs` and top-level help in `src/core/main.rs`.
+- Updated concise skill resources to require real-shell Create/New/Add smoke
+  and to call out DOM-scope handling for sibling dialogs/forms.
+- Verification so far:
+  `node --check src/apps/business-os/scripts/smoke-app-module.mjs`,
+  `node src/apps/business-os/scripts/smoke-app-module.mjs bench_quality_rfix7 --installed --json --timeout-ms 90000`,
+  `cargo run --bin ctox -- business-os app smoke bench_quality_rfix7 --installed --json --timeout-ms 90000`,
+  and negative CLI/tool controls against Inventory and Contracts.
+- `cargo fmt --check -- src/core/main.rs src/core/service/business_os.rs` was
+  attempted but existing unrelated formatting diffs in other Business OS Rust
+  files made it red; no broad formatting was applied.
 
 Previous source fix:
 
@@ -183,12 +198,12 @@ App creation is production-ready only when every gate is green.
 
 | Gate | Status | Required Evidence |
 | --- | --- | --- |
-| Skill shape | in_progress | English, concise, resource-based, no prompt wall, requires three reference apps, clear Do/Don't list, clear green checklist. |
+| Skill shape | in_progress | English, concise, resource-based, no prompt wall, requires three reference apps, clear Do/Don't list, clear green checklist, includes browser-smoke finalization. |
 | Correct install location | done | Generated apps are under `runtime/business-os/installed-modules/<module-id>` and survive `ctox upgrade --dev`. |
 | CTOX-native creation | in_progress | Fresh five-app bench is created through real app-create tasks, not direct file writes. `rfix7` is running. |
-| Static validation | in_progress | Fresh five-app run reaches terminal queue success and installed validation green for all five apps. |
-| Browser mount | pending | Fresh browser can mount all five apps from the installed module catalog. |
-| Five-app browser E2E | pending | UI create/edit, reload persistence, native CTOX DB sync, and automation command dispatch pass for all five fresh apps. |
+| Static validation | done | `rfix7` reached terminal queue success and installed validation green for all five apps. |
+| Browser mount | blocked | `rfix7` Inventory has a real mount error; fresh browser smoke catches it. |
+| Five-app browser E2E | blocked | `rfix7` browser E2E found dead Create/New flows in four apps. Fresh run required after skill/tool patch. |
 | Entry-point coverage | pending | Chat, App Creator, App Store/template flow, CLI, and inbound/MCP paths all attach the same app-module creation contract. |
 | Versioning contract | pending | Existing app version metadata is audited; missing enforcement is listed or patched; users see only versions `>=1.0.0`; each `x.0.0` major is independently installable with its own app icon. |
 | Install/upgrade lifecycle | in_progress | `ctox upgrade --dev` applies source fixes, preserves runtime modules, and leaves CTOX/Business OS healthy. |
@@ -199,12 +214,12 @@ App creation is production-ready only when every gate is green.
 | Phase | Status | Owner | Exit Criteria | Evidence |
 | --- | --- | --- | --- | --- |
 | 0. Remove deterministic builder | done | Codex | App creation uses durable tasks and agent implementation, not deterministic generated source. | Earlier deterministic builder artifacts removed; bench runner submits real app-create tasks. |
-| 1. Simplify skill/resources | in_progress | Codex | Skill/resources are English, concise, reference/resource based, avoid prompt walls, and state CTOX DB/command patterns without legacy fallbacks. | Latest resources patched in `89c2a75d`; needs fresh run proof. |
+| 1. Simplify skill/resources | in_progress | Codex | Skill/resources are English, concise, reference/resource based, avoid prompt walls, state CTOX DB/command patterns without legacy fallbacks, and require browser-smoke proof. | Latest resources now include the DOM-scope lesson and `ctox business-os app smoke`; needs fresh run proof after install. |
 | 2. Build CTOX-native bench | done | Codex | Bench submits real app-create tasks and records evidence without creating or repairing app files. | `ctox business-os app bench run/status`; run dirs under `runtime/business-os/app-creation-bench/`. |
 | 3. Close lifecycle/orchestration gaps | in_progress | Codex | Queue, validation, launchd/dev-upgrade, module catalog, and native peer lifecycle work without manual service recovery. | Latest installed release `branch-main-20260621T064355Z`; forensic sample showed worker-finalization workspace sync holding `SharedState` and blocking router/recovery/status; commit `aaf4bbb8` moved sync outside the `SharedState` lock and is installed through `ctox upgrade --dev`. |
-| 4. Close validator/resource gaps | in_progress | Codex | Validator rejects predictable bad app artifacts before browser E2E finds them, without blocking valid vanilla apps. | `89c2a75d`; old `rfix6` artifacts are rejected by installed validation. |
-| 5. Fresh five-app CTOX proof | in_progress | Codex | One fresh post-validator run reaches terminal queue success and installed validation green for five apps. | `rfix7` running; Inventory, Projects, Contracts, and Quality handled/green; Subscriptions leased/running, static green, but module tests fail 4/35. |
-| 6. Browser proof | pending | Codex | Browser mount, UI persistence, reload persistence, native sync, and automation smoke pass for all five fresh apps. | Wait for `rfix7` terminal static result. |
+| 4. Close validator/resource gaps | in_progress | Codex | Validator/tooling rejects predictable bad app artifacts before signoff, without blocking valid vanilla apps. | `89c2a75d` rejects old DB fallbacks; current source adds `ctox business-os app smoke` to catch dead create flows in the real shell. |
+| 5. Fresh five-app CTOX proof | done | Codex | One fresh post-validator run reaches terminal queue success and installed validation green for five apps. | `rfix7` terminal green: 5 handled, 0 leased, 5/5 installed validations green. |
+| 6. Browser proof | blocked | Codex | Browser mount, UI persistence, reload persistence, native sync, and automation smoke pass for all five fresh apps. | `rfix7` browser evidence is red: Inventory mount error, Contracts dead create flow, five-app E2E shows four dead Create/New flows; Quality positive-control is green. |
 | 7. Entry-point proof | pending | Codex | Every user-facing app creation/modification path uses the same skill/resource context and runtime app contract. | Not done. |
 | 8. Versioning proof | pending | Codex | App version visibility and major-version independence are either implemented or listed as missing work. | Not done. |
 | 9. Production signoff | pending | Codex | All production gates are green, latest source is installed, plan/docs updated, no unrelated dirty files staged. | Not done. |
@@ -224,21 +239,21 @@ Phase editing rules:
 
 Owner: `Codex`
 
-Active phase: `5. Fresh five-app CTOX proof`
+Active phase: `4. Close validator/resource gaps`
 
-Current rule: finish `rfix7` through CTOX product paths. Do not hand-edit
-generated app files. Before any source patch, classify the evidence as
-`model_failure`, `skill_resource_gap`, `validator_gap`,
-`runtime_orchestration_gap`, `data_plane_gap`, or `entry_point_gap`.
+Current rule: patch only reusable skill/tooling gaps exposed by the `rfix7`
+browser evidence. Do not hand-edit generated app files. Before any source patch,
+classify the evidence as `model_failure`, `skill_resource_gap`,
+`validator_gap`, `runtime_orchestration_gap`, `data_plane_gap`, or
+`entry_point_gap`.
 
 Current focus:
 
-- Let `bench_contracts_rfix7` and `bench_subscriptions_rfix7` complete through
-  normal CTOX app creation tasks.
-- Watch for the same leased-without-artifacts condition without relying on a
-  restart as proof of production readiness.
-- If the queue stops while tasks are pending, inspect and patch the queue/app
-  recovery source rather than nudging the proof run and calling it green.
+- Finish the minimal browser-smoke CLI/source patch.
+- Install it through `ctox upgrade --dev`.
+- Start a fresh five-app CTOX bench run and require both installed static
+  validation and `ctox business-os app smoke` proof before returning to full
+  five-app browser E2E.
 
 Immediate checklist:
 
@@ -279,18 +294,26 @@ Immediate checklist:
 - [x] Commit and push the worker-finalization sync-lock fix to `main`.
 - [x] Install the worker-finalization sync-lock fix through `ctox upgrade --dev`
   after it is on `main`.
-- [ ] Prove Subscriptions continues without manual artifact edits.
-- [ ] Wait for all five `rfix7` tasks to reach terminal state.
-- [ ] Run installed validation for each `rfix7` app after terminal state.
-- [ ] Update Bench Matrix with terminal `rfix7` static results.
-- [ ] If static validation is green, run browser E2E for all five apps.
-- [ ] If static validation is red, classify failures before patching.
+- [x] Prove Subscriptions continues without manual artifact edits.
+- [x] Wait for all five `rfix7` tasks to reach terminal state.
+- [x] Run installed validation for each `rfix7` app after terminal state.
+- [x] Update Bench Matrix with terminal `rfix7` static results.
+- [x] Run browser E2E/smoke against `rfix7` after static validation green.
+- [x] Classify the repeated dead Create/New flows as `skill_resource_gap` plus
+  `validator_gap`.
+- [x] Add a minimal real-browser app smoke tool/CLI, not a deterministic app
+  builder.
+- [ ] Commit and push the browser-smoke/skill patch to `main`.
+- [ ] Install the browser-smoke/skill patch through `ctox upgrade --dev`.
+- [ ] Start fresh five-app CTOX bench run after install.
+- [ ] Require installed validation and browser smoke for each fresh app before
+  returning to full browser E2E.
 
 Current slice exit criteria:
 
-- `ctox business-os app bench status --run-id rfix7 --validate` reports no
-  pending/leased tasks and validation green for five apps, or failures are
-  classified with evidence and next patches are scoped.
+- Source has a committed, installed `ctox business-os app smoke` command.
+- A fresh post-install bench run reaches static validation green and browser
+  smoke green, or failures are classified with evidence before further patching.
 
 ## Bench Matrix
 
@@ -308,11 +331,11 @@ Active run `rfix7`:
 
 | Case | Module Id | Queue Status | Static Validation | Browser Mount | Browser E2E | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| Subscriptions | `bench_subscriptions_rfix7` | leased | red | pending | pending | Running same-task rework; all required files present, static check and syntax pass, but module tests fail 4/35. |
-| Inventory | `bench_inventory_rfix7` | handled | green | pending | pending | Installed validation green; 26/26 module tests passed. |
-| Projects | `bench_projects_rfix7` | handled | green | pending | pending | Installed validation green; 30/30 module tests passed. |
-| Contracts | `bench_contracts_rfix7` | handled | green | pending | pending | Installed validation green; 32/32 module tests passed. |
-| Quality | `bench_quality_rfix7` | handled | green | pending | pending | Installed validation green after same-task repair; 10/10 module tests passed. |
+| Subscriptions | `bench_subscriptions_rfix7` | handled | green | mounted in first five-app E2E | red | Create flow timed out in first five-app E2E; source inspection shows modal refs queried from the inner root while dialogs are outside it. |
+| Inventory | `bench_inventory_rfix7` | handled | green | red | red | Browser smoke catches mount error at `index.js:92` and dead `new-item` create flow. |
+| Projects | `bench_projects_rfix7` | handled | green | mounted in first five-app E2E | red | Create flow timed out in first five-app E2E; source inspection shows same modal/root-scope pattern. |
+| Contracts | `bench_contracts_rfix7` | handled | green | mounted | red | Browser smoke observes `new-contract` click, but no dialog/form/save flow appears. |
+| Quality | `bench_quality_rfix7` | handled | green | mounted | partial green | Smoke green for `create-complaint`; prior focused E2E proved browser collection, native SQLite, and reload persistence. Automation still needs full fresh-run proof. |
 
 Only the latest fresh post-fix run may be used for production signoff.
 
@@ -395,6 +418,8 @@ Use this before marking any generated app green:
 - [ ] UI has a primary create/edit path for an empty state.
 - [ ] Every visible button either works or is removed.
 - [ ] Hidden modals/overlays are actually hidden and cannot intercept clicks.
+- [ ] `ctox business-os app smoke <module-id> --installed` clicks the primary
+  Create/New/Add flow in the real shell and passes.
 - [ ] No ornamental third column unless the app genuinely needs it.
 - [ ] No resize-column CSS unless the implemented layout actually supports it.
 - [ ] Browser mount has no console/page/request failures.
@@ -404,25 +429,17 @@ Use this before marking any generated app green:
 
 ## Next Actions
 
-1. Continue monitoring `rfix7` until Subscriptions reaches terminal state or
-   exposes a fresh queue/lifecycle failure.
-2. Do not hand-edit `bench_subscriptions_rfix7` artifacts.
-3. If Subscriptions remains leased without progress past the normal model
-   timeout, inspect queue events and classify the failure before patching.
-4. Record terminal static validation in Bench Matrix and Evidence Log.
-5. If `rfix7` is static green, run browser E2E for all five fresh apps.
-6. If `rfix7` is static red, classify each failure before patching.
-7. For validator false positives, simplify the validator instead of adding
-   arbitrary rule layers.
-8. For repeated generated-app architecture mistakes, update concise skill
-   resources, not long prompts.
-9. For valid app output blocked by CTOX behavior, patch runtime/lifecycle/data
-   plane source and install through `ctox upgrade --dev`.
-10. Do not hand-edit generated app artifacts.
-11. After static and browser E2E are green, verify entry paths: Chat, App
-   Creator, App Store/template flow, CLI, and inbound/MCP.
-12. Audit app versioning enforcement and list or patch the missing pieces.
-13. Update this file after every material bench result and before handoff.
+1. Finish verification for the new `ctox business-os app smoke` command.
+2. Commit and push the smoke/skill/plan patch to `main`.
+3. Install through `ctox upgrade --dev`.
+4. Start a fresh five-app CTOX bench run after install.
+5. Require installed validation plus browser smoke for each fresh app.
+6. Run full browser E2E only after the smoke gate is green for all five apps.
+7. Do not hand-edit generated app artifacts.
+8. If browser E2E is red, classify each failure before patching.
+9. After browser E2E is green, verify entry paths: Chat, App Creator, App
+   Store/template flow, CLI, and inbound/MCP.
+10. Audit app versioning enforcement and list or patch the missing pieces.
 
 ## Evidence Log
 
@@ -536,22 +553,43 @@ Use this before marking any generated app green:
   app-local assertions. Failing areas: `selectReviewTargets`,
   due-soon/churn-risk partition helpers, `sortSubscriptionsForUi`, and high
   churn follow-up priority.
+- `2026-06-21`: `rfix7` status snapshot
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7/status-1782025675994.json`
+  is the terminal five-app static gate: `bench_green=true`, `handled=5`,
+  `leased=0`, `validation_passed=5`, and no missing required files. Subscriptions
+  reached `handled` at `2026-06-21T07:06:27Z` with 35/35 module tests passing.
+- `2026-06-21`: first `rfix7` five-app browser E2E
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7/browser-e2e/five-app-e2e-1782026037405.json`
+  was red: Subscriptions, Inventory, Projects, and Contracts did not complete
+  their primary create dialog/form flow; Quality created and reloaded a
+  complaint and native SQLite contained the record.
+- `2026-06-21`: focused dialog probe
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7/browser-e2e/dialog-open-probe-1782026374558.json`
+  showed visible Create/New clicks without `showModal()` or visible forms for
+  the tested dialog apps.
+- `2026-06-21`: source inspection of generated `rfix7` apps found the repeated
+  DOM-scope defect: dialogs/forms are siblings of the module root section, but
+  generated code queries them with `root.querySelector(...)`. Classification:
+  `skill_resource_gap` plus `validator_gap`.
+- `2026-06-21`: new browser-smoke tool positive control:
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7/browser-e2e/smoke-quality-tool-v2.json`
+  and CLI proof
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7/browser-e2e/smoke-quality-cli.json`
+  both passed for `bench_quality_rfix7`.
+- `2026-06-21`: new browser-smoke tool negative controls:
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7/browser-e2e/smoke-inventory-cli.json`
+  failed with the Inventory mount error and dead `new-item` flow; and
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7/browser-e2e/smoke-contracts-tool-v2.json`
+  failed because `new-contract` did not reveal a dialog/form/save flow.
 
 ## Open Issues
 
-- `rfix7` is still running. Do not mark the five-app proof green until all five
-  tasks have terminal status and installed validation is green.
-- The worker-finalization sync-lock source fix is committed, pushed, and
-  installed, but production readiness still needs the remaining Subscriptions
-  task to complete or fail through normal CTOX handling.
-- `bench_subscriptions_rfix7` was recovered by boot recovery and is now in
-  same-task rework. The latest artifact set is complete, but app-local module
-  tests are inconsistent with the generated business logic.
-- Subscriptions has not yet completed after being requeued/reworked.
+- The five-app static gate is green, but browser E2E for `rfix7` is red due to
+  repeated dead Create/New flows. A fresh bench run is required after the
+  smoke/skill patch is installed.
 - Entry-point proof across Chat, App Creator, App Store/template flow, CLI, and
   inbound/MCP is still pending.
 - App versioning policy must be audited and either enforced or listed as missing
   implementation work.
-- Browser E2E for fresh hardened apps is still pending.
 - Keep unrelated dirty file `tests/business-os/ats_synthetic_generate.sh` out
   of this work unless explicitly requested.

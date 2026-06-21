@@ -40,6 +40,7 @@ HTTP can serve static shell and module files. HTTP is not the app data bridge.
 | npm package | only use local browser ESM already shipped with the app |
 | build step | none; files must run directly in the browser |
 | dashboard route tree | one focused workbench, usually one or two panes plus modal/drawer |
+| component/unit smoke | `ctox business-os app smoke <module-id> --installed` against the real shell |
 
 ## Reference Apps
 
@@ -74,6 +75,9 @@ When adapting a known app idea:
 5. Leave future dashboards, exports, AI buttons, and bulk operations out unless they are fully implemented.
 
 The app should feel like a Business OS work surface, not a generic SaaS landing page or a React demo.
+
+Before claiming done, click the primary Create/New/Add workflow in the real
+Business OS shell. A static test that only sees the button is not enough.
 
 ## Data Plane Discipline
 

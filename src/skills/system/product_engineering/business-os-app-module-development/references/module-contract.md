@@ -33,6 +33,9 @@ Keep extra files rare. Use extra local ESM helpers only when the app would other
 - `index.css` is plain CSS scoped under a module root class.
 - `index.js` is browser ESM and exports `mount(ctx)`.
 - `mount(ctx)` renders into `ctx.host`, wires handlers, subscribes to data, and returns optional cleanup.
+- Query DOM references from the container that actually contains those
+  elements. If dialogs or forms are siblings of the module root section, query
+  them from `ctx.host`, not from the inner root section.
 - Use only local relative ESM imports or shipped browser ESM files. Do not add package-manager dependencies.
 
 ## Data
