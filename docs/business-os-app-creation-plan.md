@@ -44,10 +44,10 @@ Overall status: `in_progress`, not production-ready.
 
 Current CTOX installed release:
 
-- Active install: `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T012600Z`
-- Source head: `c3807c87 Update app creation plan after validation push`
+- Active install: `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T014938Z`
+- Source head: `aa945a71 Accept namespaced Business OS app actions`
 - Upgrade path: `ctox upgrade --dev` completed and applied
-  `branch-main-20260621T012600Z`.
+  `branch-main-20260621T014938Z`.
 - Business OS shell assets are now byte-identical across source, state, and runtime:
   `src/apps/business-os/app.js`,
   `/Users/michaelwelsch/.local/state/ctox/business-os/app.js`, and
@@ -62,29 +62,31 @@ Current proof run:
 - Context: `256k`
 - Entry path: real `ctox.business_os.app.create` tasks through installed CTOX.
 - Evidence dir: `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6`
-- Latest static status snapshot: `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6/status-1782006463792.json`
+- Latest static status snapshot: `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6/status-1782008390263.json`
 - Browser evidence: pending for `rfix6`.
 
 Latest live result:
 
-- `rfix6` is running: Subscriptions is `handled` and installed-validation
-  green; Inventory, Projects, Contracts, and Quality are still `pending`.
-- Installed validator now rejects unscoped runtime collection names. Historical
-  `rfix5` apps such as `bench_inventory_rfix5` are correctly red because they
-  use shared/domain collection names.
-- A `rfix6` validator false negative was found during Subscriptions rework:
-  namespaced `data-*-action="new"` create affordances should be valid and
-  should participate in dead-button checks. Source validator patch is local and
-  verified, but not yet installed.
+- `rfix6` is running: Subscriptions, Inventory, and Projects are `handled` and
+  installed-validation green; Contracts and Quality are still `pending`.
+- CTOX is currently `running=true`, `busy=false`, `worker_active_count=0`, and
+  `pending_count=2`. This is a reproduced `runtime_orchestration_gap`: after a
+  handled durable app-create task, the service does not automatically lease the
+  next pending app-create task. Clean service restart has kicked the next task,
+  but restart is a workaround, not production readiness.
+- Installed validator now rejects unscoped runtime collection names and accepts
+  valid namespaced `data-*-action="new"` create affordances. Historical `rfix5`
+  apps such as `bench_inventory_rfix5` are correctly red because they use
+  shared/domain collection names.
 - Installed module catalog contains all five `rfix5` modules as `source=installed`.
-- Latest recorded `ctox status --json` showed `running=true`, `busy=false`,
-  `manager=launchd-user`, Business OS web/MCP autostarted, native RxDB peer
-  `replicationUp=true`, and `http_bridge_available=false`. Recheck `busy`
-  before any `ctox upgrade --dev` or fresh bench run.
+- Latest recorded `ctox status --json` showed Business OS web/MCP autostarted,
+  native RxDB peer `replicationUp=true`, and `http_bridge_available=false`.
+  Recheck `busy` before any `ctox upgrade --dev`, service restart, or fresh
+  bench run.
 - Browser mount is proven for all five apps, but first mount from a fresh
   browser context can take roughly 25-47 seconds while the browser waits for the
   RxDB module catalog.
-- Browser E2E is not production-green yet:
+- Browser E2E is not production-green yet. Historical `rfix5` browser evidence:
   - Subscriptions: UI save, reload persistence, native DB sync, and
     `business_os.chat.task` dispatch green.
   - Inventory: UI save reports success and the row is visible after reload, but
@@ -98,6 +100,7 @@ Latest live result:
     `business_os.chat.task` dispatch green.
   - Quality: targeted UI save, reload persistence, and native DB sync passed
     with a longer sync wait. The earlier red result was a browser-smoke wait gap.
+- Fresh `rfix6` browser E2E is pending until all five tasks are terminal.
 
 ## Non-Negotiables
 
@@ -146,13 +149,13 @@ App creation is production-ready only when every gate below is green.
 | Skill shape | in_progress | English, concise, resource-based, no prompt wall, requires three reference apps, clear Do/Don't list, clear green checklist. |
 | Correct install location | done | `rfix5` apps are under `runtime/business-os/installed-modules/<module-id>`; shell asset refresh now preserves installed modules during `ctox upgrade --dev`. |
 | CTOX-native creation | done | Five bench apps were created through real Business OS app-create tasks, not direct file writes. |
-| Static validation | in_progress | Installed validator now rejects historical unscoped `rfix5` apps; fresh post-validator bench is pending. |
+| Static validation | in_progress | Installed validator now rejects historical unscoped `rfix5` apps; `rfix6` has 3/5 apps handled and validation green, with 2 pending. |
 | Browser mount | done | All five apps mounted from installed runtime paths in fresh browser contexts with no console/page/request failures; mount latency remains an open quality issue. |
-| Persistence | in_progress | Subscriptions, Projects, Contracts, and targeted Quality reached native SQLite; Inventory local reload works but native sync is blocked by unscoped collection-name drift. |
-| Automation | in_progress | Subscriptions, Contracts, and targeted Projects created `business_os.chat.task`; Inventory must be reproven after scoped collections. |
+| Persistence | in_progress | Historical targeted proof reached native SQLite for Subscriptions, Projects, Contracts, and Quality; `rfix6` browser persistence proof is still pending. |
+| Automation | in_progress | Subscriptions, Contracts, and targeted Projects created `business_os.chat.task`; fresh `rfix6` browser automation proof is still pending. |
 | Entry-point coverage | pending | Chat, App Creator, App Store/template flow, CLI, and inbound/MCP paths all attach the same app-module skill/resource context. |
-| Install/upgrade lifecycle | done | `ctox upgrade --dev` applied `branch-main-20260621T001015Z`; source/state/runtime shell assets match; service is running. |
-| No regressions | in_progress | Static validation is green, but browser smoke is red and must block production signoff. |
+| Install/upgrade lifecycle | in_progress | `ctox upgrade --dev` applied `branch-main-20260621T014938Z`; source/state/runtime shell assets match; service is running, but durable app-create queue drain is not production-green. |
+| No regressions | in_progress | Validator regressions are patched, but queue drain and fresh browser E2E must block production signoff. |
 
 ## Phase Tracker
 
@@ -161,9 +164,9 @@ App creation is production-ready only when every gate below is green.
 | 0. Remove deterministic builder | done | Codex | App Creator creates durable app-create tasks instead of writing app files directly. | Earlier commits: `e8bec3b8`, `b142e4c8`; installed path verified in later bench runs. |
 | 1. Simplify skill/resources | in_progress | Codex | Skill is English, concise, reference/resource based, and avoids prompt walls. | Current skill/resources were simplified, but final entry-point proof is still open. |
 | 2. Build CTOX-native bench | done | Codex | Bench submits real app-create tasks and records evidence without creating or repairing app files. | `ctox business-os app bench run/status`; run dirs under `runtime/business-os/app-creation-bench/`. |
-| 3. Close lifecycle/orchestration gaps | done | Codex | Queue, validation, launchd/dev-upgrade, module catalog, and native peer lifecycle work without manual service recovery. | `f009a3b4` and `bbbdbbd4`; `ctox upgrade --dev` applied `branch-main-20260621T001015Z`; service running with native RxDB peer `replicationUp=true`. |
-| 4. Close validator/resource gaps | done | Codex | Validator rejects known bad app artifacts before browser E2E finds them; skill resources state the same architecture expectations plainly. | `0dd04c31` and installed release `branch-main-20260621T012600Z`; installed `bench_inventory_rfix5` validation fails on unscoped collections. |
-| 5. Fresh five-app CTOX proof | in_progress | Codex | One fresh post-validator run with five apps reaches terminal queue success and installed validation green. | `rfix6`: Subscriptions handled/validation green; four tasks pending. Validator local patch for namespaced `data-*-action` is pending install. |
+| 3. Close lifecycle/orchestration gaps | in_progress | Codex | Queue, validation, launchd/dev-upgrade, module catalog, and native peer lifecycle work without manual service recovery. | `f009a3b4` and `bbbdbbd4` fixed earlier lifecycle issues; `rfix6` now reproduces a queue-drain gap after handled app-create tasks. |
+| 4. Close validator/resource gaps | done | Codex | Validator rejects known bad app artifacts before browser E2E finds them; skill resources state the same architecture expectations plainly. | `0dd04c31` rejects unscoped collections; `aa945a71` accepts and checks namespaced `data-*-action`; installed release `branch-main-20260621T014938Z`. |
+| 5. Fresh five-app CTOX proof | in_progress | Codex | One fresh post-validator run with five apps reaches terminal queue success and installed validation green. | `rfix6`: Subscriptions, Inventory, and Projects handled/validation green; Contracts and Quality pending because the queue does not drain automatically. |
 | 6. Browser proof | pending | Codex | Browser mount, UI persistence, reload persistence, and automation smoke pass for all five fresh apps. | Pending fresh post-validator bench. |
 | 7. Entry-point proof | pending |  | Every user-facing app creation/modification path uses the same skill/resource context and runtime app contract. | Not done. |
 | 8. Production signoff | pending |  | All production gates are green, latest source is installed, plan and docs updated, no unrelated dirty files staged. | Not done. |
@@ -187,12 +190,16 @@ Owner: `Codex`
 Active phase: `5. Fresh five-app CTOX proof`
 
 Current rule: do not patch generated app artifacts by hand. `rfix6` is the
-active post-validator bench; continue it through normal CTOX queue handling and
-classify any stalled pending work before changing orchestration.
+active post-validator bench. Continue it through normal CTOX queue handling, but
+treat the idle service with pending app-create tasks as a source/runtime issue.
+Clean restart may be used only to gather evidence for Contracts and Quality; it
+must not be counted as the production fix.
 
 Immediate checklist:
 
-- [x] Confirm installed release is `branch-main-20260621T001015Z`.
+- [x] Confirm installed releases after source fixes, including
+  `branch-main-20260621T001015Z`, `branch-main-20260621T012600Z`, and
+  `branch-main-20260621T014938Z`.
 - [x] Confirm `rfix5` was submitted through real app-create tasks.
 - [x] Confirm all five apps are handled and installed-validation green.
 - [x] Confirm source/state/runtime Business OS shell assets match after
@@ -211,16 +218,30 @@ Immediate checklist:
 - [x] Verify the installed validator rejects historical unscoped `rfix5`
   modules.
 - [x] Start a fresh CTOX five-app bench after the systemic fixes.
-- [ ] Drain or classify the four pending `rfix6` queue tasks.
+- [x] Install the namespaced `data-*-action` validator patch through
+  `ctox upgrade --dev`.
+- [x] Confirm `rfix6` Subscriptions, Inventory, and Projects are handled and
+  installed-validation green.
+- [x] Classify the repeated idle-with-pending queue state as
+  `runtime_orchestration_gap`.
+- [ ] Patch the queue-drain gap in CTOX source, not in generated apps.
+- [ ] Verify the queue-drain fix with a targeted Rust regression test and a
+  fresh or continued real CTOX bench.
+- [ ] Drain or classify the two pending `rfix6` queue tasks: Contracts and
+  Quality.
 - [ ] Repeat browser E2E until all five apps are green.
 - [ ] Update this file after every material result.
 
 Current slice exit criteria:
 
-- Inventory, Projects, and Quality failures each have one failure class.
-- The next source/skill/validator/runtime patch target is named explicitly.
-- If no patch is justified, the plan says why and identifies the next fresh
-  bench command instead.
+- Queue-drain behavior is fixed or explicitly blocked with source-level
+  evidence.
+- Contracts and Quality leave `pending` without relying on manual restart as the
+  production mechanism.
+- All five `rfix6` apps are either handled and validation green, or each failure
+  has one failure class and one next patch target.
+- Browser E2E is run only after the static/queue proof is terminal for all five
+  apps.
 
 ## Bench Matrix
 
@@ -228,11 +249,11 @@ Active run `rfix6`:
 
 | Case | Module Id | Queue Task | Queue Status | Static Validation | Browser E2E | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| Subscriptions | `bench_subscriptions_rfix6` | `queue:system::b1d790469d5c9dae5978257f` | handled | green | pending | Rework fixed module tests and app now validates green. Local validator patch also proves namespaced `data-*-action` handling, but generated app currently uses generic `data-action="new"`. |
-| Inventory | `bench_inventory_rfix6` | `queue:system::0443816ee994cd5b2a753272` | pending | skipped | pending | CTOX service is idle with task pending; no artifact directory yet. |
-| Projects | `bench_projects_rfix6` | `queue:system::c46914ae3d7379543d66c59c` | pending | skipped | pending | CTOX service is idle with task pending; no artifact directory yet. |
-| Contracts | `bench_contracts_rfix6` | `queue:system::d3e25efcdcf4af03dac40faa` | pending | skipped | pending | CTOX service is idle with task pending; no artifact directory yet. |
-| Quality | `bench_quality_rfix6` | `queue:system::f67604fe551242397dd366d5` | pending | skipped | pending | CTOX service is idle with task pending; no artifact directory yet. |
+| Subscriptions | `bench_subscriptions_rfix6` | `queue:system::b1d790469d5c9dae5978257f` | handled | green | pending | Rework fixed module tests and app now validates green. Installed validator also covers namespaced `data-*-action`, though this generated app currently uses generic `data-action="new"`. |
+| Inventory | `bench_inventory_rfix6` | `queue:system::0443816ee994cd5b2a753272` | handled | green | pending | Generated collections are module-scoped (`bench_inventory_rfix6_*`); old `rfix5` collection drift did not recur. |
+| Projects | `bench_projects_rfix6` | `queue:system::c46914ae3d7379543d66c59c` | handled | green | pending | Completed after app-validation rework; MiniMax/tool-call invalid-params events occurred during rework and remain forensic context. |
+| Contracts | `bench_contracts_rfix6` | `queue:system::d3e25efcdcf4af03dac40faa` | pending | skipped | pending | CTOX service is idle with task pending; this is part of the queue-drain gap. |
+| Quality | `bench_quality_rfix6` | `queue:system::f67604fe551242397dd366d5` | pending | skipped | pending | CTOX service is idle with task pending; this is part of the queue-drain gap. |
 
 Historical run `rfix5`:
 
@@ -314,18 +335,24 @@ Use this before marking any generated app green:
 
 ## Next Actions
 
-1. Commit and push the local validator patch for namespaced
-   `data-*-action` create/dead-button checks.
-2. Install that patch with `ctox upgrade --dev` once `ctox status --json`
-   reports `busy=false`.
-3. Continue `rfix6` queue processing. If Inventory, Projects, Contracts, and
-   Quality stay `pending` while the service is idle, classify this as
-   `runtime_orchestration_gap` before patching.
-4. Confirm newly generated runtime collection names are module-id scoped.
-5. Run browser E2E with precise selectors and longer native/command sync waits.
-6. Keep browser-smoke failures separate from app failures: record selector/wait
-   gaps as harness issues, not generated app defects.
-7. Update this file before handing off and after every material result.
+1. Inspect and patch the durable queue idle/finalization path in CTOX source so
+   a handled app-create task leases the next pending app-create task without a
+   manual service restart.
+2. Add or update a targeted Rust regression test for this exact condition:
+   one app-create task completes validation, `busy=false`,
+   `worker_active_count=0`, and another pending app-create task is leased or
+   enqueued automatically.
+3. Run the narrow verification for the queue fix, then install through
+   `ctox upgrade --dev`. Do not use a production/runtime env toggle.
+4. Continue `rfix6` only to collect evidence. If a clean restart is used to
+   kick Contracts or Quality, record it as workaround evidence and do not mark
+   Phase 3 done.
+5. After all five `rfix6` tasks are terminal and validation green, run browser
+   E2E with precise selectors and longer native/command sync waits.
+6. Keep browser-smoke failures separate from generated app failures: record
+   selector/wait gaps as harness issues, not app defects.
+7. Update this file before every handoff, before every source patch, and after
+   every material bench result.
 
 ## Evidence Log
 
@@ -349,22 +376,31 @@ Use this before marking any generated app green:
 - `2026-06-21`: `rfix6` submitted through installed CTOX with five real app-create tasks and removed old `rfix5` modules. Evidence dir: `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6`.
 - `2026-06-21`: `rfix6` snapshot `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6/status-1782006463792.json` shows Subscriptions `handled` with validation green and Inventory/Projects/Contracts/Quality still `pending`.
 - `2026-06-21`: Source validator patch added namespaced `data-*-action` create-affordance and dead-button handling. Verification passed: `node src/apps/business-os/scripts/validate-app-module.test.mjs`; source validator also passes `bench_subscriptions_rfix6` installed validation.
+- `2026-06-21`: commit `aa945a71` pushed to `main` with namespaced `data-*-action` validation and regression coverage.
+- `2026-06-21`: `ctox upgrade --dev` applied `branch-main-20260621T014938Z`. Installed validator contains the namespaced action handling and Business OS remains on native RxDB/WebRTC with `http_bridge_available=false`.
+- `2026-06-21`: `rfix6` snapshot `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6/status-1782008390263.json` shows Subscriptions, Inventory, and Projects `handled` with installed validation green; Contracts and Quality remain `pending`.
+- `2026-06-21`: live `ctox status --json` after the third handled `rfix6` app reports `running=true`, `busy=false`, `worker_active_count=0`, `pending_count=2`, native RxDB peer `replicationUp=true`, and `http_bridge_available=false`. The repeated idle-with-pending state is classified as `runtime_orchestration_gap`.
 
 ## Open Issues
 
-- Historical `rfix5` artifacts are invalid under the hardened source validator
-  because runtime collections are not module-id scoped.
-- Browser E2E for Inventory remains red until a fresh post-validator app uses
-  scoped collections and proves native sync.
+- Runtime orchestration is not production-ready: after handled app-create tasks,
+  CTOX can become idle while later app-create tasks remain pending. Clean restart
+  kicks the next task, proving the pending tasks are leaseable, but restart is
+  not an acceptable production mechanism.
+- Historical `rfix5` artifacts are invalid under the hardened installed
+  validator because runtime collections are not module-id scoped.
+- Browser E2E for Inventory must be rerun on `rfix6`, where generated
+  collections are module-scoped, before the old native-sync issue can be closed.
 - Fresh-browser mount works but takes 25-47 seconds in observed cases; decide whether that is acceptable or a shell catalog readiness issue.
-- Repeated bench runs produced domain-level collection names such as
-  `bench_inventory_items`; this is classified as `skill_resource_gap` plus
-  `validator_gap` and patched locally.
+- Historical repeated bench runs produced domain-level collection names such as
+  `bench_inventory_items`; this was classified as `skill_resource_gap` plus
+  `validator_gap` and is patched/installed.
 - Browser-smoke selector/wait precision is weak: Projects needed a scoped detail
   button selector and command replication wait; Quality needed a longer native
   sync wait.
-- `rfix6` currently has four pending tasks while CTOX reports `busy=false`.
-  Continue or classify this queue behavior before treating the bench as failed.
+- `rfix6` currently has two pending tasks while CTOX reports `busy=false`.
+  Continue only after recording the queue-drain fix path, or use restart solely
+  as evidence collection.
 - Verify App Creator, Chat, App Store/template, CLI, and inbound/MCP entry paths all use the same app-module skill/resource context.
 - Confirm the skill remains short, English, resource-based, and not a prompt wall.
 - Keep unrelated dirty file `tests/business-os/ats_synthetic_generate.sh` out of this work unless explicitly requested.
