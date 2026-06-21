@@ -91,6 +91,13 @@ Latest result:
   source-local `node_modules`. It is a validation tool only; it does not
   generate, repair, or rewrite app artifacts.
 - No generated `rfix7` app files may be patched by hand.
+- Fresh run `rfix8` is in progress. Subscriptions reached terminal queue
+  success with installed validation green and browser smoke green, but the
+  installed service then stayed in `queue: finalizing` for several minutes
+  before leasing the next app. Classification: `runtime_orchestration_gap`.
+  Cause: validator-owned Business OS app completion still ran the full
+  workspace desktop-file index. Source patch now skips the full workspace sync
+  for runtime app module tasks while preserving normal workspace-output sync.
 
 Latest source fix under test:
 
@@ -225,7 +232,7 @@ App creation is production-ready only when every gate is green.
 | 0. Remove deterministic builder | done | Codex | App creation uses durable tasks and agent implementation, not deterministic generated source. | Earlier deterministic builder artifacts removed; bench runner submits real app-create tasks. |
 | 1. Simplify skill/resources | in_progress | Codex | Skill/resources are English, concise, reference/resource based, avoid prompt walls, state CTOX DB/command patterns without legacy fallbacks, and require browser-smoke proof. | Latest resources now include the DOM-scope lesson and `ctox business-os app smoke`; needs fresh run proof after install. |
 | 2. Build CTOX-native bench | done | Codex | Bench submits real app-create tasks and records evidence without creating or repairing app files. | `ctox business-os app bench run/status`; run dirs under `runtime/business-os/app-creation-bench/`. |
-| 3. Close lifecycle/orchestration gaps | in_progress | Codex | Queue, validation, launchd/dev-upgrade, module catalog, and native peer lifecycle work without manual service recovery. | Latest installed release `branch-main-20260621T064355Z`; forensic sample showed worker-finalization workspace sync holding `SharedState` and blocking router/recovery/status; commit `aaf4bbb8` moved sync outside the `SharedState` lock and is installed through `ctox upgrade --dev`. |
+| 3. Close lifecycle/orchestration gaps | in_progress | Codex | Queue, validation, launchd/dev-upgrade, module catalog, and native peer lifecycle work without manual service recovery. | `aaf4bbb8` moved workspace sync outside the `SharedState` lock. `rfix8` then showed app queue throughput still blocked by full workspace sync after validator-owned completion; current source skips full workspace desktop indexing for runtime app module tasks. |
 | 4. Close validator/resource gaps | in_progress | Codex | Validator/tooling rejects predictable bad app artifacts before signoff, without blocking valid vanilla apps. | `89c2a75d` rejects old DB fallbacks; `5811f9c0`/`710c3676` add and install `ctox business-os app smoke` to catch dead create flows in the real shell. |
 | 5. Fresh five-app CTOX proof | done | Codex | One fresh post-validator run reaches terminal queue success and installed validation green for five apps. | `rfix7` terminal green: 5 handled, 0 leased, 5/5 installed validations green. |
 | 6. Browser proof | blocked | Codex | Browser mount, UI persistence, reload persistence, native sync, and automation smoke pass for all five fresh apps. | `rfix7` browser evidence is red: Inventory mount error, Contracts dead create flow, five-app E2E shows four dead Create/New flows; Quality positive-control is green. |
@@ -248,7 +255,7 @@ Phase editing rules:
 
 Owner: `Codex`
 
-Active phase: `4. Close validator/resource gaps`
+Active phase: `3. Close lifecycle/orchestration gaps`
 
 Current rule: patch only reusable skill/tooling gaps exposed by the `rfix7`
 browser evidence. Do not hand-edit generated app files. Before any source patch,
@@ -258,11 +265,11 @@ classify the evidence as `model_failure`, `skill_resource_gap`,
 
 Current focus:
 
-- Finish the minimal browser-smoke CLI/source patch.
-- Install it through `ctox upgrade --dev`.
-- Start a fresh five-app CTOX bench run and require both installed static
-  validation and `ctox business-os app smoke` proof before returning to full
-  five-app browser E2E.
+- Install the app-finalization throughput fix through `ctox upgrade --dev`.
+- Continue `rfix8` without hand-editing generated app artifacts.
+- Require both installed static validation and `ctox business-os app smoke`
+  proof for the remaining fresh apps before returning to full five-app browser
+  E2E.
 
 Immediate checklist:
 
@@ -317,8 +324,19 @@ Immediate checklist:
 - [x] Fix the smoke runner to use the installed CTOX browser/Patchright runtime
   instead of source-local `playwright`.
 - [x] Install the runtime-loader smoke fix through `ctox upgrade --dev`.
-- [ ] Start fresh five-app CTOX bench run after install.
-- [ ] Require installed validation and browser smoke for each fresh app before
+- [x] Start fresh five-app CTOX bench run after install.
+- [x] `rfix8` Subscriptions reached terminal success with installed validation
+  and browser smoke green.
+- [x] Classify `rfix8` post-Subscriptions finalization stall as
+  `runtime_orchestration_gap`.
+- [x] Patch finalization to skip full workspace desktop indexing for runtime
+  app module tasks.
+- [x] Verify the new skip rule and the existing normal workspace sync path with
+  targeted Rust tests.
+- [ ] Commit and push the app-finalization throughput fix.
+- [ ] Install the app-finalization throughput fix through `ctox upgrade --dev`.
+- [ ] Continue `rfix8` after install/recovery.
+- [ ] Require installed validation and browser smoke for each remaining fresh app before
   returning to full browser E2E.
 
 Current slice exit criteria:
@@ -441,14 +459,16 @@ Use this before marking any generated app green:
 
 ## Next Actions
 
-1. Start a fresh five-app CTOX bench run after installed smoke proof.
-2. Require installed validation plus browser smoke for each fresh app.
-3. Run full browser E2E only after the smoke gate is green for all five apps.
-4. Do not hand-edit generated app artifacts.
-5. If browser smoke or E2E is red, classify each failure before patching.
-6. After browser E2E is green, verify entry paths: Chat, App Creator, App
+1. Commit, push, and install the app-finalization throughput fix exposed by
+   `rfix8`.
+2. Continue `rfix8` after install/recovery.
+3. Require installed validation plus browser smoke for each fresh app.
+4. Run full browser E2E only after the smoke gate is green for all five apps.
+5. Do not hand-edit generated app artifacts.
+6. If browser smoke or E2E is red, classify each failure before patching.
+7. After browser E2E is green, verify entry paths: Chat, App Creator, App
    Store/template flow, CLI, and inbound/MCP.
-7. Audit app versioning enforcement and list or patch the missing pieces.
+8. Audit app versioning enforcement and list or patch the missing pieces.
 
 ## Evidence Log
 
@@ -603,12 +623,32 @@ Use this before marking any generated app green:
   `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7/browser-e2e/smoke-quality-installed-runtime-loader.json`
   passed for `bench_quality_rfix7` and loaded Patchright plus Chromium from
   `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T074730Z/runtime/browser/interactive-reference`.
+- `2026-06-21`: `rfix8` submitted five real app-create tasks with
+  `creates_app_files=false`, `repairs_app_files=false`, and
+  `submits_real_business_commands=true`.
+- `2026-06-21`: `rfix8` Subscriptions reached terminal success in status
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix8/status-1782029381927.json`
+  and installed browser smoke
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix8/smoke-subscriptions-rfix8.json`
+  passed by clicking `add-subscription` and revealing a form/save flow.
+- `2026-06-21`: process/status evidence showed CTOX remained in
+  `worker_phase=queue: finalizing` after Subscriptions was handled, with four
+  app tasks still pending. Sample path:
+  `/tmp/ctox-finalizing-rfix8.sample.txt`. Classification:
+  `runtime_orchestration_gap`; source patch skips full Business OS workspace
+  desktop indexing for runtime app module tasks.
+- `2026-06-21`: targeted source checks passed:
+  `cargo test --bin ctox business_os_app_module_tasks_skip_full_workspace_desktop_sync -- --nocapture`
+  and
+  `cargo test --bin ctox completion_hook_indexes_workspace_outputs_for_business_os -- --nocapture`.
 
 ## Open Issues
 
 - The five-app static gate is green, but browser E2E for `rfix7` is red due to
   repeated dead Create/New flows. A fresh bench run is required after the
   smoke/skill patch is installed.
+- `rfix8` found app-finalization throughput drag after the first green app; the
+  source fix is tested but not yet installed.
 - Entry-point proof across Chat, App Creator, App Store/template flow, CLI, and
   inbound/MCP is still pending.
 - App versioning policy must be audited and either enforced or listed as missing

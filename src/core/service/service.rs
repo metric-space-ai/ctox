@@ -4560,7 +4560,14 @@ fn start_prompt_worker(
                                 &root,
                                 &delivered_artifact_refs,
                             );
-                            events.extend(sync_workspace_root_to_business_os(&root, &job));
+                            if should_sync_full_workspace_root_to_business_os(&job) {
+                                events.extend(sync_workspace_root_to_business_os(&root, &job));
+                            } else {
+                                events.push(
+                                    "Skipped full Business OS workspace file index for runtime app module task; app artifacts are installed and validated through the module lifecycle"
+                                        .to_string(),
+                                );
+                            }
                             shared = lock_shared_state(&state);
                             events
                         };
@@ -8641,6 +8648,10 @@ fn sync_workspace_root_to_business_os(root: &Path, job: &QueuedPrompt) -> Vec<St
             clip_text(&err.to_string(), 180)
         )],
     }
+}
+
+fn should_sync_full_workspace_root_to_business_os(job: &QueuedPrompt) -> bool {
+    business_os_app_module_target_from_prompt(&job.prompt).is_none()
 }
 
 fn workspace_file_artifacts_require_fresh_write(job: &QueuedPrompt) -> bool {
@@ -29909,6 +29920,43 @@ Use shell tools and verify with `test -f {run_dir}/smoke.txt` before claiming co
             large.get("content_state").and_then(Value::as_str),
             Some("lazy")
         );
+    }
+
+    #[test]
+    fn business_os_app_module_tasks_skip_full_workspace_desktop_sync() {
+        let root = temp_root("business-os-app-skip-workspace-sync");
+        let workspace = root.join("workspace");
+        let app_job = QueuedPrompt {
+            prompt: "Business OS app task metadata:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+            goal: "Build Subscriptions app".to_string(),
+            preview: "Build Subscriptions app".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("business-os-app-module-development".to_string()),
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("business-os/apps/subscriptions".to_string()),
+            workspace_root: Some(workspace.to_string_lossy().into_owned()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let normal_job = QueuedPrompt {
+            prompt: "Create workspace files.".to_string(),
+            goal: "workspace outputs".to_string(),
+            preview: "workspace outputs".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("queue/workspace-sync".to_string()),
+            workspace_root: Some(workspace.to_string_lossy().into_owned()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        assert!(!should_sync_full_workspace_root_to_business_os(&app_job));
+        assert!(should_sync_full_workspace_root_to_business_os(&normal_job));
     }
 
     #[test]
