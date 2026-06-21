@@ -298,8 +298,10 @@ async function fillVisibleForm(page, rootSelector, marker) {
     const root = document.querySelector(selector);
     if (!root) return { filled: [], visible_forms: 0 };
     const forms = Array.from(root.querySelectorAll('form')).filter(visible);
+    const fieldScopes = forms.length ? forms : [root];
     const filled = [];
-    for (const el of Array.from(root.querySelectorAll('input, textarea, select'))) {
+    const fields = Array.from(new Set(fieldScopes.flatMap((scope) => Array.from(scope.querySelectorAll('input, textarea, select')))));
+    for (const el of fields) {
       if (!visible(el)) continue;
       const tag = el.tagName.toLowerCase();
       const type = String(el.getAttribute('type') || '').toLowerCase();
