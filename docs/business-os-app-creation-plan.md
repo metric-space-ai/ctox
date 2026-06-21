@@ -42,9 +42,9 @@ Installed CTOX:
 
 - Source branch: `main`
 - Last source head checked before this plan edit:
-  `aaf4bbb8 Fix Business OS app queue finalization lock`
+  `710c3676 Fix installed Business OS app smoke runtime`
 - Active install:
-  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T064355Z`
+  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T074730Z`
 - Install path: applied through `ctox upgrade --dev`
 - State root:
   `/Users/michaelwelsch/.local/state/ctox`
@@ -86,8 +86,10 @@ Latest result:
   catch this because it saw buttons, handlers, and tests but no real browser
   interaction.
 - A new app smoke tool/CLI is under source test:
-  `ctox business-os app smoke <module-id> --installed`. It is a validation
-  tool only; it does not generate, repair, or rewrite app artifacts.
+  `ctox business-os app smoke <module-id> --installed`. It is installed and
+  uses the CTOX browser/Patchright runtime from the managed release, not
+  source-local `node_modules`. It is a validation tool only; it does not
+  generate, repair, or rewrite app artifacts.
 - No generated `rfix7` app files may be patched by hand.
 
 Latest source fix under test:
@@ -113,18 +115,25 @@ Latest source fix under test:
   contains the lock release before Business OS workspace sync and the recovery
   regression test.
 
-Current source patch under test:
+Current source patch status:
 
 - Added `src/apps/business-os/scripts/smoke-app-module.mjs`.
 - Added `ctox business-os app smoke <module-id>` CLI wiring in
   `src/core/service/business_os.rs` and top-level help in `src/core/main.rs`.
 - Updated concise skill resources to require real-shell Create/New/Add smoke
   and to call out DOM-scope handling for sibling dialogs/forms.
+- Commit `5811f9c0 Add Business OS app browser smoke gate` was pushed to
+  `main` and installed as `branch-main-20260621T073607Z`.
+- Commit `710c3676 Fix installed Business OS app smoke runtime` was pushed to
+  `main` and installed as `branch-main-20260621T074730Z`.
 - Verification so far:
   `node --check src/apps/business-os/scripts/smoke-app-module.mjs`,
   `node src/apps/business-os/scripts/smoke-app-module.mjs bench_quality_rfix7 --installed --json --timeout-ms 90000`,
   `cargo run --bin ctox -- business-os app smoke bench_quality_rfix7 --installed --json --timeout-ms 90000`,
+  installed `ctox business-os app smoke bench_quality_rfix7 --installed --json --timeout-ms 90000`,
   and negative CLI/tool controls against Inventory and Contracts.
+- Installed smoke proof:
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7/browser-e2e/smoke-quality-installed-runtime-loader.json`.
 - `cargo fmt --check -- src/core/main.rs src/core/service/business_os.rs` was
   attempted but existing unrelated formatting diffs in other Business OS Rust
   files made it red; no broad formatting was applied.
@@ -217,7 +226,7 @@ App creation is production-ready only when every gate is green.
 | 1. Simplify skill/resources | in_progress | Codex | Skill/resources are English, concise, reference/resource based, avoid prompt walls, state CTOX DB/command patterns without legacy fallbacks, and require browser-smoke proof. | Latest resources now include the DOM-scope lesson and `ctox business-os app smoke`; needs fresh run proof after install. |
 | 2. Build CTOX-native bench | done | Codex | Bench submits real app-create tasks and records evidence without creating or repairing app files. | `ctox business-os app bench run/status`; run dirs under `runtime/business-os/app-creation-bench/`. |
 | 3. Close lifecycle/orchestration gaps | in_progress | Codex | Queue, validation, launchd/dev-upgrade, module catalog, and native peer lifecycle work without manual service recovery. | Latest installed release `branch-main-20260621T064355Z`; forensic sample showed worker-finalization workspace sync holding `SharedState` and blocking router/recovery/status; commit `aaf4bbb8` moved sync outside the `SharedState` lock and is installed through `ctox upgrade --dev`. |
-| 4. Close validator/resource gaps | in_progress | Codex | Validator/tooling rejects predictable bad app artifacts before signoff, without blocking valid vanilla apps. | `89c2a75d` rejects old DB fallbacks; current source adds `ctox business-os app smoke` to catch dead create flows in the real shell. |
+| 4. Close validator/resource gaps | in_progress | Codex | Validator/tooling rejects predictable bad app artifacts before signoff, without blocking valid vanilla apps. | `89c2a75d` rejects old DB fallbacks; `5811f9c0`/`710c3676` add and install `ctox business-os app smoke` to catch dead create flows in the real shell. |
 | 5. Fresh five-app CTOX proof | done | Codex | One fresh post-validator run reaches terminal queue success and installed validation green for five apps. | `rfix7` terminal green: 5 handled, 0 leased, 5/5 installed validations green. |
 | 6. Browser proof | blocked | Codex | Browser mount, UI persistence, reload persistence, native sync, and automation smoke pass for all five fresh apps. | `rfix7` browser evidence is red: Inventory mount error, Contracts dead create flow, five-app E2E shows four dead Create/New flows; Quality positive-control is green. |
 | 7. Entry-point proof | pending | Codex | Every user-facing app creation/modification path uses the same skill/resource context and runtime app contract. | Not done. |
@@ -303,8 +312,11 @@ Immediate checklist:
   `validator_gap`.
 - [x] Add a minimal real-browser app smoke tool/CLI, not a deterministic app
   builder.
-- [ ] Commit and push the browser-smoke/skill patch to `main`.
-- [ ] Install the browser-smoke/skill patch through `ctox upgrade --dev`.
+- [x] Commit and push the browser-smoke/skill patch to `main`.
+- [x] Install the browser-smoke/skill patch through `ctox upgrade --dev`.
+- [x] Fix the smoke runner to use the installed CTOX browser/Patchright runtime
+  instead of source-local `playwright`.
+- [x] Install the runtime-loader smoke fix through `ctox upgrade --dev`.
 - [ ] Start fresh five-app CTOX bench run after install.
 - [ ] Require installed validation and browser smoke for each fresh app before
   returning to full browser E2E.
@@ -429,17 +441,14 @@ Use this before marking any generated app green:
 
 ## Next Actions
 
-1. Finish verification for the new `ctox business-os app smoke` command.
-2. Commit and push the smoke/skill/plan patch to `main`.
-3. Install through `ctox upgrade --dev`.
-4. Start a fresh five-app CTOX bench run after install.
-5. Require installed validation plus browser smoke for each fresh app.
-6. Run full browser E2E only after the smoke gate is green for all five apps.
-7. Do not hand-edit generated app artifacts.
-8. If browser E2E is red, classify each failure before patching.
-9. After browser E2E is green, verify entry paths: Chat, App Creator, App
+1. Start a fresh five-app CTOX bench run after installed smoke proof.
+2. Require installed validation plus browser smoke for each fresh app.
+3. Run full browser E2E only after the smoke gate is green for all five apps.
+4. Do not hand-edit generated app artifacts.
+5. If browser smoke or E2E is red, classify each failure before patching.
+6. After browser E2E is green, verify entry paths: Chat, App Creator, App
    Store/template flow, CLI, and inbound/MCP.
-10. Audit app versioning enforcement and list or patch the missing pieces.
+7. Audit app versioning enforcement and list or patch the missing pieces.
 
 ## Evidence Log
 
@@ -581,6 +590,19 @@ Use this before marking any generated app green:
   failed with the Inventory mount error and dead `new-item` flow; and
   `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7/browser-e2e/smoke-contracts-tool-v2.json`
   failed because `new-contract` did not reveal a dialog/form/save flow.
+- `2026-06-21`: commit `5811f9c0` (`Add Business OS app browser smoke gate`)
+  was pushed to `main` and installed through `ctox upgrade --dev` as
+  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T073607Z`.
+  The installed smoke initially failed because the runner imported source-local
+  `playwright`; classification: `validator_tool_installation_gap`, not app
+  creation behavior.
+- `2026-06-21`: commit `710c3676` (`Fix installed Business OS app smoke
+  runtime`) was pushed to `main` and installed through `ctox upgrade --dev` as
+  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T074730Z`.
+- `2026-06-21`: installed smoke proof
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7/browser-e2e/smoke-quality-installed-runtime-loader.json`
+  passed for `bench_quality_rfix7` and loaded Patchright plus Chromium from
+  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T074730Z/runtime/browser/interactive-reference`.
 
 ## Open Issues
 
