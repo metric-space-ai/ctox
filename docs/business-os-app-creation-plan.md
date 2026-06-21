@@ -40,14 +40,14 @@ Overall status: `in_progress`, not production-ready yet.
 
 Installed CTOX:
 
-- Source head: `89c2a75d Harden Business OS app DB validation`
+- Source head: `b0e733be Update Business OS app creation plan status`
 - Active install:
   `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T045029Z`
 - Install path: applied through `ctox upgrade --dev`
 - Runtime app target:
   `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/installed-modules/<module-id>`
-- CTOX status at latest check: `running=true`, `busy=true`,
-  `worker_active_count=1`
+- CTOX status at latest check: `running=true`, `busy=false`,
+  `worker_active_count=0`, `pending_count=3`
 - Business OS status at latest check: `ok=true`, native RxDB peer
   `replicationUp=true`, `http_bridge_available=false`
 
@@ -61,19 +61,19 @@ Current proof run:
 - Evidence dir:
   `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7`
 - Latest status snapshot:
-  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7/status-1782018818728.json`
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7/status-1782020545985.json`
 
 Latest result:
 
 - `rfix7` is still running and must not be judged as final yet.
-- Inventory is currently leased and has generated all required file names, but
-  static validation is red while the task is still active.
-- The other four apps are still pending in the queue.
-- Current Inventory validation observations include:
-  missing `layout.third_pane_justification` for `layout.right`, wrong
-  `collections.schema.json` `schema_format`, visible `data-action="save-*"`
-  controls without visible handlers, possible false-positive collection-name
-  flags in `core/automation.mjs`, and one generated module test failure.
+- Inventory reached `handled` with installed validation green and 26/26 module
+  tests passing.
+- Projects reached `handled` with installed validation green and 30/30 module
+  tests passing.
+- Subscriptions is `leased` but has no module directory yet while CTOX is idle;
+  treat this as a suspected `runtime_orchestration_gap` until source inspection
+  proves otherwise.
+- Contracts and Quality are still `pending`.
 - No generated `rfix7` app files may be patched by hand.
 
 Latest source fix:
@@ -157,9 +157,9 @@ App creation is production-ready only when every gate is green.
 | 0. Remove deterministic builder | done | Codex | App creation uses durable tasks and agent implementation, not deterministic generated source. | Earlier deterministic builder artifacts removed; bench runner submits real app-create tasks. |
 | 1. Simplify skill/resources | in_progress | Codex | Skill/resources are English, concise, reference/resource based, avoid prompt walls, and state CTOX DB/command patterns without legacy fallbacks. | Latest resources patched in `89c2a75d`; needs fresh run proof. |
 | 2. Build CTOX-native bench | done | Codex | Bench submits real app-create tasks and records evidence without creating or repairing app files. | `ctox business-os app bench run/status`; run dirs under `runtime/business-os/app-creation-bench/`. |
-| 3. Close lifecycle/orchestration gaps | in_progress | Codex | Queue, validation, launchd/dev-upgrade, module catalog, and native peer lifecycle work without manual service recovery. | Latest installed release `branch-main-20260621T045029Z`; CTOX/Business OS healthy but busy with `rfix7`. |
+| 3. Close lifecycle/orchestration gaps | in_progress | Codex | Queue, validation, launchd/dev-upgrade, module catalog, and native peer lifecycle work without manual service recovery. | Latest installed release `branch-main-20260621T045029Z`; CTOX/Business OS healthy, but `rfix7` has a suspected idle leased-task gap for Subscriptions. |
 | 4. Close validator/resource gaps | in_progress | Codex | Validator rejects predictable bad app artifacts before browser E2E finds them, without blocking valid vanilla apps. | `89c2a75d`; old `rfix6` artifacts are rejected by installed validation. |
-| 5. Fresh five-app CTOX proof | in_progress | Codex | One fresh post-validator run reaches terminal queue success and installed validation green for five apps. | `rfix7` running; Inventory leased, four pending. |
+| 5. Fresh five-app CTOX proof | in_progress | Codex | One fresh post-validator run reaches terminal queue success and installed validation green for five apps. | `rfix7` running; Inventory and Projects handled/green, Subscriptions leased without artifacts, Contracts and Quality pending. |
 | 6. Browser proof | pending | Codex | Browser mount, UI persistence, reload persistence, native sync, and automation smoke pass for all five fresh apps. | Wait for `rfix7` terminal static result. |
 | 7. Entry-point proof | pending | Codex | Every user-facing app creation/modification path uses the same skill/resource context and runtime app contract. | Not done. |
 | 8. Versioning proof | pending | Codex | App version visibility and major-version independence are either implemented or listed as missing work. | Not done. |
@@ -182,11 +182,18 @@ Owner: `Codex`
 
 Active phase: `5. Fresh five-app CTOX proof`
 
-Current rule: let `rfix7` finish through CTOX. Do not hand-edit generated app
-files. If `rfix7` fails terminal validation, classify each failure as
+Current rule: finish `rfix7` through CTOX product paths. Do not hand-edit
+generated app files. Before any source patch, classify the evidence as
 `model_failure`, `skill_resource_gap`, `validator_gap`,
-`runtime_orchestration_gap`, `data_plane_gap`, or `entry_point_gap` before any
-source patch.
+`runtime_orchestration_gap`, `data_plane_gap`, or `entry_point_gap`.
+
+Current focus:
+
+- Prove whether the `bench_subscriptions_rfix7` leased-without-artifacts state
+  self-recovers through CTOX stale-task recovery while the service is idle.
+- If it does not self-recover, inspect and patch the queue/app recovery source
+  rather than nudging the proof run and calling it green.
+- Continue the bench only after the orchestration state is understood.
 
 Immediate checklist:
 
@@ -205,6 +212,12 @@ Immediate checklist:
 - [x] Install validator/skill fix through `ctox upgrade --dev`.
 - [x] Prove old `rfix6` installed apps are rejected by the installed validator.
 - [x] Start fresh five-app CTOX bench run `rfix7`.
+- [x] Inventory `rfix7` reached terminal queue success with installed
+  validation green.
+- [x] Projects `rfix7` reached terminal queue success with installed
+  validation green.
+- [ ] Classify and resolve the `bench_subscriptions_rfix7`
+  leased-without-artifacts state.
 - [ ] Wait for all five `rfix7` tasks to reach terminal state.
 - [ ] Run installed validation for each `rfix7` app after terminal state.
 - [ ] Update Bench Matrix with terminal `rfix7` static results.
@@ -233,9 +246,9 @@ Active run `rfix7`:
 
 | Case | Module Id | Queue Status | Static Validation | Browser Mount | Browser E2E | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| Subscriptions | `bench_subscriptions_rfix7` | pending | skipped | pending | pending | Await queue execution. |
-| Inventory | `bench_inventory_rfix7` | leased | red while leased | pending | pending | Do not classify terminal failure yet. Current validation observations are recorded in Current State. |
-| Projects | `bench_projects_rfix7` | pending | skipped | pending | pending | Await queue execution. |
+| Subscriptions | `bench_subscriptions_rfix7` | leased | skipped | pending | pending | No module dir while CTOX is idle; suspected `runtime_orchestration_gap`. |
+| Inventory | `bench_inventory_rfix7` | handled | green | pending | pending | Installed validation green; 26/26 module tests passed. |
+| Projects | `bench_projects_rfix7` | handled | green | pending | pending | Installed validation green; 30/30 module tests passed. |
 | Contracts | `bench_contracts_rfix7` | pending | skipped | pending | pending | Await queue execution. |
 | Quality | `bench_quality_rfix7` | pending | skipped | pending | pending | Await queue execution. |
 
@@ -329,21 +342,28 @@ Use this before marking any generated app green:
 
 ## Next Actions
 
-1. Poll `rfix7` until all five tasks reach terminal state.
-2. Record terminal static validation in Bench Matrix and Evidence Log.
-3. If `rfix7` is static green, run browser E2E for all five fresh apps.
-4. If `rfix7` is static red, classify each failure before patching.
-5. For validator false positives, simplify the validator instead of adding
+1. Re-check `rfix7` and CTOX status.
+2. If `bench_subscriptions_rfix7` remains leased with no artifact directory
+   while CTOX is idle, inspect the stale app-task recovery path and classify
+   the finding as `runtime_orchestration_gap`.
+3. Patch source only if the recovery/lifecycle gap is real, verify locally,
+   install with `ctox upgrade --dev`, and record the evidence here.
+4. Let Subscriptions, Contracts, and Quality complete through normal CTOX app
+   creation tasks.
+5. Record terminal static validation in Bench Matrix and Evidence Log.
+6. If `rfix7` is static green, run browser E2E for all five fresh apps.
+7. If `rfix7` is static red, classify each failure before patching.
+8. For validator false positives, simplify the validator instead of adding
    arbitrary rule layers.
-6. For repeated generated-app architecture mistakes, update concise skill
+9. For repeated generated-app architecture mistakes, update concise skill
    resources, not long prompts.
-7. For valid app output blocked by CTOX behavior, patch runtime/lifecycle/data
+10. For valid app output blocked by CTOX behavior, patch runtime/lifecycle/data
    plane source and install through `ctox upgrade --dev`.
-8. Do not hand-edit generated app artifacts.
-9. After static and browser E2E are green, verify entry paths: Chat, App
+11. Do not hand-edit generated app artifacts.
+12. After static and browser E2E are green, verify entry paths: Chat, App
    Creator, App Store/template flow, CLI, and inbound/MCP.
-10. Audit app versioning enforcement and list or patch the missing pieces.
-11. Update this file after every material bench result and before handoff.
+13. Audit app versioning enforcement and list or patch the missing pieces.
+14. Update this file after every material bench result and before handoff.
 
 ## Evidence Log
 
@@ -384,14 +404,25 @@ Use this before marking any generated app green:
 - `2026-06-21`: `rfix7` status snapshot
   `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7/status-1782018818728.json`
   shows Inventory leased, four apps pending, and no terminal bench result yet.
+- `2026-06-21`: commit `b338fe7e` updated this file as the live app creation
+  execution plan and was pushed to `main`.
+- `2026-06-21`: `ctox status --json` showed CTOX running idle with
+  `busy=false`, `worker_active_count=0`, Business OS `ok=true`, native peer
+  `replicationUp=true`, and `http_bridge_available=false`.
+- `2026-06-21`: `rfix7` status snapshot
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7/status-1782020545985.json`
+  shows Inventory and Projects handled with installed validation green,
+  Subscriptions leased with no artifact directory, and Contracts/Quality
+  pending.
 
 ## Open Issues
 
-- `rfix7` is still running. Do not classify its current Inventory validation
-  failures as terminal until the queue task completes, fails, or blocks.
-- Inventory `rfix7` may expose real app errors or validator false positives:
-  the automation collection-name flags and `data-action` handler checks need
-  source inspection only after terminal state.
+- `rfix7` is still running. Do not mark the five-app proof green until all five
+  tasks have terminal status and installed validation is green.
+- `bench_subscriptions_rfix7` is leased with no artifact directory while CTOX
+  is idle. This needs source-level recovery/lifecycle inspection before
+  continuing the proof.
+- Contracts and Quality have not yet run.
 - Entry-point proof across Chat, App Creator, App Store/template flow, CLI, and
   inbound/MCP is still pending.
 - App versioning policy must be audited and either enforced or listed as missing
