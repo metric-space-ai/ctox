@@ -400,16 +400,27 @@ function collectStringLiterals(text) {
 
 function htmlDataActions(html) {
   const actions = new Set();
-  for (const match of String(html || '').matchAll(/\bdata-action\s*=\s*(['"])([^'"]+)\1/g)) {
+  for (const match of String(html || '').matchAll(/\bdata-[a-z0-9-]*action\s*=\s*(['"])([^'"]+)\1/gi)) {
     const action = match[2].trim();
     if (action) actions.add(action);
   }
   return actions;
 }
 
+function isPrimaryCreateActionValue(action) {
+  const value = String(action || '').trim().toLowerCase();
+  if (!value || /(?:^|[-_:])(?:follow-?up|create-?follow-?up)(?:$|[-_:])/.test(value)) {
+    return false;
+  }
+  return /^(?:add|new|create|create-record|new-record|add-record)(?:$|[-_:])/.test(value);
+}
+
 function hasPrimaryCreateAffordance(html, indexJs) {
   const combined = `${html || ''}\n${indexJs || ''}`;
   if (/\bdata-[a-z0-9]+-add\b/i.test(combined)) return true;
+  for (const action of htmlDataActions(html)) {
+    if (isPrimaryCreateActionValue(action)) return true;
+  }
   if (/\bdata-action\s*=\s*(['"])(?!(?:follow-?up|create-?follow-?up)\1)(?:add|new|create|create-record|new-record|add-record)[^'"]*\1/i.test(html)) {
     return true;
   }
@@ -513,7 +524,7 @@ function hasCommandBusDispatchInvocation(text) {
 
 function indexJsHandlesDataAction(indexJs, action) {
   const escaped = escapeRegExp(action);
-  return new RegExp(String.raw`\[data-action\s*=\s*["']${escaped}["']\]`).test(indexJs)
+  return new RegExp(String.raw`\[data-[a-z0-9-]*action\s*=\s*["']${escaped}["']\]`, 'i').test(indexJs)
     || new RegExp(String.raw`(?:===|==|case)\s*['"\`]${escaped}['"\`]`).test(indexJs)
     || new RegExp(String.raw`['"\`]${escaped}['"\`]\s*:`).test(indexJs);
 }

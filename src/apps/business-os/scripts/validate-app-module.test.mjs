@@ -225,6 +225,26 @@ function writeSourceModule(root, moduleId, overrides = {}) {
 
 {
   const root = makeWorkspace();
+  writeInstalledModule(root, 'namespacedaction', {
+    indexHtml: [
+      '<main class="validator-module">',
+      '  <section data-list></section>',
+      '  <button type="button" data-demo-action="new">New record</button>',
+      '</main>',
+      '',
+    ].join('\n'),
+    indexJs: installedIndexJs('namespacedaction', 'namespacedaction_records', [
+      "  ctx.host.querySelector('[data-demo-action=\"new\"]')?.addEventListener('click', () => {",
+      "    records?.upsert?.({ id: 'demo-2', title: 'Demo 2', updated_at_ms: Date.now() });",
+      '  });',
+    ]),
+  });
+  const run = runValidator(root, 'namespacedaction', '--installed');
+  assert.equal(run.status, 0, `${run.stderr}\n${run.stdout}`);
+}
+
+{
+  const root = makeWorkspace();
   writeInstalledModule(root, 'bench_inventory_rfix', {
     manifest: { collections: ['business_commands', 'bench_inventory_rfix_records', 'bench_inventory_items'] },
     collections: {
@@ -395,6 +415,17 @@ function writeSourceModule(root, moduleId, overrides = {}) {
     indexHtml: '<main class="validator-module"><button type="button" data-action="create-record">Create record</button><button type="button" data-action="follow-up">Follow up</button><button type="button" data-action="bulk-follow-up">Bulk follow up</button></main>\n',
   });
   const run = runValidator(root, 'deadbutton', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /data-action="bulk-follow-up" but index\.js has no visible handler/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'namespaceddeadbutton', {
+    indexHtml: '<main class="validator-module"><button type="button" data-demo-action="create-record">Create record</button><button type="button" data-demo-action="bulk-follow-up">Bulk follow up</button></main>\n',
+    indexJs: installedIndexJs('namespaceddeadbutton', 'namespaceddeadbutton_records').replaceAll('data-action', 'data-demo-action'),
+  });
+  const run = runValidator(root, 'namespaceddeadbutton', '--installed');
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /data-action="bulk-follow-up" but index\.js has no visible handler/);
 }
