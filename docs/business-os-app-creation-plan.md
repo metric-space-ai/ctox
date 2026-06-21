@@ -42,14 +42,18 @@ Installed CTOX:
 
 - Source branch: `main`
 - Last source head checked before this plan edit:
-  `b338fe7e Update Business OS app creation live plan`
+  `15a31429 Clarify app creation plan source head`
 - Active install:
-  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T045029Z`
+  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T055246Z`
 - Install path: applied through `ctox upgrade --dev`
+- State root:
+  `/Users/michaelwelsch/.local/state/ctox`
 - Runtime app target:
   `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/installed-modules/<module-id>`
-- CTOX status at latest check: `running=true`, `busy=false`,
-  `worker_active_count=0`, `pending_count=3`
+  which resolves into the managed runtime/state root. Runtime apps must not be
+  written into source paths.
+- CTOX status at latest check: `running=true`, `busy=true`,
+  `worker_active_count=1`, `pending_count=2`
 - Business OS status at latest check: `ok=true`, native RxDB peer
   `replicationUp=true`, `http_bridge_available=false`
 
@@ -63,7 +67,7 @@ Current proof run:
 - Evidence dir:
   `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7`
 - Latest status snapshot:
-  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7/status-1782020545985.json`
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7/status-1782022239634.json`
 
 Latest result:
 
@@ -72,10 +76,15 @@ Latest result:
   tests passing.
 - Projects reached `handled` with installed validation green and 30/30 module
   tests passing.
-- Subscriptions is `leased` but has no module directory yet while CTOX is idle;
-  treat this as a suspected `runtime_orchestration_gap` until source inspection
-  proves otherwise.
-- Contracts and Quality are still `pending`.
+- Quality reached `handled` with installed validation green and 10/10 module
+  tests passing after CTOX asked the same app task to repair missing artifacts.
+- Subscriptions was previously `leased` without artifacts while CTOX was idle.
+  After `ctox upgrade --dev`, boot recovery requeued it to `pending` with
+  `business-os:requeued-unstarted-app: app target missing or empty`. Classify
+  this incident as `runtime_orchestration_gap` evidence unless later source
+  inspection proves a narrower lifecycle cause.
+- Contracts is still `pending`.
+- Subscriptions is still `pending`.
 - No generated `rfix7` app files may be patched by hand.
 
 Latest source fix:
@@ -89,6 +98,15 @@ Latest source fix:
   and `git diff --check`.
 - Installed validator proof: the old `bench_inventory_rfix6` artifact is now
   rejected by installed `ctox business-os app validate`.
+
+Latest local regression guard:
+
+- `src/core/service/service.rs` has an uncommitted regression test for status
+  snapshot recovery of a leased app task whose target directory is missing.
+- Verification run:
+  `cargo test --bin ctox status_snapshot_recovery_requeues_missing_app_target_without_prefetch -- --nocapture`.
+- This source change must be committed separately from generated app evidence
+  and installed through `ctox upgrade --dev` before production signoff.
 
 ## Non-Negotiables
 
@@ -159,9 +177,9 @@ App creation is production-ready only when every gate is green.
 | 0. Remove deterministic builder | done | Codex | App creation uses durable tasks and agent implementation, not deterministic generated source. | Earlier deterministic builder artifacts removed; bench runner submits real app-create tasks. |
 | 1. Simplify skill/resources | in_progress | Codex | Skill/resources are English, concise, reference/resource based, avoid prompt walls, and state CTOX DB/command patterns without legacy fallbacks. | Latest resources patched in `89c2a75d`; needs fresh run proof. |
 | 2. Build CTOX-native bench | done | Codex | Bench submits real app-create tasks and records evidence without creating or repairing app files. | `ctox business-os app bench run/status`; run dirs under `runtime/business-os/app-creation-bench/`. |
-| 3. Close lifecycle/orchestration gaps | in_progress | Codex | Queue, validation, launchd/dev-upgrade, module catalog, and native peer lifecycle work without manual service recovery. | Latest installed release `branch-main-20260621T045029Z`; CTOX/Business OS healthy, but `rfix7` has a suspected idle leased-task gap for Subscriptions. |
+| 3. Close lifecycle/orchestration gaps | in_progress | Codex | Queue, validation, launchd/dev-upgrade, module catalog, and native peer lifecycle work without manual service recovery. | Latest installed release `branch-main-20260621T055246Z`; CTOX/Business OS healthy; boot recovery requeued the stale Subscriptions lease, but non-restart recovery still needs evidence. |
 | 4. Close validator/resource gaps | in_progress | Codex | Validator rejects predictable bad app artifacts before browser E2E finds them, without blocking valid vanilla apps. | `89c2a75d`; old `rfix6` artifacts are rejected by installed validation. |
-| 5. Fresh five-app CTOX proof | in_progress | Codex | One fresh post-validator run reaches terminal queue success and installed validation green for five apps. | `rfix7` running; Inventory and Projects handled/green, Subscriptions leased without artifacts, Contracts and Quality pending. |
+| 5. Fresh five-app CTOX proof | in_progress | Codex | One fresh post-validator run reaches terminal queue success and installed validation green for five apps. | `rfix7` running; Inventory, Projects, and Quality handled/green; Subscriptions and Contracts pending. |
 | 6. Browser proof | pending | Codex | Browser mount, UI persistence, reload persistence, native sync, and automation smoke pass for all five fresh apps. | Wait for `rfix7` terminal static result. |
 | 7. Entry-point proof | pending | Codex | Every user-facing app creation/modification path uses the same skill/resource context and runtime app contract. | Not done. |
 | 8. Versioning proof | pending | Codex | App version visibility and major-version independence are either implemented or listed as missing work. | Not done. |
@@ -191,11 +209,12 @@ generated app files. Before any source patch, classify the evidence as
 
 Current focus:
 
-- Prove whether the `bench_subscriptions_rfix7` leased-without-artifacts state
-  self-recovers through CTOX stale-task recovery while the service is idle.
-- If it does not self-recover, inspect and patch the queue/app recovery source
-  rather than nudging the proof run and calling it green.
-- Continue the bench only after the orchestration state is understood.
+- Let `bench_contracts_rfix7` and `bench_subscriptions_rfix7` complete through
+  normal CTOX app creation tasks.
+- Watch for the same leased-without-artifacts condition without relying on a
+  restart as proof of production readiness.
+- If the queue stops while tasks are pending, inspect and patch the queue/app
+  recovery source rather than nudging the proof run and calling it green.
 
 Immediate checklist:
 
@@ -218,8 +237,14 @@ Immediate checklist:
   validation green.
 - [x] Projects `rfix7` reached terminal queue success with installed
   validation green.
-- [ ] Classify and resolve the `bench_subscriptions_rfix7`
-  leased-without-artifacts state.
+- [x] Classify the `bench_subscriptions_rfix7` leased-without-artifacts state
+  as `runtime_orchestration_gap` evidence.
+- [x] Install current `main` with `ctox upgrade --dev` and observe boot recovery
+  requeue the stale Subscriptions task.
+- [x] Quality `rfix7` reached terminal queue success with installed validation
+  green after same-task repair.
+- [ ] Prove pending Subscriptions and Contracts continue without manual
+  artifact edits.
 - [ ] Wait for all five `rfix7` tasks to reach terminal state.
 - [ ] Run installed validation for each `rfix7` app after terminal state.
 - [ ] Update Bench Matrix with terminal `rfix7` static results.
@@ -248,11 +273,11 @@ Active run `rfix7`:
 
 | Case | Module Id | Queue Status | Static Validation | Browser Mount | Browser E2E | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| Subscriptions | `bench_subscriptions_rfix7` | leased | skipped | pending | pending | No module dir while CTOX is idle; suspected `runtime_orchestration_gap`. |
+| Subscriptions | `bench_subscriptions_rfix7` | pending | skipped | pending | pending | Requeued by boot recovery after stale lease with no module dir; continue through normal queue execution. |
 | Inventory | `bench_inventory_rfix7` | handled | green | pending | pending | Installed validation green; 26/26 module tests passed. |
 | Projects | `bench_projects_rfix7` | handled | green | pending | pending | Installed validation green; 30/30 module tests passed. |
 | Contracts | `bench_contracts_rfix7` | pending | skipped | pending | pending | Await queue execution. |
-| Quality | `bench_quality_rfix7` | pending | skipped | pending | pending | Await queue execution. |
+| Quality | `bench_quality_rfix7` | handled | green | pending | pending | Installed validation green after same-task repair; 10/10 module tests passed. |
 
 Only the latest fresh post-fix run may be used for production signoff.
 
@@ -344,28 +369,27 @@ Use this before marking any generated app green:
 
 ## Next Actions
 
-1. Re-check `rfix7` and CTOX status.
-2. If `bench_subscriptions_rfix7` remains leased with no artifact directory
-   while CTOX is idle, inspect the stale app-task recovery path and classify
-   the finding as `runtime_orchestration_gap`.
-3. Patch source only if the recovery/lifecycle gap is real, verify locally,
-   install with `ctox upgrade --dev`, and record the evidence here.
-4. Let Subscriptions, Contracts, and Quality complete through normal CTOX app
-   creation tasks.
-5. Record terminal static validation in Bench Matrix and Evidence Log.
-6. If `rfix7` is static green, run browser E2E for all five fresh apps.
-7. If `rfix7` is static red, classify each failure before patching.
-8. For validator false positives, simplify the validator instead of adding
+1. Continue monitoring `rfix7` until Subscriptions and Contracts either run or
+   expose a fresh queue/lifecycle failure.
+2. Do not hand-edit `bench_subscriptions_rfix7` or
+   `bench_contracts_rfix7` artifacts.
+3. If pending tasks do not lease while CTOX is idle, inspect and patch the
+   app-task dispatch/recovery path, verify locally, install with
+   `ctox upgrade --dev`, and record the evidence here.
+4. Record terminal static validation in Bench Matrix and Evidence Log.
+5. If `rfix7` is static green, run browser E2E for all five fresh apps.
+6. If `rfix7` is static red, classify each failure before patching.
+7. For validator false positives, simplify the validator instead of adding
    arbitrary rule layers.
-9. For repeated generated-app architecture mistakes, update concise skill
+8. For repeated generated-app architecture mistakes, update concise skill
    resources, not long prompts.
-10. For valid app output blocked by CTOX behavior, patch runtime/lifecycle/data
+9. For valid app output blocked by CTOX behavior, patch runtime/lifecycle/data
    plane source and install through `ctox upgrade --dev`.
-11. Do not hand-edit generated app artifacts.
-12. After static and browser E2E are green, verify entry paths: Chat, App
+10. Do not hand-edit generated app artifacts.
+11. After static and browser E2E are green, verify entry paths: Chat, App
    Creator, App Store/template flow, CLI, and inbound/MCP.
-13. Audit app versioning enforcement and list or patch the missing pieces.
-14. Update this file after every material bench result and before handoff.
+12. Audit app versioning enforcement and list or patch the missing pieces.
+13. Update this file after every material bench result and before handoff.
 
 ## Evidence Log
 
@@ -416,15 +440,31 @@ Use this before marking any generated app green:
   shows Inventory and Projects handled with installed validation green,
   Subscriptions leased with no artifact directory, and Contracts/Quality
   pending.
+- `2026-06-21`: local regression check passed:
+  `cargo test --bin ctox stale_app_recovery_requeues_leased_missing_target_before_validation -- --nocapture`.
+- `2026-06-21`: local regression check passed:
+  `cargo test --bin ctox status_snapshot_recovery_requeues_missing_app_target_without_prefetch -- --nocapture`.
+- `2026-06-21`: `ctox upgrade --dev` installed
+  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T055246Z`
+  with state root `/Users/michaelwelsch/.local/state/ctox`.
+- `2026-06-21`: installed CTOX boot recovery requeued
+  `bench_subscriptions_rfix7` from stale leased/no-artifact state to pending
+  with status note
+  `business-os:requeued-unstarted-app: app target missing or empty`.
+- `2026-06-21`: `rfix7` status snapshot
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7/status-1782022224137.json`
+  shows Inventory, Projects, and Quality handled with installed validation
+  green; Subscriptions and Contracts pending.
 
 ## Open Issues
 
 - `rfix7` is still running. Do not mark the five-app proof green until all five
   tasks have terminal status and installed validation is green.
-- `bench_subscriptions_rfix7` is leased with no artifact directory while CTOX
-  is idle. This needs source-level recovery/lifecycle inspection before
-  continuing the proof.
-- Contracts and Quality have not yet run.
+- `bench_subscriptions_rfix7` was recovered by boot recovery, but production
+  readiness still needs evidence that pending app-create tasks continue without
+  a manual restart or artifact edits.
+- Contracts has not yet run.
+- Subscriptions has not yet completed after being requeued.
 - Entry-point proof across Chat, App Creator, App Store/template flow, CLI, and
   inbound/MCP is still pending.
 - App versioning policy must be audited and either enforced or listed as missing
