@@ -7,6 +7,9 @@
 - Use plain HTML fragments, CSS, and browser ESM.
 - Export `mount(ctx)` from `index.js`.
 - Render into `ctx.host`.
+- In runtime-installed apps, load `index.html` into `ctx.host` from `mount(ctx)`
+  or render the primary UI in JS. The shell does not preload runtime module
+  `index.html`.
 - Persist app records through shell-provided collection handles from
   `ctx.db.collection('<declared-collection-name>')`.
 - Scope every runtime app collection name to the module id, for example
@@ -48,6 +51,8 @@
 - Do not write directly to `business_commands`; use `ctx.commandBus.dispatch(...)`.
 - Do not write directly to `ctox_ticket_*` projection collections.
 - Do not use a full HTML document in `index.html`.
+- Do not assume `index.html` is already present in `ctx.host` when `mount(ctx)`
+  starts.
 - Do not add decorative third panes, fake buttons, or controls without handlers.
 - Do not claim a visible Create/New/Add button works until it has been clicked
   in the real Business OS shell.

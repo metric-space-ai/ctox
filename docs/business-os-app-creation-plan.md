@@ -42,13 +42,12 @@ Installed CTOX:
 
 - Source branch: `main`
 - Last source head checked before this plan edit:
-  `85ee58d2 Serialize Business OS app queue leasing`
-- Local source delta awaiting commit/install: make
-  `ctox business-os app validate` read-only again. Validation must never mark
-  live leased app-creation tasks as handled; explicit `finalize` remains the
-  mutating command.
+  `0d0980e8 Make Business OS app validation read-only`
+- Local source delta awaiting commit/install: make the static checker reject
+  runtime-installed apps whose `mount(ctx)` assumes the Business OS shell has
+  already preloaded `index.html` into `ctx.host`.
 - Active install:
-  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T084616Z`
+  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T110239Z`
 - Install path: applied through `ctox upgrade --dev`
 - State root:
   `/Users/michaelwelsch/.local/state/ctox`
@@ -56,46 +55,46 @@ Installed CTOX:
   `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/installed-modules/<module-id>`
   which resolves into the managed runtime/state root. Runtime apps must not be
   written into source paths.
-- CTOX status at latest check: `running=true`, `busy=true`,
-  `worker_active_count=1`, `pending_count=1`, `worker_phase=queue: running`
+- CTOX status at latest check after `rfix10`: `running=true`, `busy=false`,
+  `worker_active_count=0`, `pending_count=0`
 - Business OS status at latest check: `ok=true`, native RxDB peer
   `replicationUp=true`, `http_bridge_available=false`
 
 Current proof run:
 
-- Run id: `rfix9`
+- Run id: `rfix10`
 - Suite: `core-five`
 - Model: `minimax-m3`
 - Context: `256k`
 - Entry path: real `ctox.business_os.app.create` tasks through installed CTOX
 - Evidence dir:
-  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix9`
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix10`
 - Latest status snapshot:
-  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix9/status-1782039498716.json`
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix10/status-1782045591482.json`
 
 Latest result:
 
-- `rfix8` drained to `bench_green=true`, `handled=5`, `leased=0`,
-  `validation_passed=5`, and no missing app artifact directories. It remains
-  valid forensic evidence only, not production signoff, because the run began
-  before the app-queue serialization fix and already exposed overlapping app
-  leases.
-- `rfix9` was started after the serialization fix and submitted five real
-  app-create tasks. It is now contaminated as production evidence because
-  `ctox business-os app validate bench_projects_rfix9` was run while the
-  Projects worker was still live. The installed `validate` command marked the
-  leased task handled, then the worker continued mutating the same app files.
-  This is a `runtime_orchestration_gap` in the CLI contract, not evidence for a
-  deterministic builder and not a reason to add more app-building rules.
-- Source fix in progress: make `validate` read-only and leave queue/command
-  mutation to explicit `ctox business-os app finalize <module-id> --task-id
-  <queue-task-id>`.
+- `rfix10` is the first clean post-read-only-validation run. It submitted five
+  real app-create tasks, ran them serially, and reached terminal static green:
+  `bench_green=true`, `handled=5`, `leased=0`, `validation_passed=5`, and no
+  missing app artifact directories.
+- `rfix10` browser smoke is red: Projects passed, while Inventory,
+  Subscriptions, Quality, and Contracts failed with `no visible primary create
+  action found under module root`.
+- Source inspection classified the browser failure as `skill_resource_gap` plus
+  `validator_gap`: four apps had a valid static `index.html`, but `mount(ctx)`
+  did not load that fragment into `ctx.host`. Inventory even cleared
+  `ctx.host` and assumed the shell had already loaded the fragment. Runtime
+  installed apps must load their own HTML fragment or render their primary UI in
+  JS.
+- Source fix in progress: tighten the skill resources and static checker so
+  this shell-preload assumption fails before browser smoke.
 - The installed app smoke CLI is working from the managed release runtime. It
   is a validation tool only; it does not generate, repair, or rewrite app
   artifacts.
-- No generated `rfix8` or `rfix9` app files may be patched by hand.
+- No generated `rfix8`, `rfix9`, or `rfix10` app files may be patched by hand.
 
-Latest local source fix:
+Latest installed source fix:
 
 - Classification: `runtime_orchestration_gap`, not skill text or model output.
 - Patch in `src/core/service/business_os.rs`: remove the side effect that made
@@ -109,7 +108,29 @@ Latest local source fix:
   `cargo test --bin ctox app_validate_success_does_not_finalize_matching_leased_creator_task -- --nocapture`,
   `cargo test --bin ctox app_bench_run_submits_real_tasks_without_writing_app_artifacts -- --nocapture`,
   and `rustfmt --check src/core/service/business_os.rs`.
-- Source fix status: tested locally; commit, push, install, and fresh `rfix10`
+- Source fix status: committed, pushed, and installed as
+  `branch-main-20260621T110239Z`.
+
+Latest local source fix:
+
+- Classification: `skill_resource_gap` plus `validator_gap`.
+- Patch in `src/skills/system/product_engineering/business-os-app-module-development/references/`
+  clarifies that runtime app `mount(ctx)` must load `index.html` into
+  `ctx.host` or render an equivalent primary UI itself.
+- Patch in
+  `src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs`
+  rejects installed modules that expose a primary create action only in
+  `index.html` but never render that fragment into `ctx.host`.
+- Regression guard:
+  `src/apps/business-os/scripts/validate-app-module.test.mjs` adds the
+  `shellpreload` negative control.
+- Verification runs:
+  `node src/apps/business-os/scripts/validate-app-module.test.mjs`,
+  `node --check src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs`,
+  `node --check src/apps/business-os/scripts/validate-app-module.test.mjs`, and
+  source-validator checks against all five `rfix10` modules. The new validator
+  rejects the four browser-smoke-red apps and passes Projects.
+- Source fix status: tested locally; commit, push, install, and fresh `rfix11`
   run still pending.
 
 Latest installed source fix:
@@ -232,9 +253,9 @@ App creation is production-ready only when every gate is green.
 | --- | --- | --- |
 | Skill shape | in_progress | English, concise, resource-based, no prompt wall, requires three reference apps, clear Do/Don't list, clear green checklist, includes browser-smoke finalization. |
 | Correct install location | done | Generated apps are under `runtime/business-os/installed-modules/<module-id>` and survive `ctox upgrade --dev`. |
-| CTOX-native creation | in_progress | Fresh five-app bench is created through real app-create tasks, not direct file writes. `rfix8` is forensic green but pre-fix; `rfix9` is contaminated by a `validate` side effect; `rfix10` is required after the read-only validation fix is installed. |
-| Static validation | in_progress | `rfix7` and forensic `rfix8` reached terminal installed validation green for all five apps; a clean post-read-only-validate run is still required. |
-| Browser mount | in_progress | `rfix8` Subscriptions installed browser smoke is green; full fresh post-read-only-validate run is still required. |
+| CTOX-native creation | done | `rfix10` created five apps through real app-create tasks, not direct file writes, and the queue ran serially. |
+| Static validation | done | `rfix10` reached terminal queue success and installed validation green for all five apps. |
+| Browser mount | in_progress | `rfix10` Projects browser smoke is green; four apps mount without console/page errors but do not render a visible primary create action because `mount(ctx)` does not load `index.html`. |
 | Five-app browser E2E | blocked | `rfix7` browser E2E found dead Create/New flows in four apps. `rfix8` exposed queue overlap before a clean five-app browser proof could be used. |
 | Entry-point coverage | pending | Chat, App Creator, App Store/template flow, CLI, and inbound/MCP paths all attach the same app-module creation contract. |
 | Versioning contract | pending | Existing app version metadata is audited; missing enforcement is listed or patched; users see only versions `>=1.0.0`; each `x.0.0` major is independently installable with its own app icon. |
@@ -246,12 +267,12 @@ App creation is production-ready only when every gate is green.
 | Phase | Status | Owner | Exit Criteria | Evidence |
 | --- | --- | --- | --- | --- |
 | 0. Remove deterministic builder | done | Codex | App creation uses durable tasks and agent implementation, not deterministic generated source. | Earlier deterministic builder artifacts removed; bench runner submits real app-create tasks. |
-| 1. Simplify skill/resources | in_progress | Codex | Skill/resources are English, concise, reference/resource based, avoid prompt walls, state CTOX DB/command patterns without legacy fallbacks, and require browser-smoke proof. | Latest resources now include the DOM-scope lesson and `ctox business-os app smoke`; needs fresh run proof after install. |
+| 1. Simplify skill/resources | in_progress | Codex | Skill/resources are English, concise, reference/resource based, avoid prompt walls, state CTOX DB/command patterns without legacy fallbacks, and require browser-smoke proof. | Latest resources include the DOM-scope lesson, `ctox business-os app smoke`, and the runtime `mount(ctx)` HTML-loading rule exposed by `rfix10`; needs fresh run proof after install. |
 | 2. Build CTOX-native bench | done | Codex | Bench submits real app-create tasks and records evidence without creating or repairing app files. | `ctox business-os app bench run/status`; run dirs under `runtime/business-os/app-creation-bench/`. |
 | 3. Close lifecycle/orchestration gaps | in_progress | Codex | Queue, validation, launchd/dev-upgrade, module catalog, and native peer lifecycle work without manual service recovery. | `aaf4bbb8` moved workspace sync outside the `SharedState` lock. `6766b9d1` skips full workspace desktop indexing for runtime app module tasks. `85ee58d2` serializes Business OS app queue leases. `rfix9` exposed that `validate` mutates leased tasks; local source makes `validate` read-only and has focused tests green. |
-| 4. Close validator/resource gaps | in_progress | Codex | Validator/tooling rejects predictable bad app artifacts before signoff, without blocking valid vanilla apps. | `89c2a75d` rejects old DB fallbacks; `5811f9c0`/`710c3676` add and install `ctox business-os app smoke` to catch dead create flows in the real shell. |
-| 5. Fresh five-app CTOX proof | in_progress | Codex | One fresh post-read-only-validate run reaches terminal queue success and installed validation green for five apps. | `rfix7` terminal green before browser-smoke hardening; `rfix8` forensic green after queue serialization but contains pre-fix overlap; `rfix9` is contaminated by validation finalization side effects. |
-| 6. Browser proof | blocked | Codex | Browser mount, UI persistence, reload persistence, native sync, and automation smoke pass for all five fresh apps. | `rfix7` browser evidence is red: Inventory mount error, Contracts dead create flow, five-app E2E shows four dead Create/New flows; Quality positive-control is green. |
+| 4. Close validator/resource gaps | in_progress | Codex | Validator/tooling rejects predictable bad app artifacts before signoff, without blocking valid vanilla apps. | `89c2a75d` rejects old DB fallbacks; `5811f9c0`/`710c3676` add and install `ctox business-os app smoke`; local source now rejects runtime apps that never render their `index.html` primary create UI into `ctx.host`. |
+| 5. Fresh five-app CTOX proof | done | Codex | One fresh post-read-only-validate run reaches terminal queue success and installed validation green for five apps. | `rfix10` terminal static green: 5 handled, 0 leased, 5/5 installed validations green. |
+| 6. Browser proof | blocked | Codex | Browser mount, UI persistence, reload persistence, native sync, and automation smoke pass for all five fresh apps. | `rfix10` browser smoke red: Projects green; Inventory, Subscriptions, Quality, and Contracts do not render visible primary create actions because `mount(ctx)` does not load `index.html`. |
 | 7. Entry-point proof | pending | Codex | Every user-facing app creation/modification path uses the same skill/resource context and runtime app contract. | Not done. |
 | 8. Versioning proof | pending | Codex | App version visibility and major-version independence are either implemented or listed as missing work. | Not done. |
 | 9. Production signoff | pending | Codex | All production gates are green, latest source is installed, plan/docs updated, no unrelated dirty files staged. | Not done. |
@@ -271,7 +292,7 @@ Phase editing rules:
 
 Owner: `Codex`
 
-Active phase: `3. Close lifecycle/orchestration gaps`
+Active phase: `4. Close validator/resource gaps`
 
 Current rule: patch only evidence-classified systemic gaps. Do not hand-edit
 generated app files. Before any source patch,
@@ -281,14 +302,11 @@ classify the evidence as `model_failure`, `skill_resource_gap`,
 
 Current focus:
 
-- Commit, push, and install the read-only `ctox business-os app validate` fix
-  through `ctox upgrade --dev`.
-- Treat `rfix8` as forensic evidence because it contains pre-fix overlapping
-  app leases.
-- Treat `rfix9` as forensic evidence because an installed validation command
-  prematurely finalized a live leased Projects app task.
-- Start a fresh post-read-only-validate bench run `rfix10` for production
-  signoff.
+- Commit, push, and install the runtime `mount(ctx)` HTML-loading resource and
+  validator fix through `ctox upgrade --dev`.
+- Treat `rfix10` as proof that CTOX-native queueing and static validation work,
+  but not as production signoff because browser smoke is red for 4/5 apps.
+- Start fresh run `rfix11` after the validator/resource fix is installed.
 - Require both installed static validation and `ctox business-os app smoke`
   proof for the fresh apps before returning to full five-app browser E2E.
 
@@ -370,18 +388,30 @@ Immediate checklist:
 - [x] Patch local source so `validate` is read-only and `finalize` is the only
   app-validation CLI path that mutates queue/command state.
 - [x] Verify the read-only validation fix with focused Rust tests.
-- [ ] Commit and push the read-only validation fix.
-- [ ] Install the read-only validation fix through `ctox upgrade --dev`.
-- [ ] Start a fresh post-read-only-validate five-app run `rfix10`.
+- [x] Commit and push the read-only validation fix.
+- [x] Install the read-only validation fix through `ctox upgrade --dev`.
+- [x] Start fresh post-read-only-validate five-app run `rfix10`.
+- [x] `rfix10` reached terminal queue success with installed validation green
+  for all five apps.
+- [x] Run browser smoke for all five `rfix10` apps.
+- [x] Classify the `rfix10` browser-smoke failures as `skill_resource_gap` plus
+  `validator_gap`: runtime `mount(ctx)` assumed shell-preloaded `index.html`.
+- [x] Patch local skill resources and static checker for the runtime
+  `index.html` loading contract.
+- [x] Verify the local validator rejects the four `rfix10` smoke-red apps and
+  passes Projects.
+- [ ] Commit and push the runtime `index.html` loading validator/resource fix.
+- [ ] Install the validator/resource fix through `ctox upgrade --dev`.
+- [ ] Start fresh five-app run `rfix11`.
 - [ ] Require installed validation and browser smoke for each fresh app before
   returning to full browser E2E.
 
 Current slice exit criteria:
 
-- Source has a committed, pushed, and installed read-only validation fix.
-- A fresh post-read-only-validate bench run reaches static validation green and
-  browser smoke green, or failures are classified with evidence before further
-  patching.
+- Source has a committed, pushed, and installed validator/resource fix for
+  runtime apps that fail to render their primary UI into `ctx.host`.
+- A fresh post-fix bench run reaches static validation green and browser smoke
+  green, or failures are classified with evidence before further patching.
 
 ## Bench Matrix
 
@@ -426,6 +456,20 @@ Contaminated forensic run `rfix9`:
 | Quality | `bench_quality_rfix9` | pending | skipped | not run | Pending at latest status because Projects stayed active under the contaminated lifecycle. |
 
 Only a fresh post-read-only-validate run may be used for production signoff.
+
+Clean post-read-only-validation run `rfix10`:
+
+| Case | Module Id | Queue Status | Static Validation | Browser Smoke | Notes |
+| --- | --- | --- | --- | --- | --- |
+| Projects | `bench_projects_rfix10` | handled | green | green | Correctly loads `index.html` into `ctx.host`, exposes `create-project`, opens a dialog/form/save flow. |
+| Inventory | `bench_inventory_rfix10` | handled | green | red | Browser smoke found no visible primary create action. Source clears `ctx.host` and assumes the shell already loaded `index.html`. The direct agent session hit the 1800s limit, then CTOX validation accepted the repaired artifacts. |
+| Subscriptions | `bench_subscriptions_rfix10` | handled | green | red | Browser smoke found no visible primary create action. `index.html` contains Create UI, but `mount(ctx)` never renders it into `ctx.host`. |
+| Quality | `bench_quality_rfix10` | handled | green | red | Browser smoke found no visible primary create action. `index.html` contains Create UI, but `mount(ctx)` never renders it into `ctx.host`. |
+| Contracts | `bench_contracts_rfix10` | handled after rework | green | red | First attempt was missing required files, same-task rework repaired static artifacts. Browser smoke found no visible primary create action because `mount(ctx)` never renders `index.html` into `ctx.host`. |
+
+`rfix10` proves durable CTOX creation, queue serialization, read-only
+validation, and installed static validation. It is not production signoff
+because browser smoke is red for 4/5 apps.
 
 ## Failure Classification
 
@@ -517,17 +561,22 @@ Use this before marking any generated app green:
 
 ## Next Actions
 
-1. Commit, push, and install the read-only validation fix exposed by `rfix9`.
-2. Ignore `rfix9` for production signoff because the installed CLI already
-   contaminated it.
-3. Start fresh five-app bench run `rfix10` after install.
-4. Require installed validation plus browser smoke for each fresh app.
-5. Run full browser E2E only after the smoke gate is green for all five apps.
+1. Commit and push the runtime `index.html` render-contract skill/resource and
+   validator fix.
+2. Install it through `ctox upgrade --dev`.
+3. Verify the installed validator rejects the known-bad `rfix10` apps and still
+   passes `bench_projects_rfix10`, unless a fresh bench cleanup has removed the
+   old artifacts.
+4. Start fresh five-app bench run `rfix11` through real CTOX app-create tasks.
+5. Require installed validation plus `ctox business-os app smoke --installed`
+   for each fresh app before any production-readiness claim.
 6. Do not hand-edit generated app artifacts.
 7. If browser smoke or E2E is red, classify each failure before patching.
-8. After browser E2E is green, verify entry paths: Chat, App Creator, App
+8. After browser smoke is green for all five apps, run full browser E2E for
+   create/edit, reload persistence, native DB sync, and automation dispatch.
+9. After browser E2E is green, verify entry paths: Chat, App Creator, App
    Store/template flow, CLI, and inbound/MCP.
-9. Audit app versioning enforcement and list or patch the missing pieces.
+10. Audit app versioning enforcement and list or patch the missing pieces.
 
 ## Evidence Log
 
@@ -762,19 +811,66 @@ Use this before marking any generated app green:
   `cargo test --bin ctox app_validate_success_does_not_finalize_matching_leased_creator_task -- --nocapture`,
   `cargo test --bin ctox app_bench_run_submits_real_tasks_without_writing_app_artifacts -- --nocapture`,
   and `rustfmt --check src/core/service/business_os.rs`.
+- `2026-06-21`: commit `0d0980e8` (`Make Business OS app validation
+  read-only`) was pushed to `main` and installed through `ctox upgrade --dev`
+  as
+  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T110239Z`.
+- `2026-06-21`: clean run `rfix10` submitted five real app-create tasks with
+  `creates_app_files=false`, `repairs_app_files=false`,
+  `submits_real_business_commands=true`, and runtime install targets. Task ids:
+  Subscriptions `queue:system::6e72dcba71e74168520908c0`, Inventory
+  `queue:system::2dd5af10f49497245156a5d5`, Projects
+  `queue:system::2468c793b037f744ba8d8609`, Contracts
+  `queue:system::f3b854a977627e69d97dbe87`, and Quality
+  `queue:system::7d66db45e787489fec35f36e`.
+- `2026-06-21`: `rfix10` terminal static status
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix10/status-1782045591482.json`
+  shows `bench_green=true`, `handled=5`, `leased=0`,
+  `validation_passed=5`, `validation_failed=0`, `artifact_dirs_present=5`,
+  and no missing required files.
+- `2026-06-21`: `rfix10` browser smoke passed for Projects and failed for
+  Inventory, Subscriptions, Quality, and Contracts with
+  `no visible primary create action found under module root`. Evidence:
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix10/browser-smoke-bench_projects_rfix10.json`,
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix10/browser-smoke-bench_inventory_rfix10.json`,
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix10/browser-smoke-bench_subscriptions_rfix10.json`,
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix10/browser-smoke-bench_quality_rfix10.json`,
+  and
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix10/browser-smoke-bench_contracts_rfix10.json`.
+- `2026-06-21`: source inspection of `rfix10` generated apps found the repeated
+  runtime mount defect: four apps wrote a valid static `index.html` with a
+  Create/New/Add affordance, but `mount(ctx)` never loaded that fragment into
+  `ctx.host`. Projects loaded the fragment and passed smoke. Classification:
+  `skill_resource_gap` plus `validator_gap`.
+- `2026-06-21`: local source patch updates
+  `module_static_check.mjs` and the app-module skill resources so installed
+  runtime apps must render their primary UI into `ctx.host`. Verification
+  passed:
+  `node src/apps/business-os/scripts/validate-app-module.test.mjs`,
+  `node --check src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs`,
+  `node --check src/apps/business-os/scripts/validate-app-module.test.mjs`,
+  and source-validator checks against all five `rfix10` modules. The new local
+  validator rejects the four browser-smoke-red apps and passes Projects.
 
 ## Open Issues
 
+- `rfix10` proves CTOX-native app creation and installed static validation, but
+  browser smoke is red for 4/5 apps because generated apps assumed
+  shell-preloaded `index.html`. The local validator/resource fix is tested but
+  still needs commit, push, install, and fresh `rfix11` proof.
 - The five-app static gate has been green in earlier runs, but browser E2E for
   `rfix7` was red due to repeated dead Create/New flows. A clean fresh run must
-  prove the smoke and browser gates after the current lifecycle fix.
+  prove the smoke and browser gates after the current validator/resource fix.
 - `rfix8` found app queue overlap after the throughput fix. The queue
   serialization source fix is committed, pushed, installed, and `rfix8` drained
   green, but the run is forensic-only because it contains pre-fix overlap.
 - `rfix9` cannot be the production signoff run because installed
   `ctox business-os app validate` prematurely finalized a live leased Projects
-  task. The local source fix makes validation read-only; it still needs commit,
-  push, install, and fresh `rfix10` proof.
+  task. The source fix is committed, pushed, installed, and superseded by
+  clean `rfix10` static proof.
+- Inventory `rfix10` needed a same-task timeout/recovery path before terminal
+  success. Static artifacts became valid, but throughput/turn-finish behavior
+  should be watched in `rfix11`.
 - Entry-point proof across Chat, App Creator, App Store/template flow, CLI, and
   inbound/MCP is still pending.
 - App versioning policy must be audited and either enforced or listed as missing

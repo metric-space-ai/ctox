@@ -428,6 +428,48 @@ function hasPrimaryCreateAffordance(html, indexJs) {
     || /\bopen(?:Form|Modal)\s*\(\s*['"`](?:add|new|create|record|primary)/i.test(indexJs);
 }
 
+function nonEmptyHostHtmlAssignmentExists(indexJs) {
+  const source = stripJsComments(indexJs);
+  const pattern = /\b(?:ctx\.)?host\s*\.\s*innerHTML\s*=\s*([^;\n]+)/g;
+  for (const match of source.matchAll(pattern)) {
+    const rhs = String(match[1] || '').trim();
+    if (!/^(['"`])\s*\1$/.test(rhs)) return true;
+  }
+  return false;
+}
+
+function writesToHostDom(indexJs) {
+  const source = stripJsComments(indexJs);
+  return nonEmptyHostHtmlAssignmentExists(indexJs)
+    || /\b(?:ctx\.)?host\s*\.\s*insertAdjacentHTML\s*\(/.test(source)
+    || /\b(?:ctx\.)?host\s*\.\s*replaceChildren\s*\(/.test(source)
+    || /\b(?:ctx\.)?host\s*\.\s*append(?:Child)?\s*\(/.test(source);
+}
+
+function fetchesOwnIndexHtml(indexJs) {
+  const source = stripJsComments(indexJs);
+  return /\bfetch\s*\(\s*new\s+URL\s*\(\s*['"]\.\/index\.html['"]\s*,\s*import\.meta\.url\s*\)/.test(source)
+    || /\bfetch\s*\(\s*['"]\.\/index\.html['"]/.test(source);
+}
+
+function rendersPrimaryCreateMarkupInHost(indexJs) {
+  const source = stripJsComments(indexJs);
+  const primaryCreateAction = String.raw`data-[a-z0-9-]*action\s*=\s*['"](?:add|new|create)(?:[-_:][^'"]*)?['"]`;
+  const hostHtmlWrite = String.raw`\b(?:ctx\.)?host\s*\.\s*(?:innerHTML|insertAdjacentHTML)\b`;
+  return new RegExp(String.raw`${hostHtmlWrite}[\s\S]{0,3000}${primaryCreateAction}`, 'i').test(source);
+}
+
+function collectInstalledMountMarkupFailures(indexHtml, indexJs) {
+  if (!hasPrimaryCreateAffordance(indexHtml, indexJs)) return [];
+  if ((fetchesOwnIndexHtml(indexJs) && writesToHostDom(indexJs))
+    || rendersPrimaryCreateMarkupInHost(indexJs)) {
+    return [];
+  }
+  return [
+    'installed module mount(ctx) must load index.html into ctx.host or render an equivalent primary create UI; the Business OS shell does not preload runtime module index.html',
+  ];
+}
+
 function collectHiddenModalClasses(html) {
   const classes = new Set();
   const tagPattern = /<[^>]*\bhidden\b[^>]*\bclass\s*=\s*(['"])([^'"]+)\1[^>]*>|<[^>]*\bclass\s*=\s*(['"])([^'"]+)\3[^>]*\bhidden\b[^>]*>/gi;
@@ -843,6 +885,7 @@ if (installedMode) {
   if (!hasPrimaryCreateAffordance(indexHtml, indexJs)) {
     fail('installed module must expose a primary create action for its main business record');
   }
+  for (const message of collectInstalledMountMarkupFailures(indexHtml, indexJs)) fail(message);
   if (hasFormSubmitHandler(indexJs) && !hasVisibleSubmitOrSaveControl(runtimeText)) {
     fail('installed module wires a form submit handler but renders no visible submit/save control for the form');
   }

@@ -6,7 +6,9 @@ Use this before claiming a Business OS app is done.
 - Three relevant shipped Business OS apps were chosen and inspected.
 - The app is vanilla HTML/CSS/browser ESM with no build step.
 - `index.js` exports `mount(ctx)`.
-- `mount(ctx)` renders the HTML fragment into `ctx.host`.
+- `mount(ctx)` loads `index.html` into `ctx.host` or renders an equivalent
+  primary UI into `ctx.host`; it does not assume the shell preloaded the
+  fragment.
 - `index.css` is loaded by the module or otherwise available through the app contract.
 - App records use declared module collections through
   `ctx.db.collection('<declared-collection-name>')`.
