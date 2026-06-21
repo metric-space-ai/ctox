@@ -44,7 +44,7 @@ Installed CTOX:
 - Last source head checked before this plan edit:
   `15a31429 Clarify app creation plan source head`
 - Active install:
-  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T055246Z`
+  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T062812Z`
 - Install path: applied through `ctox upgrade --dev`
 - State root:
   `/Users/michaelwelsch/.local/state/ctox`
@@ -53,7 +53,7 @@ Installed CTOX:
   which resolves into the managed runtime/state root. Runtime apps must not be
   written into source paths.
 - CTOX status at latest check: `running=true`, `busy=true`,
-  `worker_active_count=1`, `pending_count=2`
+  `worker_active_count=1`, `pending_count=1`
 - Business OS status at latest check: `ok=true`, native RxDB peer
   `replicationUp=true`, `http_bridge_available=false`
 
@@ -67,7 +67,7 @@ Current proof run:
 - Evidence dir:
   `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7`
 - Latest status snapshot:
-  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7/status-1782022239634.json`
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7/status-1782024140977.json`
 
 Latest result:
 
@@ -83,20 +83,39 @@ Latest result:
   `business-os:requeued-unstarted-app: app target missing or empty`. Classify
   this incident as `runtime_orchestration_gap` evidence unless later source
   inspection proves a narrower lifecycle cause.
-- Contracts is still `pending`.
-- Subscriptions is still `pending`.
+- Contracts reached `handled` with installed validation green and 32/32 module
+  tests passing after the service restart.
+- Subscriptions is currently `leased` and running. The module directory is not
+  present yet.
 - No generated `rfix7` app files may be patched by hand.
 
-Latest source fix:
+Latest source fix under test:
 
-- Skill/resources and installed-module validation now require canonical
-  collection access through `ctx.db.collection('<declared-collection-name>')`.
+- Forensic sample:
+  `/tmp/ctox-real_2026-06-21_082121_SuRk.sample.txt`.
+- Classification: `runtime_orchestration_gap`, not app-model failure. Status
+  IPC, channel routing, app recovery, and work-hours dispatch were all waiting
+  on the same service `SharedState` mutex while the prompt worker was inside
+  `sync_workspace_root_to_business_os`.
+- Patch in `src/core/service/service.rs`: release `SharedState` before slow
+  Business OS workspace-file sync, then reacquire it only to record resulting
+  events.
+- Verification runs:
+  `cargo test --bin ctox status_snapshot_recovery_requeues_missing_app_target_without_prefetch -- --nocapture`
+  and
+  `cargo test --bin ctox completion_hook_indexes_workspace_outputs_for_business_os -- --nocapture`.
+- Not installed yet in the active release. The `branch-main-20260621T062812Z`
+  upgrade was built from already-pushed `main`, not this local uncommitted
+  patch. Commit and push the patch, then apply it with `ctox upgrade --dev`.
+
+Previous source fix:
+
+- Skill/resources and installed-module validation require canonical collection
+  access through `ctx.db.collection('<declared-collection-name>')`.
 - Validation rejects `ctx.db[name]`, `ctx.db.collections`, direct
-  `ctx.db.<collection>` property access, cached DB facade handles, and
-  app-side `ctx.db.registerSchemas`.
-- Verification before commit: `node src/apps/business-os/scripts/validate-app-module.test.mjs`
-  and `git diff --check`.
-- Installed validator proof: the old `bench_inventory_rfix6` artifact is now
+  `ctx.db.<collection>` property access, cached DB facade handles, and app-side
+  `ctx.db.registerSchemas`.
+- Installed validator proof: the old `bench_inventory_rfix6` artifact is
   rejected by installed `ctox business-os app validate`.
 
 Latest local regression guard:
@@ -105,8 +124,9 @@ Latest local regression guard:
   snapshot recovery of a leased app task whose target directory is missing.
 - Verification run:
   `cargo test --bin ctox status_snapshot_recovery_requeues_missing_app_target_without_prefetch -- --nocapture`.
-- This source change must be committed separately from generated app evidence
-  and installed through `ctox upgrade --dev` before production signoff.
+- This source change and the worker-finalization sync-lock fix must be
+  committed separately from generated app evidence and installed through
+  `ctox upgrade --dev` before production signoff.
 
 ## Non-Negotiables
 
@@ -177,9 +197,9 @@ App creation is production-ready only when every gate is green.
 | 0. Remove deterministic builder | done | Codex | App creation uses durable tasks and agent implementation, not deterministic generated source. | Earlier deterministic builder artifacts removed; bench runner submits real app-create tasks. |
 | 1. Simplify skill/resources | in_progress | Codex | Skill/resources are English, concise, reference/resource based, avoid prompt walls, and state CTOX DB/command patterns without legacy fallbacks. | Latest resources patched in `89c2a75d`; needs fresh run proof. |
 | 2. Build CTOX-native bench | done | Codex | Bench submits real app-create tasks and records evidence without creating or repairing app files. | `ctox business-os app bench run/status`; run dirs under `runtime/business-os/app-creation-bench/`. |
-| 3. Close lifecycle/orchestration gaps | in_progress | Codex | Queue, validation, launchd/dev-upgrade, module catalog, and native peer lifecycle work without manual service recovery. | Latest installed release `branch-main-20260621T055246Z`; CTOX/Business OS healthy; boot recovery requeued the stale Subscriptions lease, but non-restart recovery still needs evidence. |
+| 3. Close lifecycle/orchestration gaps | in_progress | Codex | Queue, validation, launchd/dev-upgrade, module catalog, and native peer lifecycle work without manual service recovery. | Latest installed release `branch-main-20260621T062812Z`; forensic sample showed worker-finalization workspace sync holding `SharedState` and blocking router/recovery/status; local patch and two targeted tests are green, but the patch is not installed yet because the upgrade was built before this commit. |
 | 4. Close validator/resource gaps | in_progress | Codex | Validator rejects predictable bad app artifacts before browser E2E finds them, without blocking valid vanilla apps. | `89c2a75d`; old `rfix6` artifacts are rejected by installed validation. |
-| 5. Fresh five-app CTOX proof | in_progress | Codex | One fresh post-validator run reaches terminal queue success and installed validation green for five apps. | `rfix7` running; Inventory, Projects, and Quality handled/green; Subscriptions and Contracts pending. |
+| 5. Fresh five-app CTOX proof | in_progress | Codex | One fresh post-validator run reaches terminal queue success and installed validation green for five apps. | `rfix7` running; Inventory, Projects, Contracts, and Quality handled/green; Subscriptions leased/running. |
 | 6. Browser proof | pending | Codex | Browser mount, UI persistence, reload persistence, native sync, and automation smoke pass for all five fresh apps. | Wait for `rfix7` terminal static result. |
 | 7. Entry-point proof | pending | Codex | Every user-facing app creation/modification path uses the same skill/resource context and runtime app contract. | Not done. |
 | 8. Versioning proof | pending | Codex | App version visibility and major-version independence are either implemented or listed as missing work. | Not done. |
@@ -243,8 +263,19 @@ Immediate checklist:
   requeue the stale Subscriptions task.
 - [x] Quality `rfix7` reached terminal queue success with installed validation
   green after same-task repair.
-- [ ] Prove pending Subscriptions and Contracts continue without manual
-  artifact edits.
+- [x] Capture process sample proving the service loops were blocked on
+  `SharedState` while the worker was in Business OS workspace sync:
+  `/tmp/ctox-real_2026-06-21_082121_SuRk.sample.txt`.
+- [x] Patch worker finalization so Business OS workspace sync runs outside the
+  `SharedState` lock.
+- [x] Run targeted source tests for missing-target recovery and workspace sync.
+- [x] Verify service status is responsive after the restart.
+- [x] Prove Contracts continues without manual artifact edits and reaches
+  installed validation green.
+- [ ] Commit and push the worker-finalization sync-lock fix to `main`.
+- [ ] Install the worker-finalization sync-lock fix through `ctox upgrade --dev`
+  after it is on `main`.
+- [ ] Prove Subscriptions continues without manual artifact edits.
 - [ ] Wait for all five `rfix7` tasks to reach terminal state.
 - [ ] Run installed validation for each `rfix7` app after terminal state.
 - [ ] Update Bench Matrix with terminal `rfix7` static results.
@@ -273,10 +304,10 @@ Active run `rfix7`:
 
 | Case | Module Id | Queue Status | Static Validation | Browser Mount | Browser E2E | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| Subscriptions | `bench_subscriptions_rfix7` | pending | skipped | pending | pending | Requeued by boot recovery after stale lease with no module dir; continue through normal queue execution. |
+| Subscriptions | `bench_subscriptions_rfix7` | leased | skipped | pending | pending | Running after restart; module dir not present yet. |
 | Inventory | `bench_inventory_rfix7` | handled | green | pending | pending | Installed validation green; 26/26 module tests passed. |
 | Projects | `bench_projects_rfix7` | handled | green | pending | pending | Installed validation green; 30/30 module tests passed. |
-| Contracts | `bench_contracts_rfix7` | pending | skipped | pending | pending | Await queue execution. |
+| Contracts | `bench_contracts_rfix7` | handled | green | pending | pending | Installed validation green; 32/32 module tests passed. |
 | Quality | `bench_quality_rfix7` | handled | green | pending | pending | Installed validation green after same-task repair; 10/10 module tests passed. |
 
 Only the latest fresh post-fix run may be used for production signoff.
@@ -369,27 +400,30 @@ Use this before marking any generated app green:
 
 ## Next Actions
 
-1. Continue monitoring `rfix7` until Subscriptions and Contracts either run or
+1. Install the worker-finalization sync-lock fix through `ctox upgrade --dev`.
+2. Verify CTOX status responds and Business OS remains healthy after the
+   install.
+3. Continue monitoring `rfix7` until Subscriptions and Contracts either run or
    expose a fresh queue/lifecycle failure.
-2. Do not hand-edit `bench_subscriptions_rfix7` or
+4. Do not hand-edit `bench_subscriptions_rfix7` or
    `bench_contracts_rfix7` artifacts.
-3. If pending tasks do not lease while CTOX is idle, inspect and patch the
+5. If pending tasks do not lease while CTOX is idle, inspect and patch the
    app-task dispatch/recovery path, verify locally, install with
    `ctox upgrade --dev`, and record the evidence here.
-4. Record terminal static validation in Bench Matrix and Evidence Log.
-5. If `rfix7` is static green, run browser E2E for all five fresh apps.
-6. If `rfix7` is static red, classify each failure before patching.
-7. For validator false positives, simplify the validator instead of adding
+6. Record terminal static validation in Bench Matrix and Evidence Log.
+7. If `rfix7` is static green, run browser E2E for all five fresh apps.
+8. If `rfix7` is static red, classify each failure before patching.
+9. For validator false positives, simplify the validator instead of adding
    arbitrary rule layers.
-8. For repeated generated-app architecture mistakes, update concise skill
+10. For repeated generated-app architecture mistakes, update concise skill
    resources, not long prompts.
-9. For valid app output blocked by CTOX behavior, patch runtime/lifecycle/data
+11. For valid app output blocked by CTOX behavior, patch runtime/lifecycle/data
    plane source and install through `ctox upgrade --dev`.
-10. Do not hand-edit generated app artifacts.
-11. After static and browser E2E are green, verify entry paths: Chat, App
+12. Do not hand-edit generated app artifacts.
+13. After static and browser E2E are green, verify entry paths: Chat, App
    Creator, App Store/template flow, CLI, and inbound/MCP.
-12. Audit app versioning enforcement and list or patch the missing pieces.
-13. Update this file after every material bench result and before handoff.
+14. Audit app versioning enforcement and list or patch the missing pieces.
+15. Update this file after every material bench result and before handoff.
 
 ## Evidence Log
 
@@ -455,15 +489,38 @@ Use this before marking any generated app green:
   `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7/status-1782022224137.json`
   shows Inventory, Projects, and Quality handled with installed validation
   green; Subscriptions and Contracts pending.
+- `2026-06-21`: process sample
+  `/tmp/ctox-real_2026-06-21_082121_SuRk.sample.txt` showed status IPC,
+  channel router, app recovery, and work-hours dispatcher all blocked on the
+  service `SharedState` mutex while the active prompt worker was inside
+  `sync_workspace_root_to_business_os`. Classified as
+  `runtime_orchestration_gap`.
+- `2026-06-21`: source patch moved Business OS workspace-file sync out of the
+  locked worker-finalization section in `src/core/service/service.rs`. Local
+  checks passed:
+  `cargo test --bin ctox status_snapshot_recovery_requeues_missing_app_target_without_prefetch -- --nocapture`
+  and
+  `cargo test --bin ctox completion_hook_indexes_workspace_outputs_for_business_os -- --nocapture`.
+- `2026-06-21`: `ctox upgrade --dev` installed
+  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T062812Z`
+  and restarted CTOX successfully, but the installed release did not include
+  the uncommitted local sync-lock patch. It did prove the service became
+  responsive again and let `bench_contracts_rfix7` finish with installed
+  validation green.
+- `2026-06-21`: `rfix7` status snapshot
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix7/status-1782024140977.json`
+  shows Inventory, Projects, Contracts, and Quality handled with installed
+  validation green; Subscriptions leased/running.
 
 ## Open Issues
 
 - `rfix7` is still running. Do not mark the five-app proof green until all five
   tasks have terminal status and installed validation is green.
+- The worker-finalization sync-lock source fix is locally tested but not yet
+  committed, pushed, or installed in the active CTOX release.
 - `bench_subscriptions_rfix7` was recovered by boot recovery, but production
   readiness still needs evidence that pending app-create tasks continue without
   a manual restart or artifact edits.
-- Contracts has not yet run.
 - Subscriptions has not yet completed after being requeued.
 - Entry-point proof across Chat, App Creator, App Store/template flow, CLI, and
   inbound/MCP is still pending.

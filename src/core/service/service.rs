@@ -4554,12 +4554,19 @@ fn start_prompt_worker(
                                 ),
                             );
                         }
-                        sync_delivered_workspace_files_to_business_os(
-                            &root,
-                            &mut shared,
-                            &delivered_artifact_refs,
-                        );
-                        sync_workspace_root_to_business_os(&root, &mut shared, &job);
+                        let sync_events = {
+                            drop(shared);
+                            let mut events = sync_delivered_workspace_files_to_business_os(
+                                &root,
+                                &delivered_artifact_refs,
+                            );
+                            events.extend(sync_workspace_root_to_business_os(&root, &job));
+                            shared = lock_shared_state(&state);
+                            events
+                        };
+                        for event in sync_events {
+                            push_event_locked(&mut shared, event);
+                        }
                         if app_validation_should_run {
                             match business_os_app_module_validation_feedback(&root, &job) {
                                 Ok(Some(feedback)) => {
@@ -8584,64 +8591,55 @@ fn delivered_outcome_artifacts_for_job(
 
 fn sync_delivered_workspace_files_to_business_os(
     root: &Path,
-    shared: &mut SharedState,
     delivered_artifact_refs: &[ArtifactRef],
-) {
+) -> Vec<String> {
+    let mut events = Vec::new();
     for artifact in delivered_artifact_refs {
         if artifact.kind != ArtifactKind::WorkspaceFile {
             continue;
         }
         let path = Path::new(&artifact.primary_key);
         match crate::business_os::sync_desktop_file_from_path(root, path) {
-            Ok(()) => push_event_locked(
-                shared,
-                format!(
-                    "Synced workspace file to Business OS desktop via native RxDB: {}",
-                    path.display()
-                ),
-            ),
-            Err(err) => push_event_locked(
-                shared,
-                format!(
-                    "Business OS desktop file sync skipped for {}: {}",
-                    path.display(),
-                    clip_text(&err.to_string(), 180)
-                ),
-            ),
+            Ok(()) => events.push(format!(
+                "Synced workspace file to Business OS desktop via native RxDB: {}",
+                path.display()
+            )),
+            Err(err) => events.push(format!(
+                "Business OS desktop file sync skipped for {}: {}",
+                path.display(),
+                clip_text(&err.to_string(), 180)
+            )),
         }
     }
+    events
 }
 
-fn sync_workspace_root_to_business_os(root: &Path, shared: &mut SharedState, job: &QueuedPrompt) {
+fn sync_workspace_root_to_business_os(root: &Path, job: &QueuedPrompt) -> Vec<String> {
     let Some(workspace_root) = job
         .workspace_root
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        return;
+        return Vec::new();
     };
     let path = Path::new(workspace_root);
     match crate::business_os::sync_desktop_files_from_workspace_root(root, path) {
         Ok(indexed) => {
             if indexed > 0 {
-                push_event_locked(
-                    shared,
-                    format!(
-                        "Synced {indexed} workspace file(s) to Business OS desktop via native RxDB: {}",
-                        path.display()
-                    ),
-                );
+                vec![format!(
+                    "Synced {indexed} workspace file(s) to Business OS desktop via native RxDB: {}",
+                    path.display()
+                )]
+            } else {
+                Vec::new()
             }
         }
-        Err(err) => push_event_locked(
-            shared,
-            format!(
-                "Business OS workspace file index skipped for {}: {}",
-                path.display(),
-                clip_text(&err.to_string(), 180)
-            ),
-        ),
+        Err(err) => vec![format!(
+            "Business OS workspace file index skipped for {}: {}",
+            path.display(),
+            clip_text(&err.to_string(), 180)
+        )],
     }
 }
 
@@ -22760,6 +22758,64 @@ Business OS command:
     }
 
     #[test]
+    fn status_snapshot_recovery_requeues_missing_app_target_without_prefetch() {
+        let root = temp_root("status-snapshot-missing-app-target-requeue");
+        let leased_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create subscriptions app".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/subscriptions".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create leased app queue task");
+        channels::lease_queue_task(&root, &leased_task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        age_queue_task_lease(
+            &root,
+            &leased_task.message_key,
+            BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS + 5,
+        );
+        let pending_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create contracts app".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/contracts".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create pending app queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        status_from_shared_state(&root, &state).expect("status snapshot failed");
+
+        let reloaded = channels::load_queue_task(&root, &leased_task.message_key)
+            .expect("load leased task")
+            .expect("leased task exists");
+        assert_eq!(reloaded.route_status, "pending");
+        assert_eq!(
+            reloaded.status_note.as_deref(),
+            Some("business-os:requeued-unstarted-app: app target missing or empty")
+        );
+        assert_eq!(
+            route_status_for(&root, &pending_task.message_key),
+            "pending"
+        );
+        let shared = lock_shared_state(&state);
+        assert!(shared.pending_prompts.is_empty());
+    }
+
+    #[test]
     fn status_snapshot_recovery_resets_stale_app_recovery_guard() {
         let root = temp_root("status-snapshot-stale-app-recovery-guard");
         let script_dir = root.join("src/apps/business-os/scripts");
@@ -29792,7 +29848,9 @@ Use shell tools and verify with `test -f {run_dir}/smoke.txt` before claiming co
         };
         let mut shared = SharedState::default();
 
-        sync_workspace_root_to_business_os(&root, &mut shared, &job);
+        for event in sync_workspace_root_to_business_os(&root, &job) {
+            push_event_locked(&mut shared, event);
+        }
 
         assert!(shared.recent_events.iter().any(|event| {
             event.contains("Synced 2 workspace file(s) to Business OS desktop via native RxDB")
