@@ -4,6 +4,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
+use std::path::PathBuf;
 
 use crate::channels;
 use crate::context_health;
@@ -447,7 +448,7 @@ pub(crate) fn render_chat_prompt(
         String::new(),
         "RECENT CONVERSATION EVIDENCE".to_string(),
     ];
-    if let Some(skill_block) = render_skill_dispatch_block(suggested_skill) {
+    if let Some(skill_block) = render_skill_dispatch_block(root, suggested_skill) {
         lines.splice(3..3, [skill_block, String::new()]);
     }
     for entry in &rendered_context.entries {
@@ -479,13 +480,76 @@ fn render_autonomy_policy_block(root: &Path) -> String {
     format!("Autonomy policy:\nlevel: {level}\npolicy: {policy}")
 }
 
-fn render_skill_dispatch_block(suggested_skill: Option<&str>) -> Option<String> {
+fn render_skill_dispatch_block(root: &Path, suggested_skill: Option<&str>) -> Option<String> {
     let skill = suggested_skill
         .map(str::trim)
         .filter(|value| !value.is_empty())?;
+    let skill_reference = render_suggested_skill_reference(root, skill);
     Some(format!(
-        "Suggested skill dispatch:\n- preferred_skill: {skill}\n- expectation: use this skill first if it matches the work; if it does not fit, say why and continue within the normal CTOX loop"
+        "Suggested skill dispatch:\n- required_skill: {skill_reference}\n- expectation: load this skill before acting; use its resources and tools as the app contract"
     ))
+}
+
+fn render_suggested_skill_reference(root: &Path, skill: &str) -> String {
+    if let Some(path) = resolve_suggested_skill_path(root, skill) {
+        format!("[${skill}]({})", path.display())
+    } else {
+        format!("${skill}")
+    }
+}
+
+fn resolve_suggested_skill_path(root: &Path, skill: &str) -> Option<PathBuf> {
+    let skills_root = root.join("src/skills");
+    let mut matches = Vec::new();
+    collect_matching_skill_paths(&skills_root, skill, &mut matches);
+    if matches.len() == 1 {
+        matches.pop()
+    } else {
+        None
+    }
+}
+
+fn collect_matching_skill_paths(dir: &Path, skill: &str, matches: &mut Vec<PathBuf>) {
+    if matches.len() > 1 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries = entries.filter_map(Result::ok).collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.path());
+    for entry in entries {
+        if matches.len() > 1 {
+            return;
+        }
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            collect_matching_skill_paths(&path, skill, matches);
+        } else if file_type.is_file()
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("SKILL.md"))
+            && skill_file_declares_name(&path, skill)
+        {
+            matches.push(path);
+        }
+    }
+}
+
+fn skill_file_declares_name(path: &Path, skill: &str) -> bool {
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    contents.lines().take(32).any(|line| {
+        let Some(value) = line.trim().strip_prefix("name:") else {
+            return false;
+        };
+        value.trim().trim_matches(['"', '\'']) == skill
+    })
 }
 
 pub(crate) fn continuity_block(label: &str, content: &str) -> String {
@@ -1974,7 +2038,56 @@ mod tests {
         );
 
         assert!(prompt.contains("Suggested skill dispatch:"));
-        assert!(prompt.contains("preferred_skill: system-onboarding"));
+        assert!(prompt.contains("required_skill: $system-onboarding"));
+        assert!(prompt.contains("load this skill before acting"));
+    }
+
+    #[test]
+    fn render_chat_prompt_links_business_os_app_skill_by_path() {
+        let root = temp_root("business-os-app-skill-dispatch");
+        let skill_dir =
+            root.join("src/skills/system/product_engineering/business-os-app-module-development");
+        std::fs::create_dir_all(&skill_dir).expect("create skill dir");
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: business-os-app-module-development\n---\n# Skill\n",
+        )
+        .expect("write skill");
+        let runtime_blocks = PromptRuntimeBlocks {
+            focus: "Focus:\n- build app".to_string(),
+            anchors: "Anchors:\n- none".to_string(),
+            narrative: "Narrative:\n- none".to_string(),
+            verified_evidence: "Verified evidence:\nitems: []".to_string(),
+            workflow_state: "Open CTOX work that counts right now:\nqueue_items: []".to_string(),
+            strategy: "Strategy:\n- vision: not set\n- mission: not set\n- directives: none"
+                .to_string(),
+            workspace_root: None,
+        };
+        let prompt = render_chat_prompt(
+            &root,
+            &runtime_blocks,
+            &governance::GovernancePromptSnapshot::default(),
+            &context_health::ContextHealthSnapshot {
+                conversation_id: 0,
+                overall_score: 100,
+                status: context_health::ContextHealthStatus::Healthy,
+                summary: "healthy".to_string(),
+                repair_recommended: false,
+                dimensions: Vec::new(),
+                warnings: Vec::new(),
+            },
+            "build a Business OS app",
+            &RenderedContextSelection {
+                entries: vec!["user: build a Business OS app".to_string()],
+                omitted_items: 0,
+            },
+            Some("business-os-app-module-development"),
+        );
+
+        assert!(prompt.contains("required_skill: [$business-os-app-module-development]("));
+        assert!(prompt.contains(
+            "src/skills/system/product_engineering/business-os-app-module-development/SKILL.md"
+        ));
     }
 
     #[test]

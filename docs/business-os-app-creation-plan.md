@@ -42,12 +42,15 @@ Installed CTOX:
 
 - Source branch: `main`
 - Last source head checked before this plan edit:
-  `0d0980e8 Make Business OS app validation read-only`
-- Local source delta awaiting commit/install: make the static checker reject
-  runtime-installed apps whose `mount(ctx)` assumes the Business OS shell has
-  already preloaded `index.html` into `ctx.host`.
+  `1a15ed72 Require runtime apps to render module HTML`
+- Local source delta awaiting commit/install: make `suggested_skill` a real
+  skill dispatch, not advisory prose. `render_chat_prompt` now resolves the
+  bound skill name to a unique `src/skills/**/SKILL.md` path when available and
+  renders a linked skill mention. This reuses the existing harness skill-body
+  injection path instead of adding another app builder, prompt wall, or
+  validator rule.
 - Active install:
-  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T110239Z`
+  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T125644Z`
 - Install path: applied through `ctox upgrade --dev`
 - State root:
   `/Users/michaelwelsch/.local/state/ctox`
@@ -62,37 +65,32 @@ Installed CTOX:
 
 Current proof run:
 
-- Run id: `rfix10`
+- Run id: `rfix11`
 - Suite: `core-five`
 - Model: `minimax-m3`
 - Context: `256k`
 - Entry path: real `ctox.business_os.app.create` tasks through installed CTOX
 - Evidence dir:
-  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix10`
-- Latest status snapshot:
-  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix10/status-1782045591482.json`
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix11`
 
 Latest result:
 
-- `rfix10` is the first clean post-read-only-validation run. It submitted five
-  real app-create tasks, ran them serially, and reached terminal static green:
-  `bench_green=true`, `handled=5`, `leased=0`, `validation_passed=5`, and no
-  missing app artifact directories.
-- `rfix10` browser smoke is red: Projects passed, while Inventory,
-  Subscriptions, Quality, and Contracts failed with `no visible primary create
-  action found under module root`.
-- Source inspection classified the browser failure as `skill_resource_gap` plus
-  `validator_gap`: four apps had a valid static `index.html`, but `mount(ctx)`
-  did not load that fragment into `ctx.host`. Inventory even cleared
-  `ctx.host` and assumed the shell had already loaded the fragment. Runtime
-  installed apps must load their own HTML fragment or render their primary UI in
-  JS.
-- Source fix in progress: tighten the skill resources and static checker so
-  this shell-preload assumption fails before browser smoke.
-- The installed app smoke CLI is working from the managed release runtime. It
-  is a validation tool only; it does not generate, repair, or rewrite app
-  artifacts.
-- No generated `rfix8`, `rfix9`, or `rfix10` app files may be patched by hand.
+- Root cause found after the earlier validator-focused loop:
+  `suggested_skill` was rendered as `preferred_skill: <name>` in live context.
+  The forked harness only injects a skill body from structured
+  `UserInput::Skill` or explicit text mentions such as `$skill` or
+  `[$skill](/path/to/SKILL.md)`. Therefore Business OS app tasks were not
+  guaranteed to load `business-os-app-module-development` at all.
+- `rfix11` was started before this dispatch fix was installed. Treat it as
+  contaminated evidence. It may still show useful symptoms, but it cannot prove
+  production readiness.
+- The next clean proof run must be a fresh run after the skill-dispatch source
+  fix is committed, pushed, installed through `ctox upgrade --dev`, and verified
+  in the installed source.
+- The installed app smoke CLI is a validation tool only; it must not generate,
+  repair, or rewrite app artifacts.
+- No generated `rfix8`, `rfix9`, `rfix10`, or `rfix11` app files may be patched
+  by hand.
 
 Latest installed source fix:
 
@@ -252,12 +250,13 @@ App creation is production-ready only when every gate is green.
 | Gate | Status | Required Evidence |
 | --- | --- | --- |
 | Skill shape | in_progress | English, concise, resource-based, no prompt wall, requires three reference apps, clear Do/Don't list, clear green checklist, includes browser-smoke finalization. |
+| Skill dispatch | in_progress | A bound `suggested_skill` must become an exact skill-body injection through a linked `SKILL.md` or structured skill input, not a prose hint. Source fix is local; commit, install, and installed-source proof pending. |
 | Correct install location | done | Generated apps are under `runtime/business-os/installed-modules/<module-id>` and survive `ctox upgrade --dev`. |
 | CTOX-native creation | done | `rfix10` created five apps through real app-create tasks, not direct file writes, and the queue ran serially. |
 | Static validation | done | `rfix10` reached terminal queue success and installed validation green for all five apps. |
 | Browser mount | in_progress | `rfix10` Projects browser smoke is green; four apps mount without console/page errors but do not render a visible primary create action because `mount(ctx)` does not load `index.html`. |
 | Five-app browser E2E | blocked | `rfix7` browser E2E found dead Create/New flows in four apps. `rfix8` exposed queue overlap before a clean five-app browser proof could be used. |
-| Entry-point coverage | pending | Chat, App Creator, App Store/template flow, CLI, and inbound/MCP paths all attach the same app-module creation contract. |
+| Entry-point coverage | blocked | Chat, App Creator, App Store/template flow, CLI, and inbound/MCP paths are not production-proven until the bound skill is injected through the real harness skill path. |
 | Versioning contract | pending | Existing app version metadata is audited; missing enforcement is listed or patched; users see only versions `>=1.0.0`; each `x.0.0` major is independently installable with its own app icon. |
 | Install/upgrade lifecycle | in_progress | `ctox upgrade --dev` applies source fixes, preserves runtime modules, and leaves CTOX/Business OS healthy. |
 | No regressions | in_progress | Relevant Rust/JS checks and browser evidence are green after final patch. |
@@ -267,15 +266,16 @@ App creation is production-ready only when every gate is green.
 | Phase | Status | Owner | Exit Criteria | Evidence |
 | --- | --- | --- | --- | --- |
 | 0. Remove deterministic builder | done | Codex | App creation uses durable tasks and agent implementation, not deterministic generated source. | Earlier deterministic builder artifacts removed; bench runner submits real app-create tasks. |
-| 1. Simplify skill/resources | in_progress | Codex | Skill/resources are English, concise, reference/resource based, avoid prompt walls, state CTOX DB/command patterns without legacy fallbacks, and require browser-smoke proof. | Latest resources include the DOM-scope lesson, `ctox business-os app smoke`, and the runtime `mount(ctx)` HTML-loading rule exposed by `rfix10`; needs fresh run proof after install. |
+| 1. Simplify skill/resources | in_progress | Codex | Skill/resources are English, concise, reference/resource based, avoid prompt walls, state CTOX DB/command patterns without legacy fallbacks, and require browser-smoke proof. | Skill file is concise and resource-based. The remaining blocker is not more skill text; it is hard runtime dispatch into the skill body. |
 | 2. Build CTOX-native bench | done | Codex | Bench submits real app-create tasks and records evidence without creating or repairing app files. | `ctox business-os app bench run/status`; run dirs under `runtime/business-os/app-creation-bench/`. |
 | 3. Close lifecycle/orchestration gaps | in_progress | Codex | Queue, validation, launchd/dev-upgrade, module catalog, and native peer lifecycle work without manual service recovery. | `aaf4bbb8` moved workspace sync outside the `SharedState` lock. `6766b9d1` skips full workspace desktop indexing for runtime app module tasks. `85ee58d2` serializes Business OS app queue leases. `rfix9` exposed that `validate` mutates leased tasks; local source makes `validate` read-only and has focused tests green. |
-| 4. Close validator/resource gaps | in_progress | Codex | Validator/tooling rejects predictable bad app artifacts before signoff, without blocking valid vanilla apps. | `89c2a75d` rejects old DB fallbacks; `5811f9c0`/`710c3676` add and install `ctox business-os app smoke`; local source now rejects runtime apps that never render their `index.html` primary create UI into `ctx.host`. |
+| 4. Close validator/resource gaps | done | Codex | Validator/tooling rejects predictable bad app artifacts before signoff, without blocking valid vanilla apps. | `89c2a75d` rejects old DB fallbacks; `5811f9c0`/`710c3676` add and install `ctox business-os app smoke`; `1a15ed72` rejects runtime apps that never render their `index.html` primary create UI into `ctx.host`. Do not add more validator rules unless a new systemic contract gap is proven. |
 | 5. Fresh five-app CTOX proof | done | Codex | One fresh post-read-only-validate run reaches terminal queue success and installed validation green for five apps. | `rfix10` terminal static green: 5 handled, 0 leased, 5/5 installed validations green. |
 | 6. Browser proof | blocked | Codex | Browser mount, UI persistence, reload persistence, native sync, and automation smoke pass for all five fresh apps. | `rfix10` browser smoke red: Projects green; Inventory, Subscriptions, Quality, and Contracts do not render visible primary create actions because `mount(ctx)` does not load `index.html`. |
-| 7. Entry-point proof | pending | Codex | Every user-facing app creation/modification path uses the same skill/resource context and runtime app contract. | Not done. |
-| 8. Versioning proof | pending | Codex | App version visibility and major-version independence are either implemented or listed as missing work. | Not done. |
-| 9. Production signoff | pending | Codex | All production gates are green, latest source is installed, plan/docs updated, no unrelated dirty files staged. | Not done. |
+| 7. Skill dispatch proof | in_progress | Codex | Bound queue/app tasks load the exact skill body through the harness skill injector. | Local source renders linked `SKILL.md` mentions for unique suggested skills. Commit/install proof pending. |
+| 8. Entry-point proof | pending | Codex | Every user-facing app creation/modification path uses the same skill/resource context and runtime app contract. | Not done. |
+| 9. Versioning proof | pending | Codex | App version visibility and major-version independence are either implemented or listed as missing work. | Not done. |
+| 10. Production signoff | pending | Codex | All production gates are green, latest source is installed, plan/docs updated, no unrelated dirty files staged. | Not done. |
 
 Phase editing rules:
 
@@ -292,23 +292,24 @@ Phase editing rules:
 
 Owner: `Codex`
 
-Active phase: `4. Close validator/resource gaps`
+Active phase: `7. Skill dispatch proof`
 
-Current rule: patch only evidence-classified systemic gaps. Do not hand-edit
-generated app files. Before any source patch,
-classify the evidence as `model_failure`, `skill_resource_gap`,
-`validator_gap`, `runtime_orchestration_gap`, `data_plane_gap`, or
-`entry_point_gap`.
+Current rule: do not add more app-generation heuristics or deterministic
+artifact repair. The only active source change is the generic skill-dispatch
+fix that makes a bound `suggested_skill` load the actual skill body through the
+existing harness injector.
 
 Current focus:
 
-- Commit, push, and install the runtime `mount(ctx)` HTML-loading resource and
-  validator fix through `ctox upgrade --dev`.
-- Treat `rfix10` as proof that CTOX-native queueing and static validation work,
-  but not as production signoff because browser smoke is red for 4/5 apps.
-- Start fresh run `rfix11` after the validator/resource fix is installed.
-- Require both installed static validation and `ctox business-os app smoke`
-  proof for the fresh apps before returning to full five-app browser E2E.
+- Format and test the generic suggested-skill dispatch patch.
+- Commit and push the patch to `main`.
+- Install it through `ctox upgrade --dev`.
+- Verify installed source renders linked `SKILL.md` references for the Business
+  OS app skill.
+- Discard `rfix11` as production evidence because it started before hard skill
+  dispatch was installed.
+- Start the next clean five-app proof only after installed skill dispatch is
+  verified.
 
 Immediate checklist:
 
@@ -400,18 +401,27 @@ Immediate checklist:
   `index.html` loading contract.
 - [x] Verify the local validator rejects the four `rfix10` smoke-red apps and
   passes Projects.
-- [ ] Commit and push the runtime `index.html` loading validator/resource fix.
-- [ ] Install the validator/resource fix through `ctox upgrade --dev`.
-- [ ] Start fresh five-app run `rfix11`.
+- [x] Commit and push the runtime `index.html` loading validator/resource fix.
+- [x] Install the validator/resource fix through `ctox upgrade --dev`.
+- [x] Start fresh five-app run `rfix11`.
+- [x] Classify `rfix11` as contaminated because it started before bound
+  `suggested_skill` produced a real skill-body injection.
+- [x] Patch local source so `suggested_skill` renders as a linked `SKILL.md`
+  mention when the skill name resolves to exactly one local skill file.
+- [x] Format and test the suggested-skill dispatch patch.
+- [ ] Commit and push the suggested-skill dispatch patch.
+- [ ] Install the suggested-skill dispatch patch through `ctox upgrade --dev`.
+- [ ] Verify installed source contains the linked skill dispatch path.
+- [ ] Start fresh post-dispatch five-app run.
 - [ ] Require installed validation and browser smoke for each fresh app before
   returning to full browser E2E.
 
 Current slice exit criteria:
 
-- Source has a committed, pushed, and installed validator/resource fix for
-  runtime apps that fail to render their primary UI into `ctx.host`.
-- A fresh post-fix bench run reaches static validation green and browser smoke
-  green, or failures are classified with evidence before further patching.
+- Source has a committed, pushed, and installed skill-dispatch fix.
+- A bound app-create task receives the Business OS app skill through the real
+  harness skill-injection mechanism.
+- The next bench starts only after the installed dispatch proof is green.
 
 ## Bench Matrix
 
@@ -561,22 +571,23 @@ Use this before marking any generated app green:
 
 ## Next Actions
 
-1. Commit and push the runtime `index.html` render-contract skill/resource and
-   validator fix.
-2. Install it through `ctox upgrade --dev`.
-3. Verify the installed validator rejects the known-bad `rfix10` apps and still
-   passes `bench_projects_rfix10`, unless a fresh bench cleanup has removed the
-   old artifacts.
-4. Start fresh five-app bench run `rfix11` through real CTOX app-create tasks.
-5. Require installed validation plus `ctox business-os app smoke --installed`
+1. Format and test the local skill-dispatch patch.
+2. Commit and push the skill-dispatch patch.
+3. Install it through `ctox upgrade --dev`.
+4. Verify the installed source renders
+   `[$business-os-app-module-development](/.../SKILL.md)` for app-create work.
+5. Treat `rfix11` as contaminated evidence because it started before this fix.
+6. Start the next fresh five-app bench only after installed dispatch proof is
+   green.
+7. Require installed validation plus `ctox business-os app smoke --installed`
    for each fresh app before any production-readiness claim.
-6. Do not hand-edit generated app artifacts.
-7. If browser smoke or E2E is red, classify each failure before patching.
-8. After browser smoke is green for all five apps, run full browser E2E for
-   create/edit, reload persistence, native DB sync, and automation dispatch.
-9. After browser E2E is green, verify entry paths: Chat, App Creator, App
-   Store/template flow, CLI, and inbound/MCP.
-10. Audit app versioning enforcement and list or patch the missing pieces.
+8. Do not hand-edit generated app artifacts.
+9. If browser smoke or E2E is red, classify each failure before patching.
+10. After browser smoke is green for all five apps, run full browser E2E for
+    create/edit, reload persistence, native DB sync, and automation dispatch.
+11. After browser E2E is green, verify entry paths: Chat, App Creator, App
+    Store/template flow, CLI, and inbound/MCP.
+12. Audit app versioning enforcement and list or patch the missing pieces.
 
 ## Evidence Log
 
@@ -851,13 +862,31 @@ Use this before marking any generated app green:
   `node --check src/apps/business-os/scripts/validate-app-module.test.mjs`,
   and source-validator checks against all five `rfix10` modules. The new local
   validator rejects the four browser-smoke-red apps and passes Projects.
+- `2026-06-21`: source commit `1a15ed72` (`Require runtime apps to render
+  module HTML`) was pushed to `main` and installed through `ctox upgrade --dev`
+  as `branch-main-20260621T125644Z`.
+- `2026-06-21`: root-cause audit found the active skill-binding defect:
+  `render_skill_dispatch_block` emitted `preferred_skill: <name>`, while the
+  forked harness only injects skill bodies from structured `UserInput::Skill`
+  or explicit `$skill` / linked `SKILL.md` mentions. This means prior app
+  creation runs were not guaranteed to load the Business OS app skill at all.
+  Local source now resolves unique `src/skills/**/SKILL.md` paths by `name:`
+  and renders linked skill mentions.
+- `2026-06-21`: local suggested-skill dispatch verification passed:
+  `cargo test --bin ctox render_chat_prompt -- --nocapture`,
+  `cargo test --manifest-path src/core/harness/core/Cargo.toml collect_explicit_skill_mentions_prefers_resource_path -- --nocapture`,
+  `rustfmt --check src/core/context/live_context.rs`, and `git diff --check`.
 
 ## Open Issues
 
 - `rfix10` proves CTOX-native app creation and installed static validation, but
   browser smoke is red for 4/5 apps because generated apps assumed
-  shell-preloaded `index.html`. The local validator/resource fix is tested but
-  still needs commit, push, install, and fresh `rfix11` proof.
+  shell-preloaded `index.html`. The validator/resource fix is now committed,
+  pushed, and installed.
+- `rfix11` started before the bound-skill dispatch fix was installed. It is
+  contaminated and must not be used as production signoff.
+- The current local fix still needs commit, push, install, and installed-source
+  proof.
 - The five-app static gate has been green in earlier runs, but browser E2E for
   `rfix7` was red due to repeated dead Create/New flows. A clean fresh run must
   prove the smoke and browser gates after the current validator/resource fix.
