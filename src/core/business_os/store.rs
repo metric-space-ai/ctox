@@ -1775,6 +1775,49 @@ fn parse_business_app_semver_major(version: &str) -> Option<u64> {
     major.parse::<u64>().ok()
 }
 
+fn public_runtime_app_line_major(
+    conn: &Connection,
+    module_id: &str,
+    manifest: &Value,
+) -> anyhow::Result<Option<u64>> {
+    let latest_release = conn
+        .query_row(
+            "SELECT snapshot_json, manifest_json
+             FROM business_module_releases
+             WHERE module_id = ?1 AND status = 'released'
+             ORDER BY version DESC
+             LIMIT 1",
+            params![module_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    if let Some((snapshot_json, manifest_json)) = latest_release {
+        let snapshot = serde_json::from_str::<Value>(&snapshot_json).unwrap_or(Value::Null);
+        if let Some(major) = snapshot
+            .get("target_version")
+            .and_then(Value::as_str)
+            .and_then(parse_business_app_semver_major)
+            .filter(|major| *major >= 1)
+        {
+            return Ok(Some(major));
+        }
+        let release_manifest = serde_json::from_str::<Value>(&manifest_json).unwrap_or(Value::Null);
+        if let Some(major) = release_manifest
+            .get("version")
+            .and_then(Value::as_str)
+            .and_then(parse_business_app_semver_major)
+            .filter(|major| *major >= 1)
+        {
+            return Ok(Some(major));
+        }
+    }
+    Ok(manifest
+        .get("version")
+        .and_then(Value::as_str)
+        .and_then(parse_business_app_semver_major)
+        .filter(|major| *major >= 1))
+}
+
 fn is_plain_semver_number(part: &str) -> bool {
     !part.is_empty()
         && part.chars().all(|ch| ch.is_ascii_digit())
@@ -4845,10 +4888,19 @@ pub fn record_module_release(
             semver_major.is_some(),
             "target_version must be plain SemVer x.y.z"
         );
+        let target_major = semver_major.unwrap_or(0);
         anyhow::ensure!(
-            semver_major.unwrap_or(0) >= 1,
+            target_major >= 1,
             "Team release requires target_version >= 1.0.0"
         );
+        if let Some(existing_major) =
+            public_runtime_app_line_major(&conn, module_id, &manifest_value)?
+        {
+            anyhow::ensure!(
+                existing_major == target_major,
+                "major app versions require a separate Business OS app line; create a new runtime module id for {target_version} instead of releasing over this v{existing_major}.x app"
+            );
+        }
         module_release_data_access_review_summary(
             &conn,
             module_id,
@@ -40262,6 +40314,91 @@ mod tests {
                 .and_then(Value::as_str),
             Some("1.0.0")
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn module_release_rejects_in_place_public_major_line_bump() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        let app_root = root.join("src/apps/business-os");
+        fs::create_dir_all(root.join("runtime"))?;
+        let installed_app_root = resolve_business_os_installed_app_root(root);
+        write_installed_inventory_module(&installed_app_root, "0.9.0")?;
+
+        record_module_release(
+            root,
+            &app_root,
+            &chef_session(),
+            ModuleReleaseRequest {
+                module_id: "inventory".to_owned(),
+                target_version: "1.0.0".to_owned(),
+                release_channel: "team".to_owned(),
+                source_version_id: String::new(),
+                rollback_version_id: String::new(),
+                responsible_user_ids: Vec::new(),
+                data_access_review: locked_inventory_data_review(),
+                notes: "First team release".to_owned(),
+            },
+        )?;
+
+        record_module_release(
+            root,
+            &app_root,
+            &chef_session(),
+            ModuleReleaseRequest {
+                module_id: "inventory".to_owned(),
+                target_version: "1.1.0".to_owned(),
+                release_channel: "team".to_owned(),
+                source_version_id: String::new(),
+                rollback_version_id: String::new(),
+                responsible_user_ids: Vec::new(),
+                data_access_review: locked_inventory_data_review(),
+                notes: "Allowed same-major release".to_owned(),
+            },
+        )?;
+
+        let err = record_module_release(
+            root,
+            &app_root,
+            &chef_session(),
+            ModuleReleaseRequest {
+                module_id: "inventory".to_owned(),
+                target_version: "2.0.0".to_owned(),
+                release_channel: "team".to_owned(),
+                source_version_id: String::new(),
+                rollback_version_id: String::new(),
+                responsible_user_ids: Vec::new(),
+                data_access_review: locked_inventory_data_review(),
+                notes: "Must be a separate app line".to_owned(),
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("separate Business OS app line"),
+            "unexpected error: {err}"
+        );
+
+        let manifest = fs::read_to_string(
+            installed_app_root
+                .join("installed-modules")
+                .join("inventory")
+                .join("module.json"),
+        )?;
+        let manifest: Value = serde_json::from_str(&manifest)?;
+        assert_eq!(
+            manifest.get("version").and_then(Value::as_str),
+            Some("1.1.0")
+        );
+        let conn = open_store(root)?;
+        let release_rows: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_module_releases WHERE module_id = 'inventory'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(release_rows, 2);
 
         Ok(())
     }

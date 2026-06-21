@@ -39,38 +39,32 @@ Last updated: `2026-06-21`
 Overall status: `in_progress`. The core CTOX app-creation path is green for
 the clean five-app MiniMax M3 bench after real skill dispatch, including
 installed validation, browser smoke, save/reload persistence, native CTOX DB
-sync, and command-bus automation. Final production signoff still needs
-one source cleanup/install pass for entry-point coverage and a decision on
-major-version app-line enforcement.
+sync, and command-bus automation. Entry-point coverage is now installed and
+verified. Source now enforces the major-version app-line rule for releases;
+final production signoff still needs this source delta committed, installed
+through `ctox upgrade --dev`, and checked in the installed runtime.
 
 Current failure classification:
 
-- `entry_point_tool_gap`: CTOX had a green queue/app-create path and a green
-  App Creator handoff, but not every external entry point had a small typed
-  tool that submits the same real Business OS command. This gap must be fixed
-  with routing tools and evidence, not with deterministic app generators,
-  templates, schema derivation, or generated-app repair.
-- `entry_point_legacy_type`: source audit found one Matching context-action
-  metadata value still using legacy `business_os.app.modify`. The actual chat
-  submit path already uses `ctox.business_os.app.modify`; the metadata value is
-  being normalized to the canonical command type and installed through the dev
-  upgrade path.
-- `versioning_major_line_gap`: CTOX already enforces SemVer format, private
-  pre-1.0 runtime apps, Team visibility for Major >= 1, and Team release
-  `target_version >= 1.0.0`. What is not yet enforced in code is the product
-  rule that `2.0.0` and later major app lines must be independent module ids
-  with their own app icon instead of overwriting the existing production app.
+- `entry_point_tool_gap`: fixed and installed. CTOX now exposes small typed
+  create/modify entry tools that submit normal durable Business OS commands and
+  do not write app artifacts.
+- `versioning_major_line_gap`: source now rejects an in-place release that
+  would move an existing public runtime app line from Major `1+` to another
+  Major `1+` on the same module id. Same-major releases remain allowed, and
+  `0.x` to `1.0.0` remains the normal first Team release. This source fix is
+  verified locally and awaits commit/install proof.
 
 Installed CTOX:
 
 - Source branch: `main`
 - Last source head installed and checked:
-  `ab3c1308 Add Business OS app creation entry tools`
-- Local source delta awaiting commit/install: Matching legacy command-type
-  normalization plus this plan update. No app-generator, template writer,
+  `ca116f37 Normalize app modify entry point metadata`
+- Local source delta awaiting commit/install: native major app-line release
+  enforcement plus this plan update. No app-generator, template writer,
   schema/layout derivation, or generated-app repair is allowed in this delta.
 - Active install:
-  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T173949Z`
+  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T182855Z`
 - Install path: applied through `ctox upgrade --dev`
 - State root:
   `/Users/michaelwelsch/.local/state/ctox`
@@ -318,10 +312,10 @@ App creation is production-ready only when every gate is green.
 | Static validation | done | `rfix12` reached terminal queue success and installed validation green for all five apps. Status evidence: `status-1782055293408.json`. |
 | Browser mount | done | `rfix12` installed browser smoke is green for all five apps, including primary Create/New flow visibility and zero console/page/request failures. Evidence: `rfix12/browser-smoke/*.json`. |
 | Five-app browser E2E | done | `rfix12/deep-e2e/*.json` is green for all five apps. Each app creates data through the real UI, reloads with the record still visible, syncs to native CTOX DB/RxDB SQLite tables, and dispatches a record-scoped command-bus automation. |
-| Entry-point coverage | in_progress | Queue/app-create path is proven by `rfix12`. App Creator, shell context chat, App Store selected-app chat, source-module app chat, CLI, and MCP all route to `ctox.business_os.app.create/modify` with runtime install targets. Installed CLI/MCP proof is green in `branch-main-20260621T173949Z`. One Matching context-action metadata cleanup is pending commit/install. |
-| Versioning contract | in_progress | Native and browser code enforce valid SemVer, private pre-1.0 runtime apps, Team visibility for Major >= 1, and Team release `target_version >= 1.0.0`. Missing work: enforce/automate independent major app lines so `2.0.0` creates a separate module id/icon instead of overwriting an existing production line. |
-| Install/upgrade lifecycle | in_progress | `ctox upgrade --dev` applied source fixes as `branch-main-20260621T173949Z`; installed CTOX reports `running=true`, Business OS `ok=true`, native peer `replicationUp=true`, and `http_bridge_available=false`. Generated build/cache artifacts were cleaned after install. Watch the non-fatal sudo/launchctl warning separately if it becomes user-visible. |
-| No regressions | in_progress | Relevant Rust/JS checks and browser evidence are green for the latest app-creation path. Remaining regression check is the tiny Matching metadata cleanup plus plan/source install. |
+| Entry-point coverage | done | Queue/app-create path is proven by `rfix12`. App Creator, shell context chat, App Store selected-app chat, source-module app chat, CLI, MCP, and Matching context metadata all route to `ctox.business_os.app.create/modify` with runtime install targets. Installed CLI/MCP and Matching proof is green in `branch-main-20260621T182855Z`. |
+| Versioning contract | in_progress | Native and browser code enforce valid SemVer, private pre-1.0 runtime apps, Team visibility for Major >= 1, Team release `target_version >= 1.0.0`, and source now rejects in-place public Major-line bumps on the same runtime module id. Missing work: commit/install the source enforcement and verify installed runtime behavior. |
+| Install/upgrade lifecycle | in_progress | `ctox upgrade --dev` applied entry-point fixes as `branch-main-20260621T182855Z`; installed CTOX reports `running=true`, Business OS `ok=true`, native peer `replicationUp=true`, and `http_bridge_available=false`. Generated build/cache artifacts were cleaned after install. Watch the non-fatal sudo/launchctl warning separately if it becomes user-visible. |
+| No regressions | in_progress | Relevant Rust/JS checks and browser evidence are green for the latest app-creation path. Remaining regression check is install/runtime proof for the major app-line release policy. |
 
 ## Phase Tracker
 
@@ -335,8 +329,8 @@ App creation is production-ready only when every gate is green.
 | 5. Fresh five-app CTOX proof | done | Codex | One fresh post-skill-dispatch run reaches terminal queue success and installed validation green for five apps. | `rfix12`: 5 handled, 0 failed/blocked/cancelled, 5/5 installed validations green. |
 | 6. Browser proof | done | Codex | Browser mount, UI persistence, reload persistence, native sync, and automation smoke pass for all five fresh apps. | `rfix12` smoke and deep E2E are green for all five apps. Evidence: `rfix12/browser-smoke/*.json` and `rfix12/deep-e2e/*.json`. |
 | 7. Skill dispatch proof | done | Codex | Bound queue/app tasks load the exact skill body through the harness skill injector. | Commit `791d6da6` renders linked `SKILL.md` mentions for unique suggested skills; installed release `branch-main-20260621T134556Z` contains the dispatch code and the Business OS app skill file. |
-| 8. Entry-point proof | in_progress | Codex | Every user-facing app creation/modification path uses the same skill/resource context and runtime app contract. | Queue path is proven by `rfix12`; App Creator is installed and verified; CLI/MCP tools are installed and proven in `branch-main-20260621T173949Z`; source audit found only one legacy Matching metadata value pending cleanup/install. |
-| 9. Versioning proof | in_progress | Codex | App version visibility and major-version independence are either implemented or listed as missing work. | Visibility/release enforcement exists and is tested. Independent major app line enforcement is listed as missing source work. |
+| 8. Entry-point proof | done | Codex | Every user-facing app creation/modification path uses the same skill/resource context and runtime app contract. | Queue path is proven by `rfix12`; App Creator is installed and verified; CLI/MCP tools are installed and proven in `branch-main-20260621T173949Z`; Matching metadata normalization is committed, pushed, installed, and verified in `branch-main-20260621T182855Z`. |
+| 9. Versioning proof | in_progress | Codex | App version visibility and major-version independence are either implemented or listed as missing work. | Visibility/release enforcement exists and is tested. Source now rejects in-place public Major-line bumps on the same module id; commit/install proof is pending. |
 | 10. Production signoff | pending | Codex | All production gates are green, latest source is installed, plan/docs updated, no unrelated dirty files staged. | Not done. |
 
 Phase editing rules:
@@ -354,7 +348,7 @@ Phase editing rules:
 
 Owner: `Codex`
 
-Active phase: `8. Entry-point proof`
+Active phase: `9. Versioning proof`
 
 Current rule: do not add more app-generation heuristics or deterministic
 artifact repair. The next useful evidence is entry-point and versioning proof
@@ -365,14 +359,14 @@ Current focus:
 
 - Keep `rfix12` as the current clean app-creation proof.
 - Do not patch generated `rfix12` app artifacts.
-- Verify the remaining Matching metadata cleanup, then install it through
-  `ctox upgrade --dev`.
+- Commit, push, install, and verify the native major app-line release policy.
 - Keep CLI/MCP app create/modify tools routing-only. If a tool starts writing
   app files, deriving an app spec, or picking app internals, revert that design
   before testing.
 - Keep the simplified App Creator installed proof green while verifying the
   remaining entry paths.
-- Audit app versioning policy and enforce or list the exact missing pieces.
+- Keep app versioning source-side: release policy may reject invalid in-place
+  major bumps, but it must not generate, copy, or rewrite a replacement app.
 - Keep the app E2E command as a proof tool only. It must not create, rewrite,
   or repair generated app files.
 
@@ -511,15 +505,17 @@ Immediate checklist:
 - [x] Verify installed CLI and inbound/MCP tool surfaces.
 - [x] Audit Chat, App Store/template, CLI, and inbound/MCP entry points.
 - [x] Audit app versioning enforcement.
-- [ ] Commit/install Matching legacy command-type metadata cleanup.
+- [x] Commit/install Matching legacy command-type metadata cleanup.
+- [x] Add source enforcement for independent public major app lines.
+- [x] Verify source major-line enforcement with focused Rust tests.
+- [ ] Commit/install major app-line release enforcement.
 
 Current slice exit criteria:
 
 - `rfix12` remains the clean five-app creation proof.
 - User-facing entry paths prove they use the same app-module skill/resource
   contract and runtime install target as the green queue/app-create path.
-- App versioning behavior is either green or documented as concrete missing
-  implementation work.
+- App versioning behavior is green in source and installed runtime.
 - Any new failure is classified before patching. Generated app artifacts remain
   read-only for proof purposes.
 
@@ -657,16 +653,19 @@ Verified behavior:
 - App Store release dispatch requires `ctox.module.release`, valid SemVer, and
   `target_version >= 1.0.0` for Team releases.
 - Browser lifecycle helpers mirror the same plain-SemVer and visibility rules.
+- Native release policy rejects an in-place public Major-line bump on the same
+  runtime module id. Example: an existing released `1.x.y` app may release
+  `1.1.0`, but a `2.0.0` release over the same module id fails and leaves the
+  existing `1.x` manifest/release state intact. A `2.0.0` line must be built as
+  a separate app/module id through the normal app-create path.
 
 Missing source work:
 
-- Enforce or automate independent major app lines. A request to move an
-  existing production app from `1.x.y` to `2.0.0` should create a separate
-  runtime module id and icon, not overwrite the `1.x.y` production line.
-- Add a source-level test that proves the App Creator/modification path refuses
-  or reroutes an in-place major bump for an existing released app.
-- Add App Store/Creator UI affordance and copy for starting a new major line
-  from an existing app, backed by the same normal app-create command path.
+- Commit, push, install, and verify the native major-line enforcement through
+  `ctox upgrade --dev`.
+- Optional UX follow-up after the enforcement lands: make App Store/Creator
+  offer a clear "new major app line" handoff that uses the same normal
+  app-create command path. This must not become a deterministic app copier.
 
 ## Finalization Checklist For Each Generated App
 
@@ -701,17 +700,18 @@ Use this before marking any generated app green:
 
 ## Next Actions
 
-1. Do not start another app-creation bench until entry-point and versioning
-   coverage has either passed or exposed a classified blocker.
+1. Do not start another app-creation bench until the major app-line release
+   enforcement is committed, installed, and verified.
 2. Do not hand-edit generated `rfix12` app artifacts.
-3. Commit and install the Matching legacy command-type metadata cleanup through
+3. Commit and install the native major app-line release enforcement through
    `ctox upgrade --dev`.
-4. If entry-point proof is red, classify each failure before patching:
+4. If install/runtime proof is red, classify each failure before patching:
    `model_failure`, `skill_resource_gap`, `validator_gap`,
    `runtime_orchestration_gap`, `data_plane_gap`, or `entry_point_gap`.
 5. Treat the observed Projects `database is locked` event as a watch item. Patch
    runtime orchestration only if it recurs or leaves a task non-terminal.
-6. Implement or explicitly schedule independent major app-line enforcement.
+6. After install, verify `ctox version --json`, `ctox status --json`, and
+   installed source/test behavior for the major app-line policy.
 7. Push plan/source checkpoints to `main` only after meaningful evidence or a
    source change.
 
@@ -764,7 +764,19 @@ Use this before marking any generated app green:
   `node src/apps/business-os/modules/app-store/app-store.test.mjs`,
   `node src/apps/business-os/shared/app-lifecycle.test.mjs`,
   `node src/apps/business-os/shared/permissions.test.mjs`, and
-  `git diff --check` for the changed files. Commit/install proof is pending.
+  `git diff --check` for the changed files.
+- `2026-06-21`: commit `ca116f37` (`Normalize app modify entry point
+  metadata`) was pushed to `main` and installed through `ctox upgrade --dev` as
+  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T182855Z`.
+  Installed verification: `ctox version --json` reports
+  `current_release=branch-main-20260621T182855Z`; `ctox status --json` reports
+  `running=true`, Business OS `ok=true`, native peer `replicationUp=true`,
+  `http_bridge_available=false`, `pending_count=0`, and `blocked_count=0`;
+  installed source contains `ctox.business_os.app.modify` in the Matching
+  context-action metadata; `ctox business-os app create --help`,
+  `ctox business-os app modify --help`, and `ctox business-os mcp tools` expose
+  the app create/modify entry tools. Generated Cargo/build/cache output was
+  cleaned after install; retained backups are SQLite state.
 - `2026-06-21`: versioning source audit found implemented behavior in native
   and browser code: plain SemVer parsing, invalid/missing versions private,
   Major `0` runtime apps private/preview only, Major `>= 1` Team-visible unless
@@ -777,6 +789,20 @@ Use this before marking any generated app green:
   `cargo test --bin ctox module_catalog_projects_runtime_app_lifecycle_backfill -- --nocapture`,
   and
   `cargo test --bin ctox module_release_command_replay_does_not_duplicate_release_state -- --nocapture`.
+- `2026-06-21`: native versioning policy source fix added
+  `public_runtime_app_line_major` and rejects an in-place release that would
+  move an existing public runtime app from one Major `1+` line to another on the
+  same module id. This enforces the product rule that `2.0.0+` app lines are
+  separate apps/icons while keeping `0.x` to `1.0.0` and same-major releases
+  valid. Verification:
+  `cargo test --bin ctox module_release_rejects_in_place_public_major_line_bump -- --nocapture`,
+  `cargo test --bin ctox business_app_semver_major_matches_browser_plain_semver_contract -- --nocapture`,
+  `cargo test --bin ctox module_catalog_projects_release_state_data_access_and_rollback_target -- --nocapture`,
+  `cargo test --bin ctox module_release_command_replay_does_not_duplicate_release_state -- --nocapture`,
+  `node src/apps/business-os/shared/app-lifecycle.test.mjs`,
+  `node src/apps/business-os/modules/app-store/app-store.test.mjs`, and
+  `git diff --check -- src/core/business_os/store.rs docs/business-os-app-creation-plan.md`.
+  Commit/install proof is pending.
 - `2026-06-21`: App Creator source path simplified from a local
   specification/preset flow to direct `ctox.business_os.app.create` task
   creation. The Creator now accepts a plain user app request, treats module id,
@@ -1171,14 +1197,12 @@ Use this before marking any generated app green:
 
 ## Open Issues
 
-- Entry-point proof is down to one source cleanup/install item: Matching had one
-  legacy context-action metadata value, while actual app chat dispatch already
-  used the canonical command type. Commit/install the normalization and rerun
-  targeted checks.
-- App versioning visibility/release behavior is audited and partly enforced.
-  Missing implementation work remains for independent major app lines:
-  `2.0.0+` should create or route to a separate runtime module id/icon instead
-  of overwriting an existing released production app.
+- Major app-line enforcement is implemented and source-tested but not yet
+  committed, pushed, installed, or verified in the managed CTOX release.
+- Optional UX follow-up: App Store/Creator can add a clear handoff for "new
+  major app line" that submits the normal app-create command. This must stay a
+  handoff/tool path, not a deterministic app copier or generated-artifact
+  repair path.
 - `ctox upgrade --dev` currently succeeds and leaves CTOX healthy, but the
   non-fatal `sudo: a password is required` and launchctl SIGKILL warnings
   should be fixed separately if they create visible install/restart problems.
