@@ -1705,6 +1705,30 @@ resolve_source_version() {
   grep '^version' "$source_root/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/'
 }
 
+sync_business_os_shell_assets() {
+  local source_root="$1"
+  local state_root="$2"
+  local source_business_os_root="$source_root/src/apps/business-os"
+  local state_business_os_root="$state_root/business-os"
+
+  [[ -d "$source_business_os_root" ]] || return 0
+
+  mkdir -p "$state_business_os_root"
+  rsync -a --delete \
+    --exclude='/app-creation-bench/***' \
+    --exclude='/installed-modules/***' \
+    --exclude='/node_modules/***' \
+    --exclude='/notes/***' \
+    "$source_business_os_root/" "$state_business_os_root/"
+
+  if [[ -d "$source_business_os_root/installed-modules" ]]; then
+    mkdir -p "$state_business_os_root/installed-modules"
+    rsync -a --exclude='/node_modules/***' \
+      "$source_business_os_root/installed-modules/" \
+      "$state_business_os_root/installed-modules/"
+  fi
+}
+
 # ── Managed installation layout ─────────────────────────────────────────────
 setup_managed_install() {
   local source_root="$1"
@@ -1730,21 +1754,7 @@ setup_managed_install() {
   # every managed upgrade. Runtime-installed apps and local bench/evidence
   # directories are tenant state and must survive upgrades.
   local state_business_os_root="$STATE_ROOT/business-os"
-  if [[ -d "$source_root/src/apps/business-os" ]]; then
-    mkdir -p "$state_business_os_root"
-    rsync -a --delete \
-      --exclude='/app-creation-bench/***' \
-      --exclude='/installed-modules/***' \
-      --exclude='/node_modules/***' \
-      --exclude='/notes/***' \
-      "$source_root/src/apps/business-os/" "$state_business_os_root/"
-    if [[ -d "$source_root/src/apps/business-os/installed-modules" ]]; then
-      mkdir -p "$state_business_os_root/installed-modules"
-      rsync -a --exclude='/node_modules/***' \
-        "$source_root/src/apps/business-os/installed-modules/" \
-        "$state_business_os_root/installed-modules/"
-    fi
-  fi
+  sync_business_os_shell_assets "$source_root" "$STATE_ROOT"
   if [[ -d "$state_business_os_root" ]]; then
     rm -rf "$release_dir/business-os"
     ln -sfn "$state_business_os_root" "$release_dir/business-os"
@@ -2110,6 +2120,8 @@ run_rebuild() {
   STATE_ROOT="${CTOX_STATE_ROOT:-$root/runtime}"
   TOOLS_ROOT="${CTOX_TOOLS_ROOT:-$STATE_ROOT/tools}"
   DEPENDENCIES_ROOT="${CTOX_DEPENDENCIES_ROOT:-$STATE_ROOT/dependencies}"
+
+  sync_business_os_shell_assets "$root" "$STATE_ROOT"
 
   # Keep the web stack operational after source upgrades, not only after first
   # install. These are idempotent and leave existing runtime config untouched.
