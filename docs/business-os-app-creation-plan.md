@@ -41,7 +41,8 @@ Overall status: `in_progress`, not production-ready yet.
 Current CTOX installed release:
 
 - Active install: `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T035217Z`
-- Source head: `5a555f81 fix: keep business os rxdb peer open`
+- Source head: `2fe663cb Update Business OS app creation plan`
+- Installed code head: `5a555f81 fix: keep business os rxdb peer open`
 - Upgrade path: `ctox upgrade --dev` completed.
 - CTOX status after upgrade: `running=true`, `busy=false`,
   `pending_count=0`, `worker_active_count=0`.
@@ -67,9 +68,19 @@ Latest result:
 - The previous browser catalog blocker is fixed in the installed release.
   A fresh browser with `#bench_subscriptions_rfix6` mounted the generated app
   and the browser IndexedDB catalog contains the `rfix6` modules.
-- Full five-app browser E2E is still pending: each generated app must prove UI
-  create/edit, reload persistence, native CTOX DB sync, and automation command
-  dispatch.
+- Full five-app browser E2E has run but is not green:
+  Subscriptions, Contracts, and Quality passed mount, UI create, reload
+  persistence, native CTOX DB sync, and automation command dispatch.
+  Projects likely passed at the app level but the browser-smoke harness clicked
+  a hidden modal-close control and must be corrected before signoff.
+  Inventory persisted data into browser IndexedDB and native SQLite, but the
+  app UI reopened with `ITEMS 0`; this is a real generated-app/render failure
+  unless a repeat run disproves it.
+- The latest E2E exposed a systemic skill/validator gap: all five generated
+  apps use legacy collection fallback patterns such as `ctx.db[name]` or
+  `ctx.db.collections`, and installed validation still accepted them.
+  This must be fixed in skill resources and validator checks before the next
+  fresh bench run.
 - Entry-point proof is still pending: Chat, App Creator, App Store/template
   flow, CLI, and inbound/MCP paths must all attach the same app-module creation
   contract.
@@ -99,7 +110,8 @@ Do:
   `$CTOX_INSTALL_ROOT/current/runtime/business-os/installed-modules/<module-id>`.
 - Build apps as vanilla `index.html`, `index.css`, browser ESM `index.js`, and
   small browser ESM helper files when useful.
-- Persist app data only through shell-provided `ctx.db` collection handles.
+- Persist app data only through shell-provided collection handles from
+  `ctx.db.collection('<declared-collection-name>')`.
 - Dispatch automation only through `ctx.commandBus.dispatch`.
 - Use `business_os.chat.task` or another allowed Business OS command for
   app-triggered AI/ticket/chat work.
@@ -121,6 +133,8 @@ Do not:
 - Do not import upstream `rxdb`, React, Next.js, Vue, package-manager
   dependencies, or build-time frameworks.
 - Do not add HTTP data bridges or HTTP data fallbacks.
+- Do not use `ctx.db[name]`, `ctx.db.collections`, direct `ctx.db.<collection>`
+  property access, cached DB handles, or any legacy collection fallback.
 - Do not add long prompt blocks inside the skill or app creator.
 - Do not copy source-only manifest fields from built-in modules into runtime
   app manifests.
@@ -139,7 +153,7 @@ App creation is production-ready only when every gate is green.
 | CTOX-native creation | done | Five bench apps were created through real app-create tasks, not direct file writes. |
 | Static validation | done | `rfix6` snapshot `status-1782010063510.json`: handled=5, validation_passed=5, pending=0, failed=0. |
 | Browser mount | done | Post-upgrade proof `post-upgrade-catalog-mount-1782014629790.json` mounts `bench_subscriptions_rfix6` and materializes the module catalog. |
-| Five-app browser E2E | pending | All five `rfix6` apps prove UI create/edit, reload persistence, native CTOX DB sync, and automation command dispatch. |
+| Five-app browser E2E | blocked | `rfix6` has 3/5 green, one harness blocker, and one real Inventory UI/render failure. Requires skill/validator hardening and a fresh run. |
 | Entry-point coverage | pending | Chat, App Creator, App Store/template flow, CLI, and inbound/MCP paths all attach the same app-module creation contract. |
 | Versioning contract | pending | Existing app version metadata is audited; missing enforcement is listed; users see only versions `>=1.0.0`; each `x.0.0` major is independently installable with its own app icon. |
 | Install/upgrade lifecycle | in_progress | `ctox upgrade --dev` applies source fixes, preserves runtime modules, and leaves CTOX/Business OS healthy. |
@@ -150,12 +164,12 @@ App creation is production-ready only when every gate is green.
 | Phase | Status | Owner | Exit Criteria | Evidence |
 | --- | --- | --- | --- | --- |
 | 0. Remove deterministic builder | done | Codex | App creation uses durable tasks and agent implementation, not deterministic generated source. | Earlier commits `e8bec3b8`, `b142e4c8`; runtime installed path verified in bench runs. |
-| 1. Simplify skill/resources | in_progress | Codex | Skill/resources are English, concise, reference/resource based, and avoid prompt walls. | Needs final review after E2E failures are known. |
+| 1. Simplify skill/resources | in_progress | Codex | Skill/resources are English, concise, reference/resource based, avoid prompt walls, and state the CTOX DB/command patterns without legacy fallbacks. | Latest gap: `module-contract.md` still teaches legacy `ctx.db` fallbacks. |
 | 2. Build CTOX-native bench | done | Codex | Bench submits real app-create tasks and records evidence without creating or repairing app files. | `ctox business-os app bench run/status`; run dirs under `runtime/business-os/app-creation-bench/`. |
 | 3. Close lifecycle/orchestration gaps | in_progress | Codex | Queue, validation, launchd/dev-upgrade, module catalog, and native peer lifecycle work without manual service recovery. | Latest release `branch-main-20260621T035217Z`; `ctox status --json` healthy after upgrade. |
-| 4. Close validator/resource gaps | done | Codex | Validator rejects predictable bad app artifacts before browser E2E finds them. | `0dd04c31` rejects unscoped collections; `aa945a71` accepts and checks namespaced `data-*-action`. |
-| 5. Fresh five-app CTOX proof | done | Codex | One fresh post-validator run reaches terminal queue success and installed validation green for five apps. | `rfix6` snapshot `status-1782010063510.json`. |
-| 6. Browser proof | in_progress | Codex | Browser mount, UI persistence, reload persistence, native sync, and automation smoke pass for all five fresh apps. | Mount/catalog proof is green after `5a555f81`; five-app E2E is pending. |
+| 4. Close validator/resource gaps | in_progress | Codex | Validator rejects predictable bad app artifacts before browser E2E finds them. | New gap: validator accepted all five apps even though they used forbidden `ctx.db[name]` / `ctx.db.collections` fallbacks. |
+| 5. Fresh five-app CTOX proof | done | Codex | One fresh post-validator run reaches terminal queue success and installed validation green for five apps. | `rfix6` snapshot `status-1782010063510.json`; this run is no longer eligible for production signoff because static validation missed DB fallback violations. |
+| 6. Browser proof | blocked | Codex | Browser mount, UI persistence, reload persistence, native sync, and automation smoke pass for all five fresh apps. | `five-app-e2e-v3-1782016065115.json`: Subscriptions, Contracts, Quality green; Projects harness gap; Inventory UI/render gap. |
 | 7. Entry-point proof | pending | Codex | Every user-facing app creation/modification path uses the same skill/resource context and runtime app contract. | Not done. |
 | 8. Versioning proof | pending | Codex | App version visibility and major-version independence are either implemented or listed as missing work. | Not done. |
 | 9. Production signoff | pending | Codex | All production gates are green, latest source is installed, plan/docs updated, no unrelated dirty files staged. | Not done. |
@@ -175,11 +189,11 @@ Phase editing rules:
 
 Owner: `Codex`
 
-Active phase: `6. Browser proof`
+Active phase: `4. Close validator/resource gaps`
 
-Current rule: do not patch generated app artifacts. `rfix6` is the active
-post-validator bench. Static validation and browser catalog/mount are green.
-The next task is full five-app browser E2E.
+Current rule: do not patch generated app artifacts. `rfix6` supplied enough
+evidence to identify a systemic skill/validator gap, so the next proof run must
+be fresh after source validation and skill resources are hardened.
 
 Immediate checklist:
 
@@ -187,24 +201,29 @@ Immediate checklist:
 - [x] Install the fix through `ctox upgrade --dev`.
 - [x] Verify CTOX/Business OS health after upgrade.
 - [x] Verify fresh browser catalog materialization and module mount.
-- [ ] Inspect the five generated apps only to identify real UI selectors and
-  expected command dispatch paths.
-- [ ] Run browser E2E for Subscriptions.
-- [ ] Run browser E2E for Inventory.
-- [ ] Run browser E2E for Projects.
-- [ ] Run browser E2E for Contracts.
-- [ ] Run browser E2E for Quality.
-- [ ] Record every E2E result in Bench Matrix and Evidence Log.
-- [ ] Classify every failure before patching.
-- [ ] If E2E is green, move to entry-point proof.
+- [x] Run browser E2E for all five `rfix6` apps.
+- [x] Record the first pass results in Bench Matrix and Evidence Log.
+- [x] Classify the new systemic failure before patching.
+- [ ] Remove legacy DB fallback guidance from the skill resources.
+- [ ] Add validator checks that reject legacy `ctx.db` collection fallback
+  patterns.
+- [ ] Update validator tests so valid fixtures use only
+  `ctx.db.collection('<collection>')`.
+- [ ] Run the validator test suite.
+- [ ] Commit and push the skill/validator fix to `main`.
+- [ ] Install through `ctox upgrade --dev`.
+- [ ] Start a fresh five-app CTOX bench run.
+- [ ] Run the browser E2E against the fresh run.
+- [ ] If the fresh run is green, move to entry-point proof.
 
 Current slice exit criteria:
 
-- Browser E2E evidence exists for all five `rfix6` apps.
-- Each app proves mount, UI create/edit, reload persistence, native DB sync, and
-  automation command dispatch.
-- Every failure is classified as app defect, browser-smoke harness gap,
-  data-plane gap, validator gap, skill/resource gap, or entry-point gap.
+- Skill resources no longer teach legacy DB fallback access.
+- Validator rejects `ctx.db[name]`, `ctx.db.collections`, and direct
+  `ctx.db.<collection>` collection-property access.
+- Validator tests prove the forbidden patterns fail and the canonical
+  `ctx.db.collection('<collection>')` pattern passes.
+- A source fix is pushed and installed through `ctox upgrade --dev`.
 
 ## Bench Matrix
 
@@ -212,13 +231,23 @@ Active run `rfix6`:
 
 | Case | Module Id | Queue Status | Static Validation | Browser Mount | Browser E2E | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| Subscriptions | `bench_subscriptions_rfix6` | handled | green | green | pending | Post-upgrade mount proof uses this app; full UI/native/automation E2E still required. |
-| Inventory | `bench_inventory_rfix6` | handled | green | pending | pending | Generated collections are module-scoped; browser E2E still required. |
-| Projects | `bench_projects_rfix6` | handled | green | pending | pending | Browser E2E must use app-specific detail/follow-up selectors. |
-| Contracts | `bench_contracts_rfix6` | handled | green | pending | pending | Browser E2E still required. |
-| Quality | `bench_quality_rfix6` | handled | green | pending | pending | Browser E2E should allow enough native sync time. |
+| Subscriptions | `bench_subscriptions_rfix6` | handled | green but incomplete | green | green | Full E2E passed in `five-app-e2e-v3-1782016065115.json`; still invalid for production signoff because static validation missed forbidden DB fallback usage in generated source. |
+| Inventory | `bench_inventory_rfix6` | handled | green but incomplete | green | red | Native SQLite and browser IndexedDB contain the created marker, but reopened UI shows `ITEMS 0`; classify as generated app UI/render failure plus validator gap. |
+| Projects | `bench_projects_rfix6` | handled | green but incomplete | green | blocked | App displayed project and overdue milestone; smoke harness clicked hidden modal close and timed out. Requires harness correction/retry. |
+| Contracts | `bench_contracts_rfix6` | handled | green but incomplete | green | green | Full E2E passed in `five-app-e2e-v3-1782016065115.json`; still invalid for production signoff because of forbidden DB fallback usage. |
+| Quality | `bench_quality_rfix6` | handled | green but incomplete | green | green | Full E2E passed in `five-app-e2e-v3-1782016065115.json`; still invalid for production signoff because of forbidden DB fallback usage. |
 
 Only the latest fresh post-fix run may be used for production signoff.
+
+Fresh run placeholder:
+
+| Case | Module Id | Queue Status | Static Validation | Browser Mount | Browser E2E | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| Subscriptions | `TBD` | pending | pending | pending | pending | Create after validator/skill fix is installed. |
+| Inventory | `TBD` | pending | pending | pending | pending | Must prove visible row after reload, not just DB persistence. |
+| Projects | `TBD` | pending | pending | pending | pending | Browser harness must avoid hidden modal-close controls. |
+| Contracts | `TBD` | pending | pending | pending | pending | Must prove command dispatch through `ctx.commandBus.dispatch`. |
+| Quality | `TBD` | pending | pending | pending | pending | Must prove command dispatch and reload persistence. |
 
 ## Failure Classification
 
@@ -252,7 +281,7 @@ Patch policy:
 | npm/package dependency | No dependency management. Only browser ESM files shipped with the app or provided by the shell. |
 | App-owned database setup | Shell supplies `ctx.db`; app uses declared collection handles. |
 | IndexedDB/Postgres direct access | CTOX DB over WebRTC; never an HTTP bridge and never an app-owned IndexedDB wrapper. |
-| REST API write | `ctx.db.<collection>` write or `ctx.commandBus.dispatch`. |
+| REST API write | `ctx.db.collection('<collection>').<operation>` for records, or `ctx.commandBus.dispatch` for CTOX actions. |
 | Queue/task/ticket side effect | Dispatch a normal Business OS command, commonly `business_os.chat.task` or an allowed ticket command. |
 | Framework router/layout | Business OS shell mounts one module. Keep layout simple; use modals where appropriate. |
 | Source app template | Reference only. Runtime apps must adapt to runtime manifest/schema rules. |
@@ -285,6 +314,10 @@ Use this before marking any generated app green:
 - [ ] App is in the runtime installed-module directory, not `src/`.
 - [ ] `module.json`, `collections.schema.json`, and `schema.js` agree.
 - [ ] Runtime collection names are scoped to the module id.
+- [ ] All persistence code obtains collection handles only with
+  `ctx.db.collection('<declared-collection-name>')`.
+- [ ] No `ctx.db[name]`, `ctx.db.collections`, direct `ctx.db.<collection>`,
+  cached DB handle, raw IndexedDB, HTTP, or app-owned sync fallback exists.
 - [ ] Record helper outputs match declared JSON types.
 - [ ] No package manager, build step, React/Next/Vue, upstream `rxdb`, or HTTP
   data bridge.
@@ -300,16 +333,23 @@ Use this before marking any generated app green:
 
 ## Next Actions
 
-1. Run the five-app browser E2E for `rfix6`.
-2. For each app, record evidence paths and update Bench Matrix immediately.
-3. If a test fails, classify it before patching.
-4. Patch only the smallest systemic layer shown by evidence: skill resource,
+1. Patch the skill resource that still teaches `ctx.db` fallbacks.
+2. Patch installed-module validation so it rejects legacy DB fallback patterns.
+3. Update validator fixtures/tests to use only `ctx.db.collection`.
+4. Run the validator tests and the narrowest relevant static checks.
+5. Commit, push to `main`, and install through `ctox upgrade --dev`.
+6. Delete or ignore the invalid `rfix6` signoff candidate and start a fresh
+   five-app CTOX bench run.
+7. Run the five-app browser E2E against the fresh run.
+8. For each app, record evidence paths and update Bench Matrix immediately.
+9. If a test fails, classify it before patching.
+10. Patch only the smallest systemic layer shown by evidence: skill resource,
    validator, runtime/data plane, or browser-smoke harness.
-5. Do not hand-edit generated app artifacts.
-6. After five-app E2E is green, verify entry paths: Chat, App Creator,
+11. Do not hand-edit generated app artifacts.
+12. After five-app E2E is green, verify entry paths: Chat, App Creator,
    App Store/template flow, CLI, and inbound/MCP.
-7. Audit app versioning enforcement and list or patch the missing pieces.
-8. Update this file before handoff and after every material bench result.
+13. Audit app versioning enforcement and list or patch the missing pieces.
+14. Update this file before handoff and after every material bench result.
 
 ## Evidence Log
 
@@ -338,13 +378,49 @@ Use this before marking any generated app green:
   `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6/browser-smoke/post-upgrade-catalog-mount-1782014629790.json`
   shows a fresh browser mounted `bench_subscriptions_rfix6`; IndexedDB contains
   the module catalog and `rfix6` module ids.
+- `2026-06-21`: first broad five-app browser run
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6/browser-smoke/five-app-e2e-1782015257380.json`
+  was inconclusive because the browser-smoke harness clicked header-level
+  `[data-action="new"]` controls instead of app-bound controls and used fragile
+  mount waits.
+- `2026-06-21`: second five-app browser run
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6/browser-smoke/five-app-e2e-fixed-1782015638211.json`
+  proved some UI/native paths but still had harness issues around row selection,
+  one invalid Quality select value, and Projects automation setup.
+- `2026-06-21`: third five-app browser run
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6/browser-smoke/five-app-e2e-v3-1782016065115.json`
+  is the current browser evidence: Subscriptions, Contracts, and Quality are
+  green; Projects is blocked by a browser-smoke hidden-modal click; Inventory
+  is red because saved data does not render after reload.
+- `2026-06-21`: targeted Inventory reopen evidence
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6/browser-smoke/inventory-reopen-1782016530701.json`
+  shows the reopened Inventory UI still displays `ITEMS 0` and no saved marker.
+- `2026-06-21`: targeted Inventory IndexedDB evidence
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6/browser-smoke/inventory-idb-inspect-1782016709703.json`
+  shows the saved Inventory marker exists in browser IndexedDB, so the failure
+  is not simply missing browser persistence.
+- `2026-06-21`: installed source audit found forbidden legacy DB fallback usage
+  in all five generated `rfix6` apps (`ctx.db[name]`, `ctx.db.collections`, or
+  equivalent). `ctox business-os app validate bench_inventory_rfix6 --installed
+  --skip-tests` still passed, so this is both a `skill_resource_gap` and a
+  `validator_gap`.
 - `2026-06-21`: historical validator hardening: `0dd04c31` rejects unscoped
   runtime collections and `aa945a71` accepts/validates namespaced
   `data-*-action="new"` affordances.
 
 ## Open Issues
 
-- Full five-app browser E2E for `rfix6` is still pending.
+- Skill resource `module-contract.md` still teaches legacy `ctx.db` fallback
+  access. Replace it with the canonical
+  `ctx.db.collection('<collection>')` pattern only.
+- Installed app validation does not reject legacy DB fallback access. Add a
+  static check and tests.
+- `rfix6` is not eligible for production signoff because its generated apps
+  contain forbidden DB fallback patterns even where the browser flow passed.
+- Inventory `rfix6` persisted data into native SQLite and browser IndexedDB
+  but did not render it after reload.
+- Projects `rfix6` needs a corrected browser-smoke retry because current
+  failure is caused by the smoke harness clicking a hidden modal-close control.
 - Entry-point proof across Chat, App Creator, App Store/template flow, CLI, and
   inbound/MCP is still pending.
 - App versioning policy must be audited and either enforced or listed as missing
