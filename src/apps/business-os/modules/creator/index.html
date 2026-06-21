@@ -12,26 +12,9 @@
 
       <div class="creator-sidebar-body">
         <div class="form-group">
-          <label class="form-label" for="select-preset-request" data-t="presetLabel">Schnellstart-Vorlage laden</label>
-          <select id="select-preset-request" class="os-select">
-            <option value="" selected disabled data-t="presetPlaceholder">Vorlage auswählen</option>
-            <option value="standard-mgmt">Lagerverwaltung</option>
-            <option value="notes-style">Notizbuch</option>
-            <option value="kanban-style">Taskboard</option>
-            <option value="support-style">Support Desk</option>
-            <option value="time-style">Zeiterfassung</option>
-            <option value="plant-style">Pflanzen-Tracker</option>
-          </select>
-        </div>
-
-        <div class="form-group">
           <label class="form-label" for="app-request-input" data-t="requestLabel">App-Auftrag</label>
           <textarea id="app-request-input" class="os-textarea" placeholder="Beschreibe deine Anwendung. Zum Beispiel: 'Eine App zum Verwalten von IT-Geräten im Büro mit Zustand, Seriennummer...'" data-t-placeholder="requestPlaceholder"></textarea>
-          <button type="button" id="btn-apply-request" class="os-btn is-accent creator-wide-action" disabled>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
-            <span data-t="applyRequest">Spezifikation anwenden</span>
-          </button>
-          <p class="creator-spec-diagnostics" id="creator-spec-diagnostics" data-state="blocked" aria-live="polite" data-t="requestMissing">Auftrag fehlt. Beschreibe zuerst die App.</p>
+          <p class="creator-request-diagnostics" id="creator-request-diagnostics" data-state="blocked" aria-live="polite" data-t="requestMissing">Auftrag fehlt. Beschreibe zuerst die App.</p>
         </div>
 
         <!-- 3. Advanced Settings Accordion -->
@@ -48,26 +31,27 @@
             <div class="form-grid">
               <div class="form-group">
                 <label class="form-label" for="input-app-id" data-t="fieldModuleId">Modul ID (Slug)</label>
-                <input type="text" id="input-app-id" class="os-input" placeholder="z.B. lagerverwaltung" value="lagerverwaltung" required pattern="[a-z0-9\-]+">
+                <input type="text" id="input-app-id" class="os-input" placeholder="Optional, z.B. lagerverwaltung" value="" pattern="[a-z0-9\-]+">
               </div>
 
               <div class="form-group">
                 <label class="form-label" for="input-app-title" data-t="fieldTitle">Titel der App</label>
-                <input type="text" id="input-app-title" class="os-input" placeholder="z.B. Lagerverwaltung" value="Lagerverwaltung" required>
+                <input type="text" id="input-app-title" class="os-input" placeholder="Optional, z.B. Lagerverwaltung" value="">
               </div>
             </div>
 
             <div class="form-group">
               <label class="form-label" for="input-app-desc" data-t="fieldDescription">Beschreibung</label>
-              <input type="text" id="input-app-desc" class="os-input" placeholder="Kurze Beschreibung..." value="Echtzeit-Lagerverwaltung und Bestandsüberwachung mit synchronisierten Artikeltabellen." required>
+              <input type="text" id="input-app-desc" class="os-input" placeholder="Optionaler Kurztext..." value="">
             </div>
 
             <div class="form-grid">
               <div class="form-group">
                 <label class="form-label" for="select-app-category" data-t="fieldCategory">Kategorie</label>
                 <select id="select-app-category" class="os-select">
+                  <option value="" selected data-t="optionalChoice">Optional</option>
                   <option value="Productivity">Productivity</option>
-                  <option value="Management" selected>Management</option>
+                  <option value="Management">Management</option>
                   <option value="Finance">Finance</option>
                   <option value="Utilities">Utilities</option>
                   <option value="Development">Development</option>
@@ -77,8 +61,9 @@
               <div class="form-group">
                 <label class="form-label" for="select-app-layout" data-t="fieldLayout">Workspace Layout</label>
                 <select id="select-app-layout" class="os-select">
+                  <option value="" selected data-t="optionalChoice">Optional</option>
                   <option value="pane" data-t="layoutPane">Standard-Spalten (links/center/rechts)</option>
-                  <option value="full-workspace" selected data-t="layoutFull">Volle Breite (Custom Columns)</option>
+                  <option value="full-workspace" data-t="layoutFull">Volle Breite (Custom Columns)</option>
                 </select>
               </div>
             </div>

@@ -256,6 +256,12 @@ function validate(options) {
   if (!options.skipTests) {
     const testDir = join(moduleDir, 'tests');
     const testFiles = walk(testDir).filter((path) => path.endsWith('.test.mjs'));
+    if (mode === 'source' && existsSync(moduleDir)) {
+      for (const name of readdirSync(moduleDir)) {
+        const path = join(moduleDir, name);
+        if (statSync(path).isFile() && path.endsWith('.test.mjs')) testFiles.push(path);
+      }
+    }
     if (testFiles.length === 0) {
       failures.push(`missing ${rel(options.workspace, testDir)}/*.test.mjs`);
       checks.push({ name: 'module_tests', ok: false, detail: 'missing tests' });

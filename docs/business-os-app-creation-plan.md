@@ -46,11 +46,13 @@ Installed CTOX:
 
 - Source branch: `main`
 - Last source head checked before this plan edit:
-  `25fb0260 Limit app E2E form filling to visible forms`
-- Local source delta awaiting commit/install: none for the app-creation proof.
-  The skill-dispatch fix and the test-only app E2E command are committed,
-  pushed, installed, and verified in the installed source. No deterministic app
-  builder or template writer is active in the product flow.
+  `3ce18dba Update app creation E2E proof status`
+- Local source delta awaiting commit/install: App Creator simplification and
+  validator/source-module boundary cleanup are verified locally but not yet
+  committed, pushed, or installed. The current delta removes the deterministic
+  App Creator specification step, quickstart presets, and generator/harness
+  registry language. The product flow still has no deterministic app builder or
+  template writer.
 - Active install:
   `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T161830Z`
 - Install path: applied through `ctox upgrade --dev`
@@ -110,6 +112,15 @@ Latest result:
   generate, repair, or rewrite app artifacts.
 - No generated `rfix8`, `rfix9`, `rfix10`, `rfix11`, or `rfix12` app files may
   be patched by hand.
+- App Creator entry-point update in local source: the Creator now creates a
+  normal `ctox.business_os.app.create` command directly from the user's app
+  request. Technical fields are optional hints only; there is no local
+  specification derivation, preset-to-schema mapping, or layout/collection
+  guessing. Verification:
+  `node src/apps/business-os/modules/creator/creator.test.mjs`,
+  `node src/apps/business-os/scripts/validate-app-module.mjs creator --source --json`,
+  `node src/apps/business-os/scripts/validate-app-module.test.mjs`, and
+  `node --check` for the changed JS tools.
 
 Historical source fix: read-only validation:
 
@@ -276,7 +287,7 @@ App creation is production-ready only when every gate is green.
 | Static validation | done | `rfix12` reached terminal queue success and installed validation green for all five apps. Status evidence: `status-1782055293408.json`. |
 | Browser mount | done | `rfix12` installed browser smoke is green for all five apps, including primary Create/New flow visibility and zero console/page/request failures. Evidence: `rfix12/browser-smoke/*.json`. |
 | Five-app browser E2E | done | `rfix12/deep-e2e/*.json` is green for all five apps. Each app creates data through the real UI, reloads with the record still visible, syncs to native CTOX DB/RxDB SQLite tables, and dispatches a record-scoped command-bus automation. |
-| Entry-point coverage | pending | Chat, App Creator, App Store/template flow, CLI, and inbound/MCP paths are not production-proven yet. The queue/app-create path is proven by `rfix12`; the other entry paths still need evidence. |
+| Entry-point coverage | in_progress | Queue/app-create path is proven by `rfix12`. App Creator source path now creates direct app-create commands without a local spec/generator step and validates green. Chat, App Store/template flow, CLI, and inbound/MCP paths still need evidence. |
 | Versioning contract | pending | Existing app version metadata is audited; missing enforcement is listed or patched; users see only versions `>=1.0.0`; each `x.0.0` major is independently installable with its own app icon. |
 | Install/upgrade lifecycle | in_progress | `ctox upgrade --dev` applies source fixes, preserves runtime modules, and leaves CTOX/Business OS healthy. Latest installed release is `branch-main-20260621T161830Z`; latest status is healthy. Watch the non-fatal sudo/launchctl warning separately if it becomes user-visible. |
 | No regressions | in_progress | Relevant Rust/JS checks and browser evidence are green for the latest app-creation path. Entry-point coverage and versioning checks remain. |
@@ -293,7 +304,7 @@ App creation is production-ready only when every gate is green.
 | 5. Fresh five-app CTOX proof | done | Codex | One fresh post-skill-dispatch run reaches terminal queue success and installed validation green for five apps. | `rfix12`: 5 handled, 0 failed/blocked/cancelled, 5/5 installed validations green. |
 | 6. Browser proof | done | Codex | Browser mount, UI persistence, reload persistence, native sync, and automation smoke pass for all five fresh apps. | `rfix12` smoke and deep E2E are green for all five apps. Evidence: `rfix12/browser-smoke/*.json` and `rfix12/deep-e2e/*.json`. |
 | 7. Skill dispatch proof | done | Codex | Bound queue/app tasks load the exact skill body through the harness skill injector. | Commit `791d6da6` renders linked `SKILL.md` mentions for unique suggested skills; installed release `branch-main-20260621T134556Z` contains the dispatch code and the Business OS app skill file. |
-| 8. Entry-point proof | pending | Codex | Every user-facing app creation/modification path uses the same skill/resource context and runtime app contract. | Not done after `rfix12`; queue path is proven, Chat/App Creator/App Store/inbound paths still need proof. |
+| 8. Entry-point proof | in_progress | Codex | Every user-facing app creation/modification path uses the same skill/resource context and runtime app contract. | Queue path is proven by `rfix12`; App Creator source path is locally verified after removing the spec/preset generator step. Chat/App Store/CLI/inbound paths still need proof. |
 | 9. Versioning proof | pending | Codex | App version visibility and major-version independence are either implemented or listed as missing work. | Not done. |
 | 10. Production signoff | pending | Codex | All production gates are green, latest source is installed, plan/docs updated, no unrelated dirty files staged. | Not done. |
 
@@ -323,8 +334,11 @@ Current focus:
 
 - Keep `rfix12` as the current clean app-creation proof.
 - Do not patch generated `rfix12` app artifacts.
-- Verify Chat, App Creator, App Store/template, CLI, and inbound/MCP entry
+- Verify Chat, App Store/template, CLI, and inbound/MCP entry
   paths route through the same skill/resource contract and runtime app target.
+- Install and smoke the simplified App Creator path after commit. Local source
+  proof is green; installed CTOX proof is still pending until the checkpoint is
+  committed, pushed, and applied with `ctox upgrade --dev`.
 - Audit app versioning policy and enforce or list the exact missing pieces.
 - Keep the app E2E command as a proof tool only. It must not create, rewrite,
   or repair generated app files.
@@ -446,7 +460,16 @@ Immediate checklist:
   controls.
 - [x] Run installed deep E2E for all five `rfix12` apps: save, reload
   persistence, native DB/RxDB sync, and command-bus automation are green.
-- [ ] Verify Chat, App Creator, App Store/template, CLI, and inbound/MCP entry
+- [x] Remove App Creator's deterministic local specification step, quickstart
+  presets, and generator/harness registry language.
+- [x] Make App Creator submit a direct `ctox.business_os.app.create` command
+  from the user's app request, with optional metadata hints only.
+- [x] Split app validator behavior so runtime app checks stay strict while
+  internal source modules such as App Creator are not falsely treated as
+  runtime-generated user apps.
+- [ ] Install and smoke the simplified App Creator source through
+  `ctox upgrade --dev`.
+- [ ] Verify Chat, App Store/template, CLI, and inbound/MCP entry
   points route through the same skill/resource contract.
 - [ ] Audit app versioning enforcement.
 
@@ -627,19 +650,39 @@ Use this before marking any generated app green:
 1. Do not start another app-creation bench until entry-point and versioning
    coverage has either passed or exposed a classified blocker.
 2. Do not hand-edit generated `rfix12` app artifacts.
-3. Verify Chat, App Creator, App Store/template, CLI, and inbound/MCP all route
-   through the same skill/resource contract and runtime app target.
-4. If entry-point proof is red, classify each failure before patching:
+3. Commit and push the App Creator simplification/tool-boundary checkpoint,
+   then apply it with `ctox upgrade --dev`.
+4. Verify Chat, App Store/template, CLI, and inbound/MCP all route through the
+   same skill/resource contract and runtime app target.
+5. If entry-point proof is red, classify each failure before patching:
    `model_failure`, `skill_resource_gap`, `validator_gap`,
    `runtime_orchestration_gap`, `data_plane_gap`, or `entry_point_gap`.
-5. Treat the observed Projects `database is locked` event as a watch item. Patch
+6. Treat the observed Projects `database is locked` event as a watch item. Patch
    runtime orchestration only if it recurs or leaves a task non-terminal.
-6. Audit app versioning enforcement and list or patch the missing pieces.
-7. Push plan/source checkpoints to `main` only after meaningful evidence or a
+7. Audit app versioning enforcement and list or patch the missing pieces.
+8. Push plan/source checkpoints to `main` only after meaningful evidence or a
    source change.
 
 ## Evidence Log
 
+- `2026-06-21`: App Creator source path simplified from a local
+  specification/preset flow to direct `ctox.business_os.app.create` task
+  creation. The Creator now accepts a plain user app request, treats module id,
+  title, description, category, layout, and collection names as optional hints,
+  and always targets `runtime-installed-module` with
+  `business-os-app-module-development`. Verification:
+  `node src/apps/business-os/modules/creator/creator.test.mjs`.
+- `2026-06-21`: removed stale App Creator registry/module metadata that still
+  described a code-generator/harness workbench. `module.json` and
+  `registry.json` now describe app request handoff to CTOX agents.
+- `2026-06-21`: validator/tool boundary cleanup: installed runtime apps remain
+  strict, while internal source modules such as App Creator are no longer
+  falsely validated as runtime-generated user apps. Verification:
+  `node src/apps/business-os/scripts/validate-app-module.mjs creator --source --json`,
+  `node src/apps/business-os/scripts/validate-app-module.test.mjs`,
+  `node --check src/apps/business-os/scripts/validate-app-module.mjs`,
+  `node --check src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs`,
+  and `node --check src/apps/business-os/modules/creator/index.js`.
 - `2026-06-21`: clean post-dispatch five-app proof `rfix12` through installed
   CTOX, MiniMax M3, `256k`, real app-create queue tasks. Command:
   `ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k --run-id rfix12`.
@@ -987,11 +1030,10 @@ Use this before marking any generated app green:
 
 ## Open Issues
 
-- Entry-point proof across Chat, App Creator, App Store/template flow, CLI, and
-  inbound/MCP is still pending. The queue/app-create path is green; every other
-  user-facing creation/modification path must prove it attaches the same
-  app-module skill/resource contract and writes runtime apps to the installed
-  module directory.
+- Entry-point proof across Chat, App Store/template flow, CLI, and inbound/MCP
+  is still pending. The queue/app-create path is green; App Creator is locally
+  source-verified after simplification but still needs installed proof after
+  `ctox upgrade --dev`.
 - App versioning policy must be audited and either enforced or listed as
   concrete missing implementation work. Required behavior: non-developer users
   see only versions `>=1.0.0`, and each `x.0.0` major can run independently

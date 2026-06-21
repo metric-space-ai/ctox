@@ -692,11 +692,13 @@ const manifest = existsSync(join(moduleDir, 'module.json')) ? readJson(join(modu
 const schemaDoc = existsSync(join(moduleDir, 'collections.schema.json'))
   ? readJson(join(moduleDir, 'collections.schema.json'))
   : null;
+const sourceInstallScope = String(manifest?.install_scope || '').trim().toLowerCase();
+const sourceShellModuleMode = !installedMode && ['core', 'internal', 'local', 'starter'].includes(sourceInstallScope);
 
 if (manifest) {
   if (manifest.id !== moduleId) fail(`module.json id must be ${moduleId}`);
   if (manifest.entry !== expectedEntry) fail(`module.json entry must be ${expectedEntry}`);
-  if (manifest.install_scope !== expectedInstallScope) {
+  if (installedMode && manifest.install_scope !== expectedInstallScope) {
     fail(`module.json install_scope must be ${expectedInstallScope}`);
   }
   if (!Array.isArray(manifest.collections)) fail('module.json collections must be an array');
@@ -728,17 +730,17 @@ if (manifest) {
       fail('module.json store.installable must not be true for runtime-installed modules');
     }
   }
-  if (manifest.layout?.right && !manifest.layout?.third_pane_justification) {
+  if (!sourceShellModuleMode && manifest.layout?.right && !manifest.layout?.third_pane_justification) {
     fail('module.json layout.right requires layout.third_pane_justification');
   }
-  if (Object.prototype.hasOwnProperty.call(manifest.layout || {}, 'right_resizer')) {
+  if (!sourceShellModuleMode && Object.prototype.hasOwnProperty.call(manifest.layout || {}, 'right_resizer')) {
     fail('module.json layout.right_resizer is forbidden');
   }
-  if (manifest.layout?.icon_svg || manifest.icon_svg || manifest.iconSvg) {
+  if (installedMode && (manifest.layout?.icon_svg || manifest.icon_svg || manifest.iconSvg)) {
     fail('module.json inline icon fields are forbidden; keep SVG markup in icon.svg');
   }
   const manifestText = JSON.stringify(manifest);
-  if (/<\s*svg\b/i.test(manifestText)) {
+  if (installedMode && /<\s*svg\b/i.test(manifestText)) {
     fail('module.json must not embed inline SVG markup');
   }
 }
@@ -761,7 +763,7 @@ if (schemaDoc) {
 
 if (manifest && schemaDoc?.collections) {
   for (const name of Object.keys(schemaDoc.collections)) {
-    if (shellCollections.has(name)) fail(`collections.schema.json redeclares shell collection ${name}`);
+    if (!sourceShellModuleMode && shellCollections.has(name)) fail(`collections.schema.json redeclares shell collection ${name}`);
   }
   for (const name of manifest.collections || []) {
     if (!shellCollections.has(name) && !schemaDoc.collections[name]) {
@@ -776,7 +778,7 @@ if (existsSync(schemaJsPath)) {
   const schemaJs = readText(schemaJsPath);
   for (const collection of shellCollections) {
     const pattern = new RegExp(String.raw`(?:^|[,{]\s*)(?:['"]${collection}['"]|${collection})\s*:`, 'm');
-    if (pattern.test(schemaJs)) fail(`schema.js exports shell-registered collection key ${collection}`);
+    if (!sourceShellModuleMode && pattern.test(schemaJs)) fail(`schema.js exports shell-registered collection key ${collection}`);
   }
   if (installedMode && schemaDoc?.collections) {
     schemaJsCollections = await loadSchemaJsCollections(schemaJsPath);
@@ -838,7 +840,7 @@ for (const path of jsFiles) {
     if (!relativeImportExists(path, specifier)) {
       fail(`${rel(path)} relative import ${specifier} does not exist`);
     }
-    if (!specifier.startsWith('.') && !hasSegment(path, 'tests')) {
+    if (!specifier.startsWith('.') && !hasSegment(path, 'tests') && !path.endsWith('.test.mjs')) {
       fail(`${rel(path)} imports bare package ${specifier}; Business OS apps must use browser ESM local files only`);
     }
   }
@@ -908,8 +910,10 @@ const runtimeRules = [
 ];
 for (const path of runtimeFiles) {
   const text = readText(path);
-  for (const [label, regex] of runtimeRules) {
-    if (regex.test(text)) fail(`${rel(path)} contains forbidden runtime pattern: ${label}`);
+  if (!sourceShellModuleMode) {
+    for (const [label, regex] of runtimeRules) {
+      if (regex.test(text)) fail(`${rel(path)} contains forbidden runtime pattern: ${label}`);
+    }
   }
   if (installedMode && /\.(?:js|mjs)$/.test(path)) {
     for (const message of collectLegacyDbFacadeFailures(path, text)) fail(message);

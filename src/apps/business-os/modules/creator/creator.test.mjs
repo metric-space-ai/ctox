@@ -17,7 +17,8 @@ const [{ text: bundledSource }] = bundledModule.outputFiles;
 const {
   buildAppCreateCommand,
   computeCreatorActionState,
-  deriveSpecFromRequest,
+  deriveModuleIdFromRequest,
+  titleFromModuleId,
   normalizeCreatorInstalledApps,
   normalizeCreatorRequestSuggestions,
   normalizeCollectionName,
@@ -27,74 +28,53 @@ const {
   `data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`
 );
 
-test('empty request blocks specification and app creation', () => {
+test('empty request blocks app creation', () => {
   const state = computeCreatorActionState({
     request: '',
-    specRequest: '',
-    appId: 'lagerverwaltung',
-    appTitle: 'Lagerverwaltung',
-    appDesc: 'Beschreibung',
-    appCollections: ['inventory_records'],
+    appId: '',
+    appTitle: '',
+    appDesc: '',
+    appCollections: [],
   });
 
-  assert.equal(state.optimizeReady, false);
   assert.equal(state.deployReady, false);
   assert.match(state.diagnostic, /Auftrag fehlt/);
 });
 
-test('stale request blocks install until spec is applied again', () => {
-  const state = computeCreatorActionState({
-    request: 'Erstelle eine Zeiterfassung',
-    specRequest: 'Erstelle eine Lagerverwaltung',
-    appId: 'zeiterfassung',
-    appTitle: 'Zeiterfassung',
-    appDesc: 'Beschreibung',
-    appCollections: ['time_logs'],
-  });
-
-  assert.equal(state.optimizeReady, true);
-  assert.equal(state.deployReady, false);
-  assert.match(state.diagnostic, /nicht aktuell/);
-});
-
-test('fresh valid spec enables deploy', () => {
+test('plain request enables CTOX app creation without a local planning step', () => {
   const request = 'Erstelle eine App fuer Support Tickets';
   const state = computeCreatorActionState({
     request,
-    specRequest: request,
-    appId: 'supportdesk',
-    appTitle: 'Support Desk',
-    appDesc: 'Beschreibung',
-    appCollections: ['tickets', 'ticket_comments'],
+    appId: '',
+    appTitle: '',
+    appDesc: '',
+    appCollections: [],
   });
 
-  assert.equal(state.optimizeReady, true);
   assert.equal(state.deployReady, true);
   assert.equal(state.validationErrors.length, 0);
 });
 
-test('manual advanced edits keep a fresh spec but still surface validation errors', () => {
+test('manual advanced edits only add optional hints and still surface validation errors', () => {
   const request = 'Erstelle eine Support Desk App';
   const state = computeCreatorActionState({
     request,
-    specRequest: request,
     appId: 'supportdesk',
-    appTitle: '',
-    appDesc: 'Beschreibung',
-    appCollections: ['tickets'],
+    appTitle: 'x'.repeat(121),
+    appDesc: '',
+    appCollections: [],
   });
 
   assert.equal(state.deployReady, false);
-  assert.equal(state.validationErrors[0], 'Titel fehlt.');
-  assert.match(state.diagnostic, /Titel fehlt/);
+  assert.equal(state.validationErrors[0], 'Titel ist zu lang.');
+  assert.match(state.diagnostic, /Titel ist zu lang/);
 });
 
-test('request derivation normalizes ids and collections', () => {
-  const spec = deriveSpecFromRequest('Eine CRM App fuer Kunden und Kontakte');
+test('request metadata derivation only creates a neutral module id and title', () => {
+  const moduleId = deriveModuleIdFromRequest('Eine CRM App fuer Kunden und Kontakte', 1234);
 
-  assert.equal(spec.id, 'crm-kontakte');
-  assert.equal(spec.category, 'Finance');
-  assert.deepEqual(spec.collections, ['customers', 'interactions']);
+  assert.equal(moduleId, 'eine-crm-app-fuer-kunden');
+  assert.equal(titleFromModuleId(moduleId), 'Eine Crm App Fuer Kunden');
 });
 
 test('slug and collection normalization reject unsafe names', () => {
@@ -107,12 +87,7 @@ test('slug and collection normalization reject unsafe names', () => {
       appDesc: '',
       appCollections: [],
     }),
-    [
-      'Modul-ID fehlt oder ist ungültig.',
-      'Titel fehlt.',
-      'Beschreibung fehlt.',
-      'Mindestens eine Datentabelle ist erforderlich.',
-    ],
+    [],
   );
 });
 
@@ -164,4 +139,20 @@ test('creator builds an app create command instead of writing module source dire
   assert.deepEqual(command.payload.collections_hint, ['items', 'stock_events']);
   assert.equal(command.client_context.source, 'business-os-creator');
   assert.equal(command.client_context.install_target, 'runtime-installed-module');
+});
+
+test('creator command keeps app structure agent-led when only a request is provided', () => {
+  const command = buildAppCreateCommand({
+    instruction: 'Baue eine Vertragsverwaltung mit Fristen und CTOX Follow-up.',
+    now: 1234,
+  });
+
+  assert.equal(command.type, 'ctox.business_os.app.create');
+  assert.equal(command.record_id, 'baue-eine-vertragsverwaltung-mit-fristen');
+  assert.equal(command.payload.module_id, 'baue-eine-vertragsverwaltung-mit-fristen');
+  assert.equal(command.payload.instruction, 'Baue eine Vertragsverwaltung mit Fristen und CTOX Follow-up.');
+  assert.equal(command.payload.install_target, 'runtime-installed-module');
+  assert.deepEqual(command.payload.collections_hint, []);
+  assert.equal(command.payload.layout_hint, '');
+  assert.deepEqual(command.payload.required_skills, ['business-os-app-module-development']);
 });

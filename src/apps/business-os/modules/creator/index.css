@@ -345,7 +345,7 @@
   gap: 6px;
 }
 
-.creator-spec-diagnostics {
+.creator-request-diagnostics {
   margin: 8px 0 0;
   min-height: 18px;
   color: var(--muted);
@@ -353,15 +353,15 @@
   line-height: 1.4;
 }
 
-.creator-spec-diagnostics[data-state="ready"] {
+.creator-request-diagnostics[data-state="ready"] {
   color: var(--success);
 }
 
-.creator-spec-diagnostics[data-state="pending"] {
+.creator-request-diagnostics[data-state="pending"] {
   color: var(--warning);
 }
 
-.creator-spec-diagnostics[data-state="blocked"] {
+.creator-request-diagnostics[data-state="blocked"] {
   color: var(--muted);
 }
 

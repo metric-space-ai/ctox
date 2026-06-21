@@ -1,74 +1,15 @@
-import { CtoxResizer } from '../../shared/resizer.js';
 import { showBusinessConfirm } from '../../shared/dialogs.js';
-
-const PRESETS = {
-  'standard-mgmt': {
-    id: 'lagerverwaltung',
-    title: 'Lagerverwaltung',
-    desc: 'Echtzeit-Lagerverwaltung und Bestandsüberwachung mit synchronisierten Artikeltabellen.',
-    category: 'Management',
-    layout: 'full-workspace',
-    collections: ['inventory_records', 'inventory_transactions'],
-    request: 'Erstelle eine Echtzeit-Lagerverwaltung für mein Unternehmen. Ich möchte Artikel mit Bildern, Beschreibungen, Barcodes und Beständen auflisten. Es soll Buchungen für Wareneingang und Warenausgang geben, um den Bestand automatisch zu aktualisieren.'
-  },
-  'notes-style': {
-    id: 'notizen',
-    title: 'Notizen',
-    desc: 'Modernes, lokales Markdown-Notizmodul für schnelle Aufzeichnungen und Entwürfe.',
-    category: 'Productivity',
-    layout: 'full-workspace',
-    collections: ['notes_records'],
-    request: 'Erstelle ein digitales Notizbuch für mein Team. Man soll Notizen erstellen, editieren und löschen können. Die Notizen sollen Tags haben und einen integrierten Markdown-Editor für schöne Formatierungen bieten.'
-  },
-  'kanban-style': {
-    id: 'taskboard',
-    title: 'Taskboard',
-    desc: 'Kompaktes Aufgaben-Board mit verschiebbaren Tickets, Bearbeitungsstatus und Zuweisungen.',
-    category: 'Productivity',
-    layout: 'pane',
-    collections: ['board_tasks'],
-    request: 'Erstelle ein agiles Kanban-Taskboard. Es soll drei Spalten geben: \'Zu tun\', \'In Arbeit\' und \'Erledigt\'. Aufgaben sollen Titel, Prioritäten (hoch, mittel, niedrig) und Zuweisungen zu Teammitgliedern enthalten und sich verschieben lassen.'
-  },
-  'support-style': {
-    id: 'supportdesk',
-    title: 'Support Desk',
-    desc: 'Zentrales Helpdesk-System zur Bearbeitung von Kundenanfragen, Störungstickets und Feedback.',
-    category: 'Management',
-    layout: 'pane',
-    collections: ['tickets', 'ticket_comments'],
-    request: 'Erstelle ein professionelles Support-Ticket-System. Kunden sollen Tickets mit einer Beschreibung und Priorität erstellen können. Support-Mitarbeiter sollen Kommentare hinterlassen und den Status des Tickets auf Gelöst ändern.'
-  },
-  'time-style': {
-    id: 'zeiterfassung',
-    title: 'Zeiterfassung',
-    desc: 'Einfaches Tool zur Erfassung von Arbeitszeiten, Projektbudgets und Stundennachweisen.',
-    category: 'Productivity',
-    layout: 'full-workspace',
-    collections: ['time_logs', 'projects'],
-    request: 'Erstelle eine Zeiterfassungs-App für Dienstleister. Mitarbeiter sollen Zeiteinträge für Projekte erfassen, Start- und Endzeiten eintragen und eine Auswertung der geleisteten Stunden pro Projekt und Monat anzeigen.'
-  },
-  'plant-style': {
-    id: 'pflanzen-tracker',
-    title: 'Pflanzen-Tracker',
-    desc: 'Übersicht über Büropflanzen, deren Standorte und automatische Gieß-Erinnerungen.',
-    category: 'Utilities',
-    layout: 'pane',
-    collections: ['plants', 'watering_logs'],
-    request: 'Erstelle einen Pflanzen-Tracker für unsere Büropflanzen. Jede Pflanze hat einen Namen, einen Standort (z. B. Konferenzraum) und ein Gießintervall. Die App soll anzeigen, wann das nächste Gießen fällig ist und Gieß-Logs speichern.'
-  }
-};
 
 const state = {
   ctx: null,
   t: (key, fallback) => fallback ?? key,
-  appId: 'lagerverwaltung',
-  appTitle: 'Lagerverwaltung',
-  appDesc: 'Echtzeit-Lagerverwaltung und Bestandsüberwachung mit synchronisierten Artikeltabellen.',
-  appCategory: 'Management',
-  appLayout: 'full-workspace',
-  appCollections: ['inventory_records', 'inventory_transactions'],
-  appVersion: 'v1',
-  specRequest: '',
+  appId: '',
+  appTitle: '',
+  appDesc: '',
+  appCategory: '',
+  appLayout: '',
+  appCollections: [],
+  appVersion: '0.1.0',
   contextMenu: null,
   contextMenuCleanup: null,
   resizerCleanup: null,
@@ -76,7 +17,6 @@ const state = {
   commandSubscription: null,
   installedApps: [],
   creatorRequests: [],
-  isOptimizing: false,
   isDeploying: false
 };
 
@@ -98,107 +38,46 @@ export function normalizeCollectionName(value) {
     .replace(/^_|_$/g, '');
 }
 
-export function deriveSpecFromRequest(request) {
-  const cleanRequest = String(request || '').trim();
-  const lowerRequest = cleanRequest.toLowerCase();
-  let guessedTitle = 'Spezialanwendung';
-  let guessedId = 'spezialapp';
-  let guessedDesc = cleanRequest;
-  let guessedCategory = 'Management';
-  let guessedLayout = 'full-workspace';
-  let guessedCollections = ['records'];
+export function deriveModuleIdFromRequest(request, now = Date.now()) {
+  const words = String(request || '')
+    .replace(/[^\p{Letter}\p{Number}\s-]/gu, ' ')
+    .split(/\s+/)
+    .map((word) => word.trim())
+    .filter((word) => word.length > 2)
+    .slice(0, 5)
+    .join(' ');
+  const slug = normalizeModuleId(words).slice(0, 60).replace(/-+$/g, '');
+  return slug || `business-app-${now}`;
+}
 
-  if (lowerRequest.includes('pflanze') || lowerRequest.includes('blume') || lowerRequest.includes('garten') || lowerRequest.includes('botanik')) {
-    guessedTitle = 'Pflanzen-Tracker';
-    guessedId = 'pflanzen-tracker';
-    guessedDesc = 'Übersicht über Büropflanzen, deren Standorte und Gieß-Erinnerungen.';
-    guessedCategory = 'Utilities';
-    guessedLayout = 'pane';
-    guessedCollections = ['plants', 'watering_logs'];
-  } else if (lowerRequest.includes('auto') || lowerRequest.includes('fahrzeug') || lowerRequest.includes('fleet') || lowerRequest.includes('fuhrpark') || lowerRequest.includes('kfz')) {
-    guessedTitle = 'Fuhrparkverwaltung';
-    guessedId = 'fuhrpark';
-    guessedDesc = 'Fahrzeuge, Kilometerstände, TÜV-Termine und Wartungsprotokolle im Überblick.';
-    guessedCategory = 'Management';
-    guessedLayout = 'full-workspace';
-    guessedCollections = ['vehicles', 'maintenance_logs', 'refuels'];
-  } else if (lowerRequest.includes('kunde') || lowerRequest.includes('crm') || lowerRequest.includes('sales') || lowerRequest.includes('kontakt')) {
-    guessedTitle = 'Kundenverwaltung (CRM)';
-    guessedId = 'crm-kontakte';
-    guessedDesc = 'Zentrales CRM zur Verwaltung von Leads, Kontakten und Interaktionsberichten.';
-    guessedCategory = 'Finance';
-    guessedLayout = 'full-workspace';
-    guessedCollections = ['customers', 'interactions'];
-  } else if (lowerRequest.includes('ticket') || lowerRequest.includes('support') || lowerRequest.includes('helpdesk') || lowerRequest.includes('fehler')) {
-    guessedTitle = 'Support Desk';
-    guessedId = 'supportdesk';
-    guessedDesc = 'Helpdesk-System zur Bearbeitung von Kundenanfragen, Störungstickets und Fehlermeldungen.';
-    guessedCategory = 'Management';
-    guessedLayout = 'pane';
-    guessedCollections = ['tickets', 'ticket_comments'];
-  } else if (lowerRequest.includes('zeit') || lowerRequest.includes('stunde') || lowerRequest.includes('timer') || lowerRequest.includes('time')) {
-    guessedTitle = 'Zeiterfassung';
-    guessedId = 'zeiterfassung';
-    guessedDesc = 'Tool zur schnellen Erfassung von Arbeitszeiten und Projektstunden.';
-    guessedCategory = 'Productivity';
-    guessedLayout = 'full-workspace';
-    guessedCollections = ['time_logs', 'projects'];
-  } else if (lowerRequest.includes('möbel') || lowerRequest.includes('inventar') || lowerRequest.includes('office') || lowerRequest.includes('anlage') || lowerRequest.includes('lager')) {
-    guessedTitle = 'Inventarverwaltung';
-    guessedId = 'inventar';
-    guessedDesc = 'Schnelles Tracken von Büroausstattung, Mobiliar und IT-Hardware.';
-    guessedCategory = 'Management';
-    guessedLayout = 'full-workspace';
-    guessedCollections = ['inventory_items', 'audits'];
-  } else {
-    const cleanRequestStr = cleanRequest.replace(/[^a-zA-Z0-9\s]/g, '').trim();
-    const words = cleanRequestStr.split(/\s+/).filter(w => w.length > 3);
-    if (words.length > 0) {
-      guessedTitle = words[0].charAt(0).toUpperCase() + words[0].slice(1);
-      if (words[1]) guessedTitle += ` ${words[1].charAt(0).toUpperCase()}${words[1].slice(1)}`;
-      guessedId = normalizeModuleId(guessedTitle) || guessedId;
-    }
-    guessedDesc = cleanRequest.length > 100 ? `${cleanRequest.substring(0, 97)}...` : cleanRequest;
-    guessedCollections = [`${guessedId}_records`, `${guessedId}_history`];
-  }
-
-  return {
-    id: normalizeModuleId(guessedId),
-    title: guessedTitle,
-    desc: guessedDesc,
-    category: guessedCategory,
-    layout: guessedLayout,
-    collections: guessedCollections.map(normalizeCollectionName).filter(Boolean)
-  };
+export function titleFromModuleId(moduleId) {
+  const text = String(moduleId || '').replace(/[-_]+/g, ' ').trim();
+  if (!text) return 'Business OS App';
+  return text.replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
 export function validateCreatorSpec({ appId, appTitle, appDesc, appCollections }) {
   const errors = [];
-  if (!normalizeModuleId(appId)) errors.push('Modul-ID fehlt oder ist ungültig.');
-  if (!String(appTitle || '').trim()) errors.push('Titel fehlt.');
-  if (!String(appDesc || '').trim()) errors.push('Beschreibung fehlt.');
+  if (String(appId || '').trim() && !normalizeModuleId(appId)) errors.push('Modul-ID ist ungültig.');
+  if (String(appTitle || '').length > 120) errors.push('Titel ist zu lang.');
+  if (String(appDesc || '').length > 500) errors.push('Beschreibung ist zu lang.');
   const collections = Array.isArray(appCollections) ? appCollections.map(normalizeCollectionName).filter(Boolean) : [];
-  if (collections.length === 0) errors.push('Mindestens eine Datentabelle ist erforderlich.');
+  if (collections.length > 6) errors.push('Zu viele Datentabellen als Vorgabe.');
   return errors;
 }
 
-export function computeCreatorActionState({ request, specRequest, appId, appTitle, appDesc, appCollections, isOptimizing = false, isDeploying = false }) {
+export function computeCreatorActionState({ request, appId, appTitle, appDesc, appCollections, isDeploying = false }) {
   const requestText = String(request || '').trim();
-  const specText = String(specRequest || '').trim();
   const validationErrors = validateCreatorSpec({ appId, appTitle, appDesc, appCollections });
   const hasRequest = Boolean(requestText);
-  const hasFreshSpec = hasRequest && specText === requestText;
-  const isBusy = Boolean(isOptimizing || isDeploying);
-  const optimizeReady = hasRequest && !isBusy;
-  const deployReady = hasFreshSpec && validationErrors.length === 0 && !isBusy;
+  const isBusy = Boolean(isDeploying);
+  const deployReady = hasRequest && validationErrors.length === 0 && !isBusy;
   let diagnostic = 'Auftrag fehlt. Beschreibe zuerst die App.';
-  if (isOptimizing) diagnostic = 'Spezifikation wird aktualisiert.';
-  else if (isDeploying) diagnostic = 'CTOX App-Auftrag läuft.';
-  else if (hasRequest && !hasFreshSpec) diagnostic = 'Spezifikation ist nicht aktuell. Bitte zuerst anwenden.';
-  else if (hasFreshSpec && validationErrors.length > 0) diagnostic = validationErrors[0];
-  else if (deployReady) diagnostic = 'Spezifikation ist aktuell und kann an CTOX übergeben werden.';
+  if (isDeploying) diagnostic = 'CTOX App-Auftrag läuft.';
+  else if (hasRequest && validationErrors.length > 0) diagnostic = validationErrors[0];
+  else if (deployReady) diagnostic = 'Bereit. CTOX baut die App aus diesem Auftrag.';
 
-  return { hasRequest, hasFreshSpec, validationErrors, optimizeReady, deployReady, diagnostic };
+  return { hasRequest, validationErrors, deployReady, diagnostic };
 }
 
 export function normalizeCreatorInstalledApps(catalog) {
@@ -220,7 +99,7 @@ export function normalizeCreatorInstalledApps(catalog) {
       title: String(mod.title || mod.id),
       description: String(mod.description || mod.store?.summary || ''),
       category: String(mod.category || mod.source || 'Custom'),
-      version: String(mod.version || 'v1'),
+      version: String(mod.version || '0.1.0'),
       entry: String(mod.entry || ''),
     }))
     .filter((mod) => mod.id)
@@ -272,7 +151,7 @@ export async function mount(ctx) {
   ctx.host.innerHTML = html;
   applyCreatorTranslations(ctx.host, state.t);
 
-  // 3. Wire UI events & presets loading
+  // 3. Wire UI events
   wireUi(ctx.host);
 
   // 4. Load catalog-backed right rail data
@@ -478,14 +357,10 @@ function wireUi(host) {
   const btnAddColl = host.querySelector('#btn-add-collection');
   const inputNewColl = host.querySelector('#input-new-collection');
   const btnDeploy = host.querySelector('#btn-deploy-app');
-  const selectPreset = host.querySelector('#select-preset-request');
   const inputRequest = host.querySelector('#app-request-input');
-  const btnApplyRequest = host.querySelector('#btn-apply-request');
-  const specDiagnostics = host.querySelector('#creator-spec-diagnostics');
+  const requestDiagnostics = host.querySelector('#creator-request-diagnostics');
   const syncDot = host.querySelector('#deploy-sync-dot');
   const syncText = host.querySelector('#deploy-sync-text');
-  state.specRequest = '';
-  state.isOptimizing = false;
   state.isDeploying = false;
 
   // Accordion Expand/Collapse Trigger
@@ -504,106 +379,13 @@ function wireUi(host) {
     }
   });
 
-  // Preset Selection Change
-  selectPreset.addEventListener('change', () => {
-    const presetKey = selectPreset.value;
-    if (!presetKey || !PRESETS[presetKey]) return;
-
-    const preset = PRESETS[presetKey];
-    inputRequest.value = preset.request;
-
-    // Automatically fill advanced values
-    inputId.value = normalizeModuleId(preset.id);
-    inputTitle.value = preset.title;
-    inputDesc.value = preset.desc;
-    selectCategory.value = preset.category;
-    selectLayout.value = preset.layout;
-    state.appCollections = preset.collections.map(normalizeCollectionName).filter(Boolean);
-
-    renderCollectionsList(host);
-    syncStateFromInputs();
-    state.specRequest = inputRequest.value.trim();
-    updateCreatorActionState();
-
-    addConsoleLog(`[INFO] Vorlage '${preset.title}' erfolgreich geladen. Spezifikation im Hintergrund angepasst.`, 'info');
-  });
-
-  // Local metadata helper. It prepares module fields only; CTOX builds the app.
-  btnApplyRequest.addEventListener('click', async () => {
-    const request = inputRequest.value.trim();
-    if (!request) {
-      state.ctx.notifications.show({
-        title: 'Leerer Auftrag',
-        message: 'Bitte gib eine kurze Beschreibung der gewünschten App ein.',
-        type: 'warning'
-      });
-      return;
-    }
-
-    state.isOptimizing = true;
-    btnApplyRequest.innerHTML = `
-      <svg class="animate-spin" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation: pulse-sync 1s infinite alternate; margin-right: 6px;"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
-      CTOX analysiert Auftrag...
-    `;
-    updateCreatorActionState();
-
-    try {
-      addConsoleLog('==================================================', 'info');
-      addConsoleLog('[CTOX] Analysiere Anwendungsbeschreibung...', 'info');
-      await new Promise(r => setTimeout(r, 600));
-
-      const spec = deriveSpecFromRequest(request);
-
-      addConsoleLog(`[CTOX] Erkenne Domäne & Absicht: ${spec.category}`, 'info');
-      await new Promise(r => setTimeout(r, 300));
-      addConsoleLog(`[CTOX] Bestimme Layout-Hinweis: ${spec.layout === 'pane' ? 'kompakter Arbeitsbereich' : 'breiter Arbeitsbereich'}`, 'info');
-      addConsoleLog(`[CTOX] Schlage Datentabellen vor: [${spec.collections.join(', ')}]`, 'info');
-
-      inputId.value = spec.id;
-      inputTitle.value = spec.title;
-      inputDesc.value = spec.desc;
-      selectCategory.value = spec.category;
-      selectLayout.value = spec.layout;
-      state.appCollections = [...spec.collections];
-
-      renderCollectionsList(host);
-      syncStateFromInputs({ preserveFreshSpec: true });
-      state.specRequest = request;
-
-      addConsoleLog(`[SUCCESS] Spezifikation für '${spec.title}' erfolgreich aktualisiert.`, 'success');
-      addConsoleLog('==================================================', 'success');
-
-      state.ctx.notifications.show({
-        title: 'Spezifikation aktualisiert',
-        message: `Die App-Spezifikation für '${spec.title}' wurde aktualisiert.`,
-        type: 'success'
-      });
-    } catch (error) {
-      state.specRequest = '';
-      addConsoleLog(`[ERROR] Spezifikation konnte nicht aktualisiert werden: ${error.message}`, 'error');
-      state.ctx.notifications.show({
-        title: 'Spezifikation fehlgeschlagen',
-        message: error.message,
-        type: 'error'
-      });
-    } finally {
-      state.isOptimizing = false;
-      btnApplyRequest.innerHTML = `
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
-        Spezifikation anwenden
-      `;
-      updateCreatorActionState();
-    }
-  });
-
-  const syncStateFromInputs = ({ preserveFreshSpec = false } = {}) => {
+  const syncStateFromInputs = () => {
     state.appId = normalizeModuleId(inputId.value);
     if (inputId.value !== state.appId) inputId.value = state.appId;
     state.appTitle = inputTitle.value.trim();
     state.appDesc = inputDesc.value.trim();
-    state.appCategory = selectCategory.value;
-    state.appLayout = selectLayout.value;
-    if (!preserveFreshSpec) state.specRequest = '';
+    state.appCategory = selectCategory.value || '';
+    state.appLayout = selectLayout.value || '';
 
     updateCreatorActionState();
   };
@@ -611,28 +393,21 @@ function wireUi(host) {
   const updateCreatorActionState = () => {
     const actionState = computeCreatorActionState({
       request: inputRequest.value,
-      specRequest: state.specRequest,
       appId: inputId.value,
       appTitle: inputTitle.value,
       appDesc: inputDesc.value,
       appCollections: state.appCollections,
-      isOptimizing: state.isOptimizing,
       isDeploying: state.isDeploying
     });
-    btnApplyRequest.disabled = !actionState.optimizeReady;
     btnDeploy.disabled = !actionState.deployReady;
-    btnApplyRequest.setAttribute('aria-disabled', String(btnApplyRequest.disabled));
     btnDeploy.setAttribute('aria-disabled', String(btnDeploy.disabled));
-    btnApplyRequest.title = actionState.hasRequest
-      ? 'Beschreibung analysieren und Spezifikation aktualisieren'
-      : 'Bitte zuerst eine App-Beschreibung eingeben.';
     btnDeploy.title = actionState.deployReady
       ? 'App-Erstellung durch CTOX starten'
       : actionState.diagnostic;
     btnDeploy.dataset.state = actionState.deployReady ? 'ready' : 'blocked';
-    if (specDiagnostics) {
-      specDiagnostics.textContent = actionState.diagnostic;
-      specDiagnostics.dataset.state = actionState.deployReady ? 'ready' : actionState.hasRequest ? 'pending' : 'blocked';
+    if (requestDiagnostics) {
+      requestDiagnostics.textContent = actionState.diagnostic;
+      requestDiagnostics.dataset.state = actionState.deployReady ? 'ready' : actionState.hasRequest ? 'pending' : 'blocked';
     }
     if (!state.isDeploying && syncText && syncDot) {
       syncDot.style.background = '';
@@ -643,13 +418,11 @@ function wireUi(host) {
   };
 
   inputRequest.addEventListener('input', () => {
-    state.specRequest = '';
     updateCreatorActionState();
   });
 
-  // Text inputs changed manually inside the expandable accordion
   [inputId, inputTitle, inputDesc, selectCategory, selectLayout].forEach(el => {
-    el.addEventListener('input', () => syncStateFromInputs({ preserveFreshSpec: Boolean(inputRequest.value.trim()) }));
+    el.addEventListener('input', () => syncStateFromInputs());
   });
 
   // DB Collection Visual builder in advanced accordion
@@ -668,7 +441,7 @@ function wireUi(host) {
       row.querySelector('[data-remove-idx]').addEventListener('click', async (e) => {
         const removeIdx = parseInt(e.currentTarget.getAttribute('data-remove-idx'), 10);
         const name = state.appCollections[removeIdx];
-        const confirmed = await showBusinessConfirm(`Datentabelle "${name}" aus der Spezifikation entfernen?`, {
+        const confirmed = await showBusinessConfirm(`Datentabelle "${name}" aus den optionalen Vorgaben entfernen?`, {
           title: 'Datentabelle entfernen',
           confirmLabel: 'Entfernen',
           cancelLabel: 'Abbrechen',
@@ -677,7 +450,7 @@ function wireUi(host) {
         if (!confirmed) return;
         state.appCollections.splice(removeIdx, 1);
         renderCollectionsList(h);
-        syncStateFromInputs({ preserveFreshSpec: Boolean(inputRequest.value.trim()) });
+        syncStateFromInputs();
       });
       listEl.appendChild(row);
     });
@@ -693,7 +466,7 @@ function wireUi(host) {
     state.appCollections.push(newName);
     inputNewColl.value = '';
     renderCollectionsList(host);
-    syncStateFromInputs({ preserveFreshSpec: Boolean(inputRequest.value.trim()) });
+    syncStateFromInputs();
     addConsoleLog(`[INFO] Datentabelle '${newName}' hinzugefügt.`, 'info');
   });
 
@@ -722,7 +495,6 @@ function wireUi(host) {
       const request = state.creatorRequests.find((item) => item.id === requestButton.dataset.useCreatorRequest);
       if (!request) return;
       inputRequest.value = request.request;
-      state.specRequest = '';
       updateCreatorActionState();
       addConsoleLog(`[INFO] CTOX App-Auftrag '${request.title}' uebernommen.`, 'info');
       inputRequest.focus();
@@ -736,13 +508,13 @@ function wireUi(host) {
   btnDeploy.addEventListener('click', async () => {
     try {
       const currentRequest = inputRequest.value.trim();
-      if (!currentRequest || state.specRequest !== currentRequest) {
+      if (!currentRequest) {
         state.ctx.notifications.show({
-          title: 'Spezifikation nicht bereit',
-          message: 'Bitte beschreibe die App und wende die Spezifikation an, bevor du den CTOX-Auftrag startest.',
+          title: 'Auftrag fehlt',
+          message: 'Bitte beschreibe die App, bevor du den CTOX-Auftrag startest.',
           type: 'warning'
         });
-        addConsoleLog('[BLOCKED] App-Auftrag verhindert: Beschreibung fehlt oder Spezifikation ist nicht frisch.', 'warning');
+        addConsoleLog('[BLOCKED] App-Auftrag verhindert: Beschreibung fehlt.', 'warning');
         updateCreatorActionState();
         return;
       }
@@ -753,7 +525,18 @@ function wireUi(host) {
         return;
       }
 
-      const confirmed = await showBusinessConfirm(`CTOX soll die App "${state.appTitle}" (${state.appId}) jetzt bauen? Die App wird als runtime-installed Business-OS-Modul erstellt.`, {
+      const previewCommand = buildAppCreateCommand({
+        appId: inputId.value,
+        appTitle: inputTitle.value,
+        appDesc: inputDesc.value,
+        appCategory: selectCategory.value,
+        appLayout: selectLayout.value,
+        appCollections: state.appCollections,
+        appVersion: state.appVersion,
+        instruction: currentRequest,
+        actor: null,
+      });
+      const confirmed = await showBusinessConfirm(`CTOX soll die App "${previewCommand.payload.app_title}" (${previewCommand.payload.module_id}) jetzt bauen? Die App wird als runtime-installed Business-OS-Modul erstellt.`, {
         title: 'App-Erstellung starten',
         confirmLabel: 'Starten',
         cancelLabel: 'Abbrechen'
@@ -780,7 +563,7 @@ function wireUi(host) {
 
     if (upgradeAppId) {
       try {
-        addConsoleLog(`[INFO] Lade bestehende App-Spezifikation für Upgrade von '${upgradeAppId}'...`, 'info');
+        addConsoleLog(`[INFO] Lade bestehende App für Änderung von '${upgradeAppId}'...`, 'info');
         const manifestUrl = `installed-modules/${upgradeAppId}/module.json`;
         const manifest = await fetch(manifestUrl).then(res => {
           if (!res.ok) throw new Error(`App '${upgradeAppId}' konnte nicht geladen werden.`);
@@ -792,28 +575,17 @@ function wireUi(host) {
         if (inputDesc) inputDesc.value = manifest.description || '';
         if (selectCategory) selectCategory.value = manifest.category || 'Management';
         if (selectLayout) selectLayout.value = manifest.layout?.shell || 'full-workspace';
-        if (inputRequest) {
-          inputRequest.value = `Upgrade für ${manifest.title || upgradeAppId}: ${manifest.description || ''}`;
-        }
-
-        // Increment version
-        const currentVer = manifest.version || 'v1';
-        const verNum = parseInt(currentVer.replace('v', ''), 10) || 1;
-        const nextVer = `v${verNum + 1}`;
-        state.appVersion = nextVer;
-
-        // Clean collection names of version suffixes
-        const baseCollections = (Array.isArray(manifest.collections) ? manifest.collections : ['records'])
-          .map(coll => coll.replace(/_v\d+$/, ''));
+        if (inputRequest) inputRequest.value = `Ändere ${manifest.title || upgradeAppId}: ${manifest.description || ''}`;
+        state.appVersion = /^\d+\.\d+\.\d+$/.test(String(manifest.version || ''))
+          ? String(manifest.version)
+          : '0.1.0';
+        const baseCollections = Array.isArray(manifest.collections) ? manifest.collections : [];
         state.appCollections = baseCollections;
 
-        addConsoleLog(`[INFO] Upgrade-Version erkannt: ${currentVer} -> ${nextVer}. Suffixe aus Datentabellen entfernt.`, 'info');
-
         renderCollectionsList(host);
-        syncStateFromInputs({ preserveFreshSpec: true });
-        state.specRequest = inputRequest.value.trim();
+        syncStateFromInputs();
 
-        addConsoleLog(`[SUCCESS] Spezifikation für '${manifest.title || upgradeAppId}' erfolgreich geladen. Passe die Beschreibung an und starte die App-Erstellung.`, 'success');
+        addConsoleLog(`[SUCCESS] App-Kontext für '${manifest.title || upgradeAppId}' geladen. Passe den Auftrag an und starte CTOX.`, 'success');
         updateCreatorActionState();
       } catch (err) {
         addConsoleLog(`[ERROR] Fehler beim Laden des Upgrades: ${err.message}`, 'error');
@@ -846,16 +618,17 @@ export function buildAppCreateCommand({
   actor,
   now = Date.now(),
 }) {
-  const moduleId = normalizeModuleId(appId);
+  const request = String(instruction || appDesc || appTitle || '').trim();
+  if (!request) throw new Error('App request is required');
+  const moduleId = normalizeModuleId(appId) || deriveModuleIdFromRequest(request, now);
   const collections = Array.isArray(appCollections)
     ? appCollections.map(normalizeCollectionName).filter(Boolean)
     : [];
   const version = /^\d+\.\d+\.\d+$/.test(String(appVersion || '').trim())
     ? String(appVersion).trim()
     : '0.1.0';
-  const title = String(appTitle || moduleId || 'Business OS App').trim();
-  const description = String(appDesc || '').trim();
-  const request = String(instruction || description || title).trim();
+  const title = String(appTitle || titleFromModuleId(moduleId)).trim();
+  const description = String(appDesc || request.slice(0, 220)).trim();
 
   return {
     command_id: `app-create-${moduleId}-${now}`,
@@ -896,6 +669,7 @@ async function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
   const syncText = host.querySelector('#deploy-sync-text');
   const btnDeploy = host.querySelector('#btn-deploy-app');
 
+  const request = host.querySelector('#app-request-input')?.value?.trim() || '';
   const appId = state.appId;
   const appTitle = state.appTitle;
   const appDesc = state.appDesc;
@@ -905,13 +679,13 @@ async function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
     ? String(state.appVersion).trim()
     : '0.1.0';
 
-  if (!appId || !appTitle || !appDesc) {
+  if (!request) {
     state.ctx.notifications.show({
       title: 'Fehler beim Vorbereiten',
-      message: 'Bitte fülle alle Pflichtfelder (Modul ID, Titel, Beschreibung) aus.',
+      message: 'Bitte beschreibe die gewünschte App.',
       type: 'error'
     });
-    addConsoleLog('[FEHLER] Spezifikation unvollständig. ID, Titel und Beschreibung sind erforderlich.', 'error');
+    addConsoleLog('[FEHLER] App-Auftrag fehlt.', 'error');
     return;
   }
 
@@ -923,7 +697,7 @@ async function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
   updateCreatorActionState();
 
   addConsoleLog('==================================================', 'info');
-  addConsoleLog(`[START] Übergabe an CTOX App Creator Agent für '${appTitle}' (${appId})...`, 'info');
+  addConsoleLog('[START] Übergabe an CTOX App Creator Agent...', 'info');
 
   try {
     const actorContext = (session) => {
@@ -944,20 +718,20 @@ async function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
       appLayout,
       appCollections: collections,
       appVersion,
-      instruction: state.specRequest || appDesc,
+      instruction: request,
       actor: actorContext(state.ctx.session),
     });
 
-    addConsoleLog(`[QUEUE] Sende ${command.command_type} für ${appId}...`, 'info');
+    addConsoleLog(`[QUEUE] Sende ${command.command_type} für ${command.payload.module_id}...`, 'info');
     const result = await state.ctx.commandBus.dispatch(command);
 
     addConsoleLog('==================================================', 'success');
-    addConsoleLog(`[SUCCESS] CTOX App-Erstellung für '${appTitle}' wurde gestartet.`, 'success');
+    addConsoleLog(`[SUCCESS] CTOX App-Erstellung für '${command.payload.app_title}' wurde gestartet.`, 'success');
     if (result?.task_id) addConsoleLog(`[TASK] ${result.task_id}`, 'info');
 
     state.ctx.notifications.show({
       title: 'App-Erstellung gestartet',
-      message: `CTOX baut '${appTitle}' jetzt als Business-OS-App.`,
+      message: `CTOX baut '${command.payload.app_title}' jetzt als Business-OS-App.`,
       type: 'success'
     });
 
@@ -1036,9 +810,9 @@ function creatorCommandContextFromElement(state, target) {
   return {
     module: 'creator',
     column: 'workspace',
-    record_type: 'app-spec',
+    record_type: 'app-request',
     record_id: state.appId || 'creator',
-    label: state.appTitle || 'Creator App Spec',
+    label: state.appTitle || 'Creator App Request',
     app_id: state.appId || '',
     app_title: state.appTitle || '',
     app_desc: state.appDesc || '',
@@ -1068,7 +842,7 @@ function renderCreatorContextMenu(state, context, x, y) {
           <label><input type="radio" name="contextMode" value="app" /> App modifizieren</label>
         </div>
       ` : ''}
-      <textarea data-creator-context-message placeholder="Was soll CTOX mit dieser App-Spezifikation tun?"></textarea>
+      <textarea data-creator-context-message placeholder="Was soll CTOX mit diesem App-Auftrag tun?"></textarea>
       <footer>
         <span data-creator-context-status></span>
         <button type="submit">Senden</button>
@@ -1110,9 +884,9 @@ async function dispatchCreatorContextChat(state, context, message, mode = 'data'
     return;
   }
   if (status) status.textContent = 'Oeffne Chat...';
-  const title = `${safeMode === 'app' ? 'Creator App modifizieren' : 'App-Spezifikation anpassen'} · ${context.label || 'Creator'}`;
+  const title = `${safeMode === 'app' ? 'Creator App modifizieren' : 'App-Auftrag bearbeiten'} · ${context.label || 'Creator'}`;
   const instruction = safeMode === 'app'
-    ? `Modifiziere die App-Creator-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, App-Spezifikationen selbst nicht als primäres Ziel verändern.\n\n${trimmed}`
+    ? `Modifiziere die App-Creator-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, App-Auftraege selbst nicht als primäres Ziel verändern.\n\n${trimmed}`
     : trimmed;
 
   window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {

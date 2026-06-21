@@ -191,12 +191,13 @@ function writeSourceModule(root, moduleId, overrides = {}) {
         },
         required: ['id', 'title', 'updated_at_ms'],
       },
+      ...overrides.collections,
     },
   });
-  writeFileSync(join(dir, 'schema.js'), `export const collections = { ${collectionName}: { version: 0, primaryKey: 'id', type: 'object', properties: { id: { type: 'string', maxLength: 120 } } } };\n`);
+  writeFileSync(join(dir, 'schema.js'), overrides.schemaJs || `export const collections = { ${collectionName}: { version: 0, primaryKey: 'id', type: 'object', properties: { id: { type: 'string', maxLength: 120 } } } };\n`);
   writeFileSync(join(dir, 'index.html'), '<main class="source-module">Ready</main>\n');
   writeFileSync(join(dir, 'index.css'), '.source-module { display: block; }\n');
-  writeFileSync(join(dir, 'index.js'), 'export async function mount(ctx) { ctx.host.textContent = "Ready"; return () => { ctx.host.textContent = ""; }; }\n');
+  writeFileSync(join(dir, 'index.js'), overrides.indexJs || 'export async function mount(ctx) { ctx.host.textContent = "Ready"; return () => { ctx.host.textContent = ""; }; }\n');
   writeFileSync(join(dir, 'icon.svg'), '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"></svg>\n');
   writeJson(join(dir, 'locales/de.json'), { title: moduleId });
   writeJson(join(dir, 'locales/en.json'), { title: moduleId });
@@ -459,6 +460,49 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   const run = runValidator(root, 'sourcegood', '--source');
   assert.equal(run.status, 0, `${run.stderr}\n${run.stdout}`);
   assert.match(run.stdout, /validation OK: sourcegood \(source mode\)/);
+}
+
+{
+  const root = makeWorkspace();
+  writeSourceModule(root, 'sourcecore', {
+    manifest: {
+      install_scope: 'core',
+      layout: {
+        shell: 'full-workspace',
+        icon_svg: '<svg viewBox="0 0 24 24"></svg>',
+        left: 'Shell controls',
+        center: 'Core workbench',
+      },
+    },
+    collections: {
+      business_commands: {
+        version: 0,
+        primaryKey: 'id',
+        type: 'object',
+        properties: { id: { type: 'string' } },
+        required: ['id'],
+      },
+    },
+    schemaJs: [
+      'export const collections = {',
+      "  business_commands: { version: 0, primaryKey: 'id', type: 'object', properties: { id: { type: 'string' } } },",
+      "  sourcecore_records: { version: 0, primaryKey: 'id', type: 'object', properties: { id: { type: 'string', maxLength: 120 } } },",
+      '};',
+      '',
+    ].join('\n'),
+    indexJs: [
+      'export async function mount(ctx) {',
+      '  ctx.host.textContent = "Ready";',
+      '  localStorage.setItem("sourcecore-layout", "1");',
+      "  window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', { detail: { text: 'ready' } }));",
+      '  return () => { ctx.host.textContent = ""; };',
+      '}',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'sourcecore', '--source');
+  assert.equal(run.status, 0, `${run.stderr}\n${run.stdout}`);
+  assert.match(run.stdout, /validation OK: sourcecore \(source mode\)/);
 }
 
 {
