@@ -113,6 +113,7 @@ pub const QUERY_FETCH_ERROR_REMOTE_TIMEOUT: &str = "REMOTE_TIMEOUT";
 pub const QUERY_FETCH_ERROR_UNAUTHORIZED: &str = "UNAUTHORIZED";
 pub const QUERY_FETCH_ERROR_RATE_LIMITED: &str = "RATE_LIMITED";
 pub const QUERY_FETCH_ERROR_FEATURE_DISABLED: &str = "FEATURE_DISABLED";
+pub const QUERY_FETCH_ERROR_REMOTE: &str = "REMOTE_ERROR";
 
 /// Per-peer rate-limit token bucket. This intentionally does not mirror the
 /// concurrent stream limit: a browser startup may legitimately open many
@@ -437,6 +438,19 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler>(
 
     let outcome = stream_chunks(handler.as_ref(), &peer, &collection, &request, &cancel_flag).await;
     registry.release(&request.request_id);
+    if let Err(err) = &outcome {
+        let message = err.to_string();
+        send_error(
+            handler.as_ref(),
+            &peer,
+            "",
+            &request.request_id,
+            QUERY_FETCH_ERROR_REMOTE,
+            &message,
+            true,
+        )
+        .await;
+    }
     outcome
 }
 
@@ -882,8 +896,9 @@ mod tests {
     use crate::rx_schema::create_rx_schema;
     use crate::rxjs_compat::{RxStream, RxSubject};
     use crate::types::{
-        BulkWriteRow, HashFunction, HashOutput, JsonSchema, PrimaryKey, RxJsonSchema,
-        RxStorageInstance, RxStorageInstanceCreationParams,
+        BulkWriteRow, EventBulk, HashFunction, HashOutput, JsonSchema, PrimaryKey, RxJsonSchema,
+        RxStorageBulkWriteResponse, RxStorageChangedDocumentsSinceResult, RxStorageCountResult,
+        RxStorageInstance, RxStorageInstanceCreationParams, RxStorageQueryResult,
     };
     use async_trait::async_trait;
     use parking_lot::Mutex as TokioMutex;
@@ -891,7 +906,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::super::webrtc_types::{
-        PeerWithMessage, PeerWithResponse, WebRTCConnectionHandler, WebRTCWireFrame,
+        PeerWithMessage, PeerWithResponse, WebRTCConnectionHandler, WebRTCResponse, WebRTCWireFrame,
     };
 
     struct TestHashFunction;
@@ -981,6 +996,91 @@ mod tests {
             storage_instance,
             Arc::new(DefaultConflictHandler),
             rx_schema,
+        )
+    }
+
+    struct FailingQueryStorage {
+        inner: Arc<dyn RxStorageInstance>,
+    }
+
+    #[async_trait]
+    impl RxStorageInstance for FailingQueryStorage {
+        fn database_name(&self) -> &str {
+            self.inner.database_name()
+        }
+
+        fn collection_name(&self) -> &str {
+            self.inner.collection_name()
+        }
+
+        fn schema(&self) -> &RxJsonSchema {
+            self.inner.schema()
+        }
+
+        async fn bulk_write(
+            &self,
+            document_writes: Vec<BulkWriteRow>,
+            context: &str,
+        ) -> Result<RxStorageBulkWriteResponse, RxError> {
+            self.inner.bulk_write(document_writes, context).await
+        }
+
+        async fn find_documents_by_id(
+            &self,
+            ids: &[String],
+            with_deleted: bool,
+        ) -> Result<Vec<Value>, RxError> {
+            self.inner.find_documents_by_id(ids, with_deleted).await
+        }
+
+        async fn query(&self, _prepared_query: &Value) -> Result<RxStorageQueryResult, RxError> {
+            Err(new_rx_error(
+                "TEST_QUERY_STREAM",
+                Some(json!({ "message": "forced query stream failure" })),
+            ))
+        }
+
+        async fn count(&self, prepared_query: &Value) -> Result<RxStorageCountResult, RxError> {
+            self.inner.count(prepared_query).await
+        }
+
+        async fn get_changed_documents_since(
+            &self,
+            limit: u64,
+            checkpoint: Option<&Value>,
+        ) -> Result<RxStorageChangedDocumentsSinceResult, RxError> {
+            self.inner
+                .get_changed_documents_since(limit, checkpoint)
+                .await
+        }
+
+        fn change_stream(&self) -> RxStream<EventBulk> {
+            self.inner.change_stream()
+        }
+
+        async fn cleanup(&self, min_deleted_time: i64) -> Result<bool, RxError> {
+            self.inner.cleanup(min_deleted_time).await
+        }
+
+        async fn remove(&self) -> Result<(), RxError> {
+            self.inner.remove().await
+        }
+
+        async fn close(&self) -> Result<(), RxError> {
+            self.inner.close().await
+        }
+    }
+
+    fn collection_with_failing_query(collection: Arc<RxCollection>) -> Arc<RxCollection> {
+        let storage_instance: Arc<dyn RxStorageInstance> = Arc::new(FailingQueryStorage {
+            inner: Arc::clone(&collection.storage_instance),
+        });
+        RxCollection::new_with_schema(
+            "business_records",
+            Arc::clone(&collection.database),
+            storage_instance,
+            Arc::clone(&collection.conflict_handler),
+            collection.schema.as_ref().expect("schema").clone(),
         )
     }
 
@@ -1172,6 +1272,39 @@ mod tests {
         );
         assert!(chunks[0].documents.is_empty());
         assert!(chunks[0].complete);
+    }
+
+    #[tokio::test]
+    async fn stream_error_after_ack_emits_query_error_frame() {
+        let collection = collection_with_failing_query(seeded_collection(1).await);
+        let registry = Arc::new(QueryFetchRegistry::new(4));
+        registry.register(Arc::clone(&collection));
+        let handler = Arc::new(MockHandler::new());
+        let message = make_request("r-stream-error", "business_records", 0);
+        let result = run_query_fetch(
+            registry,
+            Arc::clone(&handler),
+            MockPeer("p1"),
+            "p1".to_string(),
+            message,
+        )
+        .await;
+        assert!(result.is_err(), "stream failure should surface an error");
+        let frames = handler.sent.lock();
+        assert!(
+            matches!(
+                frames.first(),
+                Some(WebRTCWireFrame::Response(WebRTCResponse {
+                    error: None,
+                    ..
+                }))
+            ),
+            "query fetch must still ack before async stream failure"
+        );
+        assert!(
+            error_code_emitted(&frames, QUERY_FETCH_ERROR_REMOTE),
+            "stream failures after ack must be routed as rxdb.query.error"
+        );
     }
 
     #[tokio::test]

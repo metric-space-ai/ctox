@@ -6,7 +6,10 @@ and receive a runtime-installed, immediately runnable vanilla HTML/CSS/browser
 ESM app that persists data through CTOX DB and can dispatch normal CTOX
 Business OS automation commands.
 
-This is a working plan. Update it during execution, not only at handoff.
+This is a working plan and the live progress tracker for app creation
+hardening. Update it during execution, not only at handoff. The plan is not a
+prompt for an app-building agent; it is the execution contract for making the
+CTOX app creation path production-ready.
 
 ## Update Protocol
 
@@ -31,8 +34,11 @@ Rules for edits:
 - Keep one active slice. When starting work, set `Active Slice`; when finishing,
   update the checklist and add an Evidence Log entry.
 - Mark a failure class before patching anything.
+- For every source patch, state the expected verification command before
+  patching and record the actual verification result after patching.
 - Do not use this plan as an app-building prompt.
-- Do not expand this file into a long prompt or rule wall. Keep it operational.
+- Do not expand this file into a long prompt or rule wall. Keep it operational:
+  short rules, concrete checks, evidence paths, and next actions.
 
 Status values: `pending`, `in_progress`, `blocked`, `done`.
 
@@ -63,7 +69,12 @@ Current proof run:
 - Entry path: real `ctox.business_os.app.create` tasks through installed CTOX.
 - Evidence dir: `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6`
 - Latest static status snapshot: `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6/status-1782010063510.json`
-- Browser evidence: `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6/browser-smoke/catalog-sync-diagnostic-1782010683224.json`
+- Browser evidence:
+  - `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6/browser-smoke/catalog-sync-diagnostic-1782010683224.json`
+  - `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6/browser-smoke/focused-catalog-probe-timeout-1782012028207.json`
+  - `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6/browser-smoke/bridge-query-pending-probe-1782012369270.json`
+  - `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6/browser-smoke/transport-peer-pending-probe-1782012991802.json`
+  - `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6/browser-smoke/master-pull-probe-1782013261805.json`
 
 Latest live result:
 
@@ -76,8 +87,27 @@ Latest live result:
   with `#bench_subscriptions_rfix6` stays on `desktop`, does not show any bench
   module text, and does not mount the generated app even though bootstrap reports
   `http_bridge_available=false` and `native_rxdb_peer_available=true`.
-  Preliminary class: `data_plane_gap` or module-catalog visibility gap. Run a
-  focused shell-state/RxDB probe before patching source.
+- Failure class: `data_plane_gap`, narrowed to browser/native CTOX DB catalog
+  materialization. Native SQLite has the catalog row and WebRTC exposes a valid
+  remote checkpoint, but the fresh browser primary IndexedDB store never gets the
+  `business_module_catalog` `module-catalog` document, `findOne('module-catalog')`
+  times out, and V1.5 demand query collectors remain pending.
+- Transport/root cause: browser `rxdb.query.fetch` is ACKed by native in
+  milliseconds and `peer.pending` clears, but no `rxdb.query.chunk` or
+  `rxdb.query.error` reaches the browser. Direct `masterChangesSince` against
+  `business_module_catalog` returns `RC_PULL` with `SQLITE_CLOSED`. Source fix:
+  Business OS duplicate helper opens must not close the long-lived native peer
+  database, and post-ACK query-stream errors must emit `rxdb.query.error`.
+- Local source verification is green for the patch:
+  `cargo fmt --check --manifest-path src/core/rxdb/Cargo.toml`,
+  `cargo test --manifest-path src/core/rxdb/Cargo.toml stream_error_after_ack_emits_query_error_frame`,
+  `cargo test --bin ctox open_database_does_not_close_existing_business_os_instance`,
+  `cargo check --bin ctox`, and `git diff --check`.
+- Source fix is not yet installed in the running CTOX release. Next required
+  step is `ctox upgrade --dev`, then repeat catalog/mount/browser E2E.
+- Do not patch generated apps or app creator skill resources for the current
+  blocker. The current evidence says the generated app files are not the layer
+  failing; the shell cannot see the installed module catalog.
 - The suspected queue-drain gap is not confirmed by the completed `rfix6` run:
   Contracts and Quality both leased without manual restart after delayed worker
   completion. Keep a latency watch, but do not patch source for queue-drain from
@@ -159,7 +189,7 @@ App creation is production-ready only when every gate below is green.
 | Correct install location | done | `rfix5` apps are under `runtime/business-os/installed-modules/<module-id>`; shell asset refresh now preserves installed modules during `ctox upgrade --dev`. |
 | CTOX-native creation | done | Five bench apps were created through real Business OS app-create tasks, not direct file writes. |
 | Static validation | done | `rfix6` snapshot `status-1782010063510.json`: handled=5, validation_passed=5, pending=0, failed=0. |
-| Browser mount | blocked | Historical app mount was possible, but fresh `rfix6` browser proof is blocked: native catalog has the modules, while the browser shell remains on `desktop` for `#bench_subscriptions_rfix6`. |
+| Browser mount | blocked | Fresh `rfix6` browser proof is blocked: native catalog has the modules and advertises a checkpoint, while the browser shell remains on `desktop`, local IndexedDB lacks `module-catalog`, and demand queries stay pending. Evidence: `focused-catalog-probe-timeout-1782012028207.json`, `bridge-query-pending-probe-1782012369270.json`. |
 | Persistence | in_progress | Historical targeted proof reached native SQLite for Subscriptions, Projects, Contracts, and Quality; `rfix6` browser persistence proof is still pending. |
 | Automation | in_progress | Subscriptions, Contracts, and targeted Projects created `business_os.chat.task`; fresh `rfix6` browser automation proof is still pending. |
 | Entry-point coverage | pending | Chat, App Creator, App Store/template flow, CLI, and inbound/MCP paths all attach the same app-module skill/resource context. |
@@ -176,7 +206,7 @@ App creation is production-ready only when every gate below is green.
 | 3. Close lifecycle/orchestration gaps | in_progress | Codex | Queue, validation, launchd/dev-upgrade, module catalog, and native peer lifecycle work without manual service recovery. | `f009a3b4` and `bbbdbbd4` fixed earlier lifecycle issues; `rfix6` drained all five tasks without manual restart, but queue-drain latency remains a watch item. |
 | 4. Close validator/resource gaps | done | Codex | Validator rejects known bad app artifacts before browser E2E finds them; skill resources state the same architecture expectations plainly. | `0dd04c31` rejects unscoped collections; `aa945a71` accepts and checks namespaced `data-*-action`; installed release `branch-main-20260621T014938Z`. |
 | 5. Fresh five-app CTOX proof | done | Codex | One fresh post-validator run with five apps reaches terminal queue success and installed validation green. | `rfix6` snapshot `status-1782010063510.json`: handled=5, validation_passed=5, bench_green=true. |
-| 6. Browser proof | blocked | Codex | Browser mount, UI persistence, reload persistence, and automation smoke pass for all five fresh apps. | `catalog-sync-diagnostic-1782010683224.json`: native/WebRTC bootstrap present, browser remains on `desktop` and does not see the bench app. |
+| 6. Browser proof | blocked | Codex | Browser mount, UI persistence, reload persistence, and automation smoke pass for all five fresh apps. | `catalog-sync-diagnostic-1782010683224.json`, `focused-catalog-probe-timeout-1782012028207.json`, and `bridge-query-pending-probe-1782012369270.json`: native/WebRTC bootstrap and checkpoint are present, browser remains on `desktop`, local catalog document is missing, and demand queries stay pending. |
 | 7. Entry-point proof | pending |  | Every user-facing app creation/modification path uses the same skill/resource context and runtime app contract. | Not done. |
 | 8. Production signoff | pending |  | All production gates are green, latest source is installed, plan and docs updated, no unrelated dirty files staged. | Not done. |
 
@@ -199,9 +229,10 @@ Owner: `Codex`
 Active phase: `6. Browser proof`
 
 Current rule: do not patch generated app artifacts by hand. `rfix6` is the
-active post-validator bench. Static installed validation is green; run browser
-E2E against the generated runtime apps and classify any failures before patching
-source, skill resources, validator, or smoke tooling.
+active post-validator bench. Static installed validation is green. The
+catalog/mount blocker has a source-level root cause and local source checks are
+green. Install through `ctox upgrade --dev`, then rerun browser catalog/mount
+and the five-app E2E proof.
 
 Immediate checklist:
 
@@ -237,11 +268,24 @@ Immediate checklist:
 - [x] Run first fresh `rfix6` browser diagnostic.
 - [x] Classify current browser blocker as `data_plane_gap` or module-catalog
   visibility gap candidate.
-- [ ] Run a focused Playwright shell-state/RxDB probe that reads
+- [x] Run a focused Playwright shell-state/RxDB probe that reads
   `window.CTOX_BUSINESS_OS_APP`, the browser `business_module_catalog` document,
   sync diagnostics, visible module ids, and governance founder keys.
-- [ ] Patch only after the focused probe proves whether the issue is catalog
-  replication, shell filtering/governance, or browser-smoke harness logic.
+- [x] Classify shell filtering/governance and browser-smoke selector logic as
+  unlikely for the current blocker: browser state lacks the rfix6 catalog data
+  before app-specific UI code can run.
+- [x] Run one transport-level probe that records WebRTC `peer.pending` request
+  state while a `business_module_catalog.findOne('module-catalog')` demand query
+  is pending.
+- [x] Patch only after the transport probe proves whether the issue is missing
+  `rxdb.query.fetch` ACK, missing `rxdb.query.chunk`, browser chunk routing, or
+  initial-pull completion being marked before local materialization.
+- [x] Add regression coverage for the two source fixes:
+  `open_database_does_not_close_existing_business_os_instance` and
+  `stream_error_after_ack_emits_query_error_frame`.
+- [x] Run local source checks for the patch.
+- [ ] Install the source fixes through `ctox upgrade --dev`.
+- [ ] Repeat direct browser `masterChangesSince` and catalog-demand probes.
 - [ ] After the catalog/mount blocker is fixed, run fresh `rfix6` browser E2E
   for mount, UI save, reload persistence, native sync, and automation command
   dispatch.
@@ -250,8 +294,8 @@ Immediate checklist:
 
 Current slice exit criteria:
 
-- Browser catalog/mount blocker has a source-level root cause or a documented
-  non-source explanation with evidence.
+- Browser catalog/mount blocker has a source-level root cause with evidence and
+  the installed release proves the catalog can mount again.
 - Browser E2E evidence exists for all five `rfix6` apps after the mount blocker.
 - Every `rfix6` browser failure is classified as app defect, smoke harness gap,
   data plane gap, validator gap, or skill/resource gap.
@@ -349,25 +393,25 @@ Use this before marking any generated app green:
 
 ## Next Actions
 
-1. Run a focused browser shell-state/RxDB probe for `rfix6`:
-   `window.CTOX_BUSINESS_OS_APP`, browser `business_module_catalog`,
-   `state.modules`, `state.governance`, sync diagnostics, and visible nav ids.
-2. Compare browser catalog state with native
-   `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os-rxdb.sqlite3`
-   module catalog and founder governance.
-3. Patch only the proven layer: data-plane replication, shell filtering, or
-   browser-smoke logic. Do not patch generated app artifacts.
-4. After the catalog/mount blocker is fixed, run fresh `rfix6` browser E2E with
+1. Install the source fixes through `ctox upgrade --dev`.
+2. Repeat the direct browser `masterChangesSince` probe for
+   `business_module_catalog`; it must not return `SQLITE_CLOSED`.
+3. Repeat the catalog-demand probe; the browser must receive either chunks or a
+   routed error, and the steady-state target is a local `module-catalog`
+   document in IndexedDB.
+4. Repeat the `#bench_subscriptions_rfix6` mount smoke; the shell must not stay
+   on `desktop`.
+5. After the catalog/mount blocker is fixed, run fresh `rfix6` browser E2E with
    precise selectors and longer native/command sync waits.
-5. Keep browser-smoke failures separate from generated app failures: record
+6. Keep browser-smoke failures separate from generated app failures: record
    selector/wait gaps as harness issues, not app defects.
-6. If a generated app fails browser E2E while static validation is green,
+7. If a generated app fails browser E2E while static validation is green,
    classify whether this belongs in the validator, skill resources, runtime
    shell/data plane, or app-review rework behavior.
-7. If browser E2E is green for all five apps, verify App Creator, Chat, App
+8. If browser E2E is green for all five apps, verify App Creator, Chat, App
    Store/template flow, CLI, and inbound/MCP entry paths all attach the same app
    module creation path.
-8. Update this file before every handoff, before every source patch, and after
+9. Update this file before every handoff, before every source patch, and after
    every material bench result.
 
 ## Evidence Log
@@ -400,6 +444,16 @@ Use this before marking any generated app green:
 - `2026-06-21`: `rfix6` snapshot `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6/status-1782010063510.json` shows `bench_green=true`, `handled=5`, `validation_passed=5`, `pending=0`, `failed=0`.
 - `2026-06-21`: native RxDB catalog query against `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os-rxdb.sqlite3` shows all five `rfix6` module ids and all five `rfix6` founder governance keys in `business_module_catalog`.
 - `2026-06-21`: browser diagnostic `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6/browser-smoke/catalog-sync-diagnostic-1782010683224.json` opened `http://127.0.0.1:8765/?rxdbSmoke=1&smokeDbId=rfix6browser3#bench_subscriptions_rfix6`; final checkpoint stayed on `activeModule=desktop`, `hasBenchText=false`, `http_bridge_available=false`, `native_rxdb_peer_available=true`, and V1.5 fetch logs started for `business_module_catalog` and `ctox_runtime_settings`.
+- `2026-06-21`: focused browser probe `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6/browser-smoke/focused-catalog-probe-timeout-1782012028207.json` showed `business_module_catalog` sync `status=connected`, `initialReplicationState=complete`, and remote checkpoint `latestLwt=1782010000808.91`, but the browser primary IndexedDB target had no `module-catalog` document after 90 seconds and `findOne('module-catalog')` timed out.
+- `2026-06-21`: bridge query pending probe `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6/browser-smoke/bridge-query-pending-probe-1782012369270.json` showed demand loading active, `pendingQueryBefore=2`, `pendingQueryAfter800ms=2`, and `pendingQueryAfterRead=2` while WebRTC was connected with `pendingAcks=0`. No page errors, failed requests, `fetch:ok`, or `fetch:error` were recorded.
+- `2026-06-21`: current browser blocker is classified as `data_plane_gap`, not skill wording, app artifact generation, shell filtering, or browser-smoke selectors. Next proof must distinguish WebRTC query ACK, chunk streaming/routing, and local materialization.
+- `2026-06-21`: transport peer pending probe `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6/browser-smoke/transport-peer-pending-probe-1782012991802.json` showed `rxdb.query.fetch` for `business_module_catalog` ACKed in 8ms, `peerPendingSize=0`, `pendingQueryCount=2`, and no observed `rxdb.query.chunk` or `rxdb.query.error` frames.
+- `2026-06-21`: direct master-pull probe `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6/browser-smoke/master-pull-probe-1782013261805.json` reached the peer but `masterChangesSince` for `business_module_catalog` returned `RC_PULL` with `SQLITE_CLOSED`.
+- `2026-06-21`: source patch prevents helper duplicate opens from closing the long-lived Business OS native peer database (`ignore_duplicate=true`, `close_duplicates=false`) and emits `rxdb.query.error` for post-ACK query-stream failures. Verification passed:
+  `cargo fmt --check --manifest-path src/core/rxdb/Cargo.toml`,
+  `cargo test --manifest-path src/core/rxdb/Cargo.toml stream_error_after_ack_emits_query_error_frame`,
+  `cargo test --bin ctox open_database_does_not_close_existing_business_os_instance`,
+  `cargo check --bin ctox`, and `git diff --check`.
 
 ## Open Issues
 
@@ -410,18 +464,21 @@ Use this before marking any generated app green:
   validator because runtime collections are not module-id scoped.
 - Browser E2E for Inventory must be rerun on `rfix6`, where generated
   collections are module-scoped, before the old native-sync issue can be closed.
-- Fresh-browser mount works but takes 25-47 seconds in observed cases; decide whether that is acceptable or a shell catalog readiness issue.
+- Fresh-browser mount for `rfix6` does not work yet. Older observations of
+  25-47 second mount latency are superseded for the active run by the focused
+  catalog probes above.
 - Historical repeated bench runs produced domain-level collection names such as
   `bench_inventory_items`; this was classified as `skill_resource_gap` plus
   `validator_gap` and is patched/installed.
 - Browser-smoke selector/wait precision is weak: Projects needed a scoped detail
   button selector and command replication wait; Quality needed a longer native
   sync wait.
-- Fresh `rfix6` browser E2E is blocked by module-catalog visibility: native
-  RxDB has all five modules and governance, but a fresh browser shell does not
-  mount `#bench_subscriptions_rfix6` and remains on `desktop`.
-- Focused browser state probing is required before a source patch. The next
-  patch target is not yet proven.
+- Fresh `rfix6` browser E2E is blocked by CTOX DB module-catalog materialization:
+  native RxDB has all five modules and governance and advertises a checkpoint,
+  but a fresh browser shell does not receive/materialize the catalog document,
+  does not mount `#bench_subscriptions_rfix6`, and remains on `desktop`.
+- Source fix for the current catalog/mount blocker is locally verified but not
+  yet installed in the running CTOX release.
 - Verify App Creator, Chat, App Store/template, CLI, and inbound/MCP entry paths all use the same app-module skill/resource context.
 - Confirm the skill remains short, English, resource-based, and not a prompt wall.
 - Keep unrelated dirty file `tests/business-os/ats_synthetic_generate.sh` out of this work unless explicitly requested.

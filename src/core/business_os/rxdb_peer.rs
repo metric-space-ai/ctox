@@ -6630,8 +6630,13 @@ async fn open_database(database_path: PathBuf) -> anyhow::Result<Arc<RxDatabase>
         password: None,
         hash_function: Arc::new(Sha256HashFunction),
         options: HashMap::new(),
-        ignore_duplicate: false,
-        close_duplicates: true,
+        // The native peer is long-lived and its replication pools hold
+        // collection/storage Arcs. Helper paths may open the same named RxDB in
+        // process; they must not close the live peer database underneath those
+        // pools, or the browser sees SQLITE_CLOSED from an apparently healthy
+        // peer.
+        ignore_duplicate: true,
+        close_duplicates: false,
         event_reduce: true,
         allow_slow_count: true,
     })
@@ -7938,6 +7943,44 @@ mod tests {
         })
         .await
         .map_err(|err| anyhow::anyhow!("open test Business OS RxDB database: {err}"))
+    }
+
+    #[test]
+    fn open_database_does_not_close_existing_business_os_instance() {
+        let root = tempfile::tempdir().expect("temp root");
+        let database_path = store::rxdb_store_path(root.path());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let first = open_database(database_path.clone())
+                .await
+                .expect("open first database");
+            first
+                .add_collections(collection_creators())
+                .await
+                .expect("register first collections");
+            let first_catalog = first
+                .collection("business_module_catalog")
+                .expect("first catalog collection");
+
+            let second = open_database(database_path)
+                .await
+                .expect("open duplicate database");
+
+            assert!(
+                !first.closed(),
+                "opening a helper database must not close the live peer database"
+            );
+            assert!(
+                !first_catalog.closed(),
+                "opening a helper database must not close live peer collections"
+            );
+
+            second.close().await.expect("close second database");
+            first.close().await.expect("close first database");
+        });
     }
 
     #[test]
