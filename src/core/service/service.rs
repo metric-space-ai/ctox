@@ -441,6 +441,7 @@ struct SharedState {
     worker_phase: Option<String>,
     app_recovery_active: bool,
     app_recovery_started_epoch_secs: Option<u64>,
+    durable_queue_lease_in_progress: bool,
     pending_prompts: VecDeque<QueuedPrompt>,
     leased_message_keys_inflight: HashSet<String>,
     current_goal_preview: Option<String>,
@@ -460,6 +461,7 @@ impl Default for SharedState {
             worker_phase: None,
             app_recovery_active: false,
             app_recovery_started_epoch_secs: None,
+            durable_queue_lease_in_progress: false,
             pending_prompts: VecDeque::new(),
             leased_message_keys_inflight: HashSet::new(),
             current_goal_preview: None,
@@ -11212,18 +11214,53 @@ enum DurableQueueDispatchGuard {
     CurrentWorkerFinalizing,
 }
 
-fn durable_queue_dispatch_blocked(
-    state: &Arc<Mutex<SharedState>>,
+struct DurableQueueLeaseAttemptGuard {
+    state: Arc<Mutex<SharedState>>,
+}
+
+impl Drop for DurableQueueLeaseAttemptGuard {
+    fn drop(&mut self) {
+        let mut shared = lock_shared_state(&self.state);
+        shared.durable_queue_lease_in_progress = false;
+    }
+}
+
+fn durable_queue_dispatch_blocked_locked(
+    shared: &SharedState,
     guard: DurableQueueDispatchGuard,
 ) -> bool {
-    let shared = lock_shared_state(state);
-    if shared.busy {
+    if shared.busy || shared.app_recovery_active || shared.durable_queue_lease_in_progress {
         return true;
     }
     match guard {
-        DurableQueueDispatchGuard::StrictIdle => shared.worker_active_count > 0,
-        DurableQueueDispatchGuard::CurrentWorkerFinalizing => shared.worker_active_count > 1,
+        DurableQueueDispatchGuard::StrictIdle
+        | DurableQueueDispatchGuard::CurrentWorkerFinalizing => shared.worker_active_count > 0,
     }
+}
+
+fn begin_durable_queue_lease_attempt(
+    state: &Arc<Mutex<SharedState>>,
+    guard: DurableQueueDispatchGuard,
+) -> Option<DurableQueueLeaseAttemptGuard> {
+    {
+        let mut shared = lock_shared_state(state);
+        if durable_queue_dispatch_blocked_locked(&shared, guard) {
+            return None;
+        }
+        shared.durable_queue_lease_in_progress = true;
+    }
+    Some(DurableQueueLeaseAttemptGuard {
+        state: state.clone(),
+    })
+}
+
+fn business_os_queue_task_is_app_module(task: &channels::QueueTaskView) -> bool {
+    business_os_app_module_target_from_prompt(&task.prompt).is_some()
+}
+
+fn leased_business_os_app_queue_task_exists(root: &Path) -> Result<bool> {
+    let tasks = channels::list_queue_tasks(root, &["leased".to_string()], 32)?;
+    Ok(tasks.iter().any(business_os_queue_task_is_app_module))
 }
 
 fn maybe_lease_next_durable_queue_prompt(
@@ -11231,9 +11268,9 @@ fn maybe_lease_next_durable_queue_prompt(
     state: &Arc<Mutex<SharedState>>,
     guard: DurableQueueDispatchGuard,
 ) -> Result<Option<QueuedPrompt>> {
-    if durable_queue_dispatch_blocked(state, guard) {
+    let Some(_lease_attempt) = begin_durable_queue_lease_attempt(state, guard) else {
         return Ok(None);
-    }
+    };
     match recover_stale_business_os_app_queue_tasks(
         root,
         state,
@@ -11256,11 +11293,17 @@ fn maybe_lease_next_durable_queue_prompt(
             ),
         ),
     }
-    if let Some(prompt) = maybe_lease_business_os_app_validation_rework(root, state)? {
-        return Ok(Some(prompt));
+    let app_queue_lease_active = leased_business_os_app_queue_task_exists(root)?;
+    if !app_queue_lease_active {
+        if let Some(prompt) = maybe_lease_business_os_app_validation_rework(root, state)? {
+            return Ok(Some(prompt));
+        }
     }
     let tasks = channels::list_queue_tasks(root, &["pending".to_string()], 16)?;
     for task in tasks {
+        if app_queue_lease_active && business_os_queue_task_is_app_module(&task) {
+            continue;
+        }
         if durable_queue_task_already_enqueued_in_memory_or_clear_stale(state, &task.message_key) {
             continue;
         }
@@ -23704,7 +23747,7 @@ Business OS command:
     }
 
     #[test]
-    fn worker_finalization_can_lease_next_durable_queue_task_before_activity_drop() {
+    fn app_queue_finalization_does_not_overlap_next_app_lease() {
         let root = temp_root("business-os-worker-finalization-leases-next");
         let current_task = channels::create_queue_task(
             &root,
@@ -23752,9 +23795,39 @@ Business OS command:
         );
         assert_eq!(route_status_for(&root, &next_task.message_key), "pending");
 
-        let leased = maybe_lease_next_durable_queue_prompt_for_worker_finalization(&root, &state)
-            .expect("worker-finalization dispatch should not fail")
-            .expect("expected the next durable app task to lease during worker finalization");
+        let finalizing =
+            maybe_lease_next_durable_queue_prompt_for_worker_finalization(&root, &state)
+                .expect("worker-finalization dispatch should not fail");
+        assert!(
+            finalizing.is_none(),
+            "worker-finalization dispatch must not overlap two Business OS app leases"
+        );
+        assert_eq!(route_status_for(&root, &next_task.message_key), "pending");
+
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.worker_active_count = 0;
+        }
+
+        let still_blocked = maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state)
+            .expect("idle dispatch should not fail while app lease is active");
+        assert!(
+            still_blocked.is_none(),
+            "idle dispatch must not lease a second Business OS app while the first app task is leased"
+        );
+        assert_eq!(route_status_for(&root, &next_task.message_key), "pending");
+
+        let current_job = queued_prompt_from_queue_task(current_task.clone());
+        complete_business_os_app_validation_success_to_leased_queue(
+            &root,
+            &current_job,
+            "Business OS app artifacts validated before next app lease",
+        )
+        .expect("failed to complete current app task");
+
+        let leased = maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state)
+            .expect("idle dispatch should not fail after current app completion")
+            .expect("expected next app task after current app completion");
 
         assert_eq!(
             leased.leased_message_keys,
@@ -23815,7 +23888,7 @@ Business OS command:
     }
 
     #[test]
-    fn worker_finalization_leases_pending_app_rework_despite_stale_inflight_key() {
+    fn app_rework_waits_for_idle_despite_stale_inflight_key() {
         let root = temp_root("business-os-worker-finalization-stale-rework-key");
         let rework_task = channels::create_queue_task(
             &root,
@@ -23842,9 +23915,25 @@ Business OS command:
                 .insert(rework_task.message_key.clone());
         }
 
-        let leased = maybe_lease_next_durable_queue_prompt_for_worker_finalization(&root, &state)
-            .expect("worker-finalization dispatch should not fail")
-            .expect("stale process-local inflight state must not block pending app rework");
+        let finalizing =
+            maybe_lease_next_durable_queue_prompt_for_worker_finalization(&root, &state)
+                .expect("worker-finalization dispatch should not fail");
+        assert!(
+            finalizing.is_none(),
+            "app rework must not lease while the previous app worker is finalizing"
+        );
+        assert_eq!(route_status_for(&root, &rework_task.message_key), "pending");
+
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.worker_active_count = 0;
+        }
+
+        let leased = maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state)
+            .expect("idle dispatch should not fail")
+            .expect(
+                "stale process-local inflight state must not block pending app rework once idle",
+            );
 
         assert_eq!(
             leased.leased_message_keys,
