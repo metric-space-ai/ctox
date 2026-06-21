@@ -372,32 +372,52 @@ async function markerVisible(page, rootSelector, marker, timeoutMs) {
   return true;
 }
 
-async function clickAutomation(page, rootSelector) {
-  return page.evaluate((selector) => {
+async function clickAutomation(page, rootSelector, marker) {
+  return page.evaluate(({ selector, marker }) => {
     function visible(el) {
       const box = el.getBoundingClientRect();
       const style = window.getComputedStyle(el);
       return box.width > 0 && box.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && !el.disabled;
     }
+    function automationControls(scope, scopeScore) {
+      return Array.from(scope.querySelectorAll('[data-action], button'))
+        .filter(visible)
+        .map((el, index) => {
+          const action = String(el.getAttribute('data-action') || '').toLowerCase();
+          const text = String(el.textContent || '').toLowerCase();
+          if (/(^|[-_:])(create|new|add|save|submit|cancel|close|edit|delete|remove|copy)([-_:]|$)/.test(action)) return null;
+          if (!(action.includes('followup') || action.includes('follow-up') || action.includes('review') || text.includes('follow-up') || text.includes('followup'))) return null;
+          const score = scopeScore
+            + (action.includes('batch') || text.includes('batch') ? 5 : 0)
+            + (action.includes('followup') || action.includes('follow-up') || text.includes('follow-up') || text.includes('followup') ? -3 : 0)
+            + (action.includes('review') || text.includes('review') ? -1 : 0)
+            + index / 1000;
+          return { el, score };
+        })
+        .filter(Boolean);
+    }
     const root = document.querySelector(selector);
     if (!root) return null;
-    const controls = Array.from(root.querySelectorAll('[data-action], button'))
-      .filter(visible)
-      .filter((el) => {
-        const action = String(el.getAttribute('data-action') || '').toLowerCase();
-        const text = String(el.textContent || '').toLowerCase();
-        if (/(^|[-_:])(create|new|add|save|submit|cancel|close|edit|delete|remove|copy)([-_:]|$)/.test(action)) return false;
-        return action.includes('followup') || action.includes('follow-up') || action.includes('review') || text.includes('follow-up') || text.includes('followup');
-      });
-    const control = controls[0];
+    const scopes = [];
+    for (const el of Array.from(root.querySelectorAll('*')).filter(visible)) {
+      if (!String(el.innerText || '').includes(marker)) continue;
+      const scope = el.closest('[data-record-id], article, li, tr, section, .record-card, .module-card, .card, .item, .row, div');
+      if (scope && root.contains(scope) && !scopes.includes(scope)) scopes.push(scope);
+    }
+    const controls = [
+      ...scopes.flatMap((scope, index) => automationControls(scope, index)),
+      ...automationControls(root, 10),
+    ].sort((a, b) => a.score - b.score);
+    const control = controls[0]?.el;
     if (!control) return null;
     const info = {
       action: control.getAttribute('data-action') || '',
       text: (control.textContent || '').trim().slice(0, 120),
+      scope: scopes.some((scope) => scope.contains(control)) ? 'record' : 'module',
     };
     control.click();
     return info;
-  }, rootSelector);
+  }, { selector: rootSelector, marker });
 }
 
 async function runE2e(options) {
@@ -486,7 +506,7 @@ async function runE2e(options) {
     }
     result.evidence.native_record = nativeRecord;
 
-    result.evidence.automation_action = await clickAutomation(page, rootSelector);
+    result.evidence.automation_action = await clickAutomation(page, rootSelector, options.marker);
     if (!result.evidence.automation_action) {
       result.failures.push('no visible follow-up/review automation action found');
       return result;
