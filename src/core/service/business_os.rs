@@ -623,16 +623,6 @@ fn handle_business_os_app(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 anyhow::bail!("Business OS app validation failed for `{module_id}`");
             }
             print_process_output(&output);
-            let completed = complete_leased_app_creator_tasks_after_validation(
-                root,
-                module_id,
-                "Business OS app artifacts validated by ctox business-os app validate",
-            )?;
-            if completed > 0 {
-                eprintln!(
-                    "Business OS app validation finalized {completed} leased queue task(s); stop now."
-                );
-            }
             Ok(())
         }
         Some("smoke") => {
@@ -1615,85 +1605,6 @@ fn business_os_app_reference_warnings(
         );
     }
     warnings
-}
-
-fn complete_leased_app_creator_tasks_after_validation(
-    root: &Path,
-    module_id: &str,
-    reason: &str,
-) -> anyhow::Result<usize> {
-    let tasks = channels::list_queue_tasks(root, &["leased".to_string()], 512)?;
-    let mut completed = 0usize;
-    for task in tasks {
-        if !queue_task_matches_validated_app_module(&task, module_id) {
-            continue;
-        }
-        let _ = crate::business_os::store::complete_business_command_from_app_validation_success(
-            root,
-            &task.message_key,
-            Some(module_id),
-            reason,
-        )?;
-        let reloaded = channels::load_queue_task(root, &task.message_key)?;
-        if reloaded.as_ref().map(|task| task.route_status.as_str()) != Some("handled") {
-            channels::update_queue_task(
-                root,
-                channels::QueueTaskUpdateRequest {
-                    message_key: task.message_key.clone(),
-                    route_status: Some("handled".to_string()),
-                    status_note: Some(
-                        "business-os:terminal-success: app validation passed".to_string(),
-                    ),
-                    ..Default::default()
-                },
-            )?;
-            crate::business_os::store::refresh_business_command_queue_task_projection(
-                root,
-                &task.message_key,
-            )?;
-        }
-        completed = completed.saturating_add(1);
-    }
-    Ok(completed)
-}
-
-fn queue_task_matches_validated_app_module(
-    task: &channels::QueueTaskView,
-    module_id: &str,
-) -> bool {
-    if task.route_status != "leased" {
-        return false;
-    }
-    let prompt = &task.prompt;
-    let exact_yaml_target = format!("module_id: {module_id}");
-    let exact_json_target = format!("\"module_id\": \"{module_id}\"");
-    let exact_dir_target = format!("runtime/business-os/installed-modules/{module_id}");
-    let exact_source_dir_target = format!("src/apps/business-os/modules/{module_id}");
-    (prompt.contains("ctox.business_os.app.create")
-        || prompt.contains("ctox.business_os.app.modify"))
-        && (prompt.contains(&exact_yaml_target)
-            || prompt.contains(&exact_json_target)
-            || prompt.contains(&exact_dir_target)
-            || prompt.contains(&exact_source_dir_target))
-}
-
-#[cfg(test)]
-fn app_validation_artifact_directory_for_task(
-    task: &channels::QueueTaskView,
-    module_id: &str,
-) -> String {
-    let prompt = task.prompt.to_ascii_lowercase();
-    let source_dir = format!("src/apps/business-os/modules/{module_id}");
-    if task.prompt.contains(&source_dir)
-        || prompt.contains("install_target: source")
-        || prompt.contains("\"install_target\": \"source\"")
-        || prompt.contains("\"install_target\":\"source\"")
-        || prompt.contains("--source")
-    {
-        source_dir
-    } else {
-        format!("runtime/business-os/installed-modules/{module_id}")
-    }
 }
 
 fn run_business_os_app_validator(
@@ -2688,7 +2599,11 @@ fn business_os_usage_base() -> &'static str {
 }
 
 fn exists_label(exists: bool) -> &'static str {
-    if exists { "ok" } else { "missing" }
+    if exists {
+        "ok"
+    } else {
+        "missing"
+    }
 }
 
 fn existing_file_path(root: &Path, candidates: &[&str]) -> PathBuf {
@@ -3565,14 +3480,12 @@ mod tests {
                 Some(BUSINESS_OS_APP_BENCH_SKILL)
             );
             assert!(task.prompt.contains("ctox.business_os.app.create"));
-            assert!(
-                task.prompt
-                    .contains("runtime/business-os/installed-modules/bench_")
-            );
-            assert!(
-                task.prompt
-                    .contains("ctox business-os app references --json")
-            );
+            assert!(task
+                .prompt
+                .contains("runtime/business-os/installed-modules/bench_"));
+            assert!(task
+                .prompt
+                .contains("ctox business-os app references --json"));
             assert!(
                 task.prompt.contains("\"id\": \"local-dev\""),
                 "bench tasks without --actor must target the local Business OS user"
@@ -3789,9 +3702,16 @@ mod tests {
     }
 
     #[test]
-    fn app_validate_success_marks_matching_leased_creator_task_handled() {
+    fn app_validate_success_does_not_finalize_matching_leased_creator_task() {
         let root = tempfile::tempdir().expect("temp root");
         let module_id = "projects";
+        let script_dir = root.path().join("src/apps/business-os/scripts");
+        fs::create_dir_all(&script_dir).expect("create validator script dir");
+        fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "process.exit(0);\n",
+        )
+        .expect("write green validator");
         let task_context = format!(
             "Business OS app task metadata:\n- module_id: {module_id}\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/{module_id}\nBusiness OS command:\n- type: ctox.business_os.app.create\nRequired CTOX resources: business-os-app-module-development\n"
         );
@@ -3812,62 +3732,22 @@ mod tests {
         channels::lease_queue_task(root.path(), &created.message_key, "ctox-service")
             .expect("lease queue task");
 
-        let completed = complete_leased_app_creator_tasks_after_validation(
+        handle_business_os_app(
             root.path(),
-            module_id,
-            "validated in test",
+            &[
+                "validate".to_string(),
+                module_id.to_string(),
+                "--installed".to_string(),
+            ],
         )
-        .expect("complete app creator queue task");
+        .expect("validate should pass");
 
-        assert_eq!(completed, 1);
         let reloaded = channels::load_queue_task(root.path(), &created.message_key)
             .expect("load queue task")
             .expect("queue task exists");
-        assert_eq!(reloaded.route_status, "handled");
-        assert_eq!(
-            reloaded.status_note.as_deref(),
-            Some("business-os:terminal-success: app validation passed")
-        );
-    }
-
-    #[test]
-    fn app_validate_matcher_accepts_creator_task_without_skill_id() {
-        let task = channels::QueueTaskView {
-            message_key: "queue:system::projects".to_string(),
-            thread_key: "business-os/creator".to_string(),
-            title: "Projects Bench".to_string(),
-            prompt: "Business OS app task metadata:\n- module_id: projects\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
-            workspace_root: None,
-            ticket_self_work_id: None,
-            priority: "urgent".to_string(),
-            suggested_skill: None,
-            parent_message_key: None,
-            route_status: "leased".to_string(),
-            status_note: None,
-            lease_owner: Some("ctox-service".to_string()),
-            leased_at: Some("2026-06-19T09:00:00Z".to_string()),
-            acked_at: None,
-            created_at: "2026-06-19T09:00:00Z".to_string(),
-            sort_at: "2026-06-19T09:00:00Z".to_string(),
-            updated_at: "2026-06-19T09:00:00Z".to_string(),
-        };
-
-        assert!(queue_task_matches_validated_app_module(&task, "projects"));
-        assert_eq!(
-            app_validation_artifact_directory_for_task(&task, "projects"),
-            "runtime/business-os/installed-modules/projects"
-        );
-
-        let modify_task = channels::QueueTaskView {
-            prompt: task
-                .prompt
-                .replace("ctox.business_os.app.create", "ctox.business_os.app.modify"),
-            ..task
-        };
-        assert!(queue_task_matches_validated_app_module(
-            &modify_task,
-            "projects"
-        ));
+        assert_eq!(reloaded.route_status, "leased");
+        assert_eq!(reloaded.status_note.as_deref(), None);
+        assert_eq!(reloaded.acked_at.as_deref(), None);
     }
 
     #[test]
@@ -4055,27 +3935,21 @@ mod tests {
                 .and_then(serde_json::Value::as_bool),
             Some(false)
         );
-        assert!(
-            invite
-                .get("sync_room")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .starts_with("ctox-business-os:")
-        );
-        assert!(
-            invite
-                .get("signaling_urls")
-                .and_then(serde_json::Value::as_array)
-                .map(|urls| !urls.is_empty())
-                .unwrap_or(false)
-        );
-        assert!(
-            !invite
-                .get("signaling_room_password")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .is_empty()
-        );
+        assert!(invite
+            .get("sync_room")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .starts_with("ctox-business-os:"));
+        assert!(invite
+            .get("signaling_urls")
+            .and_then(serde_json::Value::as_array)
+            .map(|urls| !urls.is_empty())
+            .unwrap_or(false));
+        assert!(!invite
+            .get("signaling_room_password")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .is_empty());
 
         let desktop_link = invite
             .get("desktop_link")

@@ -43,6 +43,10 @@ Installed CTOX:
 - Source branch: `main`
 - Last source head checked before this plan edit:
   `85ee58d2 Serialize Business OS app queue leasing`
+- Local source delta awaiting commit/install: make
+  `ctox business-os app validate` read-only again. Validation must never mark
+  live leased app-creation tasks as handled; explicit `finalize` remains the
+  mutating command.
 - Active install:
   `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T084616Z`
 - Install path: applied through `ctox upgrade --dev`
@@ -53,43 +57,60 @@ Installed CTOX:
   which resolves into the managed runtime/state root. Runtime apps must not be
   written into source paths.
 - CTOX status at latest check: `running=true`, `busy=true`,
-  `worker_active_count=1`, `pending_count=3`, `worker_phase=queue: running`
+  `worker_active_count=1`, `pending_count=1`, `worker_phase=queue: running`
 - Business OS status at latest check: `ok=true`, native RxDB peer
   `replicationUp=true`, `http_bridge_available=false`
 
 Current proof run:
 
-- Run id: `rfix8`
+- Run id: `rfix9`
 - Suite: `core-five`
 - Model: `minimax-m3`
 - Context: `256k`
 - Entry path: real `ctox.business_os.app.create` tasks through installed CTOX
 - Evidence dir:
-  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix8`
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix9`
 - Latest status snapshot:
-  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix8/status-1782031263632.json`
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix9/status-1782039498716.json`
 
 Latest result:
 
-- `rfix8` is in progress through real installed CTOX app-create tasks.
-  Subscriptions reached terminal queue success with installed validation green
-  and installed browser smoke green. Quality later reached terminal queue
-  success with installed validation green. After installing the queue
-  serialization fix, Inventory was requeued as unstarted, Projects is the only
-  leased app task, and Contracts remains pending.
-- `rfix8` exposed a second `runtime_orchestration_gap`: after the throughput
-  fix, two Business OS app-create tasks were leased one second apart
-  (`Quality` at `2026-06-21T08:27:25Z`, `Inventory` at
-  `2026-06-21T08:27:26Z`). That overlap is a CTOX queue/lifecycle bug, not a
-  generated-app failure and not a reason to add more app-building rules.
-- `rfix8` remains valid forensic evidence, but it is not a clean production
-  signoff run because part of it ran before the app-queue serialization fix.
-  Start a fresh run only after the forensic `rfix8` queue is cleanly retired or
-  has drained without manual artifact edits.
+- `rfix8` drained to `bench_green=true`, `handled=5`, `leased=0`,
+  `validation_passed=5`, and no missing app artifact directories. It remains
+  valid forensic evidence only, not production signoff, because the run began
+  before the app-queue serialization fix and already exposed overlapping app
+  leases.
+- `rfix9` was started after the serialization fix and submitted five real
+  app-create tasks. It is now contaminated as production evidence because
+  `ctox business-os app validate bench_projects_rfix9` was run while the
+  Projects worker was still live. The installed `validate` command marked the
+  leased task handled, then the worker continued mutating the same app files.
+  This is a `runtime_orchestration_gap` in the CLI contract, not evidence for a
+  deterministic builder and not a reason to add more app-building rules.
+- Source fix in progress: make `validate` read-only and leave queue/command
+  mutation to explicit `ctox business-os app finalize <module-id> --task-id
+  <queue-task-id>`.
 - The installed app smoke CLI is working from the managed release runtime. It
   is a validation tool only; it does not generate, repair, or rewrite app
   artifacts.
-- No generated `rfix8` app files may be patched by hand.
+- No generated `rfix8` or `rfix9` app files may be patched by hand.
+
+Latest local source fix:
+
+- Classification: `runtime_orchestration_gap`, not skill text or model output.
+- Patch in `src/core/service/business_os.rs`: remove the side effect that made
+  `ctox business-os app validate` complete matching leased app-creator queue
+  tasks. `validate` now runs static/module tests and reports only.
+- Explicit mutation remains available through
+  `ctox business-os app finalize <module-id> --task-id <queue-task-id>`.
+- Regression guard:
+  `app_validate_success_does_not_finalize_matching_leased_creator_task`.
+- Verification runs:
+  `cargo test --bin ctox app_validate_success_does_not_finalize_matching_leased_creator_task -- --nocapture`,
+  `cargo test --bin ctox app_bench_run_submits_real_tasks_without_writing_app_artifacts -- --nocapture`,
+  and `rustfmt --check src/core/service/business_os.rs`.
+- Source fix status: tested locally; commit, push, install, and fresh `rfix10`
+  run still pending.
 
 Latest installed source fix:
 
@@ -211,9 +232,9 @@ App creation is production-ready only when every gate is green.
 | --- | --- | --- |
 | Skill shape | in_progress | English, concise, resource-based, no prompt wall, requires three reference apps, clear Do/Don't list, clear green checklist, includes browser-smoke finalization. |
 | Correct install location | done | Generated apps are under `runtime/business-os/installed-modules/<module-id>` and survive `ctox upgrade --dev`. |
-| CTOX-native creation | in_progress | Fresh five-app bench is created through real app-create tasks, not direct file writes. `rfix8` is running, but cannot be production signoff because it exposed pre-fix app queue overlap. |
-| Static validation | done | `rfix7` reached terminal queue success and installed validation green for all five apps. |
-| Browser mount | in_progress | `rfix8` Subscriptions installed browser smoke is green; full fresh post-serialization run is still required. |
+| CTOX-native creation | in_progress | Fresh five-app bench is created through real app-create tasks, not direct file writes. `rfix8` is forensic green but pre-fix; `rfix9` is contaminated by a `validate` side effect; `rfix10` is required after the read-only validation fix is installed. |
+| Static validation | in_progress | `rfix7` and forensic `rfix8` reached terminal installed validation green for all five apps; a clean post-read-only-validate run is still required. |
+| Browser mount | in_progress | `rfix8` Subscriptions installed browser smoke is green; full fresh post-read-only-validate run is still required. |
 | Five-app browser E2E | blocked | `rfix7` browser E2E found dead Create/New flows in four apps. `rfix8` exposed queue overlap before a clean five-app browser proof could be used. |
 | Entry-point coverage | pending | Chat, App Creator, App Store/template flow, CLI, and inbound/MCP paths all attach the same app-module creation contract. |
 | Versioning contract | pending | Existing app version metadata is audited; missing enforcement is listed or patched; users see only versions `>=1.0.0`; each `x.0.0` major is independently installable with its own app icon. |
@@ -227,9 +248,9 @@ App creation is production-ready only when every gate is green.
 | 0. Remove deterministic builder | done | Codex | App creation uses durable tasks and agent implementation, not deterministic generated source. | Earlier deterministic builder artifacts removed; bench runner submits real app-create tasks. |
 | 1. Simplify skill/resources | in_progress | Codex | Skill/resources are English, concise, reference/resource based, avoid prompt walls, state CTOX DB/command patterns without legacy fallbacks, and require browser-smoke proof. | Latest resources now include the DOM-scope lesson and `ctox business-os app smoke`; needs fresh run proof after install. |
 | 2. Build CTOX-native bench | done | Codex | Bench submits real app-create tasks and records evidence without creating or repairing app files. | `ctox business-os app bench run/status`; run dirs under `runtime/business-os/app-creation-bench/`. |
-| 3. Close lifecycle/orchestration gaps | in_progress | Codex | Queue, validation, launchd/dev-upgrade, module catalog, and native peer lifecycle work without manual service recovery. | `aaf4bbb8` moved workspace sync outside the `SharedState` lock. `6766b9d1` skips full workspace desktop indexing for runtime app module tasks. `rfix8` then exposed double app-task leasing; current source serializes Business OS app queue leases and has focused tests green. |
+| 3. Close lifecycle/orchestration gaps | in_progress | Codex | Queue, validation, launchd/dev-upgrade, module catalog, and native peer lifecycle work without manual service recovery. | `aaf4bbb8` moved workspace sync outside the `SharedState` lock. `6766b9d1` skips full workspace desktop indexing for runtime app module tasks. `85ee58d2` serializes Business OS app queue leases. `rfix9` exposed that `validate` mutates leased tasks; local source makes `validate` read-only and has focused tests green. |
 | 4. Close validator/resource gaps | in_progress | Codex | Validator/tooling rejects predictable bad app artifacts before signoff, without blocking valid vanilla apps. | `89c2a75d` rejects old DB fallbacks; `5811f9c0`/`710c3676` add and install `ctox business-os app smoke` to catch dead create flows in the real shell. |
-| 5. Fresh five-app CTOX proof | done | Codex | One fresh post-validator run reaches terminal queue success and installed validation green for five apps. | `rfix7` terminal green: 5 handled, 0 leased, 5/5 installed validations green. |
+| 5. Fresh five-app CTOX proof | in_progress | Codex | One fresh post-read-only-validate run reaches terminal queue success and installed validation green for five apps. | `rfix7` terminal green before browser-smoke hardening; `rfix8` forensic green after queue serialization but contains pre-fix overlap; `rfix9` is contaminated by validation finalization side effects. |
 | 6. Browser proof | blocked | Codex | Browser mount, UI persistence, reload persistence, native sync, and automation smoke pass for all five fresh apps. | `rfix7` browser evidence is red: Inventory mount error, Contracts dead create flow, five-app E2E shows four dead Create/New flows; Quality positive-control is green. |
 | 7. Entry-point proof | pending | Codex | Every user-facing app creation/modification path uses the same skill/resource context and runtime app contract. | Not done. |
 | 8. Versioning proof | pending | Codex | App version visibility and major-version independence are either implemented or listed as missing work. | Not done. |
@@ -260,14 +281,16 @@ classify the evidence as `model_failure`, `skill_resource_gap`,
 
 Current focus:
 
-- Commit, push, and install the app queue serialization fix through
-  `ctox upgrade --dev`.
-- Treat the current `rfix8` run as forensic evidence because it already saw
-  pre-fix overlapping app leases.
-- Start a fresh post-serialization bench run for production signoff.
+- Commit, push, and install the read-only `ctox business-os app validate` fix
+  through `ctox upgrade --dev`.
+- Treat `rfix8` as forensic evidence because it contains pre-fix overlapping
+  app leases.
+- Treat `rfix9` as forensic evidence because an installed validation command
+  prematurely finalized a live leased Projects app task.
+- Start a fresh post-read-only-validate bench run `rfix10` for production
+  signoff.
 - Require both installed static validation and `ctox business-os app smoke`
-  proof for the remaining fresh apps before returning to full five-app browser
-  E2E.
+  proof for the fresh apps before returning to full five-app browser E2E.
 
 Immediate checklist:
 
@@ -340,17 +363,25 @@ Immediate checklist:
 - [x] Commit and push the app queue serialization fix.
 - [x] Install the app queue serialization fix through `ctox upgrade --dev`.
 - [x] Verify installed source contains the app queue serialization guard.
-- [ ] Let or cleanly retire the forensic `rfix8` queue before production
-  signoff.
-- [ ] Start a fresh post-serialization five-app run.
+- [x] Let the forensic `rfix8` queue drain without hand-editing app artifacts.
+- [x] Start fresh post-serialization five-app run `rfix9`.
+- [x] Classify `rfix9` contamination as `runtime_orchestration_gap`: installed
+  `ctox business-os app validate` finalized a live leased Projects app task.
+- [x] Patch local source so `validate` is read-only and `finalize` is the only
+  app-validation CLI path that mutates queue/command state.
+- [x] Verify the read-only validation fix with focused Rust tests.
+- [ ] Commit and push the read-only validation fix.
+- [ ] Install the read-only validation fix through `ctox upgrade --dev`.
+- [ ] Start a fresh post-read-only-validate five-app run `rfix10`.
 - [ ] Require installed validation and browser smoke for each fresh app before
   returning to full browser E2E.
 
 Current slice exit criteria:
 
-- Source has a committed, pushed, and installed app queue serialization fix.
-- A fresh post-serialization bench run reaches static validation green and browser
-  smoke green, or failures are classified with evidence before further patching.
+- Source has a committed, pushed, and installed read-only validation fix.
+- A fresh post-read-only-validate bench run reaches static validation green and
+  browser smoke green, or failures are classified with evidence before further
+  patching.
 
 ## Bench Matrix
 
@@ -374,17 +405,27 @@ Completed forensic run `rfix7`:
 | Contracts | `bench_contracts_rfix7` | handled | green | mounted | red | Browser smoke observes `new-contract` click, but no dialog/form/save flow appears. |
 | Quality | `bench_quality_rfix7` | handled | green | mounted | partial green | Smoke green for `create-complaint`; prior focused E2E proved browser collection, native SQLite, and reload persistence. Automation still needs full fresh-run proof. |
 
-Active forensic run `rfix8`:
+Completed forensic run `rfix8`:
 
 | Case | Module Id | Queue Status | Static Validation | Browser Smoke | Notes |
 | --- | --- | --- | --- | --- | --- |
 | Subscriptions | `bench_subscriptions_rfix8` | handled | green | green | Terminal success; installed smoke clicked `add-subscription` and revealed a form/save flow. |
-| Inventory | `bench_inventory_rfix8` | pending | skipped | not run | Originally leased at `2026-06-21T08:27:26Z` under pre-fix code, then requeued as unstarted at `2026-06-21T08:46:00Z`. |
-| Projects | `bench_projects_rfix8` | leased | red so far | not run | Only currently leased app task after installing the queue serialization fix; artifact directory currently has only `module.json` while same-task rework is running. |
-| Contracts | `bench_contracts_rfix8` | pending | skipped | not run | Pending. |
+| Inventory | `bench_inventory_rfix8` | handled | green | not run | Originally leased at `2026-06-21T08:27:26Z` under pre-fix code, then requeued as unstarted after the queue serialization fix and later completed. |
+| Projects | `bench_projects_rfix8` | handled | green | not run | Completed after the app-queue serialization fix; not production signoff because the run already contained pre-fix overlap. |
+| Contracts | `bench_contracts_rfix8` | handled | green | not run | Completed after the app-queue serialization fix. |
 | Quality | `bench_quality_rfix8` | handled | green | not run | Was leased at `2026-06-21T08:27:25Z` and later reached terminal success. The overlapping lease is runtime evidence, not app evidence. |
 
-Only the latest fresh post-fix run may be used for production signoff.
+Contaminated forensic run `rfix9`:
+
+| Case | Module Id | Queue Status | Static Validation | Browser Smoke | Notes |
+| --- | --- | --- | --- | --- | --- |
+| Subscriptions | `bench_subscriptions_rfix9` | handled | skipped in latest status | not run | Reached terminal success before the run was declared contaminated. |
+| Inventory | `bench_inventory_rfix9` | handled | skipped in latest status | not run | Reached terminal success after same-task rework; generated extra locale `.js` files but no source artifact was hand-edited. |
+| Projects | `bench_projects_rfix9` | handled | contaminated | not run | `ctox business-os app validate bench_projects_rfix9` finalized the live leased task at `2026-06-21T10:46:46Z`; the worker later continued and malformed action attributes. This is a CLI lifecycle bug. |
+| Contracts | `bench_contracts_rfix9` | handled | skipped in latest status | not run | Reached terminal success after same-task repair. |
+| Quality | `bench_quality_rfix9` | pending | skipped | not run | Pending at latest status because Projects stayed active under the contaminated lifecycle. |
+
+Only a fresh post-read-only-validate run may be used for production signoff.
 
 ## Failure Classification
 
@@ -476,16 +517,17 @@ Use this before marking any generated app green:
 
 ## Next Actions
 
-1. Commit, push, and install the app-finalization throughput fix exposed by
-   `rfix8`.
-2. Continue `rfix8` after install/recovery.
-3. Require installed validation plus browser smoke for each fresh app.
-4. Run full browser E2E only after the smoke gate is green for all five apps.
-5. Do not hand-edit generated app artifacts.
-6. If browser smoke or E2E is red, classify each failure before patching.
-7. After browser E2E is green, verify entry paths: Chat, App Creator, App
+1. Commit, push, and install the read-only validation fix exposed by `rfix9`.
+2. Ignore `rfix9` for production signoff because the installed CLI already
+   contaminated it.
+3. Start fresh five-app bench run `rfix10` after install.
+4. Require installed validation plus browser smoke for each fresh app.
+5. Run full browser E2E only after the smoke gate is green for all five apps.
+6. Do not hand-edit generated app artifacts.
+7. If browser smoke or E2E is red, classify each failure before patching.
+8. After browser E2E is green, verify entry paths: Chat, App Creator, App
    Store/template flow, CLI, and inbound/MCP.
-8. Audit app versioning enforcement and list or patch the missing pieces.
+9. Audit app versioning enforcement and list or patch the missing pieces.
 
 ## Evidence Log
 
@@ -695,16 +737,44 @@ Use this before marking any generated app green:
   requeued to pending as unstarted, Contracts pending, and Subscriptions plus
   Quality handled. This is early evidence that the serialization fix is active,
   but `rfix8` is still forensic-only because it contains pre-fix overlap.
+- `2026-06-21`: forensic `rfix8` drained without manual app artifact edits.
+  Final status
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix8/status-1782034301490.json`
+  shows `bench_green=true`, `handled=5`, `leased=0`, `validation_passed=5`,
+  no missing app artifact directories, and no failed queue tasks. This confirms
+  the queue serialization fix allowed the remaining apps to drain, but it is not
+  a clean production signoff because the run started before that fix.
+- `2026-06-21`: `rfix9` submitted five real app-create tasks with
+  `creates_app_files=false`, `repairs_app_files=false`,
+  `submits_real_business_commands=true`, and runtime install targets.
+- `2026-06-21`: `rfix9` was declared contaminated as production evidence.
+  Status
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix9/status-1782039498716.json`
+  shows four handled tasks and one pending task, but the Projects task had been
+  prematurely finalized by the installed `ctox business-os app validate`
+  command while the worker was still active. Classification:
+  `runtime_orchestration_gap`.
+- `2026-06-21`: local source patch in `src/core/service/business_os.rs` makes
+  `ctox business-os app validate` read-only by removing leased queue task
+  completion from validation. Explicit app completion remains under
+  `ctox business-os app finalize <module-id> --task-id <queue-task-id>`.
+  Verification passed:
+  `cargo test --bin ctox app_validate_success_does_not_finalize_matching_leased_creator_task -- --nocapture`,
+  `cargo test --bin ctox app_bench_run_submits_real_tasks_without_writing_app_artifacts -- --nocapture`,
+  and `rustfmt --check src/core/service/business_os.rs`.
 
 ## Open Issues
 
-- The five-app static gate is green, but browser E2E for `rfix7` is red due to
-  repeated dead Create/New flows. A fresh bench run is required after the
-  smoke/skill patch is installed.
-- `rfix8` found app queue overlap after the throughput fix. The source fix is
-  now committed, pushed, and installed; a fresh post-fix bench is still needed.
-- The current `rfix8` run cannot be the production signoff run because it
-  includes pre-fix overlapping app leases. Use it as forensic evidence only.
+- The five-app static gate has been green in earlier runs, but browser E2E for
+  `rfix7` was red due to repeated dead Create/New flows. A clean fresh run must
+  prove the smoke and browser gates after the current lifecycle fix.
+- `rfix8` found app queue overlap after the throughput fix. The queue
+  serialization source fix is committed, pushed, installed, and `rfix8` drained
+  green, but the run is forensic-only because it contains pre-fix overlap.
+- `rfix9` cannot be the production signoff run because installed
+  `ctox business-os app validate` prematurely finalized a live leased Projects
+  task. The local source fix makes validation read-only; it still needs commit,
+  push, install, and fresh `rfix10` proof.
 - Entry-point proof across Chat, App Creator, App Store/template flow, CLI, and
   inbound/MCP is still pending.
 - App versioning policy must be audited and either enforced or listed as missing
