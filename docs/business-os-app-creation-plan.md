@@ -37,21 +37,22 @@ Status values: `pending`, `in_progress`, `blocked`, `done`.
 Last updated: `2026-06-21`
 
 Overall status: `in_progress`. The core CTOX app-creation path is green for
-the first clean five-app MiniMax M3 bench after real skill dispatch, but final
-production signoff still needs deeper E2E proof for save/reload persistence,
-native DB sync, automation dispatch, entry-point coverage, and versioning.
+the clean five-app MiniMax M3 bench after real skill dispatch, including
+installed validation, browser smoke, save/reload persistence, native CTOX DB
+sync, and command-bus automation. Final production signoff still needs
+entry-point coverage and versioning proof.
 
 Installed CTOX:
 
 - Source branch: `main`
 - Last source head checked before this plan edit:
-  `d6389d0b Update app creation plan after skill dispatch install`
+  `25fb0260 Limit app E2E form filling to visible forms`
 - Local source delta awaiting commit/install: none for the app-creation proof.
-  The skill-dispatch fix is committed, pushed, installed, and verified in the
-  installed source. No deterministic app builder or template writer is active
-  in the product flow.
+  The skill-dispatch fix and the test-only app E2E command are committed,
+  pushed, installed, and verified in the installed source. No deterministic app
+  builder or template writer is active in the product flow.
 - Active install:
-  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T134556Z`
+  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T161830Z`
 - Install path: applied through `ctox upgrade --dev`
 - State root:
   `/Users/michaelwelsch/.local/state/ctox`
@@ -59,9 +60,10 @@ Installed CTOX:
   `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/installed-modules/<module-id>`
   which resolves into the managed runtime/state root. Runtime apps must not be
   written into source paths.
-- Latest CTOX status after `rfix12`: `running=true`, `busy=false`,
-  `worker_active_count=0`, Business OS `ok=true`, native RxDB peer
-  `replicationUp=true`, `http_bridge_available=false`.
+- Latest CTOX status after deep E2E: `running=true`, Business OS `ok=true`,
+  native RxDB peer `replicationUp=true`, `http_bridge_available=false`.
+  CTOX became `busy=true` only because the generated apps successfully queued
+  normal command-bus follow-up tasks during E2E.
 
 Current proof run:
 
@@ -76,6 +78,8 @@ Current proof run:
   `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix12/status-1782055293408.json`
 - Browser smoke evidence:
   `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix12/browser-smoke/`
+- Deep browser E2E evidence:
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix12/deep-e2e/`
 
 Latest result:
 
@@ -87,15 +91,27 @@ Latest result:
   Subscriptions, Inventory, Projects, Contracts, and Quality. Each smoke opened
   the primary Create/New flow in the real Business OS shell with no console
   errors, page errors, or failed requests.
+- Installed deep browser E2E is green for all five generated runtime apps:
+  Subscriptions, Inventory, Projects, Contracts, and Quality. Each E2E creates a
+  primary record through the real UI, observes the marker after save, reloads
+  the module and observes the marker again, verifies the marker in native CTOX
+  DB/RxDB SQLite tables, clicks a record-scoped CTOX follow-up/review action,
+  and verifies a matching native `business_commands` row.
+- The first red Subscriptions deep-E2E attempt clicked a global batch action
+  before the record action; the first red Contracts deep-E2E attempt filled
+  toolbar filters outside the form. Both were classified and fixed as
+  `test_harness_gap`, not generated-app, skill, or deterministic-builder fixes.
 - Projects hit one transient `database is locked` worker/rework event before
   succeeding on the same normal queue task. Classification:
   `runtime_orchestration_gap` to watch, not a skill or app-code failure.
 - The installed app smoke CLI is a validation tool only; it must not generate,
   repair, or rewrite app artifacts.
+- The installed app E2E CLI is a validation/proof tool only; it must not
+  generate, repair, or rewrite app artifacts.
 - No generated `rfix8`, `rfix9`, `rfix10`, `rfix11`, or `rfix12` app files may
   be patched by hand.
 
-Latest installed source fix:
+Historical source fix: read-only validation:
 
 - Classification: `runtime_orchestration_gap`, not skill text or model output.
 - Patch in `src/core/service/business_os.rs`: remove the side effect that made
@@ -112,7 +128,7 @@ Latest installed source fix:
 - Source fix status: committed, pushed, and installed as
   `branch-main-20260621T110239Z`.
 
-Latest local source fix:
+Historical source fix:
 
 - Classification: `skill_resource_gap` plus `validator_gap`.
 - Patch in `src/skills/system/product_engineering/business-os-app-module-development/references/`
@@ -131,10 +147,11 @@ Latest local source fix:
   `node --check src/apps/business-os/scripts/validate-app-module.test.mjs`, and
   source-validator checks against all five `rfix10` modules. The new validator
   rejects the four browser-smoke-red apps and passes Projects.
-- Source fix status: tested locally; commit, push, install, and fresh `rfix11`
-  run still pending.
+- Source fix status: committed, pushed, installed as
+  `branch-main-20260621T125644Z`, and superseded by the clean `rfix12`
+  smoke/deep-E2E proof.
 
-Latest installed source fix:
+Historical source fix: app queue serialization:
 
 - Classification: `runtime_orchestration_gap`, not skill text or model output.
 - Patch in `src/core/service/service.rs`: serialize Business OS app queue
@@ -193,7 +210,7 @@ Previous source fix:
 - Installed validator proof: the old `bench_inventory_rfix6` artifact is
   rejected by installed `ctox business-os app validate`.
 
-Latest local regression guard:
+Historical regression guard:
 
 - `src/core/service/service.rs` has a committed regression test for status
   snapshot recovery of a leased app task whose target directory is missing.
@@ -258,11 +275,11 @@ App creation is production-ready only when every gate is green.
 | CTOX-native creation | done | `rfix12` created five apps through real app-create queue tasks, not a deterministic builder or direct bench file writer. |
 | Static validation | done | `rfix12` reached terminal queue success and installed validation green for all five apps. Status evidence: `status-1782055293408.json`. |
 | Browser mount | done | `rfix12` installed browser smoke is green for all five apps, including primary Create/New flow visibility and zero console/page/request failures. Evidence: `rfix12/browser-smoke/*.json`. |
-| Five-app browser E2E | in_progress | Mount/Create smoke is green for all five apps. Deeper save, reload persistence, native DB sync, and automation dispatch E2E is still pending. |
+| Five-app browser E2E | done | `rfix12/deep-e2e/*.json` is green for all five apps. Each app creates data through the real UI, reloads with the record still visible, syncs to native CTOX DB/RxDB SQLite tables, and dispatches a record-scoped command-bus automation. |
 | Entry-point coverage | pending | Chat, App Creator, App Store/template flow, CLI, and inbound/MCP paths are not production-proven yet. The queue/app-create path is proven by `rfix12`; the other entry paths still need evidence. |
 | Versioning contract | pending | Existing app version metadata is audited; missing enforcement is listed or patched; users see only versions `>=1.0.0`; each `x.0.0` major is independently installable with its own app icon. |
-| Install/upgrade lifecycle | in_progress | `ctox upgrade --dev` applies source fixes, preserves runtime modules, and leaves CTOX/Business OS healthy. `rfix12` was run from installed release `branch-main-20260621T134556Z`; latest status is healthy. |
-| No regressions | in_progress | Relevant Rust/JS checks and browser evidence are green for the latest app-creation path. Full E2E and versioning checks remain. |
+| Install/upgrade lifecycle | in_progress | `ctox upgrade --dev` applies source fixes, preserves runtime modules, and leaves CTOX/Business OS healthy. Latest installed release is `branch-main-20260621T161830Z`; latest status is healthy. Watch the non-fatal sudo/launchctl warning separately if it becomes user-visible. |
+| No regressions | in_progress | Relevant Rust/JS checks and browser evidence are green for the latest app-creation path. Entry-point coverage and versioning checks remain. |
 
 ## Phase Tracker
 
@@ -274,7 +291,7 @@ App creation is production-ready only when every gate is green.
 | 3. Close lifecycle/orchestration gaps | in_progress | Codex | Queue, validation, launchd/dev-upgrade, module catalog, and native peer lifecycle work without manual service recovery. | `rfix12` completed 5/5, but Projects had a transient `database is locked` worker/rework event before succeeding. Watch or harden SQLite/queue concurrency only if it recurs. |
 | 4. Close validator/resource gaps | done | Codex | Validator/tooling rejects predictable bad app artifacts before signoff, without blocking valid vanilla apps. | `89c2a75d` rejects old DB fallbacks; `5811f9c0`/`710c3676` add and install `ctox business-os app smoke`; `1a15ed72` rejects runtime apps that never render their `index.html` primary create UI into `ctx.host`. Do not add more validator rules unless a new systemic contract gap is proven. |
 | 5. Fresh five-app CTOX proof | done | Codex | One fresh post-skill-dispatch run reaches terminal queue success and installed validation green for five apps. | `rfix12`: 5 handled, 0 failed/blocked/cancelled, 5/5 installed validations green. |
-| 6. Browser proof | in_progress | Codex | Browser mount, UI persistence, reload persistence, native sync, and automation smoke pass for all five fresh apps. | `rfix12` mount/Create browser smoke is green for all five apps. Deeper save/reload/native-sync/automation E2E remains pending. |
+| 6. Browser proof | done | Codex | Browser mount, UI persistence, reload persistence, native sync, and automation smoke pass for all five fresh apps. | `rfix12` smoke and deep E2E are green for all five apps. Evidence: `rfix12/browser-smoke/*.json` and `rfix12/deep-e2e/*.json`. |
 | 7. Skill dispatch proof | done | Codex | Bound queue/app tasks load the exact skill body through the harness skill injector. | Commit `791d6da6` renders linked `SKILL.md` mentions for unique suggested skills; installed release `branch-main-20260621T134556Z` contains the dispatch code and the Business OS app skill file. |
 | 8. Entry-point proof | pending | Codex | Every user-facing app creation/modification path uses the same skill/resource context and runtime app contract. | Not done after `rfix12`; queue path is proven, Chat/App Creator/App Store/inbound paths still need proof. |
 | 9. Versioning proof | pending | Codex | App version visibility and major-version independence are either implemented or listed as missing work. | Not done. |
@@ -295,20 +312,22 @@ Phase editing rules:
 
 Owner: `Codex`
 
-Active phase: `6. Browser proof`
+Active phase: `8. Entry-point proof`
 
 Current rule: do not add more app-generation heuristics or deterministic
-artifact repair. The next useful evidence is a deeper generic E2E proof for
-the already-created `rfix12` runtime apps, not another generator/validator
+artifact repair. The next useful evidence is entry-point and versioning proof
+using the already-green app creation path, not another generator/validator
 rule.
 
 Current focus:
 
 - Keep `rfix12` as the current clean app-creation proof.
 - Do not patch generated `rfix12` app artifacts.
-- Add or run a test-only E2E harness that proves save, reload persistence,
-  native CTOX DB sync, and command-bus automation for generated runtime apps.
-- Then verify user-facing entry points and app versioning policy.
+- Verify Chat, App Creator, App Store/template, CLI, and inbound/MCP entry
+  paths route through the same skill/resource contract and runtime app target.
+- Audit app versioning policy and enforce or list the exact missing pieces.
+- Keep the app E2E command as a proof tool only. It must not create, rewrite,
+  or repair generated app files.
 
 Immediate checklist:
 
@@ -419,8 +438,14 @@ Immediate checklist:
 - [x] Classify the Projects `database is locked` event as a transient
   `runtime_orchestration_gap` watch item because same-task rework completed
   without generated app patching.
-- [ ] Run or implement deep generic E2E for save, reload persistence, native DB
-  sync, and automation dispatch.
+- [x] Add installed `ctox business-os app e2e` proof tooling without app
+  generation or artifact repair.
+- [x] Fix the E2E harness to prefer record-scoped automation actions over
+  global batch actions.
+- [x] Fix the E2E harness to fill only visible forms, not toolbar search/filter
+  controls.
+- [x] Run installed deep E2E for all five `rfix12` apps: save, reload
+  persistence, native DB/RxDB sync, and command-bus automation are green.
 - [ ] Verify Chat, App Creator, App Store/template, CLI, and inbound/MCP entry
   points route through the same skill/resource contract.
 - [ ] Audit app versioning enforcement.
@@ -428,10 +453,11 @@ Immediate checklist:
 Current slice exit criteria:
 
 - `rfix12` remains the clean five-app creation proof.
-- Deep E2E proves each generated app can save data through `ctx.db`, survive a
-  shell reload, appear in native CTOX DB sync evidence, and dispatch one normal
-  Business OS command through `ctx.commandBus.dispatch`.
-- Any E2E failure is classified before patching. Generated app artifacts remain
+- User-facing entry paths prove they use the same app-module skill/resource
+  contract and runtime install target as the green queue/app-create path.
+- App versioning behavior is either green or documented as concrete missing
+  implementation work.
+- Any new failure is classified before patching. Generated app artifacts remain
   read-only for proof purposes.
 
 ## Bench Matrix
@@ -476,7 +502,8 @@ Contaminated forensic run `rfix9`:
 | Contracts | `bench_contracts_rfix9` | handled | skipped in latest status | not run | Reached terminal success after same-task repair. |
 | Quality | `bench_quality_rfix9` | pending | skipped | not run | Pending at latest status because Projects stayed active under the contaminated lifecycle. |
 
-Only a fresh post-read-only-validate run may be used for production signoff.
+`rfix9` remains forensic-only and is superseded by clean `rfix10` and `rfix12`
+evidence.
 
 Clean post-read-only-validation run `rfix10`:
 
@@ -504,8 +531,8 @@ Clean post-skill-dispatch run `rfix12`:
 
 `rfix12` proves the CTOX app-create path can produce five immediately mounted
 runtime-installed vanilla apps with MiniMax M3 and the Business OS app skill.
-It does not yet prove save/reload persistence, native DB sync, or automation
-dispatch for all five apps.
+The installed deep E2E proof also verifies UI save, reload persistence, native
+CTOX DB/RxDB sync, and record-scoped command-bus automation for all five apps.
 
 ## Failure Classification
 
@@ -597,23 +624,18 @@ Use this before marking any generated app green:
 
 ## Next Actions
 
-1. Do not start another app-creation bench until `rfix12` has deeper E2E
-   coverage or a classified blocker.
+1. Do not start another app-creation bench until entry-point and versioning
+   coverage has either passed or exposed a classified blocker.
 2. Do not hand-edit generated `rfix12` app artifacts.
-3. Implement or run a test-only deep E2E harness for generated runtime apps:
-   create a record, save it through `ctx.db.collection(...)`, reload the shell,
-   prove the record is still visible, verify native CTOX DB sync evidence, and
-   dispatch one normal command through `ctx.commandBus.dispatch`.
-4. If deep E2E is red, classify each failure before patching:
+3. Verify Chat, App Creator, App Store/template, CLI, and inbound/MCP all route
+   through the same skill/resource contract and runtime app target.
+4. If entry-point proof is red, classify each failure before patching:
    `model_failure`, `skill_resource_gap`, `validator_gap`,
    `runtime_orchestration_gap`, `data_plane_gap`, or `entry_point_gap`.
 5. Treat the observed Projects `database is locked` event as a watch item. Patch
    runtime orchestration only if it recurs or leaves a task non-terminal.
-6. Verify entry paths: Chat, App Creator, App Store/template flow, CLI, and
-   inbound/MCP all route through the same skill/resource contract and runtime
-   app target.
-7. Audit app versioning enforcement and list or patch the missing pieces.
-8. Push plan/source checkpoints to `main` only after meaningful evidence or a
+6. Audit app versioning enforcement and list or patch the missing pieces.
+7. Push plan/source checkpoints to `main` only after meaningful evidence or a
    source change.
 
 ## Evidence Log
@@ -635,15 +657,39 @@ Use this before marking any generated app green:
   `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix12/browser-smoke/*.json`.
   Each smoke reports `ok=true`, empty `failures`, empty `console_errors`,
   empty `page_errors`, and empty `failed_requests`.
+- `2026-06-21`: commit `81570f94` (`Add Business OS app E2E proof command`)
+  added `ctox business-os app e2e` as a proof-only CLI. It validates generated
+  runtime apps by exercising the real shell; it does not generate, rewrite, or
+  repair app artifacts.
+- `2026-06-21`: commit `37c6cf95` (`Prefer record-scoped app automation in
+  E2E`) fixed the proof harness after the first Subscriptions run clicked a
+  global batch action before the app's valid record-scoped automation action.
+  Classification: `test_harness_gap`.
+- `2026-06-21`: commit `25fb0260` (`Limit app E2E form filling to visible
+  forms`) fixed the proof harness after the first Contracts run filled toolbar
+  filters outside the visible create form. Native DB evidence already showed
+  the generated app had saved the marker. Classification: `test_harness_gap`.
+- `2026-06-21`: installed `main` through `ctox upgrade --dev` as
+  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T161830Z`.
+  Installed help shows the expected `validate`, `smoke`, and `e2e` app proof
+  commands.
+- `2026-06-21`: installed deep E2E was green for all five `rfix12` apps:
+  `bench_subscriptions_rfix12`, `bench_inventory_rfix12`,
+  `bench_projects_rfix12`, `bench_contracts_rfix12`, and
+  `bench_quality_rfix12`. Persisted evidence:
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix12/deep-e2e/*.json`.
+  The evidence covers UI create/save, reload persistence, native CTOX DB/RxDB
+  SQLite visibility, and one record-scoped command-bus automation per app.
 - `2026-06-21`: transient Projects issue during `rfix12`: CTOX reported
   `database is locked`, converted it into same-task app validation rework, then
   completed `bench_projects_rfix12` without hand-editing generated artifacts.
   Classification: `runtime_orchestration_gap` watch item, not a
   `skill_resource_gap`.
-- `2026-06-21`: latest health check after `rfix12`: `ctox status --json`
-  reports `running=true`, `busy=false`, `worker_active_count=0`, Business OS
-  `ok=true`, native RxDB peer `replicationUp=true`, and
-  `http_bridge_available=false`.
+- `2026-06-21`: latest health check after deep E2E: `ctox status --json`
+  reports `running=true`, Business OS `ok=true`, native RxDB peer
+  `replicationUp=true`, and `http_bridge_available=false`. CTOX is expected to
+  be temporarily `busy=true` while it processes the normal follow-up tasks
+  queued by the generated apps during E2E.
 - `2026-06-21`: `rfix6` snapshot
   `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix6/status-1782010063510.json`
   showed terminal queue success and installed validation green before DB-access
@@ -941,30 +987,20 @@ Use this before marking any generated app green:
 
 ## Open Issues
 
-- `rfix10` proves CTOX-native app creation and installed static validation, but
-  browser smoke is red for 4/5 apps because generated apps assumed
-  shell-preloaded `index.html`. The validator/resource fix is now committed,
-  pushed, and installed.
-- `rfix11` started before the bound-skill dispatch fix was installed. It is
-  contaminated and must not be used as production signoff.
-- The next fresh five-app proof has not been started after the installed
-  skill-dispatch fix.
-- The five-app static gate has been green in earlier runs, but browser E2E for
-  `rfix7` was red due to repeated dead Create/New flows. A clean fresh run must
-  prove the smoke and browser gates after the current validator/resource fix.
-- `rfix8` found app queue overlap after the throughput fix. The queue
-  serialization source fix is committed, pushed, installed, and `rfix8` drained
-  green, but the run is forensic-only because it contains pre-fix overlap.
-- `rfix9` cannot be the production signoff run because installed
-  `ctox business-os app validate` prematurely finalized a live leased Projects
-  task. The source fix is committed, pushed, installed, and superseded by
-  clean `rfix10` static proof.
-- Inventory `rfix10` needed a same-task timeout/recovery path before terminal
-  success. Static artifacts became valid, but throughput/turn-finish behavior
-  should be watched in `rfix11`.
 - Entry-point proof across Chat, App Creator, App Store/template flow, CLI, and
-  inbound/MCP is still pending.
-- App versioning policy must be audited and either enforced or listed as missing
-  implementation work.
+  inbound/MCP is still pending. The queue/app-create path is green; every other
+  user-facing creation/modification path must prove it attaches the same
+  app-module skill/resource contract and writes runtime apps to the installed
+  module directory.
+- App versioning policy must be audited and either enforced or listed as
+  concrete missing implementation work. Required behavior: non-developer users
+  see only versions `>=1.0.0`, and each `x.0.0` major can run independently
+  with its own app icon.
+- `ctox upgrade --dev` currently succeeds and leaves CTOX healthy, but the
+  non-fatal `sudo: a password is required` and launchctl SIGKILL warnings
+  should be fixed separately if they create visible install/restart problems.
+- Deep E2E intentionally queued normal command-bus follow-up tasks from the
+  generated apps. That is positive automation evidence, but the runtime may
+  need cleanup if a clean local CTOX queue is required for another proof run.
 - Keep unrelated dirty file `tests/business-os/ats_synthetic_generate.sh` out
   of this work unless explicitly requested.
