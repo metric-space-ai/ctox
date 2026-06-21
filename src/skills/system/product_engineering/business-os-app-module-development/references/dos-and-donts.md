@@ -7,7 +7,8 @@
 - Use plain HTML fragments, CSS, and browser ESM.
 - Export `mount(ctx)` from `index.js`.
 - Render into `ctx.host`.
-- Persist app records through the shell-provided `ctx.db` collection handle.
+- Persist app records through shell-provided collection handles from
+  `ctx.db.collection('<declared-collection-name>')`.
 - Scope every runtime app collection name to the module id, for example
   `inventory_v0_1_items`, so independent generated apps and future versions do
   not collide in CTOX DB.
@@ -33,6 +34,10 @@
 
 - Do not build a React, Next.js, Vite, bundled, or package-managed app.
 - Do not create a separate HTTP, REST, IndexedDB, Postgres, or SQLite data path.
+- Do not use `ctx.db[name]`, `ctx.db.collections`, direct
+  `ctx.db.<collection>` property access, or cached DB facade handles.
+- Do not call `ctx.db.registerSchemas` from app code; declare module schemas in
+  `collections.schema.json` and `schema.js`.
 - Do not use shared/domain collection names such as `inventory_items`,
   `contracts`, or `quality_complaints` for runtime-generated apps.
 - Do not write generated runtime apps under `src/` unless the task explicitly targets a source module.

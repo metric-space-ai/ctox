@@ -43,7 +43,7 @@ function installedIndexJs(moduleId, collectionName, extraLines = []) {
     'export async function mount(ctx) {',
     '  attachStylesheetOnce();',
     "  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());",
-    `  const records = ctx.db.collection?.('${collectionName}') || ctx.db.collections?.${collectionName};`,
+    `  const records = ctx.db.collection('${collectionName}');`,
     '  void records;',
     ...extraLines,
     "  ctx.host.querySelector('[data-action=\"create-record\"]')?.addEventListener('click', () => {",
@@ -294,7 +294,7 @@ function writeSourceModule(root, moduleId, overrides = {}) {
       "import { buildFollowUpCommand } from './core/automation.mjs';",
       'export async function mount(ctx) {',
       "  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());",
-      "  const records = ctx.db.collection?.('aliasautomation_records') || ctx.db.collections?.aliasautomation_records;",
+      "  const records = ctx.db.collection('aliasautomation_records');",
       '  const state = { ctx, records };',
       "  ctx.host.querySelector('[data-action=\"create-record\"]')?.addEventListener('click', () => {",
       "    state.records?.upsert?.({ id: 'demo', title: 'Demo', updated_at_ms: Date.now() });",
@@ -312,6 +312,109 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   });
   const run = runValidator(root, 'aliasautomation', '--installed');
   assert.equal(run.status, 0, `${run.stderr}\n${run.stdout}`);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'legacycollections', {
+    indexJs: [
+      "import { buildFollowUpCommand } from './core/automation.mjs';",
+      'export async function mount(ctx) {',
+      "  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());",
+      "  const records = ctx.db.collections?.legacycollections_records;",
+      "  ctx.host.querySelector('[data-action=\"create-record\"]')?.addEventListener('click', () => records?.upsert?.({ id: 'demo', title: 'Demo', updated_at_ms: Date.now() }));",
+      "  ctx.host.querySelector('[data-action=\"follow-up\"]')?.addEventListener('click', () => ctx.commandBus.dispatch(buildFollowUpCommand({ id: 'demo', title: 'Demo', updated_at_ms: 1 })));",
+      '  return () => { ctx.host.innerHTML = ""; };',
+      '}',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'legacycollections', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /uses legacy ctx\.db\.collections fallback/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'bracketcollection', {
+    indexJs: [
+      "import { buildFollowUpCommand } from './core/automation.mjs';",
+      'export async function mount(ctx) {',
+      "  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());",
+      "  const name = 'bracketcollection_records';",
+      '  const records = ctx.db[name];',
+      "  ctx.host.querySelector('[data-action=\"create-record\"]')?.addEventListener('click', () => records?.upsert?.({ id: 'demo', title: 'Demo', updated_at_ms: Date.now() }));",
+      "  ctx.host.querySelector('[data-action=\"follow-up\"]')?.addEventListener('click', () => ctx.commandBus.dispatch(buildFollowUpCommand({ id: 'demo', title: 'Demo', updated_at_ms: 1 })));",
+      '  return () => { ctx.host.innerHTML = ""; };',
+      '}',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'bracketcollection', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /uses bracket ctx\.db\[\.\.\.\] collection access/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'directproperty', {
+    indexJs: [
+      "import { buildFollowUpCommand } from './core/automation.mjs';",
+      'export async function mount(ctx) {',
+      "  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());",
+      '  const records = ctx.db.directproperty_records;',
+      "  ctx.host.querySelector('[data-action=\"create-record\"]')?.addEventListener('click', () => records?.upsert?.({ id: 'demo', title: 'Demo', updated_at_ms: Date.now() }));",
+      "  ctx.host.querySelector('[data-action=\"follow-up\"]')?.addEventListener('click', () => ctx.commandBus.dispatch(buildFollowUpCommand({ id: 'demo', title: 'Demo', updated_at_ms: 1 })));",
+      '  return () => { ctx.host.innerHTML = ""; };',
+      '}',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'directproperty', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /uses direct ctx\.db\.directproperty_records access/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'registerschemas', {
+    indexJs: [
+      "import { buildFollowUpCommand } from './core/automation.mjs';",
+      'export async function mount(ctx) {',
+      "  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());",
+      "  ctx.db.registerSchemas?.({ registerschemas_records: {} });",
+      "  const records = ctx.db.collection('registerschemas_records');",
+      "  ctx.host.querySelector('[data-action=\"create-record\"]')?.addEventListener('click', () => records?.upsert?.({ id: 'demo', title: 'Demo', updated_at_ms: Date.now() }));",
+      "  ctx.host.querySelector('[data-action=\"follow-up\"]')?.addEventListener('click', () => ctx.commandBus.dispatch(buildFollowUpCommand({ id: 'demo', title: 'Demo', updated_at_ms: 1 })));",
+      '  return () => { ctx.host.innerHTML = ""; };',
+      '}',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'registerschemas', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /calls ctx\.db\.registerSchemas from app code/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'cachedfacade', {
+    indexJs: [
+      "import { buildFollowUpCommand } from './core/automation.mjs';",
+      'export async function mount(ctx) {',
+      "  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());",
+      '  const db = ctx.db;',
+      "  const records = db.collection('cachedfacade_records');",
+      "  ctx.host.querySelector('[data-action=\"create-record\"]')?.addEventListener('click', () => records?.upsert?.({ id: 'demo', title: 'Demo', updated_at_ms: Date.now() }));",
+      "  ctx.host.querySelector('[data-action=\"follow-up\"]')?.addEventListener('click', () => ctx.commandBus.dispatch(buildFollowUpCommand({ id: 'demo', title: 'Demo', updated_at_ms: 1 })));",
+      '  return () => { ctx.host.innerHTML = ""; };',
+      '}',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'cachedfacade', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /caches the ctx\.db facade in db/);
 }
 
 {
@@ -438,7 +541,7 @@ function writeSourceModule(root, moduleId, overrides = {}) {
       "import { buildFollowUpCommand } from './core/automation.mjs';",
       'export async function mount(ctx) {',
       "  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());",
-      "  const records = ctx.db.collection?.('nocreate_records') || ctx.db.collections?.nocreate_records;",
+      "  const records = ctx.db.collection('nocreate_records');",
       '  void records;',
       "  ctx.host.querySelector('[data-action=\"follow-up\"]')?.addEventListener('click', () => ctx.commandBus.dispatch(buildFollowUpCommand({ id: 'demo', title: 'Demo', updated_at_ms: 1 })));",
       '  return () => { ctx.host.innerHTML = ""; };',
@@ -580,7 +683,7 @@ function writeSourceModule(root, moduleId, overrides = {}) {
       'function renderDetail(record) { return record?.title || ""; }',
       'export async function mount(ctx) {',
       "  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());",
-      "  const records = ctx.db.collection?.('duplicatefunction_records');",
+      "  const records = ctx.db.collection('duplicatefunction_records');",
       '  void records;',
       '  function renderDetail() {',
       '    return renderDetail({ title: "Demo" });',
@@ -605,7 +708,7 @@ function writeSourceModule(root, moduleId, overrides = {}) {
       "import { buildFollowUpCommand } from './core/automation.mjs';",
       'export async function mount(ctx) {',
       "  ctx.host.innerHTML = '<form data-form><input name=\"title\" required></form><button type=\"button\" data-action=\"create-record\">Create record</button><button type=\"button\" data-action=\"follow-up\">Follow up</button>';",
-      "  const records = ctx.db.collection?.('nosubmitcontrol_records');",
+      "  const records = ctx.db.collection('nosubmitcontrol_records');",
       '  void records;',
       "  ctx.host.querySelector('[data-action=\"create-record\"]')?.addEventListener('click', () => {",
       "    ctx.host.querySelector('[data-form]').hidden = false;",
@@ -686,7 +789,7 @@ function writeSourceModule(root, moduleId, overrides = {}) {
     indexJs: [
       'export async function mount(ctx) {',
       "  ctx.host.textContent = 'Ready';",
-      "  const records = ctx.db.collection?.('noautomation_records');",
+      "  const records = ctx.db.collection('noautomation_records');",
       '  void records;',
       '  return () => { ctx.host.textContent = ""; };',
       '}',
@@ -707,7 +810,7 @@ function writeSourceModule(root, moduleId, overrides = {}) {
       "import { buildFollowUpCommand } from './core/automation.mjs';",
       'export async function mount(ctx) {',
       "  ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());",
-      "  const records = ctx.db.collection?.('aliasnotcalled_records') || ctx.db.collections?.aliasnotcalled_records;",
+      "  const records = ctx.db.collection('aliasnotcalled_records');",
       '  const dispatch = ctx.commandBus.dispatch;',
       '  void dispatch;',
       "  ctx.host.querySelector('[data-action=\"create-record\"]')?.addEventListener('click', () => {",

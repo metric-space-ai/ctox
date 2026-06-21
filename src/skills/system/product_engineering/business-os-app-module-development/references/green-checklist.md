@@ -8,7 +8,13 @@ Use this before claiming a Business OS app is done.
 - `index.js` exports `mount(ctx)`.
 - `mount(ctx)` renders the HTML fragment into `ctx.host`.
 - `index.css` is loaded by the module or otherwise available through the app contract.
-- App records use `ctx.db` and declared module collections.
+- App records use declared module collections through
+  `ctx.db.collection('<declared-collection-name>')`.
+- No legacy DB fallback exists: no `ctx.db[name]`, `ctx.db.collections`, direct
+  `ctx.db.<collection>` property access, cached DB facade, raw IndexedDB, HTTP,
+  or app-owned sync path.
+- App code does not call `ctx.db.registerSchemas`; schema registration comes
+  from module metadata and the Business OS shell/native peer.
 - Runtime app collection names are scoped to the module id.
 - `schema.js`, `collections.schema.json`, and record helper outputs agree on
   collection names, schema versions, required fields, and property types.

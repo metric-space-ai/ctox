@@ -12,7 +12,7 @@ Business OS shell
 
 Business OS app
   renders plain HTML/CSS/browser ESM into ctx.host
-  stores records through ctx.db
+  stores records through ctx.db.collection('<collection>')
   starts automation through ctx.commandBus.dispatch(...)
 
 CTOX data plane
@@ -31,12 +31,12 @@ HTTP can serve static shell and module files. HTTP is not the app data bridge.
 | --- | --- |
 | Next.js page or route | `index.html` fragment plus `index.js` `mount(ctx)` |
 | React component state | plain JS state inside `mount(ctx)` or local helpers |
-| REST API for records | `ctx.db` collection reads/writes |
+| REST API for records | `ctx.db.collection('<collection>')` reads/writes |
 | Server action / background job | `ctx.commandBus.dispatch(...)` |
 | AI assistant action | `business_os.chat.task` through `ctx.commandBus.dispatch(...)` with `payload.record_snapshot` |
 | Create a real local ticket | `ctox.ticket.local.create` through `ctx.commandBus.dispatch(...)` |
 | Postgres table | module-owned CTOX DB collection declared in module files |
-| IndexedDB/localStorage | do not use; use `ctx.db` for durable app records |
+| IndexedDB/localStorage | do not use; use `ctx.db.collection('<collection>')` for durable app records |
 | npm package | only use local browser ESM already shipped with the app |
 | build step | none; files must run directly in the browser |
 | dashboard route tree | one focused workbench, usually one or two panes plus modal/drawer |

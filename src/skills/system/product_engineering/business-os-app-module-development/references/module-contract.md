@@ -37,9 +37,13 @@ Keep extra files rare. Use extra local ESM helpers only when the app would other
 
 ## Data
 
-- Module records persist through the shell-provided `ctx.db` collection handle.
-- Get collection handles from the shell, for example
-  `const records = ctx.db.collection?.('<collection>') || ctx.db.collections?.<collection> || ctx.db?.<collection>;`.
+- Module records persist through shell-provided collection handles from
+  `ctx.db.collection('<declared-collection-name>')`.
+- Get every module collection handle directly from the shell, for example
+  `const records = ctx.db.collection('<collection>');`.
+- Do not use legacy collection fallbacks such as `ctx.db[name]`,
+  `ctx.db.collections`, direct `ctx.db.<collection>` property access, cached DB
+  facade handles, or any app-owned fallback data path.
 - For small first versions, read a module-owned collection with
   `await records.find().exec()`, convert docs with `toJSON()`, then filter and
   sort in plain JavaScript.
@@ -55,6 +59,8 @@ Keep extra files rare. Use extra local ESM helpers only when the app would other
   peer from `collections.schema.json`. If a collection is missing from either
   `module.json`, `collections.schema.json`, or `schema.js`, browser and native
   persistence will disagree.
+- Do not call `ctx.db.registerSchemas` from app code. Declare schemas in the
+  module files and let the Business OS shell/native peer register them.
 - Do not reuse domain-level collection names across generated apps or bench
   runs. Reuse can create native/browser schema drift and make WebRTC sync look
   random.

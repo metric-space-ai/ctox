@@ -522,6 +522,73 @@ function hasCommandBusDispatchInvocation(text) {
   return false;
 }
 
+function collectLegacyDbFacadeFailures(file, text) {
+  const source = stripJsComments(text);
+  const messages = [];
+  const seen = new Set();
+  const dbAccess = String.raw`(?:ctx|state\s*(?:\?\.|\.)\s*ctx)\s*(?:\?\.|\.)\s*db`;
+
+  function add(message) {
+    if (!seen.has(message)) {
+      seen.add(message);
+      messages.push(message);
+    }
+  }
+
+  const directPropertyPattern = new RegExp(String.raw`${dbAccess}\s*(?:\?\.|\.)\s*([A-Za-z_$][\w$]*)`, 'g');
+  for (const match of source.matchAll(directPropertyPattern)) {
+    const property = match[1];
+    if (property === 'collection') continue;
+    if (property === 'collections') {
+      add(`${rel(file)} uses legacy ctx.db.collections fallback; use ctx.db.collection('<collection>')`);
+    } else if (property === 'registerSchemas') {
+      add(`${rel(file)} calls ctx.db.registerSchemas from app code; declare schemas in collections.schema.json and schema.js`);
+    } else if (property === 'raw') {
+      add(`${rel(file)} uses raw ctx.db access; use ctx.db.collection('<collection>')`);
+    } else {
+      add(`${rel(file)} uses direct ctx.db.${property} access; use ctx.db.collection('<collection>')`);
+    }
+  }
+
+  const bracketPattern = new RegExp(String.raw`${dbAccess}\s*(?:\?\.)?\s*\[`, 'g');
+  if (bracketPattern.test(source)) {
+    add(`${rel(file)} uses bracket ctx.db[...] collection access; use ctx.db.collection('<collection>')`);
+  }
+
+  const aliasPattern = new RegExp(String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*${dbAccess}\b`, 'g');
+  const aliases = new Set();
+  for (const match of source.matchAll(aliasPattern)) {
+    const next = source.slice((match.index || 0) + match[0].length).trimStart();
+    if (next.startsWith('.') || next.startsWith('?.')) continue;
+    aliases.add(match[1]);
+    add(`${rel(file)} caches the ctx.db facade in ${match[1]}; keep collection handles from ctx.db.collection('<collection>')`);
+  }
+
+  for (const alias of aliases) {
+    const escaped = escapeRegExp(alias);
+    const aliasPropertyPattern = new RegExp(String.raw`\b${escaped}\s*(?:\?\.|\.)\s*([A-Za-z_$][\w$]*)`, 'g');
+    for (const match of source.matchAll(aliasPropertyPattern)) {
+      const property = match[1];
+      if (property === 'collection') continue;
+      if (property === 'collections') {
+        add(`${rel(file)} uses legacy ${alias}.collections fallback; use ctx.db.collection('<collection>')`);
+      } else if (property === 'registerSchemas') {
+        add(`${rel(file)} calls ${alias}.registerSchemas from app code; declare schemas in collections.schema.json and schema.js`);
+      } else if (property === 'raw') {
+        add(`${rel(file)} uses raw ${alias}.raw access; use ctx.db.collection('<collection>')`);
+      } else {
+        add(`${rel(file)} uses direct ${alias}.${property} access; use ctx.db.collection('<collection>')`);
+      }
+    }
+    const aliasBracketPattern = new RegExp(String.raw`\b${escaped}\s*(?:\?\.)?\s*\[`, 'g');
+    if (aliasBracketPattern.test(source)) {
+      add(`${rel(file)} uses bracket ${alias}[...] collection access; use ctx.db.collection('<collection>')`);
+    }
+  }
+
+  return messages;
+}
+
 function indexJsHandlesDataAction(indexJs, action) {
   const escaped = escapeRegExp(action);
   return new RegExp(String.raw`\[data-[a-z0-9-]*action\s*=\s*["']${escaped}["']\]`, 'i').test(indexJs)
@@ -800,6 +867,9 @@ for (const path of runtimeFiles) {
   const text = readText(path);
   for (const [label, regex] of runtimeRules) {
     if (regex.test(text)) fail(`${rel(path)} contains forbidden runtime pattern: ${label}`);
+  }
+  if (installedMode && /\.(?:js|mjs)$/.test(path)) {
+    for (const message of collectLegacyDbFacadeFailures(path, text)) fail(message);
   }
   if (/\.(?:js|mjs)$/.test(path)) {
     for (const message of collectDuplicateFunctionDeclarationFailures(path, text)) fail(message);

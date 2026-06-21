@@ -204,12 +204,12 @@ Immediate checklist:
 - [x] Run browser E2E for all five `rfix6` apps.
 - [x] Record the first pass results in Bench Matrix and Evidence Log.
 - [x] Classify the new systemic failure before patching.
-- [ ] Remove legacy DB fallback guidance from the skill resources.
-- [ ] Add validator checks that reject legacy `ctx.db` collection fallback
+- [x] Remove legacy DB fallback guidance from the skill resources.
+- [x] Add validator checks that reject legacy `ctx.db` collection fallback
   patterns.
-- [ ] Update validator tests so valid fixtures use only
+- [x] Update validator tests so valid fixtures use only
   `ctx.db.collection('<collection>')`.
-- [ ] Run the validator test suite.
+- [x] Run the validator test suite.
 - [ ] Commit and push the skill/validator fix to `main`.
 - [ ] Install through `ctox upgrade --dev`.
 - [ ] Start a fresh five-app CTOX bench run.
@@ -219,8 +219,9 @@ Immediate checklist:
 Current slice exit criteria:
 
 - Skill resources no longer teach legacy DB fallback access.
-- Validator rejects `ctx.db[name]`, `ctx.db.collections`, and direct
-  `ctx.db.<collection>` collection-property access.
+- Validator rejects `ctx.db[name]`, `ctx.db.collections`, direct
+  `ctx.db.<collection>` collection-property access, cached DB facade handles,
+  and app-side `ctx.db.registerSchemas`.
 - Validator tests prove the forbidden patterns fail and the canonical
   `ctx.db.collection('<collection>')` pattern passes.
 - A source fix is pushed and installed through `ctox upgrade --dev`.
@@ -318,6 +319,8 @@ Use this before marking any generated app green:
   `ctx.db.collection('<declared-collection-name>')`.
 - [ ] No `ctx.db[name]`, `ctx.db.collections`, direct `ctx.db.<collection>`,
   cached DB handle, raw IndexedDB, HTTP, or app-owned sync fallback exists.
+- [ ] App code does not call `ctx.db.registerSchemas`; schema registration
+  comes from module metadata and Business OS shell/native registration.
 - [ ] Record helper outputs match declared JSON types.
 - [ ] No package manager, build step, React/Next/Vue, upstream `rxdb`, or HTTP
   data bridge.
@@ -404,17 +407,25 @@ Use this before marking any generated app green:
   equivalent). `ctox business-os app validate bench_inventory_rfix6 --installed
   --skip-tests` still passed, so this is both a `skill_resource_gap` and a
   `validator_gap`.
+- `2026-06-21`: skill resources and validator were updated in the working tree
+  to require `ctx.db.collection('<collection>')`, reject `ctx.db[name]`,
+  `ctx.db.collections`, direct `ctx.db.<collection>` collection access, cached
+  DB facade handles, and app-side `ctx.db.registerSchemas`. Verification:
+  `node src/apps/business-os/scripts/validate-app-module.test.mjs` passed and
+  `git diff --check` passed.
+- `2026-06-21`: the patched source validator rejects the old installed
+  `bench_inventory_rfix6` artifact with
+  `ctx.db.registerSchemas` and `ctx.db[...]` failures:
+  `node src/apps/business-os/scripts/validate-app-module.mjs bench_inventory_rfix6 --installed --workspace /Users/michaelwelsch/.local/lib/ctox/current --skip-tests --skip-node-check`.
 - `2026-06-21`: historical validator hardening: `0dd04c31` rejects unscoped
   runtime collections and `aa945a71` accepts/validates namespaced
   `data-*-action="new"` affordances.
 
 ## Open Issues
 
-- Skill resource `module-contract.md` still teaches legacy `ctx.db` fallback
-  access. Replace it with the canonical
-  `ctx.db.collection('<collection>')` pattern only.
-- Installed app validation does not reject legacy DB fallback access. Add a
-  static check and tests.
+- The skill/validator fix for legacy DB fallback access is implemented in the
+  working tree and tested, but not yet committed, pushed, installed, or proven
+  through a fresh CTOX bench run.
 - `rfix6` is not eligible for production signoff because its generated apps
   contain forbidden DB fallback patterns even where the browser flow passed.
 - Inventory `rfix6` persisted data into native SQLite and browser IndexedDB
