@@ -143,6 +143,8 @@ INSTALL / UPGRADE
                                  validate a Business OS app module artifact
   ctox business-os app smoke <module-id> [--url <business-os-url>]
                                  run a real browser smoke for a Business OS app module
+  ctox business-os app e2e <module-id> [--url <business-os-url>]
+                                 run save/reload/command-bus E2E for a Business OS app
   ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k
                                  submit the five-app Business OS app creation bench
   ctox business-os skills list|enable|disable

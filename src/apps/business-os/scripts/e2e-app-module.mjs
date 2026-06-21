@@ -1,0 +1,549 @@
+#!/usr/bin/env node
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const RELEASE_ROOT = resolve(SCRIPT_DIR, '../../../..');
+
+function unique(values) {
+  return Array.from(new Set(values));
+}
+
+function findRuntimeChromiumExecutable(root) {
+  const cacheDir = join(root, 'runtime/browser/interactive-reference/ms-playwright');
+  if (!existsSync(cacheDir)) return null;
+  for (const entry of readdirSync(cacheDir)) {
+    if (!entry.startsWith('chromium-')) continue;
+    const base = join(cacheDir, entry);
+    const candidates = [
+      join(base, 'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing'),
+      join(base, 'chrome-linux/chrome'),
+      join(base, 'chrome-win/chrome.exe'),
+    ];
+    const executable = candidates.find((candidate) => existsSync(candidate));
+    if (executable) return executable;
+  }
+  return null;
+}
+
+function browserPackageJsonCandidates() {
+  return unique([
+    join(RELEASE_ROOT, 'runtime/browser/interactive-reference/package.json'),
+    join(RELEASE_ROOT, 'src/apps/business-os/package.json'),
+    join(SCRIPT_DIR, '../package.json'),
+    join(process.cwd(), 'package.json'),
+  ]).filter((candidate) => existsSync(candidate));
+}
+
+function loadBrowserRuntime() {
+  const failures = [];
+  for (const packageJson of browserPackageJsonCandidates()) {
+    for (const packageName of ['patchright', 'playwright']) {
+      try {
+        const require = createRequire(packageJson);
+        const runtime = require(packageName);
+        if (!runtime?.chromium) throw new Error(`${packageName} did not expose chromium`);
+        const executablePath = findRuntimeChromiumExecutable(RELEASE_ROOT);
+        return {
+          chromium: runtime.chromium,
+          launchOptions: executablePath ? { executablePath } : {},
+          evidence: {
+            package: packageName,
+            package_json: packageJson,
+            executable_path: executablePath,
+          },
+        };
+      } catch (error) {
+        failures.push(`${packageName} from ${packageJson}: ${error.message}`);
+      }
+    }
+  }
+  throw new Error(`could not load CTOX browser runtime (${failures.join('; ')})`);
+}
+
+const browserRuntime = loadBrowserRuntime();
+
+function usage() {
+  return [
+    'Usage: node src/apps/business-os/scripts/e2e-app-module.mjs <module-id> [--url <business-os-url>] [--json] [--timeout-ms <n>] [--output <path>] [--screenshot <path>] [--marker <value>]',
+    '',
+    'Runs a real-browser save/reload/command-bus E2E against a runtime-installed CTOX Business OS app.',
+  ].join('\n');
+}
+
+function parseArgs(argv) {
+  const options = {
+    moduleId: null,
+    url: 'http://127.0.0.1:8765',
+    json: false,
+    timeoutMs: 120000,
+    output: null,
+    screenshot: null,
+    marker: null,
+  };
+  for (let idx = 0; idx < argv.length; idx += 1) {
+    const arg = argv[idx];
+    if (arg === '--url') {
+      const value = argv[idx + 1];
+      if (!value) throw new Error('--url requires a value');
+      options.url = value;
+      idx += 1;
+    } else if (arg === '--timeout-ms') {
+      const value = Number(argv[idx + 1]);
+      if (!Number.isFinite(value) || value < 1000) throw new Error('--timeout-ms must be a number >= 1000');
+      options.timeoutMs = value;
+      idx += 1;
+    } else if (arg === '--output') {
+      const value = argv[idx + 1];
+      if (!value) throw new Error('--output requires a path');
+      options.output = resolve(value);
+      idx += 1;
+    } else if (arg === '--screenshot') {
+      const value = argv[idx + 1];
+      if (!value) throw new Error('--screenshot requires a path');
+      options.screenshot = resolve(value);
+      idx += 1;
+    } else if (arg === '--marker') {
+      const value = argv[idx + 1];
+      if (!value) throw new Error('--marker requires a value');
+      options.marker = value;
+      idx += 1;
+    } else if (arg === '--json') {
+      options.json = true;
+    } else if (arg === '--installed' || arg === '--source') {
+      // Accepted for CLI symmetry with validate/smoke. This E2E always mounts
+      // through the live Business OS shell catalog.
+    } else if (arg === '--help' || arg === '-h') {
+      options.help = true;
+    } else if (arg.startsWith('-')) {
+      throw new Error(`unknown option: ${arg}`);
+    } else if (!options.moduleId) {
+      options.moduleId = arg;
+    } else {
+      throw new Error(`unexpected argument: ${arg}`);
+    }
+  }
+  if (options.help) return options;
+  if (!options.moduleId || /[\\/]/.test(options.moduleId) || options.moduleId === '.' || options.moduleId === '..') {
+    throw new Error('module id is required and must be a single path segment');
+  }
+  if (!options.marker) {
+    options.marker = `CTOX_E2E_${options.moduleId}_${Date.now()}`;
+  }
+  return options;
+}
+
+function withModuleHash(baseUrl, moduleId) {
+  const url = new URL(baseUrl);
+  url.hash = moduleId;
+  return url.href;
+}
+
+function printResult(result, json) {
+  if (json) {
+    console.log(JSON.stringify(result, null, 2));
+  } else if (result.ok) {
+    console.log(`Business OS app E2E OK: ${result.module_id}`);
+  } else {
+    console.error(`Business OS app E2E failed for ${result.module_id}:`);
+    for (const failure of result.failures) console.error(`- ${failure}`);
+  }
+}
+
+function moduleDir(moduleId) {
+  return join(RELEASE_ROOT, 'runtime/business-os/installed-modules', moduleId);
+}
+
+function readModuleCollections(moduleId) {
+  const path = join(moduleDir(moduleId), 'collections.schema.json');
+  if (!existsSync(path)) return [];
+  const parsed = JSON.parse(readFileSync(path, 'utf8'));
+  return Object.entries(parsed.collections || {}).map(([name, schema]) => ({
+    name,
+    version: Number(schema?.version || 0),
+  }));
+}
+
+function quoteSqlString(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function quoteSqlIdentifier(value) {
+  return `"${String(value).replace(/"/g, '""')}"`;
+}
+
+function tableName(collection) {
+  return `ctox_business_os__${collection.name}__v${collection.version}`;
+}
+
+function sqliteCountLike(sqlitePath, table, marker) {
+  const sql = [
+    'PRAGMA busy_timeout=10000;',
+    `SELECT COUNT(*) FROM ${quoteSqlIdentifier(table)} WHERE deleted=0 AND data LIKE '%' || ${quoteSqlString(marker)} || '%';`,
+  ].join('\n');
+  const result = spawnSync('sqlite3', [sqlitePath], {
+    input: sql,
+    encoding: 'utf8',
+    timeout: 15000,
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error((result.stderr || result.stdout || `sqlite3 exited ${result.status}`).trim());
+  }
+  const lines = String(result.stdout || '').trim().split(/\r?\n/).filter(Boolean);
+  const last = lines[lines.length - 1] || '0';
+  const count = Number(last);
+  if (!Number.isFinite(count)) throw new Error(`could not parse sqlite count from ${JSON.stringify(result.stdout)}`);
+  return count;
+}
+
+async function pollUntil(fn, timeoutMs, intervalMs = 500) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = null;
+  while (Date.now() <= deadline) {
+    try {
+      const value = await fn();
+      if (value) return value;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  if (lastError) throw lastError;
+  return null;
+}
+
+async function openModule(page, moduleId, url, timeoutMs) {
+  const targetUrl = withModuleHash(url, moduleId);
+  await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+  await page.waitForFunction((id) => {
+    const app = window.CTOX_BUSINESS_OS_APP;
+    return Boolean(app?.modules?.find?.((module) => module.id === id));
+  }, moduleId, { timeout: timeoutMs });
+  await page.evaluate(async (id) => {
+    const app = window.CTOX_BUSINESS_OS_APP;
+    location.hash = id;
+    if (typeof app?.openModule === 'function') {
+      await app.openModule(id, { force: true });
+    }
+  }, moduleId);
+  const rootSelector = `[data-module-root="${moduleId}"]`;
+  await page.waitForSelector(rootSelector, { state: 'visible', timeout: timeoutMs });
+  return rootSelector;
+}
+
+async function findPrimaryCreateAction(page, rootSelector) {
+  return page.evaluate((selector) => {
+    function visible(el) {
+      const box = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return box.width > 0 && box.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && !el.disabled;
+    }
+    function isPrimaryCreateAction(value) {
+      const action = String(value || '').trim().toLowerCase();
+      if (!action) return false;
+      if (/(^|[-_:])(follow-?up|review|save|submit|cancel|close|edit|archive|delete|remove)([-_:]|$)/.test(action)) return false;
+      return /^(add|new|create)([-_:]|$)/.test(action);
+    }
+    const root = document.querySelector(selector);
+    if (!root) return null;
+    const actions = Array.from(root.querySelectorAll('[data-action]'))
+      .map((el) => ({
+        action: el.getAttribute('data-action'),
+        text: el.textContent.trim(),
+        visible: visible(el),
+      }))
+      .filter((item) => item.visible && isPrimaryCreateAction(item.action));
+    return actions[0]?.action || null;
+  }, rootSelector);
+}
+
+async function fillVisibleForm(page, rootSelector, marker) {
+  return page.evaluate(({ selector, marker }) => {
+    function visible(el) {
+      const box = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return box.width > 0 && box.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && !el.disabled;
+    }
+    function labelFor(el) {
+      const name = el.getAttribute('name') || el.getAttribute('data-field') || el.getAttribute('aria-label') || el.placeholder || '';
+      const label = el.closest('label')?.textContent?.trim() || '';
+      return String(name || label || 'field').replace(/\s+/g, ' ').slice(0, 48);
+    }
+    function textValue(el) {
+      const name = labelFor(el);
+      const type = String(el.getAttribute('type') || '').toLowerCase();
+      if (type === 'email') return `${marker.toLowerCase().replace(/[^a-z0-9]+/g, '-')}@example.test`;
+      if (type === 'tel') return '+491234567890';
+      if (name.toLowerCase().includes('sku')) return `SKU-${marker.slice(-10)}`;
+      return `${marker} ${name}`.slice(0, Math.max(16, Number(el.maxLength) > 0 ? Number(el.maxLength) : 180));
+    }
+    function numberValue(el) {
+      const name = labelFor(el).toLowerCase();
+      if (name.includes('mrr') || name.includes('amount') || name.includes('budget') || name.includes('cost') || name.includes('rate') || name.includes('value')) return '12000';
+      if (name.includes('min') || name.includes('stock') || name.includes('quantity') || name.includes('qty') || name.includes('reorder')) return '100';
+      if (name.includes('hour')) return '40';
+      return '10';
+    }
+    function setValue(el, value) {
+      el.value = value;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    const root = document.querySelector(selector);
+    if (!root) return { filled: [], visible_forms: 0 };
+    const forms = Array.from(root.querySelectorAll('form')).filter(visible);
+    const filled = [];
+    for (const el of Array.from(root.querySelectorAll('input, textarea, select'))) {
+      if (!visible(el)) continue;
+      const tag = el.tagName.toLowerCase();
+      const type = String(el.getAttribute('type') || '').toLowerCase();
+      if (['hidden', 'button', 'submit', 'reset', 'file', 'image'].includes(type)) continue;
+      if (tag === 'select') {
+        const options = Array.from(el.options || []);
+        const candidate = options.find((option) => option.value && !option.disabled) || options.find((option) => !option.disabled);
+        if (candidate && !el.value) setValue(el, candidate.value);
+        filled.push({ kind: 'select', name: labelFor(el), value: el.value });
+      } else if (type === 'checkbox') {
+        el.checked = true;
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        filled.push({ kind: 'checkbox', name: labelFor(el), value: true });
+      } else if (type === 'radio') {
+        if (!el.checked) {
+          el.checked = true;
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        filled.push({ kind: 'radio', name: labelFor(el), value: el.value });
+      } else if (type === 'date') {
+        setValue(el, '2026-12-31');
+        filled.push({ kind: 'date', name: labelFor(el), value: el.value });
+      } else if (type === 'number' || type === 'range') {
+        setValue(el, numberValue(el));
+        filled.push({ kind: 'number', name: labelFor(el), value: el.value });
+      } else if (tag === 'textarea') {
+        setValue(el, `${marker} notes`);
+        filled.push({ kind: 'textarea', name: labelFor(el), value: el.value });
+      } else {
+        setValue(el, textValue(el));
+        filled.push({ kind: 'text', name: labelFor(el), value: el.value });
+      }
+    }
+    return { filled, visible_forms: forms.length };
+  }, { selector: rootSelector, marker });
+}
+
+async function clickSave(page, rootSelector) {
+  return page.evaluate((selector) => {
+    function visible(el) {
+      const box = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return box.width > 0 && box.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && !el.disabled;
+    }
+    const root = document.querySelector(selector);
+    if (!root) return null;
+    const controls = Array.from(root.querySelectorAll('button, input[type="submit"], [data-action]'))
+      .filter(visible)
+      .filter((el) => {
+        const action = el.getAttribute('data-action') || '';
+        const text = el.textContent || el.value || '';
+        return /\bsave\b|\bsubmit\b|speichern/i.test(`${action} ${text}`);
+      });
+    const control = controls[0];
+    if (!control) return null;
+    const info = {
+      action: control.getAttribute('data-action') || '',
+      text: (control.textContent || control.value || '').trim().slice(0, 120),
+    };
+    control.click();
+    return info;
+  }, rootSelector);
+}
+
+async function markerVisible(page, rootSelector, marker, timeoutMs) {
+  await page.waitForFunction(({ selector, marker }) => {
+    const root = document.querySelector(selector);
+    return Boolean(root && root.innerText.includes(marker));
+  }, { selector: rootSelector, marker }, { timeout: timeoutMs });
+  return true;
+}
+
+async function clickAutomation(page, rootSelector) {
+  return page.evaluate((selector) => {
+    function visible(el) {
+      const box = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return box.width > 0 && box.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && !el.disabled;
+    }
+    const root = document.querySelector(selector);
+    if (!root) return null;
+    const controls = Array.from(root.querySelectorAll('[data-action], button'))
+      .filter(visible)
+      .filter((el) => {
+        const action = String(el.getAttribute('data-action') || '').toLowerCase();
+        const text = String(el.textContent || '').toLowerCase();
+        if (/(^|[-_:])(create|new|add|save|submit|cancel|close|edit|delete|remove|copy)([-_:]|$)/.test(action)) return false;
+        return action.includes('followup') || action.includes('follow-up') || action.includes('review') || text.includes('follow-up') || text.includes('followup');
+      });
+    const control = controls[0];
+    if (!control) return null;
+    const info = {
+      action: control.getAttribute('data-action') || '',
+      text: (control.textContent || '').trim().slice(0, 120),
+    };
+    control.click();
+    return info;
+  }, rootSelector);
+}
+
+async function runE2e(options) {
+  const result = {
+    ok: false,
+    module_id: options.moduleId,
+    url: withModuleHash(options.url, options.moduleId),
+    marker: options.marker,
+    failures: [],
+    evidence: {},
+  };
+
+  const collections = readModuleCollections(options.moduleId);
+  result.evidence.collections = collections;
+  result.evidence.browser_runtime = browserRuntime.evidence;
+  const sqlitePath = join(RELEASE_ROOT, 'runtime/business-os-rxdb.sqlite3');
+  result.evidence.native_db = sqlitePath;
+
+  const browser = await browserRuntime.chromium.launch({
+    headless: true,
+    ...browserRuntime.launchOptions,
+  });
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  const page = await context.newPage();
+  const consoleErrors = [];
+  const pageErrors = [];
+  const failedRequests = [];
+
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text().slice(0, 1200));
+  });
+  page.on('pageerror', (error) => {
+    pageErrors.push(String(error.stack || error.message || error).slice(0, 1200));
+  });
+  page.on('requestfailed', (request) => {
+    failedRequests.push({
+      url: request.url(),
+      error: request.failure()?.errorText || '',
+    });
+  });
+
+  try {
+    let rootSelector = await openModule(page, options.moduleId, options.url, options.timeoutMs);
+    const action = await findPrimaryCreateAction(page, rootSelector);
+    result.evidence.create_action = action;
+    if (!action) {
+      result.failures.push('no visible primary create action found under module root');
+      return result;
+    }
+    await page.locator(`${rootSelector} [data-action="${action}"]`).click({ timeout: options.timeoutMs });
+    await page.waitForTimeout(400);
+
+    result.evidence.form = await fillVisibleForm(page, rootSelector, options.marker);
+    if (!result.evidence.form?.filled?.length) {
+      result.failures.push('no visible form fields were filled after create action');
+      return result;
+    }
+
+    result.evidence.save_control = await clickSave(page, rootSelector);
+    if (!result.evidence.save_control) {
+      result.failures.push('no visible save/submit control found after filling form');
+      return result;
+    }
+    await markerVisible(page, rootSelector, options.marker, Math.min(options.timeoutMs, 20000));
+    result.evidence.marker_visible_after_save = true;
+
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: options.timeoutMs });
+    rootSelector = await openModule(page, options.moduleId, options.url, options.timeoutMs);
+    await markerVisible(page, rootSelector, options.marker, Math.min(options.timeoutMs, 30000));
+    result.evidence.marker_visible_after_reload = true;
+
+    if (!existsSync(sqlitePath)) {
+      result.failures.push(`native RxDB SQLite database not found at ${sqlitePath}`);
+      return result;
+    }
+    const nativeRecord = await pollUntil(() => {
+      for (const collection of collections) {
+        const count = sqliteCountLike(sqlitePath, tableName(collection), options.marker);
+        if (count > 0) return { collection: collection.name, table: tableName(collection), count };
+      }
+      return null;
+    }, Math.min(options.timeoutMs, 30000), 1000);
+    if (!nativeRecord) {
+      result.failures.push('saved marker did not appear in native RxDB SQLite module collections');
+      return result;
+    }
+    result.evidence.native_record = nativeRecord;
+
+    result.evidence.automation_action = await clickAutomation(page, rootSelector);
+    if (!result.evidence.automation_action) {
+      result.failures.push('no visible follow-up/review automation action found');
+      return result;
+    }
+    const commandRecord = await pollUntil(() => {
+      const table = 'ctox_business_os__business_commands__v1';
+      const count = sqliteCountLike(sqlitePath, table, options.marker);
+      if (count > 0) return { table, count };
+      return null;
+    }, Math.min(options.timeoutMs, 30000), 1000);
+    if (!commandRecord) {
+      result.failures.push('automation marker did not appear in native business_commands');
+      return result;
+    }
+    result.evidence.native_command = commandRecord;
+  } catch (error) {
+    result.failures.push(String(error.stack || error.message || error).split('\n')[0]);
+  } finally {
+    const moduleErrors = consoleErrors.filter((message) => message.includes(options.moduleId) || message.includes('[business-os] mount failed'));
+    if (moduleErrors.length > 0) {
+      result.failures.push(...moduleErrors.map((message) => `browser console error: ${message}`));
+    }
+    if (pageErrors.length > 0) {
+      result.failures.push(...pageErrors.map((message) => `browser page error: ${message}`));
+    }
+    result.evidence.console_errors = consoleErrors;
+    result.evidence.page_errors = pageErrors;
+    result.evidence.failed_requests = failedRequests;
+    result.ok = result.failures.length === 0;
+    if (options.screenshot && !result.ok) {
+      await page.screenshot({ path: options.screenshot, fullPage: true }).catch(() => {});
+      result.evidence.screenshot = options.screenshot;
+    }
+    await context.close().catch(() => {});
+    await browser.close().catch(() => {});
+  }
+
+  return result;
+}
+
+let options;
+try {
+  options = parseArgs(process.argv.slice(2));
+} catch (error) {
+  console.error(error.message);
+  console.error(usage());
+  process.exit(2);
+}
+
+if (options.help) {
+  console.log(usage());
+  process.exit(0);
+}
+
+const result = await runE2e(options);
+if (options.output) {
+  writeFileSync(options.output, `${JSON.stringify(result, null, 2)}\n`);
+}
+printResult(result, options.json);
+process.exit(result.ok ? 0 : 1);
