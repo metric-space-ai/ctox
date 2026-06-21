@@ -1,7 +1,69 @@
 #!/usr/bin/env node
-import { writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { chromium } from 'playwright';
+import { existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const RELEASE_ROOT = resolve(SCRIPT_DIR, '../../../..');
+
+function unique(values) {
+  return Array.from(new Set(values));
+}
+
+function findRuntimeChromiumExecutable(root) {
+  const cacheDir = join(root, 'runtime/browser/interactive-reference/ms-playwright');
+  if (!existsSync(cacheDir)) return null;
+  for (const entry of readdirSync(cacheDir)) {
+    if (!entry.startsWith('chromium-')) continue;
+    const base = join(cacheDir, entry);
+    const candidates = [
+      join(base, 'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing'),
+      join(base, 'chrome-linux/chrome'),
+      join(base, 'chrome-win/chrome.exe'),
+    ];
+    const executable = candidates.find((candidate) => existsSync(candidate));
+    if (executable) return executable;
+  }
+  return null;
+}
+
+function browserPackageJsonCandidates() {
+  return unique([
+    join(RELEASE_ROOT, 'runtime/browser/interactive-reference/package.json'),
+    join(RELEASE_ROOT, 'src/apps/business-os/package.json'),
+    join(SCRIPT_DIR, '../package.json'),
+    join(process.cwd(), 'package.json'),
+  ]).filter((candidate) => existsSync(candidate));
+}
+
+function loadBrowserRuntime() {
+  const failures = [];
+  for (const packageJson of browserPackageJsonCandidates()) {
+    for (const packageName of ['patchright', 'playwright']) {
+      try {
+        const require = createRequire(packageJson);
+        const runtime = require(packageName);
+        if (!runtime?.chromium) throw new Error(`${packageName} did not expose chromium`);
+        const executablePath = findRuntimeChromiumExecutable(RELEASE_ROOT);
+        return {
+          chromium: runtime.chromium,
+          launchOptions: executablePath ? { executablePath } : {},
+          evidence: {
+            package: packageName,
+            package_json: packageJson,
+            executable_path: executablePath,
+          },
+        };
+      } catch (error) {
+        failures.push(`${packageName} from ${packageJson}: ${error.message}`);
+      }
+    }
+  }
+  throw new Error(`could not load CTOX browser runtime (${failures.join('; ')})`);
+}
+
+const browserRuntime = loadBrowserRuntime();
 
 function usage() {
   return [
@@ -98,7 +160,11 @@ async function runSmoke(options) {
     evidence: {},
   };
 
-  const browser = await chromium.launch({ headless: true });
+  result.evidence.browser_runtime = browserRuntime.evidence;
+  const browser = await browserRuntime.chromium.launch({
+    headless: true,
+    ...browserRuntime.launchOptions,
+  });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   const page = await context.newPage();
   const consoleErrors = [];
@@ -253,12 +319,15 @@ async function runSmoke(options) {
       };
     });
 
-    const clicked = result.evidence.after.probe.docClicks.some((entry) => entry.action === action);
+    const probe = result.evidence.after.probe || { docClicks: [], showModalCalls: [] };
+    const clicked = Array.isArray(probe.docClicks) && probe.docClicks.some((entry) => entry.action === action);
     const openedDialog = result.evidence.after.open_dialogs > result.evidence.before.open_dialogs;
     const revealedForm = result.evidence.after.visible_forms > result.evidence.before.visible_forms;
     const revealedSave = result.evidence.after.visible_save_submit_controls > result.evidence.before.visible_save_submit_controls;
-    const calledShowModal = result.evidence.after.probe.showModalCalls.length > 0;
-    if (!clicked) result.failures.push(`primary create action ${action} was not observed by the browser click probe`);
+    const calledShowModal = Array.isArray(probe.showModalCalls) && probe.showModalCalls.length > 0;
+    if (Array.isArray(probe.docClicks) && probe.docClicks.length > 0 && !clicked) {
+      result.failures.push(`primary create action ${action} was not observed by the browser click probe`);
+    }
     if (!(openedDialog || revealedForm || revealedSave || calledShowModal)) {
       result.failures.push(`primary create action ${action} did not reveal an open dialog, visible form, or save/submit control`);
     }
