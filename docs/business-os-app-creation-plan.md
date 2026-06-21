@@ -45,10 +45,9 @@ Overall status: `in_progress`, not production-ready.
 Current CTOX installed release:
 
 - Active install: `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T011143Z`
-- Source head: `dad194c4 Update app creation plan with browser evidence`
+- Source head: `0dd04c31 Harden Business OS app collection validation`
 - Upgrade path: latest `ctox upgrade --dev` applied the active release from
-  `main`, but did not include the local uncommitted validator/skill patch.
-  Push the patch to `main`, then run `ctox upgrade --dev` again before using
+  `main`, but predates `0dd04c31`. Run `ctox upgrade --dev` again before using
   installed validation as evidence.
 - Business OS shell assets are now byte-identical across source, state, and runtime:
   `src/apps/business-os/app.js`,
@@ -187,10 +186,10 @@ Owner: `Codex`
 
 Active phase: `4. Close validator/resource gaps`
 
-Current rule: do not patch generated app artifacts by hand. The immediate
-source patch is the module-scoped collection validator/resource update; it must
-be committed, pushed to `main`, installed with `ctox upgrade --dev`, and then
-validated from the installed CTOX path before a fresh bench is meaningful.
+Current rule: do not patch generated app artifacts by hand. The module-scoped
+collection validator/resource update is pushed to `main`; it must now be
+installed with `ctox upgrade --dev` and validated from the installed CTOX path
+before a fresh bench is meaningful.
 
 Immediate checklist:
 
@@ -208,7 +207,7 @@ Immediate checklist:
 - [x] Decide whether each fix belongs in skill resources, static validator,
   runtime/shell, or app-review rework behavior.
 - [x] Patch the smallest systemic gap.
-- [ ] Commit and push the source validator/skill patch to `main`.
+- [x] Commit and push the source validator/skill patch to `main`.
 - [ ] Run `ctox upgrade --dev` after the patch is on `main`.
 - [ ] Verify the installed validator rejects historical unscoped `rfix5`
   modules.
@@ -305,16 +304,15 @@ Use this before marking any generated app green:
 
 ## Next Actions
 
-1. Commit and push the local validator/skill/resource patch to `main`.
-2. Run `ctox upgrade --dev` only after `main` contains the patch.
-3. Verify the installed validator contains the module-scoped collection check
+1. Run `ctox upgrade --dev` now that `main` contains `0dd04c31`.
+2. Verify the installed validator contains the module-scoped collection check
    and rejects historical unscoped `rfix5` modules.
-4. Run a fresh five-app CTOX bench, for example `rfix6`, after the upgrade.
-5. Confirm newly generated runtime collection names are module-id scoped.
-6. Run browser E2E with precise selectors and longer native/command sync waits.
-7. Keep browser-smoke failures separate from app failures: record selector/wait
+3. Run a fresh five-app CTOX bench, for example `rfix6`, after the upgrade.
+4. Confirm newly generated runtime collection names are module-id scoped.
+5. Run browser E2E with precise selectors and longer native/command sync waits.
+6. Keep browser-smoke failures separate from app failures: record selector/wait
    gaps as harness issues, not generated app defects.
-8. Update this file before handing off and after every material result.
+7. Update this file before handing off and after every material result.
 
 ## Evidence Log
 
@@ -332,6 +330,7 @@ Use this before marking any generated app green:
 - `2026-06-21`: targeted Inventory browser evidence `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix5/browser-smoke/inventory-extended-diagnostic-1782003820176.json` shows UI save success and reload visibility but native item row remains `0`, matching the unscoped collection-name drift finding.
 - `2026-06-21`: local validator patch added module-scoped collection enforcement. Verification passed: `node src/apps/business-os/scripts/validate-app-module.test.mjs`. Source validator now correctly rejects historical `bench_inventory_rfix5` and `bench_projects_rfix5` installed artifacts for unscoped collection names.
 - `2026-06-21`: installed release check showed `/Users/michaelwelsch/.local/lib/ctox/current` points to `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T011143Z`. `ctox status --json` reports `running=true`, `busy=false`, native RxDB peer `replicationUp=true`, and `http_bridge_available=false`. The installed validator still needs the local patch via push to `main` plus `ctox upgrade --dev`.
+- `2026-06-21`: commit `0dd04c31` pushed to `main` with the app-creation plan, module-scoped collection validator, validator regression test, and matching skill resource updates. Next proof step is `ctox upgrade --dev`.
 
 ## Open Issues
 
