@@ -40,7 +40,9 @@ Overall status: `in_progress`, not production-ready yet.
 
 Installed CTOX:
 
-- Source head: `b0e733be Update Business OS app creation plan status`
+- Source branch: `main`
+- Last source head checked before this plan edit:
+  `b338fe7e Update Business OS app creation live plan`
 - Active install:
   `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T045029Z`
 - Install path: applied through `ctox upgrade --dev`
