@@ -9,6 +9,7 @@ Use this before claiming a Business OS app is done.
 - `mount(ctx)` renders the HTML fragment into `ctx.host`.
 - `index.css` is loaded by the module or otherwise available through the app contract.
 - App records use `ctx.db` and declared module collections.
+- Runtime app collection names are scoped to the module id.
 - `schema.js`, `collections.schema.json`, and record helper outputs agree on
   collection names, schema versions, required fields, and property types.
 - Automation uses `ctx.commandBus.dispatch(...)`.

@@ -45,11 +45,19 @@ Keep extra files rare. Use extra local ESM helpers only when the app would other
   sort in plain JavaScript.
 - Do not create a separate REST, HTTP, IndexedDB, Postgres, SQLite, localStorage, or sessionStorage data path.
 - For a first app, prefer one module-owned collection for the main business object.
+- Runtime app collection names must be scoped to the module id. Use
+  `<module_id>_<record_name>` after replacing any non-collection-safe
+  characters with underscores. Example: module `contracts_v0_1` owns
+  `contracts_v0_1_contracts`, not shared names such as `contracts` or
+  `contract_records`.
 - If you add collections, list them in `module.json`, declare them in `collections.schema.json`, and export matching schemas from `schema.js`.
 - Runtime-installed module collections are registered into the native CTOX DB
   peer from `collections.schema.json`. If a collection is missing from either
   `module.json`, `collections.schema.json`, or `schema.js`, browser and native
   persistence will disagree.
+- Do not reuse domain-level collection names across generated apps or bench
+  runs. Reuse can create native/browser schema drift and make WebRTC sync look
+  random.
 - Keep browser and native schema shapes aligned: `schema.js` and
   `collections.schema.json` must use the same collection names, versions,
   primary keys, required fields, property names, and property types.

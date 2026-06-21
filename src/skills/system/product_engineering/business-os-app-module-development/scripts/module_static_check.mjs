@@ -61,6 +61,25 @@ function rel(path) {
   return relative(root, path).split(sep).join('/');
 }
 
+function normalizedModuleCollectionPrefix(id) {
+  return String(id || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function isModuleScopedCollectionName(collection, id) {
+  const name = String(collection || '').trim();
+  const direct = String(id || '').trim();
+  const normalized = normalizedModuleCollectionPrefix(id);
+  return Boolean(name && (
+    name === direct
+    || name.startsWith(`${direct}_`)
+    || (normalized && (name === normalized || name.startsWith(`${normalized}_`)))
+  ));
+}
+
 function readText(path) {
   return readFileSync(path, 'utf8');
 }
@@ -561,6 +580,14 @@ if (manifest) {
     fail(`module.json install_scope must be ${expectedInstallScope}`);
   }
   if (!Array.isArray(manifest.collections)) fail('module.json collections must be an array');
+  if (installedMode && Array.isArray(manifest.collections)) {
+    for (const name of manifest.collections) {
+      if (shellCollections.has(name)) continue;
+      if (!isModuleScopedCollectionName(name, moduleId)) {
+        fail(`module.json collection ${name} must be scoped to module id ${moduleId}; use ${normalizedModuleCollectionPrefix(moduleId)}_<name>`);
+      }
+    }
+  }
   if (installedMode) {
     const version = String(manifest.version || '');
     const parsed = semverPattern.exec(version);
@@ -602,6 +629,13 @@ if (schemaDoc) {
   }
   if (!schemaDoc.collections || typeof schemaDoc.collections !== 'object' || Array.isArray(schemaDoc.collections)) {
     fail('collections.schema.json collections must be an object');
+  }
+  if (installedMode && schemaDoc.collections && typeof schemaDoc.collections === 'object' && !Array.isArray(schemaDoc.collections)) {
+    for (const name of Object.keys(schemaDoc.collections)) {
+      if (!isModuleScopedCollectionName(name, moduleId)) {
+        fail(`collections.schema.json collection ${name} must be scoped to module id ${moduleId}; use ${normalizedModuleCollectionPrefix(moduleId)}_<name>`);
+      }
+    }
   }
 }
 

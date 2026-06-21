@@ -8,6 +8,9 @@
 - Export `mount(ctx)` from `index.js`.
 - Render into `ctx.host`.
 - Persist app records through the shell-provided `ctx.db` collection handle.
+- Scope every runtime app collection name to the module id, for example
+  `inventory_v0_1_items`, so independent generated apps and future versions do
+  not collide in CTOX DB.
 - Send workflow automation through `ctx.commandBus.dispatch(...)`.
 - Use `business_os.chat.task` for normal AI/chat follow-up with `payload.record_snapshot`.
 - Use `ctox.ticket.local.create/comment/transition` only for real local ticket lifecycle actions.
@@ -30,6 +33,8 @@
 
 - Do not build a React, Next.js, Vite, bundled, or package-managed app.
 - Do not create a separate HTTP, REST, IndexedDB, Postgres, or SQLite data path.
+- Do not use shared/domain collection names such as `inventory_items`,
+  `contracts`, or `quality_complaints` for runtime-generated apps.
 - Do not write generated runtime apps under `src/` unless the task explicitly targets a source module.
 - Do not write directly to `business_commands`; use `ctx.commandBus.dispatch(...)`.
 - Do not write directly to `ctox_ticket_*` projection collections.

@@ -225,6 +225,50 @@ function writeSourceModule(root, moduleId, overrides = {}) {
 
 {
   const root = makeWorkspace();
+  writeInstalledModule(root, 'bench_inventory_rfix', {
+    manifest: { collections: ['business_commands', 'bench_inventory_rfix_records', 'bench_inventory_items'] },
+    collections: {
+      bench_inventory_items: {
+        version: 0,
+        primaryKey: 'id',
+        type: 'object',
+        properties: {
+          id: { type: 'string', maxLength: 120 },
+          title: { type: 'string' },
+          updated_at_ms: { type: 'number' },
+        },
+        required: ['id', 'title', 'updated_at_ms'],
+      },
+    },
+    schemaJs: [
+      'export const collections = {',
+      '  bench_inventory_rfix_records: {',
+      '    version: 0,',
+      "    primaryKey: 'id',",
+      "    type: 'object',",
+      "    properties: { id: { type: 'string', maxLength: 120 }, title: { type: 'string' }, updated_at_ms: { type: 'number' } },",
+      "    required: ['id', 'title', 'updated_at_ms'],",
+      '  },',
+      '  bench_inventory_items: {',
+      '    version: 0,',
+      "    primaryKey: 'id',",
+      "    type: 'object',",
+      "    properties: { id: { type: 'string', maxLength: 120 }, title: { type: 'string' }, updated_at_ms: { type: 'number' } },",
+      "    required: ['id', 'title', 'updated_at_ms'],",
+      '  },',
+      '};',
+      '',
+    ].join('\n'),
+    indexJs: installedIndexJs('bench_inventory_rfix', 'bench_inventory_items'),
+  });
+  const run = runValidator(root, 'bench_inventory_rfix', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /module\.json collection bench_inventory_items must be scoped to module id bench_inventory_rfix/);
+  assert.match(run.stderr, /collections\.schema\.json collection bench_inventory_items must be scoped to module id bench_inventory_rfix/);
+}
+
+{
+  const root = makeWorkspace();
   writeInstalledModule(root, 'aliasautomation', {
     indexJs: [
       "import { buildFollowUpCommand } from './core/automation.mjs';",
