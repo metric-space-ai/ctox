@@ -1726,13 +1726,24 @@ setup_managed_install() {
 
   rsync -a --exclude='target' --exclude='runtime' --exclude='.git' "$source_root/" "$release_dir/"
 
-  # Business OS apps are tenant/runtime state, not CTOX core release payload.
-  # Seed them once on first install, then mount the persistent tree into each
-  # release so CTOX upgrades cannot silently overwrite app-store-managed apps.
+  # Business OS shell assets are CTOX release payload and must be refreshed on
+  # every managed upgrade. Runtime-installed apps and local bench/evidence
+  # directories are tenant state and must survive upgrades.
   local state_business_os_root="$STATE_ROOT/business-os"
-  if [[ ! -e "$state_business_os_root/index.html" && -d "$source_root/src/apps/business-os" ]]; then
+  if [[ -d "$source_root/src/apps/business-os" ]]; then
     mkdir -p "$state_business_os_root"
-    rsync -a "$source_root/src/apps/business-os/" "$state_business_os_root/"
+    rsync -a --delete \
+      --exclude='/app-creation-bench/***' \
+      --exclude='/installed-modules/***' \
+      --exclude='/node_modules/***' \
+      --exclude='/notes/***' \
+      "$source_root/src/apps/business-os/" "$state_business_os_root/"
+    if [[ -d "$source_root/src/apps/business-os/installed-modules" ]]; then
+      mkdir -p "$state_business_os_root/installed-modules"
+      rsync -a --exclude='/node_modules/***' \
+        "$source_root/src/apps/business-os/installed-modules/" \
+        "$state_business_os_root/installed-modules/"
+    fi
   fi
   if [[ -d "$state_business_os_root" ]]; then
     rm -rf "$release_dir/business-os"
