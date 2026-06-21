@@ -1382,7 +1382,7 @@ function buildContextActions(context) {
   const actions = [
     {
       label: 'App modifizieren',
-      type: 'business_os.app.modify',
+      type: 'ctox.business_os.app.modify',
       action: 'modify_app',
       requested_change: 'Modify this Business OS module based on the selected UI context.'
     }
