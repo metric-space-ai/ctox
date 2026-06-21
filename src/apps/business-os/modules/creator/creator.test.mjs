@@ -1,19 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Buffer } from 'node:buffer';
-import { fileURLToPath } from 'node:url';
 
-import { build } from 'esbuild';
-
-const bundledModule = await build({
-  entryPoints: [fileURLToPath(new URL('./index.js', import.meta.url))],
-  bundle: true,
-  format: 'esm',
-  platform: 'browser',
-  write: false,
-});
-
-const [{ text: bundledSource }] = bundledModule.outputFiles;
 const {
   buildAppCreateCommand,
   computeCreatorActionState,
@@ -24,9 +11,7 @@ const {
   normalizeCollectionName,
   normalizeModuleId,
   validateCreatorSpec,
-} = await import(
-  `data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`
-);
+} = await import('./index.js');
 
 test('empty request blocks app creation', () => {
   const state = computeCreatorActionState({
