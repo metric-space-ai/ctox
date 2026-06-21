@@ -42,9 +42,9 @@ Installed CTOX:
 
 - Source branch: `main`
 - Last source head checked before this plan edit:
-  `6766b9d1 Skip full workspace sync for app module finalization`
+  `85ee58d2 Serialize Business OS app queue leasing`
 - Active install:
-  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T081830Z`
+  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T084616Z`
 - Install path: applied through `ctox upgrade --dev`
 - State root:
   `/Users/michaelwelsch/.local/state/ctox`
@@ -74,8 +74,9 @@ Latest result:
 - `rfix8` is in progress through real installed CTOX app-create tasks.
   Subscriptions reached terminal queue success with installed validation green
   and installed browser smoke green. Quality later reached terminal queue
-  success with installed validation green. Inventory is currently leased,
-  Projects and Contracts are pending.
+  success with installed validation green. After installing the queue
+  serialization fix, Inventory was requeued as unstarted, Projects is the only
+  leased app task, and Contracts remains pending.
 - `rfix8` exposed a second `runtime_orchestration_gap`: after the throughput
   fix, two Business OS app-create tasks were leased one second apart
   (`Quality` at `2026-06-21T08:27:25Z`, `Inventory` at
@@ -83,13 +84,14 @@ Latest result:
   generated-app failure and not a reason to add more app-building rules.
 - `rfix8` remains valid forensic evidence, but it is not a clean production
   signoff run because part of it ran before the app-queue serialization fix.
-  Start a fresh run after the fix is committed, pushed, and installed.
+  Start a fresh run only after the forensic `rfix8` queue is cleanly retired or
+  has drained without manual artifact edits.
 - The installed app smoke CLI is working from the managed release runtime. It
   is a validation tool only; it does not generate, repair, or rewrite app
   artifacts.
 - No generated `rfix8` app files may be patched by hand.
 
-Latest source fix under test:
+Latest installed source fix:
 
 - Classification: `runtime_orchestration_gap`, not skill text or model output.
 - Patch in `src/core/service/service.rs`: serialize Business OS app queue
@@ -104,9 +106,18 @@ Latest source fix under test:
   `cargo test --bin ctox durable_queue -- --nocapture`,
   `cargo test --bin ctox business_os_app_module_tasks_skip_full_workspace_desktop_sync -- --nocapture`,
   and `rustfmt --check src/core/service/service.rs`.
-- Source fix status: tested locally, not yet committed, pushed, or installed.
+- Source fix status: tested locally, committed, pushed, and installed.
+- Source fix commit: `85ee58d2 Serialize Business OS app queue leasing`.
+- Installed through `ctox upgrade --dev` as
+  `branch-main-20260621T084616Z`.
+- Installed-source proof:
+  `/Users/michaelwelsch/.local/lib/ctox/current/src/core/service/service.rs`
+  contains `durable_queue_lease_in_progress`,
+  `leased_business_os_app_queue_task_exists`,
+  `app_queue_finalization_does_not_overlap_next_app_lease`, and
+  `app_rework_waits_for_idle_despite_stale_inflight_key`.
 
-Current source patch status:
+Installed smoke/tooling status:
 
 - Added `src/apps/business-os/scripts/smoke-app-module.mjs`.
 - Added `ctox business-os app smoke <module-id>` CLI wiring in
@@ -326,15 +337,18 @@ Immediate checklist:
 - [x] Patch durable app queue leasing so only one Business OS app-create task
   can be leased while another app task is still leased or app recovery is active.
 - [x] Verify app queue serialization with focused Rust tests.
-- [ ] Commit and push the app queue serialization fix.
-- [ ] Install the app queue serialization fix through `ctox upgrade --dev`.
+- [x] Commit and push the app queue serialization fix.
+- [x] Install the app queue serialization fix through `ctox upgrade --dev`.
+- [x] Verify installed source contains the app queue serialization guard.
+- [ ] Let or cleanly retire the forensic `rfix8` queue before production
+  signoff.
 - [ ] Start a fresh post-serialization five-app run.
 - [ ] Require installed validation and browser smoke for each fresh app before
   returning to full browser E2E.
 
 Current slice exit criteria:
 
-- Source has a committed, installed app queue serialization fix.
+- Source has a committed, pushed, and installed app queue serialization fix.
 - A fresh post-serialization bench run reaches static validation green and browser
   smoke green, or failures are classified with evidence before further patching.
 
@@ -365,8 +379,8 @@ Active forensic run `rfix8`:
 | Case | Module Id | Queue Status | Static Validation | Browser Smoke | Notes |
 | --- | --- | --- | --- | --- | --- |
 | Subscriptions | `bench_subscriptions_rfix8` | handled | green | green | Terminal success; installed smoke clicked `add-subscription` and revealed a form/save flow. |
-| Inventory | `bench_inventory_rfix8` | leased | skipped | not run | Leased at `2026-06-21T08:27:26Z`; current installed service is handling it. This lease overlapped the Quality lease under pre-fix code. |
-| Projects | `bench_projects_rfix8` | pending | skipped | not run | Pending. |
+| Inventory | `bench_inventory_rfix8` | pending | skipped | not run | Originally leased at `2026-06-21T08:27:26Z` under pre-fix code, then requeued as unstarted at `2026-06-21T08:46:00Z`. |
+| Projects | `bench_projects_rfix8` | leased | red so far | not run | Only currently leased app task after installing the queue serialization fix; artifact directory currently has only `module.json` while same-task rework is running. |
 | Contracts | `bench_contracts_rfix8` | pending | skipped | not run | Pending. |
 | Quality | `bench_quality_rfix8` | handled | green | not run | Was leased at `2026-06-21T08:27:25Z` and later reached terminal success. The overlapping lease is runtime evidence, not app evidence. |
 
@@ -669,6 +683,18 @@ Use this before marking any generated app green:
   `cargo test --bin ctox durable_queue -- --nocapture`,
   `cargo test --bin ctox business_os_app_module_tasks_skip_full_workspace_desktop_sync -- --nocapture`,
   and `rustfmt --check src/core/service/service.rs`.
+- `2026-06-21`: commit `85ee58d2` (`Serialize Business OS app queue leasing`)
+  was pushed to `main` and installed through `ctox upgrade --dev` as
+  `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T084616Z`.
+  `ctox version --json` confirms `current_release=branch-main-20260621T084616Z`.
+  `ctox status --json` confirms CTOX running, Business OS `ok=true`, native
+  peer `replicationUp=true`, and `http_bridge_available=false`.
+- `2026-06-21`: post-install `rfix8` status
+  `/Users/michaelwelsch/.local/lib/ctox/current/runtime/business-os/app-creation-bench/rfix8/status-1782032199956.json`
+  shows exactly one app task leased (`bench_projects_rfix8`), Inventory
+  requeued to pending as unstarted, Contracts pending, and Subscriptions plus
+  Quality handled. This is early evidence that the serialization fix is active,
+  but `rfix8` is still forensic-only because it contains pre-fix overlap.
 
 ## Open Issues
 
@@ -676,7 +702,7 @@ Use this before marking any generated app green:
   repeated dead Create/New flows. A fresh bench run is required after the
   smoke/skill patch is installed.
 - `rfix8` found app queue overlap after the throughput fix. The source fix is
-  tested but not yet committed, pushed, or installed.
+  now committed, pushed, and installed; a fresh post-fix bench is still needed.
 - The current `rfix8` run cannot be the production signoff run because it
   includes pre-fix overlapping app leases. Use it as forensic evidence only.
 - Entry-point proof across Chat, App Creator, App Store/template flow, CLI, and
