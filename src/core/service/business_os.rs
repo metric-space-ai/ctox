@@ -610,6 +610,8 @@ fn handle_business_os_rxdb(root: &Path, args: &[String]) -> anyhow::Result<()> {
 
 fn handle_business_os_app(root: &Path, args: &[String]) -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
+        Some("create") => handle_business_os_app_create(root, &args[1..]),
+        Some("modify") => handle_business_os_app_modify(root, &args[1..]),
         Some("validate") => {
             let module_id = args
                 .get(1)
@@ -750,6 +752,158 @@ fn handle_business_os_app(root: &Path, args: &[String]) -> anyhow::Result<()> {
         }
         Some(other) => anyhow::bail!("unknown business-os app command `{other}`"),
     }
+}
+
+fn handle_business_os_app_create(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    if args_have_help(args) {
+        println!(
+            "usage: ctox business-os app create --instruction <text> [--module-id <id>] [--title <title>] [--description <text>] [--category <category>] [--version 0.1.0] [--actor <user-id>]"
+        );
+        return Ok(());
+    }
+    let instruction = app_instruction_arg(args, false)
+        .context("usage: ctox business-os app create --instruction <text> [--module-id <id>]")?;
+    let module_id = flag_value(args, "--module-id")
+        .or_else(|| flag_value(args, "--app-id"))
+        .map(sanitize_business_os_app_module_id)
+        .transpose()?
+        .unwrap_or_else(|| {
+            sanitize_business_os_app_module_id(
+                flag_value(args, "--title").unwrap_or(instruction.as_str()),
+            )
+            .unwrap_or_else(|_| format!("business-app-{}", now_ms()))
+        });
+    let title = flag_value(args, "--title")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| title_from_module_id(&module_id));
+    let description = flag_value(args, "--description")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| instruction.chars().take(220).collect::<String>());
+    let category = flag_value(args, "--category")
+        .unwrap_or("")
+        .trim()
+        .to_owned();
+    let version =
+        normalize_business_os_app_version(flag_value(args, "--version").unwrap_or("0.1.0"))?;
+    let actor = business_os_app_cli_actor(args);
+    let now = now_ms();
+    let document = serde_json::json!({
+        "id": flag_value(args, "--command-id")
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("cmd_app_create_{}_{}", module_id, now)),
+        "command_id": flag_value(args, "--command-id")
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("cmd_app_create_{}_{}", module_id, now)),
+        "module": "creator",
+        "type": "ctox.business_os.app.create",
+        "command_type": "ctox.business_os.app.create",
+        "record_id": module_id.as_str(),
+        "status": "pending_sync",
+        "payload": {
+            "title": format!("Create {title}"),
+            "instruction": instruction.as_str(),
+            "module_id": module_id.as_str(),
+            "app_id": module_id.as_str(),
+            "app_title": title.as_str(),
+            "description": description.as_str(),
+            "category": category.as_str(),
+            "desired_version": version.as_str(),
+            "install_target": "runtime-installed-module",
+            "target": "app",
+            "mode": "app",
+            "required_skills": [BUSINESS_OS_APP_BENCH_SKILL]
+        },
+        "client_context": {
+            "source": "ctox-cli.business-os-app-create",
+            "target": "app",
+            "mode": "app",
+            "module_id": module_id.as_str(),
+            "app_id": module_id.as_str(),
+            "install_target": "runtime-installed-module",
+            "actor": actor
+        },
+        "created_at_ms": now,
+        "updated_at_ms": now
+    });
+    submit_business_os_app_command_document(root, document)
+}
+
+fn handle_business_os_app_modify(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    if args_have_help(args) {
+        println!(
+            "usage: ctox business-os app modify <module-id> --instruction <text> [--actor <user-id>]"
+        );
+        return Ok(());
+    }
+    let raw_module_id = flag_value(args, "--module-id")
+        .or_else(|| flag_value(args, "--app-id"))
+        .or_else(|| {
+            args.first()
+                .filter(|value| !value.starts_with("--"))
+                .map(String::as_str)
+        })
+        .context("usage: ctox business-os app modify <module-id> --instruction <text>")?;
+    let module_id = sanitize_business_os_app_module_id(raw_module_id)?;
+    let instruction = app_instruction_arg(args, true)
+        .context("usage: ctox business-os app modify <module-id> --instruction <text>")?;
+    let title = flag_value(args, "--title")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("Modify {}", title_from_module_id(&module_id)));
+    let actor = business_os_app_cli_actor(args);
+    let now = now_ms();
+    let document = serde_json::json!({
+        "id": flag_value(args, "--command-id")
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("cmd_app_modify_{}_{}", module_id, now)),
+        "command_id": flag_value(args, "--command-id")
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("cmd_app_modify_{}_{}", module_id, now)),
+        "module": "creator",
+        "type": "ctox.business_os.app.modify",
+        "command_type": "ctox.business_os.app.modify",
+        "record_id": module_id.as_str(),
+        "status": "pending_sync",
+        "payload": {
+            "title": title.as_str(),
+            "instruction": instruction.as_str(),
+            "module_id": module_id.as_str(),
+            "app_id": module_id.as_str(),
+            "install_target": "runtime-installed-module",
+            "target": "app",
+            "mode": "app",
+            "required_skills": [BUSINESS_OS_APP_BENCH_SKILL]
+        },
+        "client_context": {
+            "source": "ctox-cli.business-os-app-modify",
+            "target": "app",
+            "mode": "app",
+            "module_id": module_id.as_str(),
+            "app_id": module_id.as_str(),
+            "install_target": "runtime-installed-module",
+            "actor": actor
+        },
+        "created_at_ms": now,
+        "updated_at_ms": now
+    });
+    submit_business_os_app_command_document(root, document)
+}
+
+fn submit_business_os_app_command_document(
+    root: &Path,
+    document: serde_json::Value,
+) -> anyhow::Result<()> {
+    let accepted = crate::business_os::store::accept_rxdb_business_command(root, document)?;
+    print_json(&accepted)?;
+    if accepted.get("status").and_then(serde_json::Value::as_str) != Some("accepted") {
+        anyhow::bail!("Business OS app command was not accepted");
+    }
+    Ok(())
 }
 
 const BUSINESS_OS_APP_BENCH_EVIDENCE_DIR: &str = "runtime/business-os/app-creation-bench";
@@ -2645,7 +2799,7 @@ fn business_os_usage() -> String {
     business_os_usage_base()
         .replace(
             "  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]",
-            "  ctox business-os app references [--query <text>] [--json]\n  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]\n  ctox business-os app smoke <module-id> [--installed|--source] [--url <business-os-url>] [--json] [--timeout-ms <n>] [--output <path>] [--screenshot <path>]\n  ctox business-os app e2e <module-id> [--installed|--source] [--url <business-os-url>] [--json] [--timeout-ms <n>] [--output <path>] [--screenshot <path>] [--marker <value>]",
+            "  ctox business-os app create --instruction <text> [--module-id <id>]\n  ctox business-os app modify <module-id> --instruction <text>\n  ctox business-os app references [--query <text>] [--json]\n  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]\n  ctox business-os app smoke <module-id> [--installed|--source] [--url <business-os-url>] [--json] [--timeout-ms <n>] [--output <path>] [--screenshot <path>]\n  ctox business-os app e2e <module-id> [--installed|--source] [--url <business-os-url>] [--json] [--timeout-ms <n>] [--output <path>] [--screenshot <path>] [--marker <value>]",
         )
         .replace(
             "  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]",
@@ -2658,7 +2812,7 @@ fn business_os_usage() -> String {
 }
 
 fn business_os_usage_base() -> &'static str {
-    "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os mcp status\n  ctox business-os mcp tools\n  ctox business-os mcp policy\n  ctox business-os mcp policy keys\n  ctox business-os mcp policy set [--enabled true|false] [--allow-reads true|false] [--allow-writes true|false] [--allow-approvals true|false] [--allow-external-effects true|false] [--rate-limit-per-minute <n>] [--audit-retention-days <n>] [--allow-actor <id>]... [--allow-workspace <id>]... [--allow-module <id>]... [--allow-collection <name>]... [--deny-tool business_os.<tool>]... [--clear-deny-tools]\n  ctox business-os mcp call <tool-name> [--args <json>]\n  ctox business-os mcp audit [--limit <n>] [--format json|jsonl] [--output <path>] [--prune]\n  ctox business-os mcp serve [--addr 127.0.0.1:8788]\n  ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id> [--token <token>] [--once] [--max-reconnect-delay-ms <n>] [--heartbeat-interval-ms <n>] [--max-connection-age-ms <n>]\n  ctox business-os mcp gateway-status --url https://mcp.ctox.dev/status/<instance-id> [--token <token>]\n  ctox business-os peer status\n  ctox business-os peer rotate\n  ctox business-os peer start\n  ctox business-os desktop invite [--display-name <name>] [--ttl-hours <n> | --expires-at <rfc3339>] [--format json|link] [--output <path>]\n  ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]\n  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]\n  ctox business-os app finalize <module-id> --task-id <queue-task-id> [--installed|--source] [--reason <text>]\n  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]\n  ctox business-os repair queue-projections (--dry-run | --apply)\n  ctox business-os backup restore-drill [--module <module-id>]\n  ctox business-os backup prune-drills [--dry-run]\n  ctox business-os install --target <empty-dir> [--init-git] [--dry-run] [--no-copy-env]\n  ctox business-os commands process <command-id>\n  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os web-stack person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--auto-auth-assist] [--task-id <id>] [--workspace <path>] [--no-workspace]\n  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-status --session-id <id>\n  ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]\n  ctox business-os web-stack context-extract --session-id <id> [--source-id <id>] [--capture-script <id>] [--task-id <id>]\n  ctox business-os web-stack redaction-audit --canary <value> [--canary <value>]... [--path <path>]...\n  ctox business-os web-stack browser-doctor [--dir <path>]\n  ctox business-os files sync <path>\n  ctox business-os files sync-workspace <path>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
+    "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os mcp status\n  ctox business-os mcp tools\n  ctox business-os mcp policy\n  ctox business-os mcp policy keys\n  ctox business-os mcp policy set [--enabled true|false] [--allow-reads true|false] [--allow-writes true|false] [--allow-approvals true|false] [--allow-external-effects true|false] [--rate-limit-per-minute <n>] [--audit-retention-days <n>] [--allow-actor <id>]... [--allow-workspace <id>]... [--allow-module <id>]... [--allow-collection <name>]... [--deny-tool business_os.<tool>]... [--clear-deny-tools]\n  ctox business-os mcp call <tool-name> [--args <json>]\n  ctox business-os mcp audit [--limit <n>] [--format json|jsonl] [--output <path>] [--prune]\n  ctox business-os mcp serve [--addr 127.0.0.1:8788]\n  ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id> [--token <token>] [--once] [--max-reconnect-delay-ms <n>] [--heartbeat-interval-ms <n>] [--max-connection-age-ms <n>]\n  ctox business-os mcp gateway-status --url https://mcp.ctox.dev/status/<instance-id> [--token <token>]\n  ctox business-os peer status\n  ctox business-os peer rotate\n  ctox business-os peer start\n  ctox business-os desktop invite [--display-name <name>] [--ttl-hours <n> | --expires-at <rfc3339>] [--format json|link] [--output <path>]\n  ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]\n  ctox business-os app create --instruction <text> [--module-id <id>]\n  ctox business-os app modify <module-id> --instruction <text>\n  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]\n  ctox business-os app finalize <module-id> --task-id <queue-task-id> [--installed|--source] [--reason <text>]\n  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]\n  ctox business-os repair queue-projections (--dry-run | --apply)\n  ctox business-os backup restore-drill [--module <module-id>]\n  ctox business-os backup prune-drills [--dry-run]\n  ctox business-os install --target <empty-dir> [--init-git] [--dry-run] [--no-copy-env]\n  ctox business-os commands process <command-id>\n  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os web-stack person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--auto-auth-assist] [--task-id <id>] [--workspace <path>] [--no-workspace]\n  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-status --session-id <id>\n  ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]\n  ctox business-os web-stack context-extract --session-id <id> [--source-id <id>] [--capture-script <id>] [--task-id <id>]\n  ctox business-os web-stack redaction-audit --canary <value> [--canary <value>]... [--path <path>]...\n  ctox business-os web-stack browser-doctor [--dir <path>]\n  ctox business-os files sync <path>\n  ctox business-os files sync-workspace <path>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
 }
 
 fn exists_label(exists: bool) -> &'static str {
@@ -2683,6 +2837,126 @@ fn existing_dir_path(root: &Path, candidates: &[&str]) -> PathBuf {
         .map(|candidate| root.join(candidate))
         .find(|path| path.is_dir())
         .unwrap_or_else(|| root.join(candidates[0]))
+}
+
+fn app_instruction_arg(args: &[String], skip_first_positional: bool) -> Option<String> {
+    flag_value(args, "--instruction")
+        .or_else(|| flag_value(args, "--request"))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            let mut skip_first = skip_first_positional;
+            let mut free = Vec::new();
+            let mut index = 0usize;
+            while index < args.len() {
+                let arg = &args[index];
+                if arg.starts_with("--") {
+                    if app_command_flag_has_value(arg.as_str()) {
+                        index = index.saturating_add(2);
+                    } else {
+                        index = index.saturating_add(1);
+                    }
+                    continue;
+                }
+                if skip_first {
+                    skip_first = false;
+                    index = index.saturating_add(1);
+                    continue;
+                }
+                free.push(arg.as_str());
+                index = index.saturating_add(1);
+            }
+            let text = free.join(" ").trim().to_owned();
+            if text.is_empty() {
+                None
+            } else {
+                Some(text)
+            }
+        })
+}
+
+fn app_command_flag_has_value(flag: &str) -> bool {
+    matches!(
+        flag,
+        "--instruction"
+            | "--request"
+            | "--module-id"
+            | "--app-id"
+            | "--title"
+            | "--description"
+            | "--category"
+            | "--version"
+            | "--actor"
+            | "--actor-user"
+            | "--command-id"
+    )
+}
+
+fn sanitize_business_os_app_module_id(value: &str) -> anyhow::Result<String> {
+    let slug = value
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    anyhow::ensure!(!slug.is_empty(), "module id is required");
+    Ok(slug.chars().take(72).collect())
+}
+
+fn title_from_module_id(module_id: &str) -> String {
+    let title = module_id
+        .split(['-', '_'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    if title.is_empty() {
+        "Business OS App".to_owned()
+    } else {
+        title
+    }
+}
+
+fn normalize_business_os_app_version(value: &str) -> anyhow::Result<String> {
+    let version = value.trim();
+    anyhow::ensure!(
+        version
+            .split('.')
+            .map(str::parse::<u64>)
+            .collect::<Result<Vec<_>, _>>()
+            .is_ok_and(|parts| parts.len() == 3),
+        "Business OS app version must use semver without a v prefix, for example 0.1.0"
+    );
+    Ok(version.to_owned())
+}
+
+fn business_os_app_cli_actor(args: &[String]) -> serde_json::Value {
+    let id = flag_value(args, "--actor")
+        .or_else(|| flag_value(args, "--actor-user"))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            crate::business_os::store::session(None, None)
+                .user
+                .map(|user| user.id)
+        })
+        .unwrap_or_else(|| "local-dev".to_owned());
+    serde_json::json!({
+        "id": id,
+        "display_name": id,
+    })
 }
 
 fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
@@ -3554,6 +3828,76 @@ mod tests {
                 "bench tasks without --actor must target the local Business OS user"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn app_create_cli_enqueues_real_task_without_writing_app_artifacts() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let module_id = "cli-inventory";
+        let installed_root = root.path().join("runtime/business-os/installed-modules");
+
+        handle_business_os_app(
+            root.path(),
+            &[
+                "create".to_string(),
+                "--module-id".to_string(),
+                module_id.to_string(),
+                "--instruction".to_string(),
+                "Build a small inventory app with one CTOX follow-up automation.".to_string(),
+                "--actor".to_string(),
+                "cli-admin".to_string(),
+            ],
+        )?;
+
+        assert!(
+            !installed_root.join(module_id).exists(),
+            "app create CLI must not write app artifacts"
+        );
+        let tasks = channels::list_queue_tasks(root.path(), &[], 8)?;
+        assert_eq!(tasks.len(), 1);
+        let task = &tasks[0];
+        assert_eq!(
+            task.suggested_skill.as_deref(),
+            Some(BUSINESS_OS_APP_BENCH_SKILL)
+        );
+        assert!(task.prompt.contains("ctox.business_os.app.create"));
+        assert!(task
+            .prompt
+            .contains("runtime/business-os/installed-modules/cli-inventory"));
+        assert!(task
+            .prompt
+            .contains("ctox business-os app references --json"));
+        Ok(())
+    }
+
+    #[test]
+    fn app_modify_cli_enqueues_app_modify_skill_task() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+
+        handle_business_os_app(
+            root.path(),
+            &[
+                "modify".to_string(),
+                "cli-inventory".to_string(),
+                "--instruction".to_string(),
+                "Add a due-date field and keep existing data.".to_string(),
+                "--actor".to_string(),
+                "cli-admin".to_string(),
+            ],
+        )?;
+
+        let tasks = channels::list_queue_tasks(root.path(), &[], 8)?;
+        assert_eq!(tasks.len(), 1);
+        let task = &tasks[0];
+        assert_eq!(
+            task.suggested_skill.as_deref(),
+            Some(BUSINESS_OS_APP_BENCH_SKILL)
+        );
+        assert!(task.prompt.contains("ctox.business_os.app.modify"));
+        assert!(task
+            .prompt
+            .contains("runtime/business-os/installed-modules/cli-inventory"));
         Ok(())
     }
 

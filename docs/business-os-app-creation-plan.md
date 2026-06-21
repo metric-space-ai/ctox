@@ -42,13 +42,24 @@ installed validation, browser smoke, save/reload persistence, native CTOX DB
 sync, and command-bus automation. Final production signoff still needs
 entry-point coverage and versioning proof.
 
+Current failure classification:
+
+- `entry_point_tool_gap`: CTOX had a green queue/app-create path and a green
+  App Creator handoff, but not every external entry point had a small typed
+  tool that submits the same real Business OS command. This gap must be fixed
+  with routing tools and evidence, not with deterministic app generators,
+  templates, schema derivation, or generated-app repair.
+
 Installed CTOX:
 
 - Source branch: `main`
 - Last source head installed and checked:
   `41cd8600 Make creator source test release-safe`
-- Local source delta awaiting commit/install: none for App Creator. The product
-  flow still has no deterministic app builder or template writer.
+- Local source delta awaiting commit/install: thin CLI/MCP app create/modify
+  delegators plus the matching skill tool-boundary note. These changes must
+  remain routing-only: they enqueue normal Business OS commands, attach
+  `business-os-app-module-development`, point at the runtime app target, and
+  must not write app artifacts.
 - Active install:
   `/Users/michaelwelsch/.local/lib/ctox/releases/branch-main-20260621T170122Z`
 - Install path: applied through `ctox upgrade --dev`
@@ -236,6 +247,13 @@ The app creation path must stay simple, agent-led, and product-native.
 Do:
 
 - Let CTOX create apps through normal durable app-create tasks.
+- Use typed product tools for entry points:
+  `ctox business-os app create --instruction <text>`,
+  `ctox business-os app modify <module-id> --instruction <text>`,
+  MCP `business_os.create_app`, and MCP `business_os.modify_app`.
+- Keep those tools as delegators only. They may submit Business OS commands,
+  attach the app skill, and report command/task ids; they must not choose
+  schemas, layouts, files, or code.
 - Write runtime app output only under
   `$CTOX_INSTALL_ROOT/current/runtime/business-os/installed-modules/<module-id>`.
 - Build apps as vanilla `index.html`, `index.css`, browser ESM `index.js`, and
@@ -269,6 +287,8 @@ Do not:
   collection fallbacks.
 - Do not call `ctx.db.registerSchemas` from app code.
 - Do not add long prompt walls inside the skill or app creator.
+- Do not expose app creation as a generic `--prompt` API; use explicit user
+  `instruction` plus CTOX resources/tools.
 - Do not copy source-only manifest fields from built-in modules into runtime
   app manifests.
 - Do not ship UI slop: unused third columns, fake buttons, hidden overlays that
@@ -287,7 +307,7 @@ App creation is production-ready only when every gate is green.
 | Static validation | done | `rfix12` reached terminal queue success and installed validation green for all five apps. Status evidence: `status-1782055293408.json`. |
 | Browser mount | done | `rfix12` installed browser smoke is green for all five apps, including primary Create/New flow visibility and zero console/page/request failures. Evidence: `rfix12/browser-smoke/*.json`. |
 | Five-app browser E2E | done | `rfix12/deep-e2e/*.json` is green for all five apps. Each app creates data through the real UI, reloads with the record still visible, syncs to native CTOX DB/RxDB SQLite tables, and dispatches a record-scoped command-bus automation. |
-| Entry-point coverage | in_progress | Queue/app-create path is proven by `rfix12`. Installed App Creator now creates direct app-create commands without a local spec/generator step and validates green in `branch-main-20260621T170122Z`. Chat, App Store/template flow, CLI, and inbound/MCP paths still need evidence. |
+| Entry-point coverage | in_progress | Queue/app-create path is proven by `rfix12`. Installed App Creator now creates direct app-create commands without a local spec/generator step and validates green in `branch-main-20260621T170122Z`. Source now has routing-only CLI/MCP create/modify delegators with targeted Rust tests green; they still need install through `ctox upgrade --dev` and installed entry-point evidence. Chat and App Store/template flow still need evidence. |
 | Versioning contract | pending | Existing app version metadata is audited; missing enforcement is listed or patched; users see only versions `>=1.0.0`; each `x.0.0` major is independently installable with its own app icon. |
 | Install/upgrade lifecycle | in_progress | `ctox upgrade --dev` applies source fixes, preserves runtime modules, and leaves CTOX/Business OS usable. Latest installed release is `branch-main-20260621T170122Z`; App Creator installed validation is green. Watch the non-fatal sudo/launchctl warning separately if it becomes user-visible. |
 | No regressions | in_progress | Relevant Rust/JS checks and browser evidence are green for the latest app-creation path. Entry-point coverage and versioning checks remain. |
@@ -304,7 +324,7 @@ App creation is production-ready only when every gate is green.
 | 5. Fresh five-app CTOX proof | done | Codex | One fresh post-skill-dispatch run reaches terminal queue success and installed validation green for five apps. | `rfix12`: 5 handled, 0 failed/blocked/cancelled, 5/5 installed validations green. |
 | 6. Browser proof | done | Codex | Browser mount, UI persistence, reload persistence, native sync, and automation smoke pass for all five fresh apps. | `rfix12` smoke and deep E2E are green for all five apps. Evidence: `rfix12/browser-smoke/*.json` and `rfix12/deep-e2e/*.json`. |
 | 7. Skill dispatch proof | done | Codex | Bound queue/app tasks load the exact skill body through the harness skill injector. | Commit `791d6da6` renders linked `SKILL.md` mentions for unique suggested skills; installed release `branch-main-20260621T134556Z` contains the dispatch code and the Business OS app skill file. |
-| 8. Entry-point proof | in_progress | Codex | Every user-facing app creation/modification path uses the same skill/resource context and runtime app contract. | Queue path is proven by `rfix12`; App Creator is installed and verified after removing the spec/preset generator step. Chat/App Store/CLI/inbound paths still need proof. |
+| 8. Entry-point proof | in_progress | Codex | Every user-facing app creation/modification path uses the same skill/resource context and runtime app contract. | Queue path is proven by `rfix12`; App Creator is installed and verified after removing the spec/preset generator step. Source CLI/MCP tools now enqueue the same app command without writing artifacts and have targeted tests green; install and Chat/App Store evidence still need proof. |
 | 9. Versioning proof | pending | Codex | App version visibility and major-version independence are either implemented or listed as missing work. | Not done. |
 | 10. Production signoff | pending | Codex | All production gates are green, latest source is installed, plan/docs updated, no unrelated dirty files staged. | Not done. |
 
@@ -336,6 +356,9 @@ Current focus:
 - Do not patch generated `rfix12` app artifacts.
 - Verify Chat, App Store/template, CLI, and inbound/MCP entry
   paths route through the same skill/resource contract and runtime app target.
+- Keep CLI/MCP app create/modify tools routing-only. If a tool starts writing
+  app files, deriving an app spec, or picking app internals, revert that design
+  before testing.
 - Keep the simplified App Creator installed proof green while verifying the
   remaining entry paths.
 - Audit app versioning policy and enforce or list the exact missing pieces.
@@ -470,6 +493,10 @@ Immediate checklist:
 - [x] Install the simplified App Creator source through `ctox upgrade --dev`.
 - [x] Verify installed App Creator validation is green in
   `branch-main-20260621T170122Z`.
+- [x] Add source CLI and MCP app create/modify delegators that enqueue normal
+  Business OS commands and do not write app artifacts.
+- [x] Verify source CLI/MCP delegators with targeted Rust tests.
+- [ ] Install source CLI/MCP delegators through `ctox upgrade --dev`.
 - [ ] Verify Chat, App Store/template, CLI, and inbound/MCP entry
   points route through the same skill/resource contract.
 - [ ] Audit app versioning enforcement.
@@ -653,17 +680,39 @@ Use this before marking any generated app green:
 2. Do not hand-edit generated `rfix12` app artifacts.
 3. Verify Chat, App Store/template, CLI, and inbound/MCP all route through the
    same skill/resource contract and runtime app target.
-4. If entry-point proof is red, classify each failure before patching:
+4. Verify the source CLI/MCP delegators with targeted Rust tests, then install
+   through `ctox upgrade --dev` and verify the installed command/tool surfaces.
+5. If entry-point proof is red, classify each failure before patching:
    `model_failure`, `skill_resource_gap`, `validator_gap`,
    `runtime_orchestration_gap`, `data_plane_gap`, or `entry_point_gap`.
-5. Treat the observed Projects `database is locked` event as a watch item. Patch
+6. Treat the observed Projects `database is locked` event as a watch item. Patch
    runtime orchestration only if it recurs or leaves a task non-terminal.
-6. Audit app versioning enforcement and list or patch the missing pieces.
-7. Push plan/source checkpoints to `main` only after meaningful evidence or a
+7. Audit app versioning enforcement and list or patch the missing pieces.
+8. Push plan/source checkpoints to `main` only after meaningful evidence or a
    source change.
 
 ## Evidence Log
 
+- `2026-06-21`: root-cause correction after deterministic-builder drift:
+  current work classifies the remaining problem as `entry_point_tool_gap`.
+  Correct fix class is a small set of routing/validation tools plus concise
+  skill resources. Forbidden fix class remains deterministic app generation,
+  template writing, schema/layout derivation, or generated-artifact repair.
+- `2026-06-21`: source CLI/MCP tool boundary added for app creation and
+  modification. `ctox business-os app create --instruction <text>`,
+  `ctox business-os app modify <module-id> --instruction <text>`,
+  MCP `business_os.create_app`, and MCP `business_os.modify_app` submit normal
+  Business OS command records targeting
+  `runtime/business-os/installed-modules/<module-id>` and
+  `business-os-app-module-development`; they do not write app artifacts.
+  Verification:
+  `cargo test --bin ctox app_create -- --nocapture`,
+  `cargo test --bin ctox app_modify -- --nocapture`,
+  `cargo test --bin ctox create_app_tool_enqueues_agent_led_app_command_without_writing_files -- --nocapture`,
+  `cargo test --bin ctox tool_descriptors_expose_only_typed_business_os_tools -- --nocapture`,
+  `rustfmt --edition 2021 src/core/service/business_os.rs src/core/business_os/mcp_channel.rs src/core/main.rs`,
+  and `git diff --check` for the changed files. Install is pending in this
+  slice.
 - `2026-06-21`: App Creator source path simplified from a local
   specification/preset flow to direct `ctox.business_os.app.create` task
   creation. The Creator now accepts a plain user app request, treats module id,
@@ -1060,7 +1109,8 @@ Use this before marking any generated app green:
 
 - Entry-point proof across Chat, App Store/template flow, CLI, and inbound/MCP
   is still pending. The queue/app-create path is green and App Creator is
-  installed-source verified after simplification.
+  installed-source verified after simplification. Source CLI/MCP delegators have
+  targeted tests green but still need install-level proof.
 - App versioning policy must be audited and either enforced or listed as
   concrete missing implementation work. Required behavior: non-developer users
   see only versions `>=1.0.0`, and each `x.0.0` major can run independently

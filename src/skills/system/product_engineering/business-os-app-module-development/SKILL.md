@@ -9,6 +9,17 @@ metadata:
 
 This file is a resource index. Use the linked contracts and checklists as the working source of truth.
 
+## Tool Boundary
+
+- Product entry points may use `ctox business-os app create --instruction <text>`
+  or `ctox business-os app modify <module-id> --instruction <text>` to enqueue
+  a real Business OS app task.
+- These tools route the request to the Business OS command/queue/policy path;
+  they do not generate app files, derive schemas, choose layouts, or write
+  templates.
+- App workers build or modify the app themselves, using the resources below and
+  the three chosen reference apps.
+
 ## Resource Index
 
 - `references/module-contract.md`: file layout, manifest, schema, mount contract, persistence contract, automation contract.

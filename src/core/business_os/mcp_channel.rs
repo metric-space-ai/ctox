@@ -246,6 +246,22 @@ pub struct BusinessOsActionExecution {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BusinessOsAppCommandExecution {
+    pub ok: bool,
+    pub module_id: String,
+    pub command_type: String,
+    pub command_id: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_status: Option<String>,
+    pub install_target: String,
+    pub app_directory: String,
+    pub client_context: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BusinessOsApprovalDecision {
     pub ok: bool,
     pub decision: String,
@@ -791,6 +807,27 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
                 optional_string("id"),
             ]),
         ),
+        write_tool(
+            "business_os.create_app",
+            "Use this when the user asks CTOX Business OS to build a new runtime-installed app.",
+            object_schema(vec![
+                required_string("instruction"),
+                optional_string("module_id"),
+                optional_string("title"),
+                optional_string("description"),
+                optional_string("category"),
+                optional_string("version"),
+            ]),
+        ),
+        write_tool(
+            "business_os.modify_app",
+            "Use this when the user asks CTOX Business OS to modify an existing app.",
+            object_schema(vec![
+                required_string("module_id"),
+                required_string("instruction"),
+                optional_string("title"),
+            ]),
+        ),
         read_tool(
             "business_os.list_module_actions",
             "Use this when you need allowed action descriptors for a Business OS module.",
@@ -980,6 +1017,147 @@ pub fn search_records(
     Ok(records)
 }
 
+pub fn create_app(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<BusinessOsAppCommandExecution> {
+    context.validate()?;
+    let instruction = required_arg(arguments, "instruction")?;
+    let module_id = app_module_id_from_arguments(arguments, &instruction)?;
+    enforce_module_policy(root, &module_id)?;
+    enforce_business_os_mcp_policy(root, context, "business_os.create_app", arguments)?;
+    let title = optional_string_arg(arguments, "title")
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| title_from_module_id(&module_id));
+    let description = optional_string_arg(arguments, "description")
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| instruction.chars().take(220).collect::<String>());
+    let category = optional_string_arg(arguments, "category").unwrap_or_default();
+    let version = normalize_app_semver(
+        optional_string_arg(arguments, "version")
+            .as_deref()
+            .unwrap_or("0.1.0"),
+    )?;
+    let actor = resolved_mcp_actor_context(root, context)?;
+    let client_context = serde_json::json!({
+        "channel": &context.channel,
+        "surface": &context.surface,
+        "actor": actor,
+        "mcp_actor": &context.actor,
+        "workspace": &context.workspace,
+        "request_id": &context.request_id,
+        "mcp_tool": &context.tool,
+        "source": "business-os-mcp",
+        "target": "app",
+        "mode": "app",
+        "module_id": module_id.as_str(),
+        "app_id": module_id.as_str(),
+        "install_target": "runtime-installed-module",
+        "required_skills": ["business-os-app-module-development"]
+    });
+    let accepted = store::record_command(
+        root,
+        store::BusinessCommand {
+            id: None,
+            module: "creator".to_string(),
+            command_type: "ctox.business_os.app.create".to_string(),
+            record_id: Some(module_id.clone()),
+            payload: serde_json::json!({
+                "title": format!("Create {title}"),
+                "instruction": instruction.as_str(),
+                "module_id": module_id.as_str(),
+                "app_id": module_id.as_str(),
+                "app_title": title.as_str(),
+                "description": description.as_str(),
+                "category": category.as_str(),
+                "desired_version": version.as_str(),
+                "install_target": "runtime-installed-module",
+                "target": "app",
+                "mode": "app",
+                "required_skills": ["business-os-app-module-development"]
+            }),
+            client_context: client_context.clone(),
+        },
+    )?;
+    Ok(BusinessOsAppCommandExecution {
+        ok: accepted.ok,
+        module_id: module_id.clone(),
+        command_type: "ctox.business_os.app.create".to_string(),
+        command_id: accepted.command_id,
+        status: accepted.status.to_string(),
+        task_id: accepted.task_id,
+        task_status: accepted.task_status,
+        install_target: "runtime-installed-module".to_string(),
+        app_directory: format!("runtime/business-os/installed-modules/{module_id}"),
+        client_context,
+    })
+}
+
+pub fn modify_app(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<BusinessOsAppCommandExecution> {
+    context.validate()?;
+    let module_id = sanitize_app_module_id(&required_arg(arguments, "module_id")?)?;
+    let instruction = required_arg(arguments, "instruction")?;
+    enforce_module_policy(root, &module_id)?;
+    enforce_business_os_mcp_policy(root, context, "business_os.modify_app", arguments)?;
+    let title = optional_string_arg(arguments, "title")
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| format!("Modify {}", title_from_module_id(&module_id)));
+    let actor = resolved_mcp_actor_context(root, context)?;
+    let client_context = serde_json::json!({
+        "channel": &context.channel,
+        "surface": &context.surface,
+        "actor": actor,
+        "mcp_actor": &context.actor,
+        "workspace": &context.workspace,
+        "request_id": &context.request_id,
+        "mcp_tool": &context.tool,
+        "source": "business-os-mcp",
+        "target": "app",
+        "mode": "app",
+        "module_id": module_id.as_str(),
+        "app_id": module_id.as_str(),
+        "install_target": "runtime-installed-module",
+        "required_skills": ["business-os-app-module-development"]
+    });
+    let accepted = store::record_command(
+        root,
+        store::BusinessCommand {
+            id: None,
+            module: "creator".to_string(),
+            command_type: "ctox.business_os.app.modify".to_string(),
+            record_id: Some(module_id.clone()),
+            payload: serde_json::json!({
+                "title": title.as_str(),
+                "instruction": instruction.as_str(),
+                "module_id": module_id.as_str(),
+                "app_id": module_id.as_str(),
+                "install_target": "runtime-installed-module",
+                "target": "app",
+                "mode": "app",
+                "required_skills": ["business-os-app-module-development"]
+            }),
+            client_context: client_context.clone(),
+        },
+    )?;
+    Ok(BusinessOsAppCommandExecution {
+        ok: accepted.ok,
+        module_id: module_id.clone(),
+        command_type: "ctox.business_os.app.modify".to_string(),
+        command_id: accepted.command_id,
+        status: accepted.status.to_string(),
+        task_id: accepted.task_id,
+        task_status: accepted.task_status,
+        install_target: "runtime-installed-module".to_string(),
+        app_directory: format!("runtime/business-os/installed-modules/{module_id}"),
+        client_context,
+    })
+}
+
 pub fn call_tool(root: &Path, tool_name: &str, arguments: Value) -> anyhow::Result<Value> {
     let context = context_from_arguments(tool_name, &arguments)?;
     enforce_tool_policy(root, tool_name)?;
@@ -1089,6 +1267,8 @@ pub fn call_tool(root: &Path, tool_name: &str, arguments: Value) -> anyhow::Resu
             let id = optional_string_arg(&arguments, "id");
             serde_json::to_value(open_link(&kind, &module_or_collection, id.as_deref()))?
         }
+        "business_os.create_app" => serde_json::to_value(create_app(root, &context, &arguments)?)?,
+        "business_os.modify_app" => serde_json::to_value(modify_app(root, &context, &arguments)?)?,
         "business_os.list_module_actions" => {
             let module_id = required_arg(&arguments, "module_id")?;
             serde_json::to_value(list_module_actions(root, &context, &module_id)?)?
@@ -2424,6 +2604,29 @@ fn business_os_mcp_policy_decision(
                 BusinessOsPermission::DataWrite,
             )?))
         }
+        "business_os.create_app" => {
+            let instruction = required_arg(arguments, "instruction")?;
+            let module_id = app_module_id_from_arguments(arguments, &instruction)?;
+            Ok(Some(store::trusted_mcp_actor_policy_decision(
+                root,
+                &context.actor,
+                &context.actor,
+                BusinessOsPermission::AppsInstall,
+                BusinessOsScopeType::Module,
+                Some(module_id.as_str()),
+            )?))
+        }
+        "business_os.modify_app" => {
+            let module_id = sanitize_app_module_id(&required_arg(arguments, "module_id")?)?;
+            Ok(Some(store::trusted_mcp_actor_policy_decision(
+                root,
+                &context.actor,
+                &context.actor,
+                BusinessOsPermission::AppsModify,
+                BusinessOsScopeType::Module,
+                Some(module_id.as_str()),
+            )?))
+        }
         "business_os.approve" | "business_os.reject" | "business_os.request_changes" => Ok(Some(
             business_os_mcp_approval_decision(root, context, arguments)?,
         )),
@@ -2733,8 +2936,19 @@ fn enforce_argument_scope_policy(
         | "business_os.list_entities"
         | "business_os.list_module_actions"
         | "business_os.propose_action"
-        | "business_os.execute_action" => {
+        | "business_os.execute_action"
+        | "business_os.modify_app" => {
             if let Some(module_id) = string_field(arguments, "module_id") {
+                enforce_module_policy(root, &module_id)?;
+            }
+        }
+        "business_os.create_app" => {
+            if let Ok(module_id) = app_module_id_from_arguments(
+                arguments,
+                string_field(arguments, "instruction")
+                    .unwrap_or_default()
+                    .as_str(),
+            ) {
                 enforce_module_policy(root, &module_id)?;
             }
         }
@@ -2840,7 +3054,9 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
     match tool_name {
         "business_os.approve" => McpToolPolicyClass::ExternalEffect,
         "business_os.reject" | "business_os.request_changes" => McpToolPolicyClass::Approval,
-        "business_os.execute_action" => McpToolPolicyClass::Write,
+        "business_os.execute_action" | "business_os.create_app" | "business_os.modify_app" => {
+            McpToolPolicyClass::Write
+        }
         _ => McpToolPolicyClass::Read,
     }
 }
@@ -3058,6 +3274,74 @@ fn confirmation_state_from_str(value: &str) -> McpConfirmationState {
         "rejected" => McpConfirmationState::Rejected,
         _ => McpConfirmationState::NotRequired,
     }
+}
+
+fn app_module_id_from_arguments(arguments: &Value, instruction: &str) -> anyhow::Result<String> {
+    optional_string_arg(arguments, "module_id")
+        .or_else(|| optional_string_arg(arguments, "app_id"))
+        .or_else(|| optional_string_arg(arguments, "title"))
+        .map(|value| sanitize_app_module_id(&value))
+        .unwrap_or_else(|| sanitize_app_module_id(instruction))
+}
+
+fn sanitize_app_module_id(value: &str) -> anyhow::Result<String> {
+    let slug = value
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if slug.is_empty() {
+        return Err(anyhow::Error::new(BusinessOsMcpError {
+            code: BusinessOsMcpErrorCode::ValidationFailed,
+            message: "module_id is required".to_string(),
+            field: Some("module_id".to_string()),
+        }));
+    }
+    Ok(slug.chars().take(72).collect())
+}
+
+fn title_from_module_id(module_id: &str) -> String {
+    let title = module_id
+        .split(['-', '_'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    if title.is_empty() {
+        "Business OS App".to_string()
+    } else {
+        title
+    }
+}
+
+fn normalize_app_semver(value: &str) -> anyhow::Result<String> {
+    let version = value.trim();
+    let valid = version
+        .split('.')
+        .map(str::parse::<u64>)
+        .collect::<Result<Vec<_>, _>>()
+        .is_ok_and(|parts| parts.len() == 3);
+    if !valid {
+        return Err(anyhow::Error::new(BusinessOsMcpError {
+            code: BusinessOsMcpErrorCode::ValidationFailed,
+            message:
+                "Business OS app version must use semver without a v prefix, for example 0.1.0"
+                    .to_string(),
+            field: Some("version".to_string()),
+        }));
+    }
+    Ok(version.to_string())
 }
 
 fn required_arg(arguments: &Value, field: &str) -> anyhow::Result<String> {
@@ -3768,6 +4052,12 @@ mod tests {
             .any(|tool| tool.name == "business_os.execute_action"));
         assert!(tools
             .iter()
+            .any(|tool| tool.name == "business_os.create_app"));
+        assert!(tools
+            .iter()
+            .any(|tool| tool.name == "business_os.modify_app"));
+        assert!(tools
+            .iter()
             .any(|tool| tool.name == "business_os.get_command_status"));
         assert!(tools
             .iter()
@@ -3796,6 +4086,99 @@ mod tests {
                 "{forbidden} must not be exposed as a Business OS MCP tool"
             );
         }
+    }
+
+    #[test]
+    fn create_app_tool_enqueues_agent_led_app_command_without_writing_files() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_default_mcp_admin(root)?;
+
+        let result = call_tool(
+            root,
+            "business_os.create_app",
+            serde_json::json!({
+                "module_id": "mcp-inventory",
+                "instruction": "Build a small inventory app with one CTOX follow-up automation.",
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+
+        assert_eq!(result.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            result.get("command_type").and_then(Value::as_str),
+            Some("ctox.business_os.app.create")
+        );
+        assert_eq!(
+            result.get("app_directory").and_then(Value::as_str),
+            Some("runtime/business-os/installed-modules/mcp-inventory")
+        );
+        assert!(
+            !root
+                .join("runtime/business-os/installed-modules/mcp-inventory")
+                .exists(),
+            "MCP create_app must not write app artifacts"
+        );
+        let task_id = result
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?;
+        let task = crate::mission::channels::load_queue_task(root, task_id)?
+            .context("expected queue task")?;
+        assert_eq!(
+            task.suggested_skill.as_deref(),
+            Some("business-os-app-module-development")
+        );
+        assert!(task.prompt.contains("ctox.business_os.app.create"));
+        assert!(task
+            .prompt
+            .contains("ctox business-os app references --json"));
+        Ok(())
+    }
+
+    #[test]
+    fn modify_app_tool_enqueues_app_modify_skill_task() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_default_mcp_admin(root)?;
+
+        let result = call_tool(
+            root,
+            "business_os.modify_app",
+            serde_json::json!({
+                "module_id": "mcp-inventory",
+                "instruction": "Add a reorder review action and keep existing data.",
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+
+        assert_eq!(result.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            result.get("command_type").and_then(Value::as_str),
+            Some("ctox.business_os.app.modify")
+        );
+        let task_id = result
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?;
+        let task = crate::mission::channels::load_queue_task(root, task_id)?
+            .context("expected queue task")?;
+        assert_eq!(
+            task.suggested_skill.as_deref(),
+            Some("business-os-app-module-development")
+        );
+        assert!(task.prompt.contains("ctox.business_os.app.modify"));
+        assert!(task
+            .prompt
+            .contains("runtime/business-os/installed-modules/mcp-inventory"));
+        Ok(())
     }
 
     #[test]

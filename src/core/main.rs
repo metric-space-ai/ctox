@@ -139,6 +139,10 @@ INSTALL / UPGRADE
                                  list local Business OS apps an agent can inspect as references
   ctox business-os app references [--query <text>] [--json]
                                  list local Business OS app reference candidates
+  ctox business-os app create --instruction <text> [--module-id <id>]
+                                 enqueue an agent-led runtime Business OS app creation task
+  ctox business-os app modify <module-id> --instruction <text>
+                                 enqueue an agent-led Business OS app modification task
   ctox business-os app validate <module-id> [--installed|--source]
                                  validate a Business OS app module artifact
   ctox business-os app smoke <module-id> [--url <business-os-url>]
