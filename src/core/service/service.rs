@@ -4491,6 +4491,7 @@ fn start_prompt_worker(
             let mut platform_pipeline_event: Option<String> = None;
             let mut app_validation_rework = false;
             let mut app_validation_terminal_failure = false;
+            let mut app_validation_terminal_success = app_validation_precompleted;
             let next_prompt;
             worker_activity.set_phase(&job.source_label, "finalizing");
             {
@@ -4678,7 +4679,6 @@ fn start_prompt_worker(
                                     }
                                 }
                                 Ok(None) => {
-                                    should_handle_messages = true;
                                     push_event_locked(
                                         &mut shared,
                                         format!(
@@ -4694,9 +4694,12 @@ fn start_prompt_worker(
                                         ) {
                                             Ok(updated) => push_event_locked(
                                                 &mut shared,
-                                                format!(
-                                                    "Marked {updated} app-validation-verified queue task(s) handled after normal worker success"
-                                                ),
+                                                {
+                                                    app_validation_terminal_success = updated > 0;
+                                                    format!(
+                                                        "Marked {updated} app-validation-verified queue task(s) handled after normal worker success"
+                                                    )
+                                                },
                                             ),
                                             Err(update_err) => {
                                                 let summary = format!(
@@ -4981,7 +4984,10 @@ fn start_prompt_worker(
                                 );
                             }
                         }
-                        if should_handle_messages && !job.leased_message_keys.is_empty() {
+                        if should_handle_messages
+                            && !app_validation_terminal_success
+                            && !job.leased_message_keys.is_empty()
+                        {
                             for message_key in &job.leased_message_keys {
                                 match crate::business_os::store::complete_business_command_from_queue_reply(
                                     &root,
@@ -5013,7 +5019,15 @@ fn start_prompt_worker(
                                 }
                             }
                         }
-                        if !job.leased_message_keys.is_empty() && should_handle_messages {
+                        if !job.leased_message_keys.is_empty() && app_validation_terminal_success {
+                            push_event_locked(
+                                &mut shared,
+                                format!(
+                                    "Skipped generic queue ack for {} because Business OS app validation already completed the queue task",
+                                    job.source_label
+                                ),
+                            );
+                        } else if !job.leased_message_keys.is_empty() && should_handle_messages {
                             record_ack_failure_locked(
                                 &mut shared,
                                 channels::ack_leased_messages(
