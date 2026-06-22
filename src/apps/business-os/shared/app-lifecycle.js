@@ -1,7 +1,7 @@
 import {
   BusinessOsPermissions,
   canModifyBusinessModule,
-  canUseBusinessExplicitOrAssignedPermission,
+  canUseBusinessPermission,
 } from './permissions.js';
 
 export function parseBusinessAppSemver(version) {
@@ -221,7 +221,7 @@ export function appLifecycleState(moduleLike, options = {}) {
       governance: options.governance,
     });
   const canAccessNonPublic = options.canAccessNonPublic === true
-    || canUseBusinessExplicitOrAssignedPermission({
+    || canUseBusinessPermission({
       session: options.session,
       governance: options.governance,
       permission: BusinessOsPermissions.AppsView,

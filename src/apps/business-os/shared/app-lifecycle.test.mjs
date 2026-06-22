@@ -92,7 +92,7 @@ test('semver parser accepts plain Business OS app versions only', () => {
   assert.equal(parseBusinessAppSemver('1'), null);
 });
 
-test('runtime installed 0.x app is private unless actor is responsible for that app', () => {
+test('runtime installed 0.x app is private unless actor can view that app', () => {
   assert.equal(
     canSeeModuleForAppVersion(draftApp, {
       session: session('team_member', 'user'),
@@ -126,7 +126,7 @@ test('runtime installed 0.x app is private unless actor is responsible for that 
       session: session('global_admin', 'admin'),
       governance,
     }),
-    false
+    true
   );
 });
 
@@ -193,7 +193,7 @@ test('projected native lifecycle semver overrides stale manifest version', () =>
   assert.equal(appLifecycleBadge(projected).version, 'v1.0.0');
 });
 
-test('restricted released apps are not team-visible without app responsibility', () => {
+test('restricted released apps are not team-visible without app view permission', () => {
   const restricted = {
     ...draftApp,
     version: '1.0.0',
@@ -233,7 +233,7 @@ test('restricted released apps are not team-visible without app responsibility',
       session: session('global_admin', 'admin'),
       governance,
     }),
-    false
+    true
   );
 });
 
@@ -325,6 +325,13 @@ test('lifecycle state separates app visibility from app management permission', 
   });
   assert.equal(modifierState.canAccessNonPublic, false);
   assert.equal(modifierState.canManage, true);
+
+  const adminState = appLifecycleState(draftApp, {
+    session: session('global_admin', 'admin'),
+    governance,
+  });
+  assert.equal(adminState.canAccessNonPublic, true);
+  assert.equal(adminState.canManage, true);
 });
 
 test('release projection explains current release, rollback and data areas', () => {
