@@ -215,11 +215,8 @@ async function runSmoke(options) {
   });
 
   try {
+    const rootSelector = `[data-module-root="${options.moduleId}"]`;
     await page.goto(result.url, { waitUntil: 'domcontentloaded', timeout: options.timeoutMs });
-    await page.waitForFunction((moduleId) => {
-      const app = window.CTOX_BUSINESS_OS_APP;
-      return Boolean(app?.modules?.find?.((module) => module.id === moduleId));
-    }, options.moduleId, { timeout: options.timeoutMs });
     await page.evaluate(async (moduleId) => {
       const app = window.CTOX_BUSINESS_OS_APP;
       location.hash = moduleId;
@@ -227,7 +224,24 @@ async function runSmoke(options) {
         await app.openModule(moduleId, { force: true });
       }
     }, options.moduleId);
-    const rootSelector = `[data-module-root="${options.moduleId}"]`;
+    await page.waitForFunction(({ moduleId, selector }) => {
+      const root = document.querySelector(selector);
+      if (root) {
+        const box = root.getBoundingClientRect();
+        const style = window.getComputedStyle(root);
+        if (box.width > 0 && box.height > 0 && style.visibility !== 'hidden' && style.display !== 'none') {
+          return true;
+        }
+      }
+      const app = window.CTOX_BUSINESS_OS_APP;
+      return Boolean(app?.modules?.find?.((module) => module.id === moduleId));
+    }, { moduleId: options.moduleId, selector: rootSelector }, { timeout: options.timeoutMs });
+    await page.evaluate(async (moduleId) => {
+      const app = window.CTOX_BUSINESS_OS_APP;
+      if (typeof app?.openModule === 'function') {
+        await app.openModule(moduleId, { force: true });
+      }
+    }, options.moduleId);
     await page.waitForSelector(rootSelector, { state: 'visible', timeout: options.timeoutMs });
 
     const action = options.createAction || await page.evaluate((moduleId) => {

@@ -225,11 +225,8 @@ async function pollUntil(fn, timeoutMs, intervalMs = 500) {
 
 async function openModule(page, moduleId, url, timeoutMs) {
   const targetUrl = withModuleHash(url, moduleId);
+  const rootSelector = `[data-module-root="${moduleId}"]`;
   await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
-  await page.waitForFunction((id) => {
-    const app = window.CTOX_BUSINESS_OS_APP;
-    return Boolean(app?.modules?.find?.((module) => module.id === id));
-  }, moduleId, { timeout: timeoutMs });
   await page.evaluate(async (id) => {
     const app = window.CTOX_BUSINESS_OS_APP;
     location.hash = id;
@@ -237,7 +234,24 @@ async function openModule(page, moduleId, url, timeoutMs) {
       await app.openModule(id, { force: true });
     }
   }, moduleId);
-  const rootSelector = `[data-module-root="${moduleId}"]`;
+  await page.waitForFunction(({ id, selector }) => {
+    const root = document.querySelector(selector);
+    if (root) {
+      const box = root.getBoundingClientRect();
+      const style = window.getComputedStyle(root);
+      if (box.width > 0 && box.height > 0 && style.visibility !== 'hidden' && style.display !== 'none') {
+        return true;
+      }
+    }
+    const app = window.CTOX_BUSINESS_OS_APP;
+    return Boolean(app?.modules?.find?.((module) => module.id === id));
+  }, { id: moduleId, selector: rootSelector }, { timeout: timeoutMs });
+  await page.evaluate(async (id) => {
+    const app = window.CTOX_BUSINESS_OS_APP;
+    if (typeof app?.openModule === 'function') {
+      await app.openModule(id, { force: true });
+    }
+  }, moduleId);
   await page.waitForSelector(rootSelector, { state: 'visible', timeout: timeoutMs });
   return rootSelector;
 }
