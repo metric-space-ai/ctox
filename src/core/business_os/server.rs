@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
 use std::io;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -2467,8 +2468,6 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
         let html = String::from_utf8(bytes).context("Business OS index.html is not UTF-8")?;
         bytes = inject_launch_context(html, &session, sync_config.as_ref())?.into_bytes();
     }
-    let mut response = Response::from_data(bytes);
-    response.add_header(Header::from_bytes("Content-Type", mime.as_bytes()).unwrap());
     // Cache policy. index.html carries per-session injected launch context
     // and must never be cached. Every other static asset is immutable per
     // URL: the shell imports JS/CSS through `?v=` cache-busters and bumps
@@ -2486,9 +2485,7 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
         // local while hot-deploys still land within minutes.
         "public, max-age=300, stale-while-revalidate=86400"
     };
-    response.add_header(Header::from_bytes("Cache-Control", cache_control.as_bytes()).unwrap());
-    add_common_response_headers(&mut response);
-    request.respond(response)?;
+    respond_static_success(request, &bytes, mime, cache_control)?;
     Ok(())
 }
 
@@ -2582,14 +2579,48 @@ fn add_cors_headers<R: io::Read>(response: &mut Response<R>) {
     response.add_header(Header::from_bytes("Vary", "Origin").unwrap());
 }
 
-fn add_common_response_headers<R: io::Read>(_response: &mut Response<R>) {
-    // HTTP keep-alive stays ENABLED (tiny_http's HTTP/1.1 default). The
-    // previous blanket `Connection: close` forced every asset request to pay
-    // a fresh TCP connect — behind the managed edge that meant ~2s TTFB per
-    // file, which multiplied across the module import graph into 5-7s
-    // app-switch times. tiny_http parks idle keep-alive connections on its
-    // own connection threads; the server only listens on loopback (the edge
-    // forwarder), so the idle-connection count stays bounded.
+fn add_common_response_headers<R: io::Read>(response: &mut Response<R>) {
+    let _ = response;
+    // tiny_http filters hop-by-hop response headers such as Connection here.
+    // Static Business OS assets use respond_static_success() so Chromium does
+    // not leave the ES-module graph stuck on a kept-alive loopback connection.
+}
+
+fn respond_static_success(
+    request: Request,
+    bytes: &[u8],
+    content_type: &str,
+    cache_control: &str,
+) -> anyhow::Result<()> {
+    let mut writer = request.into_writer();
+    match write_static_success_response(&mut writer, bytes, content_type, cache_control) {
+        Ok(()) => Ok(()),
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionAborted
+            ) =>
+        {
+            Ok(())
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn write_static_success_response<W: Write>(
+    mut writer: W,
+    bytes: &[u8],
+    content_type: &str,
+    cache_control: &str,
+) -> io::Result<()> {
+    write!(writer, "HTTP/1.1 200 OK\r\n")?;
+    write!(writer, "Content-Type: {content_type}\r\n")?;
+    write!(writer, "Cache-Control: {cache_control}\r\n")?;
+    write!(writer, "Content-Length: {}\r\n", bytes.len())?;
+    write!(writer, "Connection: close\r\n")?;
+    write!(writer, "\r\n")?;
+    writer.write_all(bytes)?;
+    writer.flush()
 }
 
 fn mime_for(path: &PathBuf) -> &'static str {
@@ -2630,5 +2661,26 @@ mod tests {
         assert!(html.contains("window.CTOX_BUSINESS_OS_CONFIG=null"));
         assert!(!html.contains("sync_room"));
         assert!(!html.contains("signaling_room_password"));
+    }
+
+    #[test]
+    fn static_success_response_closes_http_connection() {
+        let mut response = Vec::new();
+
+        write_static_success_response(
+            &mut response,
+            b"console.log('ok');",
+            "text/javascript; charset=utf-8",
+            "public, max-age=300",
+        )
+        .expect("write static response");
+
+        let raw = String::from_utf8(response).expect("utf8 response");
+        assert!(raw.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(raw.contains("\r\nContent-Type: text/javascript; charset=utf-8\r\n"));
+        assert!(raw.contains("\r\nCache-Control: public, max-age=300\r\n"));
+        assert!(raw.contains("\r\nContent-Length: 18\r\n"));
+        assert!(raw.contains("\r\nConnection: close\r\n"));
+        assert!(raw.ends_with("\r\n\r\nconsole.log('ok');"));
     }
 }
