@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +9,11 @@ const RELEASE_ROOT = resolve(SCRIPT_DIR, '../../../..');
 
 function unique(values) {
   return Array.from(new Set(values));
+}
+
+function ensureParentDir(path) {
+  const parent = dirname(path);
+  if (parent && parent !== path) mkdirSync(parent, { recursive: true });
 }
 
 function findRuntimeChromiumExecutable(root) {
@@ -346,6 +351,7 @@ async function runSmoke(options) {
     result.evidence.failed_requests = failedRequests;
     result.ok = result.failures.length === 0;
     if (options.screenshot && !result.ok) {
+      ensureParentDir(options.screenshot);
       await page.screenshot({ path: options.screenshot, fullPage: true }).catch(() => {});
       result.evidence.screenshot = options.screenshot;
     }
@@ -372,6 +378,7 @@ if (options.help) {
 
 const result = await runSmoke(options);
 if (options.output) {
+  ensureParentDir(options.output);
   writeFileSync(options.output, `${JSON.stringify(result, null, 2)}\n`);
 }
 printResult(result, options.json);

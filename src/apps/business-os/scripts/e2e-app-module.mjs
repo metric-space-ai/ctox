@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
@@ -10,6 +10,11 @@ const RELEASE_ROOT = resolve(SCRIPT_DIR, '../../../..');
 
 function unique(values) {
   return Array.from(new Set(values));
+}
+
+function ensureParentDir(path) {
+  const parent = dirname(path);
+  if (parent && parent !== path) mkdirSync(parent, { recursive: true });
 }
 
 function findRuntimeChromiumExecutable(root) {
@@ -539,6 +544,7 @@ async function runE2e(options) {
     result.evidence.failed_requests = failedRequests;
     result.ok = result.failures.length === 0;
     if (options.screenshot && !result.ok) {
+      ensureParentDir(options.screenshot);
       await page.screenshot({ path: options.screenshot, fullPage: true }).catch(() => {});
       result.evidence.screenshot = options.screenshot;
     }
@@ -565,6 +571,7 @@ if (options.help) {
 
 const result = await runE2e(options);
 if (options.output) {
+  ensureParentDir(options.output);
   writeFileSync(options.output, `${JSON.stringify(result, null, 2)}\n`);
 }
 printResult(result, options.json);

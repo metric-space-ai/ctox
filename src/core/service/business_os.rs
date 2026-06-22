@@ -1862,6 +1862,7 @@ fn run_business_os_app_smoke(
     );
     let mut command = Command::new(resolve_business_os_validator_node(root));
     command.current_dir(root).arg(script).arg(module_id);
+    let caller_cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut idx = 0;
     while idx < args.len() {
         match args[idx].as_str() {
@@ -1873,7 +1874,11 @@ fn run_business_os_app_smoke(
                 let value = args
                     .get(idx + 1)
                     .with_context(|| format!("{} requires a value", args[idx]))?;
-                command.arg(&args[idx]).arg(value);
+                command.arg(&args[idx]).arg(app_browser_evidence_arg(
+                    &args[idx],
+                    value,
+                    &caller_cwd,
+                ));
                 idx += 2;
             }
             value if value.starts_with("--") => {
@@ -1910,6 +1915,7 @@ fn run_business_os_app_e2e(
     );
     let mut command = Command::new(resolve_business_os_validator_node(root));
     command.current_dir(root).arg(script).arg(module_id);
+    let caller_cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut idx = 0;
     while idx < args.len() {
         match args[idx].as_str() {
@@ -1921,7 +1927,11 @@ fn run_business_os_app_e2e(
                 let value = args
                     .get(idx + 1)
                     .with_context(|| format!("{} requires a value", args[idx]))?;
-                command.arg(&args[idx]).arg(value);
+                command.arg(&args[idx]).arg(app_browser_evidence_arg(
+                    &args[idx],
+                    value,
+                    &caller_cwd,
+                ));
                 idx += 2;
             }
             value if value.starts_with("--") => {
@@ -1935,6 +1945,18 @@ fn run_business_os_app_e2e(
     command
         .output()
         .context("failed to run Business OS app browser E2E")
+}
+
+fn app_browser_evidence_arg(flag: &str, value: &str, caller_cwd: &Path) -> String {
+    if flag != "--output" && flag != "--screenshot" {
+        return value.to_string();
+    }
+    let path = PathBuf::from(value);
+    if path.is_absolute() {
+        value.to_string()
+    } else {
+        caller_cwd.join(path).to_string_lossy().into_owned()
+    }
 }
 
 pub(crate) fn resolve_business_os_validator_node(_root: &Path) -> PathBuf {
@@ -4379,6 +4401,23 @@ mod tests {
         );
         assert!(decoded_invite.get("native_peer_id").is_some());
         assert_eq!(decoded_invite.get("desktop_link"), None);
+    }
+
+    #[test]
+    fn app_browser_evidence_paths_are_relative_to_caller_cwd() {
+        let cwd = PathBuf::from("/tmp/ctox-caller");
+        assert_eq!(
+            app_browser_evidence_arg("--output", "output/e2e.json", &cwd),
+            "/tmp/ctox-caller/output/e2e.json"
+        );
+        assert_eq!(
+            app_browser_evidence_arg("--screenshot", "/tmp/e2e.png", &cwd),
+            "/tmp/e2e.png"
+        );
+        assert_eq!(
+            app_browser_evidence_arg("--url", "http://127.0.0.1:8765", &cwd),
+            "http://127.0.0.1:8765"
+        );
     }
 }
 
