@@ -467,6 +467,7 @@ fn build_desktop_invite(root: &Path, args: &[String]) -> anyhow::Result<serde_js
         "display_name": display_name,
         "instance_id": config.instance_id,
         "sync_room": config.sync_room,
+        "native_peer_id": config.native_peer_id,
         "signaling_urls": config.signaling_urls,
         "signaling_room_password": config.signaling_room_password,
         "transport": "webrtc",
@@ -4376,6 +4377,7 @@ mod tests {
                 .and_then(serde_json::Value::as_str),
             Some("ctox-business-os-invite")
         );
+        assert!(decoded_invite.get("native_peer_id").is_some());
         assert_eq!(decoded_invite.get("desktop_link"), None);
     }
 }

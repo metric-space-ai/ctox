@@ -1266,6 +1266,7 @@ async fn run_native_peer(
         .into_iter()
         .find(|url| !url.trim().is_empty())
         .context("Business OS native RxDB peer requires a signaling URL")?;
+    let peer_session_id = format!("rxdb-rs-{}", Uuid::new_v4().simple());
     // The provider re-derives the URL — including fresh `token_iat`/
     // `token_exp` — on EVERY signaling (re)connect attempt. Baking the token
     // window in once meant that after >24h uptime any socket drop became a
@@ -1274,12 +1275,12 @@ async fn run_native_peer(
         let base_url = signaling_base_url.clone();
         let sync_room = sync_room.clone();
         let password = signaling_room_password.clone();
+        let peer_session_id = peer_session_id.clone();
         std::sync::Arc::new(move || {
-            signaling_url_with_native_metadata(&base_url, &sync_room, &password)
+            signaling_url_with_native_metadata(&base_url, &sync_room, &password, &peer_session_id)
         })
     };
     let ice_servers = ice_servers_from_sync_config(&store::sync_config(&root)?.ice_servers);
-    let peer_session_id = format!("rxdb-rs-{}", Uuid::new_v4().simple());
     let database_path = store::rxdb_store_path(&root);
     match repair_stale_rxdb_collection_schema_versions(&root) {
         Ok(result) => {
@@ -1673,6 +1674,7 @@ fn signaling_url_with_native_metadata(
     raw_url: &str,
     sync_room: &str,
     signaling_room_password: &str,
+    native_peer_id: &str,
 ) -> String {
     let Ok(mut url) = Url::parse(raw_url) else {
         return raw_url.to_string();
@@ -1700,7 +1702,18 @@ fn signaling_url_with_native_metadata(
         for (key, value) in existing {
             query.append_pair(&key, &value);
         }
-        query.append_pair("client", "ctox-business-os-native");
+        let native_peer_id = native_peer_id.trim();
+        query.append_pair(
+            "client",
+            if native_peer_id.is_empty() {
+                "ctox-business-os-native"
+            } else {
+                native_peer_id
+            },
+        );
+        if !native_peer_id.is_empty() {
+            query.append_pair("native_peer_id", native_peer_id);
+        }
         query.append_pair("role", "ctox_instance");
         if let Some(instance_id) = instance_id_from_sync_room(sync_room) {
             query.append_pair("instance_id", instance_id);
@@ -7678,6 +7691,7 @@ mod tests {
             "wss://signaling.ctox.dev?foo=bar&role=browser",
             "ctox-business-os:inst_123:roomhash",
             "room-password",
+            "rxdb-rs-test-peer",
         );
 
         let parsed = Url::parse(&url).expect("metadata url parses");
@@ -7695,7 +7709,15 @@ mod tests {
                 .find(|(key, _)| key == "client")
                 .unwrap()
                 .1,
-            "ctox-business-os-native"
+            "rxdb-rs-test-peer"
+        );
+        assert_eq!(
+            parsed
+                .query_pairs()
+                .find(|(key, _)| key == "native_peer_id")
+                .unwrap()
+                .1,
+            "rxdb-rs-test-peer"
         );
         assert_eq!(
             parsed

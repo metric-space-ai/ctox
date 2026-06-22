@@ -41,7 +41,7 @@ function browserPackageJsonCandidates() {
 function loadBrowserRuntime() {
   const failures = [];
   for (const packageJson of browserPackageJsonCandidates()) {
-    for (const packageName of ['patchright', 'playwright']) {
+    for (const packageName of ['playwright', 'patchright']) {
       try {
         const require = createRequire(packageJson);
         const runtime = require(packageName);

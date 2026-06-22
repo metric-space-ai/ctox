@@ -114,6 +114,7 @@ pub struct BusinessOsSyncConfig {
     pub sync_mode: &'static str,
     pub instance_id: String,
     pub peer_id: String,
+    pub native_peer_id: String,
     pub peer_role: &'static str,
     pub sync_room: String,
     pub signaling_room_password: String,
@@ -894,6 +895,11 @@ pub fn sync_config(root: &Path) -> anyhow::Result<BusinessOsSyncConfig> {
     let peer_id = format!("ctox-core-{}", short_hash(&instance_id));
     let native_rxdb_peer_available = super::rxdb_peer::is_native_peer_running_for_root(root);
     let native_rxdb_peer_status = super::rxdb_peer::native_peer_status(root);
+    let native_peer_id = native_rxdb_peer_status
+        .get("peer_session_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
     let signaling = signaling_urls_config(root);
     Ok(BusinessOsSyncConfig {
         ok: true,
@@ -906,6 +912,7 @@ pub fn sync_config(root: &Path) -> anyhow::Result<BusinessOsSyncConfig> {
         signaling_room_password,
         instance_id,
         peer_id,
+        native_peer_id,
         peer_role: "ctox_instance",
         signaling_urls: signaling.urls,
         signaling_urls_source: signaling.source,
