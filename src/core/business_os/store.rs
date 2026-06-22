@@ -24968,12 +24968,7 @@ fn create_ctox_queue_task(
         })
         .unwrap_or("normal")
         .to_string();
-    let thread_key = command
-        .payload
-        .get("thread_key")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| format!("business-os/{}", command.module));
+    let thread_key = command_queue_thread_key(command_id, command);
     let task = channels::create_queue_task(
         root,
         channels::QueueTaskCreateRequest {
@@ -24997,6 +24992,35 @@ fn create_ctox_queue_task(
         },
     )?;
     Ok(Some(task))
+}
+
+fn command_queue_thread_key(command_id: &str, command: &BusinessCommand) -> String {
+    if is_business_os_app_module_command(command) {
+        let module_id = business_os_app_command_target_metadata(command)
+            .map(|(module_id, _, _)| module_id)
+            .unwrap_or_else(|| {
+                command
+                    .record_id
+                    .clone()
+                    .unwrap_or_else(|| command.module.clone())
+            });
+        let module_slug = source_sanitize_slug(&module_id);
+        let digest = Sha256::digest(command_id.as_bytes());
+        let suffix = format!("{digest:x}").chars().take(12).collect::<String>();
+        return if module_slug.is_empty() {
+            format!("business-os/app-creator/task/{suffix}")
+        } else {
+            format!("business-os/app-creator/{module_slug}/{suffix}")
+        };
+    }
+    command
+        .payload
+        .get("thread_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("business-os/{}", command.module))
 }
 
 fn command_inbound_channel(command: &BusinessCommand) -> String {
@@ -27298,7 +27322,93 @@ mod tests {
             task.suggested_skill.as_deref(),
             Some(BUSINESS_OS_APP_MODULE_SKILL_NAME)
         );
+        assert!(
+            task.thread_key
+                .starts_with("business-os/app-creator/inventory/"),
+            "app create tasks must use an isolated app-creator thread, got {}",
+            task.thread_key
+        );
         assert!(task.prompt.contains("- type: ctox.business_os.app.create"));
+        Ok(())
+    }
+
+    #[test]
+    fn app_create_ignores_legacy_shared_creator_thread_key() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_app_legacy_thread_key",
+                "module": "creator",
+                "type": "ctox.business_os.app.create",
+                "record_id": "inventory",
+                "payload": {
+                    "title": "Build Inventory",
+                    "instruction": "Build a Business OS inventory app.",
+                    "module_id": "inventory",
+                    "install_target": "runtime-installed-module",
+                    "target": "app",
+                    "thread_key": "business-os/creator"
+                },
+                "client_context": {
+                    "source": "business-os-app-creator-native-test",
+                    "target": "app"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queued task id")?;
+        let task = channels::load_queue_task(root, task_id)?.context("expected queue task")?;
+        assert!(
+            task.thread_key
+                .starts_with("business-os/app-creator/inventory/"),
+            "app create must isolate legacy creator thread keys, got {}",
+            task.thread_key
+        );
+        assert_ne!(task.thread_key, "business-os/creator");
+        Ok(())
+    }
+
+    #[test]
+    fn app_modify_ignores_legacy_shared_creator_thread_key() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_app_modify_legacy_thread_key",
+                "module": "creator",
+                "type": "ctox.business_os.app.modify",
+                "record_id": "inventory",
+                "payload": {
+                    "title": "Modify Inventory",
+                    "instruction": "Improve the Business OS inventory app.",
+                    "module_id": "inventory",
+                    "install_target": "runtime-installed-module",
+                    "target": "app",
+                    "thread_key": "business-os/creator"
+                },
+                "client_context": {
+                    "source": "business-os-app-creator-native-test",
+                    "target": "app"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queued task id")?;
+        let task = channels::load_queue_task(root, task_id)?.context("expected queue task")?;
+        assert!(
+            task.thread_key
+                .starts_with("business-os/app-creator/inventory/"),
+            "app modify must isolate legacy creator thread keys, got {}",
+            task.thread_key
+        );
+        assert_ne!(task.thread_key, "business-os/creator");
         Ok(())
     }
 

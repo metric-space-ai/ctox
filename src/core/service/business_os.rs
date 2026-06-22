@@ -3839,6 +3839,16 @@ mod tests {
                 task.suggested_skill.as_deref(),
                 Some(BUSINESS_OS_APP_BENCH_SKILL)
             );
+            assert!(
+                task.thread_key
+                    .starts_with("business-os/app-creator/bench-"),
+                "bench app tasks must use isolated app-creator threads, got {}",
+                task.thread_key
+            );
+            assert_ne!(
+                task.thread_key, "business-os/creator",
+                "bench app tasks must not inherit the shared legacy creator thread"
+            );
             assert!(task.prompt.contains("ctox.business_os.app.create"));
             assert!(task
                 .prompt
