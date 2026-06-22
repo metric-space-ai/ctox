@@ -51,11 +51,13 @@ const ASSIGNED_MODULE_PERMISSIONS = new Set([
   BusinessOsPermissions.SupportAgentApply,
 ]);
 
-export function businessActorFromSession(session = null) {
+export function businessActorFromSession(session = null, governance = null) {
   const user = session?.user || {};
-  const role = normalizeRole(user.role || (user.is_admin ? 'admin' : 'user'));
+  const governanceRole = governance?.role || governance?.governance?.role || '';
+  const governanceUserId = governance?.user_id || governance?.governance?.user_id || '';
+  const role = normalizeRole(user.role || (user.is_admin ? 'admin' : '') || governanceRole || (governance?.can_manage_all ? 'admin' : 'user'));
   return {
-    id: String(user.id || user.user_id || '').trim(),
+    id: String(user.id || user.user_id || governanceUserId || '').trim(),
     role,
   };
 }
@@ -74,7 +76,7 @@ export function canUseBusinessPermission({
   owned = false,
 } = {}) {
   if (!permission) return false;
-  const actor = businessActorFromSession(session);
+  const actor = businessActorFromSession(session, governance);
   const normalizedScopeId = String(scopeId || '').trim();
   const model = permissionModelFromGovernance(governance);
   const moduleAssigned = scopeType === 'module'
@@ -118,7 +120,7 @@ export function canUseBusinessExplicitOrAssignedPermission({
   scopeId = '',
 } = {}) {
   if (!permission) return false;
-  const actor = businessActorFromSession(session);
+  const actor = businessActorFromSession(session, governance);
   const normalizedScopeId = String(scopeId || '').trim();
   const model = permissionModelFromGovernance(governance);
   if (explicitGrantAllows(model, actor, permission, scopeType, normalizedScopeId)) return true;

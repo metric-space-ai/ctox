@@ -128,6 +128,17 @@ test('runtime installed 0.x app is private unless actor can view that app', () =
     }),
     true
   );
+  assert.equal(
+    canSeeModuleForAppVersion(draftApp, {
+      session: {},
+      governance: {
+        ...governance,
+        user_id: 'ctox-system',
+        role: 'admin',
+      },
+    }),
+    true
+  );
 });
 
 test('runtime installed 1.0.0 app is team-visible by default', () => {

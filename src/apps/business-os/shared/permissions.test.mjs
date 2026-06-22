@@ -72,6 +72,21 @@ test('business actor resolves browser session role aliases', () => {
     id: 'legacy',
     role: 'admin',
   });
+  assert.deepEqual(businessActorFromSession({}, { user_id: 'ctox-system', role: 'admin' }), {
+    id: 'ctox-system',
+    role: 'admin',
+  });
+  assert.deepEqual(businessActorFromSession({}, { can_manage_all: true }), {
+    id: '',
+    role: 'admin',
+  });
+  assert.deepEqual(
+    businessActorFromSession(userSession('viewer', 'user'), { user_id: 'ctox-system', role: 'admin' }),
+    {
+      id: 'viewer',
+      role: 'user',
+    }
+  );
 });
 
 test('module assignments and founder fallback allow only assigned app modification', () => {
@@ -309,6 +324,46 @@ test('workspace grants authorize targeted workspace permissions only', () => {
       governance,
       permission: BusinessOsPermissions.RuntimeManage,
       scopeType: 'workspace',
+    }),
+    false
+  );
+});
+
+test('server-projected governance actor authorizes local admin shells with empty sessions', () => {
+  const governance = governanceWithPermissionModel({
+    role_defaults: {
+      admin: {
+        workspace: [BusinessOsPermissions.AppsView],
+        module: [BusinessOsPermissions.AppsView, BusinessOsPermissions.AppsModify],
+      },
+      user: {
+        workspace: [],
+        module: [],
+      },
+    },
+  });
+
+  assert.equal(
+    canUseBusinessPermission({
+      session: {},
+      governance: {
+        ...governance,
+        user_id: 'ctox-system',
+        role: 'admin',
+      },
+      permission: BusinessOsPermissions.AppsView,
+      scopeType: 'module',
+      scopeId: 'private_app',
+    }),
+    true
+  );
+  assert.equal(
+    canUseBusinessPermission({
+      session: {},
+      governance,
+      permission: BusinessOsPermissions.AppsView,
+      scopeType: 'module',
+      scopeId: 'private_app',
     }),
     false
   );
