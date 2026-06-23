@@ -22,10 +22,11 @@ use super::protocol_contract_generated;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use serde_json::Value;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio_stream::StreamExt;
 use webrtc::peer_connection::RTCIceServer;
 
@@ -61,6 +62,7 @@ use protocol_contract_generated::{
 };
 
 const FORK_RESYNC_INTERVAL: Duration = Duration::from_secs(5);
+const PROTOCOL_ROOM_PAYLOAD_CACHE_TTL: Duration = Duration::from_secs(5);
 const CTOX_RXDB_NATIVE_CAPABILITIES: &[&str] = &[
     "ctox-rxdb-native-v1",
     "ctox-file-chunks-v1",
@@ -188,6 +190,15 @@ pub struct RxWebRTCReplicationPool<H: WebRTCConnectionHandler> {
     pub file_fetch_registry: Arc<super::file_fetch_handler::FileFetchRegistry>,
     /// Every collection multiplexed onto this connection, keyed by name.
     collections: HashMap<String, Arc<RxCollection>>,
+    /// Short-lived shared room payload for the `ctoxProtocol` handshake.
+    ///
+    /// A fresh Business OS browser can send multiple `ctoxProtocol` requests
+    /// while the native peer also starts its own handshake. Building
+    /// collectionSchemas/collectionCheckpoints for the whole multiplexed room
+    /// per task fans out into hundreds of SQLite checkpoint snapshots. Share
+    /// one in-flight build and reuse it briefly; individual target collection
+    /// payloads are still resolved per response.
+    protocol_room_payload_cache: AsyncMutex<ProtocolRoomPayloadCache>,
     /// Per-peer sub-tasks (the master-change relay tasks, one per collection).
     peer_states: Mutex<HashMap<H::Peer, PeerState>>,
     /// Fork replication states keyed by (collection, peer). One entry per
@@ -198,6 +209,18 @@ pub struct RxWebRTCReplicationPool<H: WebRTCConnectionHandler> {
 
 struct PeerState {
     sub_tasks: Vec<tokio::task::JoinHandle<()>>,
+}
+
+#[derive(Clone, Default)]
+struct ProtocolRoomPayload {
+    collection_schemas: Option<Value>,
+    collection_checkpoints: Option<Value>,
+}
+
+#[derive(Default)]
+struct ProtocolRoomPayloadCache {
+    payload: Option<ProtocolRoomPayload>,
+    built_at: Option<Instant>,
 }
 
 impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
@@ -249,6 +272,7 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
             query_fetch_registry: registry,
             file_fetch_registry: file_registry,
             collections: collection_map,
+            protocol_room_payload_cache: AsyncMutex::new(ProtocolRoomPayloadCache::default()),
             peer_states: Mutex::new(HashMap::new()),
             fork_states: Mutex::new(HashMap::new()),
             tasks: Mutex::new(Vec::new()),
@@ -266,6 +290,25 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
 
     fn master_handler_for(&self, name: &str) -> Option<Arc<dyn RxReplicationHandler>> {
         self.master_replication_handlers.get(name).cloned()
+    }
+
+    async fn protocol_room_payload(&self) -> ProtocolRoomPayload {
+        let now = Instant::now();
+        let mut cache = self.protocol_room_payload_cache.lock().await;
+        if let (Some(payload), Some(built_at)) = (&cache.payload, cache.built_at) {
+            if now.duration_since(built_at) <= PROTOCOL_ROOM_PAYLOAD_CACHE_TTL {
+                return payload.clone();
+            }
+        }
+
+        let collections = self.collections();
+        let payload = ProtocolRoomPayload {
+            collection_schemas: collection_schemas_payload(&collections).await,
+            collection_checkpoints: collection_checkpoints_payload(&collections).await,
+        };
+        cache.built_at = Some(Instant::now());
+        cache.payload = Some(payload.clone());
+        payload
     }
 
     /// Register the per-peer relay sub-tasks (one master-change relay per
@@ -686,22 +729,13 @@ where
                                 .as_deref()
                                 .and_then(|name| pool_task.collection_by_name(name))
                                 .unwrap_or_else(|| Arc::clone(&representative_task));
-                            // Phase 3 schema-validation hardening: include the
-                            // per-collection schema-hash map so a multiplexing
-                            // browser validates EACH collection individually.
-                            let schemas =
-                                collection_schemas_payload(&pool_task.collections()).await;
-                            // ... and the per-collection checkpoint map so every
-                            // collection deriving its protocol from this room
-                            // handshake advertises ITS OWN checkpoint epoch.
-                            let checkpoints =
-                                collection_checkpoints_payload(&pool_task.collections()).await;
+                            let room_payload = pool_task.protocol_room_payload().await;
                             ctox_protocol_response_with_flag(
                                 &target,
                                 peer_session_id.as_deref(),
                                 flag,
-                                schemas,
-                                checkpoints,
+                                room_payload.collection_schemas,
+                                room_payload.collection_checkpoints,
                             )
                             .await
                         }
@@ -745,9 +779,12 @@ where
                         error: None,
                         collection: frame_collection,
                     };
-                    let _ = handler_task
+                    if let Err(error) = handler_task
                         .send(&item.peer, WebRTCWireFrame::Response(resp))
-                        .await;
+                        .await
+                    {
+                        pool_task.error_subject.next(error);
+                    }
                 });
             }
         });
@@ -816,19 +853,14 @@ where
                         format!("{}|{}|{}", representative.database.token, request_flag, n)
                     };
                     let local_flag = pool_clone.query_fetch_registry.is_feature_enabled();
-                    // Phase 3 schema-validation hardening: carry the per-collection
-                    // schema-hash map on the outbound handshake so the remote can
-                    // validate each collection individually too (symmetric).
-                    let local_collection_schemas =
-                        collection_schemas_payload(&pool_clone.collections()).await;
-                    let local_collection_checkpoints =
-                        collection_checkpoints_payload(&pool_clone.collections()).await;
+                    let local_room_payload = pool_clone.protocol_room_payload().await;
+                    let local_collection_schemas = local_room_payload.collection_schemas.clone();
                     let local_protocol = ctox_protocol_response_with_flag(
                         &representative,
                         peer_session_id.as_deref(),
                         local_flag,
-                        local_collection_schemas.clone(),
-                        local_collection_checkpoints,
+                        local_room_payload.collection_schemas,
+                        local_room_payload.collection_checkpoints,
                     )
                     .await;
                     let protocol_response = match send_message_and_await_answer(
@@ -2425,6 +2457,74 @@ mod tests {
             params: vec![Value::Null, Value::from(10u64)],
             collection: Some(collection.to_string()),
         }
+    }
+
+    fn ctox_protocol_frame(id: &str, collection: &str) -> WebRTCMessage {
+        WebRTCMessage {
+            id: id.to_string(),
+            method: "ctoxProtocol".to_string(),
+            params: vec![],
+            collection: Some(collection.to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn ctox_protocol_response_carries_multiplex_room_payload() {
+        let alpha = crate::rx_collection::test_support::test_collection_named("proto_alpha").await;
+        let beta = crate::rx_collection::test_support::test_collection_named("proto_beta").await;
+        let handler = MockHandler::new();
+        let pool = replicate_web_rtc_multi(
+            vec![StdArc::clone(&alpha), StdArc::clone(&beta)],
+            StdArc::clone(&handler),
+            None,
+            Some("test-room-protocol".to_string()),
+            Some(StdArc::<str>::from("rxdb-rs-protocol-test")),
+        )
+        .await
+        .expect("bring up multiplexed pool");
+
+        handler.inject_message(
+            "browser-1",
+            ctox_protocol_frame("req-protocol", "proto_beta"),
+        );
+        for _ in 0..30 {
+            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            if !handler.sent_responses().is_empty() {
+                break;
+            }
+        }
+
+        let responses = handler.sent_responses();
+        let response = responses
+            .iter()
+            .find(|item| item.id == "req-protocol")
+            .expect("ctoxProtocol answer present");
+        assert_eq!(response.collection.as_deref(), Some("proto_beta"));
+        assert_eq!(
+            response
+                .result
+                .pointer("/collection/name")
+                .and_then(Value::as_str),
+            Some("proto_beta")
+        );
+        assert!(
+            response
+                .result
+                .pointer("/collectionSchemas/proto_alpha/schemaHash")
+                .and_then(Value::as_str)
+                .is_some(),
+            "multiplex schema map must include every collection"
+        );
+        assert_eq!(
+            response
+                .result
+                .pointer("/collectionCheckpoints/proto_beta/collection")
+                .and_then(Value::as_str),
+            Some("proto_beta")
+        );
+
+        pool.cancel().await;
     }
 
     /// Phase 3: two collections multiplexed on ONE handler must demultiplex
