@@ -56,7 +56,30 @@ const CORE_MODULE_IDS: &[&str] = &[
     "reports",
     "tickets",
 ];
-const STARTER_MODULE_IDS: &[&str] = &["documents", "spreadsheets", "calendar", "notes", "research"];
+const STARTER_MODULE_IDS: &[&str] = &[
+    // Generic productivity apps shipped on every instance.
+    "documents",
+    "spreadsheets",
+    "calendar",
+    "notes",
+    "research",
+    // Recruiting / ATS app set. Shipped as starter so a provisioned instance comes up
+    // with the full pipeline visible without per-instance scope patching that a release
+    // re-extraction would wipe.
+    "matching",
+    "cv-print-builder",
+    "intake",
+    "submissions",
+    "placements",
+    "interviews",
+    "nachweise",
+    "consent",
+    "esign",
+    "buchhaltung",
+    "customers",
+    "shiftflow",
+    "credentials",
+];
 const CHATGPT_AUTH_ISSUER: &str = "https://auth.openai.com";
 const CHATGPT_AUTH_CALLBACK_PORT: u16 = 1455;
 const CHATGPT_AUTH_CALLBACK_FALLBACK_PORT: u16 = 1457;
@@ -1059,6 +1082,14 @@ fn business_os_room_password(root: &Path) -> anyhow::Result<String> {
 }
 
 pub fn session(auth_header: Option<&str>, session_header: Option<&str>) -> BusinessOsSession {
+    session_for_request(auth_header, session_header, true)
+}
+
+pub fn session_for_request(
+    auth_header: Option<&str>,
+    session_header: Option<&str>,
+    allow_local_dev_session: bool,
+) -> BusinessOsSession {
     let token = env::var("CTOX_BUSINESS_OS_SESSION_TOKEN").unwrap_or_default();
     let password = env::var("CTOX_BUSINESS_PASSWORD").unwrap_or_default();
     let expected_user = env::var("CTOX_BUSINESS_USER").unwrap_or_else(|_| "admin".to_owned());
@@ -1069,7 +1100,7 @@ pub fn session(auth_header: Option<&str>, session_header: Option<&str>) -> Busin
         .filter(|value| !value.trim().is_empty());
 
     if token.trim().is_empty() && password.trim().is_empty() && configured_users.is_empty() {
-        if !require_explicit_login {
+        if !require_explicit_login && allow_local_dev_session {
             return BusinessOsSession {
                 ok: true,
                 authenticated: true,
@@ -26092,6 +26123,34 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn unauthenticated_public_surface_does_not_get_local_dev_admin() {
+        let _env = EnvRestore::set(&[
+            ("CTOX_AUTH_USERS", ""),
+            ("CTOX_BUSINESS_PASSWORD", ""),
+            ("CTOX_BUSINESS_OS_DESKTOP_ROLE", "admin"),
+            ("CTOX_BUSINESS_OS_LOGIN_URL", ""),
+            ("CTOX_BUSINESS_OS_REQUIRE_LOGIN", "0"),
+            ("CTOX_BUSINESS_OS_SESSION_TOKEN", ""),
+        ]);
+
+        let public = session_for_request(None, None, false);
+        assert!(!public.authenticated);
+        assert!(public.auth_required);
+        assert!(public.user.is_none());
+        assert_eq!(
+            public.reason.as_deref(),
+            Some("ctox_session_token_not_configured")
+        );
+
+        let local = session_for_request(None, None, true);
+        assert!(local.authenticated);
+        assert_eq!(
+            local.user.as_ref().map(|user| user.role.as_str()),
+            Some("admin")
+        );
     }
 
     fn write_widget_module(app_root: &Path, js: &str) -> anyhow::Result<()> {

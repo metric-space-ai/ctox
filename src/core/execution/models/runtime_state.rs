@@ -466,13 +466,42 @@ pub fn persist_runtime_state(root: &Path, state: &InferenceRuntimeState) -> Resu
 }
 
 pub fn load_or_resolve_runtime_state(root: &Path) -> Result<InferenceRuntimeState> {
-    if let Some(state) = load_runtime_state(root)? {
-        return Ok(state);
-    }
     let env_map = load_runtime_env_map_for_resolution(root)?;
+    if let Some(persisted) = load_runtime_state(root)? {
+        // The persisted row caches a previously derived runtime state. When the operator
+        // pins an explicit upstream endpoint in runtime_env (for example provisioning
+        // switches the model gateway to the llm.ctox.dev proxy after the first boot), a
+        // stale cached row would otherwise shadow the live config and keep the harness
+        // dialing the old endpoint. Re-derive and reconcile only when an upstream is
+        // explicitly pinned and no longer matches the cached row; the local-engine path
+        // (no pinned upstream) is never second-guessed here.
+        if has_pinned_upstream_base_url(&env_map) {
+            let derived = derive_runtime_state_from_env_map(root, &env_map)?;
+            if !upstream_base_url_eq(&derived.upstream_base_url, &persisted.upstream_base_url) {
+                persist_runtime_state(root, &derived)?;
+                return Ok(derived);
+            }
+        }
+        return Ok(persisted);
+    }
     let state = derive_runtime_state_from_env_map(root, &env_map)?;
     persist_runtime_state(root, &state)?;
     Ok(state)
+}
+
+/// True when runtime_env explicitly pins an upstream API/proxy base URL (the
+/// `ctox-core` API path). Used to decide whether a cached runtime-state row may
+/// be reconciled against the live env without disturbing local-engine state.
+fn has_pinned_upstream_base_url(env_map: &BTreeMap<String, String>) -> bool {
+    env_string(env_map, CTOX_LLM_PROXY_BASE_URL_ENV).is_some_and(|value| !value.trim().is_empty())
+        || env_string(env_map, "CTOX_UPSTREAM_BASE_URL")
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn upstream_base_url_eq(a: &str, b: &str) -> bool {
+    a.trim()
+        .trim_end_matches('/')
+        .eq_ignore_ascii_case(b.trim().trim_end_matches('/'))
 }
 
 pub fn sync_runtime_state_from_env_map(
