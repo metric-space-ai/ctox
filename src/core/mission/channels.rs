@@ -22,6 +22,8 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -52,6 +54,53 @@ const QUEUE_PROVIDER: &str = "system";
 const QUEUE_SENDER_DISPLAY: &str = "CTOX queue";
 const QUEUE_SENDER_ADDRESS: &str = "queue:system";
 static REVIEWED_FOUNDER_SEND_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static CHANNEL_SCHEMA_READY: OnceLock<Mutex<HashSet<ChannelSchemaCacheKey>>> = OnceLock::new();
+static CHANNEL_OPEN_ROUTING_READY: OnceLock<
+    Mutex<BTreeMap<ChannelSchemaCacheKey, ChannelRoutingCacheStamp>>,
+> = OnceLock::new();
+static QUEUE_TASK_LIST_CACHE: OnceLock<
+    Mutex<BTreeMap<QueueTaskListCacheKey, QueueTaskListCacheEntry>>,
+> = OnceLock::new();
+
+const QUEUE_TASK_LIST_CACHE_MAX_ENTRIES: usize = 256;
+
+type ChannelFileChangeStamp = (u64, u128);
+type ChannelRoutingCacheStamp = (u64, u64, u64);
+type QueueTaskListCacheStamp = (
+    ChannelFileChangeStamp,
+    ChannelFileChangeStamp,
+    ChannelFileChangeStamp,
+);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct QueueTaskListCacheKey {
+    database: ChannelSchemaCacheKey,
+    statuses: Vec<String>,
+    limit: usize,
+}
+
+#[derive(Debug, Clone)]
+struct QueueTaskListCacheEntry {
+    stamp: QueueTaskListCacheStamp,
+    tasks: Vec<QueueTaskView>,
+}
+
+#[cfg(test)]
+static CHANNEL_SCHEMA_ENSURE_COUNTS: OnceLock<Mutex<BTreeMap<ChannelSchemaCacheKey, usize>>> =
+    OnceLock::new();
+
+#[cfg(unix)]
+type ChannelSchemaCacheKey = (PathBuf, u64, u64);
+#[cfg(not(unix))]
+type ChannelSchemaCacheKey = PathBuf;
+
+#[cfg(test)]
+static CHANNEL_OPEN_ROUTING_ENSURE_COUNTS: OnceLock<Mutex<BTreeMap<ChannelSchemaCacheKey, usize>>> =
+    OnceLock::new();
+
+#[cfg(test)]
+static QUEUE_TASK_LIST_CACHE_MISS_COUNTS: OnceLock<Mutex<BTreeMap<QueueTaskListCacheKey, usize>>> =
+    OnceLock::new();
 
 #[derive(Debug, Clone, Serialize)]
 pub struct QueueTaskView {
@@ -2535,19 +2584,33 @@ pub fn list_queue_tasks(
     limit: usize,
 ) -> Result<Vec<QueueTaskView>> {
     let db_path = resolve_db_path(root, None);
-    let conn = open_channel_db(&db_path)?;
-    if statuses.is_empty() {
-        return list_queue_tasks_from_conn(&conn, limit);
-    }
     let allowed = statuses
         .iter()
         .map(|status| status.trim().to_lowercase())
         .filter(|status| !status.is_empty())
         .collect::<Vec<_>>();
-    if allowed.is_empty() {
+    if !statuses.is_empty() && allowed.is_empty() {
         return Ok(Vec::new());
     }
-    list_queue_tasks_from_conn_with_statuses(&conn, &allowed, limit)
+    let cache_key = queue_task_list_cache_key(&db_path, &allowed, limit);
+    let stamp = queue_task_list_cache_stamp(&db_path);
+    if let Some(tasks) = cached_queue_task_list(&cache_key, &stamp) {
+        return Ok(tasks);
+    }
+
+    let conn = open_channel_db(&db_path)?;
+    let tasks = if allowed.is_empty() {
+        list_queue_tasks_from_conn(&conn, limit)?
+    } else {
+        list_queue_tasks_from_conn_with_statuses(&conn, &allowed, limit)?
+    };
+    drop(conn);
+    let cache_key = queue_task_list_cache_key(&db_path, &allowed, limit);
+    let stamp = queue_task_list_cache_stamp(&db_path);
+    #[cfg(test)]
+    record_queue_task_list_cache_miss_for_tests(&cache_key);
+    store_queue_task_list_cache(cache_key, stamp, tasks.clone());
+    Ok(tasks)
 }
 
 pub fn count_queue_tasks(root: &Path, statuses: &[String]) -> Result<usize> {
@@ -6532,8 +6595,217 @@ pub(crate) fn open_channel_db(path: &Path) -> Result<Connection> {
         .with_context(|| format!("failed to open channel db {}", path.display()))?;
     conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
         .context("failed to configure SQLite busy_timeout for channels")?;
-    ensure_schema(&conn)?;
+    ensure_schema_once(path, &conn)?;
+    ensure_open_routing_rows_once(path, &conn)?;
     Ok(conn)
+}
+
+fn ensure_schema_once(path: &Path, conn: &Connection) -> Result<()> {
+    let key = channel_schema_cache_key(path);
+    let ready = CHANNEL_SCHEMA_READY.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut ready = ready
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if ready.contains(&key) {
+        return Ok(());
+    }
+    ensure_schema(conn)?;
+    #[cfg(test)]
+    record_channel_schema_ensure_for_tests(&key);
+    ready.insert(key);
+    Ok(())
+}
+
+fn ensure_open_routing_rows_once(path: &Path, conn: &Connection) -> Result<()> {
+    let key = channel_schema_cache_key(path);
+    let ready = CHANNEL_OPEN_ROUTING_READY.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut ready = ready
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let stamp = channel_routing_cache_stamp(path);
+    if ready.get(&key) == Some(&stamp) {
+        return Ok(());
+    }
+    ensure_routing_rows_for_inbound(conn)?;
+    #[cfg(test)]
+    record_channel_open_routing_ensure_for_tests(&key);
+    ready.insert(key, channel_routing_cache_stamp(path));
+    Ok(())
+}
+
+#[cfg(unix)]
+fn channel_schema_cache_key(path: &Path) -> ChannelSchemaCacheKey {
+    let canonical = fs::canonicalize(path).unwrap_or_else(|_| absolute_channel_db_path(path));
+    let metadata = fs::metadata(&canonical)
+        .or_else(|_| fs::metadata(path))
+        .ok();
+    let (device, inode) = metadata
+        .map(|metadata| (metadata.dev(), metadata.ino()))
+        .unwrap_or((0, 0));
+    (canonical, device, inode)
+}
+
+#[cfg(not(unix))]
+fn channel_schema_cache_key(path: &Path) -> ChannelSchemaCacheKey {
+    fs::canonicalize(path).unwrap_or_else(|_| absolute_channel_db_path(path))
+}
+
+fn queue_task_list_cache_key(
+    path: &Path,
+    statuses: &[String],
+    limit: usize,
+) -> QueueTaskListCacheKey {
+    QueueTaskListCacheKey {
+        database: channel_schema_cache_key(path),
+        statuses: statuses.to_vec(),
+        limit,
+    }
+}
+
+fn cached_queue_task_list(
+    key: &QueueTaskListCacheKey,
+    stamp: &QueueTaskListCacheStamp,
+) -> Option<Vec<QueueTaskView>> {
+    let cache = QUEUE_TASK_LIST_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache
+        .get(key)
+        .filter(|entry| &entry.stamp == stamp)
+        .map(|entry| entry.tasks.clone())
+}
+
+fn store_queue_task_list_cache(
+    key: QueueTaskListCacheKey,
+    stamp: QueueTaskListCacheStamp,
+    tasks: Vec<QueueTaskView>,
+) {
+    let cache = QUEUE_TASK_LIST_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if cache.len() >= QUEUE_TASK_LIST_CACHE_MAX_ENTRIES && !cache.contains_key(&key) {
+        cache.clear();
+    }
+    cache.insert(key, QueueTaskListCacheEntry { stamp, tasks });
+}
+
+fn absolute_channel_db_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    std::env::current_dir()
+        .map(|cwd| cwd.join(path))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn channel_routing_cache_stamp(path: &Path) -> ChannelRoutingCacheStamp {
+    (
+        channel_file_size_stamp(path),
+        channel_file_size_stamp(&sqlite_sidecar_path(path, "-wal")),
+        channel_file_size_stamp(&sqlite_sidecar_path(path, "-journal")),
+    )
+}
+
+fn queue_task_list_cache_stamp(path: &Path) -> QueueTaskListCacheStamp {
+    (
+        channel_file_change_stamp(path),
+        channel_file_change_stamp(&sqlite_sidecar_path(path, "-wal")),
+        channel_file_change_stamp(&sqlite_sidecar_path(path, "-journal")),
+    )
+}
+
+fn channel_file_size_stamp(path: &Path) -> u64 {
+    fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0)
+}
+
+fn channel_file_change_stamp(path: &Path) -> ChannelFileChangeStamp {
+    let Ok(metadata) = fs::metadata(path) else {
+        return (0, 0);
+    };
+    let modified_at = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    (metadata.len(), modified_at)
+}
+
+fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut value = path.as_os_str().to_os_string();
+    value.push(suffix);
+    PathBuf::from(value)
+}
+
+#[cfg(test)]
+fn record_channel_schema_ensure_for_tests(key: &ChannelSchemaCacheKey) {
+    let counts = CHANNEL_SCHEMA_ENSURE_COUNTS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut counts = counts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *counts.entry(key.clone()).or_insert(0) += 1;
+}
+
+#[cfg(test)]
+fn channel_schema_ensure_count_for_tests(path: &Path) -> usize {
+    let key = channel_schema_cache_key(path);
+    let Some(counts) = CHANNEL_SCHEMA_ENSURE_COUNTS.get() else {
+        return 0;
+    };
+    let counts = counts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    counts.get(&key).copied().unwrap_or(0)
+}
+
+#[cfg(test)]
+fn record_channel_open_routing_ensure_for_tests(key: &ChannelSchemaCacheKey) {
+    let counts = CHANNEL_OPEN_ROUTING_ENSURE_COUNTS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut counts = counts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *counts.entry(key.clone()).or_insert(0) += 1;
+}
+
+#[cfg(test)]
+fn channel_open_routing_ensure_count_for_tests(path: &Path) -> usize {
+    let key = channel_schema_cache_key(path);
+    let Some(counts) = CHANNEL_OPEN_ROUTING_ENSURE_COUNTS.get() else {
+        return 0;
+    };
+    let counts = counts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    counts.get(&key).copied().unwrap_or(0)
+}
+
+#[cfg(test)]
+fn record_queue_task_list_cache_miss_for_tests(key: &QueueTaskListCacheKey) {
+    let counts = QUEUE_TASK_LIST_CACHE_MISS_COUNTS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut counts = counts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *counts.entry(key.clone()).or_insert(0) += 1;
+}
+
+#[cfg(test)]
+fn queue_task_list_cache_miss_count_for_tests(
+    path: &Path,
+    statuses: &[String],
+    limit: usize,
+) -> usize {
+    let key = queue_task_list_cache_key(path, statuses, limit);
+    let Some(counts) = QUEUE_TASK_LIST_CACHE_MISS_COUNTS.get() else {
+        return 0;
+    };
+    let counts = counts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    counts.get(&key).copied().unwrap_or(0)
 }
 
 fn open_channel_db_read_only(path: &Path) -> Result<Option<Connection>> {
@@ -6702,7 +6974,6 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
     ))
     .context("failed to ensure channel schema")?;
     ensure_terminal_no_send_column(conn)?;
-    ensure_routing_rows_for_inbound(conn)?;
     Ok(())
 }
 
@@ -9468,6 +9739,96 @@ mod tests {
     }
 
     #[test]
+    fn queue_task_list_cache_reuses_idle_reads_until_store_changes() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-queue-list-cache-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("failed to create temp test root");
+        let db_path = resolve_db_path(&root, None);
+        let pending = vec!["pending".to_string()];
+
+        let first = list_queue_tasks(&root, &pending, 10).expect("failed to list empty queue");
+        assert!(first.is_empty());
+        assert_eq!(
+            queue_task_list_cache_miss_count_for_tests(&db_path, &pending, 10),
+            1,
+            "first queue list must hit SQLite"
+        );
+
+        let second = list_queue_tasks(&root, &pending, 10).expect("failed to relist empty queue");
+        assert!(second.is_empty());
+        assert_eq!(
+            queue_task_list_cache_miss_count_for_tests(&db_path, &pending, 10),
+            1,
+            "unchanged idle queue list must reuse the cached snapshot"
+        );
+
+        let created = create_queue_task(
+            &root,
+            QueueTaskCreateRequest {
+                title: "cache invalidation".to_string(),
+                prompt: "Make the queue list cache refresh after a store write.".to_string(),
+                thread_key: "queue/list-cache".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+
+        let after_write =
+            list_queue_tasks(&root, &pending, 10).expect("failed to list queue after write");
+        assert_eq!(after_write.len(), 1);
+        assert_eq!(after_write[0].message_key, created.message_key);
+        assert_eq!(
+            queue_task_list_cache_miss_count_for_tests(&db_path, &pending, 10),
+            2,
+            "store writes must invalidate the cached queue snapshot"
+        );
+
+        let after_idle =
+            list_queue_tasks(&root, &pending, 10).expect("failed to list queue after idle");
+        assert_eq!(after_idle.len(), 1);
+        assert_eq!(after_idle[0].message_key, created.message_key);
+        assert_eq!(
+            queue_task_list_cache_miss_count_for_tests(&db_path, &pending, 10),
+            2,
+            "unchanged post-write queue list must reuse the refreshed snapshot"
+        );
+
+        update_queue_task(
+            &root,
+            QueueTaskUpdateRequest {
+                message_key: created.message_key.clone(),
+                route_status: Some("blocked".to_string()),
+                status_note: Some("cache invalidation after status update".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("failed to update queue task status");
+
+        let pending_after_status_update = list_queue_tasks(&root, &pending, 10)
+            .expect("failed to list queue after status update");
+        assert!(
+            pending_after_status_update.is_empty(),
+            "cached pending queue snapshot must not survive a status update"
+        );
+        assert_eq!(
+            queue_task_list_cache_miss_count_for_tests(&db_path, &pending, 10),
+            3,
+            "status updates must invalidate the cached queue snapshot"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn routing_backfill_is_idempotent_under_parallel_schema_open() {
         let db_path = unique_test_db_path("ctox-routing-backfill-parallel");
         {
@@ -9545,6 +9906,46 @@ mod tests {
             )
             .expect("failed to count routing rows");
         assert_eq!(routing_rows, 32);
+
+        let _ = fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn channel_schema_is_ensured_once_per_open_database_file() {
+        let db_path = unique_test_db_path("ctox-channel-schema-once");
+        let conn = open_channel_db(&db_path).expect("failed to open db first time");
+        drop(conn);
+        assert_eq!(
+            channel_schema_ensure_count_for_tests(&db_path),
+            1,
+            "first open must install the channel schema"
+        );
+        assert_eq!(
+            channel_open_routing_ensure_count_for_tests(&db_path),
+            1,
+            "first open must run the routing backfill"
+        );
+
+        let conn = open_channel_db(&db_path).expect("failed to open db second time");
+        drop(conn);
+        assert_eq!(
+            channel_schema_ensure_count_for_tests(&db_path),
+            1,
+            "second open of the same database file must not re-run schema DDL"
+        );
+        let settled_routing_ensure_count = channel_open_routing_ensure_count_for_tests(&db_path);
+        assert!(
+            (1..=2).contains(&settled_routing_ensure_count),
+            "routing backfill should run at most once more while SQLite settles a newly created WAL database"
+        );
+
+        let conn = open_channel_db(&db_path).expect("failed to open db third time");
+        drop(conn);
+        assert_eq!(
+            channel_open_routing_ensure_count_for_tests(&db_path),
+            settled_routing_ensure_count,
+            "subsequent opens of a settled database file must not re-run routing backfill"
+        );
 
         let _ = fs::remove_file(&db_path);
     }
