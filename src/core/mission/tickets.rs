@@ -18,6 +18,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashSet;
+use std::fs;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Write;
@@ -28,7 +29,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 use crate::inference::engine;
 use crate::inference::local_transport::LocalTransport;
@@ -80,6 +81,37 @@ const REQUIRED_KNOWLEDGE_DOMAINS: &[&str] = &[
 ];
 
 static TICKET_SCHEMA_READY: OnceLock<Mutex<HashSet<TicketSchemaCacheKey>>> = OnceLock::new();
+static TICKET_SELF_WORK_LIST_CACHE: OnceLock<
+    Mutex<BTreeMap<TicketSelfWorkListCacheKey, TicketSelfWorkListCacheEntry>>,
+> = OnceLock::new();
+
+const TICKET_SELF_WORK_LIST_CACHE_MAX_ENTRIES: usize = 256;
+
+type TicketFileChangeStamp = (u64, u128);
+type TicketSelfWorkListCacheStamp = (
+    TicketFileChangeStamp,
+    TicketFileChangeStamp,
+    TicketFileChangeStamp,
+);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct TicketSelfWorkListCacheKey {
+    database: TicketSchemaCacheKey,
+    system: Option<String>,
+    state: Option<String>,
+    limit: usize,
+}
+
+#[derive(Debug, Clone)]
+struct TicketSelfWorkListCacheEntry {
+    stamp: TicketSelfWorkListCacheStamp,
+    items: Vec<TicketSelfWorkItemView>,
+}
+
+#[cfg(test)]
+static TICKET_SELF_WORK_LIST_CACHE_MISS_COUNTS: OnceLock<
+    Mutex<BTreeMap<TicketSelfWorkListCacheKey, usize>>,
+> = OnceLock::new();
 
 thread_local! {
     static TICKET_RECONCILE_DB: RefCell<Option<CachedTicketConnection>> = RefCell::new(None);
@@ -2865,6 +2897,7 @@ pub(crate) fn put_ticket_self_work_item(
             "#,
             params![&item.work_id, fallback_state, now],
         );
+        clear_ticket_self_work_list_cache();
         anyhow::bail!(
             "core spawn gate rejected ticket internal work `{}` ({}): {}",
             item.work_id,
@@ -3282,8 +3315,24 @@ pub(crate) fn list_ticket_self_work_items(
     state: Option<&str>,
     limit: usize,
 ) -> Result<Vec<TicketSelfWorkItemView>> {
+    let db_path = resolve_db_path(root);
+    let cache_key = ticket_self_work_list_cache_key(&db_path, system, state, limit);
+    let initial_stamp = ticket_self_work_list_cache_stamp(&db_path);
+    if let Some(items) = cached_ticket_self_work_list(&cache_key, &initial_stamp) {
+        return Ok(items);
+    }
+
     let conn = open_ticket_db(root)?;
-    list_ticket_self_work_items_on_conn(&conn, system, state, limit)
+    let items = list_ticket_self_work_items_on_conn(&conn, system, state, limit)?;
+    drop(conn);
+    let cache_key = ticket_self_work_list_cache_key(&db_path, system, state, limit);
+    let stamp = ticket_self_work_list_cache_stamp(&db_path);
+    #[cfg(test)]
+    record_ticket_self_work_list_cache_miss_for_tests(&cache_key);
+    if stamp == initial_stamp {
+        store_ticket_self_work_list_cache(cache_key, stamp, items.clone());
+    }
+    Ok(items)
 }
 
 fn list_ticket_self_work_items_on_conn(
@@ -4045,6 +4094,7 @@ fn merge_ticket_self_work_metadata(
         .unwrap_or_default();
     merge_json_object_values(&mut metadata, &update);
     conn.execute(r#"UPDATE ticket_self_work_items SET metadata_json = ?2, updated_at = ?3 WHERE work_id = ?1"#, params![work_id, serde_json::to_string(&metadata)?, now_iso_string()])?;
+    clear_ticket_self_work_list_cache();
     let item = load_ticket_self_work_item_raw(&conn, work_id)?
         .context("ticket internal work item not found after metadata update")?;
     let item = hydrate_ticket_self_work_item(&conn, item)?;
@@ -4501,6 +4551,7 @@ fn set_ticket_self_work_state_internal(
         "#,
         params![work_id, state, now],
     )?;
+    clear_ticket_self_work_list_cache();
     let item = load_ticket_self_work_item_raw(conn, work_id)?
         .context("ticket internal work item not found")?;
     hydrate_ticket_self_work_item(conn, item)
@@ -4511,6 +4562,7 @@ fn touch_ticket_self_work_item(conn: &mut Connection, work_id: &str) -> Result<(
         "UPDATE ticket_self_work_items SET updated_at = ?2 WHERE work_id = ?1",
         params![work_id, now_iso_string()],
     )?;
+    clear_ticket_self_work_list_cache();
     Ok(())
 }
 
@@ -4544,6 +4596,7 @@ fn insert_ticket_self_work_assignment(
             now
         ],
     )?;
+    clear_ticket_self_work_list_cache();
     conn.query_row(
         r#"
         SELECT assignment_id, work_id, assigned_to, assigned_by, rationale, remote_event_id, created_at
@@ -4586,6 +4639,7 @@ fn insert_ticket_self_work_note(
             now
         ],
     )?;
+    clear_ticket_self_work_list_cache();
     conn.query_row(
         r#"
         SELECT note_id, work_id, body_text, visibility, authored_by, remote_event_id, created_at
@@ -4714,6 +4768,7 @@ fn upsert_ticket_self_work_item_internal(
             now,
         ],
     )?;
+    clear_ticket_self_work_list_cache();
     conn.query_row(
         r#"
         SELECT work_id, source_system, kind, title, body_text, state, metadata_json, remote_ticket_id, remote_locator, created_at, updated_at
@@ -4756,6 +4811,7 @@ fn mark_ticket_self_work_published(
         "#,
         params![work_id, remote_ticket_id, remote_locator, now],
     )?;
+    clear_ticket_self_work_list_cache();
     conn.query_row(
         r#"
         SELECT work_id, source_system, kind, title, body_text, state, metadata_json, remote_ticket_id, remote_locator, created_at, updated_at
@@ -10096,6 +10152,58 @@ fn ticket_schema_cache_key(path: &Path) -> TicketSchemaCacheKey {
     std::fs::canonicalize(path).unwrap_or_else(|_| absolute_ticket_db_path(path))
 }
 
+fn ticket_self_work_list_cache_key(
+    path: &Path,
+    system: Option<&str>,
+    state: Option<&str>,
+    limit: usize,
+) -> TicketSelfWorkListCacheKey {
+    TicketSelfWorkListCacheKey {
+        database: ticket_schema_cache_key(path),
+        system: system.map(ToOwned::to_owned),
+        state: state.map(ToOwned::to_owned),
+        limit,
+    }
+}
+
+fn cached_ticket_self_work_list(
+    key: &TicketSelfWorkListCacheKey,
+    stamp: &TicketSelfWorkListCacheStamp,
+) -> Option<Vec<TicketSelfWorkItemView>> {
+    let cache = TICKET_SELF_WORK_LIST_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache
+        .get(key)
+        .filter(|entry| &entry.stamp == stamp)
+        .map(|entry| entry.items.clone())
+}
+
+fn store_ticket_self_work_list_cache(
+    key: TicketSelfWorkListCacheKey,
+    stamp: TicketSelfWorkListCacheStamp,
+    items: Vec<TicketSelfWorkItemView>,
+) {
+    let cache = TICKET_SELF_WORK_LIST_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if cache.len() >= TICKET_SELF_WORK_LIST_CACHE_MAX_ENTRIES && !cache.contains_key(&key) {
+        cache.clear();
+    }
+    cache.insert(key, TicketSelfWorkListCacheEntry { stamp, items });
+}
+
+fn clear_ticket_self_work_list_cache() {
+    if let Some(cache) = TICKET_SELF_WORK_LIST_CACHE.get() {
+        cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+    }
+}
+
 fn absolute_ticket_db_path(path: &Path) -> PathBuf {
     if path.is_absolute() {
         return path.to_path_buf();
@@ -10103,6 +10211,58 @@ fn absolute_ticket_db_path(path: &Path) -> PathBuf {
     std::env::current_dir()
         .map(|cwd| cwd.join(path))
         .unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn ticket_self_work_list_cache_stamp(path: &Path) -> TicketSelfWorkListCacheStamp {
+    (
+        ticket_file_change_stamp(path),
+        ticket_file_change_stamp(&sqlite_sidecar_path(path, "-wal")),
+        ticket_file_change_stamp(&sqlite_sidecar_path(path, "-journal")),
+    )
+}
+
+fn ticket_file_change_stamp(path: &Path) -> TicketFileChangeStamp {
+    let Ok(metadata) = fs::metadata(path) else {
+        return (0, 0);
+    };
+    let modified_at = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    (metadata.len(), modified_at)
+}
+
+fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
+    PathBuf::from(format!("{}{}", path.display(), suffix))
+}
+
+#[cfg(test)]
+fn record_ticket_self_work_list_cache_miss_for_tests(key: &TicketSelfWorkListCacheKey) {
+    let counts =
+        TICKET_SELF_WORK_LIST_CACHE_MISS_COUNTS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut counts = counts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *counts.entry(key.clone()).or_insert(0) += 1;
+}
+
+#[cfg(test)]
+fn ticket_self_work_list_cache_miss_count_for_tests(
+    path: &Path,
+    system: Option<&str>,
+    state: Option<&str>,
+    limit: usize,
+) -> usize {
+    let key = ticket_self_work_list_cache_key(path, system, state, limit);
+    let Some(counts) = TICKET_SELF_WORK_LIST_CACHE_MISS_COUNTS.get() else {
+        return 0;
+    };
+    let counts = counts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    counts.get(&key).copied().unwrap_or(0)
 }
 
 fn ensure_schema(conn: &Connection) -> Result<()> {
@@ -12583,6 +12743,99 @@ mod tests {
             Some(1)
         );
         assert!(item.remote_ticket_id.is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn ticket_self_work_list_cache_reuses_idle_reads_until_store_changes() -> Result<()> {
+        let root = temp_root("self-work-list-cache");
+        std::fs::create_dir_all(&root)?;
+        let db_path = resolve_db_path(&root);
+        let _ = open_ticket_db(&root)?;
+
+        let first = list_ticket_self_work_items(&root, Some("local"), None, 10)?;
+        assert!(first.is_empty());
+        assert_eq!(
+            ticket_self_work_list_cache_miss_count_for_tests(&db_path, Some("local"), None, 10),
+            1,
+            "first self-work list must hit SQLite"
+        );
+
+        let second = list_ticket_self_work_items(&root, Some("local"), None, 10)?;
+        assert!(second.is_empty());
+        assert_eq!(
+            ticket_self_work_list_cache_miss_count_for_tests(&db_path, Some("local"), None, 10),
+            1,
+            "unchanged idle self-work list must reuse the cached snapshot"
+        );
+
+        let created = put_ticket_self_work_item(
+            &root,
+            TicketSelfWorkUpsertInput {
+                source_system: "local".to_string(),
+                kind: "cache-test".to_string(),
+                title: "Refresh self-work snapshot after write".to_string(),
+                body_text: "The idle list cache must notice self-work writes.".to_string(),
+                state: "open".to_string(),
+                metadata: json!({
+                    "skill": "cache-test",
+                    "dedupe_key": "self-work-list-cache",
+                }),
+            },
+            false,
+        )?;
+
+        let after_write = list_ticket_self_work_items(&root, Some("local"), None, 10)?;
+        assert_eq!(after_write.len(), 1);
+        assert_eq!(after_write[0].work_id, created.work_id);
+        assert_eq!(
+            ticket_self_work_list_cache_miss_count_for_tests(&db_path, Some("local"), None, 10),
+            2,
+            "self-work writes must invalidate the cached snapshot"
+        );
+
+        let after_idle = list_ticket_self_work_items(&root, Some("local"), None, 10)?;
+        assert_eq!(after_idle.len(), 1);
+        assert_eq!(after_idle[0].work_id, created.work_id);
+        assert_eq!(
+            ticket_self_work_list_cache_miss_count_for_tests(&db_path, Some("local"), None, 10),
+            2,
+            "unchanged post-write self-work list must reuse the refreshed snapshot"
+        );
+
+        assign_ticket_self_work_item(
+            &root,
+            &created.work_id,
+            "ctox-core",
+            "cache-test",
+            Some("exercise assignment hydration invalidation"),
+        )?;
+
+        let after_assignment = list_ticket_self_work_items(&root, Some("local"), None, 10)?;
+        assert_eq!(after_assignment.len(), 1);
+        assert_eq!(
+            after_assignment[0].assigned_to.as_deref(),
+            Some("ctox-core")
+        );
+        assert_eq!(
+            ticket_self_work_list_cache_miss_count_for_tests(&db_path, Some("local"), None, 10),
+            3,
+            "assignment writes must invalidate hydrated self-work snapshots"
+        );
+
+        let after_assignment_idle = list_ticket_self_work_items(&root, Some("local"), None, 10)?;
+        assert_eq!(after_assignment_idle.len(), 1);
+        assert_eq!(
+            after_assignment_idle[0].assigned_to.as_deref(),
+            Some("ctox-core")
+        );
+        assert_eq!(
+            ticket_self_work_list_cache_miss_count_for_tests(&db_path, Some("local"), None, 10),
+            3,
+            "unchanged assigned self-work list must stay cached"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
