@@ -91,6 +91,12 @@ function contentForForbiddenHttpScan(file, content) {
     );
   }
 
+  if (rel === 'src/apps/business-os/shared/command-bus.js') {
+    allow(
+      /['"]\/api\/business-os\/auth\/capability['"]/g,
+    );
+  }
+
   if (rel === 'src/apps/business-os/app.js') {
     allow(
       /['"]\/api\/business-os\/sync\/config['"]/g,

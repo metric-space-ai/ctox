@@ -876,16 +876,36 @@ function watchInitialReplication({
     });
     return () => {};
   }
-  const stallTimer = setTimeout(() => {
-    if (isStopped?.()) return;
-    recordCollection?.(collection, {
-      status: 'reconnecting',
-      connectionStatus: 'reconnecting',
-      initialReplicationState: 'stalled',
-      reconnectingSince: new Date().toISOString(),
-    });
-    scheduleRestart?.(collection, 1000);
-  }, INITIAL_REPLICATION_STALL_MS);
+  let lastProgressSignature = initialReplicationProgressSignature(replicationState);
+  let stallTimer = null;
+  const armStallTimer = () => {
+    if (stallTimer) clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => {
+      stallTimer = null;
+      if (isStopped?.()) return;
+      const progressSignature = initialReplicationProgressSignature(replicationState);
+      if (progressSignature && progressSignature !== lastProgressSignature) {
+        lastProgressSignature = progressSignature;
+        recordCollection?.(collection, {
+          status: hasOpenNativePeerState(replicationState) ? 'connected' : 'connecting',
+          connectionStatus: hasOpenNativePeerState(replicationState) ? 'connected' : 'connecting',
+          initialReplicationState: 'pending',
+          lastError: null,
+          lastLifecycleEvent: null,
+        });
+        armStallTimer();
+        return;
+      }
+      recordCollection?.(collection, {
+        status: 'reconnecting',
+        connectionStatus: 'reconnecting',
+        initialReplicationState: 'stalled',
+        reconnectingSince: new Date().toISOString(),
+      });
+      scheduleRestart?.(collection, 1000);
+    }, INITIAL_REPLICATION_STALL_MS);
+  };
+  armStallTimer();
   recordCollection?.(collection, {
     initialReplicationState: 'pending',
     initialReplicationSource: awaitInitialReplication.source,
@@ -906,7 +926,7 @@ function watchInitialReplication({
         });
         const ready = await waitForCondition(canCompleteInitialReplication, 30000, 250, isStopped);
         if (isStopped?.()) {
-          clearTimeout(stallTimer);
+          if (stallTimer) clearTimeout(stallTimer);
           return;
         }
         if (!ready) {
@@ -914,7 +934,7 @@ function watchInitialReplication({
           // behavior left the collection in 'waiting-for-peer' forever).
           // Mark it restartable and arm the sweep; the stall timer is no
           // longer needed.
-          clearTimeout(stallTimer);
+          if (stallTimer) clearTimeout(stallTimer);
           recordCollection?.(collection, {
             status: 'reconnecting',
             connectionStatus: 'reconnecting',
@@ -925,7 +945,7 @@ function watchInitialReplication({
           return;
         }
       }
-      clearTimeout(stallTimer);
+      if (stallTimer) clearTimeout(stallTimer);
       recordCollection?.(collection, {
         status: 'connected',
         connectionStatus: 'connected',
@@ -938,7 +958,7 @@ function watchInitialReplication({
       });
     })
     .catch((error) => {
-      clearTimeout(stallTimer);
+      if (stallTimer) clearTimeout(stallTimer);
       if (isStopped?.()) return;
       recordCollection?.(collection, {
         status: 'error',
@@ -948,7 +968,54 @@ function watchInitialReplication({
         lastError: serializeError(error),
       });
     });
-  return () => clearTimeout(stallTimer);
+  return () => {
+    if (stallTimer) clearTimeout(stallTimer);
+  };
+}
+
+function initialReplicationProgressSignature(replicationState) {
+  if (!replicationState || typeof replicationState !== 'object') return '';
+  let status = {};
+  try {
+    status = typeof replicationState.getTransportStatus === 'function'
+      ? replicationState.getTransportStatus() || {}
+      : {};
+  } catch {
+    status = {};
+  }
+  return JSON.stringify({
+    open: hasOpenNativePeerState(replicationState),
+    pullInProgress: status.pullInProgress === true || replicationState.pullInProgress === true,
+    pushInProgress: status.pushInProgress === true || replicationState.pushInProgress === true,
+    pendingRequests: progressNumber(status.pendingRequests),
+    pendingAcks: progressNumber(status.pendingAcks),
+    activeTransfers: progressNumber(status.activeTransfers),
+    incomingTransfers: progressNumber(status.incomingTransfers),
+    sentFrames: progressNumber(status.sentFrames),
+    sentBytes: progressNumber(status.sentBytes),
+    receivedFrames: progressNumber(status.receivedFrames),
+    receivedBytes: progressNumber(status.receivedBytes),
+    queuedFrames: progressNumber(status.queuedFrames),
+    sentScheduledFrames: progressNumber(status.sentScheduledFrames),
+    pullCheckpoints: checkpointProgressSignature(replicationState.pullCheckpointsByPeer),
+    pushCheckpoints: checkpointProgressSignature(replicationState.pushCheckpointsByPeer),
+  });
+}
+
+function checkpointProgressSignature(map) {
+  if (!map || typeof map.entries !== 'function') return [];
+  return Array.from(map.entries())
+    .map(([peerId, checkpoint]) => [
+      String(peerId || ''),
+      String(checkpoint?.id || ''),
+      progressNumber(checkpoint?.lwt),
+    ])
+    .sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+function progressNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
 }
 
 function waitForCondition(predicate, timeoutMs, intervalMs, isStopped) {
@@ -1516,6 +1583,7 @@ export const __ctoxSyncTestHooks = {
   classifySchemaProtocolError,
   classifyReplicationIoError,
   extractReplicationErrorDetails,
+  initialReplicationProgressSignature,
 };
 
 function replicationIoMessageFor(code) {
