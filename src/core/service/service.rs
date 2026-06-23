@@ -105,8 +105,8 @@ const SYSTEMD_USER_UNIT_NAME: &str = "ctox.service";
 const LAUNCHD_USER_LABEL: &str = "com.metric-space.ctox.service";
 const LAUNCHD_USER_MARKER_RELATIVE_PATH: &str = "runtime/ctox_launchd_user.installed";
 const CHANNEL_ROUTER_POLL_SECS: u64 = 8;
-const TICKET_RECONCILE_IDLE_SAFETY_SECS: u64 = 60;
-const CHANNEL_ROUTER_IDLE_SAFETY_SECS: u64 = 60;
+const TICKET_RECONCILE_IDLE_SAFETY_SECS: u64 = 3600;
+const CHANNEL_ROUTER_IDLE_SAFETY_SECS: u64 = 3600;
 const CHANNEL_SYNC_POLL_SECS: u64 = 60;
 const MISSION_MAINTENANCE_POLL_SECS: u64 = 15;
 const HARNESS_AUDIT_TICK_SECS: u64 = 300;
@@ -164,6 +164,9 @@ const BUSINESS_OS_AUTOSTART_RETRY_SECS: u64 = 30;
 
 static SERVICE_PANIC_HOOK: Once = Once::new();
 static TICKET_RECONCILE_GATE: OnceLock<Mutex<Option<TicketReconcileGateState>>> = OnceLock::new();
+static CHANNEL_ROUTER_PREFLIGHT_IDLE_GATE: OnceLock<
+    Mutex<Option<ChannelRouterPreflightIdleGateState>>,
+> = OnceLock::new();
 static CHANNEL_ROUTER_IDLE_GATE: OnceLock<Mutex<Option<ChannelRouterIdleGateState>>> =
     OnceLock::new();
 static HARNESS_AUDIT_IDLE_GATE: OnceLock<Mutex<Option<HarnessAuditIdleGateState>>> =
@@ -180,6 +183,17 @@ struct TicketReconcileGateState {
     stamp: CoreDbChangeStamp,
     active_keys: Vec<String>,
     last_run: Instant,
+}
+
+#[derive(Debug, Clone)]
+struct ChannelRouterPreflightIdleGateState {
+    root: PathBuf,
+    core_db_path: PathBuf,
+    core_stamp: CoreDbChangeStamp,
+    business_os_store_stamp: CoreDbChangeStamp,
+    ticket_stamp: tickets::TicketStoreChangeStamp,
+    env_overlay: BTreeMap<String, String>,
+    last_idle_pass: Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -10483,22 +10497,26 @@ fn looks_like_internal_label(text: &str) -> bool {
 }
 
 fn start_channel_router(root: std::path::PathBuf, state: Arc<Mutex<SharedState>>) {
-    thread::spawn(move || loop {
-        let routed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            route_external_messages(&root, &state)
-        }));
-        match routed {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => {
-                eprintln!("ctox channel route failed: {err:#}");
-                push_event(&state, format!("Channel route failed: {err}"));
+    thread::spawn(move || {
+        mark_channel_router_preflight_idle(&root);
+        mark_ticket_reconcile_ran(&root, &HashSet::new());
+        loop {
+            let routed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                route_external_messages(&root, &state)
+            }));
+            match routed {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    eprintln!("ctox channel route failed: {err:#}");
+                    push_event(&state, format!("Channel route failed: {err}"));
+                }
+                Err(_) => {
+                    eprintln!("ctox channel router panic; continuing");
+                    push_event(&state, "Channel router panicked; continuing".to_string());
+                }
             }
-            Err(_) => {
-                eprintln!("ctox channel router panic; continuing");
-                push_event(&state, "Channel router panicked; continuing".to_string());
-            }
+            thread::sleep(Duration::from_secs(CHANNEL_ROUTER_POLL_SECS));
         }
-        thread::sleep(Duration::from_secs(CHANNEL_ROUTER_POLL_SECS));
     });
 }
 
@@ -10839,6 +10857,57 @@ fn clear_harness_audit_idle_gate_for_tests() {
     }
 }
 
+fn should_skip_idle_channel_router_preflight(root: &Path) -> bool {
+    let root_path = root.to_path_buf();
+    let core_db_path = crate::paths::core_db(root);
+    let core_stamp = core_db_change_stamp(&core_db_path);
+    let business_os_store_stamp = business_os_store_change_stamp(root);
+    let ticket_stamp = tickets::ticket_store_change_stamp(root);
+    let env_overlay = live_service_env_overlay();
+    let now = Instant::now();
+    let gate = CHANNEL_ROUTER_PREFLIGHT_IDLE_GATE.get_or_init(|| Mutex::new(None));
+    let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(previous) = guard.as_ref() else {
+        return false;
+    };
+    previous.root == root_path
+        && previous.core_db_path == core_db_path
+        && previous.core_stamp == core_stamp
+        && previous.business_os_store_stamp == business_os_store_stamp
+        && previous.ticket_stamp == ticket_stamp
+        && previous.env_overlay == env_overlay
+        && now.duration_since(previous.last_idle_pass)
+            < Duration::from_secs(CHANNEL_ROUTER_IDLE_SAFETY_SECS)
+}
+
+fn mark_channel_router_preflight_idle(root: &Path) {
+    let root_path = root.to_path_buf();
+    let core_db_path = crate::paths::core_db(root);
+    let core_stamp = core_db_change_stamp(&core_db_path);
+    let business_os_store_stamp = business_os_store_change_stamp(root);
+    let ticket_stamp = tickets::ticket_store_change_stamp(root);
+    let env_overlay = live_service_env_overlay();
+    let gate = CHANNEL_ROUTER_PREFLIGHT_IDLE_GATE.get_or_init(|| Mutex::new(None));
+    let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = Some(ChannelRouterPreflightIdleGateState {
+        root: root_path,
+        core_db_path,
+        core_stamp,
+        business_os_store_stamp,
+        ticket_stamp,
+        env_overlay,
+        last_idle_pass: Instant::now(),
+    });
+}
+
+#[cfg(test)]
+fn clear_channel_router_preflight_idle_gate_for_tests() {
+    if let Some(gate) = CHANNEL_ROUTER_PREFLIGHT_IDLE_GATE.get() {
+        let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = None;
+    }
+}
+
 fn should_skip_idle_channel_router_tick(root: &Path, settings: &BTreeMap<String, String>) -> bool {
     let root_path = root.to_path_buf();
     let core_db_path = crate::paths::core_db(root);
@@ -11012,12 +11081,15 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         );
         return Ok(());
     }
-    if let Err(err) = reconcile_ticket_runtime_state(root, state) {
-        push_event(state, format!("Ticket reconciliation failed: {err}"));
-    }
     if let Some(prompt) = maybe_take_next_queued_prompt_for_idle_dispatch(root, state) {
         start_prompt_worker(root.to_path_buf(), state.clone(), prompt);
         return Ok(());
+    }
+    if should_skip_idle_channel_router_preflight(root) {
+        return Ok(());
+    }
+    if let Err(err) = reconcile_ticket_runtime_state(root, state) {
+        push_event(state, format!("Ticket reconciliation failed: {err}"));
     }
     if queue_pressure_active(state) {
         // router-2: this skip of all downstream router stages was previously a
@@ -11041,6 +11113,7 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
     }
     let settings = live_service_settings(root);
     if should_skip_idle_channel_router_tick(root, &settings) {
+        mark_channel_router_preflight_idle(root);
         return Ok(());
     }
     let mut router_did_work = false;
@@ -11508,6 +11581,7 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         }
     }
     if !router_did_work {
+        mark_channel_router_preflight_idle(root);
         mark_idle_channel_router_pass(root, &settings);
     }
     Ok(())
@@ -18595,6 +18669,47 @@ mod tests {
             ),
             "Business OS store changes must reopen the router gate"
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn channel_router_preflight_gate_reopens_when_core_db_changes() {
+        clear_channel_router_preflight_idle_gate_for_tests();
+        let root = temp_root("channel-router-preflight-gate");
+        std::fs::create_dir_all(root.join("runtime")).unwrap();
+        let db_path = crate::paths::core_db(&root);
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE router_preflight_probe (id INTEGER PRIMARY KEY, value TEXT);",
+            )
+            .unwrap();
+        }
+
+        assert!(
+            !should_skip_idle_channel_router_preflight(&root),
+            "first preflight for a root must run until the service primes the idle gate"
+        );
+        mark_channel_router_preflight_idle(&root);
+        assert!(
+            should_skip_idle_channel_router_preflight(&root),
+            "unchanged router preflight should be skipped inside the idle safety window"
+        );
+
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute(
+                "INSERT INTO router_preflight_probe (value) VALUES (?1)",
+                params!["changed"],
+            )
+            .unwrap();
+        }
+        assert!(
+            !should_skip_idle_channel_router_preflight(&root),
+            "core DB changes must reopen the channel-router preflight gate"
+        );
+
+        clear_channel_router_preflight_idle_gate_for_tests();
         let _ = std::fs::remove_dir_all(root);
     }
 
