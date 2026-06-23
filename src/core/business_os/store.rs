@@ -33,6 +33,8 @@ use std::io::Write;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
@@ -109,6 +111,38 @@ const BUSINESS_RESTORE_DRILL_EXPORT_DIR: &str = "runtime/business-os/restore-dri
 const BUSINESS_OS_MCP_POLICY_PAYLOAD_KEY: &str = "business_os.mcp_policy.v1";
 const BUSINESS_OS_AUDIT_RETENTION_POLICY_PAYLOAD_KEY: &str =
     "business_os.audit_retention_policy.v1";
+const RXDB_TABLE_CACHE_MAX_ENTRIES: usize = 64;
+const RUNTIME_SETTINGS_RXDB_CACHE_TTL_SECS: u64 = 5;
+
+static RXDB_TABLE_NAMES_CACHE: OnceLock<Mutex<BTreeMap<PathBuf, RxdbTableNamesCacheEntry>>> =
+    OnceLock::new();
+static RUNTIME_SETTINGS_RXDB_CACHE: OnceLock<Mutex<BTreeMap<PathBuf, RuntimeSettingsCacheEntry>>> =
+    OnceLock::new();
+
+type BusinessOsFileChangeStamp = (u64, u128);
+type RxdbStoreStamp = (
+    BusinessOsFileChangeStamp,
+    BusinessOsFileChangeStamp,
+    BusinessOsFileChangeStamp,
+);
+type RuntimeSettingsCacheStamp = (
+    BusinessOsFileChangeStamp,
+    BusinessOsFileChangeStamp,
+    BusinessOsFileChangeStamp,
+);
+
+#[derive(Debug, Clone)]
+struct RxdbTableNamesCacheEntry {
+    stamp: RxdbStoreStamp,
+    tables: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeSettingsCacheEntry {
+    generated_at: Instant,
+    stamp: RuntimeSettingsCacheStamp,
+    value: Value,
+}
 
 #[derive(Debug, Clone, Default)]
 struct ChatgptSubscriptionAuthStatus {
@@ -647,10 +681,10 @@ fn rxdb_data_plane_status(root: &Path) -> Value {
     let mut collections = BTreeMap::new();
     let mut required_ok = true;
     for (collection, required_for_shell) in CRITICAL_COLLECTIONS {
-        let table = rxdb_collection_table_name(&conn, collection);
+        let table = rxdb_collection_table_name(&path, &conn, collection);
         let table_exists = table
             .as_deref()
-            .map(|table| rxdb_table_exists(&conn, table).unwrap_or(false))
+            .map(|table| rxdb_table_exists_cached(&path, &conn, table).unwrap_or(false))
             .unwrap_or(false);
         let row_count = if table_exists && rxdb_collection_tracks_row_count(collection) {
             table
@@ -694,15 +728,85 @@ fn rxdb_data_plane_status(root: &Path) -> Value {
     })
 }
 
-fn rxdb_table_exists(conn: &Connection, table: &str) -> anyhow::Result<bool> {
-    Ok(conn
-        .query_row(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1",
-            [table],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?
-        .is_some())
+fn rxdb_table_exists_cached(path: &Path, conn: &Connection, table: &str) -> anyhow::Result<bool> {
+    Ok(rxdb_table_names_cached(path, conn)?.contains(table))
+}
+
+fn rxdb_table_names_cached(path: &Path, conn: &Connection) -> anyhow::Result<BTreeSet<String>> {
+    let key = rxdb_store_cache_key(path);
+    let stamp = rxdb_store_stamp(path);
+    let cache = RXDB_TABLE_NAMES_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    {
+        let cache = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(entry) = cache.get(&key).filter(|entry| entry.stamp == stamp) {
+            return Ok(entry.tables.clone());
+        }
+    }
+
+    let mut statement = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .context("list RxDB SQLite tables")?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    let mut tables = BTreeSet::new();
+    for row in rows {
+        tables.insert(row?);
+    }
+
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if cache.len() >= RXDB_TABLE_CACHE_MAX_ENTRIES && !cache.contains_key(&key) {
+        cache.clear();
+    }
+    cache.insert(
+        key,
+        RxdbTableNamesCacheEntry {
+            stamp,
+            tables: tables.clone(),
+        },
+    );
+    Ok(tables)
+}
+
+fn rxdb_store_cache_key(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(path))
+                .unwrap_or_else(|_| path.to_path_buf())
+        }
+    })
+}
+
+fn rxdb_store_stamp(path: &Path) -> RxdbStoreStamp {
+    (
+        business_os_file_change_stamp(path),
+        business_os_file_change_stamp(&sqlite_sidecar_path(path, "-wal")),
+        business_os_file_change_stamp(&sqlite_sidecar_path(path, "-shm")),
+    )
+}
+
+fn business_os_file_change_stamp(path: &Path) -> BusinessOsFileChangeStamp {
+    let Ok(metadata) = fs::metadata(path) else {
+        return (0, 0);
+    };
+    let modified_at = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    (metadata.len(), modified_at)
+}
+
+fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut value = path.as_os_str().to_os_string();
+    value.push(suffix);
+    PathBuf::from(value)
 }
 
 fn rxdb_table_row_count(conn: &Connection, table: &str) -> anyhow::Result<i64> {
@@ -729,27 +833,25 @@ fn rxdb_table_latest_updated_at_ms(conn: &Connection, table: &str) -> anyhow::Re
     .with_context(|| format!("read latest updated_at_ms in {table}"))
 }
 
-fn rxdb_collection_table_name(conn: &Connection, collection: &str) -> Option<String> {
+fn rxdb_collection_table_name(path: &Path, conn: &Connection, collection: &str) -> Option<String> {
     let expected = format!(
         "ctox_business_os__{collection}__v{}",
         rxdb_schema_version(collection)
     );
-    if rxdb_table_exists(conn, &expected).unwrap_or(false) {
+    let tables = rxdb_table_names_cached(path, conn).ok()?;
+    if tables.contains(&expected) {
         return Some(expected);
     }
     let prefix = format!("ctox_business_os__{collection}__v");
-    let pattern = format!("{prefix}%");
-    conn.query_row(
-        "SELECT name FROM sqlite_master
-         WHERE type = 'table' AND name LIKE ?1
-         ORDER BY CAST(substr(name, length(?2) + 1) AS INTEGER) DESC
-         LIMIT 1",
-        params![pattern, prefix],
-        |row| row.get::<_, String>(0),
-    )
-    .optional()
-    .ok()
-    .flatten()
+    tables
+        .into_iter()
+        .filter(|table| table.starts_with(&prefix))
+        .max_by_key(|table| {
+            table
+                .strip_prefix(&prefix)
+                .and_then(|version| version.parse::<i64>().ok())
+                .unwrap_or(-1)
+        })
 }
 
 fn rxdb_schema_version(collection: &str) -> i64 {
@@ -788,7 +890,8 @@ fn rxdb_module_catalog_status(root: &Path) -> Value {
         }
     };
     let _ = conn.busy_timeout(Duration::from_millis(100));
-    let Some(table) = rxdb_collection_table_name(&conn, "business_module_catalog") else {
+    let path = rxdb_store_path(root);
+    let Some(table) = rxdb_collection_table_name(&path, &conn, "business_module_catalog") else {
         return serde_json::json!({
             "ok": false,
             "path": path.display().to_string(),
@@ -2823,6 +2926,38 @@ pub fn pull_business_users_for_rxdb(root: &Path) -> anyhow::Result<Value> {
 }
 
 pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
+    let key = business_os_root_cache_key(root);
+    let stamp = runtime_settings_cache_stamp(root);
+    let cache = RUNTIME_SETTINGS_RXDB_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    {
+        let cache = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(entry) = cache.get(&key).filter(|entry| {
+            entry.stamp == stamp
+                && entry.generated_at.elapsed()
+                    < Duration::from_secs(RUNTIME_SETTINGS_RXDB_CACHE_TTL_SECS)
+        }) {
+            return Ok(entry.value.clone());
+        }
+    }
+
+    let value = build_runtime_settings_for_rxdb(root)?;
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache.insert(
+        key,
+        RuntimeSettingsCacheEntry {
+            generated_at: Instant::now(),
+            stamp,
+            value: value.clone(),
+        },
+    );
+    Ok(value)
+}
+
+fn build_runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
     let env_map = crate::inference::runtime_env::effective_operator_env_map(root)
         .unwrap_or_else(|_| BTreeMap::new());
     let runtime_state = crate::inference::runtime_state::load_runtime_state(root)
@@ -2981,6 +3116,27 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
             "message": diagnostics_message
         }
     }))
+}
+
+fn business_os_root_cache_key(root: &Path) -> PathBuf {
+    fs::canonicalize(root).unwrap_or_else(|_| {
+        if root.is_absolute() {
+            root.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(root))
+                .unwrap_or_else(|_| root.to_path_buf())
+        }
+    })
+}
+
+fn runtime_settings_cache_stamp(root: &Path) -> RuntimeSettingsCacheStamp {
+    let runtime = root.join("runtime");
+    (
+        business_os_file_change_stamp(&runtime.join("ctox.sqlite3")),
+        business_os_file_change_stamp(&runtime.join("ctox-runtime.sqlite3")),
+        business_os_file_change_stamp(&runtime.join("ctox-secrets.sqlite3")),
+    )
 }
 
 fn harness_flow_projection(root: &Path) -> Value {
@@ -10433,7 +10589,8 @@ fn business_os_restore_drill_rxdb_summary(root: &Path) -> anyhow::Result<Value> 
     }
     let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .with_context(|| format!("failed to open native RxDB SQLite store {}", path.display()))?;
-    let catalog_table = rxdb_collection_table_name(&conn, "business_module_catalog");
+    let rxdb_path = rxdb_store_path(root);
+    let catalog_table = rxdb_collection_table_name(&rxdb_path, &conn, "business_module_catalog");
     let module_catalog_present = if let Some(table) = catalog_table.as_deref() {
         conn.query_row(
             &format!("SELECT 1 FROM {table} WHERE id = 'module-catalog' LIMIT 1"),
@@ -10445,7 +10602,7 @@ fn business_os_restore_drill_rxdb_summary(root: &Path) -> anyhow::Result<Value> 
     } else {
         false
     };
-    let release_table = rxdb_collection_table_name(&conn, "business_module_releases");
+    let release_table = rxdb_collection_table_name(&rxdb_path, &conn, "business_module_releases");
     let release_projection_count = if let Some(table) = release_table.as_deref() {
         sqlite_table_row_count(&conn, table)?
     } else {
@@ -12578,10 +12735,10 @@ fn pull_rxdb_collection_table_records(
     if !path.is_file() {
         return Ok(None);
     }
-    let conn = Connection::open(path)?;
+    let conn = Connection::open(&path)?;
     for version in (0..=1).rev() {
         let table = format!("ctox_business_os__{collection}__v{version}");
-        if !rxdb_table_exists(&conn, &table)? {
+        if !rxdb_table_exists_cached(&path, &conn, &table)? {
             continue;
         }
         let mut statement = conn.prepare(&format!(
@@ -12632,8 +12789,8 @@ fn load_rxdb_collection_record(
     if !path.is_file() {
         return Ok(None);
     }
-    let conn = Connection::open(path)?;
-    let Some(table) = rxdb_collection_table_name(&conn, collection) else {
+    let conn = Connection::open(&path)?;
+    let Some(table) = rxdb_collection_table_name(&path, &conn, collection) else {
         return Ok(None);
     };
     let raw = conn
@@ -12669,8 +12826,8 @@ fn upsert_rxdb_collection_record(
     if !path.is_file() {
         return Ok(());
     }
-    let conn = Connection::open(path)?;
-    let Some(table) = rxdb_collection_table_name(&conn, collection) else {
+    let conn = Connection::open(&path)?;
+    let Some(table) = rxdb_collection_table_name(&path, &conn, collection) else {
         return Ok(());
     };
     if let Some(existing_json) = conn

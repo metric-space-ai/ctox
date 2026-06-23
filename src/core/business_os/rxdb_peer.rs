@@ -125,6 +125,8 @@ const KNOWLEDGE_TABLES_SYNC_INTERVAL_SECS: u64 = 15;
 const BUSINESS_RECORD_PROJECTION_SYNC_INTERVAL_SECS: u64 = 3;
 const BUSINESS_RECORD_PROJECTION_SYNC_LIMIT: usize = 2_000;
 const TICKET_STATE_SYNC_LIMIT: usize = 500;
+const BROWSER_RUNTIME_ACTIVE_MAINTENANCE_INTERVAL_MS: u64 = 300;
+const BROWSER_RUNTIME_IDLE_MAINTENANCE_INTERVAL_SECS: u64 = 10;
 const BUSINESS_OS_CHANNEL_IDS: &[&str] = &["whatsapp", "jami", "teams", "email", "meeting"];
 const NATIVE_PEER_STATUS_VERSION: &str = "ctox-native-rxdb-peer-status-v1";
 const NATIVE_PEER_HEARTBEAT_INTERVAL_SECS: u64 = 5;
@@ -3222,6 +3224,13 @@ async fn browser_runtime_maintenance_loop(
 ) {
     let _ = root;
     loop {
+        if browser_runtime_manager().active_session_ids().is_empty() {
+            tokio::time::sleep(Duration::from_secs(
+                BROWSER_RUNTIME_IDLE_MAINTENANCE_INTERVAL_SECS,
+            ))
+            .await;
+            continue;
+        }
         {
             let _guard = database_write_lock.lock().await;
             let _browser_guard = BROWSER_RUNTIME_COMMAND_LOCK.lock().await;
@@ -3229,7 +3238,10 @@ async fn browser_runtime_maintenance_loop(
                 eprintln!("[business-os] browser runtime maintenance failed: {err:#}");
             }
         }
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(Duration::from_millis(
+            BROWSER_RUNTIME_ACTIVE_MAINTENANCE_INTERVAL_MS,
+        ))
+        .await;
     }
 }
 
@@ -6173,6 +6185,38 @@ async fn ensure_ctox_desktop_folder_path(
             virtual_path = format!("{}/{}", virtual_path.trim_end_matches('/'), name);
             folder_id = desktop_folder_id(&virtual_path);
         }
+        let existing_folder = files
+            .find_one(Some(MangoQuery {
+                selector: Some(json!({ "id": { "$eq": folder_id } })),
+                ..Default::default()
+            }))
+            .map_err(|err| anyhow::anyhow!("query CTOX desktop folder {virtual_path}: {err}"))?
+            .exec(false)
+            .await
+            .map_err(|err| anyhow::anyhow!("exec CTOX desktop folder {virtual_path}: {err}"))?;
+        let existing_folder = existing_folder.is_object().then_some(existing_folder);
+        if existing_folder.as_ref().is_some_and(|doc| {
+            desktop_folder_doc_is_current(doc, &folder_id, &parent_id, &virtual_path, name)
+        }) {
+            parent_id = folder_id.clone();
+            continue;
+        }
+        let created_at_ms = existing_folder
+            .as_ref()
+            .and_then(|doc| doc.get("created_at_ms"))
+            .and_then(Value::as_u64)
+            .map(Value::from)
+            .unwrap_or_else(|| json!(now));
+        let sort_index = if idx == 0 {
+            Value::from(5_u64)
+        } else {
+            existing_folder
+                .as_ref()
+                .and_then(|doc| doc.get("sort_index"))
+                .and_then(Value::as_u64)
+                .map(Value::from)
+                .unwrap_or_else(|| Value::from(u64::try_from(now).unwrap_or(u64::MAX)))
+        };
         files
             .incremental_upsert(json!({
                 "id": folder_id,
@@ -6192,9 +6236,9 @@ async fn ensure_ctox_desktop_folder_path(
                 "content_hash": "",
                 "mtime_ms": now,
                 "content_synced_at_ms": now,
-                "sort_index": if idx == 0 { 5 } else { now },
+                "sort_index": sort_index,
                 "is_deleted": false,
-                "created_at_ms": now,
+                "created_at_ms": created_at_ms,
                 "updated_at_ms": now,
             }))
             .await
@@ -6202,6 +6246,30 @@ async fn ensure_ctox_desktop_folder_path(
         parent_id = folder_id.clone();
     }
     Ok(folder_id)
+}
+
+fn desktop_folder_doc_is_current(
+    doc: &Value,
+    folder_id: &str,
+    parent_id: &str,
+    virtual_path: &str,
+    name: &str,
+) -> bool {
+    doc.get("id").and_then(Value::as_str) == Some(folder_id)
+        && doc.get("parent_id").and_then(Value::as_str) == Some(parent_id)
+        && doc.get("path").and_then(Value::as_str) == Some(virtual_path)
+        && doc.get("virtual_path").and_then(Value::as_str) == Some(virtual_path)
+        && doc.get("local_path").and_then(Value::as_str) == Some("")
+        && doc.get("name").and_then(Value::as_str) == Some(name)
+        && doc.get("kind").and_then(Value::as_str) == Some("folder")
+        && doc.get("source").and_then(Value::as_str) == Some("ctox-core")
+        && doc.get("content_ref").and_then(Value::as_str) == Some("")
+        && doc.get("content_state").and_then(Value::as_str) == Some("directory")
+        && doc.get("content_hash").and_then(Value::as_str) == Some("")
+        && !doc
+            .get("is_deleted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
 }
 
 async fn sync_desktop_file_index_with_database(
@@ -6357,8 +6425,16 @@ fn is_safe_desktop_file_scan_root(path: &Path) -> bool {
         if path == home {
             return false;
         }
+        if is_ctox_internal_desktop_scan_root(path, &home) {
+            return false;
+        }
     }
     true
+}
+
+fn is_ctox_internal_desktop_scan_root(path: &Path, home: &Path) -> bool {
+    path.starts_with(home.join(".local/lib/ctox"))
+        || path.starts_with(home.join(".local/state/ctox"))
 }
 
 fn collect_files_bounded(root: &Path, out: &mut Vec<PathBuf>) {
@@ -9713,6 +9789,23 @@ mod tests {
         assert_eq!(chunks, 1);
     }
 
+    #[test]
+    fn desktop_file_scan_rejects_ctox_internal_roots() {
+        let home = PathBuf::from("/tmp/ctox-home");
+        assert!(is_ctox_internal_desktop_scan_root(
+            &home.join(".local/lib/ctox/current"),
+            &home
+        ));
+        assert!(is_ctox_internal_desktop_scan_root(
+            &home.join(".local/state/ctox/backups/update"),
+            &home
+        ));
+        assert!(!is_ctox_internal_desktop_scan_root(
+            &home.join("workspace/project"),
+            &home
+        ));
+    }
+
     /// REGRESSION (data-plane churn): rescanning an UNCHANGED workspace must
     /// be a complete no-op. The 15s desktop-file index scan used to mint a
     /// fresh timestamped generation id for every file on every pass, rewrite
@@ -9734,10 +9827,12 @@ mod tests {
         let file_id = desktop_file_id(&file_path.canonicalize().expect("canonical file"));
         let first_file;
         let first_chunks;
+        let first_desktop_files;
         {
             let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
             first_file = read_desktop_file_row(&conn, &file_id);
             first_chunks = read_desktop_file_chunks(&conn, &file_id, true);
+            first_desktop_files = read_desktop_file_rows(&conn);
         }
         assert!(!first_chunks.is_empty(), "first scan produced chunks");
 
@@ -9745,11 +9840,13 @@ mod tests {
 
         let second_file;
         let second_chunks;
+        let second_desktop_files;
         {
             let conn =
                 Connection::open(store::rxdb_store_path(root.path())).expect("reopen sqlite");
             second_file = read_desktop_file_row(&conn, &file_id);
             second_chunks = read_desktop_file_chunks(&conn, &file_id, true);
+            second_desktop_files = read_desktop_file_rows(&conn);
         }
         // Byte-identical documents (including _rev/_meta) prove the rescan
         // wrote NOTHING — no new generation, no chunk rotation, no
@@ -9761,6 +9858,10 @@ mod tests {
         assert_eq!(
             first_chunks, second_chunks,
             "rescan of an unchanged file must not rotate its chunks"
+        );
+        assert_eq!(
+            first_desktop_files, second_desktop_files,
+            "rescan of an unchanged workspace must not rewrite folder docs"
         );
 
         // A real content change (different size) must still mint a new
@@ -9881,6 +9982,18 @@ mod tests {
             )
             .expect("desktop file row");
         serde_json::from_str(&file_json).expect("desktop file json")
+    }
+
+    fn read_desktop_file_rows(conn: &Connection) -> Vec<(String, String)> {
+        let mut rows = conn
+            .prepare("SELECT id, data FROM ctox_business_os__desktop_files__v0 ORDER BY id")
+            .expect("desktop files query");
+        rows.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .expect("desktop file rows")
+        .map(|row| row.expect("desktop file row"))
+        .collect()
     }
 
     fn read_desktop_file_chunks(

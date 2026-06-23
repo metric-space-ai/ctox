@@ -109,11 +109,12 @@ const TICKET_RECONCILE_IDLE_SAFETY_SECS: u64 = 60;
 const CHANNEL_SYNC_POLL_SECS: u64 = 60;
 const MISSION_MAINTENANCE_POLL_SECS: u64 = 15;
 const HARNESS_AUDIT_TICK_SECS: u64 = 300;
-const BUSINESS_OS_APP_RECOVERY_POLL_SECS: u64 = 10;
+const BUSINESS_OS_APP_RECOVERY_POLL_SECS: u64 = 60;
 const IDLE_QUEUE_DISPATCH_POLL_SECS: u64 = 8;
 const WORKER_IDLE_QUEUE_KICK_DELAY_MS: u64 = 250;
-const BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS: u64 = 30;
+const BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS: u64 = 180;
 const BUSINESS_OS_APP_RECOVERY_STALE_SECS: u64 = 180;
+const BUSINESS_OS_APP_RECOVERY_PREFLIGHT_IDLE_SAFETY_SECS: u64 = 60;
 const BUSINESS_OS_APP_RECOVERY_SCAN_LIMIT: usize = 128;
 const CHANNEL_ROUTER_LEASE_OWNER: &str = "ctox-service";
 const QUEUE_PRESSURE_GUARD_THRESHOLD: usize = 20;
@@ -161,6 +162,9 @@ const BUSINESS_OS_AUTOSTART_RETRY_SECS: u64 = 30;
 
 static SERVICE_PANIC_HOOK: Once = Once::new();
 static TICKET_RECONCILE_GATE: OnceLock<Mutex<Option<TicketReconcileGateState>>> = OnceLock::new();
+static BUSINESS_OS_APP_RECOVERY_PREFLIGHT_GATE: OnceLock<
+    Mutex<Option<BusinessOsAppRecoveryPreflightGateState>>,
+> = OnceLock::new();
 static LIVE_SERVICE_SETTINGS_CACHE: OnceLock<Mutex<Option<LiveServiceSettingsCacheState>>> =
     OnceLock::new();
 
@@ -169,6 +173,12 @@ struct TicketReconcileGateState {
     db_path: PathBuf,
     stamp: CoreDbChangeStamp,
     active_keys: Vec<String>,
+    last_run: Instant,
+}
+
+#[derive(Debug, Clone)]
+struct BusinessOsAppRecoveryPreflightGateState {
+    root: PathBuf,
     last_run: Instant,
 }
 
@@ -7378,7 +7388,7 @@ fn render_business_os_app_module_validation_feedback(
     report: &str,
 ) -> String {
     format!(
-        "Business OS app validation failed.\n\nTask source: {}\n\nBusiness OS app task metadata:\n- module_id: {}\n- install_target: {}\n- app_directory: {}\n- resource.module_contract: src/skills/system/product_engineering/business-os-app-module-development/references/module-contract.md\n- resource.dos_and_donts: src/skills/system/product_engineering/business-os-app-module-development/references/dos-and-donts.md\n- resource.green_checklist: src/skills/system/product_engineering/business-os-app-module-development/references/green-checklist.md\n- validation: ctox business-os app validate {} {}\n\nValidator report:\n{}\n\nOriginal task remains active:\n{}",
+        "Business OS app artifact validation failed.\n\nBusiness OS app validation failed.\n\nTask source: {}\n\nBusiness OS app task metadata:\n- module_id: {}\n- install_target: {}\n- app_directory: {}\n- resource.module_contract: src/skills/system/product_engineering/business-os-app-module-development/references/module-contract.md\n- resource.dos_and_donts: src/skills/system/product_engineering/business-os-app-module-development/references/dos-and-donts.md\n- resource.green_checklist: src/skills/system/product_engineering/business-os-app-module-development/references/green-checklist.md\n- validation: ctox business-os app validate {} {}\n\nValidator report:\n{}\n\nOriginal task remains active:\n{}",
         job.source_label,
         target.module_id,
         target.install_target,
@@ -11465,27 +11475,29 @@ fn maybe_lease_next_durable_queue_prompt(
     let Some(_lease_attempt) = begin_durable_queue_lease_attempt(state, guard) else {
         return Ok(None);
     };
-    match recover_stale_business_os_app_queue_tasks(
-        root,
-        state,
-        BUSINESS_OS_APP_RECOVERY_SCAN_LIMIT,
-    ) {
-        Ok(updated) if updated > 0 => {
-            push_event(
+    if mark_business_os_app_recovery_preflight_due(root) {
+        match recover_stale_business_os_app_queue_tasks(
+            root,
+            state,
+            BUSINESS_OS_APP_RECOVERY_SCAN_LIMIT,
+        ) {
+            Ok(updated) if updated > 0 => {
+                push_event(
+                    state,
+                    format!(
+                        "Recovered {updated} stale Business OS app queue task(s) before leasing new work"
+                    ),
+                );
+            }
+            Ok(_) => {}
+            Err(err) => push_event(
                 state,
                 format!(
-                    "Recovered {updated} stale Business OS app queue task(s) before leasing new work"
+                    "Business OS app validation recovery skipped: {}",
+                    clip_text(&err.to_string(), 180)
                 ),
-            );
-        }
-        Ok(_) => {}
-        Err(err) => push_event(
-            state,
-            format!(
-                "Business OS app validation recovery skipped: {}",
-                clip_text(&err.to_string(), 180)
             ),
-        ),
+        }
     }
     match quarantine_synthetic_e2e_queue_tasks_before_dispatch(root) {
         Ok(blocked) if blocked > 0 => push_event(
@@ -11535,6 +11547,25 @@ fn maybe_lease_next_durable_queue_prompt(
         }));
     }
     Ok(None)
+}
+
+fn mark_business_os_app_recovery_preflight_due(root: &Path) -> bool {
+    let root = root.to_path_buf();
+    let gate = BUSINESS_OS_APP_RECOVERY_PREFLIGHT_GATE.get_or_init(|| Mutex::new(None));
+    let mut gate = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(previous) = gate.as_ref() {
+        if previous.root == root
+            && previous.last_run.elapsed()
+                < Duration::from_secs(BUSINESS_OS_APP_RECOVERY_PREFLIGHT_IDLE_SAFETY_SECS)
+        {
+            return false;
+        }
+    }
+    *gate = Some(BusinessOsAppRecoveryPreflightGateState {
+        root,
+        last_run: Instant::now(),
+    });
+    true
 }
 
 const SYNTHETIC_E2E_QUEUE_BLOCK_NOTE: &str =
