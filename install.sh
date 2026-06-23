@@ -221,6 +221,18 @@ prepare_cargo_target_cache() {
   [[ "${CTOX_DISABLE_CARGO_TARGET_CACHE:-0}" == "1" ]] && return 0
   [[ -n "${CACHE_ROOT:-}" ]] || return 0
 
+  # Managed releases are immutable install payloads. Keep their Cargo target
+  # directory release-local because Cargo build scripts may bake absolute
+  # CARGO_MANIFEST_DIR paths into generated artifacts.
+  case "$link_path" in
+    "$INSTALL_ROOT"/releases/*)
+      if [[ -L "$link_path" ]]; then
+        rm -f "$link_path" 2>/dev/null || true
+      fi
+      return 0
+      ;;
+  esac
+
   local cache_dir="$CACHE_ROOT/cargo-target/$cache_key"
   mkdir -p "$cache_dir"
 
@@ -1505,11 +1517,20 @@ build_ctox() {
   local source_root="$1"
   local cargo; cargo="$(resolve_cargo)"
   local main_target_dir="$source_root/runtime/build/cargo-target"
+  local managed_release_build=0
+  local -a workspace_cargo_env=()
+  case "$source_root" in
+    "$INSTALL_ROOT"/releases/*)
+      managed_release_build=1
+      main_target_dir="$source_root/target"
+      workspace_cargo_env=(env "CARGO_TARGET_DIR=$main_target_dir")
+      ;;
+  esac
   prepare_cargo_target_cache "$main_target_dir" "ctox-main"
   clean_stale_cmake_cache_dirs "$main_target_dir" "$source_root"
 
   # 1. Build main CTOX binary
-  run_build_module "ctox CLI" "$source_root" "$cargo" build --release --bin ctox
+  run_build_module "ctox CLI" "$source_root" "${workspace_cargo_env[@]}" "$cargo" build --release --bin ctox
   mkdir -p "$source_root/bin"
   local ctox_built_binary=""
   for candidate in \
@@ -1525,10 +1546,11 @@ build_ctox() {
 
   if [[ -f "$source_root/src/apps/desktop/Cargo.toml" && "${CTOX_SKIP_DESKTOP_HOST_BUILD:-0}" != "1" ]]; then
     prepare_cargo_target_cache "$source_root/src/apps/desktop/target" "ctox-desktop"
-    run_build_module "ctox desktop host" "$source_root" "$cargo" build --release --manifest-path src/apps/desktop/Cargo.toml --bin ctox-desktop-host
+    run_build_module "ctox desktop host" "$source_root" "${workspace_cargo_env[@]}" "$cargo" build --release --manifest-path src/apps/desktop/Cargo.toml --bin ctox-desktop-host
     local desktop_built_binary=""
     for candidate in \
       "$source_root/runtime/build/cargo-target/release/ctox-desktop-host" \
+      "$source_root/target/release/ctox-desktop-host" \
       "$source_root/src/apps/desktop/target/release/ctox-desktop-host"
     do
       if [[ -x "$candidate" ]]; then
@@ -1547,7 +1569,11 @@ build_ctox() {
   local qwen36_backend_dir="$source_root/src/core/inference/models/qwen36_35b_a3b_ggml"
   if [[ -f "$qwen36_backend_dir/Cargo.toml" ]]; then
     prepare_cargo_target_cache "$qwen36_backend_dir/target" "qwen36-35b-a3b-ggml"
-    run_build_module "Qwen3.6 ggml backend" "$qwen36_backend_dir" "$cargo" build --release --bin qwen36-35b-a3b-ggml-server
+    local -a qwen36_cargo_env=()
+    if [[ "$managed_release_build" -eq 1 ]]; then
+      qwen36_cargo_env=(env "CARGO_TARGET_DIR=$qwen36_backend_dir/target")
+    fi
+    run_build_module "Qwen3.6 ggml backend" "$qwen36_backend_dir" "${qwen36_cargo_env[@]}" "$cargo" build --release --bin qwen36-35b-a3b-ggml-server
     local qwen36_built_binary=""
     local qwen36_expected_binary="$qwen36_backend_dir/target/release/qwen36-35b-a3b-ggml-server"
     for candidate in \
@@ -1612,6 +1638,10 @@ build_ctox() {
   # build entirely.
   if [[ -f "$source_root/tools/model-runtime/Cargo.toml" ]]; then
     prepare_cargo_target_cache "$source_root/tools/model-runtime/target" "model-runtime"
+    local -a engine_cargo_env=()
+    if [[ "$managed_release_build" -eq 1 ]]; then
+      engine_cargo_env=(env "CARGO_TARGET_DIR=$source_root/tools/model-runtime/target")
+    fi
     local cargo_features=""
     local engine_label="${ENGINE_FEATURES:-cpu-only}"
     local -a engine_build_cmd=(
@@ -1627,7 +1657,7 @@ build_ctox() {
     fi
 
     # Build the internal inference runtime binary (not the workspace default)
-    run_build_module "ctox model engine (${engine_label})" "$source_root/tools/model-runtime" "${engine_build_cmd[@]}"
+    run_build_module "ctox model engine (${engine_label})" "$source_root/tools/model-runtime" "${engine_cargo_env[@]}" "${engine_build_cmd[@]}"
 
     # Write feature stamp for runtime verification
     local stamp_dir="$source_root/tools/model-runtime/target/release"
@@ -1674,6 +1704,8 @@ resolve_ctox_desktop_host_binary_path() {
   for candidate in \
     "$source_root/runtime/build/cargo-target/release/ctox-desktop-host" \
     "$source_root/runtime/build/cargo-target/debug/ctox-desktop-host" \
+    "$source_root/target/release/ctox-desktop-host" \
+    "$source_root/target/debug/ctox-desktop-host" \
     "$source_root/src/apps/desktop/target/release/ctox-desktop-host" \
     "$source_root/src/apps/desktop/target/debug/ctox-desktop-host" \
     "$source_root/bin/ctox-desktop-host"
