@@ -87,6 +87,20 @@ test('business actor resolves browser session role aliases', () => {
       role: 'user',
     }
   );
+  assert.deepEqual(
+    businessActorFromSession(userSession('steffen', 'user'), { user_id: 'steffen', role: 'admin' }),
+    {
+      id: 'steffen',
+      role: 'admin',
+    }
+  );
+  assert.deepEqual(
+    businessActorFromSession(userSession('owner', 'team'), { user_id: 'owner', role: 'chef', can_manage_all: true }),
+    {
+      id: 'owner',
+      role: 'chef',
+    }
+  );
 });
 
 test('module assignments and founder fallback allow only assigned app modification', () => {
@@ -364,6 +378,40 @@ test('server-projected governance actor authorizes local admin shells with empty
       permission: BusinessOsPermissions.AppsView,
       scopeType: 'module',
       scopeId: 'private_app',
+    }),
+    false
+  );
+});
+
+test('server-projected owner admin role overrides stale user session for app data access', () => {
+  const governance = governanceWithPermissionModel();
+  assert.equal(
+    canUseBusinessPermission({
+      session: userSession('steffen', 'user'),
+      governance: {
+        ...governance,
+        user_id: 'steffen',
+        role: 'admin',
+        can_manage_all: true,
+      },
+      permission: BusinessOsPermissions.DataRead,
+      scopeType: 'collection',
+      scopeId: 'documents',
+    }),
+    true
+  );
+  assert.equal(
+    canUseBusinessPermission({
+      session: userSession('viewer', 'user'),
+      governance: {
+        ...governance,
+        user_id: 'steffen',
+        role: 'admin',
+        can_manage_all: true,
+      },
+      permission: BusinessOsPermissions.DataRead,
+      scopeType: 'collection',
+      scopeId: 'documents',
     }),
     false
   );

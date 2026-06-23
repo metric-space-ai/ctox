@@ -5,18 +5,18 @@ import {
   appReleaseProjection,
   businessDataAreaLabel,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
-} from '../../shared/app-lifecycle.js';
+} from '../../shared/app-lifecycle.js?v=20260623-role-session';
 import {
   BusinessOsPermissions,
   canInstallBusinessApps,
   canModifyBusinessModule,
   canUninstallBusinessApp,
   canUseBusinessPermission,
-} from '../../shared/permissions.js';
+} from '../../shared/permissions.js?v=20260623-role-session';
 import {
   buildGlobalCtoxAgentScopeView,
   renderGlobalCtoxAgentScopeHtml,
-} from '../../shared/shell-permissions-ui.js';
+} from '../../shared/shell-permissions-ui.js?v=20260623-role-session';
 
 const CTOX_REPO = 'metric-space-ai/ctox';
 const CTOX_BRANCH = 'main';

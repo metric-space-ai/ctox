@@ -1,7 +1,7 @@
 import {
   canModifyBusinessModule,
   canViewBusinessModuleSource,
-} from '../../shared/permissions.js';
+} from '../../shared/permissions.js?v=20260623-role-session';
 
 export const manifest = {
   id: 'code-editor',

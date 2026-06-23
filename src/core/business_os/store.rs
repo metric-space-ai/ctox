@@ -82,6 +82,8 @@ const STARTER_MODULE_IDS: &[&str] = &[
     "shiftflow",
     "credentials",
 ];
+const STARTER_DATA_GRANT_MODULE_IDS: &[&str] = &["cv-print-builder"];
+const STARTER_DATA_GRANT_ROLES: &[&str] = &["user", "founder"];
 const CHATGPT_AUTH_ISSUER: &str = "https://auth.openai.com";
 const CHATGPT_AUTH_CALLBACK_PORT: u16 = 1455;
 const CHATGPT_AUTH_CALLBACK_FALLBACK_PORT: u16 = 1457;
@@ -1383,10 +1385,7 @@ fn seed_configured_business_users(conn: &Connection) -> anyhow::Result<()> {
             "INSERT INTO business_users
                 (user_id, display_name, role, active, created_at_ms, updated_at_ms)
              VALUES (?1, ?1, ?2, 1, ?3, ?3)
-             ON CONFLICT(user_id) DO UPDATE SET
-                role = excluded.role,
-                active = 1,
-                updated_at_ms = excluded.updated_at_ms",
+             ON CONFLICT(user_id) DO NOTHING",
             params![user.id.trim(), normalize_business_role(&user.role), now],
         )?;
     }
@@ -2503,6 +2502,73 @@ fn legacy_preview_audience_grant_id(module_id: &str, user_id: &str) -> String {
     format!("legacy_preview_app_view_{module_slug}_{suffix}")
 }
 
+fn is_starter_data_grant_module(id: &str) -> bool {
+    STARTER_DATA_GRANT_MODULE_IDS
+        .iter()
+        .any(|module_id| id == *module_id)
+}
+
+fn starter_data_grant_id(module_id: &str, role: &str, permission: BusinessOsPermission) -> String {
+    let module_slug = source_sanitize_slug(module_id);
+    let permission_slug = permission.as_str().replace('.', "_");
+    format!("starter_data_{module_slug}_{role}_{permission_slug}")
+}
+
+fn backfill_starter_module_data_grants(
+    root: &Path,
+    modules: &[ModuleManifest],
+) -> anyhow::Result<usize> {
+    let conn = open_store(root)?;
+    let now = now_ms() as i64;
+    let mut inserted = 0usize;
+
+    for manifest in modules {
+        if !is_starter_data_grant_module(&manifest.id)
+            || module_is_runtime_installed(manifest)
+            || manifest.install_scope.trim() != "starter"
+            || manifest.collections.is_empty()
+        {
+            continue;
+        }
+        let module_id = manifest.id.trim();
+        for role in STARTER_DATA_GRANT_ROLES {
+            for permission in [
+                BusinessOsPermission::DataRead,
+                BusinessOsPermission::DataWrite,
+            ] {
+                let grant_id = starter_data_grant_id(module_id, role, permission);
+                inserted += conn.execute(
+                    "INSERT OR IGNORE INTO business_permission_grants
+                        (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
+                         active, reason, created_by, created_at_ms, updated_at_ms)
+                     SELECT ?1, 'role', ?2, ?3, 'module', ?4, 1, ?5, ?6, ?7, ?7
+                     WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM business_permission_grants
+                        WHERE active = 1
+                          AND subject_type = 'role'
+                          AND subject_id = ?2
+                          AND permission = ?3
+                          AND scope_type = 'module'
+                          AND scope_id = ?4
+                     )",
+                    params![
+                        grant_id,
+                        *role,
+                        permission.as_str(),
+                        module_id,
+                        "Packaged starter module data access for CV Print Builder",
+                        "ctox.starter_module.data_access.backfill",
+                        now
+                    ],
+                )?;
+            }
+        }
+    }
+
+    Ok(inserted)
+}
+
 fn backfill_manifest_preview_audience_grants(
     root: &Path,
     modules: &[ModuleManifest],
@@ -3302,6 +3368,7 @@ pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
     let installed_app_root = resolve_business_os_installed_app_root(root);
     let modules = load_module_manifests(&app_root, &installed_app_root)?;
     backfill_manifest_preview_audience_grants(root, &modules)?;
+    backfill_starter_module_data_grants(root, &modules)?;
     let marketplace = load_marketplace_module_manifests(&app_root)?;
     let templates = load_template_manifests(&app_root)?;
     let mut governance = module_governance_map(
@@ -7811,12 +7878,40 @@ fn seed_session_user(conn: &Connection, session: &BusinessOsSession) -> anyhow::
          VALUES (?1, ?2, ?3, 1, ?4, ?4)
          ON CONFLICT(user_id) DO UPDATE SET
             display_name = excluded.display_name,
-            role = excluded.role,
-            active = 1,
             updated_at_ms = excluded.updated_at_ms",
         params![user.id, user.display_name, user.role, now],
     )?;
     Ok(())
+}
+
+pub fn session_with_persisted_user(
+    root: &Path,
+    mut session: BusinessOsSession,
+) -> anyhow::Result<BusinessOsSession> {
+    if !session.authenticated {
+        return Ok(session);
+    }
+    let Some(session_user) = session.user.clone() else {
+        return Ok(session);
+    };
+    let conn = open_store(root)?;
+    if let Some(user) = business_user_by_id(&conn, &session_user.id)? {
+        if !user.active {
+            session.authenticated = false;
+            session.user = None;
+            session.reason = Some("business_user_inactive".to_owned());
+            return Ok(session);
+        }
+        session.user = Some(BusinessOsSessionUser {
+            id: user.id,
+            display_name: user.display_name,
+            role: user.role.clone(),
+            is_admin: role_can_manage(&user.role),
+        });
+        return Ok(session);
+    }
+    seed_session_user(&conn, &session)?;
+    Ok(session)
 }
 
 pub fn remember_authenticated_session_user(
@@ -7849,6 +7944,34 @@ fn query_users(conn: &Connection) -> anyhow::Result<Vec<BusinessOsUser>> {
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(users)
+}
+
+fn business_user_by_id(
+    conn: &Connection,
+    actor_id: &str,
+) -> anyhow::Result<Option<BusinessOsUser>> {
+    let actor_id = actor_id.trim();
+    if actor_id.is_empty() {
+        return Ok(None);
+    }
+    Ok(conn
+        .query_row(
+            "SELECT user_id, display_name, role, active, created_at_ms, updated_at_ms
+             FROM business_users
+             WHERE user_id = ?1",
+            params![actor_id],
+            |row| {
+                Ok(BusinessOsUser {
+                    id: row.get(0)?,
+                    display_name: row.get(1)?,
+                    role: normalize_business_role(&row.get::<_, String>(2)?),
+                    active: row.get::<_, i64>(3)? != 0,
+                    created_at_ms: row.get(4)?,
+                    updated_at_ms: row.get(5)?,
+                })
+            },
+        )
+        .optional()?)
 }
 
 fn default_true() -> bool {
@@ -26310,6 +26433,94 @@ mod tests {
         );
     }
 
+    #[test]
+    fn authenticated_session_uses_persisted_business_user_role() -> anyhow::Result<()> {
+        let _env = EnvRestore::set(&[
+            ("CTOX_AUTH_USERS", ""),
+            ("CTOX_BUSINESS_PASSWORD", "secret"),
+            ("CTOX_BUSINESS_USER", "steffen"),
+            ("CTOX_BUSINESS_OS_DEFAULT_ROLE", "user"),
+            ("CTOX_BUSINESS_OS_REQUIRE_LOGIN", "1"),
+            ("CTOX_BUSINESS_OS_SESSION_TOKEN", ""),
+        ]);
+        let temp = tempdir()?;
+        let root = temp.path();
+        let conn = open_store(root)?;
+        conn.execute(
+            "INSERT INTO business_users
+                (user_id, display_name, role, active, created_at_ms, updated_at_ms)
+             VALUES ('steffen', 'Steffen', 'admin', 1, 1, 1)",
+            [],
+        )?;
+        let auth_header = format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode("steffen:secret".as_bytes())
+        );
+        let raw_session = session_for_request(Some(&auth_header), None, false);
+        assert!(raw_session.authenticated);
+        assert_eq!(
+            raw_session.user.as_ref().map(|user| user.role.as_str()),
+            Some("user")
+        );
+
+        remember_authenticated_session_user(root, &raw_session)?;
+        let stored_role: String = conn.query_row(
+            "SELECT role FROM business_users WHERE user_id = 'steffen'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(stored_role, "admin");
+
+        let hydrated = session_with_persisted_user(root, raw_session)?;
+        assert_eq!(
+            hydrated.user.as_ref().map(|user| user.role.as_str()),
+            Some("admin")
+        );
+        assert!(session_can_manage_all(&hydrated));
+        Ok(())
+    }
+
+    #[test]
+    fn authenticated_session_does_not_reactivate_inactive_business_user() -> anyhow::Result<()> {
+        let _env = EnvRestore::set(&[
+            ("CTOX_AUTH_USERS", ""),
+            ("CTOX_BUSINESS_PASSWORD", "secret"),
+            ("CTOX_BUSINESS_USER", "steffen"),
+            ("CTOX_BUSINESS_OS_DEFAULT_ROLE", "user"),
+            ("CTOX_BUSINESS_OS_REQUIRE_LOGIN", "1"),
+            ("CTOX_BUSINESS_OS_SESSION_TOKEN", ""),
+        ]);
+        let temp = tempdir()?;
+        let root = temp.path();
+        let conn = open_store(root)?;
+        conn.execute(
+            "INSERT INTO business_users
+                (user_id, display_name, role, active, created_at_ms, updated_at_ms)
+             VALUES ('steffen', 'Steffen', 'admin', 0, 1, 1)",
+            [],
+        )?;
+        let auth_header = format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode("steffen:secret".as_bytes())
+        );
+        let raw_session = session_for_request(Some(&auth_header), None, false);
+        assert!(raw_session.authenticated);
+
+        remember_authenticated_session_user(root, &raw_session)?;
+        let stored_active: i64 = conn.query_row(
+            "SELECT active FROM business_users WHERE user_id = 'steffen'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(stored_active, 0);
+
+        let hydrated = session_with_persisted_user(root, raw_session)?;
+        assert!(!hydrated.authenticated);
+        assert!(hydrated.user.is_none());
+        assert_eq!(hydrated.reason.as_deref(), Some("business_user_inactive"));
+        Ok(())
+    }
+
     fn write_widget_module(app_root: &Path, js: &str) -> anyhow::Result<()> {
         let module_dir = app_root.join("modules").join("widget");
         fs::create_dir_all(&module_dir)?;
@@ -39553,6 +39764,93 @@ mod tests {
             research.get("entry").and_then(Value::as_str),
             Some("modules/research/index.html")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn module_catalog_backfills_cv_print_builder_starter_data_grants() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let app_root = root.join("src/apps/business-os");
+        fs::create_dir_all(app_root.join("modules/ctox"))?;
+        fs::create_dir_all(app_root.join("modules/cv-print-builder"))?;
+        fs::write(app_root.join("index.html"), "<!doctype html>")?;
+        fs::write(
+            app_root.join("modules/ctox/module.json"),
+            r#"{"id":"ctox","title":"CTOX","entry":"modules/ctox/index.html","install_scope":"core"}"#,
+        )?;
+        fs::write(
+            app_root.join("modules/cv-print-builder/module.json"),
+            r#"{"id":"cv-print-builder","title":"CV Print Builder","entry":"modules/cv-print-builder/index.html","install_scope":"store","collections":["business_commands","business_chats","ctox_queue_tasks","desktop_files","desktop_file_chunks","documents","document_versions"]}"#,
+        )?;
+
+        let catalog = module_catalog_for_rxdb(root)?;
+        let modules = catalog
+            .get("modules")
+            .and_then(Value::as_array)
+            .context("catalog modules")?;
+        let cv_print_builder = modules
+            .iter()
+            .find(|module| module.get("id").and_then(Value::as_str) == Some("cv-print-builder"))
+            .context("cv-print-builder module projection")?;
+        assert_eq!(
+            cv_print_builder
+                .get("install_scope")
+                .and_then(Value::as_str),
+            Some("starter")
+        );
+
+        let conn = open_store(root)?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM business_permission_grants
+             WHERE active = 1
+               AND subject_type = 'role'
+               AND subject_id IN ('user', 'founder')
+               AND permission IN (?1, ?2)
+               AND scope_type = 'module'
+               AND scope_id = 'cv-print-builder'",
+            params![
+                BusinessOsPermission::DataRead.as_str(),
+                BusinessOsPermission::DataWrite.as_str()
+            ],
+            |row| row.get(0),
+        )?;
+        assert_eq!(count, 4);
+        drop(conn);
+
+        let catalog_again = module_catalog_for_rxdb(root)?;
+        let conn = open_store(root)?;
+        let count_again: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM business_permission_grants
+             WHERE active = 1
+               AND subject_type = 'role'
+               AND subject_id IN ('user', 'founder')
+               AND permission IN (?1, ?2)
+               AND scope_type = 'module'
+               AND scope_id = 'cv-print-builder'",
+            params![
+                BusinessOsPermission::DataRead.as_str(),
+                BusinessOsPermission::DataWrite.as_str()
+            ],
+            |row| row.get(0),
+        )?;
+        assert_eq!(count_again, 4);
+
+        let explicit_grants = catalog_again
+            .pointer("/governance/permission_model/explicit_grants")
+            .and_then(Value::as_array)
+            .context("explicit grants projection")?;
+        assert!(explicit_grants.iter().any(|grant| {
+            grant.get("subject_type").and_then(Value::as_str) == Some("role")
+                && grant.get("subject_id").and_then(Value::as_str) == Some("founder")
+                && grant.get("permission").and_then(Value::as_str)
+                    == Some(BusinessOsPermission::DataWrite.as_str())
+                && grant.get("scope_type").and_then(Value::as_str) == Some("module")
+                && grant.get("scope_id").and_then(Value::as_str) == Some("cv-print-builder")
+        }));
+
         Ok(())
     }
 

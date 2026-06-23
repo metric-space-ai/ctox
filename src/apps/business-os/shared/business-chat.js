@@ -5,7 +5,7 @@ import {
   base64ToBytes,
   sha256Hex,
 } from './file-integrity.js?v=20260605-rxdb-cancel1';
-import { renderGlobalCtoxAgentScopeHtml } from './shell-permissions-ui.js';
+import { renderGlobalCtoxAgentScopeHtml } from './shell-permissions-ui.js?v=20260623-role-session';
 
 const CHAT_STYLE_ID = 'ctox-business-chat-style';
 const CHAT_STATE_KEY = 'ctox.businessOs.chat.v1';
@@ -20,6 +20,7 @@ const CHAT_ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
 const CHAT_ATTACHMENT_CHUNK_SIZE = 16 * 1024;
 const CHAT_ATTACHMENT_ROOT_ID = 'fs_business_os_chat_attachments';
 const CHAT_ATTACHMENT_ROOT_PATH = '/Business OS Chat';
+const CHAT_DELETE_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 export function initBusinessChat({
   session,
@@ -53,8 +54,19 @@ export function initBusinessChat({
     if (minimizeButton && root.contains(minimizeButton)) {
       event.preventDefault();
       event.stopPropagation();
+      event.stopImmediatePropagation?.();
       collapseChatWindow({ root, state, commandBus, db, getActiveModule, target: minimizeButton }).catch((error) => {
         console.warn('[business-chat] chat minimize failed', error);
+      });
+      return;
+    }
+    const deleteButton = event.target.closest?.('[data-chat-delete]');
+    if (deleteButton && root.contains(deleteButton)) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation?.();
+      deleteChatFromTarget({ root, state, commandBus, db, getActiveModule, target: deleteButton }).catch((error) => {
+        console.warn('[business-chat] chat delete failed', error);
       });
       return;
     }
@@ -423,6 +435,21 @@ function renderAndPersistChatState({ root, state, commandBus, db, getActiveModul
   });
 }
 
+async function deleteChatFromTarget({ root, state, commandBus, db, getActiveModule, target }) {
+  const node = target.closest('[data-chat-id]');
+  const chat = state.chats.find((item) => item.id === node?.dataset.chatId);
+  if (!chat) return;
+  const confirmed = await showBusinessConfirm('Diesen Chat wirklich löschen?', {
+    title: 'Chat löschen',
+    confirmLabel: 'Löschen',
+  });
+  if (!confirmed) return;
+  captureDrafts(root, state);
+  const deletion = deleteChat({ state, chat, db });
+  renderChatRoot({ root, state, commandBus, db, getActiveModule });
+  await deletion;
+}
+
 function setWindowInteractiveState(win, isActive) {
   win.querySelectorAll('button, input, textarea, select, a').forEach((node) => {
     if (isActive) {
@@ -478,11 +505,12 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   const hasDatePanel = Boolean(root.querySelector('[data-chat-date-workload-panel]'));
   const currentWindowIds = existingWindows.map(w => w.dataset.chatId);
   const visibleChatIds = visibleChats.map(c => c.id);
-  const attachmentsUnchanged = existingWindows.every((win, idx) => (
+  const windowShapeUnchanged = existingWindows.length === visibleChats.length
+    && currentWindowIds.every((id, idx) => id === visibleChatIds[idx]);
+  const attachmentsUnchanged = windowShapeUnchanged && existingWindows.every((win, idx) => (
     win.dataset.chatAttachmentSignature === attachmentSignature(visibleChats[idx])
   ));
-  const canUpdateInPlace = existingWindows.length === visibleChats.length &&
-                           currentWindowIds.every((id, idx) => id === visibleChatIds[idx]) &&
+  const canUpdateInPlace = windowShapeUnchanged &&
                            attachmentsUnchanged &&
                            root.querySelector('[data-chat-dock]') &&
                            wasCollapsed === dockCollapsed &&
@@ -794,14 +822,10 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
       renderAndPersistChatState({ root, state, commandBus, db, getActiveModule });
     }));
 
-    node.querySelector('[data-chat-delete]')?.addEventListener('click', async () => {
-      const confirmed = await showBusinessConfirm('Diesen Chat wirklich löschen?', {
-        title: 'Chat löschen',
-        confirmLabel: 'Löschen',
-      });
-      if (!confirmed) return;
-      await deleteChat({ state, chat, db });
-      renderChatRoot({ root, state, commandBus, db, getActiveModule });
+    node.querySelector('[data-chat-delete]')?.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      await deleteChatFromTarget({ root, state, commandBus, db, getActiveModule, target: event.currentTarget });
     });
 
     node.querySelectorAll('[data-track-task]').forEach((button) => {
@@ -1141,7 +1165,7 @@ function expandChatOnly(state, activeChat) {
 }
 
 function attachmentSignature(chat) {
-  return (Array.isArray(chat.attachments) ? chat.attachments : [])
+  return (Array.isArray(chat?.attachments) ? chat.attachments : [])
     .map((att) => [
       att.attachmentId || att.fileId || att.name || '',
       att.contentHash || '',
@@ -2373,6 +2397,7 @@ function readChatState(session) {
       preCollapseExpandedChatIds: Array.isArray(parsed.preCollapseExpandedChatIds)
         ? parsed.preCollapseExpandedChatIds.filter(Boolean)
         : [],
+      deletedChatIds: normalizeChatDeletionMap(parsed.deletedChatIds),
       chats: chats
         .filter((chat) => !chat.owner_user_id || chat.owner_user_id === owner)
         .map((chat) => ({
@@ -2396,11 +2421,12 @@ function readChatState(session) {
         })),
     };
   } catch {
-    return { ownerUserId: owner, selectedDate: getLocalDateString(Date.now()), dockCollapsed: true, preCollapseExpandedChatIds: [], chats: [] };
+    return { ownerUserId: owner, selectedDate: getLocalDateString(Date.now()), dockCollapsed: true, preCollapseExpandedChatIds: [], deletedChatIds: {}, chats: [] };
   }
 }
 
 function writeChatState(state) {
+  const deletedChatIds = pruneChatDeletionTombstones(state);
   localStorage.setItem(CHAT_STATE_KEY, JSON.stringify({
     selectedDate: state.selectedDate || getLocalDateString(Date.now()),
     activeChatId: state.activeChatId || '',
@@ -2408,6 +2434,7 @@ function writeChatState(state) {
     preCollapseExpandedChatIds: Array.isArray(state.preCollapseExpandedChatIds)
       ? state.preCollapseExpandedChatIds.filter(Boolean)
       : [],
+    deletedChatIds,
     chats: state.chats.filter((chat) => isOwnedChat(chat, state.ownerUserId)).map((chat) => ({
       ...chat,
       messages: chat.messages.slice(-40),
@@ -2422,6 +2449,47 @@ function writeChatState(state) {
         : {},
     })),
   }));
+}
+
+function normalizeChatDeletionMap(value) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const normalized = {};
+  Object.entries(source).forEach(([id, deletedAt]) => {
+    const chatId = String(id || '').trim();
+    const timestamp = Number(deletedAt) || 0;
+    if (chatId && timestamp > 0) normalized[chatId] = timestamp;
+  });
+  return normalized;
+}
+
+function pruneChatDeletionTombstones(state) {
+  const source = normalizeChatDeletionMap(state?.deletedChatIds);
+  const cutoff = Date.now() - CHAT_DELETE_TOMBSTONE_RETENTION_MS;
+  const pruned = {};
+  Object.entries(source).forEach(([id, deletedAt]) => {
+    if (deletedAt >= cutoff) pruned[id] = deletedAt;
+  });
+  if (state) state.deletedChatIds = pruned;
+  return pruned;
+}
+
+function markChatDeleted(state, chat) {
+  const id = String(chat?.id || '').trim();
+  if (!id) return 0;
+  const deletedAt = Date.now();
+  state.deletedChatIds = pruneChatDeletionTombstones(state);
+  state.deletedChatIds[id] = deletedAt;
+  state.lastUiMutationMs = deletedAt;
+  return deletedAt;
+}
+
+function isChatLocallyDeleted(state, chat) {
+  const id = String(chat?.id || '').trim();
+  if (!id) return false;
+  const deletedAt = Number(state?.deletedChatIds?.[id] || 0);
+  if (!deletedAt) return false;
+  const remoteUpdatedAt = Number(chat?.updated_at_ms || chat?.updatedAt || chat?.updated_at || 0);
+  return !remoteUpdatedAt || deletedAt >= remoteUpdatedAt;
 }
 
 async function persistChatState({ state, db }) {
@@ -2468,9 +2536,12 @@ async function hydrateChatsFromRxDb({ state, db, session }) {
   if (!collection) return false;
   const owner = ownerUserId(session) || state.ownerUserId || '';
   state.ownerUserId = owner;
+  pruneChatDeletionTombstones(state);
   const docs = await collection.find().exec();
   const remoteChats = docs
     .map((doc) => doc.toJSON())
+    .filter((chat) => !chat?._deleted)
+    .filter((chat) => !isChatLocallyDeleted(state, chat))
     .filter((chat) => isOwnedChat(chat, owner))
     .map(normalizeChat)
     .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
@@ -2486,6 +2557,7 @@ async function hydrateChatsFromRxDb({ state, db, session }) {
 }
 
 async function deleteChat({ state, chat, db }) {
+  const deletedAt = markChatDeleted(state, chat);
   state.chats = state.chats.filter((item) => item.id !== chat.id);
   if (state.activeChatId === chat.id) state.activeChatId = nextOpenChatId(state, chat.id);
   writeChatState(state);
@@ -2499,7 +2571,7 @@ async function deleteChat({ state, chat, db }) {
       ...normalizeChat(chat),
       owner_user_id: chat.owner_user_id || state.ownerUserId || '',
       _deleted: true,
-      updated_at_ms: Date.now(),
+      updated_at_ms: deletedAt || Date.now(),
     }).catch(() => {});
   }
 }

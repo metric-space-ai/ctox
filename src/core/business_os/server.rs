@@ -16,6 +16,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::io::Write;
+use std::net::IpAddr;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -239,7 +240,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             // caller-supplied input). The browser attaches the returned token to
             // every command so native authorization stops trusting the
             // browser-asserted client_context.actor.
-            let session = request_session(&request);
+            let session = request_session(root, &request);
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else {
@@ -270,7 +271,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/ctox/subscription-auth/start") => {
-            let session = request_session(&request);
+            let session = request_session(root, &request);
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -289,7 +290,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             handle_subscription_auth_callback(request, root, &url_raw)?;
         }
         (Method::Post, "/api/business-os/ctox/tasks/update") => {
-            let session = request_session(&request);
+            let session = request_session(root, &request);
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -301,7 +302,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/ctox/tasks/delete") => {
-            let session = request_session(&request);
+            let session = request_session(root, &request);
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -313,12 +314,8 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Get, "/api/business-os/session") => {
-            let auth_header = header_value(&request, "Authorization");
-            let session_header = header_value(&request, "X-CTOX-Business-OS-Session");
-            respond_json(
-                request,
-                &store::session(auth_header.as_deref(), session_header.as_deref()),
-            )?;
+            let session = request_session(root, &request);
+            respond_json(request, &session)?;
         }
         (Method::Post, "/login") => {
             handle_login_request(root, request)?;
@@ -327,7 +324,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             respond_redirect_with_cookie(request, "/", "", 0)?;
         }
         (Method::Get, "/api/business-os/users") => {
-            let session = request_session(&request);
+            let session = request_session(root, &request);
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else {
@@ -335,7 +332,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/users") => {
-            let session = request_session(&request);
+            let session = request_session(root, &request);
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !session
@@ -352,7 +349,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Get, "/api/business-os/modules") => {
-            let session = request_session(&request);
+            let session = request_session(root, &request);
             let installed_app_root = resolve_business_os_installed_app_root(root);
             respond_json(
                 request,
@@ -364,7 +361,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             )?;
         }
         (Method::Get, "/api/business-os/module-governance") => {
-            let session = request_session(&request);
+            let session = request_session(root, &request);
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else {
@@ -372,7 +369,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/modules") => {
-            let session = request_session(&request);
+            let session = request_session(root, &request);
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else {
@@ -441,7 +438,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             respond_status(request, 404, "unknown Business OS knowledge endpoint")?;
         }
         (Method::Post, "/api/business-os/modules/install-template") => {
-            let session = request_session(&request);
+            let session = request_session(root, &request);
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -461,7 +458,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/modules/delete") => {
-            let session = request_session(&request);
+            let session = request_session(root, &request);
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else {
@@ -481,7 +478,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/modules/assign-founder") => {
-            let session = request_session(&request);
+            let session = request_session(root, &request);
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else {
@@ -494,7 +491,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/reports") => {
-            let session = request_session(&request);
+            let session = request_session(root, &request);
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else {
@@ -518,7 +515,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
         }
         // ---------- Channels tab ----------
         (Method::Get, "/api/business-os/channels/accounts") => {
-            let session = request_session(&request);
+            let session = request_session(root, &request);
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else {
@@ -529,7 +526,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/channels/test") => {
-            let session = request_session(&request);
+            let session = request_session(root, &request);
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -552,7 +549,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/channels/sync") => {
-            let session = request_session(&request);
+            let session = request_session(root, &request);
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -567,7 +564,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/channels/settings") => {
-            let session = request_session(&request);
+            let session = request_session(root, &request);
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -585,7 +582,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/channels/disconnect") => {
-            let session = request_session(&request);
+            let session = request_session(root, &request);
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -606,7 +603,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/channels/pair/start") => {
-            let session = request_session(&request);
+            let session = request_session(root, &request);
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -621,7 +618,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Get, "/api/business-os/channels/pair/state") => {
-            let session = request_session(&request);
+            let session = request_session(root, &request);
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else {
@@ -632,7 +629,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/channels/jami/export") => {
-            let session = request_session(&request);
+            let session = request_session(root, &request);
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -643,7 +640,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/channels/jami/create") => {
-            let session = request_session(&request);
+            let session = request_session(root, &request);
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -690,11 +687,65 @@ fn is_business_os_control_plane_path(path: &str) -> bool {
     )
 }
 
-fn request_session(request: &Request) -> store::BusinessOsSession {
+fn request_session(root: &Path, request: &Request) -> store::BusinessOsSession {
     let auth_header =
         header_value(request, "Authorization").or_else(|| login_cookie_auth_header(request));
     let session_header = header_value(request, "X-CTOX-Business-OS-Session");
-    store::session(auth_header.as_deref(), session_header.as_deref())
+    let session = store::session_for_request(
+        auth_header.as_deref(),
+        session_header.as_deref(),
+        request_allows_local_dev_session(request),
+    );
+    store::session_with_persisted_user(root, session).unwrap_or_else(|_| {
+        store::session_for_request(
+            auth_header.as_deref(),
+            session_header.as_deref(),
+            request_allows_local_dev_session(request),
+        )
+    })
+}
+
+fn request_allows_local_dev_session(request: &Request) -> bool {
+    if let Some(host) = header_value(request, "Host") {
+        return host_header_allows_local_dev_session(&host);
+    }
+    request
+        .remote_addr()
+        .map(|addr| addr.ip().is_loopback())
+        .unwrap_or(false)
+}
+
+fn host_header_allows_local_dev_session(host: &str) -> bool {
+    let Some(hostname) = host_header_hostname(host) else {
+        return false;
+    };
+    hostname.eq_ignore_ascii_case("localhost")
+        || hostname.to_ascii_lowercase().ends_with(".localhost")
+        || hostname
+            .parse::<IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
+}
+
+fn host_header_hostname(host: &str) -> Option<String> {
+    let value = host.split(',').next()?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if let Some(rest) = value.strip_prefix('[') {
+        let (hostname, _) = rest.split_once(']')?;
+        return (!hostname.trim().is_empty()).then(|| hostname.trim().to_owned());
+    }
+    let hostname = match value.rsplit_once(':') {
+        Some((prefix, port))
+            if !prefix.contains(':') && port.chars().all(|ch| ch.is_ascii_digit()) =>
+        {
+            prefix
+        }
+        _ => value,
+    };
+    let hostname = hostname.trim();
+    (!hostname.is_empty()).then(|| hostname.to_owned())
 }
 
 fn query_param(url_raw: &str, key: &str) -> Option<String> {
@@ -1315,7 +1366,12 @@ fn handle_login_request(root: &Path, mut request: Request) -> anyhow::Result<()>
         "Basic {}",
         base64::engine::general_purpose::STANDARD.encode(credentials.as_bytes())
     );
-    let session = store::session(Some(&auth_header), None);
+    let session = store::session_for_request(
+        Some(&auth_header),
+        None,
+        request_allows_local_dev_session(&request),
+    );
+    let session = store::session_with_persisted_user(root, session)?;
     if session.authenticated {
         store::remember_authenticated_session_user(root, &session)?;
         let cookie =
@@ -2458,7 +2514,7 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
     let mime = mime_for(&target);
     let is_index = target == app_root.join("index.html");
     if is_index {
-        let session = request_session(&request);
+        let session = request_session(root, &request);
         store::remember_authenticated_session_user(root, &session)?;
         let sync_config = if session.authenticated {
             Some(store::sync_config(root)?)
@@ -2638,6 +2694,20 @@ fn mime_for(path: &PathBuf) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_dev_session_host_gate_is_loopback_only() {
+        assert!(host_header_allows_local_dev_session("localhost:8765"));
+        assert!(host_header_allows_local_dev_session("dev.localhost:8765"));
+        assert!(host_header_allows_local_dev_session("127.0.0.1:8765"));
+        assert!(host_header_allows_local_dev_session("[::1]:8765"));
+
+        assert!(!host_header_allows_local_dev_session("ninja.ctox.dev"));
+        assert!(!host_header_allows_local_dev_session("10.0.0.12:8765"));
+        assert!(!host_header_allows_local_dev_session("192.168.1.10:8765"));
+        assert!(!host_header_allows_local_dev_session("[2001:db8::1]:8765"));
+        assert!(!host_header_allows_local_dev_session(""));
+    }
 
     #[test]
     fn unauthenticated_shell_does_not_inject_sync_config() {

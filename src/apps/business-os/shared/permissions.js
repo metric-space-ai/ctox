@@ -53,13 +53,29 @@ const ASSIGNED_MODULE_PERMISSIONS = new Set([
 
 export function businessActorFromSession(session = null, governance = null) {
   const user = session?.user || {};
-  const governanceRole = governance?.role || governance?.governance?.role || '';
-  const governanceUserId = governance?.user_id || governance?.governance?.user_id || '';
-  const role = normalizeRole(user.role || (user.is_admin ? 'admin' : '') || governanceRole || (governance?.can_manage_all ? 'admin' : 'user'));
+  const userId = String(user.id || user.user_id || '').trim();
+  const governanceUserId = String(governance?.user_id || governance?.governance?.user_id || '').trim();
+  const sessionRole = knownRole(user.role || (user.is_admin ? 'admin' : ''));
+  const governanceRole = governanceRoleForActor(governance, userId);
+  const role = governanceRole || sessionRole || 'user';
   return {
-    id: String(user.id || user.user_id || governanceUserId || '').trim(),
+    id: userId || governanceUserId,
     role,
   };
+}
+
+function knownRole(value) {
+  const text = String(value || '').trim();
+  return text ? normalizeRole(text) : '';
+}
+
+function governanceRoleForActor(governance = null, userId = '') {
+  const source = governance?.governance || governance || {};
+  const governanceUserId = String(source.user_id || '').trim();
+  const normalizedUserId = String(userId || '').trim();
+  if (normalizedUserId && governanceUserId && governanceUserId !== normalizedUserId) return '';
+  const role = knownRole(source.role || (source.can_manage_all ? 'admin' : ''));
+  return role;
 }
 
 export function permissionModelFromGovernance(governance = null) {

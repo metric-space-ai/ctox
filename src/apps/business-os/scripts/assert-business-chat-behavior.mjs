@@ -264,6 +264,38 @@ try {
     expect(minimizeLatency < 150, `minimize must render before persistence delay, got ${minimizeLatency.toFixed(1)}ms`);
   });
 
+  await scenario(page, 'delete-renders-before-db-delay', { count: 1, dbDelay: 500 }, async () => {
+    const deleteLatency = await page.evaluate(async () => {
+      document.querySelector('.ctox-chat-window.is-active [data-chat-delete]').click();
+      await window.chatHarness.waitFor(() => document.querySelector('[data-dialog-confirm]'));
+      const start = performance.now();
+      document.querySelector('[data-dialog-confirm]').click();
+      await window.chatHarness.waitFor(() => document.querySelectorAll('.ctox-chat-window').length === 0, 1200);
+      return performance.now() - start;
+    });
+    const after = await page.evaluate(() => window.chatHarness.collect());
+    results.push({ scenario: 'delete-control-latency-ms', deleteLatency, metrics: after });
+    expect(deleteLatency < 350, `delete must render before persistence delay, got ${deleteLatency.toFixed(1)}ms`);
+    expect(after.windowCount === 0, `deleted chat window must disappear, got ${after.windowCount}`);
+    expect(after.storedChats === 0, `deleted chat must leave local state, got ${after.storedChats}`);
+  });
+
+  await scenario(page, 'delete-tombstone-blocks-rxdb-resurrection', { count: 1, dbDeleteError: true }, async () => {
+    const after = await page.evaluate(async () => {
+      document.querySelector('.ctox-chat-window.is-active [data-chat-delete]').click();
+      await window.chatHarness.waitFor(() => document.querySelector('[data-dialog-confirm]'));
+      document.querySelector('[data-dialog-confirm]').click();
+      await window.chatHarness.waitFor(() => document.querySelectorAll('.ctox-chat-window').length === 0);
+      await window.chatHarness.emitChats();
+      await window.chatHarness.waitForPaint();
+      return window.chatHarness.collect();
+    });
+    results.push({ scenario: 'delete-after-rxdb-resurrection-attempt', metrics: after });
+    expect(after.windowCount === 0, `locally deleted chat must not rehydrate from stale RxDB doc, got ${after.windowCount}`);
+    expect(after.storedChats === 0, `locally deleted chat must stay out of local state, got ${after.storedChats}`);
+    expect(after.deletedChatTombstones === 1, `failed remote remove must leave one local tombstone, got ${after.deletedChatTombstones}`);
+  });
+
   await scenario(page, 'chip-selection-render-before-db-delay', { count: 4, activeIndex: 0, dbDelay: 180 }, async () => {
     const chipLatency = await page.evaluate(async () => {
       const start = performance.now();
@@ -509,7 +541,8 @@ function harnessHtml() {
     const CHAT_STATE_KEY = 'ctox.businessOs.chat.v1';
     const owner = 'test-user';
 
-    window.chatHarness = { seed, collect, waitFor, waitForPaint };
+    let chatCollectionSubscribers = new Set();
+    window.chatHarness = { seed, collect, waitFor, waitForPaint, emitChats };
 
     async function seed(options = {}) {
       const oldRoot = document.querySelector('[data-ctox-chat-root]');
@@ -521,6 +554,7 @@ function harnessHtml() {
       document.body.innerHTML = '<main class="harness-app">' + ['Tickets', 'Conversations', 'Notizen', 'Documents', 'Knowledge', 'Kunden', 'App Store', 'Source Editor'].map((name) => '<div class="harness-module">' + name + '</div>').join('') + '</main>';
       localStorage.clear();
       sessionStorage.clear();
+      chatCollectionSubscribers = new Set();
 
       const selectedDate = localDateString(addDays(new Date(), options.selectedOffset || 0));
       const chats = Array.from({ length: options.count || 0 }, (_, index) => makeChat({ index, selectedDate, options }));
@@ -544,7 +578,7 @@ function harnessHtml() {
       initBusinessChat({
         session: { authenticated: true, user: { id: owner, name: 'Harness User' } },
         commandBus: makeCommandBus(options),
-        db: makeDb(chats, options.dbDelay || 0, Boolean(options.dbTransientError)),
+        db: makeDb(chats, options.dbDelay || 0, Boolean(options.dbTransientError), Boolean(options.dbDeleteError)),
         getActiveModule: () => ({ id: 'ctox', name: 'CTOX' }),
       });
       await waitFor(() => document.querySelector('[data-chat-dock]'));
@@ -607,6 +641,12 @@ function harnessHtml() {
       };
     }
 
+    async function emitChats() {
+      for (const callback of Array.from(chatCollectionSubscribers)) callback?.();
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      await waitForPaint();
+    }
+
     function makeCommandBus(options) {
       return {
         dispatch: async () => {
@@ -618,7 +658,7 @@ function harnessHtml() {
       };
     }
 
-    function makeDb(chats, delayMs, transientError) {
+    function makeDb(chats, delayMs, transientError, deleteError) {
       const store = new Map(chats.map((chat) => [chat.id, structuredClone(chat)]));
       const delay = () => new Promise((resolve) => setTimeout(resolve, delayMs));
       const maybeThrow = async () => {
@@ -631,13 +671,22 @@ function harnessHtml() {
         return {
           toJSON: () => structuredClone(value),
           incrementalPatch: async (doc) => { await maybeThrow(); store.set(id, structuredClone({ ...value, ...doc })); },
-          remove: async () => { await maybeThrow(); store.delete(id); },
+          remove: async () => {
+            await maybeThrow();
+            if (deleteError) throw new Error('CTOX_BUSINESS_OS_PERMISSION_DENIED');
+            store.delete(id);
+          },
         };
       };
       return {
         raw: {
           business_chats: {
-            $: { subscribe: () => ({ unsubscribe() {} }) },
+            $: {
+              subscribe: (callback) => {
+                chatCollectionSubscribers.add(callback);
+                return { unsubscribe: () => chatCollectionSubscribers.delete(callback) };
+              },
+            },
             find: () => ({ exec: async () => { await maybeThrow(); return Array.from(store.keys()).map(docFor).filter(Boolean); } }),
             findOne: (id) => ({ exec: async () => { await maybeThrow(); return docFor(id); } }),
             insert: async (doc) => { await maybeThrow(); store.set(doc.id, structuredClone(doc)); return docFor(doc.id); },
@@ -654,6 +703,9 @@ function harnessHtml() {
       const strip = document.querySelector('[data-chat-strip]');
       const activeWindow = document.querySelector('.ctox-chat-window.is-active');
       const stored = JSON.parse(localStorage.getItem(CHAT_STATE_KEY) || '{}');
+      const deletedChatIds = stored.deletedChatIds && typeof stored.deletedChatIds === 'object' && !Array.isArray(stored.deletedChatIds)
+        ? stored.deletedChatIds
+        : {};
       const activeMessages = document.querySelector('.ctox-chat-window.is-active .ctox-chat-messages');
       const inactiveActions = Array.from(document.querySelectorAll('.ctox-chat-window:not(.is-active) .ctox-chat-header-actions'));
       const inactiveControls = Array.from(document.querySelectorAll('.ctox-chat-window:not(.is-active) button, .ctox-chat-window:not(.is-active) input, .ctox-chat-window:not(.is-active) textarea, .ctox-chat-window:not(.is-active) select, .ctox-chat-window:not(.is-active) a'));
@@ -697,6 +749,7 @@ function harnessHtml() {
         activeStatusText: document.querySelector('.ctox-chat-window.is-active .ctox-chat-status-badge')?.textContent?.trim() || '',
         activeMessageText: document.querySelector('.ctox-chat-window.is-active .ctox-chat-messages')?.textContent?.trim() || '',
         storedChats: Array.isArray(stored.chats) ? stored.chats.length : 0,
+        deletedChatTombstones: Object.keys(deletedChatIds).length,
       };
     }
 

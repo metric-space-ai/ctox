@@ -5,13 +5,13 @@ import {
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js';
+} from './shared/app-lifecycle.js?v=20260623-role-session';
 import {
   BusinessOsPermissions,
   canModifyBusinessModule,
   canUseBusinessPermission,
   canViewBusinessModuleSource,
-} from './shared/permissions.js';
+} from './shared/permissions.js?v=20260623-role-session';
 import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js';
 import {
   buildLifecyclePermissionView,
@@ -22,7 +22,7 @@ import {
   renderGlobalCtoxAgentScopeHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js';
+} from './shared/shell-permissions-ui.js?v=20260623-role-session';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -35,7 +35,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260623-shell-icons';
+const APP_BUILD = '20260623-role-session';
 // Monotonic token so a slow loading-shadow fetch from a previous module open
 // cannot paint over a newer one (rapid module switching).
 let activeLoadToken = 0;

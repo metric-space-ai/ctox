@@ -1,13 +1,13 @@
 import { showBusinessConfirm } from './dialogs.js';
-import { appReleaseProjection } from './app-lifecycle.js';
-import { canModifyBusinessModule } from './permissions.js';
+import { appReleaseProjection } from './app-lifecycle.js?v=20260623-role-session';
+import { canModifyBusinessModule } from './permissions.js?v=20260623-role-session';
 import {
   assignableRolesForActor,
   normalizeRole,
   roleCanManage,
   roleDisplayName,
 } from './roles.js';
-import { renderModuleWhyDiagnosticsHtml } from './shell-permissions-ui.js';
+import { renderModuleWhyDiagnosticsHtml } from './shell-permissions-ui.js?v=20260623-role-session';
 
 export async function openReactSettings({
   mount,
