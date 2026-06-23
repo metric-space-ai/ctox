@@ -4,22 +4,35 @@
 use crate::config::SmtpConfig;
 use crate::smtp::client::SmtpOutboundClient;
 use crate::smtp::dkim::DkimSigner;
-use crate::store::SqliteStore;
+use crate::store::{SqliteStore, SqliteStoreChangeStamp};
 use crate::util::errors::{StalwartError, StalwartResult};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
 use tracing::{error, info, warn};
 
+const SMTP_QUEUE_IDLE_SAFETY_SECS: u64 = 60;
+
 pub struct SmtpOutboundQueue {
     store: SqliteStore,
     config: SmtpConfig,
+    idle_gate: Mutex<Option<SmtpQueueIdleGate>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SmtpQueueIdleGate {
+    stamp: SqliteStoreChangeStamp,
+    next_check_at: Instant,
 }
 
 impl SmtpOutboundQueue {
     pub fn new(store: SqliteStore, config: SmtpConfig) -> Self {
-        Self { store, config }
+        Self {
+            store,
+            config,
+            idle_gate: Mutex::new(None),
+        }
     }
 
     pub async fn start(self: Arc<Self>) {
@@ -34,10 +47,16 @@ impl SmtpOutboundQueue {
     }
 
     pub async fn process_queue(&self) -> StalwartResult<()> {
-        let pending = self.store.get_pending_emails()?;
-        if pending.is_empty() {
+        if self.should_skip_idle_poll() {
             return Ok(());
         }
+
+        let pending = self.store.get_pending_emails()?;
+        if pending.is_empty() {
+            self.mark_idle_poll()?;
+            return Ok(());
+        }
+        self.clear_idle_poll();
 
         info!("Found {} pending outbound emails in queue", pending.len());
 
@@ -207,6 +226,48 @@ impl SmtpOutboundQueue {
         }
 
         Ok(())
+    }
+
+    fn should_skip_idle_poll(&self) -> bool {
+        let stamp = self.store.change_stamp();
+        let now = Instant::now();
+        let guard = self
+            .idle_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(previous) = *guard else {
+            return false;
+        };
+        previous.stamp == stamp && now < previous.next_check_at
+    }
+
+    fn mark_idle_poll(&self) -> StalwartResult<()> {
+        let stamp = self.store.change_stamp();
+        let now_secs = crate::util::now_utc_secs();
+        let delay_secs = match self.store.next_pending_email_attempt_at()? {
+            Some(next_attempt) if next_attempt > now_secs => {
+                (next_attempt - now_secs).min(SMTP_QUEUE_IDLE_SAFETY_SECS)
+            }
+            Some(_) => 0,
+            None => SMTP_QUEUE_IDLE_SAFETY_SECS,
+        };
+        let mut guard = self
+            .idle_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = Some(SmtpQueueIdleGate {
+            stamp,
+            next_check_at: Instant::now() + Duration::from_secs(delay_secs),
+        });
+        Ok(())
+    }
+
+    fn clear_idle_poll(&self) {
+        let mut guard = self
+            .idle_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = None;
     }
 
     async fn deliver_on_connection(
@@ -426,4 +487,41 @@ fn parse_dns_name(response: &[u8], mut p: usize, depth: usize) -> Option<(String
         }
     }
     Some((name, read_bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::StalwartConfig;
+
+    #[tokio::test]
+    async fn empty_outbound_queue_skips_until_store_changes() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("mail.sqlite3");
+        let store = SqliteStore::new(db_path.to_str().unwrap());
+        store.init().unwrap();
+        let queue = SmtpOutboundQueue::new(store.clone(), StalwartConfig::default().smtp);
+
+        assert!(
+            !queue.should_skip_idle_poll(),
+            "first queue poll must inspect SQLite"
+        );
+        queue.process_queue().await.unwrap();
+        assert!(
+            queue.should_skip_idle_poll(),
+            "unchanged empty queue should skip SQLite during the idle safety window"
+        );
+
+        store
+            .queue_email(
+                "sender@ctox.local",
+                "receiver@ctox.local",
+                "queued after idle gate",
+            )
+            .unwrap();
+        assert!(
+            !queue.should_skip_idle_poll(),
+            "queue writes must reopen the idle gate"
+        );
+    }
 }

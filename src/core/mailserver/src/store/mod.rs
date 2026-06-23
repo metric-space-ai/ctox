@@ -4,4 +4,4 @@
 pub mod sqlite;
 pub mod sqlite_schema;
 
-pub use sqlite::SqliteStore;
+pub use sqlite::{SqliteStore, SqliteStoreChangeStamp};

@@ -4,6 +4,29 @@
 use crate::store::sqlite_schema::SQLITE_SCHEMA;
 use crate::util::errors::StalwartResult;
 use rusqlite::{params, Connection};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, UNIX_EPOCH};
+
+thread_local! {
+    static SQLITE_STORE_CONNECTIONS: RefCell<HashMap<String, Connection>> =
+        RefCell::new(HashMap::new());
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct SqliteStoreChangeStamp {
+    main: SqliteFileChangeStamp,
+    wal: SqliteFileChangeStamp,
+    shm: SqliteFileChangeStamp,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct SqliteFileChangeStamp {
+    exists: bool,
+    len: u64,
+    modified_ns: u128,
+}
 
 #[derive(Clone, Debug)]
 pub struct SqliteStore {
@@ -17,11 +40,36 @@ impl SqliteStore {
         }
     }
 
-    fn connect(&self) -> StalwartResult<Connection> {
-        let conn = Connection::open(&self.db_path)?;
-        conn.busy_timeout(std::time::Duration::from_secs(10))?;
+    fn open_connection(db_path: &str) -> StalwartResult<Connection> {
+        let conn = Connection::open(db_path)?;
+        conn.busy_timeout(Duration::from_secs(10))?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
         Ok(conn)
+    }
+
+    fn connect(&self) -> StalwartResult<Connection> {
+        Self::open_connection(&self.db_path)
+    }
+
+    fn with_connection<T>(
+        &self,
+        f: impl FnOnce(&Connection) -> StalwartResult<T>,
+    ) -> StalwartResult<T> {
+        SQLITE_STORE_CONNECTIONS.with(|connections| {
+            let mut connections = connections.borrow_mut();
+            if !connections.contains_key(&self.db_path) {
+                let conn = Self::open_connection(&self.db_path)?;
+                connections.insert(self.db_path.clone(), conn);
+            }
+            let conn = connections
+                .get(&self.db_path)
+                .expect("sqlite store connection cache entry exists");
+            f(conn)
+        })
+    }
+
+    pub fn change_stamp(&self) -> SqliteStoreChangeStamp {
+        sqlite_store_change_stamp(Path::new(&self.db_path))
     }
 
     pub fn init(&self) -> StalwartResult<()> {
@@ -49,18 +97,19 @@ impl SqliteStore {
     }
 
     pub fn get_domain_dkim(&self, domain_name: &str) -> StalwartResult<Option<(String, String)>> {
-        let conn = self.connect()?;
-        let mut stmt = conn.prepare(
-            "SELECT dkim_selector, dkim_private_key FROM stalwart_domains WHERE domain_name = ?1",
-        )?;
-        let mut rows = stmt.query(params![domain_name])?;
-        if let Some(row) = rows.next()? {
-            let selector: String = row.get(0)?;
-            let priv_key: String = row.get(1)?;
-            Ok(Some((selector, priv_key)))
-        } else {
-            Ok(None)
-        }
+        self.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT dkim_selector, dkim_private_key FROM stalwart_domains WHERE domain_name = ?1",
+            )?;
+            let mut rows = stmt.query(params![domain_name])?;
+            if let Some(row) = rows.next()? {
+                let selector: String = row.get(0)?;
+                let priv_key: String = row.get(1)?;
+                Ok(Some((selector, priv_key)))
+            } else {
+                Ok(None)
+            }
+        })
     }
 
     // --- SMTP Outbound Queue ---
@@ -80,27 +129,39 @@ impl SqliteStore {
     pub fn get_pending_emails(
         &self,
     ) -> StalwartResult<Vec<(String, String, String, String, usize)>> {
-        let conn = self.connect()?;
-        let now = crate::util::now_utc_secs();
-        let mut stmt = conn.prepare(
-            "SELECT id, from_addr, to_addr, msg_body, retry_count FROM stalwart_smtp_queue
-             WHERE status = 'pending' AND next_attempt_at <= ?1",
-        )?;
-        let rows = stmt.query_map(params![now], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, usize>(4)?,
-            ))
-        })?;
+        self.with_connection(|conn| {
+            let now = crate::util::now_utc_secs();
+            let mut stmt = conn.prepare(
+                "SELECT id, from_addr, to_addr, msg_body, retry_count FROM stalwart_smtp_queue
+                 WHERE status = 'pending' AND next_attempt_at <= ?1",
+            )?;
+            let rows = stmt.query_map(params![now], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, usize>(4)?,
+                ))
+            })?;
 
-        let mut res = Vec::new();
-        for r in rows {
-            res.push(r?);
-        }
-        Ok(res)
+            let mut res = Vec::new();
+            for r in rows {
+                res.push(r?);
+            }
+            Ok(res)
+        })
+    }
+
+    pub fn next_pending_email_attempt_at(&self) -> StalwartResult<Option<u64>> {
+        self.with_connection(|conn| {
+            let next_attempt = conn.query_row(
+                "SELECT MIN(next_attempt_at) FROM stalwart_smtp_queue WHERE status = 'pending'",
+                [],
+                |row| row.get::<_, Option<u64>>(0),
+            )?;
+            Ok(next_attempt)
+        })
     }
 
     pub fn update_email_status(
@@ -110,19 +171,21 @@ impl SqliteStore {
         next_attempt: u64,
         retry_count: usize,
     ) -> StalwartResult<()> {
-        let conn = self.connect()?;
-        conn.execute(
-            "UPDATE stalwart_smtp_queue SET status = ?2, next_attempt_at = ?3, retry_count = ?4
-             WHERE id = ?1",
-            params![id, status, next_attempt, retry_count],
-        )?;
-        Ok(())
+        self.with_connection(|conn| {
+            conn.execute(
+                "UPDATE stalwart_smtp_queue SET status = ?2, next_attempt_at = ?3, retry_count = ?4
+                 WHERE id = ?1",
+                params![id, status, next_attempt, retry_count],
+            )?;
+            Ok(())
+        })
     }
 
     pub fn delete_email(&self, id: &str) -> StalwartResult<()> {
-        let conn = self.connect()?;
-        conn.execute("DELETE FROM stalwart_smtp_queue WHERE id = ?1", params![id])?;
-        Ok(())
+        self.with_connection(|conn| {
+            conn.execute("DELETE FROM stalwart_smtp_queue WHERE id = ?1", params![id])?;
+            Ok(())
+        })
     }
 
     /// Record a terminal SMTP delivery outcome (success or permanent failure) so the
@@ -137,14 +200,15 @@ impl SqliteStore {
         error_text: Option<&str>,
         completed_at: i64,
     ) -> StalwartResult<()> {
-        let conn = self.connect()?;
-        conn.execute(
-            "INSERT OR IGNORE INTO stalwart_smtp_delivery_log
-                (id, from_addr, to_addr, outcome, error_text, completed_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![id, from_addr, to_addr, outcome, error_text, completed_at],
-        )?;
-        Ok(())
+        self.with_connection(|conn| {
+            conn.execute(
+                "INSERT OR IGNORE INTO stalwart_smtp_delivery_log
+                    (id, from_addr, to_addr, outcome, error_text, completed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![id, from_addr, to_addr, outcome, error_text, completed_at],
+            )?;
+            Ok(())
+        })
     }
 
     // --- CalDAV Operations ---
@@ -368,10 +432,11 @@ impl SqliteStore {
     }
 
     pub fn user_exists(&self, username: &str) -> StalwartResult<bool> {
-        let conn = self.connect()?;
-        let mut stmt = conn.prepare("SELECT 1 FROM stalwart_users WHERE username = ?1")?;
-        let mut rows = stmt.query(params![username])?;
-        Ok(rows.next()?.is_some())
+        self.with_connection(|conn| {
+            let mut stmt = conn.prepare("SELECT 1 FROM stalwart_users WHERE username = ?1")?;
+            let mut rows = stmt.query(params![username])?;
+            Ok(rows.next()?.is_some())
+        })
     }
 
     pub fn get_mailboxes(&self, owner: &str) -> StalwartResult<Vec<(String, String)>> {
@@ -503,4 +568,38 @@ impl SqliteStore {
             Ok(false)
         }
     }
+}
+
+fn sqlite_store_change_stamp(path: &Path) -> SqliteStoreChangeStamp {
+    SqliteStoreChangeStamp {
+        main: sqlite_file_change_stamp(path),
+        wal: sqlite_file_change_stamp(&sqlite_sidecar_path(path, "-wal")),
+        shm: sqlite_file_change_stamp(&sqlite_sidecar_path(path, "-shm")),
+    }
+}
+
+fn sqlite_file_change_stamp(path: &Path) -> SqliteFileChangeStamp {
+    match std::fs::metadata(path) {
+        Ok(metadata) => SqliteFileChangeStamp {
+            exists: true,
+            len: metadata.len(),
+            modified_ns: metadata
+                .modified()
+                .ok()
+                .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0),
+        },
+        Err(_) => SqliteFileChangeStamp {
+            exists: false,
+            len: 0,
+            modified_ns: 0,
+        },
+    }
+}
+
+fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut value = path.as_os_str().to_os_string();
+    value.push(suffix);
+    PathBuf::from(value)
 }
