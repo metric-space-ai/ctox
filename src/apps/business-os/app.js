@@ -35,7 +35,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260623-sync-progress-watchdog';
+const APP_BUILD = '20260623-shell-icons';
 // Monotonic token so a slow loading-shadow fetch from a previous module open
 // cannot paint over a newer one (rapid module switching).
 let activeLoadToken = 0;
@@ -173,6 +173,7 @@ const state = {
   moduleCatalogFingerprint: '',
   moduleAllowlist: [],
   shellCatalogMergedIds: new Set(),
+  moduleIconSvgCache: new Map(),
   initialModuleOpened: false,
   advancedStatusRequiredRestarts: new Map(),
 };
@@ -855,9 +856,11 @@ async function bootstrap() {
   modules = await waitForRequestedHashModule(modules);
   state.modules = modules.modules || [];
   state.moduleCatalogFingerprint = modules.catalogFingerprint || state.moduleCatalogFingerprint;
-  registerCustomModuleIcons().catch((error) => {
-    console.warn('[business-os] deferred custom module icon registration failed:', error);
-  });
+  try {
+    await registerCustomModuleIcons();
+  } catch (error) {
+    console.warn('[business-os] custom module icon registration failed:', error);
+  }
   state.governance = modules.governance || null;
   state.moduleLayout = normalizeModuleLayout(await loadModuleLayout(), state.modules);
   state.taskbarPins = normalizeTaskbarPins(readTaskbarPins(), state.modules);
@@ -4174,6 +4177,7 @@ function createModuleContext(mod) {
     notifications: state.notifications,
     windowManager: state.windowManager,
     desktopApps: listDesktopApps(),
+    getSvgIcon: getRegisteredSvgIcon,
     openDesktopApp,
     openBusinessChat,
     reportFileIntegrityError: (error, details = {}) => reportFileIntegrityError(`module:${mod.id}`, error, {
@@ -6313,10 +6317,61 @@ async function registerCustomModuleIcons() {
   const { registerSvgIcon } = await loadShellIconsModule();
   if (!Array.isArray(state.modules)) return;
   for (const mod of state.modules) {
-    if (mod.layout?.icon_svg) {
-      registerSvgIcon(mod.id, mod.layout.icon_svg);
+    const svgIcon = await resolveModuleIconSvg(mod);
+    if (svgIcon) {
+      registerSvgIcon(mod.id, svgIcon);
     }
   }
+}
+
+async function resolveModuleIconSvg(mod) {
+  if (!mod?.id) return '';
+  const inlineSvg = inlineModuleIconSvg(mod);
+  if (inlineSvg) return inlineSvg;
+  if (state.moduleIconSvgCache.has(mod.id)) return state.moduleIconSvgCache.get(mod.id);
+  const assetPath = moduleIconAssetPath(mod);
+  if (!assetPath) return '';
+  try {
+    const response = await fetch(`./${assetPath}?v=${APP_BUILD}${moduleRevisionQuery(mod.id)}`, { cache: 'force-cache' });
+    if (!response.ok) {
+      state.moduleIconSvgCache.set(mod.id, '');
+      return '';
+    }
+    const svg = (await response.text()).trim();
+    if (!svg.includes('<svg')) {
+      state.moduleIconSvgCache.set(mod.id, '');
+      return '';
+    }
+    state.moduleIconSvgCache.set(mod.id, svg);
+    return svg;
+  } catch (error) {
+    state.moduleIconSvgCache.set(mod.id, '');
+    return '';
+  }
+}
+
+function inlineModuleIconSvg(mod) {
+  const candidates = [
+    mod?.layout?.icon_svg,
+    mod?.icon_svg,
+    mod?.iconSvg,
+  ];
+  for (const candidate of candidates) {
+    const svg = typeof candidate === 'string' ? candidate.trim() : '';
+    if (svg.includes('<svg')) return svg;
+  }
+  return '';
+}
+
+function moduleIconAssetPath(mod) {
+  const iconPath = String(mod?.icon || mod?.icon_path || 'icon.svg').trim();
+  if (!iconPath || iconPath.includes('..') || /^[a-z][a-z0-9+.-]*:/i.test(iconPath)) return '';
+  const cleanPath = iconPath.replace(/^\.?\//, '').split('?')[0].split('#')[0];
+  if (!cleanPath || cleanPath.includes('..')) return '';
+  if (cleanPath.startsWith('modules/') || cleanPath.startsWith('installed-modules/')) {
+    return cleanPath;
+  }
+  return `${moduleBasePath(mod)}/${cleanPath}`;
 }
 
 async function refreshModules() {

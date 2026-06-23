@@ -2,7 +2,7 @@ import { loadModuleMessages } from '../../shared/i18n.js';
 import { showBusinessPrompt } from '../../shared/dialogs.js';
 import { createCtoxLauncher } from './ctoxLauncher.js';
 import { makeIconDraggable } from './iconDrag.js';
-import { getSvgIcon } from '../../shared/icons.js?v=20260605-rxdb-cancel1';
+import { getSvgIcon as getFallbackSvgIcon } from '../../shared/icons.js';
 
 const STYLE_BUILD = '20260605-rxdb-cancel1';
 const LAYOUT_DOC_ID = 'layout';
@@ -196,7 +196,8 @@ export async function mount(ctx) {
     
     const glyphEl = el.querySelector('.desktop-icon-glyph');
     const targetModule = doc.target_module || '';
-    const svgIcon = getSvgIcon(targetModule, 28);
+    const resolveSvgIcon = typeof ctx.getSvgIcon === 'function' ? ctx.getSvgIcon : getFallbackSvgIcon;
+    const svgIcon = resolveSvgIcon(targetModule, 28);
     if (svgIcon) {
       glyphEl.innerHTML = svgIcon;
     } else {
