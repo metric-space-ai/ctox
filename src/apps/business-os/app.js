@@ -852,6 +852,7 @@ async function bootstrap() {
       modules = await loadModules({ timeoutMs: 180000, allowShellSeed: false });
     }
   }
+  modules = await waitForRequestedHashModule(modules);
   state.modules = modules.modules || [];
   state.moduleCatalogFingerprint = modules.catalogFingerprint || state.moduleCatalogFingerprint;
   registerCustomModuleIcons().catch((error) => {
@@ -6623,6 +6624,43 @@ async function loadModules(options = {}) {
     governance,
     catalogFingerprint: moduleCatalogFingerprint({ ...catalog, modules }),
   };
+}
+
+async function waitForRequestedHashModule(modules, timeoutMs = 45000) {
+  const hashId = currentHashModuleId();
+  if (!hashId) return modules;
+  const hasRequestedModule = (candidate) => Array.isArray(candidate?.modules)
+    && candidate.modules.some((mod) => mod.id === hashId);
+  if (hasRequestedModule(modules)) return modules;
+  if (!state.db?.collection?.('business_module_catalog')) return modules;
+
+  console.log(`[business-os] Waiting for requested runtime module #${hashId} in RxDB module catalog.`);
+  state.sync?.startCollection?.('business_module_catalog').catch((error) => {
+    console.warn('[business-os] requested module catalog sync start failed:', error);
+  });
+
+  const deadline = Date.now() + timeoutMs;
+  let latest = modules;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      const next = await loadModules({ timeoutMs: 5000, allowShellSeed: false });
+      latest = next;
+      if (hasRequestedModule(next)) {
+        console.log(`[business-os] Requested runtime module #${hashId} arrived in RxDB module catalog.`);
+        return next;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await delay(500);
+  }
+  console.warn(
+    `[business-os] Requested runtime module #${hashId} did not arrive before initial shell open; `
+      + `continuing with available modules.`,
+    lastError || '',
+  );
+  return latest || modules;
 }
 
 function resolveModuleAllowlist(catalogAllowlist) {

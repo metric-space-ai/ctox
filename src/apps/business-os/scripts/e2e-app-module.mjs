@@ -282,6 +282,47 @@ async function findPrimaryCreateAction(page, rootSelector) {
   }, rootSelector);
 }
 
+async function collectBrowserDiagnostics(page, moduleId, rootSelector) {
+  try {
+    return await page.evaluate(({ moduleId, rootSelector }) => {
+      function visible(el) {
+        const box = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
+        return box.width > 0 && box.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+      }
+      const app = window.CTOX_BUSINESS_OS_APP || null;
+      const roots = Array.from(document.querySelectorAll('[data-module-root]')).map((el) => ({
+        module_root: el.getAttribute('data-module-root') || '',
+        visible: visible(el),
+        text: String(el.innerText || '').slice(0, 500),
+      }));
+      const actions = Array.from(document.querySelectorAll('[data-action]')).map((el) => ({
+        action: el.getAttribute('data-action') || '',
+        text: String(el.textContent || el.value || '').trim().slice(0, 160),
+        visible: visible(el),
+        disabled: Boolean(el.disabled),
+        module_root: el.closest('[data-module-root]')?.getAttribute('data-module-root') || '',
+      }));
+      return {
+        hash: location.hash,
+        active_module: document.body.dataset.activeModule || '',
+        loading_module: document.body.dataset.moduleLoading || '',
+        has_shell_state: Boolean(app),
+        shell_module_count: Array.isArray(app?.modules) ? app.modules.length : null,
+        requested_module_in_shell: Boolean(app?.modules?.some?.((mod) => mod?.id === moduleId)),
+        shell_module_ids: Array.isArray(app?.modules) ? app.modules.map((mod) => mod?.id).filter(Boolean).slice(0, 80) : [],
+        root_selector: rootSelector,
+        root_present: Boolean(document.querySelector(rootSelector)),
+        roots,
+        actions: actions.slice(0, 80),
+        body_text: String(document.body.innerText || '').slice(0, 1200),
+      };
+    }, { moduleId, rootSelector });
+  } catch (error) {
+    return { error: String(error?.message || error) };
+  }
+}
+
 async function fillVisibleForm(page, rootSelector, marker) {
   return page.evaluate(({ selector, marker }) => {
     function visible(el) {
@@ -485,6 +526,7 @@ async function runE2e(options) {
     const action = await findPrimaryCreateAction(page, rootSelector);
     result.evidence.create_action = action;
     if (!action) {
+      result.evidence.browser_diagnostics = await collectBrowserDiagnostics(page, options.moduleId, rootSelector);
       result.failures.push('no visible primary create action found under module root');
       return result;
     }
@@ -529,6 +571,7 @@ async function runE2e(options) {
 
     result.evidence.automation_action = await clickAutomation(page, rootSelector, options.marker);
     if (!result.evidence.automation_action) {
+      result.evidence.browser_diagnostics = await collectBrowserDiagnostics(page, options.moduleId, rootSelector);
       result.failures.push('no visible follow-up/review automation action found');
       return result;
     }
@@ -539,11 +582,17 @@ async function runE2e(options) {
       return null;
     }, Math.min(options.timeoutMs, 30000), 1000);
     if (!commandRecord) {
+      result.evidence.browser_diagnostics = await collectBrowserDiagnostics(page, options.moduleId, rootSelector);
       result.failures.push('automation marker did not appear in native business_commands');
       return result;
     }
     result.evidence.native_command = commandRecord;
   } catch (error) {
+    result.evidence.browser_diagnostics = await collectBrowserDiagnostics(
+      page,
+      options.moduleId,
+      `[data-module-root="${options.moduleId}"]`,
+    );
     result.failures.push(String(error.stack || error.message || error).split('\n')[0]);
   } finally {
     const moduleErrors = consoleErrors.filter((message) => message.includes(options.moduleId) || message.includes('[business-os] mount failed'));
