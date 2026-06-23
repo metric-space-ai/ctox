@@ -17,6 +17,10 @@
   not collide in CTOX DB.
 - Send workflow automation through `ctx.commandBus.dispatch(...)`.
 - Use `business_os.chat.task` for normal AI/chat follow-up with `payload.record_snapshot`.
+- Show returned `task_id`/`command_id` as a real tracking control that opens the
+  CTOX Flow/Queue focus. Use `ctox.businessOs.focusTask` plus a `#ctox` hash,
+  following existing shipped apps such as Matching, Research, Documents, or
+  Business Chat.
 - Use `ctox.ticket.local.create/comment/transition` only for real local ticket lifecycle actions.
 - Keep the first version small, focused, and fully working.
 - Prefer one or two panes; use modals for occasional detail work.
@@ -50,6 +54,8 @@
 - Do not write generated runtime apps under `src/` unless the task explicitly targets a source module.
 - Do not write directly to `business_commands`; use `ctx.commandBus.dispatch(...)`.
 - Do not write directly to `ctox_ticket_*` projection collections.
+- Do not render queue, command, or task ids as inert text when the user needs
+  to track the run in CTOX.
 - Do not use a full HTML document in `index.html`.
 - Do not assume `index.html` is already present in `ctx.host` when `mount(ctx)`
   starts.

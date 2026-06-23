@@ -84,6 +84,12 @@ Keep extra files rare. Use extra local ESM helpers only when the app would other
 - The normal intelligent workflow command is `business_os.chat.task`.
 - Use `business_os.chat.task` for follow-up chats, AI review, drafting, renewal checks, reports, and normal CTOX task continuation.
 - Include both `type` and `command_type`, set `module`, set `record_id`, and include enough `payload.record_snapshot` context for CTOX to continue the workflow.
+- Every visible automation that creates a CTOX command or queue task must expose
+  a visible tracking affordance in the originating record. Store the returned
+  `task_id` and `command_id`, and provide a button/link that sets
+  `sessionStorage["ctox.businessOs.focusTask"]` and opens `#ctox` or
+  `#ctox?task_id=<task_id>&command_id=<command_id>`. Do not render queue/task
+  ids as dead text only.
 - Use `ctox.ticket.local.create`, `ctox.ticket.local.comment`, or `ctox.ticket.local.transition` only when the app is intentionally creating or updating a real local CTOX ticket.
 - Do not write directly to `business_commands` from app code.
 - Do not write directly to `ctox_ticket_*` projection collections from app code.

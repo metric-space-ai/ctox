@@ -22,6 +22,9 @@ Use this before claiming a Business OS app is done.
   collection names, schema versions, required fields, and property types.
 - Automation uses `ctx.commandBus.dispatch(...)`.
 - Chat/AI actions use `business_os.chat.task` with `payload.record_snapshot`; real ticket lifecycle actions use `ctox.ticket.*`.
+- Automation results that return `task_id` or `command_id` are visible and
+  clickable from the originating record, opening the CTOX Flow/Queue focus via
+  `ctox.businessOs.focusTask` and `#ctox?...`.
 - The UI has no decorative panes or dead controls.
 - The empty state lets the user create at least one primary business record.
 - Primary Create/New/Add controls are clicked in the real Business OS shell and
