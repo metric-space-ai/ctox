@@ -75,6 +75,21 @@ function assertBusinessOsShellBuildKeyIsCurrent() {
   if (appBuild && scriptBuild && appBuild !== scriptBuild) {
     offenders.push(`src/apps/business-os/index.html: app.js build key ${scriptBuild} does not match APP_BUILD ${appBuild}`);
   }
+  if (!/<link\s+rel=["']stylesheet["']\s+href=["']app\.css\?v=[^"']+["']/.test(indexContent)) {
+    offenders.push('src/apps/business-os/index.html: missing required app.css stylesheet link');
+  }
+  if (!/<link\s+rel=["']stylesheet["']\s+href=["']shared\/base\.css\?v=[^"']+["']/.test(indexContent)) {
+    offenders.push('src/apps/business-os/index.html: missing required shared/base.css stylesheet link');
+  }
+  if (!/ensureShellStylesheets\(\);/.test(appContent)) {
+    offenders.push('src/apps/business-os/app.js: missing runtime shell stylesheet fallback');
+  }
+  if (!/app\.css\?v=\$\{APP_BUILD\}/.test(appContent)) {
+    offenders.push('src/apps/business-os/app.js: stylesheet fallback must load app.css with APP_BUILD');
+  }
+  if (!/shared\/base\.css\?v=20260609-base1/.test(appContent)) {
+    offenders.push('src/apps/business-os/app.js: stylesheet fallback must load shared/base.css');
+  }
 }
 
 function contentForForbiddenHttpScan(file, content) {

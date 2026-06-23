@@ -35,7 +35,10 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260623-role-session';
+const APP_BUILD = '20260623-cv-print-hotfix10';
+
+ensureShellStylesheets();
+
 // Monotonic token so a slow loading-shadow fetch from a previous module open
 // cannot paint over a newer one (rapid module switching).
 let activeLoadToken = 0;
@@ -68,6 +71,31 @@ const CRITICAL_SYNC_COLLECTIONS = [
 ];
 
 let criticalSyncCollectionsBundleChecked = false;
+
+function ensureShellStylesheets() {
+  if (typeof document === 'undefined') return;
+  for (const href of [
+    `app.css?v=${APP_BUILD}`,
+    'shared/base.css?v=20260609-base1',
+  ]) {
+    const absoluteHref = new URL(href, import.meta.url).href;
+    const alreadyLoaded = Array.from(document.querySelectorAll('link[rel="stylesheet"]'))
+      .some((link) => {
+        try {
+          return new URL(link.getAttribute('href') || link.href, document.baseURI).pathname
+            === new URL(absoluteHref).pathname;
+        } catch {
+          return false;
+        }
+      });
+    if (alreadyLoaded) continue;
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = absoluteHref;
+    link.dataset.shellRequiredStylesheet = 'true';
+    document.head.appendChild(link);
+  }
+}
 
 function assertCriticalSyncCollectionsMatchBundle(rxdb) {
   if (criticalSyncCollectionsBundleChecked) return;

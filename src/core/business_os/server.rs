@@ -2550,6 +2550,7 @@ fn inject_launch_context(
     session: &store::BusinessOsSession,
     sync_config: Option<&store::BusinessOsSyncConfig>,
 ) -> anyhow::Result<String> {
+    let html = ensure_shell_stylesheets_in_index(html);
     let script = format!(
         "<script>window.CTOX_BUSINESS_OS_SESSION={};window.CTOX_BUSINESS_OS_CONFIG={};</script>",
         script_json(session)?,
@@ -2566,6 +2567,29 @@ fn inject_launch_context(
         Ok(injected)
     } else {
         Ok(format!("{script}{html}"))
+    }
+}
+
+fn ensure_shell_stylesheets_in_index(html: String) -> String {
+    let mut required = Vec::new();
+    if !html.contains("app.css") {
+        required.push(r#"<link rel="stylesheet" href="app.css?v=20260623-shell-icons" />"#);
+    }
+    if !html.contains("shared/base.css") {
+        required.push(r#"<link rel="stylesheet" href="shared/base.css?v=20260609-base1" />"#);
+    }
+    if required.is_empty() {
+        return html;
+    }
+    let styles = format!("\n    {}\n", required.join("\n    "));
+    if let Some(idx) = html.find("</head>") {
+        let mut injected = String::with_capacity(html.len() + styles.len());
+        injected.push_str(&html[..idx]);
+        injected.push_str(&styles);
+        injected.push_str(&html[idx..]);
+        injected
+    } else {
+        format!("{styles}{html}")
     }
 }
 
@@ -2729,8 +2753,20 @@ mod tests {
 
         assert!(html.contains("window.CTOX_BUSINESS_OS_SESSION="));
         assert!(html.contains("window.CTOX_BUSINESS_OS_CONFIG=null"));
+        assert!(html.contains(r#"href="app.css?v=20260623-shell-icons""#));
+        assert!(html.contains(r#"href="shared/base.css?v=20260609-base1""#));
         assert!(!html.contains("sync_room"));
         assert!(!html.contains("signaling_room_password"));
+    }
+
+    #[test]
+    fn shell_stylesheet_guard_does_not_duplicate_existing_links() {
+        let html = ensure_shell_stylesheets_in_index(
+            r#"<html><head><link rel="stylesheet" href="app.css?v=old" /><link rel="stylesheet" href="shared/base.css?v=old" /></head><body></body></html>"#.to_owned(),
+        );
+
+        assert_eq!(html.matches("app.css").count(), 1);
+        assert_eq!(html.matches("shared/base.css").count(), 1);
     }
 
     #[test]
