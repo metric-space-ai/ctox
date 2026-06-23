@@ -1486,10 +1486,10 @@ fn release_stale_service_communication_leases_on_boot(
     root: &Path,
     state: &Arc<Mutex<SharedState>>,
 ) {
-    match recover_stale_business_os_app_queue_tasks(root, state, 16) {
+    match recover_abandoned_business_os_app_queue_tasks(root, state, 16) {
         Ok(updated) if updated > 0 => push_event(
             state,
-            format!("Recovered {updated} stale Business OS app queue task(s) at boot"),
+            format!("Recovered {updated} abandoned Business OS app queue task(s) at boot"),
         ),
         Ok(_) => {}
         Err(err) => push_event(
@@ -3116,7 +3116,7 @@ fn recover_business_os_app_queue_tasks_for_idle_status_snapshot(
             root,
             state,
             BUSINESS_OS_APP_RECOVERY_SCAN_LIMIT,
-            BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS,
+            0,
         )
     }));
     {
@@ -3129,7 +3129,7 @@ fn recover_business_os_app_queue_tasks_for_idle_status_snapshot(
             push_event(
                 state,
                 format!(
-                    "Recovered {} stale Business OS app queue task(s) during idle status snapshot",
+                    "Recovered {} abandoned Business OS app queue task(s) during idle status snapshot",
                     summary.total()
                 ),
             );
@@ -10542,7 +10542,7 @@ fn maybe_spawn_business_os_app_recovery(
     }
     thread::spawn(move || {
         let recovered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            recover_stale_business_os_app_queue_tasks(
+            recover_abandoned_business_os_app_queue_tasks(
                 &root,
                 &state,
                 BUSINESS_OS_APP_RECOVERY_SCAN_LIMIT,
@@ -10558,7 +10558,7 @@ fn maybe_spawn_business_os_app_recovery(
                 push_event(
                     &state,
                     format!(
-                        "Recovered {updated} stale Business OS app queue task(s) during {reason}"
+                        "Recovered {updated} abandoned Business OS app queue task(s) during {reason}"
                     ),
                 );
                 if reason != "idle status snapshot" {
@@ -11708,7 +11708,7 @@ fn maybe_lease_next_durable_queue_prompt(
         return Ok(None);
     };
     if mark_business_os_app_recovery_preflight_due(root) {
-        match recover_stale_business_os_app_queue_tasks(
+        match recover_abandoned_business_os_app_queue_tasks(
             root,
             state,
             BUSINESS_OS_APP_RECOVERY_SCAN_LIMIT,
@@ -11717,7 +11717,7 @@ fn maybe_lease_next_durable_queue_prompt(
                 push_event(
                     state,
                     format!(
-                        "Recovered {updated} stale Business OS app queue task(s) before leasing new work"
+                        "Recovered {updated} abandoned Business OS app queue task(s) before leasing new work"
                     ),
                 );
             }
@@ -11962,6 +11962,15 @@ fn recover_stale_business_os_app_queue_tasks(
         BUSINESS_OS_APP_RECOVERY_STALE_SECS,
     )
     .map(BusinessOsAppQueueRecoverySummary::total)
+}
+
+fn recover_abandoned_business_os_app_queue_tasks(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+    limit: usize,
+) -> Result<usize> {
+    recover_stale_business_os_app_queue_task_summary(root, state, limit, 0)
+        .map(BusinessOsAppQueueRecoverySummary::total)
 }
 
 fn recover_stale_business_os_app_queue_task_summary(
@@ -12338,11 +12347,11 @@ fn reconcile_ticket_runtime_state(root: &Path, state: &Arc<Mutex<SharedState>>) 
         return Ok(());
     }
 
-    match recover_stale_business_os_app_queue_tasks(root, state, 8) {
+    match recover_abandoned_business_os_app_queue_tasks(root, state, 8) {
         Ok(updated) if updated > 0 => push_event(
             state,
             format!(
-                "Recovered {updated} stale Business OS app queue task(s) during router reconcile"
+                "Recovered {updated} abandoned Business OS app queue task(s) during router reconcile"
             ),
         ),
         Ok(_) => {}
@@ -23325,6 +23334,87 @@ Business OS command:
     }
 
     #[test]
+    fn abandoned_app_recovery_requeues_fresh_missing_target_without_waiting() {
+        let root = temp_root("abandoned-app-recovery-missing-target-requeue");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create quality app".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: quality\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/quality".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        let updated = recover_abandoned_business_os_app_queue_tasks(&root, &state, 10)
+            .expect("abandoned app recovery failed");
+
+        assert_eq!(updated, 1);
+        let reloaded = channels::load_queue_task(&root, &task.message_key)
+            .expect("load queue task")
+            .expect("queue task exists");
+        assert_eq!(reloaded.route_status, "pending");
+        assert_eq!(
+            reloaded.status_note.as_deref(),
+            Some("business-os:requeued-unstarted-app: app target missing or empty")
+        );
+    }
+
+    #[test]
+    fn abandoned_app_recovery_moves_fresh_partial_target_to_validation_rework() {
+        let root = temp_root("abandoned-app-recovery-partial-target-rework");
+        let script_dir = root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "console.error('missing index.html index.css index.js'); process.exit(1);\n",
+        )
+        .expect("write validator script fixture");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create inventory app".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/inventory".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        let partial_dir = root.join("runtime/business-os/installed-modules/inventory");
+        std::fs::create_dir_all(&partial_dir).expect("create partial app dir");
+        std::fs::write(partial_dir.join("module.json"), r#"{"id":"inventory"}"#)
+            .expect("write partial module");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        let updated = recover_abandoned_business_os_app_queue_tasks(&root, &state, 10)
+            .expect("abandoned app recovery failed");
+
+        assert_eq!(updated, 1);
+        let reloaded = channels::load_queue_task(&root, &task.message_key)
+            .expect("load queue task")
+            .expect("queue task exists");
+        assert_eq!(reloaded.route_status, "review_rework");
+        assert!(reloaded
+            .prompt
+            .contains("Business OS app artifact validation failed."));
+        assert!(reloaded.prompt.contains("missing index.html"));
+    }
+
+    #[test]
     fn stale_app_validation_recovery_skips_pending_prompt_before_worker_start() {
         let root = temp_root("stale-app-validation-recovery-pending-skip");
         let script_dir = root.join("src/apps/business-os/scripts");
@@ -23477,8 +23567,8 @@ Business OS command:
     }
 
     #[test]
-    fn status_snapshot_recovery_skips_fresh_written_app_queue_lease() {
-        let root = temp_root("status-snapshot-fresh-written-app-skip");
+    fn status_snapshot_recovery_completes_fresh_abandoned_written_app_queue_lease() {
+        let root = temp_root("status-snapshot-fresh-written-app-complete");
         let script_dir = root.join("src/apps/business-os/scripts");
         std::fs::create_dir_all(&script_dir).expect("create validator script dir");
         std::fs::write(
@@ -23507,7 +23597,7 @@ Business OS command:
 
         status_from_shared_state(&root, &state).expect("status snapshot failed");
 
-        assert_eq!(route_status_for(&root, &task.message_key), "leased");
+        assert_eq!(route_status_for(&root, &task.message_key), "handled");
         let shared = lock_shared_state(&state);
         assert!(shared.pending_prompts.is_empty());
     }
@@ -23978,7 +24068,7 @@ Business OS command:
         let shared = lock_shared_state(&state);
         assert!(
             shared.recent_events.iter().any(|event| event.contains(
-                "Recovered 1 stale Business OS app queue task(s) during router reconcile"
+                "Recovered 1 abandoned Business OS app queue task(s) during router reconcile"
             )),
             "router reconcile should report green app recovery: {:?}",
             shared.recent_events
@@ -24033,7 +24123,7 @@ Business OS command:
         let shared = lock_shared_state(&state);
         assert!(
             !shared.recent_events.iter().any(|event| event.contains(
-                "Recovered 1 stale Business OS app queue task(s) during router reconcile"
+                "Recovered 1 abandoned Business OS app queue task(s) during router reconcile"
             )),
             "router reconcile must not recover app work during an active worker: {:?}",
             shared.recent_events
@@ -27785,13 +27875,11 @@ Use shell tools to create or update these files."
 
         assert_eq!(route_status_for(&state_root, &task.message_key), "handled");
         let shared = lock_shared_state(&state);
-        assert!(
-            shared
-                .recent_events
-                .iter()
-                .any(|event| event
-                    .contains("Recovered 1 stale Business OS app queue task(s) at boot"))
-        );
+        assert!(shared
+            .recent_events
+            .iter()
+            .any(|event| event
+                .contains("Recovered 1 abandoned Business OS app queue task(s) at boot")));
     }
 
     #[test]
