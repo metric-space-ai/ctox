@@ -62,7 +62,7 @@ const SEND_CAPACITY_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 // in browsers (the exact failure the transport plan flags as the channel-killer).
 // Every frame put on the wire via `send_json_text` MUST serialize to <= this.
 const MAX_SERIALIZED_FRAME_BYTES: usize = 16384;
-const DEFAULT_UDP_BIND_ADDR: &str = "0.0.0.0:0";
+const DEFAULT_UDP_BIND_ADDR: &str = "127.0.0.1:0";
 const UDP_BIND_ADDR_ENV: &str = "CTOX_WEBRTC_UDP_BIND_ADDR";
 
 /// Phase 2: transport-control wire method by which a browser tells the native
@@ -2729,7 +2729,7 @@ mod tests {
     }
 
     #[test]
-    fn default_handler_binds_udp_on_all_ipv4_interfaces() {
+    fn default_handler_binds_udp_on_loopback_for_local_business_os() {
         let handler = WebRTCRsConnectionHandler::new();
         assert_eq!(handler.udp_bind_addr, DEFAULT_UDP_BIND_ADDR);
     }
