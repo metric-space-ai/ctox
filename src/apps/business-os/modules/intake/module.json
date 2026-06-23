@@ -32,6 +32,6 @@
     "editable_after_install": true,
     "distribution": "catalog-module"
   },
-  "install_scope": "store",
+  "install_scope": "starter",
   "default_installed": false
 }
