@@ -123,6 +123,8 @@ const TICKET_STATE_SYNC_INTERVAL_SECS: u64 = 3;
 /// catalog/row changes to the browser within seconds-to-tens-of-seconds.
 const KNOWLEDGE_TABLES_SYNC_INTERVAL_SECS: u64 = 15;
 const BUSINESS_RECORD_PROJECTION_SYNC_INTERVAL_SECS: u64 = 3;
+const BUSINESS_RECORD_PROJECTION_IDLE_SYNC_INTERVAL_SECS: u64 = 60;
+const BUSINESS_RECORD_PROJECTION_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 const BUSINESS_RECORD_PROJECTION_SYNC_LIMIT: usize = 2_000;
 const TICKET_STATE_SYNC_LIMIT: usize = 500;
 const BROWSER_RUNTIME_ACTIVE_MAINTENANCE_INTERVAL_MS: u64 = 300;
@@ -2120,6 +2122,7 @@ async fn sync_business_record_projections_background_loop(
     database_write_lock: Arc<AsyncMutex<()>>,
 ) {
     let mut since_by_collection = HashMap::<String, i64>::new();
+    let mut consecutive_idle_rounds = 0u32;
     loop {
         let result = {
             let _guard = database_write_lock.lock().await;
@@ -2130,13 +2133,32 @@ async fn sync_business_record_projections_background_loop(
             )
             .await
         };
-        if let Err(err) = result {
-            eprintln!("[business-os] native rxdb business record projection sync failed: {err:#}");
+        match result {
+            Ok(0) => {
+                consecutive_idle_rounds = consecutive_idle_rounds.saturating_add(1);
+            }
+            Ok(_) => {
+                consecutive_idle_rounds = 0;
+            }
+            Err(err) => {
+                consecutive_idle_rounds = 0;
+                eprintln!(
+                    "[business-os] native rxdb business record projection sync failed: {err:#}"
+                );
+            }
         }
-        tokio::time::sleep(Duration::from_secs(
-            BUSINESS_RECORD_PROJECTION_SYNC_INTERVAL_SECS,
-        ))
+        tokio::time::sleep(Duration::from_secs(business_record_projection_sleep_secs(
+            consecutive_idle_rounds,
+        )))
         .await;
+    }
+}
+
+fn business_record_projection_sleep_secs(consecutive_idle_rounds: u32) -> u64 {
+    if consecutive_idle_rounds >= BUSINESS_RECORD_PROJECTION_IDLE_BACKOFF_AFTER_TICKS {
+        BUSINESS_RECORD_PROJECTION_IDLE_SYNC_INTERVAL_SECS
+    } else {
+        BUSINESS_RECORD_PROJECTION_SYNC_INTERVAL_SECS
     }
 }
 
@@ -4116,6 +4138,9 @@ async fn sync_module_catalog_with_database(
     let module_catalog = database
         .collection("business_module_catalog")
         .context("business_module_catalog collection is not registered")?;
+    if projection_document_unchanged(&module_catalog, &document).await? {
+        return Ok(());
+    }
     match module_catalog.incremental_upsert(document.clone()).await {
         Ok(_) => {}
         Err(err) if is_recoverable_projection_write_error(&err) => {
@@ -4133,6 +4158,33 @@ async fn sync_module_catalog_with_database(
         Err(err) => return Err(anyhow::anyhow!("upsert module catalog projection: {err}")),
     }
     Ok(())
+}
+
+async fn projection_document_unchanged(
+    collection: &Arc<RxCollection>,
+    document: &Value,
+) -> anyhow::Result<bool> {
+    let Some(document_id) = document
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+    else {
+        return Ok(false);
+    };
+    let Some(existing) = find_projection_document(collection, document_id).await? else {
+        return Ok(false);
+    };
+    Ok(projection_document_compare_payload(existing)
+        == projection_document_compare_payload(document.clone()))
+}
+
+fn projection_document_compare_payload(mut document: Value) -> Value {
+    remove_projection_rxdb_envelope(&mut document);
+    if let Some(object) = document.as_object_mut() {
+        object.remove("_attachments");
+        object.remove("updated_at_ms");
+    }
+    document
 }
 
 async fn sync_ticket_state_with_database(
@@ -7512,6 +7564,22 @@ mod tests {
     }
 
     #[test]
+    fn business_record_projection_sleep_backs_off_after_idle_round() {
+        assert_eq!(
+            business_record_projection_sleep_secs(0),
+            BUSINESS_RECORD_PROJECTION_SYNC_INTERVAL_SECS
+        );
+        assert_eq!(
+            business_record_projection_sleep_secs(1),
+            BUSINESS_RECORD_PROJECTION_IDLE_SYNC_INTERVAL_SECS
+        );
+        assert_eq!(
+            business_record_projection_sleep_secs(u32::MAX),
+            BUSINESS_RECORD_PROJECTION_IDLE_SYNC_INTERVAL_SECS
+        );
+    }
+
+    #[test]
     fn runtime_installed_module_schemas_extend_native_collection_creators() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let module_dir = temp
@@ -8825,6 +8893,16 @@ mod tests {
                 .and_then(Value::as_str),
             Some("demo-template")
         );
+
+        sync_module_catalog(root.path()).expect("resync unchanged module catalog");
+        let catalog_json_again: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__business_module_catalog__v0 WHERE id = 'module-catalog'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("projected module catalog row after resync");
+        assert_eq!(catalog_json, catalog_json_again);
     }
 
     #[test]

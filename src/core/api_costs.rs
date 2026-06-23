@@ -2,9 +2,14 @@ use anyhow::{Context, Result};
 use chrono::{Datelike, Duration, NaiveDate, Weekday};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Mutex;
+use std::sync::OnceLock;
+
+static API_COST_SCHEMA_READY: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ApiTokenUsage {
@@ -176,7 +181,6 @@ pub fn record_api_model_usage_with_telemetry(
         return Ok(());
     }
     let conn = open_cost_db(root)?;
-    ensure_schema(&conn)?;
     let now = chrono::Local::now();
     let created_at = now.to_rfc3339();
     let day = now.format("%Y-%m-%d").to_string();
@@ -249,7 +253,6 @@ pub fn summary_for_range(
     validate_day(start_day)?;
     validate_day(end_day)?;
     let conn = open_cost_db(root)?;
-    ensure_schema(&conn)?;
     let mut stmt = conn.prepare(
         "SELECT day, provider, model,
                 input_tokens, cached_input_tokens, output_tokens,
@@ -382,7 +385,6 @@ pub fn summary_for_range(
 
 pub fn summaries_for_recent_days(root: &Path, days: usize) -> Result<Vec<ApiCostSummary>> {
     let conn = open_cost_db(root)?;
-    ensure_schema(&conn)?;
     let mut stmt =
         conn.prepare("SELECT DISTINCT day FROM api_model_cost_events ORDER BY day DESC LIMIT ?1")?;
     let rows = stmt.query_map([days.max(1) as i64], |row| row.get::<_, String>(0))?;
@@ -439,7 +441,6 @@ pub fn summaries_for_recent_months(root: &Path, months: usize) -> Result<Vec<Api
 pub fn hotspots_for_day(root: &Path, day: &str, limit: usize) -> Result<Vec<ApiCostHotspot>> {
     validate_day(day)?;
     let conn = open_cost_db(root)?;
-    ensure_schema(&conn)?;
     let mut stmt = conn.prepare(
         "SELECT source, turn_id, provider, model,
                 COUNT(*) AS events,
@@ -492,7 +493,6 @@ pub fn hotspots_for_day(root: &Path, day: &str, limit: usize) -> Result<Vec<ApiC
 
 pub fn list_prices(root: &Path) -> Result<Vec<ApiPriceRate>> {
     let conn = open_cost_db(root)?;
-    ensure_schema(&conn)?;
     let mut stmt = conn.prepare(
         "SELECT provider, model, input_usd_per_million,
                 cached_input_usd_per_million, output_usd_per_million,
@@ -538,7 +538,6 @@ pub fn set_price_rate(
         .unwrap_or_else(today_day);
     validate_day(&day)?;
     let conn = open_cost_db(root)?;
-    ensure_schema(&conn)?;
     let now = chrono::Local::now().to_rfc3339();
     conn.execute(
         "INSERT INTO api_model_price_rates (
@@ -934,7 +933,34 @@ fn open_cost_db(root: &Path) -> Result<Connection> {
     let conn = Connection::open(&path)
         .with_context(|| format!("failed to open cost database {}", path.display()))?;
     conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    ensure_schema_once(&path, &conn)?;
     Ok(conn)
+}
+
+fn ensure_schema_once(path: &Path, conn: &Connection) -> Result<()> {
+    let key = cost_schema_cache_key(path);
+    let ready = API_COST_SCHEMA_READY.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut ready = ready
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if ready.contains(&key) {
+        return Ok(());
+    }
+    ensure_schema(conn)?;
+    ready.insert(key);
+    Ok(())
+}
+
+fn cost_schema_cache_key(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(path))
+                .unwrap_or_else(|_| path.to_path_buf())
+        }
+    })
 }
 
 fn ensure_schema(conn: &Connection) -> Result<()> {
@@ -1121,6 +1147,20 @@ mod tests {
         assert_eq!(summary.events, 1);
         assert_eq!(summary.unpriced_events, 0);
         assert_eq!(summary.total_cost_microusd, 1_700);
+        Ok(())
+    }
+
+    #[test]
+    fn open_cost_db_marks_schema_ready_for_db_path() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let _conn = open_cost_db(tmp.path())?;
+        let key = cost_schema_cache_key(&crate::paths::core_db(tmp.path()));
+        let ready = API_COST_SCHEMA_READY
+            .get()
+            .expect("schema cache should be initialized")
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(ready.contains(&key));
         Ok(())
     }
 

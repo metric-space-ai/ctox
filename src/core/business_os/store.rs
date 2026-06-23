@@ -117,6 +117,7 @@ const BUSINESS_OS_MCP_POLICY_PAYLOAD_KEY: &str = "business_os.mcp_policy.v1";
 const BUSINESS_OS_AUDIT_RETENTION_POLICY_PAYLOAD_KEY: &str =
     "business_os.audit_retention_policy.v1";
 const RXDB_TABLE_CACHE_MAX_ENTRIES: usize = 64;
+const RXDB_TABLE_CACHE_TTL_SECS: u64 = 60;
 const RUNTIME_SETTINGS_RXDB_CACHE_TTL_SECS: u64 = 5;
 
 static RXDB_TABLE_NAMES_CACHE: OnceLock<Mutex<BTreeMap<PathBuf, RxdbTableNamesCacheEntry>>> =
@@ -141,11 +142,7 @@ type BusinessOsStoreDbKey = (PathBuf, u64, u64);
 type BusinessOsStoreDbKey = PathBuf;
 
 type BusinessOsFileChangeStamp = (u64, u128);
-type RxdbStoreStamp = (
-    BusinessOsFileChangeStamp,
-    BusinessOsFileChangeStamp,
-    BusinessOsFileChangeStamp,
-);
+type RxdbStoreStamp = BusinessOsFileChangeStamp;
 type RuntimeSettingsCacheStamp = (
     BusinessOsFileChangeStamp,
     BusinessOsFileChangeStamp,
@@ -154,6 +151,7 @@ type RuntimeSettingsCacheStamp = (
 
 #[derive(Debug, Clone)]
 struct RxdbTableNamesCacheEntry {
+    generated_at: Instant,
     stamp: RxdbStoreStamp,
     tables: BTreeSet<String>,
 }
@@ -834,16 +832,26 @@ fn rxdb_table_exists_cached(path: &Path, conn: &Connection, table: &str) -> anyh
 fn rxdb_table_names_cached(path: &Path, conn: &Connection) -> anyhow::Result<BTreeSet<String>> {
     let key = rxdb_store_cache_key(path);
     let stamp = rxdb_store_stamp(path);
+    let now = Instant::now();
     let cache = RXDB_TABLE_NAMES_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
     {
         let cache = cache
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(entry) = cache.get(&key).filter(|entry| entry.stamp == stamp) {
+        if let Some(entry) = cache.get(&key).filter(|entry| {
+            entry.stamp == stamp
+                && now.duration_since(entry.generated_at)
+                    < Duration::from_secs(RXDB_TABLE_CACHE_TTL_SECS)
+        }) {
             return Ok(entry.tables.clone());
         }
     }
 
+    let tables = rxdb_table_names_uncached(conn)?;
+    cache_rxdb_table_names(cache, key, stamp, now, tables)
+}
+
+fn rxdb_table_names_uncached(conn: &Connection) -> anyhow::Result<BTreeSet<String>> {
     let mut statement = conn
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
         .context("list RxDB SQLite tables")?;
@@ -852,7 +860,16 @@ fn rxdb_table_names_cached(path: &Path, conn: &Connection) -> anyhow::Result<BTr
     for row in rows {
         tables.insert(row?);
     }
+    Ok(tables)
+}
 
+fn cache_rxdb_table_names(
+    cache: &Mutex<BTreeMap<PathBuf, RxdbTableNamesCacheEntry>>,
+    key: PathBuf,
+    stamp: RxdbStoreStamp,
+    generated_at: Instant,
+    tables: BTreeSet<String>,
+) -> anyhow::Result<BTreeSet<String>> {
     let mut cache = cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -862,6 +879,7 @@ fn rxdb_table_names_cached(path: &Path, conn: &Connection) -> anyhow::Result<BTr
     cache.insert(
         key,
         RxdbTableNamesCacheEntry {
+            generated_at,
             stamp,
             tables: tables.clone(),
         },
@@ -882,11 +900,7 @@ fn rxdb_store_cache_key(path: &Path) -> PathBuf {
 }
 
 fn rxdb_store_stamp(path: &Path) -> RxdbStoreStamp {
-    (
-        business_os_file_change_stamp(path),
-        business_os_file_change_stamp(&sqlite_sidecar_path(path, "-wal")),
-        business_os_file_change_stamp(&sqlite_sidecar_path(path, "-shm")),
-    )
+    business_os_file_change_stamp(path)
 }
 
 fn business_os_file_change_stamp(path: &Path) -> BusinessOsFileChangeStamp {
@@ -938,13 +952,22 @@ fn rxdb_collection_table_name(path: &Path, conn: &Connection, collection: &str) 
         rxdb_schema_version(collection)
     );
     let tables = rxdb_table_names_cached(path, conn).ok()?;
-    if tables.contains(&expected) {
-        return Some(expected);
+    rxdb_collection_table_name_from_tables(&tables, &expected, collection)
+}
+
+fn rxdb_collection_table_name_from_tables(
+    tables: &BTreeSet<String>,
+    expected: &str,
+    collection: &str,
+) -> Option<String> {
+    if tables.contains(expected) {
+        return Some(expected.to_string());
     }
     let prefix = format!("ctox_business_os__{collection}__v");
     tables
-        .into_iter()
+        .iter()
         .filter(|table| table.starts_with(&prefix))
+        .cloned()
         .max_by_key(|table| {
             table
                 .strip_prefix(&prefix)
@@ -26508,6 +26531,30 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn rxdb_table_names_cache_ignores_wal_and_shm_churn() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let path = temp.path().join(RXDB_STORE_FILE);
+        let conn = Connection::open(&path)?;
+        conn.execute(
+            "CREATE TABLE ctox_business_os__business_chats__v1 (id TEXT PRIMARY KEY, data TEXT)",
+            [],
+        )?;
+
+        let initial_stamp = rxdb_store_stamp(&path);
+        fs::write(sqlite_sidecar_path(&path, "-wal"), b"first wal write")?;
+        fs::write(sqlite_sidecar_path(&path, "-shm"), b"first shm write")?;
+        assert_eq!(initial_stamp, rxdb_store_stamp(&path));
+
+        let tables = rxdb_table_names_cached(&path, &conn)?;
+        assert!(tables.contains("ctox_business_os__business_chats__v1"));
+
+        fs::write(sqlite_sidecar_path(&path, "-wal"), b"second wal write")?;
+        fs::write(sqlite_sidecar_path(&path, "-shm"), b"second shm write")?;
+        assert_eq!(tables, rxdb_table_names_cached(&path, &conn)?);
+        Ok(())
     }
 
     #[test]
