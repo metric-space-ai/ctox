@@ -190,7 +190,6 @@ struct ChannelRouterPreflightIdleGateState {
     root: PathBuf,
     core_db_path: PathBuf,
     core_stamp: CoreDbChangeStamp,
-    business_os_store_stamp: CoreDbChangeStamp,
     ticket_stamp: tickets::TicketStoreChangeStamp,
     env_overlay: BTreeMap<String, String>,
     last_idle_pass: Instant,
@@ -201,7 +200,6 @@ struct ChannelRouterIdleGateState {
     root: PathBuf,
     core_db_path: PathBuf,
     core_stamp: CoreDbChangeStamp,
-    business_os_store_stamp: CoreDbChangeStamp,
     ticket_stamp: tickets::TicketStoreChangeStamp,
     settings: BTreeMap<String, String>,
     last_idle_pass: Instant,
@@ -10861,7 +10859,6 @@ fn should_skip_idle_channel_router_preflight(root: &Path) -> bool {
     let root_path = root.to_path_buf();
     let core_db_path = crate::paths::core_db(root);
     let core_stamp = core_db_change_stamp(&core_db_path);
-    let business_os_store_stamp = business_os_store_change_stamp(root);
     let ticket_stamp = tickets::ticket_store_change_stamp(root);
     let env_overlay = live_service_env_overlay();
     let now = Instant::now();
@@ -10873,7 +10870,6 @@ fn should_skip_idle_channel_router_preflight(root: &Path) -> bool {
     previous.root == root_path
         && previous.core_db_path == core_db_path
         && previous.core_stamp == core_stamp
-        && previous.business_os_store_stamp == business_os_store_stamp
         && previous.ticket_stamp == ticket_stamp
         && previous.env_overlay == env_overlay
         && now.duration_since(previous.last_idle_pass)
@@ -10884,7 +10880,6 @@ fn mark_channel_router_preflight_idle(root: &Path) {
     let root_path = root.to_path_buf();
     let core_db_path = crate::paths::core_db(root);
     let core_stamp = core_db_change_stamp(&core_db_path);
-    let business_os_store_stamp = business_os_store_change_stamp(root);
     let ticket_stamp = tickets::ticket_store_change_stamp(root);
     let env_overlay = live_service_env_overlay();
     let gate = CHANNEL_ROUTER_PREFLIGHT_IDLE_GATE.get_or_init(|| Mutex::new(None));
@@ -10893,7 +10888,6 @@ fn mark_channel_router_preflight_idle(root: &Path) {
         root: root_path,
         core_db_path,
         core_stamp,
-        business_os_store_stamp,
         ticket_stamp,
         env_overlay,
         last_idle_pass: Instant::now(),
@@ -10912,7 +10906,6 @@ fn should_skip_idle_channel_router_tick(root: &Path, settings: &BTreeMap<String,
     let root_path = root.to_path_buf();
     let core_db_path = crate::paths::core_db(root);
     let core_stamp = core_db_change_stamp(&core_db_path);
-    let business_os_store_stamp = business_os_store_change_stamp(root);
     let ticket_stamp = tickets::ticket_store_change_stamp(root);
     let now = Instant::now();
     let gate = CHANNEL_ROUTER_IDLE_GATE.get_or_init(|| Mutex::new(None));
@@ -10925,7 +10918,6 @@ fn should_skip_idle_channel_router_tick(root: &Path, settings: &BTreeMap<String,
         &root_path,
         &core_db_path,
         &core_stamp,
-        &business_os_store_stamp,
         &ticket_stamp,
         settings,
         now,
@@ -10936,7 +10928,6 @@ fn mark_idle_channel_router_pass(root: &Path, settings: &BTreeMap<String, String
     let root_path = root.to_path_buf();
     let core_db_path = crate::paths::core_db(root);
     let core_stamp = core_db_change_stamp(&core_db_path);
-    let business_os_store_stamp = business_os_store_change_stamp(root);
     let ticket_stamp = tickets::ticket_store_change_stamp(root);
     let gate = CHANNEL_ROUTER_IDLE_GATE.get_or_init(|| Mutex::new(None));
     let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -10944,7 +10935,6 @@ fn mark_idle_channel_router_pass(root: &Path, settings: &BTreeMap<String, String
         root: root_path,
         core_db_path,
         core_stamp,
-        business_os_store_stamp,
         ticket_stamp,
         settings: settings.clone(),
         last_idle_pass: Instant::now(),
@@ -10956,7 +10946,6 @@ fn channel_router_idle_gate_matches(
     root_path: &Path,
     core_db_path: &Path,
     core_stamp: &CoreDbChangeStamp,
-    business_os_store_stamp: &CoreDbChangeStamp,
     ticket_stamp: &tickets::TicketStoreChangeStamp,
     settings: &BTreeMap<String, String>,
     now: Instant,
@@ -10964,7 +10953,6 @@ fn channel_router_idle_gate_matches(
     previous.root == root_path
         && previous.core_db_path == core_db_path
         && previous.core_stamp == *core_stamp
-        && previous.business_os_store_stamp == *business_os_store_stamp
         && previous.ticket_stamp == *ticket_stamp
         && previous.settings == *settings
         && now.duration_since(previous.last_idle_pass)
@@ -11022,10 +11010,6 @@ fn core_db_change_stamp(path: &Path) -> CoreDbChangeStamp {
         wal: file_change_stamp(&sqlite_sidecar_path(path, "-wal")),
         shm: file_change_stamp(&sqlite_sidecar_path(path, "-shm")),
     }
-}
-
-fn business_os_store_change_stamp(root: &Path) -> CoreDbChangeStamp {
-    core_db_change_stamp(&root.join("runtime").join("business-os.sqlite3"))
 }
 
 fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
@@ -18616,21 +18600,19 @@ mod tests {
     }
 
     #[test]
-    fn channel_router_idle_gate_reopens_when_business_os_store_changes() {
+    fn channel_router_idle_gate_ignores_business_os_store_churn() {
         let root = temp_root("channel-router-business-os-store-gate");
         std::fs::create_dir_all(root.join("runtime")).unwrap();
         let settings = BTreeMap::new();
         let root_path = root.clone();
         let core_db_path = crate::paths::core_db(&root);
         let core_stamp = core_db_change_stamp(&core_db_path);
-        let business_os_store_stamp = business_os_store_change_stamp(&root);
         let ticket_stamp = tickets::ticket_store_change_stamp(&root);
         let now = Instant::now();
         let previous = ChannelRouterIdleGateState {
             root: root_path.clone(),
             core_db_path: core_db_path.clone(),
             core_stamp: core_stamp.clone(),
-            business_os_store_stamp: business_os_store_stamp.clone(),
             ticket_stamp: ticket_stamp.clone(),
             settings: settings.clone(),
             last_idle_pass: now,
@@ -18642,7 +18624,6 @@ mod tests {
                 &root_path,
                 &core_db_path,
                 &core_stamp,
-                &business_os_store_stamp,
                 &ticket_stamp,
                 &settings,
                 now,
@@ -18651,23 +18632,17 @@ mod tests {
         );
 
         std::fs::write(root.join("runtime").join("business-os.sqlite3"), b"changed").unwrap();
-        let changed_business_os_store_stamp = business_os_store_change_stamp(&root);
-        assert_ne!(
-            business_os_store_stamp, changed_business_os_store_stamp,
-            "Business OS store writes must change the router idle gate stamp"
-        );
         assert!(
-            !channel_router_idle_gate_matches(
+            channel_router_idle_gate_matches(
                 &previous,
                 &root_path,
                 &core_db_path,
                 &core_stamp,
-                &changed_business_os_store_stamp,
                 &ticket_stamp,
                 &settings,
                 now,
             ),
-            "Business OS store changes must reopen the router gate"
+            "Business OS runtime store churn must not reopen the idle router gate by itself"
         );
         let _ = std::fs::remove_dir_all(root);
     }
@@ -18694,6 +18669,12 @@ mod tests {
         assert!(
             should_skip_idle_channel_router_preflight(&root),
             "unchanged router preflight should be skipped inside the idle safety window"
+        );
+
+        std::fs::write(root.join("runtime").join("business-os.sqlite3"), b"churn").unwrap();
+        assert!(
+            should_skip_idle_channel_router_preflight(&root),
+            "Business OS runtime store churn must not reopen the channel-router preflight gate"
         );
 
         {
