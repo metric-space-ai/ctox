@@ -23,6 +23,7 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::env;
 use std::fs;
@@ -30,6 +31,8 @@ use std::io;
 use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
@@ -120,6 +123,22 @@ static RXDB_TABLE_NAMES_CACHE: OnceLock<Mutex<BTreeMap<PathBuf, RxdbTableNamesCa
     OnceLock::new();
 static RUNTIME_SETTINGS_RXDB_CACHE: OnceLock<Mutex<BTreeMap<PathBuf, RuntimeSettingsCacheEntry>>> =
     OnceLock::new();
+static BUSINESS_OS_STORE_SCHEMA_READY: OnceLock<Mutex<HashSet<BusinessOsStoreDbKey>>> =
+    OnceLock::new();
+
+thread_local! {
+    static BUSINESS_OS_STORE_DB: RefCell<Option<CachedBusinessOsStoreConnection>> = RefCell::new(None);
+}
+
+struct CachedBusinessOsStoreConnection {
+    key: BusinessOsStoreDbKey,
+    conn: Connection,
+}
+
+#[cfg(unix)]
+type BusinessOsStoreDbKey = (PathBuf, u64, u64);
+#[cfg(not(unix))]
+type BusinessOsStoreDbKey = PathBuf;
 
 type BusinessOsFileChangeStamp = (u64, u128);
 type RxdbStoreStamp = (
@@ -601,11 +620,49 @@ struct TemplateManifest {
 }
 
 pub fn open_store(root: &Path) -> anyhow::Result<Connection> {
+    let path = business_os_store_path(root);
+    let conn = open_store_connection(&path)?;
+    ensure_store_schema_once(&path, &conn)?;
+    Ok(conn)
+}
+
+fn with_store_connection<T>(
+    root: &Path,
+    f: impl FnOnce(&Connection) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    let path = business_os_store_path(root);
+    BUSINESS_OS_STORE_DB.with(|cell| {
+        let mut cached = cell.borrow_mut();
+        let key = business_os_store_db_key(&path);
+        let needs_open = cached
+            .as_ref()
+            .map(|entry| entry.key != key)
+            .unwrap_or(true);
+        if needs_open {
+            let conn = open_store_connection(&path)?;
+            ensure_store_schema_once(&path, &conn)?;
+            let key = business_os_store_db_key(&path);
+            *cached = Some(CachedBusinessOsStoreConnection { key, conn });
+        }
+        let conn = &cached
+            .as_ref()
+            .expect("Business OS store connection initialized")
+            .conn;
+        f(conn)
+    })
+}
+
+fn business_os_store_path(root: &Path) -> PathBuf {
     let runtime = root.join("runtime");
-    std::fs::create_dir_all(&runtime)
-        .with_context(|| format!("failed to create runtime dir {}", runtime.display()))?;
-    let path = runtime.join(STORE_FILE);
-    let conn = Connection::open(&path)
+    runtime.join(STORE_FILE)
+}
+
+fn open_store_connection(path: &Path) -> anyhow::Result<Connection> {
+    if let Some(runtime) = path.parent() {
+        std::fs::create_dir_all(runtime)
+            .with_context(|| format!("failed to create runtime dir {}", runtime.display()))?;
+    }
+    let conn = Connection::open(path)
         .with_context(|| format!("failed to open Business OS store {}", path.display()))?;
     conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
         .context("failed to configure Business OS SQLite busy_timeout")?;
@@ -614,8 +671,48 @@ pub fn open_store(root: &Path) -> anyhow::Result<Connection> {
         "PRAGMA journal_mode=WAL; PRAGMA busy_timeout={busy_timeout_ms};"
     ))
     .context("failed to configure Business OS SQLite pragmas")?;
-    migrate(&conn)?;
     Ok(conn)
+}
+
+fn ensure_store_schema_once(path: &Path, conn: &Connection) -> anyhow::Result<()> {
+    let key = business_os_store_db_key(path);
+    let ready = BUSINESS_OS_STORE_SCHEMA_READY.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut ready = ready
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if ready.contains(&key) {
+        return Ok(());
+    }
+    migrate(conn)?;
+    ready.insert(key);
+    Ok(())
+}
+
+#[cfg(unix)]
+fn business_os_store_db_key(path: &Path) -> BusinessOsStoreDbKey {
+    let canonical =
+        fs::canonicalize(path).unwrap_or_else(|_| absolute_business_os_store_path(path));
+    let metadata = fs::metadata(&canonical)
+        .or_else(|_| fs::metadata(path))
+        .ok();
+    let (device, inode) = metadata
+        .map(|metadata| (metadata.dev(), metadata.ino()))
+        .unwrap_or((0, 0));
+    (canonical, device, inode)
+}
+
+#[cfg(not(unix))]
+fn business_os_store_db_key(path: &Path) -> BusinessOsStoreDbKey {
+    fs::canonicalize(path).unwrap_or_else(|_| absolute_business_os_store_path(path))
+}
+
+fn absolute_business_os_store_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    std::env::current_dir()
+        .map(|cwd| cwd.join(path))
+        .unwrap_or_else(|_| path.to_path_buf())
 }
 
 pub fn rxdb_store_path(root: &Path) -> PathBuf {
@@ -12211,35 +12308,37 @@ pub fn pull_collection_records(
         }
         _ => {}
     }
-    let conn = open_store(root)?;
     let limit = limit.unwrap_or(500).clamp(1, 2_000);
     let since_ms = since_ms.unwrap_or(0);
-    let mut statement = conn.prepare(
-        "SELECT record_id, deleted, updated_at_ms, payload_json
-         FROM business_records
-         WHERE collection = ?1 AND updated_at_ms >= ?2
-         ORDER BY updated_at_ms ASC, record_id ASC
-         LIMIT ?3",
-    )?;
-    let rows = statement.query_map(params![collection, since_ms, limit as i64], |row| {
-        let record_id: String = row.get(0)?;
-        let deleted: i64 = row.get(1)?;
-        let updated_at_ms: i64 = row.get(2)?;
-        let payload_json: String = row.get(3)?;
-        Ok((record_id, deleted, updated_at_ms, payload_json))
-    })?;
-    let mut documents = Vec::new();
-    for row in rows {
-        let (record_id, deleted, updated_at_ms, payload_json) = row?;
-        let mut payload = serde_json::from_str::<Value>(&payload_json).unwrap_or(Value::Null);
-        if let Some(obj) = payload.as_object_mut() {
-            obj.entry("id".to_string())
-                .or_insert_with(|| Value::String(record_id.clone()));
-            obj.insert("_deleted".to_string(), Value::Bool(deleted != 0));
-            obj.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
+    let documents = with_store_connection(root, |conn| {
+        let mut statement = conn.prepare(
+            "SELECT record_id, deleted, updated_at_ms, payload_json
+             FROM business_records
+             WHERE collection = ?1 AND updated_at_ms >= ?2
+             ORDER BY updated_at_ms ASC, record_id ASC
+             LIMIT ?3",
+        )?;
+        let rows = statement.query_map(params![collection, since_ms, limit as i64], |row| {
+            let record_id: String = row.get(0)?;
+            let deleted: i64 = row.get(1)?;
+            let updated_at_ms: i64 = row.get(2)?;
+            let payload_json: String = row.get(3)?;
+            Ok((record_id, deleted, updated_at_ms, payload_json))
+        })?;
+        let mut documents = Vec::new();
+        for row in rows {
+            let (record_id, deleted, updated_at_ms, payload_json) = row?;
+            let mut payload = serde_json::from_str::<Value>(&payload_json).unwrap_or(Value::Null);
+            if let Some(obj) = payload.as_object_mut() {
+                obj.entry("id".to_string())
+                    .or_insert_with(|| Value::String(record_id.clone()));
+                obj.insert("_deleted".to_string(), Value::Bool(deleted != 0));
+                obj.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
+            }
+            documents.push(payload);
         }
-        documents.push(payload);
-    }
+        Ok(documents)
+    })?;
     if documents.is_empty() {
         if let Some(rxdb_projection) =
             pull_rxdb_collection_table_records(root, collection, since_ms, limit)?
@@ -12283,15 +12382,16 @@ pub fn pull_collection_record(
         }
         _ => {}
     }
-    let conn = open_store(root)?;
-    let payload_json = conn
-        .query_row(
-            "SELECT payload_json FROM business_records
-             WHERE collection = ?1 AND record_id = ?2 AND deleted = 0",
-            params![collection, record_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?;
+    let payload_json = with_store_connection(root, |conn| {
+        Ok(conn
+            .query_row(
+                "SELECT payload_json FROM business_records
+                 WHERE collection = ?1 AND record_id = ?2 AND deleted = 0",
+                params![collection, record_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?)
+    })?;
     if let Some(payload_json) = payload_json {
         let mut payload = serde_json::from_str::<Value>(&payload_json).unwrap_or(Value::Null);
         if let Some(object) = payload.as_object_mut() {
@@ -12355,34 +12455,36 @@ pub fn pull_latest_collection_records(
         }
         _ => {}
     }
-    let conn = open_store(root)?;
     let limit = limit.unwrap_or(500).clamp(1, 2_000);
-    let mut statement = conn.prepare(
-        "SELECT record_id, deleted, updated_at_ms, payload_json
-         FROM business_records
-         WHERE collection = ?1
-         ORDER BY updated_at_ms DESC, record_id DESC
-         LIMIT ?2",
-    )?;
-    let rows = statement.query_map(params![collection, limit as i64], |row| {
-        let record_id: String = row.get(0)?;
-        let deleted: i64 = row.get(1)?;
-        let updated_at_ms: i64 = row.get(2)?;
-        let payload_json: String = row.get(3)?;
-        Ok((record_id, deleted, updated_at_ms, payload_json))
-    })?;
-    let mut documents = Vec::new();
-    for row in rows {
-        let (record_id, deleted, updated_at_ms, payload_json) = row?;
-        let mut payload = serde_json::from_str::<Value>(&payload_json).unwrap_or(Value::Null);
-        if let Some(obj) = payload.as_object_mut() {
-            obj.entry("id".to_string())
-                .or_insert_with(|| Value::String(record_id.clone()));
-            obj.insert("_deleted".to_string(), Value::Bool(deleted != 0));
-            obj.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
+    let documents = with_store_connection(root, |conn| {
+        let mut statement = conn.prepare(
+            "SELECT record_id, deleted, updated_at_ms, payload_json
+             FROM business_records
+             WHERE collection = ?1
+             ORDER BY updated_at_ms DESC, record_id DESC
+             LIMIT ?2",
+        )?;
+        let rows = statement.query_map(params![collection, limit as i64], |row| {
+            let record_id: String = row.get(0)?;
+            let deleted: i64 = row.get(1)?;
+            let updated_at_ms: i64 = row.get(2)?;
+            let payload_json: String = row.get(3)?;
+            Ok((record_id, deleted, updated_at_ms, payload_json))
+        })?;
+        let mut documents = Vec::new();
+        for row in rows {
+            let (record_id, deleted, updated_at_ms, payload_json) = row?;
+            let mut payload = serde_json::from_str::<Value>(&payload_json).unwrap_or(Value::Null);
+            if let Some(obj) = payload.as_object_mut() {
+                obj.entry("id".to_string())
+                    .or_insert_with(|| Value::String(record_id.clone()));
+                obj.insert("_deleted".to_string(), Value::Bool(deleted != 0));
+                obj.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
+            }
+            documents.push(payload);
         }
-        documents.push(payload);
-    }
+        Ok(documents)
+    })?;
     if documents.is_empty() {
         if let Some(rxdb_projection) =
             pull_rxdb_collection_table_records(root, collection, 0, limit)?
