@@ -4442,7 +4442,9 @@ async fn reconcile_ctox_queue_task_projections(
             Some((
                 "failed",
                 now_ms() as i64,
-                Some("Queue task is no longer present in the CTOX harness queue; marking the orphaned Business OS projection as failed."),
+                Some(
+                    "Queue task is no longer present in the CTOX harness queue; marking the orphaned Business OS projection as failed.",
+                ),
                 Some("failed"),
                 None,
             ))
@@ -5616,6 +5618,24 @@ fn expected_desktop_file_chunk_total(size_bytes: u64) -> u64 {
     encoded_len.div_ceil(DESKTOP_FILE_CHUNK_SIZE as u64).max(1)
 }
 
+async fn find_rxdb_document_by_id(
+    database: &Arc<RxDatabase>,
+    collection_name: &str,
+    document_id: &str,
+    with_deleted: bool,
+) -> anyhow::Result<Option<Value>> {
+    let collection = database
+        .collection(collection_name)
+        .with_context(|| format!("{collection_name} collection is not registered"))?;
+    let ids = vec![document_id.to_string()];
+    let mut documents = collection
+        .storage_instance
+        .find_documents_by_id(&ids, with_deleted)
+        .await
+        .map_err(|err| anyhow::anyhow!("find {collection_name} document {document_id}: {err}"))?;
+    Ok(documents.pop())
+}
+
 /// True when the chunk store holds the complete LIVE chunk set for the given
 /// generation. The scan's change-detection fast path must not skip a file
 /// whose chunks went missing (crash window, manual cleanup,
@@ -5633,19 +5653,42 @@ async fn desktop_file_chunk_generation_is_complete(
     let Some(chunks) = database.collection("desktop_file_chunks") else {
         return false;
     };
-    let Ok(query) = chunks.count(Some(MangoQuery {
-        selector: Some(json!({
-            "file_id": { "$eq": file_id },
-            "generation_id": { "$eq": generation_id },
-        })),
-        ..Default::default()
-    })) else {
+    let expected_total = expected_desktop_file_chunk_total(size_bytes);
+    let Ok(expected_total_usize) = usize::try_from(expected_total) else {
         return false;
     };
-    let Ok(counted) = query.exec(false).await else {
+    let ids: Vec<String> = (0..expected_total_usize)
+        .map(|idx| format!("{file_id}_{generation_id}_{idx}"))
+        .collect();
+    let Ok(documents) = chunks
+        .storage_instance
+        .find_documents_by_id(&ids, false)
+        .await
+    else {
         return false;
     };
-    counted.as_u64() == Some(expected_desktop_file_chunk_total(size_bytes))
+    if documents.len() != expected_total_usize {
+        return false;
+    }
+    let mut seen_indices = HashSet::with_capacity(documents.len());
+    for document in documents {
+        if document.get("file_id").and_then(Value::as_str) != Some(file_id) {
+            return false;
+        }
+        if document.get("generation_id").and_then(Value::as_str) != Some(generation_id) {
+            return false;
+        }
+        if document.get("total").and_then(Value::as_u64) != Some(expected_total) {
+            return false;
+        }
+        let Some(idx) = document.get("idx").and_then(Value::as_u64) else {
+            return false;
+        };
+        if idx >= expected_total || !seen_indices.insert(idx) {
+            return false;
+        }
+    }
+    true
 }
 
 async fn upsert_desktop_file_with_parent(
@@ -5691,16 +5734,9 @@ async fn upsert_desktop_file_with_parent(
     let files = database
         .collection("desktop_files")
         .context("desktop_files collection is not registered")?;
-    let existing_file_doc = files
-        .find_one(Some(MangoQuery {
-            selector: Some(json!({ "id": { "$eq": file_id } })),
-            ..Default::default()
-        }))
-        .map_err(|err| anyhow::anyhow!("query desktop file doc: {err}"))?
-        .exec(false)
+    let existing_file_doc = find_rxdb_document_by_id(database, "desktop_files", &file_id, false)
         .await
-        .map_err(|err| anyhow::anyhow!("exec desktop file doc query: {err}"))?;
-    let existing_file_doc = existing_file_doc.is_object().then_some(existing_file_doc);
+        .map_err(|err| anyhow::anyhow!("read desktop file doc {file_id}: {err}"))?;
     // Materialization is sticky: once a file was explicitly materialized
     // (ctox.file.materialize set content_state 'available'), the periodic
     // scan must NOT demote it back to its size/extension policy 'lazy'.
@@ -6185,16 +6221,10 @@ async fn ensure_ctox_desktop_folder_path(
             virtual_path = format!("{}/{}", virtual_path.trim_end_matches('/'), name);
             folder_id = desktop_folder_id(&virtual_path);
         }
-        let existing_folder = files
-            .find_one(Some(MangoQuery {
-                selector: Some(json!({ "id": { "$eq": folder_id } })),
-                ..Default::default()
-            }))
-            .map_err(|err| anyhow::anyhow!("query CTOX desktop folder {virtual_path}: {err}"))?
-            .exec(false)
-            .await
-            .map_err(|err| anyhow::anyhow!("exec CTOX desktop folder {virtual_path}: {err}"))?;
-        let existing_folder = existing_folder.is_object().then_some(existing_folder);
+        let existing_folder =
+            find_rxdb_document_by_id(database, "desktop_files", &folder_id, false)
+                .await
+                .map_err(|err| anyhow::anyhow!("read CTOX desktop folder {virtual_path}: {err}"))?;
         if existing_folder.as_ref().is_some_and(|doc| {
             desktop_folder_doc_is_current(doc, &folder_id, &parent_id, &virtual_path, name)
         }) {
@@ -9787,6 +9817,55 @@ mod tests {
             )
             .expect("chunks count");
         assert_eq!(chunks, 1);
+    }
+
+    #[tokio::test]
+    async fn desktop_file_chunk_completion_uses_primary_chunk_ids() {
+        let root = tempfile::tempdir().expect("temp root");
+        let database = open_test_database(root.path().join("chunk-complete.sqlite3"))
+            .await
+            .expect("open db");
+        database
+            .add_collections(HashMap::from([(
+                "desktop_file_chunks".to_string(),
+                RxCollectionCreator {
+                    schema: business_os_schema("desktop_file_chunks", "id"),
+                    conflict_handler: None,
+                    options: HashMap::new(),
+                },
+            )]))
+            .await
+            .expect("add desktop_file_chunks");
+        let chunks = database
+            .collection("desktop_file_chunks")
+            .expect("desktop_file_chunks collection");
+        chunks
+            .incremental_upsert(json!({
+                "id": "file_a_gen_a_0",
+                "file_id": "file_a",
+                "generation_id": "gen_a",
+                "content_hash": "hash",
+                "content_hash_scheme": DESKTOP_FILE_CONTENT_HASH_SCHEME,
+                "idx": 0,
+                "total": 1,
+                "encoding": "base64",
+                "data": "YQ==",
+                "chunk_hash": "chunk_hash",
+                "chunk_hash_scheme": DESKTOP_FILE_CHUNK_HASH_SCHEME,
+                "size_bytes": 4,
+                "created_at_ms": 1,
+            }))
+            .await
+            .expect("insert chunk");
+
+        assert!(
+            desktop_file_chunk_generation_is_complete(&database, "file_a", "gen_a", 1).await,
+            "the deterministic primary-key chunk set is complete"
+        );
+        assert!(
+            !desktop_file_chunk_generation_is_complete(&database, "file_a", "missing_gen", 1).await,
+            "a missing deterministic primary-key chunk set is incomplete"
+        );
     }
 
     #[test]

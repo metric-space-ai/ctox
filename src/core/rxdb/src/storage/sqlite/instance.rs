@@ -1,6 +1,7 @@
 //! SQLite [`crate::types::RxStorageInstance`] implementation.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -33,6 +34,7 @@ use super::sql::{
 use super::types::{sqlite_error, SharedSqliteConnection};
 
 const SQLITE_EXTERNAL_POLL_FILE_CHUNK_LIMIT: u64 = 2;
+const SQLITE_EXTERNAL_POLL_SAFETY_INTERVAL: Duration = Duration::from_secs(60);
 
 static INSTANCE_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -49,28 +51,67 @@ fn join_error(err: tokio::task::JoinError) -> RxError {
     )
 }
 
-static UPDATE_REGISTRY: OnceLock<StdMutex<HashMap<String, Arc<Notify>>>> = OnceLock::new();
+struct TableNotifier {
+    notify: Notify,
+    generation: AtomicU64,
+}
 
-pub fn register_table_notifier(table_name: &str, notifier: Arc<Notify>) {
+impl TableNotifier {
+    fn new() -> Self {
+        Self {
+            notify: Notify::new(),
+            generation: AtomicU64::new(0),
+        }
+    }
+
+    fn signal(&self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        self.notify.notify_one();
+    }
+}
+
+static UPDATE_REGISTRY: OnceLock<StdMutex<HashMap<String, Arc<TableNotifier>>>> = OnceLock::new();
+
+pub(crate) fn database_key_for_path(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+fn registry_key(database_key: &str, table_name: &str) -> String {
+    format!("{database_key}\0{table_name}")
+}
+
+fn register_table_notifier(database_key: &str, table_name: &str, notifier: Arc<TableNotifier>) {
     let mut map = UPDATE_REGISTRY
         .get_or_init(|| StdMutex::new(HashMap::new()))
         .lock()
         .unwrap();
-    map.insert(table_name.to_string(), notifier);
+    map.insert(registry_key(database_key, table_name), notifier);
 }
 
-pub fn unregister_table_notifier(table_name: &str) {
+fn unregister_table_notifier(database_key: &str, table_name: &str) {
     if let Some(registry) = UPDATE_REGISTRY.get() {
         let mut map = registry.lock().unwrap();
-        map.remove(table_name);
+        map.remove(&registry_key(database_key, table_name));
     }
 }
 
-pub fn notify_table_change(table_name: &str) {
+pub fn notify_table_change(database_key: &str, table_name: &str) {
     if let Some(registry) = UPDATE_REGISTRY.get() {
         let map = registry.lock().unwrap();
-        if let Some(notifier) = map.get(table_name) {
-            notifier.notify_one();
+        if let Some(notifier) = map.get(&registry_key(database_key, table_name)) {
+            notifier.signal();
+        }
+    }
+}
+
+pub fn notify_database_change(database_key: &str) {
+    if let Some(registry) = UPDATE_REGISTRY.get() {
+        let map = registry.lock().unwrap();
+        let prefix = format!("{database_key}\0");
+        for (key, notifier) in map.iter() {
+            if key.starts_with(&prefix) {
+                notifier.signal();
+            }
         }
     }
 }
@@ -86,6 +127,7 @@ pub struct RxStorageInstanceSqlite {
     /// connection per stream — keeps the shared write connection free for
     /// other peers / replication while a long stream runs.
     pub database_path: std::path::PathBuf,
+    database_key: String,
     changes: RxSubject<EventBulk>,
     closed: Arc<AtomicBool>,
     external_checkpoint: Arc<Mutex<Value>>,
@@ -100,6 +142,7 @@ impl RxStorageInstanceSqlite {
         database_path: std::path::PathBuf,
     ) -> Self {
         let primary_path = get_primary_field_of_primary_key(&params.schema.primary_key);
+        let database_key = database_key_for_path(&database_path);
         let changes = RxSubject::new();
         let closed = Arc::new(AtomicBool::new(false));
         let external_checkpoint = Arc::new(Mutex::new({
@@ -107,8 +150,11 @@ impl RxStorageInstanceSqlite {
             latest_checkpoint(&conn, &table_name).unwrap_or_else(|| json!({ "id": "", "lwt": 0 }))
         }));
 
-        let notifier = Arc::new(Notify::new());
-        register_table_notifier(&table_name, Arc::clone(&notifier));
+        let notifier = Arc::new(TableNotifier::new());
+        register_table_notifier(&database_key, &table_name, Arc::clone(&notifier));
+        // One startup reconciliation closes the gap between the initial
+        // checkpoint read and the database-wide data_version watcher baseline.
+        notifier.signal();
 
         start_external_write_poll(
             Arc::clone(&connection),
@@ -127,6 +173,7 @@ impl RxStorageInstanceSqlite {
             table_name,
             primary_path,
             database_path,
+            database_key,
             changes,
             closed,
             external_checkpoint,
@@ -192,6 +239,24 @@ fn checkpoint_status_snapshot(
     })
 }
 
+fn primary_key_selector_ids(query: &FilledMangoQuery, primary_path: &str) -> Option<Vec<String>> {
+    let selector = query.selector.as_object()?;
+    let matcher = selector.get(primary_path)?;
+    if let Some(id) = matcher.as_str() {
+        return Some(vec![id.to_string()]);
+    }
+    let matcher_obj = matcher.as_object()?;
+    if let Some(eq) = matcher_obj.get("$eq").and_then(Value::as_str) {
+        return Some(vec![eq.to_string()]);
+    }
+    matcher_obj.get("$in").and_then(Value::as_array).map(|ids| {
+        ids.iter()
+            .filter_map(Value::as_str)
+            .map(ToString::to_string)
+            .collect()
+    })
+}
+
 fn start_external_write_poll(
     connection: SharedSqliteConnection,
     table_name: String,
@@ -199,24 +264,37 @@ fn start_external_write_poll(
     changes: RxSubject<EventBulk>,
     closed: Arc<AtomicBool>,
     checkpoint: Arc<Mutex<Value>>,
-    notifier: Arc<Notify>,
+    notifier: Arc<TableNotifier>,
 ) {
     let Ok(_) = tokio::runtime::Handle::try_current() else {
         return;
     };
     tokio::spawn(async move {
+        let mut seen_generation = 0;
         loop {
-            tokio::select! {
-                _ = tokio::time::sleep(Duration::from_millis(1000)) => {
-                    // Fallback low-CPU poll for external processes
-                }
-                _ = notifier.notified() => {
-                    // Instant notification from SQLite update_hook!
+            let mut safety_poll = false;
+            if notifier.generation.load(Ordering::SeqCst) == seen_generation {
+                tokio::select! {
+                    _ = tokio::time::sleep(SQLITE_EXTERNAL_POLL_SAFETY_INTERVAL) => {
+                        // Rare rescue path in case an update notification is
+                        // lost or this storage was opened without the
+                        // database-wide external-change watcher.
+                        safety_poll = true;
+                    }
+                    _ = notifier.notify.notified() => {
+                        // Instant notification from SQLite update_hook or the
+                        // database-wide external-change watcher.
+                    }
                 }
             }
             if closed.load(Ordering::SeqCst) {
                 break;
             }
+            let current_generation = notifier.generation.load(Ordering::SeqCst);
+            if current_generation == seen_generation && !safety_poll {
+                continue;
+            }
+            seen_generation = current_generation;
             // FIX 1: run the per-table poll query off the tokio worker thread.
             // Each instance spawns one of these loops; doing the blocking
             // rusqlite read directly on a worker (1-2 on a small VPS) is what
@@ -590,6 +668,7 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         let skip_plus_limit = skip.saturating_add(limit);
         let matcher = get_query_matcher(&self.schema, &query);
         let comparator = get_sort_comparator(&self.schema, &query);
+        let primary_ids = primary_key_selector_ids(&query, &self.primary_path);
 
         // FIX 1: run the full-table scan + sort off the tokio worker thread.
         // The matcher/comparator are `Arc<dyn Fn .. + Send + Sync>` so they
@@ -598,16 +677,31 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         let table_name = self.table_name.clone();
         let documents = tokio::task::spawn_blocking(move || -> RxResult<Vec<Value>> {
             let conn = connection.lock();
-            // Stream rows one at a time and keep only those that match. Sort and
-            // truncate at the end so we never materialize the whole table.
-            // Memory bound: O(number of matches), not O(table size).
             let mut rows: Vec<Value> = Vec::new();
-            for_each_document(&conn, &table_name, |doc| {
-                if matcher(&doc) {
-                    rows.push(doc);
+
+            if let Some(ids) = primary_ids {
+                // Query/count callers are not all routed through RxQuery's
+                // find-by-id fast path. Keep primary-key equality bounded by
+                // the requested id set instead of scanning large collections.
+                for id in ids {
+                    if let Some(doc) = document_by_id(&conn, &table_name, &id)? {
+                        if matcher(&doc) {
+                            rows.push(doc);
+                        }
+                    }
                 }
-                Ok(true)
-            })?;
+            } else {
+                // Stream rows one at a time and keep only those that match.
+                // Sort and truncate at the end so we never materialize the
+                // whole table. Memory bound: O(number of matches), not
+                // O(table size).
+                for_each_document(&conn, &table_name, |doc| {
+                    if matcher(&doc) {
+                        rows.push(doc);
+                    }
+                    Ok(true)
+                })?;
+            }
             rows.sort_by(|a, b| comparator(a, b));
             let start = skip.min(rows.len());
             let end = skip_plus_limit.min(rows.len());
@@ -681,13 +775,13 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         .await
         .map_err(join_error)??;
         self.closed.store(true, Ordering::SeqCst);
-        unregister_table_notifier(&self.table_name);
+        unregister_table_notifier(&self.database_key, &self.table_name);
         Ok(())
     }
 
     async fn close(&self) -> Result<(), RxError> {
         self.closed.store(true, Ordering::SeqCst);
-        unregister_table_notifier(&self.table_name);
+        unregister_table_notifier(&self.database_key, &self.table_name);
         Ok(())
     }
 
@@ -728,7 +822,7 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
 
 impl Drop for RxStorageInstanceSqlite {
     fn drop(&mut self) {
-        unregister_table_notifier(&self.table_name);
+        unregister_table_notifier(&self.database_key, &self.table_name);
     }
 }
 
@@ -1248,6 +1342,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn query_primary_key_equality_uses_bounded_candidate_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("ctox.sqlite3"),
+        });
+        let schema = test_schema();
+        let instance = create_storage_instance(&storage, params(schema.clone()))
+            .await
+            .unwrap();
+        let rows: Vec<BulkWriteRow> = (0..300)
+            .map(|idx| BulkWriteRow {
+                previous: None,
+                document: doc(&format!("k{idx:03}"), "1-a", idx, false, idx as f64),
+            })
+            .collect();
+        instance.bulk_write(rows, "seed").await.unwrap();
+
+        let mut sort = HashMap::new();
+        sort.insert("age".to_string(), "desc".to_string());
+        let filled = normalize_mango_query(
+            &schema,
+            MangoQuery {
+                selector: Some(json!({ "id": { "$in": ["k003", "missing", "k299"] } })),
+                sort: Some(vec![sort]),
+                index: None,
+                limit: None,
+                skip: Some(0),
+            },
+        );
+        let prepared = prepare_query(&schema, filled).unwrap();
+        let result = instance.query(&prepared).await.unwrap();
+        let ids: Vec<&str> = result
+            .documents
+            .iter()
+            .filter_map(|doc| doc.get("id").and_then(Value::as_str))
+            .collect();
+        assert_eq!(ids, vec!["k299", "k003"]);
+
+        let count = instance.count(&prepared).await.unwrap();
+        assert_eq!(count.count, 2);
+    }
+
+    #[tokio::test]
     async fn query_stream_applies_skip_and_global_sort() {
         // Regression for the review finding: skip docs MUST be removed from
         // the output and the sort MUST be global (not per-batch). We seed
@@ -1737,6 +1874,47 @@ mod tests {
         );
         assert_eq!(bulk.events.len(), 1);
         assert_eq!(bulk.events[0].document_id, "external");
+        assert_eq!(bulk.events[0].operation, "UPDATE");
+    }
+
+    #[tokio::test]
+    async fn change_stream_emits_other_connection_sqlite_writes() {
+        use tokio::time::timeout;
+        use tokio_stream::StreamExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let database_path = dir.path().join("ctox.sqlite3");
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: database_path.clone(),
+        });
+        let schema = test_schema();
+        let instance = create_storage_instance(&storage, params(schema))
+            .await
+            .unwrap();
+        let mut stream = instance.change_stream();
+
+        {
+            let conn = rusqlite::Connection::open(&database_path).unwrap();
+            insert_document(
+                &conn,
+                &instance.table_name,
+                &instance.primary_path,
+                &doc("external-connection", "1-external", 7, false, 10.0),
+            )
+            .unwrap();
+        }
+
+        let bulk = timeout(Duration::from_secs(4), stream.next())
+            .await
+            .expect("other-connection write should be emitted")
+            .expect("change stream should stay open");
+        assert_eq!(bulk.context.as_deref(), Some("sqlite-external-poll"));
+        assert_eq!(
+            bulk.checkpoint,
+            Some(json!({ "id": "external-connection", "lwt": 10.0 }))
+        );
+        assert_eq!(bulk.events.len(), 1);
+        assert_eq!(bulk.events[0].document_id, "external-connection");
         assert_eq!(bulk.events[0].operation, "UPDATE");
     }
 

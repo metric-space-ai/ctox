@@ -8,6 +8,8 @@ use crate::types::BulkWriteRow;
 
 use super::types::sqlite_error;
 
+const CHANGED_TABLES_TABLE: &str = "__rxdb_changed_tables";
+
 pub fn table_name(database_name: &str, collection_name: &str, schema_version: i32) -> String {
     format!("{database_name}__{collection_name}__v{schema_version}")
         .chars()
@@ -29,6 +31,11 @@ pub fn ensure_collection_table(conn: &Connection, table: &str) -> RxResult<()> {
     let quoted = quote_identifier(table);
     let lwt_index = quote_identifier(&format!("{table}_lwt_id_idx"));
     let deleted_index = quote_identifier(&format!("{table}_deleted_lwt_id_idx"));
+    let changed_tables = quote_identifier(CHANGED_TABLES_TABLE);
+    let table_literal = quote_sql_literal(table);
+    let insert_trigger = quote_identifier(&format!("{table}__rxdb_changed_insert"));
+    let update_trigger = quote_identifier(&format!("{table}__rxdb_changed_update"));
+    let delete_trigger = quote_identifier(&format!("{table}__rxdb_changed_delete"));
     conn.execute_batch(&format!(
         r#"
         CREATE TABLE IF NOT EXISTS {quoted}(
@@ -42,9 +49,42 @@ pub fn ensure_collection_table(conn: &Connection, table: &str) -> RxResult<()> {
             ON {quoted}(lastWriteTime, id);
         CREATE INDEX IF NOT EXISTS {deleted_index}
             ON {quoted}(deleted, lastWriteTime, id);
+
+        CREATE TABLE IF NOT EXISTS {changed_tables}(
+            table_name TEXT NOT NULL PRIMARY KEY,
+            changed_at INTEGER NOT NULL
+        );
+
+        CREATE TRIGGER IF NOT EXISTS {insert_trigger}
+            AFTER INSERT ON {quoted}
+        BEGIN
+            INSERT INTO {changed_tables}(table_name, changed_at)
+            VALUES ({table_literal}, 1)
+            ON CONFLICT(table_name) DO UPDATE SET changed_at = changed_at + 1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS {update_trigger}
+            AFTER UPDATE ON {quoted}
+        BEGIN
+            INSERT INTO {changed_tables}(table_name, changed_at)
+            VALUES ({table_literal}, 1)
+            ON CONFLICT(table_name) DO UPDATE SET changed_at = changed_at + 1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS {delete_trigger}
+            AFTER DELETE ON {quoted}
+        BEGIN
+            INSERT INTO {changed_tables}(table_name, changed_at)
+            VALUES ({table_literal}, 1)
+            ON CONFLICT(table_name) DO UPDATE SET changed_at = changed_at + 1;
+        END;
         "#
     ))
     .map_err(sqlite_error)
+}
+
+fn quote_sql_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
 
 pub fn insert_document(

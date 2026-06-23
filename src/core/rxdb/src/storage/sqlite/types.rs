@@ -1,17 +1,22 @@
 //! Types for the SQLite storage backend.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 
 use parking_lot::Mutex;
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 
 use crate::rx_error::{new_rx_error, RxResult};
 
 /// Matches upstream's `:memory:` SQLite database marker.
 pub const SQLITE_IN_MEMORY_DB_NAME: &str = ":memory:";
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(10);
+const SQLITE_EXTERNAL_DATABASE_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const SQLITE_CHANGED_TABLES_TABLE: &str = "__rxdb_changed_tables";
 
 #[derive(Debug, Clone)]
 pub struct RxStorageSqliteSettings {
@@ -33,6 +38,7 @@ pub struct RxStorageSqlite {
     pub name: String,
     pub settings: RxStorageSqliteSettings,
     pub connection: Mutex<Option<SharedSqliteConnection>>,
+    external_poll_stop: Arc<AtomicBool>,
 }
 
 impl RxStorageSqlite {
@@ -41,6 +47,7 @@ impl RxStorageSqlite {
             name: "sqlite".to_string(),
             settings,
             connection: Mutex::new(None),
+            external_poll_stop: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -72,10 +79,18 @@ impl RxStorageSqlite {
             )
             .map_err(sqlite_error)?;
 
-        // Register the update hook for immediate same-process reactivity
+        let database_key = crate::storage::sqlite::instance::database_key_for_path(path);
+        start_external_database_poll(
+            path.clone(),
+            database_key.clone(),
+            Arc::clone(&self.external_poll_stop),
+        );
+
+        // Register the update hook for immediate same-process reactivity.
+        let hook_database_key = database_key.clone();
         connection.update_hook(Some(
-            |_action: rusqlite::hooks::Action, _db: &str, tbl: &str, _row_id: i64| {
-                crate::storage::sqlite::instance::notify_table_change(tbl);
+            move |_action: rusqlite::hooks::Action, _db: &str, tbl: &str, _row_id: i64| {
+                crate::storage::sqlite::instance::notify_table_change(&hook_database_key, tbl);
             },
         ));
 
@@ -83,6 +98,95 @@ impl RxStorageSqlite {
         *self.connection.lock() = Some(Arc::clone(&shared));
         Ok(shared)
     }
+}
+
+impl Drop for RxStorageSqlite {
+    fn drop(&mut self) {
+        self.external_poll_stop.store(true, Ordering::SeqCst);
+    }
+}
+
+fn start_external_database_poll(path: PathBuf, database_key: String, stop: Arc<AtomicBool>) {
+    if path.as_os_str() == SQLITE_IN_MEMORY_DB_NAME {
+        return;
+    }
+    let _ = thread::Builder::new()
+        .name("rxdb-sqlite-external-poll".to_string())
+        .spawn(move || {
+            let mut last_version: Option<i64> = None;
+            let mut changed_tables: HashMap<String, i64>;
+            while !stop.load(Ordering::SeqCst) {
+                match open_external_poll_connection(&path) {
+                    Ok(conn) => {
+                        last_version = read_data_version(&conn).ok().or(last_version);
+                        changed_tables = read_changed_table_versions(&conn).unwrap_or_default();
+                        while !stop.load(Ordering::SeqCst) {
+                            thread::sleep(SQLITE_EXTERNAL_DATABASE_POLL_INTERVAL);
+                            let Ok(version) = read_data_version(&conn) else {
+                                break;
+                            };
+                            if last_version.replace(version) != Some(version) {
+                                if let Ok(next_changed_tables) = read_changed_table_versions(&conn)
+                                {
+                                    for (table_name, changed_at) in next_changed_tables.iter() {
+                                        if changed_tables.get(table_name) != Some(changed_at) {
+                                            crate::storage::sqlite::instance::notify_table_change(
+                                                &database_key,
+                                                table_name,
+                                            );
+                                        }
+                                    }
+                                    changed_tables = next_changed_tables;
+                                }
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        thread::sleep(SQLITE_EXTERNAL_DATABASE_POLL_INTERVAL);
+                    }
+                }
+            }
+        });
+}
+
+fn open_external_poll_connection(path: &PathBuf) -> rusqlite::Result<Connection> {
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    conn.busy_timeout(SQLITE_BUSY_TIMEOUT)?;
+    Ok(conn)
+}
+
+fn read_data_version(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.query_row("PRAGMA data_version", [], |row| row.get(0))
+}
+
+fn read_changed_table_versions(conn: &Connection) -> rusqlite::Result<HashMap<String, i64>> {
+    let exists = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
+            [SQLITE_CHANGED_TABLES_TABLE],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .is_some();
+    if !exists {
+        return Ok(HashMap::new());
+    }
+    let mut stmt = conn.prepare(&format!(
+        "SELECT table_name, changed_at FROM {}",
+        crate::storage::sqlite::sql::quote_identifier(SQLITE_CHANGED_TABLES_TABLE)
+    ))?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+    })?;
+    let mut out = HashMap::new();
+    for row in rows {
+        let (table_name, changed_at) = row?;
+        out.insert(table_name, changed_at);
+    }
+    Ok(out)
 }
 
 pub fn sqlite_error(err: rusqlite::Error) -> crate::rx_error::RxError {
