@@ -110,6 +110,7 @@ const CHANNEL_ROUTER_IDLE_SAFETY_SECS: u64 = 60;
 const CHANNEL_SYNC_POLL_SECS: u64 = 60;
 const MISSION_MAINTENANCE_POLL_SECS: u64 = 15;
 const HARNESS_AUDIT_TICK_SECS: u64 = 300;
+const HARNESS_AUDIT_IDLE_SAFETY_SECS: u64 = 3600;
 const BUSINESS_OS_APP_RECOVERY_POLL_SECS: u64 = 60;
 const IDLE_QUEUE_DISPATCH_POLL_SECS: u64 = 8;
 const WORKER_IDLE_QUEUE_KICK_DELAY_MS: u64 = 250;
@@ -165,6 +166,8 @@ static SERVICE_PANIC_HOOK: Once = Once::new();
 static TICKET_RECONCILE_GATE: OnceLock<Mutex<Option<TicketReconcileGateState>>> = OnceLock::new();
 static CHANNEL_ROUTER_IDLE_GATE: OnceLock<Mutex<Option<ChannelRouterIdleGateState>>> =
     OnceLock::new();
+static HARNESS_AUDIT_IDLE_GATE: OnceLock<Mutex<Option<HarnessAuditIdleGateState>>> =
+    OnceLock::new();
 static BUSINESS_OS_APP_RECOVERY_PREFLIGHT_GATE: OnceLock<
     Mutex<Option<BusinessOsAppRecoveryPreflightGateState>>,
 > = OnceLock::new();
@@ -188,6 +191,14 @@ struct ChannelRouterIdleGateState {
     ticket_stamp: tickets::TicketStoreChangeStamp,
     settings: BTreeMap<String, String>,
     last_idle_pass: Instant,
+}
+
+#[derive(Debug, Clone)]
+struct HarnessAuditIdleGateState {
+    root: PathBuf,
+    core_db_path: PathBuf,
+    core_stamp: CoreDbChangeStamp,
+    last_run: Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -10663,8 +10674,13 @@ fn start_harness_audit_watcher(root: std::path::PathBuf, state: Arc<Mutex<Shared
         // hammering the DB in the first 30s).
         thread::sleep(Duration::from_secs(60));
         loop {
+            if should_skip_idle_harness_audit_tick(&root) {
+                thread::sleep(Duration::from_secs(HARNESS_AUDIT_TICK_SECS));
+                continue;
+            }
             match harness_audit_tick_once(&root) {
                 Ok(summary) => {
+                    mark_harness_audit_tick_ran(&root);
                     if summary.recorded > 0 || summary.confirmed > 0 {
                         push_event(
                             &state,
@@ -10782,6 +10798,45 @@ fn clear_live_service_settings_cache_for_tests() {
 fn active_agent_loop_in_progress(state: &Arc<Mutex<SharedState>>) -> bool {
     let shared = lock_shared_state(state);
     shared.busy || shared.worker_active_count > 0
+}
+
+fn should_skip_idle_harness_audit_tick(root: &Path) -> bool {
+    let root_path = root.to_path_buf();
+    let core_db_path = crate::paths::core_db(root);
+    let core_stamp = core_db_change_stamp(&core_db_path);
+    let now = Instant::now();
+    let gate = HARNESS_AUDIT_IDLE_GATE.get_or_init(|| Mutex::new(None));
+    let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(previous) = guard.as_ref() else {
+        return false;
+    };
+    previous.root == root_path
+        && previous.core_db_path == core_db_path
+        && previous.core_stamp == core_stamp
+        && now.duration_since(previous.last_run)
+            < Duration::from_secs(HARNESS_AUDIT_IDLE_SAFETY_SECS)
+}
+
+fn mark_harness_audit_tick_ran(root: &Path) {
+    let root_path = root.to_path_buf();
+    let core_db_path = crate::paths::core_db(root);
+    let core_stamp = core_db_change_stamp(&core_db_path);
+    let gate = HARNESS_AUDIT_IDLE_GATE.get_or_init(|| Mutex::new(None));
+    let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = Some(HarnessAuditIdleGateState {
+        root: root_path,
+        core_db_path,
+        core_stamp,
+        last_run: Instant::now(),
+    });
+}
+
+#[cfg(test)]
+fn clear_harness_audit_idle_gate_for_tests() {
+    if let Some(gate) = HARNESS_AUDIT_IDLE_GATE.get() {
+        let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = None;
+    }
 }
 
 fn should_skip_idle_channel_router_tick(root: &Path, settings: &BTreeMap<String, String>) -> bool {
@@ -18540,6 +18595,47 @@ mod tests {
             ),
             "Business OS store changes must reopen the router gate"
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn harness_audit_idle_gate_reopens_when_core_db_changes() {
+        clear_harness_audit_idle_gate_for_tests();
+        let root = temp_root("harness-audit-idle-gate");
+        std::fs::create_dir_all(root.join("runtime")).unwrap();
+        let db_path = crate::paths::core_db(&root);
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE audit_gate_probe (id INTEGER PRIMARY KEY, value TEXT);",
+            )
+            .unwrap();
+        }
+
+        assert!(
+            !should_skip_idle_harness_audit_tick(&root),
+            "first harness audit tick must run"
+        );
+        mark_harness_audit_tick_ran(&root);
+        assert!(
+            should_skip_idle_harness_audit_tick(&root),
+            "unchanged core DB should skip harness audit inside the idle safety window"
+        );
+
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute(
+                "INSERT INTO audit_gate_probe (value) VALUES (?1)",
+                params!["changed"],
+            )
+            .unwrap();
+        }
+        assert!(
+            !should_skip_idle_harness_audit_tick(&root),
+            "core DB changes must reopen the harness audit gate"
+        );
+
+        clear_harness_audit_idle_gate_for_tests();
         let _ = std::fs::remove_dir_all(root);
     }
 
