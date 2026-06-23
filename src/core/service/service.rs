@@ -890,10 +890,6 @@ where
 }
 
 pub fn run_foreground(root: &Path) -> Result<()> {
-    if let Some(reason) = crate::service::working_hours::hold_reason(root) {
-        eprintln!("ctox service not started: {reason}");
-        return Ok(());
-    }
     let runtime_dir = root.join("runtime");
     std::fs::create_dir_all(&runtime_dir)
         .with_context(|| format!("failed to create runtime dir {}", runtime_dir.display()))?;
@@ -1729,9 +1725,6 @@ fn normalize_state_token(value: &str) -> String {
 
 pub fn start_background(root: &Path) -> Result<String> {
     let _systemd_cache_guard = SystemdCacheInvalidator;
-    if let Some(reason) = crate::service::working_hours::hold_reason(root) {
-        return Ok(format!("CTOX service not started: {reason}"));
-    }
     if let Some(systemd) = systemd_unit_status(root)? {
         if systemd.active {
             return Ok(format!(
