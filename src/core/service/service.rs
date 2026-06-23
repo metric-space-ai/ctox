@@ -105,6 +105,7 @@ const SYSTEMD_USER_UNIT_NAME: &str = "ctox.service";
 const LAUNCHD_USER_LABEL: &str = "com.metric-space.ctox.service";
 const LAUNCHD_USER_MARKER_RELATIVE_PATH: &str = "runtime/ctox_launchd_user.installed";
 const CHANNEL_ROUTER_POLL_SECS: u64 = 8;
+const TICKET_RECONCILE_IDLE_SAFETY_SECS: u64 = 60;
 const CHANNEL_SYNC_POLL_SECS: u64 = 60;
 const MISSION_MAINTENANCE_POLL_SECS: u64 = 15;
 const HARNESS_AUDIT_TICK_SECS: u64 = 300;
@@ -159,6 +160,40 @@ const BUSINESS_OS_MCP_DEFAULT_ADDR: &str = "127.0.0.1:8788";
 const BUSINESS_OS_AUTOSTART_RETRY_SECS: u64 = 30;
 
 static SERVICE_PANIC_HOOK: Once = Once::new();
+static TICKET_RECONCILE_GATE: OnceLock<Mutex<Option<TicketReconcileGateState>>> = OnceLock::new();
+static LIVE_SERVICE_SETTINGS_CACHE: OnceLock<Mutex<Option<LiveServiceSettingsCacheState>>> =
+    OnceLock::new();
+
+#[derive(Debug, Clone)]
+struct TicketReconcileGateState {
+    db_path: PathBuf,
+    stamp: CoreDbChangeStamp,
+    active_keys: Vec<String>,
+    last_run: Instant,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct CoreDbChangeStamp {
+    main: FileChangeStamp,
+    wal: FileChangeStamp,
+    shm: FileChangeStamp,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct FileChangeStamp {
+    exists: bool,
+    len: u64,
+    modified_ns: u128,
+}
+
+#[derive(Debug, Clone)]
+struct LiveServiceSettingsCacheState {
+    root: PathBuf,
+    db_path: PathBuf,
+    stamp: CoreDbChangeStamp,
+    env_overlay: BTreeMap<String, String>,
+    settings: BTreeMap<String, String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceStatus {
@@ -845,6 +880,7 @@ pub fn run_foreground(root: &Path) -> Result<()> {
     run_boot_state_invariant_check(root, &state);
     run_boot_auto_submitted_reclassifier(root, &state);
     release_stale_service_communication_leases_on_boot(root, &state);
+    quarantine_synthetic_e2e_queue_tasks_on_boot(root, &state);
     push_event(&state, format!("Loop ready on {}", listen_addr));
     start_channel_router(root.to_path_buf(), state.clone());
     start_business_os_app_recovery_loop(root.to_path_buf(), state.clone());
@@ -1444,6 +1480,23 @@ fn release_stale_service_communication_leases_on_boot(
         Err(err) => push_event(
             state,
             format!("Boot lease repair failed for communication routes: {err}"),
+        ),
+    }
+}
+
+fn quarantine_synthetic_e2e_queue_tasks_on_boot(root: &Path, state: &Arc<Mutex<SharedState>>) {
+    match quarantine_synthetic_e2e_queue_tasks_before_dispatch(root) {
+        Ok(blocked) if blocked > 0 => push_event(
+            state,
+            format!("Quarantined {blocked} synthetic E2E/bench queue task(s) at boot"),
+        ),
+        Ok(_) => {}
+        Err(err) => push_event(
+            state,
+            format!(
+                "Boot synthetic E2E/bench queue quarantine skipped: {}",
+                clip_text(&err.to_string(), 180)
+            ),
         ),
     }
 }
@@ -10646,22 +10699,149 @@ fn auto_close_pending_approval_gates(root: &Path) -> Result<usize> {
 }
 
 fn live_service_settings(root: &Path) -> BTreeMap<String, String> {
-    let mut settings = runtime_env::load_runtime_env_map(root).unwrap_or_default();
-    for (key, value) in env::vars() {
-        if (!key.starts_with("CTOX_") && !key.starts_with("CTO_"))
-            || crate::inference::runtime_state::is_runtime_state_key(&key)
-        {
-            continue;
+    let root_path = root.to_path_buf();
+    let db_path = crate::paths::core_db(root);
+    let stamp = core_db_change_stamp(&db_path);
+    let env_overlay = live_service_env_overlay();
+    let cache = LIVE_SERVICE_SETTINGS_CACHE.get_or_init(|| Mutex::new(None));
+    {
+        let guard = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(cached) = guard.as_ref() {
+            if cached.root == root_path
+                && cached.db_path == db_path
+                && cached.stamp == stamp
+                && cached.env_overlay == env_overlay
+            {
+                return cached.settings.clone();
+            }
         }
-        settings.insert(key, value);
+    }
+    let mut settings = runtime_env::load_runtime_env_map(root).unwrap_or_default();
+    for (key, value) in &env_overlay {
+        settings.insert(key.clone(), value.clone());
     }
     let _ = channels::merge_owner_profile_settings(root, &mut settings);
+    let mut guard = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = Some(LiveServiceSettingsCacheState {
+        root: root_path,
+        db_path,
+        stamp,
+        env_overlay,
+        settings: settings.clone(),
+    });
     settings
+}
+
+fn live_service_env_overlay() -> BTreeMap<String, String> {
+    env::vars()
+        .filter(|(key, _)| {
+            (key.starts_with("CTOX_") || key.starts_with("CTO_"))
+                && !crate::inference::runtime_state::is_runtime_state_key(key)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn clear_live_service_settings_cache_for_tests() {
+    if let Some(cache) = LIVE_SERVICE_SETTINGS_CACHE.get() {
+        let mut guard = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = None;
+    }
 }
 
 fn active_agent_loop_in_progress(state: &Arc<Mutex<SharedState>>) -> bool {
     let shared = lock_shared_state(state);
     shared.busy || shared.worker_active_count > 0
+}
+
+fn should_skip_idle_ticket_reconcile(root: &Path, active_keys: &HashSet<String>) -> bool {
+    let db_path = crate::paths::core_db(root);
+    let stamp = core_db_change_stamp(&db_path);
+    let active_keys = sorted_active_reconcile_keys(active_keys);
+    let now = Instant::now();
+    let gate = TICKET_RECONCILE_GATE.get_or_init(|| Mutex::new(None));
+    let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(previous) = guard.as_ref() else {
+        return false;
+    };
+    previous.db_path == db_path
+        && previous.stamp == stamp
+        && previous.active_keys == active_keys
+        && now.duration_since(previous.last_run)
+            < Duration::from_secs(TICKET_RECONCILE_IDLE_SAFETY_SECS)
+}
+
+fn mark_ticket_reconcile_ran(root: &Path, active_keys: &HashSet<String>) {
+    let db_path = crate::paths::core_db(root);
+    let stamp = core_db_change_stamp(&db_path);
+    let active_keys = sorted_active_reconcile_keys(active_keys);
+    let gate = TICKET_RECONCILE_GATE.get_or_init(|| Mutex::new(None));
+    let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = Some(TicketReconcileGateState {
+        db_path,
+        stamp,
+        active_keys,
+        last_run: Instant::now(),
+    });
+}
+
+#[cfg(test)]
+fn clear_ticket_reconcile_gate_for_tests() {
+    if let Some(gate) = TICKET_RECONCILE_GATE.get() {
+        let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = None;
+    }
+}
+
+fn sorted_active_reconcile_keys(active_keys: &HashSet<String>) -> Vec<String> {
+    let mut keys = active_keys.iter().cloned().collect::<Vec<_>>();
+    keys.sort();
+    keys
+}
+
+fn core_db_change_stamp(path: &Path) -> CoreDbChangeStamp {
+    CoreDbChangeStamp {
+        main: file_change_stamp(path),
+        wal: file_change_stamp(&sqlite_sidecar_path(path, "-wal")),
+        shm: file_change_stamp(&sqlite_sidecar_path(path, "-shm")),
+    }
+}
+
+fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut value = path.as_os_str().to_os_string();
+    value.push(suffix);
+    PathBuf::from(value)
+}
+
+fn file_change_stamp(path: &Path) -> FileChangeStamp {
+    match std::fs::metadata(path) {
+        Ok(metadata) => FileChangeStamp {
+            exists: true,
+            len: metadata.len(),
+            modified_ns: metadata
+                .modified()
+                .ok()
+                .map(system_time_to_unix_nanos)
+                .unwrap_or(0),
+        },
+        Err(_) => FileChangeStamp {
+            exists: false,
+            len: 0,
+            modified_ns: 0,
+        },
+    }
+}
+
+fn system_time_to_unix_nanos(time: SystemTime) -> u128 {
+    time.duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0)
 }
 
 fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<()> {
@@ -11307,6 +11487,22 @@ fn maybe_lease_next_durable_queue_prompt(
             ),
         ),
     }
+    match quarantine_synthetic_e2e_queue_tasks_before_dispatch(root) {
+        Ok(blocked) if blocked > 0 => push_event(
+            state,
+            format!(
+                "Quarantined {blocked} synthetic E2E/bench queue task(s) before durable dispatch"
+            ),
+        ),
+        Ok(_) => {}
+        Err(err) => push_event(
+            state,
+            format!(
+                "Synthetic E2E/bench queue quarantine skipped: {}",
+                clip_text(&err.to_string(), 180)
+            ),
+        ),
+    }
     let app_queue_lease_active = leased_business_os_app_queue_task_exists(root)?;
     if !app_queue_lease_active {
         if let Some(prompt) = maybe_lease_business_os_app_validation_rework(root, state)? {
@@ -11339,6 +11535,94 @@ fn maybe_lease_next_durable_queue_prompt(
         }));
     }
     Ok(None)
+}
+
+const SYNTHETIC_E2E_QUEUE_BLOCK_NOTE: &str =
+    "Synthetic Business OS E2E/bench task quarantined before service dispatch.";
+
+fn quarantine_synthetic_e2e_queue_tasks_before_dispatch(root: &Path) -> Result<usize> {
+    let statuses = ["pending", "leased", "review_rework"]
+        .iter()
+        .map(|status| status.to_string())
+        .collect::<Vec<_>>();
+    let tasks = channels::list_queue_tasks(root, &statuses, 64)?;
+    let mut blocked = 0usize;
+    for task in tasks {
+        if !queue_task_is_synthetic_e2e_bench_leftover(&task) {
+            continue;
+        }
+        channels::update_queue_task(
+            root,
+            channels::QueueTaskUpdateRequest {
+                message_key: task.message_key.clone(),
+                route_status: Some("blocked".to_string()),
+                status_note: Some(SYNTHETIC_E2E_QUEUE_BLOCK_NOTE.to_string()),
+                ..Default::default()
+            },
+        )?;
+        blocked = blocked.saturating_add(1);
+    }
+    Ok(blocked)
+}
+
+fn queue_task_is_synthetic_e2e_bench_leftover(task: &channels::QueueTaskView) -> bool {
+    queue_identity_is_synthetic_e2e_bench_leftover(&task.thread_key, &task.title, &task.prompt)
+}
+
+fn queued_prompt_is_synthetic_e2e_bench_leftover(prompt: &QueuedPrompt) -> bool {
+    queue_identity_is_synthetic_e2e_bench_leftover(
+        prompt.thread_key.as_deref().unwrap_or_default(),
+        &prompt.goal,
+        &prompt.prompt,
+    )
+}
+
+fn queue_identity_is_synthetic_e2e_bench_leftover(
+    thread_key: &str,
+    title: &str,
+    prompt: &str,
+) -> bool {
+    let haystack = format!("{thread_key}\n{title}\n{prompt}");
+    if !contains_any(&haystack, &["CTOX_E2E_", "ctox_e2e_", "_thread_isolation"]) {
+        return false;
+    }
+    thread_key.starts_with("business-os/bench_")
+        || thread_key.contains("evidence-live-cli-admin")
+        || contains_any(title, &["CTOX_E2E_", "ctox_e2e_"])
+        || contains_any(prompt, &["CTOX_E2E_", "ctox_e2e_"])
+}
+
+fn block_synthetic_e2e_queued_prompt_before_dispatch(
+    root: &Path,
+    prompt: &QueuedPrompt,
+) -> Result<usize> {
+    if !queued_prompt_is_synthetic_e2e_bench_leftover(prompt) {
+        return Ok(0);
+    }
+    let mut blocked = 0usize;
+    for message_key in &prompt.leased_message_keys {
+        let Some(task) = channels::load_queue_task(root, message_key)? else {
+            continue;
+        };
+        if !queue_task_is_synthetic_e2e_bench_leftover(&task) {
+            continue;
+        }
+        channels::update_queue_task(
+            root,
+            channels::QueueTaskUpdateRequest {
+                message_key: message_key.clone(),
+                route_status: Some("blocked".to_string()),
+                status_note: Some(SYNTHETIC_E2E_QUEUE_BLOCK_NOTE.to_string()),
+                ..Default::default()
+            },
+        )?;
+        let _ = crate::business_os::store::refresh_business_command_queue_task_projection(
+            root,
+            message_key,
+        );
+        blocked = blocked.saturating_add(1);
+    }
+    Ok(blocked)
 }
 
 fn maybe_lease_next_durable_queue_prompt_for_idle_dispatch(
@@ -11775,6 +12059,22 @@ fn run_ticket_dispatch_preflight(
 }
 
 fn reconcile_ticket_runtime_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<()> {
+    let active_keys = {
+        let shared = lock_shared_state(state);
+        let mut keys = HashSet::new();
+        for prompt in &shared.pending_prompts {
+            keys.extend(prompt.leased_message_keys.iter().cloned());
+            keys.extend(prompt.leased_ticket_event_keys.iter().cloned());
+        }
+        if shared.busy {
+            keys.extend(shared.leased_message_keys_inflight.iter().cloned());
+        }
+        keys
+    };
+    if should_skip_idle_ticket_reconcile(root, &active_keys) {
+        return Ok(());
+    }
+
     match recover_stale_business_os_app_queue_tasks(root, state, 8) {
         Ok(updated) if updated > 0 => push_event(
             state,
@@ -11791,18 +12091,6 @@ fn reconcile_ticket_runtime_state(root: &Path, state: &Arc<Mutex<SharedState>>) 
             ),
         ),
     }
-    let active_keys = {
-        let shared = lock_shared_state(state);
-        let mut keys = HashSet::new();
-        for prompt in &shared.pending_prompts {
-            keys.extend(prompt.leased_message_keys.iter().cloned());
-            keys.extend(prompt.leased_ticket_event_keys.iter().cloned());
-        }
-        if shared.busy {
-            keys.extend(shared.leased_message_keys_inflight.iter().cloned());
-        }
-        keys
-    };
     let released_queue_leases =
         channels::release_stale_queue_task_leases(root, CHANNEL_ROUTER_LEASE_OWNER, &active_keys)?;
     if !released_queue_leases.is_empty() {
@@ -11882,6 +12170,7 @@ fn reconcile_ticket_runtime_state(root: &Path, state: &Arc<Mutex<SharedState>>) 
     let runnable_queue_tasks =
         channels::list_queue_tasks(root, &["pending".to_string(), "leased".to_string()], 1)?;
     if !runnable_queue_tasks.is_empty() {
+        mark_ticket_reconcile_ran(root, &active_keys);
         return Ok(());
     }
     let released_leases =
@@ -11939,6 +12228,7 @@ fn reconcile_ticket_runtime_state(root: &Path, state: &Arc<Mutex<SharedState>>) 
             format!("Released {released_count} previously blocked ticket event(s)"),
         );
     }
+    mark_ticket_reconcile_ran(root, &active_keys);
     Ok(())
 }
 
@@ -12124,6 +12414,24 @@ fn enqueue_prompt(
     prompt: QueuedPrompt,
     event: String,
 ) {
+    if queued_prompt_is_synthetic_e2e_bench_leftover(&prompt) {
+        match block_synthetic_e2e_queued_prompt_before_dispatch(root, &prompt) {
+            Ok(blocked) => push_event(
+                state,
+                format!(
+                    "Quarantined {blocked} synthetic E2E/bench queue task(s) before worker enqueue"
+                ),
+            ),
+            Err(err) => push_event(
+                state,
+                format!(
+                    "Synthetic E2E/bench queue task skipped before worker enqueue; quarantine failed: {}",
+                    clip_text(&err.to_string(), 180)
+                ),
+            ),
+        }
+        return;
+    }
     let event = decorate_service_event_with_skill(&event, prompt.suggested_skill.as_deref());
     let release_deferred_durable_queue_prompt = prompt.source_label == "queue"
         && !prompt.leased_message_keys.is_empty()
@@ -17984,6 +18292,44 @@ mod tests {
         root
     }
 
+    #[test]
+    fn ticket_reconcile_gate_skips_unchanged_idle_state_until_core_db_changes() {
+        clear_ticket_reconcile_gate_for_tests();
+        let root = temp_root("ticket-reconcile-gate");
+        let active_keys = HashSet::new();
+
+        assert!(
+            !should_skip_idle_ticket_reconcile(&root, &active_keys),
+            "first reconcile for a root must run"
+        );
+        mark_ticket_reconcile_ran(&root, &active_keys);
+        assert!(
+            should_skip_idle_ticket_reconcile(&root, &active_keys),
+            "unchanged idle reconcile should be skipped inside the safety window"
+        );
+
+        channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Gate invalidation".to_string(),
+                prompt: "Verify the reconcile gate sees DB changes.".to_string(),
+                thread_key: "ticket-reconcile-gate".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+        assert!(
+            !should_skip_idle_ticket_reconcile(&root, &active_keys),
+            "core DB changes must reopen the reconcile gate"
+        );
+        clear_ticket_reconcile_gate_for_tests();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     fn age_queue_task_lease(root: &Path, message_key: &str, age_secs: u64) {
         let leased_at = chrono_like_iso(current_epoch_secs().saturating_sub(age_secs));
         let conn = channels::open_channel_db(&crate::paths::core_db(root))
@@ -20880,6 +21226,7 @@ mod tests {
 
     #[test]
     fn live_service_settings_include_process_env_founder_policy() {
+        clear_live_service_settings_cache_for_tests();
         let root = temp_root("live-service-settings");
         let owner_key = "CTOX_OWNER_EMAIL_ADDRESS";
         let founder_key = "CTOX_FOUNDER_EMAIL_ADDRESSES";
@@ -20933,6 +21280,29 @@ mod tests {
         assert_eq!(founder_policy.role, "owner");
         assert!(founder_policy.allowed);
         assert!(founder_policy.allow_admin_actions);
+        clear_live_service_settings_cache_for_tests();
+    }
+
+    #[test]
+    fn live_service_settings_cache_invalidates_when_runtime_store_changes() {
+        clear_live_service_settings_cache_for_tests();
+        let root = temp_root("live-service-settings-cache-invalidation");
+        let key = "CTOX_CHANNEL_SYNC_POLL_SECS";
+
+        let mut settings = BTreeMap::new();
+        settings.insert(key.to_string(), "31".to_string());
+        runtime_env::save_runtime_env_map(&root, &settings).expect("persist first setting");
+        let first = live_service_settings(&root);
+        assert_eq!(first.get(key).map(String::as_str), Some("31"));
+
+        std::thread::sleep(Duration::from_millis(5));
+        settings.insert(key.to_string(), "313".to_string());
+        runtime_env::save_runtime_env_map(&root, &settings).expect("persist second setting");
+        let second = live_service_settings(&root);
+        assert_eq!(second.get(key).map(String::as_str), Some("313"));
+
+        clear_live_service_settings_cache_for_tests();
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -30612,6 +30982,91 @@ The previous controller turn is incomplete. Update these files now:\n\
             Path::new("."),
             &job
         ));
+    }
+
+    #[test]
+    fn synthetic_e2e_bench_queue_tasks_are_quarantined_before_dispatch() {
+        let synthetic = channels::QueueTaskView {
+            message_key: "queue:system::synthetic".to_string(),
+            thread_key: "business-os/bench_contracts_rfix14_thread_isolation".to_string(),
+            title: "Contract review follow-up".to_string(),
+            prompt: "The external CTOX Review Gate checked your last result and found that it is not complete yet.".to_string(),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            priority: "normal".to_string(),
+            suggested_skill: None,
+            parent_message_key: None,
+            route_status: "pending".to_string(),
+            status_note: None,
+            lease_owner: None,
+            leased_at: None,
+            acked_at: None,
+            created_at: "2026-06-22T00:00:00Z".to_string(),
+            sort_at: "2026-06-22T00:00:00Z".to_string(),
+            updated_at: "2026-06-22T00:00:00Z".to_string(),
+        };
+        assert!(queue_task_is_synthetic_e2e_bench_leftover(&synthetic));
+
+        let normal = channels::QueueTaskView {
+            message_key: "queue:system::normal".to_string(),
+            thread_key: "business-os/contracts".to_string(),
+            title: "Contract review follow-up".to_string(),
+            prompt: "Review renewal terms for customer ABC".to_string(),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            priority: "normal".to_string(),
+            suggested_skill: None,
+            parent_message_key: None,
+            route_status: "pending".to_string(),
+            status_note: None,
+            lease_owner: None,
+            leased_at: None,
+            acked_at: None,
+            created_at: "2026-06-22T00:00:00Z".to_string(),
+            sort_at: "2026-06-22T00:00:00Z".to_string(),
+            updated_at: "2026-06-22T00:00:00Z".to_string(),
+        };
+        assert!(!queue_task_is_synthetic_e2e_bench_leftover(&normal));
+    }
+
+    #[test]
+    fn synthetic_e2e_bench_queued_prompts_are_blocked_before_enqueue() {
+        let root = temp_root("synthetic-e2e-bench-before-enqueue");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Contract review follow-up: ctr_mqpr8fg6_8nbzjp".to_string(),
+                prompt: "The external CTOX Review Gate checked your last result and found that it is not complete yet.".to_string(),
+                thread_key: "business-os/bench_contracts_rfix14_thread_isolation".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("create synthetic queue task");
+        let leased =
+            channels::lease_queue_task(&root, &task.message_key, CHANNEL_ROUTER_LEASE_OWNER)
+                .expect("lease synthetic queue task");
+        let job = queued_prompt_from_queue_task(leased);
+
+        assert!(queued_prompt_is_synthetic_e2e_bench_leftover(&job));
+        let blocked = block_synthetic_e2e_queued_prompt_before_dispatch(&root, &job)
+            .expect("block synthetic queued prompt");
+
+        assert_eq!(blocked, 1);
+        let loaded = channels::load_queue_task(&root, &task.message_key)
+            .expect("load synthetic queue task")
+            .expect("synthetic queue task exists");
+        assert_eq!(loaded.route_status, "blocked");
+        assert_eq!(
+            loaded.status_note.as_deref(),
+            Some(SYNTHETIC_E2E_QUEUE_BLOCK_NOTE)
+        );
+        assert!(loaded.lease_owner.is_none());
+        assert!(loaded.leased_at.is_none());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
