@@ -184,6 +184,7 @@ struct ChannelRouterIdleGateState {
     root: PathBuf,
     core_db_path: PathBuf,
     core_stamp: CoreDbChangeStamp,
+    business_os_store_stamp: CoreDbChangeStamp,
     ticket_stamp: tickets::TicketStoreChangeStamp,
     settings: BTreeMap<String, String>,
     last_idle_pass: Instant,
@@ -10787,6 +10788,7 @@ fn should_skip_idle_channel_router_tick(root: &Path, settings: &BTreeMap<String,
     let root_path = root.to_path_buf();
     let core_db_path = crate::paths::core_db(root);
     let core_stamp = core_db_change_stamp(&core_db_path);
+    let business_os_store_stamp = business_os_store_change_stamp(root);
     let ticket_stamp = tickets::ticket_store_change_stamp(root);
     let now = Instant::now();
     let gate = CHANNEL_ROUTER_IDLE_GATE.get_or_init(|| Mutex::new(None));
@@ -10794,19 +10796,23 @@ fn should_skip_idle_channel_router_tick(root: &Path, settings: &BTreeMap<String,
     let Some(previous) = guard.as_ref() else {
         return false;
     };
-    previous.root == root_path
-        && previous.core_db_path == core_db_path
-        && previous.core_stamp == core_stamp
-        && previous.ticket_stamp == ticket_stamp
-        && previous.settings == *settings
-        && now.duration_since(previous.last_idle_pass)
-            < Duration::from_secs(CHANNEL_ROUTER_IDLE_SAFETY_SECS)
+    channel_router_idle_gate_matches(
+        previous,
+        &root_path,
+        &core_db_path,
+        &core_stamp,
+        &business_os_store_stamp,
+        &ticket_stamp,
+        settings,
+        now,
+    )
 }
 
 fn mark_idle_channel_router_pass(root: &Path, settings: &BTreeMap<String, String>) {
     let root_path = root.to_path_buf();
     let core_db_path = crate::paths::core_db(root);
     let core_stamp = core_db_change_stamp(&core_db_path);
+    let business_os_store_stamp = business_os_store_change_stamp(root);
     let ticket_stamp = tickets::ticket_store_change_stamp(root);
     let gate = CHANNEL_ROUTER_IDLE_GATE.get_or_init(|| Mutex::new(None));
     let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -10814,10 +10820,31 @@ fn mark_idle_channel_router_pass(root: &Path, settings: &BTreeMap<String, String
         root: root_path,
         core_db_path,
         core_stamp,
+        business_os_store_stamp,
         ticket_stamp,
         settings: settings.clone(),
         last_idle_pass: Instant::now(),
     });
+}
+
+fn channel_router_idle_gate_matches(
+    previous: &ChannelRouterIdleGateState,
+    root_path: &Path,
+    core_db_path: &Path,
+    core_stamp: &CoreDbChangeStamp,
+    business_os_store_stamp: &CoreDbChangeStamp,
+    ticket_stamp: &tickets::TicketStoreChangeStamp,
+    settings: &BTreeMap<String, String>,
+    now: Instant,
+) -> bool {
+    previous.root == root_path
+        && previous.core_db_path == core_db_path
+        && previous.core_stamp == *core_stamp
+        && previous.business_os_store_stamp == *business_os_store_stamp
+        && previous.ticket_stamp == *ticket_stamp
+        && previous.settings == *settings
+        && now.duration_since(previous.last_idle_pass)
+            < Duration::from_secs(CHANNEL_ROUTER_IDLE_SAFETY_SECS)
 }
 
 fn should_skip_idle_ticket_reconcile(root: &Path, active_keys: &HashSet<String>) -> bool {
@@ -10871,6 +10898,10 @@ fn core_db_change_stamp(path: &Path) -> CoreDbChangeStamp {
         wal: file_change_stamp(&sqlite_sidecar_path(path, "-wal")),
         shm: file_change_stamp(&sqlite_sidecar_path(path, "-shm")),
     }
+}
+
+fn business_os_store_change_stamp(root: &Path) -> CoreDbChangeStamp {
+    core_db_change_stamp(&root.join("runtime").join("business-os.sqlite3"))
 }
 
 fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
@@ -10929,20 +10960,6 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
     if let Err(err) = reconcile_ticket_runtime_state(root, state) {
         push_event(state, format!("Ticket reconciliation failed: {err}"));
     }
-    match crate::business_os::store::complete_ready_documents_report_commands(root, 8) {
-        Ok(completed) if completed > 0 => push_event(
-            state,
-            format!("Completed {completed} ready Business OS document report writeback(s)"),
-        ),
-        Ok(_) => {}
-        Err(err) => push_event(
-            state,
-            format!(
-                "Business OS document report writeback sweep failed: {}",
-                clip_text(&err.to_string(), 180)
-            ),
-        ),
-    }
     if let Some(prompt) = maybe_take_next_queued_prompt_for_idle_dispatch(root, state) {
         start_prompt_worker(root.to_path_buf(), state.clone(), prompt);
         return Ok(());
@@ -10972,6 +10989,23 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         return Ok(());
     }
     let mut router_did_work = false;
+    match crate::business_os::store::complete_ready_documents_report_commands(root, 8) {
+        Ok(completed) if completed > 0 => {
+            router_did_work = true;
+            push_event(
+                state,
+                format!("Completed {completed} ready Business OS document report writeback(s)"),
+            );
+        }
+        Ok(_) => {}
+        Err(err) => push_event(
+            state,
+            format!(
+                "Business OS document report writeback sweep failed: {}",
+                clip_text(&err.to_string(), 180)
+            ),
+        ),
+    }
     // router-4: honor source_label_dispatch_rank at the durable-queue-vs-inbound
     // boundary. A freshly-arrived top-rank (founder/owner/admin = rank 4) inbound
     // must not lose the single serial slot to a rank-1 durable-queue task purely
@@ -18449,6 +18483,63 @@ mod tests {
             "core DB changes must reopen the reconcile gate"
         );
         clear_ticket_reconcile_gate_for_tests();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn channel_router_idle_gate_reopens_when_business_os_store_changes() {
+        let root = temp_root("channel-router-business-os-store-gate");
+        std::fs::create_dir_all(root.join("runtime")).unwrap();
+        let settings = BTreeMap::new();
+        let root_path = root.clone();
+        let core_db_path = crate::paths::core_db(&root);
+        let core_stamp = core_db_change_stamp(&core_db_path);
+        let business_os_store_stamp = business_os_store_change_stamp(&root);
+        let ticket_stamp = tickets::ticket_store_change_stamp(&root);
+        let now = Instant::now();
+        let previous = ChannelRouterIdleGateState {
+            root: root_path.clone(),
+            core_db_path: core_db_path.clone(),
+            core_stamp: core_stamp.clone(),
+            business_os_store_stamp: business_os_store_stamp.clone(),
+            ticket_stamp: ticket_stamp.clone(),
+            settings: settings.clone(),
+            last_idle_pass: now,
+        };
+
+        assert!(
+            channel_router_idle_gate_matches(
+                &previous,
+                &root_path,
+                &core_db_path,
+                &core_stamp,
+                &business_os_store_stamp,
+                &ticket_stamp,
+                &settings,
+                now,
+            ),
+            "unchanged idle router state should be skipped inside the safety window"
+        );
+
+        std::fs::write(root.join("runtime").join("business-os.sqlite3"), b"changed").unwrap();
+        let changed_business_os_store_stamp = business_os_store_change_stamp(&root);
+        assert_ne!(
+            business_os_store_stamp, changed_business_os_store_stamp,
+            "Business OS store writes must change the router idle gate stamp"
+        );
+        assert!(
+            !channel_router_idle_gate_matches(
+                &previous,
+                &root_path,
+                &core_db_path,
+                &core_stamp,
+                &changed_business_os_store_stamp,
+                &ticket_stamp,
+                &settings,
+                now,
+            ),
+            "Business OS store changes must reopen the router gate"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

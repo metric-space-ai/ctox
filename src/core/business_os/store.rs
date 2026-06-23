@@ -12095,55 +12095,58 @@ pub fn complete_ready_documents_report_commands(
     root: &Path,
     limit: usize,
 ) -> anyhow::Result<usize> {
-    let conn = open_store(root)?;
-    let mut statement = conn.prepare(
-        "SELECT command_id
-         FROM business_commands
-         WHERE module = 'documents'
-           AND command_type = 'research.systematic.report.create'
-           AND status NOT IN ('completed', 'failed', 'cancelled')
-         ORDER BY observed_at_ms ASC, command_id ASC
-         LIMIT ?1",
-    )?;
-    let rows = statement.query_map(params![limit.max(1) as i64], |row| row.get::<_, String>(0))?;
-    let command_ids = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-    drop(statement);
-
-    let mut completed = 0usize;
-    for command_id in command_ids {
-        let command = match load_business_command(&conn, &command_id) {
-            Ok(command) => command,
-            Err(_) => continue,
-        };
-        if !is_documents_report_command(&command) {
-            continue;
-        }
-        let Some(filename) = expected_docx_filename(&command) else {
-            continue;
-        };
-        let Some(docx_path) = resolve_generated_docx_path(root, &command, &filename, None) else {
-            continue;
-        };
-        if !docx_path.is_file() {
-            continue;
-        }
-        let task = find_queue_task_for_command(root, &command_id)
-            .and_then(|task_id| channels::load_queue_task(root, &task_id).ok().flatten());
-        let reply = format!(
-            "DOCX artifact created and detected by Business OS writeback: {}",
-            docx_path.display()
-        );
-        process_documents_report_command(
-            root,
-            &conn,
-            &command_id,
-            &command,
-            task.as_ref(),
-            Some(&reply),
+    with_store_connection(root, |conn| {
+        let mut statement = conn.prepare(
+            "SELECT command_id
+             FROM business_commands
+             WHERE module = 'documents'
+               AND command_type = 'research.systematic.report.create'
+               AND status NOT IN ('completed', 'failed', 'cancelled')
+             ORDER BY observed_at_ms ASC, command_id ASC
+             LIMIT ?1",
         )?;
-        completed += 1;
-    }
-    Ok(completed)
+        let rows =
+            statement.query_map(params![limit.max(1) as i64], |row| row.get::<_, String>(0))?;
+        let command_ids = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
+
+        let mut completed = 0usize;
+        for command_id in command_ids {
+            let command = match load_business_command(conn, &command_id) {
+                Ok(command) => command,
+                Err(_) => continue,
+            };
+            if !is_documents_report_command(&command) {
+                continue;
+            }
+            let Some(filename) = expected_docx_filename(&command) else {
+                continue;
+            };
+            let Some(docx_path) = resolve_generated_docx_path(root, &command, &filename, None)
+            else {
+                continue;
+            };
+            if !docx_path.is_file() {
+                continue;
+            }
+            let task = find_queue_task_for_command(root, &command_id)
+                .and_then(|task_id| channels::load_queue_task(root, &task_id).ok().flatten());
+            let reply = format!(
+                "DOCX artifact created and detected by Business OS writeback: {}",
+                docx_path.display()
+            );
+            process_documents_report_command(
+                root,
+                conn,
+                &command_id,
+                &command,
+                task.as_ref(),
+                Some(&reply),
+            )?;
+            completed += 1;
+        }
+        Ok(completed)
+    })
 }
 
 fn process_business_chat_reply(
