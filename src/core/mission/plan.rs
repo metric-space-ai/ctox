@@ -11,8 +11,17 @@ use serde::Serialize;
 use serde_json::json;
 use sha2::Digest;
 use sha2::Sha256;
+use std::collections::HashSet;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Mutex;
+use std::sync::OnceLock;
+use std::time::Duration as StdDuration;
+use std::time::Instant;
 use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use crate::channels;
 use crate::governance;
@@ -20,6 +29,37 @@ use crate::governance;
 const DEFAULT_DB_RELATIVE_PATH: &str = "runtime/ctox.sqlite3";
 const DEFAULT_GOAL_THREAD_PREFIX: &str = "plan";
 const DEFAULT_RESULT_EXCERPT_CHARS: usize = 420;
+const EMIT_DUE_STEPS_IDLE_SAFETY_SECS: u64 = 60;
+
+static PLAN_SCHEMA_READY: OnceLock<Mutex<HashSet<PlanDbKey>>> = OnceLock::new();
+static EMIT_DUE_STEPS_GATE: OnceLock<Mutex<Option<EmitDueStepsGateState>>> = OnceLock::new();
+
+#[derive(Debug, Clone)]
+struct EmitDueStepsGateState {
+    db_path: PathBuf,
+    stamp: CoreDbChangeStamp,
+    next_due_at: Option<DateTime<Utc>>,
+    last_scan: Instant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CoreDbChangeStamp {
+    main: FileChangeStamp,
+    wal: FileChangeStamp,
+    shm: FileChangeStamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileChangeStamp {
+    exists: bool,
+    len: u64,
+    modified_ns: u128,
+}
+
+#[cfg(unix)]
+type PlanDbKey = (PathBuf, u64, u64);
+#[cfg(not(unix))]
+type PlanDbKey = PathBuf;
 
 const STEP_STATUS_PENDING: &str = "pending";
 const STEP_STATUS_QUEUED: &str = "queued";
@@ -322,8 +362,18 @@ pub fn complete_step_by_message_key(
 }
 
 pub fn emit_due_steps(root: &Path) -> Result<EmitDuePlansSummary> {
+    let now = now_utc();
+    if should_skip_emit_due_step_scan(root, &now) {
+        return Ok(EmitDuePlansSummary::default());
+    }
     let conn = open_plan_db(root)?;
     let goals = list_goal_ids_with_due_work(&conn)?;
+    if goals.is_empty() {
+        let next_due_at = load_next_due_step_at(&conn, &now)?;
+        drop(conn);
+        mark_emit_due_step_scan(root, next_due_at);
+        return Ok(EmitDuePlansSummary::default());
+    }
     let mut summary = EmitDuePlansSummary::default();
     for goal_id in goals {
         if let Some(emitted) = emit_next_step_for_goal(root, &goal_id)? {
@@ -1177,6 +1227,71 @@ fn list_goal_ids_with_due_work(conn: &Connection) -> Result<Vec<String>> {
         .map_err(anyhow::Error::from)
 }
 
+fn load_next_due_step_at(conn: &Connection, now: &DateTime<Utc>) -> Result<Option<DateTime<Utc>>> {
+    let raw: Option<String> = conn
+        .query_row(
+            r#"
+            SELECT MIN(s.defer_until)
+            FROM planned_goals g
+            JOIN planned_steps s ON s.goal_id = g.goal_id
+            WHERE g.auto_advance = 1
+              AND g.status = 'active'
+              AND s.status = 'pending'
+              AND s.defer_until IS NOT NULL
+              AND s.defer_until != ''
+              AND s.defer_until > ?1
+            "#,
+            params![now.to_rfc3339()],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    raw.as_deref().map(parse_rfc3339_utc).transpose()
+}
+
+fn should_skip_emit_due_step_scan(root: &Path, now: &DateTime<Utc>) -> bool {
+    let db_path = resolve_db_path(root);
+    let stamp = core_db_change_stamp(&db_path);
+    let gate = EMIT_DUE_STEPS_GATE.get_or_init(|| Mutex::new(None));
+    let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(previous) = guard.as_ref() else {
+        return false;
+    };
+    if previous.db_path != db_path || previous.stamp != stamp {
+        return false;
+    }
+    if previous
+        .next_due_at
+        .as_ref()
+        .map(|next_due_at| next_due_at <= now)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    previous.last_scan.elapsed() < StdDuration::from_secs(EMIT_DUE_STEPS_IDLE_SAFETY_SECS)
+}
+
+fn mark_emit_due_step_scan(root: &Path, next_due_at: Option<DateTime<Utc>>) {
+    let db_path = resolve_db_path(root);
+    let stamp = core_db_change_stamp(&db_path);
+    let gate = EMIT_DUE_STEPS_GATE.get_or_init(|| Mutex::new(None));
+    let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = Some(EmitDueStepsGateState {
+        db_path,
+        stamp,
+        next_due_at,
+        last_scan: Instant::now(),
+    });
+}
+
+#[cfg(test)]
+fn clear_emit_due_step_scan_gate_for_tests() {
+    if let Some(gate) = EMIT_DUE_STEPS_GATE.get() {
+        let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = None;
+    }
+}
+
 fn load_goal(conn: &Connection, goal_id: &str) -> Result<Option<PlannedGoalView>> {
     conn.query_row(
         r#"
@@ -1578,6 +1693,51 @@ fn open_plan_db(root: &Path) -> Result<Connection> {
         .with_context(|| format!("failed to open plan db {}", path.display()))?;
     conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
         .context("failed to configure SQLite busy_timeout for plans")?;
+    ensure_plan_schema_once(&path, &conn)?;
+    Ok(conn)
+}
+
+fn ensure_plan_schema_once(path: &Path, conn: &Connection) -> Result<()> {
+    let key = plan_db_key(path);
+    let ready = PLAN_SCHEMA_READY.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut ready = ready
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if ready.contains(&key) {
+        return Ok(());
+    }
+    ensure_plan_schema(conn)?;
+    ready.insert(key);
+    Ok(())
+}
+
+#[cfg(unix)]
+fn plan_db_key(path: &Path) -> PlanDbKey {
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| absolute_db_path(path));
+    let metadata = std::fs::metadata(&canonical)
+        .or_else(|_| std::fs::metadata(path))
+        .ok();
+    let (device, inode) = metadata
+        .map(|metadata| (metadata.dev(), metadata.ino()))
+        .unwrap_or((0, 0));
+    (canonical, device, inode)
+}
+
+#[cfg(not(unix))]
+fn plan_db_key(path: &Path) -> PlanDbKey {
+    std::fs::canonicalize(path).unwrap_or_else(|_| absolute_db_path(path))
+}
+
+fn absolute_db_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    std::env::current_dir()
+        .map(|cwd| cwd.join(path))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn ensure_plan_schema(conn: &Connection) -> Result<()> {
     let busy_timeout_ms = crate::persistence::sqlite_busy_timeout_millis();
     conn.execute_batch(&format!(
         r#"
@@ -1623,7 +1783,7 @@ fn open_plan_db(root: &Path) -> Result<Connection> {
             ON planned_steps(status, defer_until, updated_at);
         "#,
     ))?;
-    Ok(conn)
+    Ok(())
 }
 
 fn schema_state(conn: &Connection) -> Result<serde_json::Value> {
@@ -1639,6 +1799,45 @@ fn schema_state(conn: &Connection) -> Result<serde_json::Value> {
 
 fn resolve_db_path(root: &Path) -> std::path::PathBuf {
     root.join(DEFAULT_DB_RELATIVE_PATH)
+}
+
+fn core_db_change_stamp(path: &Path) -> CoreDbChangeStamp {
+    CoreDbChangeStamp {
+        main: file_change_stamp(path),
+        wal: file_change_stamp(&sqlite_sidecar_path(path, "-wal")),
+        shm: file_change_stamp(&sqlite_sidecar_path(path, "-shm")),
+    }
+}
+
+fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut value = path.as_os_str().to_os_string();
+    value.push(suffix);
+    PathBuf::from(value)
+}
+
+fn file_change_stamp(path: &Path) -> FileChangeStamp {
+    match std::fs::metadata(path) {
+        Ok(metadata) => FileChangeStamp {
+            exists: true,
+            len: metadata.len(),
+            modified_ns: metadata
+                .modified()
+                .ok()
+                .map(system_time_to_unix_nanos)
+                .unwrap_or(0),
+        },
+        Err(_) => FileChangeStamp {
+            exists: false,
+            len: 0,
+            modified_ns: 0,
+        },
+    }
+}
+
+fn system_time_to_unix_nanos(time: SystemTime) -> u128 {
+    time.duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0)
 }
 
 fn parse_ingest_request(args: &[String]) -> Result<PlanCreateRequest> {
@@ -1716,6 +1915,16 @@ fn now_iso_string() -> String {
     DateTime::<Utc>::from(SystemTime::now()).to_rfc3339()
 }
 
+fn now_utc() -> DateTime<Utc> {
+    DateTime::<Utc>::from(SystemTime::now())
+}
+
+fn parse_rfc3339_utc(value: &str) -> Result<DateTime<Utc>> {
+    Ok(DateTime::parse_from_rfc3339(value)
+        .with_context(|| format!("failed to parse RFC3339 timestamp {value}"))?
+        .with_timezone(&Utc))
+}
+
 fn stable_digest(input: &str) -> String {
     let digest = Sha256::digest(input.as_bytes());
     let hex = format!("{digest:x}");
@@ -1747,6 +1956,75 @@ mod tests {
             |row| row.get(0),
         )
         .expect("expected routing status")
+    }
+
+    #[test]
+    fn emit_due_step_scan_gate_skips_idle_until_plan_db_changes_or_due_time_arrives() {
+        clear_emit_due_step_scan_gate_for_tests();
+        let root = temp_plan_root("idle-gate");
+        let now = now_utc();
+        let future_due = (now + Duration::minutes(5)).to_rfc3339();
+        let created_at = now_iso_string();
+        {
+            let conn = open_plan_db(&root).expect("open plan db");
+            conn.execute(
+                r#"
+                INSERT INTO planned_goals (
+                    goal_id, title, source_prompt, thread_key, skill, auto_advance,
+                    status, last_emitted_at, last_completed_at, created_at, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, NULL, 1, ?5, NULL, NULL, ?6, ?6)
+                "#,
+                params![
+                    "goal-future",
+                    "future goal",
+                    "later",
+                    "plan/future",
+                    GOAL_STATUS_ACTIVE,
+                    created_at
+                ],
+            )
+            .expect("insert goal");
+            conn.execute(
+                r#"
+                INSERT INTO planned_steps (
+                    step_id, goal_id, step_order, title, instruction, status,
+                    defer_until, blocked_reason, attempt_count, last_message_key,
+                    last_result_excerpt, created_at, updated_at, completed_at
+                ) VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6, NULL, 0, NULL, NULL, ?7, ?7, NULL)
+                "#,
+                params![
+                    "step-future",
+                    "goal-future",
+                    "future step",
+                    "do it later",
+                    STEP_STATUS_PENDING,
+                    future_due,
+                    created_at
+                ],
+            )
+            .expect("insert step");
+        }
+
+        assert!(!should_skip_emit_due_step_scan(&root, &now_utc()));
+        let summary = emit_due_steps(&root).expect("first plan scan");
+        assert_eq!(summary.emitted_count, 0);
+        assert!(should_skip_emit_due_step_scan(&root, &now_utc()));
+
+        mark_emit_due_step_scan(&root, Some(now_utc() - Duration::minutes(1)));
+        assert!(!should_skip_emit_due_step_scan(&root, &now_utc()));
+
+        mark_emit_due_step_scan(&root, Some(now_utc() + Duration::minutes(5)));
+        {
+            let conn = open_plan_db(&root).expect("reopen plan db");
+            conn.execute(
+                "UPDATE planned_steps SET title = ?2, updated_at = ?3 WHERE step_id = ?1",
+                params!["step-future", "changed", now_iso_string()],
+            )
+            .expect("mutate plan step");
+        }
+        assert!(!should_skip_emit_due_step_scan(&root, &now_utc()));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

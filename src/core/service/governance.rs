@@ -18,10 +18,11 @@ use std::sync::OnceLock;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-/// DB paths whose governance schema + default-mechanism upsert has already
-/// run in this process. Skipped on subsequent opens — the daemon owns the
-/// authoritative writes; the TUI's repeated `prompt_snapshot` calls just
-/// need to read.
+/// DB paths whose static default governance mechanisms have already been
+/// upserted in this process. The daemon restarts on release changes, so one
+/// upsert per DB per process is enough to publish updated mechanism metadata
+/// without making every idempotent router audit event repeat the fixed-row
+/// writer loop.
 fn initialized_governance_paths() -> &'static Mutex<HashSet<PathBuf>> {
     static INITIALIZED: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
     INITIALIZED.get_or_init(|| Mutex::new(HashSet::new()))
@@ -386,7 +387,7 @@ pub fn handle_governance_command(root: &Path, args: &[String]) -> Result<()> {
 
 pub fn ensure_governance(root: &Path) -> Result<()> {
     let conn = open_governance_db(root)?;
-    upsert_default_mechanisms(&conn)
+    ensure_default_mechanisms(&conn)
 }
 
 /// Insert a governance event, returning its deterministic id and whether THIS
@@ -440,7 +441,7 @@ pub fn record_event(
     request: GovernanceEventRequest<'_>,
 ) -> Result<Option<GovernanceEventRecord>> {
     let conn = open_governance_db(root)?;
-    upsert_default_mechanisms(&conn)?;
+    ensure_default_mechanisms(&conn)?;
     let created_at = now_millis_string();
     let (event_id, was_new) = insert_governance_event(&conn, &request, &created_at)?;
     if !was_new {
@@ -503,7 +504,7 @@ pub fn dropped_audit_writes() -> u64 {
 /// concurrent second call return `false`, with no check-then-act race.
 pub fn record_event_if_new(root: &Path, request: GovernanceEventRequest<'_>) -> Result<bool> {
     let conn = open_governance_db(root)?;
-    upsert_default_mechanisms(&conn)?;
+    ensure_default_mechanisms(&conn)?;
     let created_at = now_millis_string();
     let (_event_id, was_new) = insert_governance_event(&conn, &request, &created_at)?;
     Ok(was_new)
@@ -511,28 +512,7 @@ pub fn record_event_if_new(root: &Path, request: GovernanceEventRequest<'_>) -> 
 
 pub fn prompt_snapshot(root: &Path, conversation_id: i64) -> Result<GovernancePromptSnapshot> {
     let conn = open_governance_db(root)?;
-    // `upsert_default_mechanisms` is a writer-locked INSERT-OR-UPDATE loop
-    // over a fixed set of rows whose values are static. Running it on every
-    // TUI refresh contends with the daemon's writer and dominates lag. Skip
-    // after first call per process per path — initial population happened
-    // either at install time or on the daemon side.
-    let conn_path = conn.path().map(PathBuf::from);
-    let needs_upsert = match conn_path.as_ref() {
-        Some(path) => !initialized_governance_paths()
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .contains(path),
-        None => true,
-    };
-    if needs_upsert {
-        upsert_default_mechanisms(&conn)?;
-        if let Some(path) = conn_path {
-            initialized_governance_paths()
-                .lock()
-                .unwrap_or_else(|err| err.into_inner())
-                .insert(path);
-        }
-    }
+    ensure_default_mechanisms(&conn)?;
     Ok(GovernancePromptSnapshot {
         mechanisms: list_mechanisms(&conn)?,
         recent_events: list_recent_events_from_conn(&conn, conversation_id, DEFAULT_EVENT_LIMIT)?,
@@ -631,7 +611,7 @@ pub fn list_recent_events(
     limit: usize,
 ) -> Result<Vec<GovernanceEventRecord>> {
     let conn = open_governance_db(root)?;
-    upsert_default_mechanisms(&conn)?;
+    ensure_default_mechanisms(&conn)?;
     list_recent_events_from_conn(&conn, conversation_id, limit)
 }
 
@@ -759,6 +739,25 @@ fn upsert_default_mechanisms(conn: &Connection) -> Result<()> {
             ],
         )?;
     }
+    Ok(())
+}
+
+fn ensure_default_mechanisms(conn: &Connection) -> Result<()> {
+    let Some(path) = conn.path().map(PathBuf::from) else {
+        return upsert_default_mechanisms(conn);
+    };
+    if initialized_governance_paths()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .contains(&path)
+    {
+        return Ok(());
+    }
+    upsert_default_mechanisms(conn)?;
+    initialized_governance_paths()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .insert(path);
     Ok(())
 }
 
@@ -963,6 +962,40 @@ mod tests {
             std::env::temp_dir().join(format!("ctox-governance-{label}-{}", now_millis_string()));
         std::fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
         root
+    }
+
+    #[test]
+    fn ensure_governance_marks_default_mechanisms_initialized_for_event_writes() -> Result<()> {
+        let root = temp_root("default-cache");
+        ensure_governance(&root)?;
+        let conn = open_governance_db(&root)?;
+        conn.execute(
+            "UPDATE governance_mechanisms SET updated_at = ?2 WHERE mechanism_id = ?1",
+            params!["queue_pressure_guard", "sentinel"],
+        )?;
+        drop(conn);
+
+        let _ = record_event(
+            &root,
+            GovernanceEventRequest {
+                mechanism_id: "queue_pressure_guard",
+                conversation_id: Some(1),
+                severity: "info",
+                reason: "verify cached default mechanism initialization",
+                action_taken: "recorded an event without rewriting static mechanism rows",
+                details: json!({}),
+                idempotence_key: Some("default-cache"),
+            },
+        )?;
+
+        let conn = open_governance_db(&root)?;
+        let updated_at: String = conn.query_row(
+            "SELECT updated_at FROM governance_mechanisms WHERE mechanism_id = ?1",
+            params!["queue_pressure_guard"],
+            |row| row.get(0),
+        )?;
+        assert_eq!(updated_at, "sentinel");
+        Ok(())
     }
 
     #[test]

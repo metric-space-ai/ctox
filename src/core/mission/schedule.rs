@@ -13,18 +13,57 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
 use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
+use std::sync::Mutex;
+use std::sync::OnceLock;
+use std::time::Duration as StdDuration;
+use std::time::Instant;
 use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use crate::channels;
 
 const DEFAULT_DB_RELATIVE_PATH: &str = "runtime/ctox.sqlite3";
 const CRON_SCAN_MINUTES: i64 = 366 * 24 * 60;
 const MEETING_JOIN_MARKER: &str = "CTOX_MEETING_JOIN:";
+const EMIT_DUE_IDLE_SAFETY_SECS: u64 = 60;
+
+static EMIT_DUE_SCAN_GATE: OnceLock<Mutex<Option<EmitDueScanGateState>>> = OnceLock::new();
+static SCHEDULE_SCHEMA_READY: OnceLock<Mutex<HashSet<ScheduleDbKey>>> = OnceLock::new();
+
+#[derive(Debug, Clone)]
+struct EmitDueScanGateState {
+    db_path: PathBuf,
+    stamp: CoreDbChangeStamp,
+    next_due_at: Option<DateTime<Utc>>,
+    last_scan: Instant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CoreDbChangeStamp {
+    main: FileChangeStamp,
+    wal: FileChangeStamp,
+    shm: FileChangeStamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileChangeStamp {
+    exists: bool,
+    len: u64,
+    modified_ns: u128,
+}
+
+#[cfg(unix)]
+type ScheduleDbKey = (PathBuf, u64, u64);
+#[cfg(not(unix))]
+type ScheduleDbKey = PathBuf;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ScheduledTaskView {
@@ -134,10 +173,17 @@ pub fn handle_schedule_command(root: &Path, args: &[String]) -> Result<()> {
 }
 
 pub fn emit_due_tasks(root: &Path) -> Result<EmitDueSummary> {
-    let conn = open_schedule_db(root)?;
     let now = now_utc();
+    if should_skip_emit_due_scan(root, &now) {
+        return Ok(EmitDueSummary::default());
+    }
+
+    let conn = open_schedule_db(root)?;
     let mut due = list_due_tasks(&conn, &now)?;
     if due.is_empty() {
+        let next_due_at = load_next_due_at(&conn)?;
+        drop(conn);
+        mark_emit_due_scan(root, next_due_at);
         return Ok(EmitDueSummary::default());
     }
     let tx = conn.unchecked_transaction()?;
@@ -178,6 +224,9 @@ pub fn emit_due_tasks(root: &Path) -> Result<EmitDueSummary> {
         summary.emitted_runs.push(run);
     }
     tx.commit()?;
+    let next_due_at = load_next_due_at(&conn)?;
+    drop(conn);
+    mark_emit_due_scan(root, next_due_at);
     Ok(summary)
 }
 
@@ -591,6 +640,67 @@ fn list_due_tasks(conn: &Connection, now: &DateTime<Utc>) -> Result<Vec<Schedule
         .map_err(anyhow::Error::from)
 }
 
+fn load_next_due_at(conn: &Connection) -> Result<Option<DateTime<Utc>>> {
+    let raw: Option<String> = conn
+        .query_row(
+            r#"
+            SELECT next_run_at
+            FROM scheduled_tasks
+            WHERE enabled = 1
+              AND next_run_at IS NOT NULL
+            ORDER BY next_run_at ASC, created_at ASC
+            LIMIT 1
+            "#,
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    raw.as_deref().map(parse_rfc3339_utc).transpose()
+}
+
+fn should_skip_emit_due_scan(root: &Path, now: &DateTime<Utc>) -> bool {
+    let db_path = resolve_db_path(root);
+    let stamp = core_db_change_stamp(&db_path);
+    let gate = EMIT_DUE_SCAN_GATE.get_or_init(|| Mutex::new(None));
+    let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(previous) = guard.as_ref() else {
+        return false;
+    };
+    if previous.db_path != db_path || previous.stamp != stamp {
+        return false;
+    }
+    if previous
+        .next_due_at
+        .as_ref()
+        .map(|next_due_at| next_due_at <= now)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    previous.last_scan.elapsed() < StdDuration::from_secs(EMIT_DUE_IDLE_SAFETY_SECS)
+}
+
+fn mark_emit_due_scan(root: &Path, next_due_at: Option<DateTime<Utc>>) {
+    let db_path = resolve_db_path(root);
+    let stamp = core_db_change_stamp(&db_path);
+    let gate = EMIT_DUE_SCAN_GATE.get_or_init(|| Mutex::new(None));
+    let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = Some(EmitDueScanGateState {
+        db_path,
+        stamp,
+        next_due_at,
+        last_scan: Instant::now(),
+    });
+}
+
+#[cfg(test)]
+fn clear_emit_due_scan_gate_for_tests() {
+    if let Some(gate) = EMIT_DUE_SCAN_GATE.get() {
+        let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = None;
+    }
+}
+
 fn load_task(conn: &Connection, task_id: &str) -> Result<Option<ScheduledTaskView>> {
     conn.query_row(
         r#"
@@ -633,6 +743,51 @@ fn open_schedule_db(root: &Path) -> Result<Connection> {
         .with_context(|| format!("failed to open schedule db {}", path.display()))?;
     conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
         .context("failed to configure SQLite busy_timeout for schedules")?;
+    ensure_schedule_schema_once(&path, &conn)?;
+    Ok(conn)
+}
+
+fn ensure_schedule_schema_once(path: &Path, conn: &Connection) -> Result<()> {
+    let key = schedule_db_key(path);
+    let ready = SCHEDULE_SCHEMA_READY.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut ready = ready
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if ready.contains(&key) {
+        return Ok(());
+    }
+    ensure_schedule_schema(conn)?;
+    ready.insert(key);
+    Ok(())
+}
+
+#[cfg(unix)]
+fn schedule_db_key(path: &Path) -> ScheduleDbKey {
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| absolute_db_path(path));
+    let metadata = std::fs::metadata(&canonical)
+        .or_else(|_| std::fs::metadata(path))
+        .ok();
+    let (device, inode) = metadata
+        .map(|metadata| (metadata.dev(), metadata.ino()))
+        .unwrap_or((0, 0));
+    (canonical, device, inode)
+}
+
+#[cfg(not(unix))]
+fn schedule_db_key(path: &Path) -> ScheduleDbKey {
+    std::fs::canonicalize(path).unwrap_or_else(|_| absolute_db_path(path))
+}
+
+fn absolute_db_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    std::env::current_dir()
+        .map(|cwd| cwd.join(path))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn ensure_schedule_schema(conn: &Connection) -> Result<()> {
     let busy_timeout_ms = crate::persistence::sqlite_busy_timeout_millis();
     conn.execute_batch(&format!(
         r#"
@@ -669,7 +824,7 @@ fn open_schedule_db(root: &Path) -> Result<Connection> {
             ON scheduled_task_runs(task_id, scheduled_for DESC);
         "#,
     ))?;
-    Ok(conn)
+    Ok(())
 }
 
 fn schema_state(conn: &Connection) -> Result<serde_json::Value> {
@@ -686,6 +841,45 @@ fn schema_state(conn: &Connection) -> Result<serde_json::Value> {
 
 fn resolve_db_path(root: &Path) -> std::path::PathBuf {
     root.join(DEFAULT_DB_RELATIVE_PATH)
+}
+
+fn core_db_change_stamp(path: &Path) -> CoreDbChangeStamp {
+    CoreDbChangeStamp {
+        main: file_change_stamp(path),
+        wal: file_change_stamp(&sqlite_sidecar_path(path, "-wal")),
+        shm: file_change_stamp(&sqlite_sidecar_path(path, "-shm")),
+    }
+}
+
+fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut value = path.as_os_str().to_os_string();
+    value.push(suffix);
+    PathBuf::from(value)
+}
+
+fn file_change_stamp(path: &Path) -> FileChangeStamp {
+    match std::fs::metadata(path) {
+        Ok(metadata) => FileChangeStamp {
+            exists: true,
+            len: metadata.len(),
+            modified_ns: metadata
+                .modified()
+                .ok()
+                .map(system_time_to_unix_nanos)
+                .unwrap_or(0),
+        },
+        Err(_) => FileChangeStamp {
+            exists: false,
+            len: 0,
+            modified_ns: 0,
+        },
+    }
+}
+
+fn system_time_to_unix_nanos(time: SystemTime) -> u128 {
+    time.duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0)
 }
 
 fn parse_add_request(args: &[String]) -> Result<ScheduleCreateRequest> {
@@ -799,6 +993,64 @@ mod tests {
                 .expect("failed state");
         assert_eq!(next_run.as_deref(), Some("2026-04-28T12:01:00+00:00"));
         assert!(enabled);
+    }
+
+    #[test]
+    fn emit_due_scan_gate_skips_idle_until_schedule_db_changes_or_due_time_arrives() {
+        clear_emit_due_scan_gate_for_tests();
+        let root = std::env::temp_dir().join(format!(
+            "ctox_schedule_idle_gate_test_{}",
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("runtime")).expect("runtime dir");
+        let now = now_utc();
+        let future_due = (now + Duration::minutes(5)).to_rfc3339();
+        let created_at = now_iso_string();
+        {
+            let conn = open_schedule_db(&root).expect("open schedule db");
+            conn.execute(
+                r#"
+                INSERT INTO scheduled_tasks (
+                    task_id, name, cron_expr, prompt, thread_key, skill, enabled,
+                    next_run_at, last_run_at, created_at, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, 1, ?6, NULL, ?7, ?7)
+                "#,
+                params![
+                    "future",
+                    "future task",
+                    "* * * * *",
+                    "later",
+                    "thread/future",
+                    future_due,
+                    created_at
+                ],
+            )
+            .expect("insert future task");
+        }
+
+        assert!(!should_skip_emit_due_scan(&root, &now_utc()));
+        let summary = emit_due_tasks(&root).expect("first schedule scan");
+        assert_eq!(summary.emitted_count, 0);
+        assert!(should_skip_emit_due_scan(&root, &now_utc()));
+
+        mark_emit_due_scan(&root, Some(now_utc() - Duration::minutes(1)));
+        assert!(!should_skip_emit_due_scan(&root, &now_utc()));
+
+        mark_emit_due_scan(&root, Some(now_utc() + Duration::minutes(5)));
+        {
+            let conn = open_schedule_db(&root).expect("reopen schedule db");
+            conn.execute(
+                "UPDATE scheduled_tasks SET prompt = ?2, updated_at = ?3 WHERE task_id = ?1",
+                params!["future", "changed", now_iso_string()],
+            )
+            .expect("mutate schedule task");
+        }
+        assert!(!should_skip_emit_due_scan(&root, &now_utc()));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

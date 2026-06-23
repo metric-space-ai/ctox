@@ -13,6 +13,7 @@ use serde_json::json;
 use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -20,9 +21,13 @@ use std::collections::HashSet;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use crate::inference::engine;
@@ -73,6 +78,22 @@ const REQUIRED_KNOWLEDGE_DOMAINS: &[&str] = &[
     "access_model",
     "monitoring_landscape",
 ];
+
+static TICKET_SCHEMA_READY: OnceLock<Mutex<HashSet<TicketSchemaCacheKey>>> = OnceLock::new();
+
+thread_local! {
+    static TICKET_RECONCILE_DB: RefCell<Option<CachedTicketConnection>> = RefCell::new(None);
+}
+
+struct CachedTicketConnection {
+    key: TicketSchemaCacheKey,
+    conn: Connection,
+}
+
+#[cfg(unix)]
+type TicketSchemaCacheKey = (PathBuf, u64, u64);
+#[cfg(not(unix))]
+type TicketSchemaCacheKey = PathBuf;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TicketItemView {
@@ -3262,6 +3283,15 @@ pub(crate) fn list_ticket_self_work_items(
     limit: usize,
 ) -> Result<Vec<TicketSelfWorkItemView>> {
     let conn = open_ticket_db(root)?;
+    list_ticket_self_work_items_on_conn(&conn, system, state, limit)
+}
+
+fn list_ticket_self_work_items_on_conn(
+    conn: &Connection,
+    system: Option<&str>,
+    state: Option<&str>,
+    limit: usize,
+) -> Result<Vec<TicketSelfWorkItemView>> {
     let mut statement = conn.prepare(
         r#"
         SELECT work_id, source_system, kind, title, body_text, state, metadata_json, remote_ticket_id, remote_locator, created_at, updated_at
@@ -3281,7 +3311,7 @@ pub(crate) fn list_ticket_self_work_items(
         .map_err(anyhow::Error::from)?;
     items
         .into_iter()
-        .map(|item| hydrate_ticket_self_work_item(&conn, item))
+        .map(|item| hydrate_ticket_self_work_item(conn, item))
         .collect()
 }
 
@@ -4969,9 +4999,9 @@ pub(crate) fn release_stale_ticket_event_leases(
     lease_owner: &str,
     active_event_keys: &HashSet<String>,
 ) -> Result<Vec<String>> {
-    let conn = open_ticket_db(root)?;
-    let mut statement = conn.prepare(
-        r#"
+    with_reconcile_ticket_db(root, |conn| {
+        let mut statement = conn.prepare(
+            r#"
         SELECT event_key
         FROM ticket_event_routing_state
         WHERE route_status = 'leased'
@@ -4979,28 +5009,28 @@ pub(crate) fn release_stale_ticket_event_leases(
         ORDER BY leased_at ASC, updated_at ASC
         LIMIT 128
         "#,
-    )?;
-    let rows = statement.query_map(params![lease_owner], |row| row.get::<_, String>(0))?;
-    let candidates = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-    drop(statement);
-
-    let now = now_iso_string();
-    let mut released = Vec::new();
-    for event_key in candidates {
-        if active_event_keys.contains(&event_key) {
-            continue;
-        }
-        let previous_route_status = current_ticket_event_route_status(&conn, &event_key)?;
-        enforce_ticket_event_route_status_transition(
-            &conn,
-            &event_key,
-            &previous_route_status,
-            "pending",
-            lease_owner,
-            "release_stale_ticket_event_leases",
         )?;
-        conn.execute(
-            r#"
+        let rows = statement.query_map(params![lease_owner], |row| row.get::<_, String>(0))?;
+        let candidates = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
+
+        let now = now_iso_string();
+        let mut released = Vec::new();
+        for event_key in candidates {
+            if active_event_keys.contains(&event_key) {
+                continue;
+            }
+            let previous_route_status = current_ticket_event_route_status(conn, &event_key)?;
+            enforce_ticket_event_route_status_transition(
+                conn,
+                &event_key,
+                &previous_route_status,
+                "pending",
+                lease_owner,
+                "release_stale_ticket_event_leases",
+            )?;
+            conn.execute(
+                r#"
             UPDATE ticket_event_routing_state
             SET route_status='pending',
                 lease_owner=NULL,
@@ -5010,19 +5040,20 @@ pub(crate) fn release_stale_ticket_event_leases(
             WHERE event_key = ?1
               AND route_status = 'leased'
             "#,
-            params![event_key, now],
-        )?;
-        released.push(event_key);
-    }
-    Ok(released)
+                params![event_key, now],
+            )?;
+            released.push(event_key);
+        }
+        Ok(released)
+    })
 }
 
 pub(crate) fn release_ready_blocked_ticket_events(
     root: &Path,
     limit: usize,
 ) -> Result<Vec<String>> {
-    let conn = open_ticket_db(root)?;
-    let mut statement = conn.prepare(
+    with_reconcile_ticket_db(root, |conn| {
+        let mut statement = conn.prepare(
         r#"
         SELECT e.event_key, e.ticket_key, e.source_system, e.remote_event_id, e.direction,
                e.event_type, e.summary, e.body_text, e.metadata_json, e.external_created_at, e.observed_at
@@ -5034,27 +5065,27 @@ pub(crate) fn release_ready_blocked_ticket_events(
         LIMIT ?1
         "#,
     )?;
-    let rows = statement.query_map(params![limit as i64], map_ticket_event_row)?;
-    let candidates = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-    drop(statement);
+        let rows = statement.query_map(params![limit as i64], map_ticket_event_row)?;
+        let candidates = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
 
-    let now = now_iso_string();
-    let mut released = Vec::new();
-    for event in candidates {
-        if ticket_event_ready_for_preparation(root, &event).is_err() {
-            continue;
-        }
-        let previous_route_status = current_ticket_event_route_status(&conn, &event.event_key)?;
-        enforce_ticket_event_route_status_transition(
-            &conn,
-            &event.event_key,
-            &previous_route_status,
-            "pending",
-            "ctox-ticket-router",
-            "release_ready_blocked_ticket_events",
-        )?;
-        conn.execute(
-            r#"
+        let now = now_iso_string();
+        let mut released = Vec::new();
+        for event in candidates {
+            if ticket_event_ready_for_preparation(root, &event).is_err() {
+                continue;
+            }
+            let previous_route_status = current_ticket_event_route_status(conn, &event.event_key)?;
+            enforce_ticket_event_route_status_transition(
+                conn,
+                &event.event_key,
+                &previous_route_status,
+                "pending",
+                "ctox-ticket-router",
+                "release_ready_blocked_ticket_events",
+            )?;
+            conn.execute(
+                r#"
             UPDATE ticket_event_routing_state
             SET route_status='pending',
                 lease_owner=NULL,
@@ -5064,11 +5095,12 @@ pub(crate) fn release_ready_blocked_ticket_events(
             WHERE event_key = ?1
               AND route_status = 'blocked'
             "#,
-            params![event.event_key, now],
-        )?;
-        released.push(event.event_key);
-    }
-    Ok(released)
+                params![event.event_key, now],
+            )?;
+            released.push(event.event_key);
+        }
+        Ok(released)
+    })
 }
 
 fn ticket_event_ready_for_preparation(root: &Path, event: &TicketEventView) -> Result<()> {
@@ -9999,8 +10031,78 @@ fn open_ticket_db(root: &Path) -> Result<Connection> {
         .with_context(|| format!("failed to open ticket db {}", path.display()))?;
     conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
         .context("failed to configure SQLite busy_timeout for tickets")?;
-    ensure_schema(&conn)?;
+    ensure_schema_once(&path, &conn)?;
     Ok(conn)
+}
+
+fn with_reconcile_ticket_db<T>(root: &Path, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+    let path = resolve_db_path(root);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create ticket db parent {}", parent.display()))?;
+    }
+    TICKET_RECONCILE_DB.with(|cell| {
+        let mut cached = cell.borrow_mut();
+        let key = ticket_schema_cache_key(&path);
+        let needs_open = cached
+            .as_ref()
+            .map(|entry| entry.key != key)
+            .unwrap_or(true);
+        if needs_open {
+            let conn = Connection::open(&path)
+                .with_context(|| format!("failed to open ticket db {}", path.display()))?;
+            conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+                .context("failed to configure SQLite busy_timeout for tickets")?;
+            ensure_schema_once(&path, &conn)?;
+            let key = ticket_schema_cache_key(&path);
+            *cached = Some(CachedTicketConnection { key, conn });
+        }
+        let conn = &cached
+            .as_ref()
+            .expect("ticket reconcile db initialized")
+            .conn;
+        f(conn)
+    })
+}
+
+fn ensure_schema_once(path: &Path, conn: &Connection) -> Result<()> {
+    let key = ticket_schema_cache_key(path);
+    let ready = TICKET_SCHEMA_READY.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut ready = ready
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if ready.contains(&key) {
+        return Ok(());
+    }
+    ensure_schema(conn)?;
+    ready.insert(key);
+    Ok(())
+}
+
+#[cfg(unix)]
+fn ticket_schema_cache_key(path: &Path) -> TicketSchemaCacheKey {
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| absolute_ticket_db_path(path));
+    let metadata = std::fs::metadata(&canonical)
+        .or_else(|_| std::fs::metadata(path))
+        .ok();
+    let (device, inode) = metadata
+        .map(|metadata| (metadata.dev(), metadata.ino()))
+        .unwrap_or((0, 0));
+    (canonical, device, inode)
+}
+
+#[cfg(not(unix))]
+fn ticket_schema_cache_key(path: &Path) -> TicketSchemaCacheKey {
+    std::fs::canonicalize(path).unwrap_or_else(|_| absolute_ticket_db_path(path))
+}
+
+fn absolute_ticket_db_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    std::env::current_dir()
+        .map(|cwd| cwd.join(path))
+        .unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn ensure_schema(conn: &Connection) -> Result<()> {

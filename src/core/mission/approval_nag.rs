@@ -29,8 +29,13 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::cell::RefCell;
+use std::collections::HashSet;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::inference::runtime_env;
@@ -41,6 +46,22 @@ use crate::service::core_state_machine::{
 use crate::service::core_transition_guard::enforce_core_transition;
 
 const DB_RELATIVE_PATH: &str = "runtime/ctox.sqlite3";
+
+static APPROVAL_NAG_SCHEMA_READY: OnceLock<Mutex<HashSet<ApprovalNagDbKey>>> = OnceLock::new();
+
+thread_local! {
+    static APPROVAL_NAG_DB: RefCell<Option<CachedApprovalNagConnection>> = RefCell::new(None);
+}
+
+struct CachedApprovalNagConnection {
+    key: ApprovalNagDbKey,
+    conn: Connection,
+}
+
+#[cfg(unix)]
+type ApprovalNagDbKey = (PathBuf, u64, u64);
+#[cfg(not(unix))]
+type ApprovalNagDbKey = PathBuf;
 
 #[derive(Debug, Default, Clone)]
 pub struct NagSweepSummary {
@@ -89,13 +110,86 @@ fn db_path(root: &Path) -> PathBuf {
 }
 
 fn open_db(root: &Path) -> Result<Connection> {
-    let conn = Connection::open(db_path(root))
-        .with_context(|| format!("open {}", db_path(root).display()))?;
+    let path = db_path(root);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create approval nag db parent {}", parent.display()))?;
+    }
+    let conn = Connection::open(&path).with_context(|| format!("open {}", path.display()))?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .context("configure SQLite busy_timeout for approval nag")?;
     Ok(conn)
 }
 
+fn with_db<T>(root: &Path, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+    let path = db_path(root);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create approval nag db parent {}", parent.display()))?;
+    }
+    APPROVAL_NAG_DB.with(|cell| {
+        let mut cached = cell.borrow_mut();
+        let key = approval_nag_db_key(&path);
+        let needs_open = cached
+            .as_ref()
+            .map(|entry| entry.key != key)
+            .unwrap_or(true);
+        if needs_open {
+            let conn = open_db(root)?;
+            ensure_schema_once(&path, &conn)?;
+            let key = approval_nag_db_key(&path);
+            *cached = Some(CachedApprovalNagConnection { key, conn });
+        }
+        let conn = &cached.as_ref().expect("approval nag db initialized").conn;
+        f(conn)
+    })
+}
+
 fn ensure_schema(root: &Path) -> Result<()> {
-    let conn = open_db(root)?;
+    with_db(root, |_| Ok(()))
+}
+
+fn ensure_schema_once(path: &Path, conn: &Connection) -> Result<()> {
+    let key = approval_nag_db_key(path);
+    let ready = APPROVAL_NAG_SCHEMA_READY.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut ready = ready
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if ready.contains(&key) {
+        return Ok(());
+    }
+    ensure_schema_on_conn(conn)?;
+    ready.insert(key);
+    Ok(())
+}
+
+#[cfg(unix)]
+fn approval_nag_db_key(path: &Path) -> ApprovalNagDbKey {
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| absolute_db_path(path));
+    let metadata = std::fs::metadata(&canonical)
+        .or_else(|_| std::fs::metadata(path))
+        .ok();
+    let (device, inode) = metadata
+        .map(|metadata| (metadata.dev(), metadata.ino()))
+        .unwrap_or((0, 0));
+    (canonical, device, inode)
+}
+
+#[cfg(not(unix))]
+fn approval_nag_db_key(path: &Path) -> ApprovalNagDbKey {
+    std::fs::canonicalize(path).unwrap_or_else(|_| absolute_db_path(path))
+}
+
+fn absolute_db_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    std::env::current_dir()
+        .map(|cwd| cwd.join(path))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn ensure_schema_on_conn(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS ticket_approval_nag_state (
@@ -144,49 +238,50 @@ fn nag_schedule(root: &Path) -> &'static [(i64, &'static str)] {
 }
 
 fn schedule_new_gates(root: &Path) -> Result<usize> {
-    let conn = open_db(root)?;
     let open_gates = tickets::list_ticket_self_work_items(root, None, Some("open"), 256)?;
-    let mut scheduled = 0usize;
-    for item in open_gates {
-        if item.kind != "approval-gate" {
-            continue;
-        }
-        // Skip if we already track this gate.
-        let existing: Option<String> = conn
-            .query_row(
-                "SELECT work_id FROM ticket_approval_nag_state WHERE work_id = ?1",
-                params![&item.work_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if existing.is_some() {
-            continue;
-        }
-        let now = now_rfc3339();
-        let Some(first) = nag_schedule(root).first() else {
-            // Progressive autonomy has no nag schedule — nothing to do.
-            continue;
-        };
-        let next = add_offset_rfc3339(&now, first.0);
-        conn.execute(
-            r#"
+    with_db(root, |conn| {
+        let mut scheduled = 0usize;
+        for item in open_gates {
+            if item.kind != "approval-gate" {
+                continue;
+            }
+            // Skip if we already track this gate.
+            let existing: Option<String> = conn
+                .query_row(
+                    "SELECT work_id FROM ticket_approval_nag_state WHERE work_id = ?1",
+                    params![&item.work_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if existing.is_some() {
+                continue;
+            }
+            let now = now_rfc3339();
+            let Some(first) = nag_schedule(root).first() else {
+                // Progressive autonomy has no nag schedule — nothing to do.
+                continue;
+            };
+            let next = add_offset_rfc3339(&now, first.0);
+            conn.execute(
+                r#"
             INSERT INTO ticket_approval_nag_state
               (work_id, attempt_count, first_seen_at, last_nag_at, next_nag_at, last_channel, completed_at)
             VALUES (?1, 0, ?2, NULL, ?3, NULL, NULL)
             "#,
-            params![&item.work_id, now, next],
-        )?;
-        scheduled += 1;
-    }
-    Ok(scheduled)
+                params![&item.work_id, now, next],
+            )?;
+            scheduled += 1;
+        }
+        Ok(scheduled)
+    })
 }
 
 fn mark_closed_gates_completed(root: &Path) -> Result<usize> {
-    let conn = open_db(root)?;
-    let now = now_rfc3339();
-    // Any nag state whose gate is no longer open gets its completed_at set.
-    let changed = conn.execute(
-        r#"
+    with_db(root, |conn| {
+        let now = now_rfc3339();
+        // Any nag state whose gate is no longer open gets its completed_at set.
+        let changed = conn.execute(
+            r#"
         UPDATE ticket_approval_nag_state
         SET completed_at = ?1
         WHERE completed_at IS NULL
@@ -195,9 +290,10 @@ fn mark_closed_gates_completed(root: &Path) -> Result<usize> {
             WHERE state != 'open' AND kind = 'approval-gate'
           )
         "#,
-        params![now],
-    )?;
-    Ok(changed)
+            params![now],
+        )?;
+        Ok(changed)
+    })
 }
 
 /// Business-hours window — reminders are only sent Mon–Fri 08:00–20:00
@@ -262,82 +358,82 @@ fn next_business_window_start(
 }
 
 fn send_due_nags(root: &Path) -> Result<usize> {
-    let conn = open_db(root)?;
-    let now = now_rfc3339();
+    with_db(root, |conn| {
+        let now = now_rfc3339();
 
-    // Skip sending outside business hours (Mon–Fri 08:00–20:00 local)
-    // and defer the due nags to the next window start so the owner's
-    // inbox stays quiet overnight and on weekends. Operators can opt
-    // out by exporting `CTOX_APPROVAL_NAG_24_7=1` (useful for on-call
-    // setups or tests).
-    let ignore_hours = std::env::var("CTOX_APPROVAL_NAG_24_7")
-        .map(|value| matches!(value.trim(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(false);
-    let now_local = chrono::Local::now();
-    if !ignore_hours && !is_within_business_hours(&now_local) {
-        let next_local = next_business_window_start(&now_local);
-        let next_iso = next_local.with_timezone(&chrono::Utc).to_rfc3339();
-        // Push any currently-due nag to the next business-window start,
-        // but never backwards.
-        let _ = conn.execute(
-            r#"
+        // Skip sending outside business hours (Mon–Fri 08:00–20:00 local)
+        // and defer the due nags to the next window start so the owner's
+        // inbox stays quiet overnight and on weekends. Operators can opt
+        // out by exporting `CTOX_APPROVAL_NAG_24_7=1` (useful for on-call
+        // setups or tests).
+        let ignore_hours = std::env::var("CTOX_APPROVAL_NAG_24_7")
+            .map(|value| matches!(value.trim(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
+        let now_local = chrono::Local::now();
+        if !ignore_hours && !is_within_business_hours(&now_local) {
+            let next_local = next_business_window_start(&now_local);
+            let next_iso = next_local.with_timezone(&chrono::Utc).to_rfc3339();
+            // Push any currently-due nag to the next business-window start,
+            // but never backwards.
+            let _ = conn.execute(
+                r#"
             UPDATE ticket_approval_nag_state
             SET next_nag_at = ?1
             WHERE completed_at IS NULL AND next_nag_at <= ?2 AND next_nag_at < ?1
             "#,
-            params![&next_iso, &now],
-        );
-        return Ok(0);
-    }
+                params![&next_iso, &now],
+            );
+            return Ok(0);
+        }
 
-    let mut statement = conn.prepare(
-        r#"
+        let mut statement = conn.prepare(
+            r#"
         SELECT work_id, attempt_count, first_seen_at
         FROM ticket_approval_nag_state
         WHERE completed_at IS NULL AND next_nag_at <= ?1
         ORDER BY next_nag_at ASC
         LIMIT 16
         "#,
-    )?;
-    let due: Vec<(String, i64, String)> = statement
-        .query_map(params![&now], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-        })?
-        .collect::<rusqlite::Result<_>>()?;
-    drop(statement);
+        )?;
+        let due: Vec<(String, i64, String)> = statement
+            .query_map(params![&now], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        drop(statement);
 
-    let mut sent = 0usize;
-    for (work_id, attempt_count, first_seen) in due {
-        let item = match tickets::load_ticket_self_work_item(root, &work_id)? {
-            Some(view) => view,
-            None => continue,
-        };
-        if item.state != "open" || item.kind != "approval-gate" {
-            // Gate disappeared or was already closed — mark nag complete.
-            let _ = conn.execute(
-                "UPDATE ticket_approval_nag_state SET completed_at = ?1 WHERE work_id = ?2",
-                params![&now, &work_id],
-            );
-            continue;
-        }
-        let attempt = attempt_count as usize;
-        let (channel, subject, body) = compose_nag(root, &item, attempt);
-        match send_via_channel(root, &channel, &subject, &body, &item) {
-            Ok(()) => {
-                sent += 1;
-                let next_attempt = attempt + 1;
-                let next_iso = if next_attempt >= nag_schedule(root).len() {
-                    // Stop nagging. Mark as completed so we stop re-sending.
-                    let _ = conn.execute(
-                        "UPDATE ticket_approval_nag_state SET completed_at = ?1, attempt_count = ?2, last_nag_at = ?1, last_channel = ?3 WHERE work_id = ?4",
-                        params![&now, next_attempt as i64, &channel, &work_id],
-                    );
-                    continue;
-                } else {
-                    add_offset_rfc3339(&first_seen, nag_schedule(root)[next_attempt].0)
-                };
-                conn.execute(
-                    r#"
+        let mut sent = 0usize;
+        for (work_id, attempt_count, first_seen) in due {
+            let item = match tickets::load_ticket_self_work_item(root, &work_id)? {
+                Some(view) => view,
+                None => continue,
+            };
+            if item.state != "open" || item.kind != "approval-gate" {
+                // Gate disappeared or was already closed — mark nag complete.
+                let _ = conn.execute(
+                    "UPDATE ticket_approval_nag_state SET completed_at = ?1 WHERE work_id = ?2",
+                    params![&now, &work_id],
+                );
+                continue;
+            }
+            let attempt = attempt_count as usize;
+            let (channel, subject, body) = compose_nag(root, &item, attempt);
+            match send_via_channel(root, &channel, &subject, &body, &item) {
+                Ok(()) => {
+                    sent += 1;
+                    let next_attempt = attempt + 1;
+                    let next_iso = if next_attempt >= nag_schedule(root).len() {
+                        // Stop nagging. Mark as completed so we stop re-sending.
+                        let _ = conn.execute(
+                            "UPDATE ticket_approval_nag_state SET completed_at = ?1, attempt_count = ?2, last_nag_at = ?1, last_channel = ?3 WHERE work_id = ?4",
+                            params![&now, next_attempt as i64, &channel, &work_id],
+                        );
+                        continue;
+                    } else {
+                        add_offset_rfc3339(&first_seen, nag_schedule(root)[next_attempt].0)
+                    };
+                    conn.execute(
+                        r#"
                     UPDATE ticket_approval_nag_state
                     SET attempt_count = ?1,
                         last_nag_at = ?2,
@@ -345,25 +441,26 @@ fn send_due_nags(root: &Path) -> Result<usize> {
                         next_nag_at = ?4
                     WHERE work_id = ?5
                     "#,
-                    params![next_attempt as i64, &now, &channel, &next_iso, &work_id],
-                )?;
-            }
-            Err(err) => {
-                // On send failure, delay next attempt by 15 min and keep
-                // the attempt counter unchanged so we retry the same step.
-                let retry_iso = add_offset_rfc3339(&now, 15 * 60);
-                let _ = conn.execute(
-                    "UPDATE ticket_approval_nag_state SET next_nag_at = ?1 WHERE work_id = ?2",
-                    params![&retry_iso, &work_id],
-                );
-                eprintln!(
-                    "approval_nag: send failed for work_id={} channel={}: {}",
-                    work_id, channel, err
-                );
+                        params![next_attempt as i64, &now, &channel, &next_iso, &work_id],
+                    )?;
+                }
+                Err(err) => {
+                    // On send failure, delay next attempt by 15 min and keep
+                    // the attempt counter unchanged so we retry the same step.
+                    let retry_iso = add_offset_rfc3339(&now, 15 * 60);
+                    let _ = conn.execute(
+                        "UPDATE ticket_approval_nag_state SET next_nag_at = ?1 WHERE work_id = ?2",
+                        params![&retry_iso, &work_id],
+                    );
+                    eprintln!(
+                        "approval_nag: send failed for work_id={} channel={}: {}",
+                        work_id, channel, err
+                    );
+                }
             }
         }
-    }
-    Ok(sent)
+        Ok(sent)
+    })
 }
 
 fn compose_nag(
@@ -531,9 +628,9 @@ fn parse_inbound_approval_replies(root: &Path) -> Result<usize> {
     let cutoff = chrono::Utc::now() - chrono::Duration::days(7);
     let cutoff_iso = cutoff.to_rfc3339();
 
-    let conn = open_db(root)?;
-    let mut statement = conn.prepare(
-        r#"
+    with_db(root, |conn| {
+        let mut statement = conn.prepare(
+            r#"
         SELECT message_key, subject, body_text, channel
         FROM communication_messages
         WHERE direction = 'inbound'
@@ -546,69 +643,70 @@ fn parse_inbound_approval_replies(root: &Path) -> Result<usize> {
         ORDER BY rowid DESC
         LIMIT 32
         "#,
-    )?;
+        )?;
 
-    let rows: Vec<(String, String, String, String)> = statement
-        .query_map(params![&cutoff_iso], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-            ))
-        })?
-        .collect::<rusqlite::Result<_>>()?;
-    drop(statement);
+        let rows: Vec<(String, String, String, String)> = statement
+            .query_map(params![&cutoff_iso], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        drop(statement);
 
-    let mut processed = 0usize;
-    for (message_key, subject, body, _channel) in rows {
-        let work_id = match extract_work_id(&subject) {
-            Some(id) => id,
-            None => continue,
-        };
-        let action = classify_reply_action(&body);
-        let Some(action) = action else {
-            continue;
-        };
-        let item = match tickets::load_ticket_self_work_item(root, &work_id)? {
-            Some(i) if i.kind == "approval-gate" && i.state == "open" => i,
-            _ => continue,
-        };
-        let modality = ApprovalModality::from_item(&item);
-        if modality == ApprovalModality::TuiOnly {
-            // tui-only gates do NOT accept email replies as approval.
-            // Mark the reply as acknowledged so we stop reprocessing it.
-            let _ = mark_reply_handled(&conn, &message_key);
-            continue;
-        }
-        let new_state = match action {
-            ReplyAction::Approve => "closed",
-            ReplyAction::Reject => "failed",
-        };
-        let transition_result = if matches!(action, ReplyAction::Reject) {
-            tickets::set_ticket_self_work_state_with_failure_reason(
-                root,
-                &work_id,
-                new_state,
-                Some("approval reply rejected the internal work item"),
-            )
-        } else {
-            tickets::set_ticket_self_work_state(root, &work_id, new_state)
-        };
-        match transition_result {
-            Ok(_) => {
-                processed += 1;
-                let _ = mark_reply_handled(&conn, &message_key);
+        let mut processed = 0usize;
+        for (message_key, subject, body, _channel) in rows {
+            let work_id = match extract_work_id(&subject) {
+                Some(id) => id,
+                None => continue,
+            };
+            let action = classify_reply_action(&body);
+            let Some(action) = action else {
+                continue;
+            };
+            let item = match tickets::load_ticket_self_work_item(root, &work_id)? {
+                Some(i) if i.kind == "approval-gate" && i.state == "open" => i,
+                _ => continue,
+            };
+            let modality = ApprovalModality::from_item(&item);
+            if modality == ApprovalModality::TuiOnly {
+                // tui-only gates do NOT accept email replies as approval.
+                // Mark the reply as acknowledged so we stop reprocessing it.
+                let _ = mark_reply_handled(conn, &message_key);
+                continue;
             }
-            Err(err) => {
-                eprintln!(
-                    "approval_nag: failed to set state {} on {}: {}",
-                    new_state, work_id, err
-                );
+            let new_state = match action {
+                ReplyAction::Approve => "closed",
+                ReplyAction::Reject => "failed",
+            };
+            let transition_result = if matches!(action, ReplyAction::Reject) {
+                tickets::set_ticket_self_work_state_with_failure_reason(
+                    root,
+                    &work_id,
+                    new_state,
+                    Some("approval reply rejected the internal work item"),
+                )
+            } else {
+                tickets::set_ticket_self_work_state(root, &work_id, new_state)
+            };
+            match transition_result {
+                Ok(_) => {
+                    processed += 1;
+                    let _ = mark_reply_handled(conn, &message_key);
+                }
+                Err(err) => {
+                    eprintln!(
+                        "approval_nag: failed to set state {} on {}: {}",
+                        new_state, work_id, err
+                    );
+                }
             }
         }
-    }
-    Ok(processed)
+        Ok(processed)
+    })
 }
 
 enum ReplyAction {
