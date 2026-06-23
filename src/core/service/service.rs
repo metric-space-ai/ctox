@@ -106,6 +106,7 @@ const LAUNCHD_USER_LABEL: &str = "com.metric-space.ctox.service";
 const LAUNCHD_USER_MARKER_RELATIVE_PATH: &str = "runtime/ctox_launchd_user.installed";
 const CHANNEL_ROUTER_POLL_SECS: u64 = 8;
 const TICKET_RECONCILE_IDLE_SAFETY_SECS: u64 = 60;
+const CHANNEL_ROUTER_IDLE_SAFETY_SECS: u64 = 60;
 const CHANNEL_SYNC_POLL_SECS: u64 = 60;
 const MISSION_MAINTENANCE_POLL_SECS: u64 = 15;
 const HARNESS_AUDIT_TICK_SECS: u64 = 300;
@@ -162,6 +163,8 @@ const BUSINESS_OS_AUTOSTART_RETRY_SECS: u64 = 30;
 
 static SERVICE_PANIC_HOOK: Once = Once::new();
 static TICKET_RECONCILE_GATE: OnceLock<Mutex<Option<TicketReconcileGateState>>> = OnceLock::new();
+static CHANNEL_ROUTER_IDLE_GATE: OnceLock<Mutex<Option<ChannelRouterIdleGateState>>> =
+    OnceLock::new();
 static BUSINESS_OS_APP_RECOVERY_PREFLIGHT_GATE: OnceLock<
     Mutex<Option<BusinessOsAppRecoveryPreflightGateState>>,
 > = OnceLock::new();
@@ -174,6 +177,16 @@ struct TicketReconcileGateState {
     stamp: CoreDbChangeStamp,
     active_keys: Vec<String>,
     last_run: Instant,
+}
+
+#[derive(Debug, Clone)]
+struct ChannelRouterIdleGateState {
+    root: PathBuf,
+    core_db_path: PathBuf,
+    core_stamp: CoreDbChangeStamp,
+    ticket_stamp: tickets::TicketStoreChangeStamp,
+    settings: BTreeMap<String, String>,
+    last_idle_pass: Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -10770,6 +10783,43 @@ fn active_agent_loop_in_progress(state: &Arc<Mutex<SharedState>>) -> bool {
     shared.busy || shared.worker_active_count > 0
 }
 
+fn should_skip_idle_channel_router_tick(root: &Path, settings: &BTreeMap<String, String>) -> bool {
+    let root_path = root.to_path_buf();
+    let core_db_path = crate::paths::core_db(root);
+    let core_stamp = core_db_change_stamp(&core_db_path);
+    let ticket_stamp = tickets::ticket_store_change_stamp(root);
+    let now = Instant::now();
+    let gate = CHANNEL_ROUTER_IDLE_GATE.get_or_init(|| Mutex::new(None));
+    let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(previous) = guard.as_ref() else {
+        return false;
+    };
+    previous.root == root_path
+        && previous.core_db_path == core_db_path
+        && previous.core_stamp == core_stamp
+        && previous.ticket_stamp == ticket_stamp
+        && previous.settings == *settings
+        && now.duration_since(previous.last_idle_pass)
+            < Duration::from_secs(CHANNEL_ROUTER_IDLE_SAFETY_SECS)
+}
+
+fn mark_idle_channel_router_pass(root: &Path, settings: &BTreeMap<String, String>) {
+    let root_path = root.to_path_buf();
+    let core_db_path = crate::paths::core_db(root);
+    let core_stamp = core_db_change_stamp(&core_db_path);
+    let ticket_stamp = tickets::ticket_store_change_stamp(root);
+    let gate = CHANNEL_ROUTER_IDLE_GATE.get_or_init(|| Mutex::new(None));
+    let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = Some(ChannelRouterIdleGateState {
+        root: root_path,
+        core_db_path,
+        core_stamp,
+        ticket_stamp,
+        settings: settings.clone(),
+        last_idle_pass: Instant::now(),
+    });
+}
+
 fn should_skip_idle_ticket_reconcile(root: &Path, active_keys: &HashSet<String>) -> bool {
     let db_path = crate::paths::core_db(root);
     let stamp = core_db_change_stamp(&db_path);
@@ -10918,6 +10968,10 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         return Ok(());
     }
     let settings = live_service_settings(root);
+    if should_skip_idle_channel_router_tick(root, &settings) {
+        return Ok(());
+    }
+    let mut router_did_work = false;
     // router-4: honor source_label_dispatch_rank at the durable-queue-vs-inbound
     // boundary. A freshly-arrived top-rank (founder/owner/admin = rank 4) inbound
     // must not lose the single serial slot to a rank-1 durable-queue task purely
@@ -10954,16 +11008,20 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         return Ok(());
     }
     match tickets::materialize_ready_workflow_steps(root, 8) {
-        Ok(result) if !result.materialized.is_empty() => {
-            push_event(
-                state,
-                format!(
-                    "Materialized {} ready ticket workflow step(s) into internal work routing",
-                    result.materialized.len()
-                ),
-            );
+        Ok(result) => {
+            if result.materialized.is_empty() {
+                // no-op
+            } else {
+                router_did_work = true;
+                push_event(
+                    state,
+                    format!(
+                        "Materialized {} ready ticket workflow step(s) into internal work routing",
+                        result.materialized.len()
+                    ),
+                );
+            }
         }
-        Ok(_) => {}
         Err(err) => push_event(
             state,
             format!(
@@ -10972,9 +11030,16 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
             ),
         ),
     }
-    if let Err(err) = route_assigned_ticket_self_work(root, state) {
-        if !handle_channel_router_guard_block(root, state, "assigned-ticket-self-work", &err) {
-            return Err(err.context("failed to route assigned ticket internal work"));
+    match route_assigned_ticket_self_work(root, state) {
+        Ok(routed) => {
+            if routed > 0 {
+                router_did_work = true;
+            }
+        }
+        Err(err) => {
+            if !handle_channel_router_guard_block(root, state, "assigned-ticket-self-work", &err) {
+                return Err(err.context("failed to route assigned ticket internal work"));
+            }
         }
     }
     let ticket_preflight_issues = run_ticket_dispatch_preflight(root, state, &settings);
@@ -10998,6 +11063,7 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
             }
         };
     if repaired_founder_messages > 0 {
+        router_did_work = true;
         push_event(
             state,
             format!(
@@ -11020,6 +11086,7 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         }
     };
     if scheduled.emitted_count > 0 {
+        router_did_work = true;
         push_event(
             state,
             format!("Scheduled {} cron task(s)", scheduled.emitted_count),
@@ -11039,6 +11106,9 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         CHANNEL_ROUTER_SERIAL_LEASE_LIMIT,
         CHANNEL_ROUTER_LEASE_OWNER,
     )?;
+    if !leased.is_empty() {
+        router_did_work = true;
+    }
     leased.sort_by_key(|message| {
         std::cmp::Reverse(source_label_dispatch_rank(&inbound_source_label(
             &settings, message,
@@ -11291,6 +11361,7 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         }
     };
     if !duplicates.is_empty() {
+        router_did_work = true;
         let result = channels::ack_leased_messages_with_reason(
             root,
             &duplicates,
@@ -11300,6 +11371,7 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         log_ack_failure("duplicate_inbound", &duplicates, result);
     }
     if !blocked.is_empty() {
+        router_did_work = true;
         let result = channels::ack_leased_messages_with_reason(
             root,
             &blocked,
@@ -11309,6 +11381,7 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         log_ack_failure("blocked_sender", &blocked, result);
     }
     if !meeting_handled.is_empty() {
+        router_did_work = true;
         let result = channels::ack_leased_messages_with_reason(
             root,
             &meeting_handled,
@@ -11318,6 +11391,7 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         log_ack_failure("meeting_scheduled", &meeting_handled, result);
     }
     if !meeting_passive.is_empty() {
+        router_did_work = true;
         let result = channels::ack_leased_messages_with_reason(
             root,
             &meeting_passive,
@@ -11327,14 +11401,25 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         log_ack_failure("meeting_passive_mention", &meeting_passive, result);
     }
     if !deferred_for_founder_rework.is_empty() {
+        router_did_work = true;
         let _ = channels::ack_leased_messages(root, &deferred_for_founder_rework, "pending");
     }
     if ticket_dispatch_allowed && !ticket_sync_allowed_sources.is_empty() {
-        if let Err(err) = route_ticket_events(root, state, &ticket_sync_allowed_sources) {
-            if !handle_channel_router_guard_block(root, state, "ticket-event-routing", &err) {
-                return Err(err.context("failed to route ticket events"));
+        match route_ticket_events(root, state, &ticket_sync_allowed_sources) {
+            Ok(routed) => {
+                if routed > 0 {
+                    router_did_work = true;
+                }
+            }
+            Err(err) => {
+                if !handle_channel_router_guard_block(root, state, "ticket-event-routing", &err) {
+                    return Err(err.context("failed to route ticket events"));
+                }
             }
         }
+    }
+    if !router_did_work {
+        mark_idle_channel_router_pass(root, &settings);
     }
     Ok(())
 }
@@ -12263,7 +12348,7 @@ fn reconcile_ticket_runtime_state(root: &Path, state: &Arc<Mutex<SharedState>>) 
     Ok(())
 }
 
-fn route_assigned_ticket_self_work(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<()> {
+fn route_assigned_ticket_self_work(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<usize> {
     let mut items = tickets::list_ticket_self_work_items(root, None, Some("published"), 128)?;
     items.extend(tickets::list_ticket_self_work_items(
         root,
@@ -12271,6 +12356,7 @@ fn route_assigned_ticket_self_work(root: &Path, state: &Arc<Mutex<SharedState>>)
         Some("queued"),
         128,
     )?);
+    let mut routed = 0usize;
     for item in items {
         if item.assigned_to.as_deref() != Some("self") {
             continue;
@@ -12288,6 +12374,7 @@ fn route_assigned_ticket_self_work(root: &Path, state: &Arc<Mutex<SharedState>>)
                     item.work_id, item.kind, reason
                 ),
             );
+            routed = routed.saturating_add(1);
             continue;
         }
         if let Some(created) = queue_ticket_self_work_item(root, &item)? {
@@ -12301,16 +12388,17 @@ fn route_assigned_ticket_self_work(root: &Path, state: &Arc<Mutex<SharedState>>)
                     created.suggested_skill.as_deref(),
                 ),
             );
+            routed = routed.saturating_add(1);
         }
     }
-    Ok(())
+    Ok(routed)
 }
 
 fn route_ticket_events(
     root: &Path,
     state: &Arc<Mutex<SharedState>>,
     allowed_sources: &HashSet<String>,
-) -> Result<()> {
+) -> Result<usize> {
     let leased = tickets::lease_pending_ticket_events_for_sources(
         root,
         16,
@@ -12318,10 +12406,11 @@ fn route_ticket_events(
         Some(allowed_sources),
     )?;
     if leased.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
     let mut duplicates = Vec::new();
     let mut blocked = Vec::new();
+    let mut routed = 0usize;
     for event in leased {
         if inflight_leased_message_key(state, &event.event_key) {
             continue;
@@ -12365,6 +12454,7 @@ fn route_ticket_events(
                     state,
                     format!("Blocked ticket event {}: {}", event.event_key, reason),
                 );
+                routed = routed.saturating_add(1);
                 continue;
             }
         };
@@ -12432,11 +12522,12 @@ fn route_ticket_events(
                 prepared.ticket_key, prepared.event_type
             ),
         );
+        routed = routed.saturating_add(1);
     }
     if !blocked.is_empty() {
         let _ = tickets::ack_leased_ticket_events(root, &blocked, "blocked");
     }
-    Ok(())
+    Ok(routed)
 }
 
 fn enqueue_prompt(

@@ -84,15 +84,23 @@ static TICKET_SCHEMA_READY: OnceLock<Mutex<HashSet<TicketSchemaCacheKey>>> = Onc
 static TICKET_SELF_WORK_LIST_CACHE: OnceLock<
     Mutex<BTreeMap<TicketSelfWorkListCacheKey, TicketSelfWorkListCacheEntry>>,
 > = OnceLock::new();
+static TICKET_WORKFLOW_MATERIALIZE_CACHE: OnceLock<
+    Mutex<BTreeMap<TicketWorkflowMaterializeCacheKey, TicketWorkflowMaterializeCacheEntry>>,
+> = OnceLock::new();
 
 const TICKET_SELF_WORK_LIST_CACHE_MAX_ENTRIES: usize = 256;
+const TICKET_WORKFLOW_MATERIALIZE_CACHE_MAX_ENTRIES: usize = 128;
 
 type TicketFileChangeStamp = (u64, u128);
-type TicketSelfWorkListCacheStamp = (
-    TicketFileChangeStamp,
-    TicketFileChangeStamp,
-    TicketFileChangeStamp,
-);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TicketStoreChangeStamp {
+    main: TicketFileChangeStamp,
+    wal: TicketFileChangeStamp,
+    journal: TicketFileChangeStamp,
+}
+
+type TicketSelfWorkListCacheStamp = TicketStoreChangeStamp;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct TicketSelfWorkListCacheKey {
@@ -108,9 +116,26 @@ struct TicketSelfWorkListCacheEntry {
     items: Vec<TicketSelfWorkItemView>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct TicketWorkflowMaterializeCacheKey {
+    database: TicketSchemaCacheKey,
+    workflow_id: Option<String>,
+    limit: usize,
+}
+
+#[derive(Debug, Clone)]
+struct TicketWorkflowMaterializeCacheEntry {
+    stamp: TicketStoreChangeStamp,
+    result: TicketWorkflowMaterializeResult,
+}
+
 #[cfg(test)]
 static TICKET_SELF_WORK_LIST_CACHE_MISS_COUNTS: OnceLock<
     Mutex<BTreeMap<TicketSelfWorkListCacheKey, usize>>,
+> = OnceLock::new();
+#[cfg(test)]
+static TICKET_WORKFLOW_MATERIALIZE_CACHE_MISS_COUNTS: OnceLock<
+    Mutex<BTreeMap<TicketWorkflowMaterializeCacheKey, usize>>,
 > = OnceLock::new();
 
 thread_local! {
@@ -3770,6 +3795,13 @@ pub(crate) fn materialize_ready_workflow_steps_for_workflow(
             skipped_count: 0,
         });
     }
+    let db_path = resolve_db_path(root);
+    let cache_key = ticket_workflow_materialize_cache_key(&db_path, workflow_id, limit);
+    let initial_stamp = ticket_store_change_stamp_for_path(&db_path);
+    if let Some(result) = cached_ticket_workflow_materialize_result(&cache_key, &initial_stamp) {
+        return Ok(result);
+    }
+
     let conn = open_ticket_db(root)?;
     let mut statement = conn.prepare(r#"SELECT work_id, source_system, kind, title, body_text, state, metadata_json, remote_ticket_id, remote_locator, created_at, updated_at FROM ticket_self_work_items WHERE kind = ?1 AND (?2 IS NULL OR json_extract(metadata_json, '$.workflow_id') = ?2) ORDER BY created_at ASC LIMIT 512"#)?;
     let rows = statement.query_map(
@@ -3800,12 +3832,19 @@ pub(crate) fn materialize_ready_workflow_steps_for_workflow(
     for work_id in ready_work_ids {
         materialized.push(workflow_mark_step_queue_ready(root, &work_id)?);
     }
-    Ok(TicketWorkflowMaterializeResult {
+    let result = TicketWorkflowMaterializeResult {
         workflow_id: workflow_id.map(ToOwned::to_owned),
         materialized_count: materialized.len(),
         materialized,
         skipped_count,
-    })
+    };
+    let final_stamp = ticket_store_change_stamp_for_path(&db_path);
+    #[cfg(test)]
+    record_ticket_workflow_materialize_cache_miss_for_tests(&cache_key);
+    if result.materialized.is_empty() && final_stamp == initial_stamp {
+        store_ticket_workflow_materialize_cache(cache_key, final_stamp, result.clone());
+    }
+    Ok(result)
 }
 
 pub(crate) fn workflow_prompt_block(root: &Path, limit: usize) -> Result<Option<String>> {
@@ -10166,6 +10205,18 @@ fn ticket_self_work_list_cache_key(
     }
 }
 
+fn ticket_workflow_materialize_cache_key(
+    path: &Path,
+    workflow_id: Option<&str>,
+    limit: usize,
+) -> TicketWorkflowMaterializeCacheKey {
+    TicketWorkflowMaterializeCacheKey {
+        database: ticket_schema_cache_key(path),
+        workflow_id: workflow_id.map(ToOwned::to_owned),
+        limit,
+    }
+}
+
 fn cached_ticket_self_work_list(
     key: &TicketSelfWorkListCacheKey,
     stamp: &TicketSelfWorkListCacheStamp,
@@ -10178,6 +10229,20 @@ fn cached_ticket_self_work_list(
         .get(key)
         .filter(|entry| &entry.stamp == stamp)
         .map(|entry| entry.items.clone())
+}
+
+fn cached_ticket_workflow_materialize_result(
+    key: &TicketWorkflowMaterializeCacheKey,
+    stamp: &TicketStoreChangeStamp,
+) -> Option<TicketWorkflowMaterializeResult> {
+    let cache = TICKET_WORKFLOW_MATERIALIZE_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache
+        .get(key)
+        .filter(|entry| &entry.stamp == stamp)
+        .map(|entry| entry.result.clone())
 }
 
 fn store_ticket_self_work_list_cache(
@@ -10195,8 +10260,29 @@ fn store_ticket_self_work_list_cache(
     cache.insert(key, TicketSelfWorkListCacheEntry { stamp, items });
 }
 
+fn store_ticket_workflow_materialize_cache(
+    key: TicketWorkflowMaterializeCacheKey,
+    stamp: TicketStoreChangeStamp,
+    result: TicketWorkflowMaterializeResult,
+) {
+    let cache = TICKET_WORKFLOW_MATERIALIZE_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if cache.len() >= TICKET_WORKFLOW_MATERIALIZE_CACHE_MAX_ENTRIES && !cache.contains_key(&key) {
+        cache.clear();
+    }
+    cache.insert(key, TicketWorkflowMaterializeCacheEntry { stamp, result });
+}
+
 fn clear_ticket_self_work_list_cache() {
     if let Some(cache) = TICKET_SELF_WORK_LIST_CACHE.get() {
+        cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+    }
+    if let Some(cache) = TICKET_WORKFLOW_MATERIALIZE_CACHE.get() {
         cache
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -10214,11 +10300,19 @@ fn absolute_ticket_db_path(path: &Path) -> PathBuf {
 }
 
 fn ticket_self_work_list_cache_stamp(path: &Path) -> TicketSelfWorkListCacheStamp {
-    (
-        ticket_file_change_stamp(path),
-        ticket_file_change_stamp(&sqlite_sidecar_path(path, "-wal")),
-        ticket_file_change_stamp(&sqlite_sidecar_path(path, "-journal")),
-    )
+    ticket_store_change_stamp_for_path(path)
+}
+
+pub(crate) fn ticket_store_change_stamp(root: &Path) -> TicketStoreChangeStamp {
+    ticket_store_change_stamp_for_path(&resolve_db_path(root))
+}
+
+fn ticket_store_change_stamp_for_path(path: &Path) -> TicketStoreChangeStamp {
+    TicketStoreChangeStamp {
+        main: ticket_file_change_stamp(path),
+        wal: ticket_file_change_stamp(&sqlite_sidecar_path(path, "-wal")),
+        journal: ticket_file_change_stamp(&sqlite_sidecar_path(path, "-journal")),
+    }
 }
 
 fn ticket_file_change_stamp(path: &Path) -> TicketFileChangeStamp {
@@ -10249,6 +10343,18 @@ fn record_ticket_self_work_list_cache_miss_for_tests(key: &TicketSelfWorkListCac
 }
 
 #[cfg(test)]
+fn record_ticket_workflow_materialize_cache_miss_for_tests(
+    key: &TicketWorkflowMaterializeCacheKey,
+) {
+    let counts =
+        TICKET_WORKFLOW_MATERIALIZE_CACHE_MISS_COUNTS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut counts = counts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *counts.entry(key.clone()).or_insert(0) += 1;
+}
+
+#[cfg(test)]
 fn ticket_self_work_list_cache_miss_count_for_tests(
     path: &Path,
     system: Option<&str>,
@@ -10257,6 +10363,22 @@ fn ticket_self_work_list_cache_miss_count_for_tests(
 ) -> usize {
     let key = ticket_self_work_list_cache_key(path, system, state, limit);
     let Some(counts) = TICKET_SELF_WORK_LIST_CACHE_MISS_COUNTS.get() else {
+        return 0;
+    };
+    let counts = counts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    counts.get(&key).copied().unwrap_or(0)
+}
+
+#[cfg(test)]
+fn ticket_workflow_materialize_cache_miss_count_for_tests(
+    path: &Path,
+    workflow_id: Option<&str>,
+    limit: usize,
+) -> usize {
+    let key = ticket_workflow_materialize_cache_key(path, workflow_id, limit);
+    let Some(counts) = TICKET_WORKFLOW_MATERIALIZE_CACHE_MISS_COUNTS.get() else {
         return 0;
     };
     let counts = counts
@@ -12835,6 +12957,77 @@ mod tests {
             ticket_self_work_list_cache_miss_count_for_tests(&db_path, Some("local"), None, 10),
             3,
             "unchanged assigned self-work list must stay cached"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn ticket_workflow_materialize_cache_reuses_idle_noop_until_store_changes() -> Result<()> {
+        let root = temp_root("workflow-materialize-cache");
+        std::fs::create_dir_all(&root)?;
+        let db_path = resolve_db_path(&root);
+        let _ = open_ticket_db(&root)?;
+
+        let first = materialize_ready_workflow_steps(&root, 8)?;
+        assert_eq!(first.materialized_count, 0);
+        assert_eq!(
+            ticket_workflow_materialize_cache_miss_count_for_tests(&db_path, None, 8),
+            1,
+            "first workflow materialize pass must inspect SQLite"
+        );
+
+        let second = materialize_ready_workflow_steps(&root, 8)?;
+        assert_eq!(second.materialized_count, 0);
+        assert_eq!(
+            ticket_workflow_materialize_cache_miss_count_for_tests(&db_path, None, 8),
+            1,
+            "unchanged idle workflow materialize pass must reuse the no-op cache"
+        );
+
+        let workflow = start_ticket_workflow(
+            &root,
+            TicketWorkflowStartInput {
+                source_system: "internal".to_string(),
+                title: "Exercise workflow materialize cache".to_string(),
+                goal: "Create a ready step so the cache must refresh after writes.".to_string(),
+                thread_key: Some("workflow/cache".to_string()),
+                workspace_root: None,
+                skill: None,
+                priority: Some("normal".to_string()),
+                first_phase: "plan".to_string(),
+                first_phase_goal: None,
+                first_exit_gate: None,
+                first_step_title: None,
+                first_step_prompt: None,
+                queue_now: false,
+            },
+        )?;
+        assert_eq!(workflow.ready_steps, vec!["phase-0-reducer".to_string()]);
+
+        let materialized = materialize_ready_workflow_steps(&root, 8)?;
+        assert_eq!(materialized.materialized_count, 1);
+        assert_eq!(
+            ticket_workflow_materialize_cache_miss_count_for_tests(&db_path, None, 8),
+            2,
+            "workflow writes must invalidate the previous no-op cache"
+        );
+
+        let after_materialized = materialize_ready_workflow_steps(&root, 8)?;
+        assert_eq!(after_materialized.materialized_count, 0);
+        assert_eq!(
+            ticket_workflow_materialize_cache_miss_count_for_tests(&db_path, None, 8),
+            3,
+            "first post-materialization no-op pass must refresh the cache"
+        );
+
+        let after_idle = materialize_ready_workflow_steps(&root, 8)?;
+        assert_eq!(after_idle.materialized_count, 0);
+        assert_eq!(
+            ticket_workflow_materialize_cache_miss_count_for_tests(&db_path, None, 8),
+            3,
+            "unchanged post-materialization no-op pass must stay cached"
         );
 
         let _ = std::fs::remove_dir_all(&root);
