@@ -148,6 +148,15 @@ impl From<VerbosityConfig> for OpenAiVerbosity {
     }
 }
 
+/// Serde predicate: omit `parallel_tool_calls` from the request when false. CTOX
+/// runs tool calls serially and never enables parallel tool calls itself; some
+/// Responses-compatible proxies (e.g. the MiniMax-M3 fallback behind llm.ctox.dev)
+/// reject an explicit `parallel_tool_calls: false`. Models that genuinely support
+/// parallel tool calls set the flag true, which is still serialized as before.
+fn parallel_tool_calls_disabled(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Debug, Serialize, Clone, PartialEq)]
 pub struct ResponsesApiRequest {
     pub model: String,
@@ -157,6 +166,7 @@ pub struct ResponsesApiRequest {
     pub input: Vec<ResponseItem>,
     pub tools: Vec<serde_json::Value>,
     pub tool_choice: String,
+    #[serde(skip_serializing_if = "parallel_tool_calls_disabled")]
     pub parallel_tool_calls: bool,
     pub reasoning: Option<Reasoning>,
     #[serde(skip_serializing_if = "Option::is_none")]
