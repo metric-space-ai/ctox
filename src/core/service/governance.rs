@@ -28,6 +28,15 @@ fn initialized_governance_paths() -> &'static Mutex<HashSet<PathBuf>> {
     INITIALIZED.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
+/// Idempotent event keys that were successfully written or observed during this
+/// process. `INSERT OR IGNORE` protects the durable table, but repeatedly
+/// opening the large core SQLite DB just to discover the same idempotence
+/// collision is not idle work.
+fn recorded_idempotent_events() -> &'static Mutex<HashSet<(PathBuf, String, String)>> {
+    static RECORDED: OnceLock<Mutex<HashSet<(PathBuf, String, String)>>> = OnceLock::new();
+    RECORDED.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
 const DEFAULT_DB_RELATIVE_PATH: &str = "runtime/ctox.sqlite3";
 const DEFAULT_EVENT_LIMIT: usize = 8;
 
@@ -481,9 +490,35 @@ static DROPPED_AUDIT_WRITES: AtomicU64 = AtomicU64::new(0);
 /// without threading error handling through every governance touchpoint.
 pub fn record_event_or_count(root: &Path, request: GovernanceEventRequest<'_>) {
     let mechanism_id = request.mechanism_id;
-    if let Err(err) = record_event(root, request) {
-        DROPPED_AUDIT_WRITES.fetch_add(1, Ordering::Relaxed);
-        eprintln!("governance audit write failed [{mechanism_id}]: {err:#}");
+    let cache_key = request.idempotence_key.map(|idempotence_key| {
+        (
+            resolve_db_path(root),
+            mechanism_id.to_string(),
+            idempotence_key.to_string(),
+        )
+    });
+    if let Some(cache_key) = cache_key.as_ref() {
+        if recorded_idempotent_events()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .contains(cache_key)
+        {
+            return;
+        }
+    }
+    match record_event(root, request) {
+        Ok(_) => {
+            if let Some(cache_key) = cache_key {
+                recorded_idempotent_events()
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .insert(cache_key);
+            }
+        }
+        Err(err) => {
+            DROPPED_AUDIT_WRITES.fetch_add(1, Ordering::Relaxed);
+            eprintln!("governance audit write failed [{mechanism_id}]: {err:#}");
+        }
     }
 }
 
@@ -962,6 +997,49 @@ mod tests {
             std::env::temp_dir().join(format!("ctox-governance-{label}-{}", now_millis_string()));
         std::fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
         root
+    }
+
+    fn remove_sqlite_file_and_sidecars(path: &Path) {
+        fn sidecar(path: &Path, suffix: &str) -> PathBuf {
+            let mut value = path.as_os_str().to_os_string();
+            value.push(suffix);
+            PathBuf::from(value)
+        }
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(sidecar(path, "-wal"));
+        let _ = std::fs::remove_file(sidecar(path, "-shm"));
+    }
+
+    #[test]
+    fn record_event_or_count_skips_cached_idempotent_event_without_opening_db() {
+        recorded_idempotent_events()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .clear();
+        let root = temp_root("idempotent-process-cache");
+        let request = || GovernanceEventRequest {
+            mechanism_id: "channel_router_loop_active",
+            conversation_id: None,
+            severity: "info",
+            reason: "active_agent_loop_in_progress",
+            action_taken: "deferred channel routing until the active agent loop ends",
+            details: json!({}),
+            idempotence_key: Some("channel-router-loop-active"),
+        };
+        let db_path = resolve_db_path(&root);
+
+        record_event_or_count(&root, request());
+        assert!(
+            db_path.exists(),
+            "first idempotent audit call should create and write the governance db"
+        );
+        remove_sqlite_file_and_sidecars(&db_path);
+
+        record_event_or_count(&root, request());
+        assert!(
+            !db_path.exists(),
+            "cached idempotent audit call must not reopen or recreate the SQLite db"
+        );
     }
 
     #[test]
