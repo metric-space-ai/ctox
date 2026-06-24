@@ -120,6 +120,8 @@ const BUSINESS_USERS_SYNC_INTERVAL_SECS: u64 = 3;
 const RUNTIME_SETTINGS_SYNC_INTERVAL_SECS: u64 = 3;
 const MODULE_CATALOG_SYNC_INTERVAL_SECS: u64 = 3;
 const TICKET_STATE_SYNC_INTERVAL_SECS: u64 = 3;
+const BUSINESS_OS_PROJECTION_IDLE_SYNC_INTERVAL_SECS: u64 = 60;
+const BUSINESS_OS_PROJECTION_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 /// Knowledge tables are record-shape parquet content that changes far less
 /// often than ticket/queue state, and projecting them reads parquet rows off
 /// disk. A slower interval keeps the parquet I/O light while still surfacing
@@ -1010,7 +1012,7 @@ fn sync_business_users(root: &Path) -> anyhow::Result<usize> {
 }
 
 #[cfg(test)]
-fn sync_runtime_settings(root: &Path) -> anyhow::Result<()> {
+fn sync_runtime_settings(root: &Path) -> anyhow::Result<usize> {
     let database_path = store::rxdb_store_path(root);
     if let Some(parent) = database_path.parent() {
         fs::create_dir_all(parent)
@@ -1033,17 +1035,17 @@ fn sync_runtime_settings(root: &Path) -> anyhow::Result<()> {
             .add_collections(collection_creators())
             .await
             .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
-        sync_runtime_settings_with_database(root, &database).await?;
+        let synced = sync_runtime_settings_with_database(root, &database).await?;
         database
             .close()
             .await
             .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
-        Ok(())
+        Ok(synced)
     })
 }
 
 #[cfg(test)]
-fn sync_module_catalog(root: &Path) -> anyhow::Result<()> {
+fn sync_module_catalog(root: &Path) -> anyhow::Result<usize> {
     let database_path = store::rxdb_store_path(root);
     if let Some(parent) = database_path.parent() {
         fs::create_dir_all(parent)
@@ -1066,12 +1068,12 @@ fn sync_module_catalog(root: &Path) -> anyhow::Result<()> {
             .add_collections(collection_creators())
             .await
             .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
-        sync_module_catalog_with_database(root, &database).await?;
+        let synced = sync_module_catalog_with_database(root, &database).await?;
         database
             .close()
             .await
             .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
-        Ok(())
+        Ok(synced)
     })
 }
 
@@ -2113,6 +2115,7 @@ async fn sync_channel_state_background_loop(
     database_write_lock: Arc<AsyncMutex<()>>,
 ) {
     let mut last_projection_stamp: Option<ChannelStateProjectionStamp> = None;
+    let mut consecutive_idle_rounds = 0u32;
     loop {
         let result = {
             let _guard = database_write_lock.lock().await;
@@ -2123,10 +2126,16 @@ async fn sync_channel_state_background_loop(
             )
             .await
         };
-        if let Err(err) = result {
-            eprintln!("[business-os] native rxdb channel state sync failed: {err:#}");
-        }
-        tokio::time::sleep(Duration::from_secs(CHANNEL_STATE_SYNC_INTERVAL_SECS)).await;
+        update_projection_idle_rounds(
+            result,
+            &mut consecutive_idle_rounds,
+            "[business-os] native rxdb channel state sync failed",
+        );
+        tokio::time::sleep(Duration::from_secs(business_os_projection_sleep_secs(
+            CHANNEL_STATE_SYNC_INTERVAL_SECS,
+            consecutive_idle_rounds,
+        )))
+        .await;
     }
 }
 
@@ -2135,15 +2144,22 @@ async fn sync_business_users_background_loop(
     database: Arc<RxDatabase>,
     database_write_lock: Arc<AsyncMutex<()>>,
 ) {
+    let mut consecutive_idle_rounds = 0u32;
     loop {
         let result = {
             let _guard = database_write_lock.lock().await;
             sync_business_users_with_database(&root, &database).await
         };
-        if let Err(err) = result {
-            eprintln!("[business-os] native rxdb business users sync failed: {err:#}");
-        }
-        tokio::time::sleep(Duration::from_secs(BUSINESS_USERS_SYNC_INTERVAL_SECS)).await;
+        update_projection_idle_rounds(
+            result,
+            &mut consecutive_idle_rounds,
+            "[business-os] native rxdb business users sync failed",
+        );
+        tokio::time::sleep(Duration::from_secs(business_os_projection_sleep_secs(
+            BUSINESS_USERS_SYNC_INTERVAL_SECS,
+            consecutive_idle_rounds,
+        )))
+        .await;
     }
 }
 
@@ -2152,15 +2168,22 @@ async fn sync_runtime_settings_background_loop(
     database: Arc<RxDatabase>,
     database_write_lock: Arc<AsyncMutex<()>>,
 ) {
+    let mut consecutive_idle_rounds = 0u32;
     loop {
         let result = {
             let _guard = database_write_lock.lock().await;
             sync_runtime_settings_with_database(&root, &database).await
         };
-        if let Err(err) = result {
-            eprintln!("[business-os] native rxdb runtime settings sync failed: {err:#}");
-        }
-        tokio::time::sleep(Duration::from_secs(RUNTIME_SETTINGS_SYNC_INTERVAL_SECS)).await;
+        update_projection_idle_rounds(
+            result,
+            &mut consecutive_idle_rounds,
+            "[business-os] native rxdb runtime settings sync failed",
+        );
+        tokio::time::sleep(Duration::from_secs(business_os_projection_sleep_secs(
+            RUNTIME_SETTINGS_SYNC_INTERVAL_SECS,
+            consecutive_idle_rounds,
+        )))
+        .await;
     }
 }
 
@@ -2169,15 +2192,22 @@ async fn sync_module_catalog_background_loop(
     database: Arc<RxDatabase>,
     database_write_lock: Arc<AsyncMutex<()>>,
 ) {
+    let mut consecutive_idle_rounds = 0u32;
     loop {
         let result = {
             let _guard = database_write_lock.lock().await;
             sync_module_catalog_with_database(&root, &database).await
         };
-        if let Err(err) = result {
-            eprintln!("[business-os] native rxdb module catalog sync failed: {err:#}");
-        }
-        tokio::time::sleep(Duration::from_secs(MODULE_CATALOG_SYNC_INTERVAL_SECS)).await;
+        update_projection_idle_rounds(
+            result,
+            &mut consecutive_idle_rounds,
+            "[business-os] native rxdb module catalog sync failed",
+        );
+        tokio::time::sleep(Duration::from_secs(business_os_projection_sleep_secs(
+            MODULE_CATALOG_SYNC_INTERVAL_SECS,
+            consecutive_idle_rounds,
+        )))
+        .await;
     }
 }
 
@@ -2186,15 +2216,22 @@ async fn sync_ticket_state_background_loop(
     database: Arc<RxDatabase>,
     database_write_lock: Arc<AsyncMutex<()>>,
 ) {
+    let mut consecutive_idle_rounds = 0u32;
     loop {
         let result = {
             let _guard = database_write_lock.lock().await;
             sync_ticket_state_with_database(&root, &database).await
         };
-        if let Err(err) = result {
-            eprintln!("[business-os] native rxdb ticket state sync failed: {err:#}");
-        }
-        tokio::time::sleep(Duration::from_secs(TICKET_STATE_SYNC_INTERVAL_SECS)).await;
+        update_projection_idle_rounds(
+            result,
+            &mut consecutive_idle_rounds,
+            "[business-os] native rxdb ticket state sync failed",
+        );
+        tokio::time::sleep(Duration::from_secs(business_os_projection_sleep_secs(
+            TICKET_STATE_SYNC_INTERVAL_SECS,
+            consecutive_idle_rounds,
+        )))
+        .await;
     }
 }
 
@@ -2232,20 +2269,11 @@ async fn sync_business_record_projections_background_loop(
             )
             .await
         };
-        match result {
-            Ok(0) => {
-                consecutive_idle_rounds = consecutive_idle_rounds.saturating_add(1);
-            }
-            Ok(_) => {
-                consecutive_idle_rounds = 0;
-            }
-            Err(err) => {
-                consecutive_idle_rounds = 0;
-                eprintln!(
-                    "[business-os] native rxdb business record projection sync failed: {err:#}"
-                );
-            }
-        }
+        update_projection_idle_rounds(
+            result,
+            &mut consecutive_idle_rounds,
+            "[business-os] native rxdb business record projection sync failed",
+        );
         tokio::time::sleep(Duration::from_secs(business_record_projection_sleep_secs(
             consecutive_idle_rounds,
         )))
@@ -2253,11 +2281,56 @@ async fn sync_business_record_projections_background_loop(
     }
 }
 
+fn update_projection_idle_rounds(
+    result: anyhow::Result<usize>,
+    consecutive_idle_rounds: &mut u32,
+    failure_prefix: &str,
+) {
+    match result {
+        Ok(0) => {
+            *consecutive_idle_rounds = consecutive_idle_rounds.saturating_add(1);
+        }
+        Ok(_) => {
+            *consecutive_idle_rounds = 0;
+        }
+        Err(err) => {
+            *consecutive_idle_rounds = 0;
+            eprintln!("{failure_prefix}: {err:#}");
+        }
+    }
+}
+
+fn business_os_projection_sleep_secs(
+    active_interval_secs: u64,
+    consecutive_idle_rounds: u32,
+) -> u64 {
+    projection_sleep_secs(
+        active_interval_secs,
+        BUSINESS_OS_PROJECTION_IDLE_SYNC_INTERVAL_SECS,
+        BUSINESS_OS_PROJECTION_IDLE_BACKOFF_AFTER_TICKS,
+        consecutive_idle_rounds,
+    )
+}
+
 fn business_record_projection_sleep_secs(consecutive_idle_rounds: u32) -> u64 {
-    if consecutive_idle_rounds >= BUSINESS_RECORD_PROJECTION_IDLE_BACKOFF_AFTER_TICKS {
-        BUSINESS_RECORD_PROJECTION_IDLE_SYNC_INTERVAL_SECS
+    projection_sleep_secs(
+        BUSINESS_RECORD_PROJECTION_SYNC_INTERVAL_SECS,
+        BUSINESS_RECORD_PROJECTION_IDLE_SYNC_INTERVAL_SECS,
+        BUSINESS_RECORD_PROJECTION_IDLE_BACKOFF_AFTER_TICKS,
+        consecutive_idle_rounds,
+    )
+}
+
+fn projection_sleep_secs(
+    active_interval_secs: u64,
+    idle_interval_secs: u64,
+    idle_backoff_after_ticks: u32,
+    consecutive_idle_rounds: u32,
+) -> u64 {
+    if consecutive_idle_rounds >= idle_backoff_after_ticks {
+        idle_interval_secs
     } else {
-        BUSINESS_RECORD_PROJECTION_SYNC_INTERVAL_SECS
+        active_interval_secs
     }
 }
 
@@ -4175,17 +4248,16 @@ async fn sync_business_users_with_database(
     let users = database
         .collection("business_users")
         .context("business_users collection is not registered")?;
-    let count = documents.len();
+    let mut count = 0usize;
     for mut document in documents {
         if let Some(object) = document.as_object_mut() {
             object.remove("_rev");
             object.remove("_meta");
             object.insert("is_deleted".to_string(), Value::Bool(false));
         }
-        users
-            .incremental_upsert(document)
-            .await
-            .map_err(|err| anyhow::anyhow!("upsert business user projection: {err}"))?;
+        if incremental_upsert_projection_if_changed(&users, document, "business user").await? {
+            count += 1;
+        }
     }
     Ok(count)
 }
@@ -4193,7 +4265,7 @@ async fn sync_business_users_with_database(
 async fn sync_runtime_settings_with_database(
     root: &Path,
     database: &Arc<RxDatabase>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<usize> {
     let root = root.to_path_buf();
     let mut document = tokio::task::spawn_blocking(move || store::runtime_settings_for_rxdb(&root))
         .await
@@ -4210,17 +4282,16 @@ async fn sync_runtime_settings_with_database(
     let runtime_settings = database
         .collection("ctox_runtime_settings")
         .context("ctox_runtime_settings collection is not registered")?;
-    runtime_settings
-        .incremental_upsert(document)
-        .await
-        .map_err(|err| anyhow::anyhow!("upsert runtime settings projection: {err}"))?;
-    Ok(())
+    let changed =
+        incremental_upsert_projection_if_changed(&runtime_settings, document, "runtime settings")
+            .await?;
+    Ok(usize::from(changed))
 }
 
 async fn sync_module_catalog_with_database(
     root: &Path,
     database: &Arc<RxDatabase>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<usize> {
     let root = root.to_path_buf();
     let mut document = tokio::task::spawn_blocking(move || store::module_catalog_for_rxdb(&root))
         .await
@@ -4237,53 +4308,10 @@ async fn sync_module_catalog_with_database(
     let module_catalog = database
         .collection("business_module_catalog")
         .context("business_module_catalog collection is not registered")?;
-    if projection_document_unchanged(&module_catalog, &document).await? {
-        return Ok(());
-    }
-    match module_catalog.incremental_upsert(document.clone()).await {
-        Ok(_) => {}
-        Err(err) if is_recoverable_projection_write_error(&err) => {
-            match module_catalog.upsert(document.clone()).await {
-                Ok(_) => {}
-                Err(_) => repair_projection_document_envelope_and_upsert(&module_catalog, document)
-                    .await
-                    .map_err(|fallback_err| {
-                        anyhow::anyhow!(
-                            "upsert module catalog projection after document cache envelope repair failed: {fallback_err}"
-                        )
-                    })?,
-            }
-        }
-        Err(err) => return Err(anyhow::anyhow!("upsert module catalog projection: {err}")),
-    }
-    Ok(())
-}
-
-async fn projection_document_unchanged(
-    collection: &Arc<RxCollection>,
-    document: &Value,
-) -> anyhow::Result<bool> {
-    let Some(document_id) = document
-        .get("id")
-        .and_then(Value::as_str)
-        .filter(|id| !id.trim().is_empty())
-    else {
-        return Ok(false);
-    };
-    let Some(existing) = find_projection_document(collection, document_id).await? else {
-        return Ok(false);
-    };
-    Ok(projection_document_compare_payload(existing)
-        == projection_document_compare_payload(document.clone()))
-}
-
-fn projection_document_compare_payload(mut document: Value) -> Value {
-    remove_projection_rxdb_envelope(&mut document);
-    if let Some(object) = document.as_object_mut() {
-        object.remove("_attachments");
-        object.remove("updated_at_ms");
-    }
-    document
+    let changed =
+        incremental_upsert_projection_if_changed(&module_catalog, document, "module catalog")
+            .await?;
+    Ok(usize::from(changed))
 }
 
 async fn sync_ticket_state_with_database(
@@ -4314,13 +4342,15 @@ async fn sync_ticket_state_with_database(
                 object.insert("_deleted".to_string(), Value::Bool(false));
                 object.insert("is_deleted".to_string(), Value::Bool(false));
             }
-            collection
-                .incremental_upsert(document)
-                .await
-                .map_err(|err| {
-                    anyhow::anyhow!("upsert {collection_name} ticket projection: {err}")
-                })?;
-            count += 1;
+            if incremental_upsert_projection_if_changed(
+                &collection,
+                document,
+                &format!("{collection_name} ticket"),
+            )
+            .await?
+            {
+                count += 1;
+            }
         }
     }
     Ok(count)
@@ -5749,23 +5779,48 @@ async fn incremental_upsert_projection_if_changed(
             return Ok(false);
         }
     }
-    collection
-        .incremental_upsert(document)
-        .await
-        .map_err(|err| anyhow::anyhow!("upsert {label} projection: {err}"))?;
+    match collection.incremental_upsert(document.clone()).await {
+        Ok(_) => {}
+        Err(err) if is_recoverable_projection_write_error(&err) => {
+            repair_projection_document_envelope_and_upsert(collection, document)
+                .await
+                .map_err(|fallback_err| {
+                    anyhow::anyhow!(
+                        "upsert {label} projection after document cache envelope repair failed: {fallback_err}"
+                    )
+                })?;
+        }
+        Err(err) => return Err(anyhow::anyhow!("upsert {label} projection: {err}")),
+    }
     Ok(true)
 }
 
 fn canonical_projection_document_for_compare(document: &Value) -> Value {
     let mut value = document.clone();
-    if let Some(object) = value.as_object_mut() {
-        object.remove("_rev");
-        object.remove("_meta");
-        object.remove("_attachments");
-        object.remove("_deleted");
-        object.remove("updated_at_ms");
-    }
+    remove_projection_compare_metadata(&mut value);
     value
+}
+
+fn remove_projection_compare_metadata(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            object.remove("_rev");
+            object.remove("_meta");
+            object.remove("_attachments");
+            object.remove("_deleted");
+            object.remove("updated_at_ms");
+            object.remove("generated_at_ms");
+            for value in object.values_mut() {
+                remove_projection_compare_metadata(value);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                remove_projection_compare_metadata(item);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn load_channel_state_projection(root: &Path) -> anyhow::Result<ChannelStateProjection> {
@@ -8179,6 +8234,22 @@ mod tests {
     }
 
     #[test]
+    fn business_os_projection_sleep_backs_off_after_idle_round() {
+        assert_eq!(
+            business_os_projection_sleep_secs(RUNTIME_SETTINGS_SYNC_INTERVAL_SECS, 0),
+            RUNTIME_SETTINGS_SYNC_INTERVAL_SECS
+        );
+        assert_eq!(
+            business_os_projection_sleep_secs(RUNTIME_SETTINGS_SYNC_INTERVAL_SECS, 1),
+            BUSINESS_OS_PROJECTION_IDLE_SYNC_INTERVAL_SECS
+        );
+        assert_eq!(
+            business_os_projection_sleep_secs(RUNTIME_SETTINGS_SYNC_INTERVAL_SECS, u32::MAX),
+            BUSINESS_OS_PROJECTION_IDLE_SYNC_INTERVAL_SECS
+        );
+    }
+
+    #[test]
     fn runtime_installed_module_schemas_extend_native_collection_creators() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let module_dir = temp
@@ -9458,7 +9529,10 @@ mod tests {
     fn sync_runtime_settings_projects_status_document() {
         let root = tempfile::tempdir().expect("temp root");
 
-        sync_runtime_settings(root.path()).expect("sync runtime settings");
+        let synced = sync_runtime_settings(root.path()).expect("sync runtime settings");
+        assert_eq!(synced, 1);
+        let resynced = sync_runtime_settings(root.path()).expect("resync runtime settings");
+        assert_eq!(resynced, 0);
 
         let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open rxdb sqlite");
         let settings_json: String = conn
@@ -9508,7 +9582,8 @@ mod tests {
         )
         .expect("write template manifest");
 
-        sync_module_catalog(root.path()).expect("sync module catalog");
+        let synced = sync_module_catalog(root.path()).expect("sync module catalog");
+        assert_eq!(synced, 1);
 
         let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open rxdb sqlite");
         let catalog_json: String = conn
@@ -9542,7 +9617,8 @@ mod tests {
             Some("demo-template")
         );
 
-        sync_module_catalog(root.path()).expect("resync unchanged module catalog");
+        let resynced = sync_module_catalog(root.path()).expect("resync unchanged module catalog");
+        assert_eq!(resynced, 0);
         let catalog_json_again: String = conn
             .query_row(
                 "SELECT data FROM ctox_business_os__business_module_catalog__v0 WHERE id = 'module-catalog'",
@@ -11210,6 +11286,8 @@ mod tests {
 
         let synced = sync_ticket_state(root.path()).expect("sync ticket projections");
         assert!(synced >= 2, "expected item and event projection");
+        let resynced = sync_ticket_state(root.path()).expect("resync ticket projections");
+        assert_eq!(resynced, 0);
 
         let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open rxdb sqlite");
         let ticket_key = format!("local:{}", remote.ticket_id);
