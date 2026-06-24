@@ -261,6 +261,26 @@ pub struct BusinessOsUserMutation {
     pub accept_recovery_responsibility: bool,
 }
 
+/// Where a `BusinessCommand` entered the daemon from. This is the trust
+/// boundary for actor authorization: a command replicated over the WebRTC/RxDB
+/// data plane carries an attacker-controllable `client_context.actor`, so its
+/// identity/role must come from a verified capability token — never from the
+/// claimed actor. In-process commands (operator CLI, server-side handlers that
+/// already authenticated a session, internal projections) are trusted to set
+/// their own actor. The field is never deserialized from a wire document
+/// (`#[serde(skip)]`), so a browser cannot upgrade itself by setting it; the
+/// only `ReplicatedPeer` constructor is `accept_rxdb_business_command_with_origin`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CommandOrigin {
+    /// Issued in-process by trusted local code (CLI, server-side post-auth
+    /// handlers, internal projections, tests). The claimed actor may be trusted.
+    #[default]
+    TrustedLocal,
+    /// Replicated from a browser/device peer over WebRTC/RxDB. The client
+    /// context (including the actor) is attacker-controllable.
+    ReplicatedPeer,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BusinessCommand {
     #[serde(default)]
@@ -274,6 +294,11 @@ pub struct BusinessCommand {
     pub payload: Value,
     #[serde(default)]
     pub client_context: Value,
+    /// Trust origin of this command. Defaults to `TrustedLocal` and is never
+    /// read from the wire (`#[serde(skip)]`). Set to `ReplicatedPeer` only by
+    /// the WebRTC/RxDB intake path.
+    #[serde(skip)]
+    pub origin: CommandOrigin,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1387,11 +1412,21 @@ pub fn session_for_request(
             })
             .unwrap_or(false);
     let authenticated = token_authenticated || password_authenticated || configured_user.is_some();
-    let session_user_id = basic
-        .as_ref()
-        .map(|(user, _)| user.as_str())
-        .filter(|user| !user.trim().is_empty())
-        .unwrap_or("ctox-user");
+    // SECURITY: derive the session identity from HOW authentication succeeded,
+    // never from the unverified client-supplied Basic username. Only a matched
+    // per-user credential (configured_user) or the password path (which pins
+    // supplied_user == expected_user) yield a trusted username. The workspace-wide
+    // shared token is NOT a per-user credential, so a token holder must not be
+    // able to claim an arbitrary persisted user's id and inherit its role via
+    // session_with_persisted_user — it binds to a fixed service principal whose
+    // role comes from server config (default_session_role).
+    let session_user_id: &str = if let Some(user) = configured_user {
+        user.id.as_str()
+    } else if password_authenticated {
+        expected_user.trim()
+    } else {
+        "ctox-shared-token-session"
+    };
 
     let role = configured_user
         .map(|user| user.role.clone())
@@ -3685,6 +3720,7 @@ fn business_os_why_safe_command(
     session: &BusinessOsSession,
 ) -> BusinessCommand {
     BusinessCommand {
+        origin: CommandOrigin::TrustedLocal,
         id: command.id.clone(),
         module: command.module.clone(),
         command_type: command.command_type.clone(),
@@ -5907,6 +5943,7 @@ fn module_lifecycle_projection_repair_safe_command(
     session: &BusinessOsSession,
 ) -> BusinessCommand {
     BusinessCommand {
+        origin: CommandOrigin::TrustedLocal,
         id: command.id.clone(),
         module: command.module.clone(),
         command_type: command.command_type.clone(),
@@ -5997,6 +6034,7 @@ fn record_report_command(
     let expected = mutation.expected.clone();
     let client_context = mutation.client_context.clone();
     let command = BusinessCommand {
+        origin: CommandOrigin::TrustedLocal,
         id: command_id,
         module: "ctox".to_owned(),
         command_type: format!("ctox.report.{kind}"),
@@ -8694,6 +8732,7 @@ fn business_os_support_diagnostics_safe_command(
         .map(source_sanitize_slug)
         .unwrap_or_default();
     BusinessCommand {
+        origin: CommandOrigin::TrustedLocal,
         id: command.id.clone(),
         module: command.module.clone(),
         command_type: command.command_type.clone(),
@@ -8925,6 +8964,7 @@ fn business_os_audit_retention_safe_command(
 ) -> anyhow::Result<BusinessCommand> {
     let retention_days = business_os_effective_audit_retention_days(root, request.retention_days)?;
     Ok(BusinessCommand {
+        origin: CommandOrigin::TrustedLocal,
         id: command.id.clone(),
         module: command.module.clone(),
         command_type: command.command_type.clone(),
@@ -8953,6 +8993,7 @@ fn business_os_audit_retention_policy_safe_command(
     session: &BusinessOsSession,
 ) -> BusinessCommand {
     BusinessCommand {
+        origin: CommandOrigin::TrustedLocal,
         id: command.id.clone(),
         module: command.module.clone(),
         command_type: command.command_type.clone(),
@@ -9238,6 +9279,7 @@ fn business_os_backup_restore_drill_safe_command(
     session: &BusinessOsSession,
 ) -> BusinessCommand {
     BusinessCommand {
+        origin: CommandOrigin::TrustedLocal,
         id: command.id.clone(),
         module: command.module.clone(),
         command_type: command.command_type.clone(),
@@ -13879,6 +13921,7 @@ fn secret_command_safe_command(
     safe_payload: Value,
 ) -> BusinessCommand {
     BusinessCommand {
+        origin: CommandOrigin::TrustedLocal,
         id: command.id.clone(),
         module: command.module.clone(),
         command_type: command.command_type.clone(),
@@ -13898,7 +13941,23 @@ fn secret_command_safe_command(
     }
 }
 
+/// Accept a command that originated in trusted, in-process code (operator CLI,
+/// server-side handlers, internal projections, tests). The claimed actor in
+/// `client_context` is trusted. Network-originated commands MUST use
+/// [`accept_rxdb_business_command_with_origin`] with [`CommandOrigin::ReplicatedPeer`].
 pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Result<Value> {
+    accept_rxdb_business_command_with_origin(root, document, CommandOrigin::TrustedLocal)
+}
+
+/// Accept a Business OS command, tagging it with its trust [`CommandOrigin`].
+/// `ReplicatedPeer` commands (arriving over the WebRTC/RxDB data plane) cannot
+/// authorize a privileged role from the browser-asserted actor; identity/role
+/// for those comes only from a verified capability token.
+pub fn accept_rxdb_business_command_with_origin(
+    root: &Path,
+    document: Value,
+    origin: CommandOrigin,
+) -> anyhow::Result<Value> {
     let command_id = document
         .get("command_id")
         .or_else(|| document.get("id"))
@@ -13927,6 +13986,7 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
     }
     drop(conn);
     let command = BusinessCommand {
+        origin,
         id: Some(command_id.clone()),
         module: document
             .get("module")
@@ -19640,18 +19700,17 @@ fn rxdb_authenticated_session(
     rxdb_session_from_command(root, command, false)
 }
 
-// SECURITY (platform trust boundary — tracked finding, not yet fixed):
-// The actor identity below is taken from `client_context.actor` inside the
-// replicated command document, i.e. it is ASSERTED BY THE BROWSER. We only
-// verify that the claimed id is an active `business_users` row — never that the
-// sender actually IS that user. The sole authentication gate today is WebRTC
-// room access (the signaling token); any peer admitted to the room can therefore
-// write a command claiming any active chef/admin id and pass every
-// `require_manage_all` check. A real fix requires per-command authentication —
-// either a signature the browser produces with the logged-in user's key (native
-// verifies against a registered public key) or a server-issued, per-session
-// capability token verified here — which spans the browser, the WebRTC/RxDB sync
-// layer and key management. Do NOT assume this function authenticates the actor.
+// SECURITY (per-command authorization trust boundary):
+// The actor in `client_context` is asserted by the command author. For commands
+// replicated over the WebRTC/RxDB data plane (`CommandOrigin::ReplicatedPeer`)
+// that author is an untrusted browser peer admitted to the room only by the
+// shared signaling secret, so its identity and role MUST come from a verified,
+// native-signed capability token — never from the claimed actor. Without a valid
+// token a replicated command resolves to an unprivileged, non-attributable
+// principal (or is rejected outright when the operator requires tokens), so a
+// spoofed chef/admin id cannot escalate. In-process commands (`TrustedLocal`:
+// operator CLI, server-side handlers that already authenticated a session,
+// internal projections) may trust their claimed actor. See `capability.rs`.
 fn rxdb_session_from_command(
     root: &Path,
     command: &BusinessCommand,
@@ -19677,13 +19736,9 @@ fn rxdb_session_from_command(
         .unwrap_or(id.as_str())
         .to_string();
 
-    // Capability token (preferred, native-authoritative): when the command
-    // carries a valid native-signed `capability_token`, the id + role come from
-    // the SIGNED token, not from the browser-asserted actor. When enforcement is
-    // enabled (runtime config CTOX_BUSINESS_OS_REQUIRE_CAPABILITY_TOKEN=1) a
-    // privileged (manage-all) command without a valid token is denied. Without
-    // enforcement and without a token we fall back to the legacy claimed-actor
-    // path so existing browsers keep working until they attach tokens.
+    // Capability token (native-authoritative): when the command carries a valid
+    // native-signed `capability_token`, the id + role come from the SIGNED token
+    // for ANY origin, never from the claimed actor.
     let now = now_ms() as i64;
     let verified = client_ctx
         .get("capability_token")
@@ -19693,22 +19748,40 @@ fn rxdb_session_from_command(
             let secret = capability_signing_secret(root).ok()?;
             super::capability::verify_capability_token(&secret, token, now)
         });
-    let enforce_token = crate::inference::runtime_env::env_or_config(
-        root,
-        "CTOX_BUSINESS_OS_REQUIRE_CAPABILITY_TOKEN",
-    )
-    .as_deref()
-        == Some("1");
 
     let (id, role, display_name) = if let Some(claims) = verified {
         (claims.user_id, claims.role, display_name)
     } else {
-        anyhow::ensure!(
-            !(enforce_token && require_manage_all),
-            "a valid capability token is required for privileged Business OS commands"
-        );
-        let trusted_user = trusted_rxdb_command_user(root, &id, &display_name)?;
-        (id, trusted_user.role, trusted_user.display_name)
+        match command.origin {
+            // Operator / in-process caller: the claimed actor is trusted.
+            CommandOrigin::TrustedLocal => {
+                let trusted_user = trusted_rxdb_command_user(root, &id, &display_name)?;
+                (id, trusted_user.role, trusted_user.display_name)
+            }
+            // Untrusted browser peer with no verified token. Fail closed: if the
+            // operator requires tokens, reject; otherwise resolve an unprivileged,
+            // non-attributable principal that matches no role check, founder ACL
+            // or id-keyed permission grant — so a spoofed chef/admin id is inert.
+            // Legitimate browsers always attach a token (see command-bus.js); this
+            // only degrades a client that lost the control plane, never escalates.
+            CommandOrigin::ReplicatedPeer => {
+                let require_token = crate::inference::runtime_env::env_or_config(
+                    root,
+                    "CTOX_BUSINESS_OS_REQUIRE_CAPABILITY_TOKEN",
+                )
+                .as_deref()
+                    == Some("1");
+                anyhow::ensure!(
+                    !require_token,
+                    "a valid capability token is required for Business OS commands"
+                );
+                (
+                    "rxdb-command".to_string(),
+                    "user".to_string(),
+                    "rxdb-command".to_string(),
+                )
+            }
+        }
     };
     let is_admin = role_can_manage(&role);
     let session = BusinessOsSession {
@@ -20513,6 +20586,7 @@ fn customers_opportunity_close(
         }
     }
     let command = BusinessCommand {
+        origin: CommandOrigin::TrustedLocal,
         payload,
         ..command.clone()
     };
@@ -21757,6 +21831,7 @@ fn load_business_command(conn: &Connection, command_id: &str) -> anyhow::Result<
             let payload_json: String = row.get(3)?;
             let client_context_json: String = row.get(4)?;
             Ok(BusinessCommand {
+                origin: CommandOrigin::TrustedLocal,
                 id: Some(command_id.to_string()),
                 module: row.get(0)?,
                 command_type: row.get(1)?,
@@ -26920,20 +26995,18 @@ mod tests {
         Ok(())
     }
 
-    // §9.1 regression: with capability-token enforcement on, the role MUST come
-    // from a valid native-signed token, not the browser-asserted actor. Pins the
-    // security fix so it cannot silently regress.
+    // §9.1 regression: a command replicated from a browser peer (ReplicatedPeer)
+    // MUST derive its role from a valid native-signed token, never from the
+    // browser-asserted actor — and this is the DEFAULT, with no runtime flag set.
+    // A trusted in-process command (TrustedLocal, e.g. the operator CLI) keeps
+    // trusting its claimed actor. Pins the fix so it cannot silently regress.
     #[test]
     fn capability_token_enforcement_gates_privileged_commands() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
         seed_business_user(root.path(), "chef1", "chef")?;
         seed_business_user(root.path(), "user1", "user")?;
-        let mut env = std::collections::BTreeMap::new();
-        env.insert(
-            "CTOX_BUSINESS_OS_REQUIRE_CAPABILITY_TOKEN".to_string(),
-            "1".to_string(),
-        );
-        crate::inference::runtime_env::save_runtime_env_map(root.path(), &env)?;
+        // NOTE: no CTOX_BUSINESS_OS_REQUIRE_CAPABILITY_TOKEN flag — the hardening
+        // is the default, not opt-in.
 
         let cmd = |cid: &str, ctx: Value| {
             serde_json::json!({
@@ -26946,22 +27019,25 @@ mod tests {
             })
         };
 
-        // No token, claiming chef → denied (cannot trust the unsigned actor).
-        let denied = accept_rxdb_business_command(
+        // Replicated peer, no token, claiming chef → denied: the role is forced to
+        // an unprivileged baseline, so the manage-all check fails.
+        let denied = accept_rxdb_business_command_with_origin(
             root.path(),
             cmd("c1", serde_json::json!({ "actor": { "id": "chef1" } })),
+            CommandOrigin::ReplicatedPeer,
         );
         assert!(
             denied.is_err(),
-            "no-token privileged command must be denied: {denied:?}"
+            "replicated no-token privileged command must be denied: {denied:?}"
         );
 
-        // Valid chef token → allowed (role from the signed token).
+        // Replicated peer with a valid chef token → allowed (role from the token).
         let now = now_ms() as i64;
         let (chef_token, _) = issue_business_os_capability_token(root.path(), "chef1", now)?;
-        let allowed = accept_rxdb_business_command(
+        let allowed = accept_rxdb_business_command_with_origin(
             root.path(),
             cmd("c2", serde_json::json!({ "capability_token": chef_token })),
+            CommandOrigin::ReplicatedPeer,
         )?;
         assert_eq!(
             allowed.get("status").and_then(Value::as_str),
@@ -26970,13 +27046,109 @@ mod tests {
 
         // A user-role token must not satisfy a manage-all command.
         let (user_token, _) = issue_business_os_capability_token(root.path(), "user1", now)?;
-        let user_denied = accept_rxdb_business_command(
+        let user_denied = accept_rxdb_business_command_with_origin(
             root.path(),
             cmd("c3", serde_json::json!({ "capability_token": user_token })),
+            CommandOrigin::ReplicatedPeer,
         );
         assert!(
             user_denied.is_err(),
             "user-role token must not pass a manage-all command: {user_denied:?}"
+        );
+
+        // Regression: the same no-token claimed-chef command from a TRUSTED local
+        // origin (operator CLI) still works — we only distrust the network peer.
+        let trusted = accept_rxdb_business_command_with_origin(
+            root.path(),
+            cmd("c4", serde_json::json!({ "actor": { "id": "chef1" } })),
+            CommandOrigin::TrustedLocal,
+        )?;
+        assert_eq!(
+            trusted.get("status").and_then(Value::as_str),
+            Some("completed"),
+            "trusted-local CLI command must not be downgraded"
+        );
+        Ok(())
+    }
+
+    // §9.1 regression for the NON-manage-all path (finding: enforcement must also
+    // cover policy-gated commands dispatched via rxdb_authenticated_session, not
+    // only require_manage_all ones). A replicated peer claiming a chef id without
+    // a token must NOT pass the SecretsManage policy gate.
+    #[test]
+    fn replicated_peer_without_token_cannot_manage_secrets() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        seed_business_user(root.path(), "chef1", "chef")?;
+
+        let secret_list = |cid: &str, ctx: Value| {
+            serde_json::json!({
+                "id": cid,
+                "command_id": cid,
+                "module": "credentials",
+                "type": "ctox.secret.list",
+                "payload": {},
+                "client_context": ctx,
+            })
+        };
+
+        // Replicated peer claiming chef, no token → SecretsManage denied (role is
+        // downgraded to user). The handler returns a non-completed (failed) outcome.
+        let denied = accept_rxdb_business_command_with_origin(
+            root.path(),
+            secret_list("s1", serde_json::json!({ "actor": { "id": "chef1" } })),
+            CommandOrigin::ReplicatedPeer,
+        )?;
+        assert_ne!(
+            denied.get("status").and_then(Value::as_str),
+            Some("completed"),
+            "replicated no-token secret.list must not succeed: {denied:?}"
+        );
+
+        // Same command with a valid chef token → allowed.
+        let now = now_ms() as i64;
+        let (chef_token, _) = issue_business_os_capability_token(root.path(), "chef1", now)?;
+        let allowed = accept_rxdb_business_command_with_origin(
+            root.path(),
+            secret_list("s2", serde_json::json!({ "capability_token": chef_token })),
+            CommandOrigin::ReplicatedPeer,
+        )?;
+        assert_eq!(
+            allowed.get("status").and_then(Value::as_str),
+            Some("completed"),
+            "valid chef token must pass SecretsManage: {allowed:?}"
+        );
+        Ok(())
+    }
+
+    // With the strict opt-in flag set, a replicated peer command without a valid
+    // token is rejected outright (not merely downgraded), even on the
+    // rxdb_authenticated_session path.
+    #[test]
+    fn replicated_peer_strict_flag_rejects_tokenless_commands() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        seed_business_user(root.path(), "chef1", "chef")?;
+        let mut env = std::collections::BTreeMap::new();
+        env.insert(
+            "CTOX_BUSINESS_OS_REQUIRE_CAPABILITY_TOKEN".to_string(),
+            "1".to_string(),
+        );
+        crate::inference::runtime_env::save_runtime_env_map(root.path(), &env)?;
+
+        let rejected = accept_rxdb_business_command_with_origin(
+            root.path(),
+            serde_json::json!({
+                "id": "strict1",
+                "command_id": "strict1",
+                "module": "credentials",
+                "type": "ctox.secret.list",
+                "payload": {},
+                "client_context": { "actor": { "id": "chef1" } },
+            }),
+            CommandOrigin::ReplicatedPeer,
+        );
+        assert!(
+            rejected.is_err(),
+            "strict flag must reject a token-less replicated command: {rejected:?}"
         );
         Ok(())
     }
@@ -27794,6 +27966,7 @@ mod tests {
     #[test]
     fn app_modify_queue_prompt_targets_app_module_not_skill_files() {
         let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
             id: Some("cmd_app_bench".to_owned()),
             module: "creator".to_owned(),
             command_type: "ctox.business_os.app.modify".to_owned(),
@@ -27842,6 +28015,7 @@ mod tests {
     #[test]
     fn app_create_queue_prompt_targets_app_module_skill() {
         let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
             id: Some("cmd_app_create".to_owned()),
             module: "creator".to_owned(),
             command_type: "ctox.business_os.app.create".to_owned(),

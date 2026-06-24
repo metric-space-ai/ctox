@@ -4378,6 +4378,7 @@ mod tests {
 
     fn command(command_type: &str, conversation_id: &str, payload: Value) -> BusinessCommand {
         BusinessCommand {
+            origin: crate::business_os::store::CommandOrigin::TrustedLocal,
             id: Some(format!(
                 "cmd_{}_{}",
                 command_type.replace('.', "_"),

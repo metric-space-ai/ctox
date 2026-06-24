@@ -1893,6 +1893,7 @@ mod tests {
 
     fn make_command(module: &str, command_type: &str, payload: Value) -> BusinessCommand {
         BusinessCommand {
+            origin: crate::business_os::store::CommandOrigin::TrustedLocal,
             id: Some("cmd_test_1".to_string()),
             module: module.to_string(),
             command_type: command_type.to_string(),

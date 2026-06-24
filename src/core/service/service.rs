@@ -25029,6 +25029,7 @@ Business OS command:
         let accepted = crate::business_os::store::record_command(
             &root,
             crate::business_os::store::BusinessCommand {
+                origin: crate::business_os::store::CommandOrigin::TrustedLocal,
                 id: Some("cmd_leaked_worker_guard".to_string()),
                 module: "research".to_string(),
                 command_type: "business_os.chat.task".to_string(),

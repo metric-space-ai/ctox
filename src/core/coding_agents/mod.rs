@@ -3888,6 +3888,7 @@ mod tests {
         grant_workspace(root, Provider::Mock, &workspace)?;
 
         let command = BusinessCommand {
+            origin: crate::business_os::store::CommandOrigin::TrustedLocal,
             id: Some("cmd_workspace_list".to_string()),
             module: "coding-agents".to_string(),
             command_type: "ctox.coding_agent.workspace.list".to_string(),

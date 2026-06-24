@@ -706,15 +706,23 @@ fn request_session(root: &Path, request: &Request) -> store::BusinessOsSession {
 }
 
 fn request_allows_local_dev_session(request: &Request) -> bool {
-    if let Some(host) = header_value(request, "Host") {
-        return host_header_allows_local_dev_session(&host);
-    }
+    // SECURITY: the implicit local-dev (admin) session may only be granted when
+    // the ACTUAL TCP peer is loopback. The `Host` header is client-controlled —
+    // a remote attacker can send `Host: localhost` over a public 0.0.0.0 bind, so
+    // it must never be the trust signal. On a non-loopback bind a remote peer's
+    // source IP is non-loopback and is therefore correctly refused. (Behind a
+    // same-host reverse proxy the peer is the proxy; such deployments must
+    // configure real auth — CTOX_AUTH_USERS / CTOX_BUSINESS_PASSWORD — so the
+    // implicit grant never fires.)
     request
         .remote_addr()
         .map(|addr| addr.ip().is_loopback())
         .unwrap_or(false)
 }
 
+// Retained for the host-parsing unit test below; no longer part of the
+// local-dev session trust decision (see `request_allows_local_dev_session`).
+#[allow(dead_code)]
 fn host_header_allows_local_dev_session(host: &str) -> bool {
     let Some(hostname) = host_header_hostname(host) else {
         return false;
@@ -727,6 +735,7 @@ fn host_header_allows_local_dev_session(host: &str) -> bool {
             .unwrap_or(false)
 }
 
+#[allow(dead_code)]
 fn host_header_hostname(host: &str) -> Option<String> {
     let value = host.split(',').next()?.trim();
     if value.is_empty() {

@@ -2690,8 +2690,16 @@ async fn accept_pending_business_command(
     let root = root.to_path_buf();
     let accept_root = root.clone();
     let document_for_store = document.clone();
+    // This document was replicated from a browser/device peer over WebRTC/RxDB:
+    // its client_context (incl. actor) is attacker-controllable, so it is tagged
+    // ReplicatedPeer and cannot authorize a privileged role without a verified
+    // capability token (see store::rxdb_session_from_command).
     let accepted_result = tokio::task::spawn_blocking(move || {
-        store::accept_rxdb_business_command(&accept_root, document_for_store)
+        store::accept_rxdb_business_command_with_origin(
+            &accept_root,
+            document_for_store,
+            store::CommandOrigin::ReplicatedPeer,
+        )
     })
     .await;
 

@@ -371,11 +371,80 @@ struct BusinessOsMcpPolicyPayload {
     policy: BusinessOsMcpPolicy,
 }
 
+const MCP_AUTH_SECRET_SCOPE: &str = "business_os";
+const MCP_AUTH_SECRET_NAME: &str = "mcp_inbound_auth_token";
+
+/// Per-instance bearer token that an inbound MCP client must present on `/mcp`.
+/// Auto-generated and persisted in the CTOX secret store on first use; the
+/// operator retrieves it (secret `business_os/mcp_inbound_auth_token`) to
+/// configure trusted external agents. Mirrors `capability_signing_secret`.
+fn mcp_auth_token(root: &Path) -> anyhow::Result<String> {
+    if crate::secrets::secret_exists(root, MCP_AUTH_SECRET_SCOPE, MCP_AUTH_SECRET_NAME)? {
+        let value =
+            crate::secrets::read_secret_value(root, MCP_AUTH_SECRET_SCOPE, MCP_AUTH_SECRET_NAME)?;
+        if !value.trim().is_empty() {
+            return Ok(value.trim().to_string());
+        }
+    }
+    use base64::Engine as _;
+    use ring::rand::SecureRandom;
+    let mut buf = [0u8; 32];
+    ring::rand::SystemRandom::new()
+        .fill(&mut buf)
+        .map_err(|_| anyhow::anyhow!("failed to generate MCP auth token"))?;
+    let value = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf);
+    crate::secrets::write_secret_record(
+        root,
+        MCP_AUTH_SECRET_SCOPE,
+        MCP_AUTH_SECRET_NAME,
+        &value,
+        Some("Business OS inbound MCP bearer token (auto-generated)".to_string()),
+        serde_json::json!({ "auto_managed": true }),
+    )?;
+    Ok(value)
+}
+
+fn request_bearer_token(request: &Request) -> Option<String> {
+    request
+        .headers()
+        .iter()
+        .find(|header| header.field.equiv("Authorization"))
+        .and_then(|header| {
+            header
+                .value
+                .as_str()
+                .trim()
+                .strip_prefix("Bearer ")
+                .map(|token| token.trim().to_string())
+        })
+}
+
+/// Inbound `/mcp` requests must carry a valid bearer token. Fail closed: a
+/// missing token, a wrong token, or an unreadable secret store all deny.
+fn mcp_request_authorized(root: &Path, request: &Request) -> bool {
+    let expected = match mcp_auth_token(root) {
+        Ok(token) => token,
+        Err(error) => {
+            eprintln!("[business-os-mcp] auth token unavailable: {error:#}");
+            return false;
+        }
+    };
+    let Some(presented) = request_bearer_token(request) else {
+        return false;
+    };
+    ring::constant_time::verify_slices_are_equal(expected.as_bytes(), presented.as_bytes()).is_ok()
+}
+
 pub fn serve_mcp_channel(root: &Path, options: BusinessOsMcpServeOptions) -> anyhow::Result<()> {
     let server = Server::http(&options.addr)
         .map_err(|error| anyhow::anyhow!("failed to bind Business OS MCP server: {error}"))?;
+    // Materialize the auth token at startup so it exists in the secret store for
+    // the operator to retrieve, and warn loudly if bound beyond loopback.
+    if let Err(error) = mcp_auth_token(root) {
+        eprintln!("[business-os-mcp] failed to provision inbound auth token: {error:#}");
+    }
     println!("CTOX Business OS MCP listening on http://{}", options.addr);
-    println!("MCP endpoint: http://{}/mcp", options.addr);
+    println!("MCP endpoint: http://{}/mcp (requires Authorization: Bearer <secret business_os/mcp_inbound_auth_token>)", options.addr);
     for request in server.incoming_requests() {
         let root = root.to_path_buf();
         std::thread::spawn(move || {
@@ -1059,6 +1128,7 @@ pub fn create_app(
     let accepted = store::record_command(
         root,
         store::BusinessCommand {
+            origin: store::CommandOrigin::TrustedLocal,
             id: None,
             module: "creator".to_string(),
             command_type: "ctox.business_os.app.create".to_string(),
@@ -1127,6 +1197,7 @@ pub fn modify_app(
     let accepted = store::record_command(
         root,
         store::BusinessCommand {
+            origin: store::CommandOrigin::TrustedLocal,
             id: None,
             module: "creator".to_string(),
             command_type: "ctox.business_os.app.modify".to_string(),
@@ -1632,6 +1703,7 @@ pub fn record_approval_decision(
     let accepted = store::record_command(
         root,
         store::BusinessCommand {
+            origin: store::CommandOrigin::TrustedLocal,
             id: None,
             module: "outbound".to_string(),
             command_type: command_type.to_string(),
@@ -1998,6 +2070,7 @@ pub fn execute_action(
     let accepted = store::record_command(
         root,
         store::BusinessCommand {
+            origin: store::CommandOrigin::TrustedLocal,
             id: None,
             module: module_id.to_string(),
             command_type: proposal.command_type.clone(),
@@ -2082,6 +2155,18 @@ fn handle_mcp_http_request(root: &Path, mut request: Request) -> anyhow::Result<
             )?;
         }
         (Method::Post, "/mcp") => {
+            if !mcp_request_authorized(root, &request) {
+                respond_json_status(
+                    request,
+                    401,
+                    serde_json::json!({
+                        "ok": false,
+                        "error": "unauthorized",
+                        "message": "Business OS MCP requires a valid Authorization: Bearer token."
+                    }),
+                )?;
+                return Ok(());
+            }
             let body = read_json(&mut request)?;
             let response = handle_json_rpc(root, body);
             respond_json_value(request, response)?;
@@ -2288,24 +2373,10 @@ fn respond_json_status(request: Request, status: u16, value: Value) -> anyhow::R
         )
         .map_err(|_| anyhow::anyhow!("failed to build content-type header"))?,
     );
-    response.add_header(
-        Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..])
-            .map_err(|_| anyhow::anyhow!("failed to build cors header"))?,
-    );
-    response.add_header(
-        Header::from_bytes(
-            &b"Access-Control-Allow-Headers"[..],
-            &b"Content-Type, Authorization"[..],
-        )
-        .map_err(|_| anyhow::anyhow!("failed to build cors header"))?,
-    );
-    response.add_header(
-        Header::from_bytes(
-            &b"Access-Control-Allow-Methods"[..],
-            &b"GET, POST, OPTIONS"[..],
-        )
-        .map_err(|_| anyhow::anyhow!("failed to build cors header"))?,
-    );
+    // No CORS allow-origin: the MCP endpoint is a token-authenticated control
+    // surface for non-browser agents, not a web API. Omitting ACAO prevents a
+    // malicious web page in a local browser from reading responses cross-origin
+    // (drive-by against a loopback-bound MCP server).
     request
         .respond(response)
         .map_err(|error| anyhow::anyhow!("failed to send response: {error}"))
