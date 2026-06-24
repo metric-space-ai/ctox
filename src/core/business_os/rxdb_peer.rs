@@ -770,6 +770,10 @@ fn sync_desktop_file_from_path_with_policy(
         .with_context(|| format!("failed to canonicalize desktop file {}", path.display()))?;
     let metadata = fs::metadata(&path)
         .with_context(|| format!("failed to read desktop file metadata {}", path.display()))?;
+    ensure_safe_desktop_file_index_path(&path, "desktop file")?;
+    if !metadata.is_file() {
+        anyhow::bail!("desktop file path is not a file: {}", path.display());
+    }
     let policy = forced_policy.unwrap_or_else(|| {
         if should_eager_sync_file(&path, &metadata) {
             DesktopFileContentPolicy::Eager
@@ -6725,22 +6729,53 @@ fn is_safe_desktop_file_scan_root(path: &Path) -> bool {
     if !path.is_dir() {
         return false;
     }
-    let component_count = path.components().count();
-    if component_count <= 1 {
+    if is_broad_desktop_file_scan_root(path) {
         return false;
     }
-    if path == Path::new("/tmp") || path == Path::new("/var/tmp") {
+    if is_ctox_internal_path_layout(path) {
         return false;
-    }
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        if path == home {
-            return false;
-        }
-        if is_ctox_internal_desktop_scan_root(path, &home) {
-            return false;
-        }
     }
     true
+}
+
+fn ensure_safe_desktop_file_index_path(path: &Path, kind: &str) -> anyhow::Result<()> {
+    if is_ctox_internal_path_layout(path) || is_broad_desktop_file_scan_root(path) {
+        anyhow::bail!(
+            "{kind} is outside the Business OS file-index boundary: {}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+fn is_broad_desktop_file_scan_root(path: &Path) -> bool {
+    if path == Path::new("/")
+        || path == Path::new("/Users")
+        || path == Path::new("/Applications")
+        || path == Path::new("/Library")
+        || path == Path::new("/System")
+        || path == Path::new("/Volumes")
+        || path == Path::new("/private")
+        || path == Path::new("/var")
+        || path == Path::new("/tmp")
+        || path == Path::new("/var/tmp")
+        || path == Path::new("/var/folders")
+        || path == Path::new("/private/var/folders")
+    {
+        return true;
+    }
+    let mut components = path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str());
+    matches!(
+        (
+            components.next(),
+            components.next(),
+            components.next(),
+            components.next()
+        ),
+        (Some("/"), Some("Users"), Some(_user), None)
+    )
 }
 
 fn is_ctox_internal_desktop_scan_root(path: &Path, home: &Path) -> bool {
@@ -10193,6 +10228,41 @@ mod tests {
     }
 
     #[test]
+    fn desktop_file_scan_rejects_broad_roots() {
+        assert!(!is_safe_desktop_file_scan_root(Path::new("/")));
+        if Path::new("/Users").is_dir() {
+            assert!(!is_safe_desktop_file_scan_root(Path::new("/Users")));
+        }
+        assert!(!is_broad_desktop_file_scan_root(Path::new(
+            "/Users/example/project"
+        )));
+        assert!(is_broad_desktop_file_scan_root(Path::new("/Users/example")));
+        assert!(is_broad_desktop_file_scan_root(Path::new("/var")));
+        assert!(is_broad_desktop_file_scan_root(Path::new("/var/folders")));
+    }
+
+    #[test]
+    fn sync_desktop_file_from_path_rejects_internal_ctox_file() {
+        let root = tempfile::tempdir().expect("temp root");
+        let home = tempfile::tempdir().expect("temp home");
+        let internal_dir = home.path().join(".local/lib/ctox/current/logs");
+        fs::create_dir_all(&internal_dir).expect("create internal dir");
+        let internal_file = internal_dir.join("ctox-real.log");
+        fs::write(&internal_file, b"internal file content").expect("write internal file");
+
+        let err = sync_desktop_file_from_path(root.path(), &internal_file)
+            .expect_err("internal CTOX files must not enter the desktop file index");
+        assert!(
+            format!("{err:#}").contains("outside the Business OS file-index boundary"),
+            "unexpected error: {err:#}"
+        );
+        assert!(
+            !store::rxdb_store_path(root.path()).exists(),
+            "rejected file sync must not create the RxDB file index"
+        );
+    }
+
+    #[test]
     fn background_desktop_scan_uses_only_static_business_os_roots() {
         let root = tempfile::tempdir().expect("temp root");
         for rel in [
@@ -10228,12 +10298,36 @@ mod tests {
         let internal_file = internal_dir.join("ctox-real.log");
         fs::write(&internal_file, b"internal file content").expect("write internal file");
 
-        sync_desktop_file_from_path(root.path(), &internal_file).expect("sync internal file");
-        let canonical = internal_file
-            .canonicalize()
-            .expect("canonical internal file");
-        let file_id = desktop_file_id(&canonical);
+        let safe_file = root.path().join("safe.log");
+        fs::write(&safe_file, b"legacy indexed content").expect("write safe seed file");
+        sync_desktop_file_from_path(root.path(), &safe_file).expect("sync safe seed file");
+        let file_id = desktop_file_id(&safe_file.canonicalize().expect("canonical safe file"));
         let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
+        let file_json: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__desktop_files__v0 WHERE id = ?1",
+                [file_id.as_str()],
+                |row| row.get(0),
+            )
+            .expect("file row before maintenance");
+        let mut file_doc: Value = serde_json::from_str(&file_json).expect("file doc json");
+        let internal_path = internal_file
+            .canonicalize()
+            .expect("canonical internal file")
+            .display()
+            .to_string();
+        if let Some(object) = file_doc.as_object_mut() {
+            object.insert("path".to_string(), Value::String(internal_path.clone()));
+            object.insert("local_path".to_string(), Value::String(internal_path));
+        }
+        conn.execute(
+            "UPDATE ctox_business_os__desktop_files__v0 SET data = ?2 WHERE id = ?1",
+            params![
+                file_id,
+                serde_json::to_string(&file_doc).expect("serialize file doc")
+            ],
+        )
+        .expect("rewrite legacy unsafe file path");
         let before_chunks: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM ctox_business_os__desktop_file_chunks__v0 WHERE id LIKE ?1",
