@@ -131,6 +131,9 @@ const BUSINESS_RECORD_PROJECTION_SYNC_INTERVAL_SECS: u64 = 3;
 const BUSINESS_RECORD_PROJECTION_IDLE_SYNC_INTERVAL_SECS: u64 = 60;
 const BUSINESS_RECORD_PROJECTION_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 const BUSINESS_RECORD_PROJECTION_SYNC_LIMIT: usize = 2_000;
+const BUSINESS_COMMAND_ACTIVE_POLL_SECS: u64 = 1;
+const BUSINESS_COMMAND_IDLE_POLL_SECS: u64 = 10;
+const BUSINESS_COMMAND_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 const SUPPORT_COMMUNICATION_INTAKE_SINCE_KEY: &str = "__support_communication_intake";
 const TICKET_STATE_SYNC_LIMIT: usize = 500;
 const BROWSER_RUNTIME_ACTIVE_MAINTENANCE_INTERVAL_MS: u64 = 300;
@@ -2387,16 +2390,38 @@ async fn consume_business_commands_loop(
     // re-sorted to the head on the next 1s tick, and starve every command
     // behind it — browser-issued commands then appeared to hang forever.
     let mut accept_failures: HashMap<String, u32> = HashMap::new();
+    let mut consecutive_idle_rounds = 0u32;
     loop {
         let result = {
             let _guard = database_write_lock.lock().await;
             consume_pending_business_commands(&root, &database, &mut accept_failures).await
         };
-        if let Err(err) = result {
-            eprintln!("[business-os] native rxdb command consumer failed: {err:#}");
+        match result {
+            Ok(0) => {
+                consecutive_idle_rounds = consecutive_idle_rounds.saturating_add(1);
+            }
+            Ok(_) => {
+                consecutive_idle_rounds = 0;
+            }
+            Err(err) => {
+                consecutive_idle_rounds = 0;
+                eprintln!("[business-os] native rxdb command consumer failed: {err:#}");
+            }
         }
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        tokio::time::sleep(Duration::from_secs(business_command_poll_sleep_secs(
+            consecutive_idle_rounds,
+        )))
+        .await;
     }
+}
+
+fn business_command_poll_sleep_secs(consecutive_idle_rounds: u32) -> u64 {
+    projection_sleep_secs(
+        BUSINESS_COMMAND_ACTIVE_POLL_SECS,
+        BUSINESS_COMMAND_IDLE_POLL_SECS,
+        BUSINESS_COMMAND_IDLE_BACKOFF_AFTER_TICKS,
+        consecutive_idle_rounds,
+    )
 }
 
 /// How often a single command may fail `accept_pending_business_command`
@@ -2558,7 +2583,7 @@ async fn consume_pending_business_commands(
     root: &Path,
     database: &Arc<RxDatabase>,
     accept_failures: &mut HashMap<String, u32>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<usize> {
     let commands = database
         .collection("business_commands")
         .context("business_commands collection is not registered")?;
@@ -2574,8 +2599,9 @@ async fn consume_pending_business_commands(
         .map_err(|err| anyhow::anyhow!("exec pending business_commands query: {err}"))?;
 
     let Some(rows) = pending.as_array() else {
-        return Ok(());
+        return Ok(0);
     };
+    let pending_count = rows.len();
     for document in rows {
         // Isolate failures per command: one broken document must not stall
         // the entire queue (it would be re-sorted to the head every tick).
@@ -2623,7 +2649,7 @@ async fn consume_pending_business_commands(
             }
         }
     }
-    Ok(())
+    Ok(pending_count)
 }
 
 async fn accept_pending_business_command(
@@ -8410,6 +8436,22 @@ mod tests {
         assert_eq!(
             business_os_projection_sleep_secs(RUNTIME_SETTINGS_SYNC_INTERVAL_SECS, u32::MAX),
             BUSINESS_OS_PROJECTION_IDLE_SYNC_INTERVAL_SECS
+        );
+    }
+
+    #[test]
+    fn business_command_poll_sleep_backs_off_after_idle_round() {
+        assert_eq!(
+            business_command_poll_sleep_secs(0),
+            BUSINESS_COMMAND_ACTIVE_POLL_SECS
+        );
+        assert_eq!(
+            business_command_poll_sleep_secs(1),
+            BUSINESS_COMMAND_IDLE_POLL_SECS
+        );
+        assert_eq!(
+            business_command_poll_sleep_secs(u32::MAX),
+            BUSINESS_COMMAND_IDLE_POLL_SECS
         );
     }
 

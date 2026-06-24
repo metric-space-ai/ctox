@@ -109,6 +109,7 @@ const TICKET_RECONCILE_IDLE_SAFETY_SECS: u64 = 3600;
 const CHANNEL_ROUTER_IDLE_SAFETY_SECS: u64 = 3600;
 const CHANNEL_SYNC_POLL_SECS: u64 = 60;
 const MISSION_MAINTENANCE_POLL_SECS: u64 = 15;
+const APPROVAL_NAG_IDLE_SAFETY_SECS: u64 = 300;
 const HARNESS_AUDIT_TICK_SECS: u64 = 300;
 const HARNESS_AUDIT_IDLE_SAFETY_SECS: u64 = 3600;
 const BUSINESS_OS_APP_RECOVERY_POLL_SECS: u64 = 60;
@@ -171,6 +172,7 @@ static CHANNEL_ROUTER_IDLE_GATE: OnceLock<Mutex<Option<ChannelRouterIdleGateStat
     OnceLock::new();
 static HARNESS_AUDIT_IDLE_GATE: OnceLock<Mutex<Option<HarnessAuditIdleGateState>>> =
     OnceLock::new();
+static APPROVAL_NAG_IDLE_GATE: OnceLock<Mutex<Option<ApprovalNagIdleGateState>>> = OnceLock::new();
 static BUSINESS_OS_APP_RECOVERY_PREFLIGHT_GATE: OnceLock<
     Mutex<Option<BusinessOsAppRecoveryPreflightGateState>>,
 > = OnceLock::new();
@@ -207,6 +209,14 @@ struct ChannelRouterIdleGateState {
 
 #[derive(Debug, Clone)]
 struct HarnessAuditIdleGateState {
+    root: PathBuf,
+    core_db_path: PathBuf,
+    core_stamp: CoreDbChangeStamp,
+    last_run: Instant,
+}
+
+#[derive(Debug, Clone)]
+struct ApprovalNagIdleGateState {
     root: PathBuf,
     core_db_path: PathBuf,
     core_stamp: CoreDbChangeStamp,
@@ -10644,9 +10654,12 @@ fn start_mission_maintenance_loop(root: std::path::PathBuf, state: Arc<Mutex<Sha
                     }
                     _ => {}
                 }
+            } else if should_skip_idle_approval_nag_sweep(&root) {
+                // no-op
             } else {
                 match crate::mission::approval_nag::sweep(&root) {
                     Ok(summary) => {
+                        mark_approval_nag_sweep_ran(&root);
                         if summary.sent > 0
                             || summary.scheduled > 0
                             || summary.replies_processed > 0
@@ -10843,6 +10856,45 @@ fn mark_harness_audit_tick_ran(root: &Path) {
 #[cfg(test)]
 fn clear_harness_audit_idle_gate_for_tests() {
     if let Some(gate) = HARNESS_AUDIT_IDLE_GATE.get() {
+        let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = None;
+    }
+}
+
+fn should_skip_idle_approval_nag_sweep(root: &Path) -> bool {
+    let root_path = root.to_path_buf();
+    let core_db_path = crate::paths::core_db(root);
+    let core_stamp = core_db_change_stamp(&core_db_path);
+    let now = Instant::now();
+    let gate = APPROVAL_NAG_IDLE_GATE.get_or_init(|| Mutex::new(None));
+    let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(previous) = guard.as_ref() else {
+        return false;
+    };
+    previous.root == root_path
+        && previous.core_db_path == core_db_path
+        && previous.core_stamp == core_stamp
+        && now.duration_since(previous.last_run)
+            < Duration::from_secs(APPROVAL_NAG_IDLE_SAFETY_SECS)
+}
+
+fn mark_approval_nag_sweep_ran(root: &Path) {
+    let root_path = root.to_path_buf();
+    let core_db_path = crate::paths::core_db(root);
+    let core_stamp = core_db_change_stamp(&core_db_path);
+    let gate = APPROVAL_NAG_IDLE_GATE.get_or_init(|| Mutex::new(None));
+    let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = Some(ApprovalNagIdleGateState {
+        root: root_path,
+        core_db_path,
+        core_stamp,
+        last_run: Instant::now(),
+    });
+}
+
+#[cfg(test)]
+fn clear_approval_nag_idle_gate_for_tests() {
+    if let Some(gate) = APPROVAL_NAG_IDLE_GATE.get() {
         let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         *guard = None;
     }
@@ -18734,6 +18786,53 @@ mod tests {
         );
 
         clear_harness_audit_idle_gate_for_tests();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn approval_nag_idle_gate_reopens_when_core_db_changes() {
+        clear_approval_nag_idle_gate_for_tests();
+        let root = temp_root("approval-nag-idle-gate");
+        std::fs::create_dir_all(root.join("runtime")).unwrap();
+        let db_path = crate::paths::core_db(&root);
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE approval_nag_gate_probe (id INTEGER PRIMARY KEY, value TEXT);",
+            )
+            .unwrap();
+        }
+
+        assert!(
+            !should_skip_idle_approval_nag_sweep(&root),
+            "first approval nag sweep must run"
+        );
+        mark_approval_nag_sweep_ran(&root);
+        assert!(
+            should_skip_idle_approval_nag_sweep(&root),
+            "unchanged core DB should skip approval nag inside the idle safety window"
+        );
+
+        std::fs::write(root.join("runtime").join("business-os.sqlite3"), b"churn").unwrap();
+        assert!(
+            should_skip_idle_approval_nag_sweep(&root),
+            "Business OS runtime store churn must not reopen the approval nag gate"
+        );
+
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute(
+                "INSERT INTO approval_nag_gate_probe (value) VALUES (?1)",
+                params!["changed"],
+            )
+            .unwrap();
+        }
+        assert!(
+            !should_skip_idle_approval_nag_sweep(&root),
+            "core DB changes must reopen the approval nag gate"
+        );
+
+        clear_approval_nag_idle_gate_for_tests();
         let _ = std::fs::remove_dir_all(root);
     }
 

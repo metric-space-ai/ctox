@@ -68,6 +68,10 @@ impl TableNotifier {
         self.generation.fetch_add(1, Ordering::SeqCst);
         self.notify.notify_one();
     }
+
+    fn generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
 }
 
 static UPDATE_REGISTRY: OnceLock<StdMutex<HashMap<String, Arc<TableNotifier>>>> = OnceLock::new();
@@ -102,6 +106,13 @@ pub fn notify_table_change(database_key: &str, table_name: &str) {
             notifier.signal();
         }
     }
+}
+
+pub fn table_change_generation(database_key: &str, table_name: &str) -> Option<u64> {
+    let registry = UPDATE_REGISTRY.get()?;
+    let map = registry.lock().unwrap();
+    map.get(&registry_key(database_key, table_name))
+        .map(|notifier| notifier.generation())
 }
 
 pub fn notify_database_change(database_key: &str) {
