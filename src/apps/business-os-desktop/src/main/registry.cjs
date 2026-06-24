@@ -3,6 +3,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { assertRegistrySafe, normalizeInstance } = require("../common/instance-model.cjs");
+const { isLoopbackHost } = require("./url-safety.cjs");
 
 function createDefaultRegistry() {
   return {
@@ -83,8 +84,20 @@ function cleanUrl(value, fallback) {
   const raw = String(value || "").trim();
   if (!raw) return fallback;
   const parsed = new URL(raw);
-  if (!["https:", "http:"].includes(parsed.protocol)) throw new Error("registry URL must be http or https");
+  assertAllowedControlPlaneUrl(parsed);
   return parsed.toString();
+}
+
+// The ctox.dev control-plane / shell base URLs drive login, session-package,
+// launch-token and management requests that carry ctox.dev cookies. Pin them to
+// https on ctox.dev so a tampered instances.json cannot repoint the whole managed
+// flow at an attacker host or downgrade it to cleartext http. http loopback is
+// permitted only for local development and the in-process test mocks.
+function assertAllowedControlPlaneUrl(parsed) {
+  const host = parsed.hostname.toLowerCase();
+  if (parsed.protocol === "https:" && (host === "ctox.dev" || host.endsWith(".ctox.dev"))) return;
+  if (parsed.protocol === "http:" && isLoopbackHost(host)) return;
+  throw new Error("registry control-plane URL must be https on ctox.dev (or http loopback for local dev)");
 }
 
 function upsertInstance(registry, instance) {

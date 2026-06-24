@@ -121,6 +121,16 @@ function hostOf(origin) {
   }
 }
 
+// Loopback hosts are the only non-https / non-ctox.dev endpoints the desktop will
+// talk to, and only for local development and the in-process test mocks.
+function isLoopbackHost(host) {
+  const normalized = String(host || "").toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
+  return normalized === "localhost"
+    || normalized.endsWith(".localhost")
+    || normalized === "::1"
+    || /^127\.\d+\.\d+\.\d+$/.test(normalized);
+}
+
 function normalizePathname(pathname) {
   // Lowercase so a case-variant data path (e.g. /API/Business-OS/Records on a
   // case-insensitive server) cannot slip past the classifier.
@@ -138,4 +148,5 @@ module.exports = {
   isSafeExternalUrl,
   isForbiddenBusinessOsHttpDataRequest,
   isForbiddenBusinessOsDataResourceRequest,
+  isLoopbackHost,
 };

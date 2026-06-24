@@ -24,6 +24,7 @@ const {
   inspectSshHostKey,
   verifyTrustedHostKey,
 } = require("./ssh-host-key.cjs");
+const { isLoopbackHost } = require("./url-safety.cjs");
 const { WINDOWS_CREDENTIAL_MANAGER_SCRIPT } = require("./secret-store.cjs");
 
 const execFileAsync = promisify(execFile);
@@ -83,6 +84,10 @@ class CtoxDevInstanceSource {
     if (!tokenResponse.ok) throw new Error(`ctox.dev launch token failed: ${tokenResponse.status}`);
     const tokenPayload = await tokenResponse.json();
     if (!tokenPayload.launchConfigUrl) throw new Error("ctox.dev launch token response is missing launchConfigUrl");
+    // The launch-config URL is fetched WITH ctox.dev credentials; pin it to the
+    // ctox.dev control-plane origin so a tampered token response cannot exfiltrate
+    // those cookies to an attacker host (SSRF / blind POST).
+    assertSameControlPlaneOrigin(tokenPayload.launchConfigUrl, this.baseUrl, "ctox.dev launch config URL");
     const launchResponse = await this.fetch(tokenPayload.launchConfigUrl, {
       method: "POST",
       credentials: "include",
@@ -90,8 +95,11 @@ class CtoxDevInstanceSource {
     });
     if (!launchResponse.ok) throw new Error(`ctox.dev launch config failed: ${launchResponse.status}`);
     const launchPayload = await launchResponse.json();
-    const ctoxConfig = launchPayload.pairingConfig || {};
+    // Re-assert the data-boundary invariant on the server-returned config instead
+    // of trusting it verbatim: webrtc transport only, HTTP bridge never enabled.
+    const ctoxConfig = forceWebrtcLaunchConfig(launchPayload.pairingConfig);
     const launchUrl = selectCtoxDevLaunchUrl(launchPayload.launchUrl, ctoxConfig);
+    assertSafeLaunchUrl(launchUrl);
     return {
       source: "ctox_dev",
       launchUrl,
@@ -101,14 +109,90 @@ class CtoxDevInstanceSource {
   }
 }
 
+function assertSameControlPlaneOrigin(rawUrl, baseUrl, label) {
+  let url;
+  let base;
+  try {
+    url = new URL(String(rawUrl || ""));
+  } catch (_error) {
+    throw new Error(`${label} is not a valid URL`);
+  }
+  try {
+    base = new URL(String(baseUrl || ""));
+  } catch (_error) {
+    throw new Error("ctox.dev base URL is invalid");
+  }
+  if (url.origin !== base.origin) {
+    throw new Error(`${label} must stay on the ctox.dev control-plane origin`);
+  }
+}
+
+function assertSafeLaunchUrl(rawUrl) {
+  let url;
+  try {
+    url = new URL(String(rawUrl || ""));
+  } catch (_error) {
+    throw new Error("ctox.dev launch URL is invalid");
+  }
+  if (url.protocol === "https:") return;
+  if (url.protocol === "http:" && isLoopbackHost(url.hostname)) return;
+  throw new Error("ctox.dev launch URL must be https");
+}
+
+function forceWebrtcLaunchConfig(config) {
+  const next = { ...(config && typeof config === "object" ? config : {}) };
+  if (next.transport && next.transport !== "webrtc") {
+    throw new Error(`ctox.dev launch config requested unsupported transport: ${next.transport}`);
+  }
+  if (next.http_bridge_available === true) {
+    throw new Error("ctox.dev launch config attempted to enable the HTTP data bridge");
+  }
+  next.transport = "webrtc";
+  next.http_bridge_available = false;
+  return next;
+}
+
 function selectCtoxDevLaunchUrl(rawLaunchUrl, ctoxConfig) {
   const launchUrl = String(rawLaunchUrl || "").trim();
   if (!launchUrl) throw new Error("ctox.dev launch config is missing launchUrl");
-  if (launchUrlHasPackedConfig(launchUrl)) return launchUrl;
+  if (launchUrlHasPackedConfig(launchUrl)) {
+    assertPackedLaunchConfigIsWebrtc(launchUrl);
+    return launchUrl;
+  }
   if (containsRedactedPairingSecret(ctoxConfig)) {
     throw new Error("ctox.dev launch config has only redacted pairing metadata and no packed launch URL");
   }
   return buildLaunchUrl(launchUrl, ctoxConfig);
+}
+
+function assertPackedLaunchConfigIsWebrtc(launchUrl) {
+  const config = decodePackedLaunchConfig(launchUrl);
+  if (!config || typeof config !== "object") return; // opaque/undecodable -> request-level data guard still applies
+  if (config.transport && config.transport !== "webrtc") {
+    throw new Error(`ctox.dev packed launch config requested unsupported transport: ${config.transport}`);
+  }
+  if (config.http_bridge_available === true) {
+    throw new Error("ctox.dev packed launch config attempted to enable the HTTP data bridge");
+  }
+}
+
+function decodePackedLaunchConfig(launchUrl) {
+  try {
+    const url = new URL(String(launchUrl || ""));
+    let packed = url.searchParams.get("ctox_config") || url.searchParams.get("ctoxConfig");
+    if (!packed) {
+      const hash = String(url.hash || "").replace(/^#/, "");
+      const queryStart = hash.indexOf("?");
+      if (queryStart >= 0) {
+        const params = new URLSearchParams(hash.slice(queryStart + 1));
+        packed = params.get("ctox_config") || params.get("ctoxConfig");
+      }
+    }
+    if (!packed) return null;
+    return JSON.parse(Buffer.from(packed, "base64url").toString("utf8"));
+  } catch (_error) {
+    return null;
+  }
 }
 
 function launchUrlHasPackedConfig(rawLaunchUrl) {

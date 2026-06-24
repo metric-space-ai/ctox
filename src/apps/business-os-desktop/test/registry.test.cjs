@@ -73,6 +73,21 @@ test("saveRegistry writes atomically and round-trips", () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test("control-plane base URLs are pinned to https on ctox.dev", () => {
+  // Loopback http is allowed for local dev / test mocks.
+  assert.doesNotThrow(() => normalizeRegistry({ settings: { ctoxDevBaseUrl: "http://127.0.0.1:8765" } }));
+  assert.doesNotThrow(() => normalizeRegistry({ settings: { ctoxDevBaseUrl: "https://ctox.dev" } }));
+  // An attacker-supplied off-host or cleartext base is rejected.
+  assert.throws(
+    () => normalizeRegistry({ settings: { ctoxDevBaseUrl: "https://evil.example" } }),
+    /control-plane URL must be https on ctox\.dev/,
+  );
+  assert.throws(
+    () => normalizeRegistry({ settings: { ctoxDevBaseUrl: "http://ctox.dev" } }),
+    /control-plane URL must be https on ctox\.dev/,
+  );
+});
+
 test("usage is separate from instance metadata", () => {
   let registry = upsertInstance(createDefaultRegistry(), {
     id: "local-a",

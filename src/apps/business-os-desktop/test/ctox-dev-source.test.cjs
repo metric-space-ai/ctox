@@ -235,6 +235,41 @@ test("ctox.dev source requests a fresh launch token for each activation", async 
   ]);
 });
 
+test("ctox.dev source rejects an off-origin launch config URL (SSRF guard)", async () => {
+  const source = new CtoxDevInstanceSource({
+    baseUrl: "https://ctox.dev",
+    fetchImpl: async (url) => {
+      if (url === "https://ctox.dev/api/desktop/launch-token") {
+        return jsonResponse({ launchConfigUrl: "https://evil.example/api/desktop/launch/token_1" });
+      }
+      throw new Error(`launch config URL must not be fetched: ${url}`);
+    },
+  });
+  await assert.rejects(
+    () => source.getLaunchConfig("managed:tenant_skf"),
+    /control-plane origin/,
+  );
+});
+
+test("ctox.dev source rejects a launch config that tries to enable the HTTP bridge", async () => {
+  const source = new CtoxDevInstanceSource({
+    baseUrl: "https://ctox.dev",
+    fetchImpl: async (url) => {
+      if (url === "https://ctox.dev/api/desktop/launch-token") {
+        return jsonResponse({ launchConfigUrl: "https://ctox.dev/api/desktop/launch/token_1" });
+      }
+      return jsonResponse({
+        launchUrl: "https://skf.ctox.dev/",
+        pairingConfig: { transport: "webrtc", http_bridge_available: true, sync_room: "ctox-business-os:skf" },
+      });
+    },
+  });
+  await assert.rejects(
+    () => source.getLaunchConfig("managed:tenant_skf"),
+    /HTTP data bridge/,
+  );
+});
+
 function decodeCtoxConfig(url) {
   return JSON.parse(Buffer.from(url.searchParams.get("ctox_config"), "base64url").toString("utf8"));
 }
