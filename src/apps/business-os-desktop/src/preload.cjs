@@ -30,4 +30,5 @@ contextBridge.exposeInMainWorld("ctoxDesktop", {
   loginCtoxDev: () => ipcRenderer.invoke("ctox-dev:login"),
   logoutCtoxDev: () => ipcRenderer.invoke("ctox-dev:logout"),
   openCtoxDevManagedInstance: (instance) => ipcRenderer.invoke("ctox-dev:manage-instance", instance),
+  createSupportSnapshot: () => ipcRenderer.invoke("support:create-snapshot"),
 });

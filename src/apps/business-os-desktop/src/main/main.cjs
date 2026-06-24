@@ -20,6 +20,7 @@ const { configureAutoUpdates } = require("./auto-update.cjs");
 const { SourceManager } = require("./source-manager.cjs");
 const { loadRegistry, saveRegistry } = require("./registry.cjs");
 const { createSecretStore } = require("./secret-store.cjs");
+const { createSupportBundleSnapshot } = require("./redaction.cjs");
 const {
   createInstanceBrowserView,
   layoutInstanceBrowserView,
@@ -304,7 +305,7 @@ function protocolHandlers() {
       return activateInstance(instance);
     },
     activateManagedInstance,
-    handleCtoxDevAuthCallback: completeCtoxDevLoginFromProtocol,
+    handleCtoxDevAuthCallback: (rawUrl) => completeCtoxDevLoginFromProtocol(rawUrl, registry?.settings?.ctoxDevBaseUrl),
   };
 }
 
@@ -332,7 +333,11 @@ async function isCtoxDevSessionAuthenticated() {
   });
   if (!response.ok) return false;
   const payload = await response.json().catch(() => ({}));
-  return payload?.account?.authenticated === true || Array.isArray(payload?.account?.tenants);
+  const account = payload?.account;
+  // Require an explicit authenticated flag or at least one tenant; an empty
+  // tenants array must not be read as an authenticated session.
+  return account?.authenticated === true
+    || (Array.isArray(account?.tenants) && account.tenants.length > 0);
 }
 
 async function logoutCtoxDev() {
@@ -382,6 +387,14 @@ ipcMain.handle("ssh:store-login-password", async (_event, options) => sourceMana
 ipcMain.handle("ctox-dev:login", async () => openCtoxDevLogin());
 ipcMain.handle("ctox-dev:logout", async () => logoutCtoxDev());
 ipcMain.handle("ctox-dev:manage-instance", async (_event, instance) => openCtoxDevManagedInstance(instance));
+ipcMain.handle("support:create-snapshot", async () => createSupportBundleSnapshot({
+  registry,
+  appInfo: {
+    name: app.getName(),
+    version: app.getVersion(),
+    platform: process.platform,
+  },
+}));
 
 app.whenReady().then(async () => {
   protocolHandling.registerDefaultProtocolClient();

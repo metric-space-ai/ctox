@@ -51,8 +51,8 @@ function isCtoxDevLoginCompleteUrl(rawUrl, baseUrl) {
 
 const activeLoginProtocolCompletions = new Set();
 
-function completeCtoxDevLoginFromProtocol(rawUrl) {
-  if (!isCtoxDevLoginCompleteUrl(rawUrl, "https://ctox.dev")) {
+function completeCtoxDevLoginFromProtocol(rawUrl, baseUrl = "https://ctox.dev") {
+  if (!isCtoxDevLoginCompleteUrl(rawUrl, baseUrl)) {
     return {
       ok: false,
       completed: false,

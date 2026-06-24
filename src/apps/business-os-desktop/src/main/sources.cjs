@@ -1300,7 +1300,15 @@ function validateKeychainRef(value, label) {
 
 function createSshPasswordAskpass(profile, platform = process.platform) {
   if (!profile?.sshPasswordRef) return null;
+  // mkdtempSync already creates the directory 0700 (owner-only); enforce it
+  // explicitly so the askpass helper files are never readable by other users even
+  // under an unusual umask. The files hold only the keychain lookup, never the secret.
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "ctox-ssh-askpass-"));
+  try {
+    fs.chmodSync(tempDir, 0o700);
+  } catch (_error) {
+    // best-effort; not supported on every platform/filesystem
+  }
   const scriptPath = writeAskpassScript(tempDir, profile.sshPasswordRef, platform);
   return {
     env: {
@@ -1320,13 +1328,13 @@ function writeAskpassScript(tempDir, ref, platform) {
     fs.writeFileSync(payloadPath, JSON.stringify({
       action: "get",
       target: `CTOX Business OS Desktop:${ref}`,
-    }));
-    fs.writeFileSync(scriptPath, WINDOWS_CREDENTIAL_MANAGER_SCRIPT);
+    }), { mode: 0o600 });
+    fs.writeFileSync(scriptPath, WINDOWS_CREDENTIAL_MANAGER_SCRIPT, { mode: 0o600 });
     fs.writeFileSync(commandPath, [
       "@echo off",
       `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${scriptPath}" < "${payloadPath}"`,
       "",
-    ].join("\r\n"));
+    ].join("\r\n"), { mode: 0o600 });
     return commandPath;
   }
   const scriptPath = path.join(tempDir, "askpass.sh");

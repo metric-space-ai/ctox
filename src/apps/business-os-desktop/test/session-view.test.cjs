@@ -6,7 +6,13 @@ const {
   createInstanceBrowserView,
   installBusinessOsHttpDataGuard,
   layoutInstanceBrowserView,
+  sanitizeForScriptLiteral,
 } = require("../src/main/session-view.cjs");
+
+test("switcher payload strips U+2028/U+2029 line separators", () => {
+  assert.equal(sanitizeForScriptLiteral("Acme\u2028\u2029Corp"), "AcmeCorp");
+  assert.equal(sanitizeForScriptLiteral("normal name"), "normal name");
+});
 
 test("instance BrowserView uses the instance session partition", () => {
   let options;

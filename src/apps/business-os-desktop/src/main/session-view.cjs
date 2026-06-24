@@ -81,9 +81,9 @@ function installInstancePermissionPolicy(view) {
 
 async function installDesktopInstanceSwitcher(view, instance) {
   const payload = {
-    id: String(instance?.id || ""),
-    name: String(instance?.displayName || instance?.domain || "Instanz"),
-    source: sourceLabel(instance?.source),
+    id: sanitizeForScriptLiteral(instance?.id || ""),
+    name: sanitizeForScriptLiteral(instance?.displayName || instance?.domain || "Instanz"),
+    source: sanitizeForScriptLiteral(sourceLabel(instance?.source)),
   };
   await view.webContents.executeJavaScript(`(() => {
     const payload = ${JSON.stringify(payload)};
@@ -165,6 +165,15 @@ function layoutInstanceBrowserView(view, contentBounds) {
   view.setAutoResize({ width: true, height: true });
 }
 
+function sanitizeForScriptLiteral(value) {
+  // The switcher payload (attacker-influenced instance name/domain) is embedded
+  // into an executeJavaScript source string via JSON.stringify, which already
+  // escapes quotes/backslashes. Additionally strip the U+2028/U+2029 line
+  // separators, which are valid inside a JSON string but were historically treated
+  // as line terminators inside a JS source string — defense-in-depth.
+  return String(value).replace(/[\u2028\u2029]/g, "");
+}
+
 function sourceLabel(source) {
   return {
     ctox_dev: "ctox.dev",
@@ -179,4 +188,5 @@ module.exports = {
   installDesktopInstanceSwitcher,
   installBusinessOsHttpDataGuard,
   layoutInstanceBrowserView,
+  sanitizeForScriptLiteral,
 };
