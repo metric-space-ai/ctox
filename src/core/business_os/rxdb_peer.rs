@@ -107,6 +107,7 @@ const DESKTOP_FILE_SCAN_MAX_DEPTH: usize = 6;
 const DESKTOP_FILE_SCAN_MAX_FILES: usize = 200;
 const DESKTOP_FILE_CHUNK_RETAIN_GENERATIONS: usize = 2;
 const DESKTOP_FILE_CHUNK_CLEANUP_SCAN_LIMIT: u64 = 100_000;
+const DESKTOP_FILE_INDEX_MAINTENANCE_INTERVAL_SECS: u64 = 10 * 60;
 const DESKTOP_FILE_CONTENT_HASH_SCHEME: &str = "sha256-bytes-v1";
 const DESKTOP_FILE_CHUNK_HASH_SCHEME: &str = "sha256-base64-chunk-v1";
 const CTOX_DESKTOP_FOLDER_ID: &str = "fs_ctox";
@@ -1341,8 +1342,24 @@ async fn run_native_peer(
         }
         eprintln!(
             "[business-os] skipping optional Business OS RxDB collection `{collection_name}` \
-             (registration failed: {err})"
+            (registration failed: {err})"
         );
+    }
+    match compact_desktop_file_index_store(&root).await {
+        Ok(stats) if stats.changed() => {
+            eprintln!(
+                "[business-os] desktop file index maintenance: tombstoned {} unsafe file(s), \
+                 removed {} unsafe chunk(s), {} stale chunk(s), {} deleted chunk tombstone(s)",
+                stats.tombstoned_unsafe_files,
+                stats.removed_unsafe_chunks,
+                stats.removed_stale_chunks,
+                stats.removed_deleted_chunks
+            );
+        }
+        Ok(_) => {}
+        Err(err) => {
+            eprintln!("[business-os] desktop file index maintenance failed: {err:#}");
+        }
     }
 
     // Phase 3 (single multiplexed stream): bring up ONE replication session
@@ -2002,9 +2019,35 @@ async fn sync_desktop_file_index_background_loop(
     database: Arc<RxDatabase>,
     database_write_lock: Arc<AsyncMutex<()>>,
 ) {
+    let mut last_maintenance_at = SystemTime::UNIX_EPOCH;
     loop {
         let result = {
             let _guard = database_write_lock.lock().await;
+            let run_maintenance = last_maintenance_at
+                .elapsed()
+                .map(|elapsed| {
+                    elapsed >= Duration::from_secs(DESKTOP_FILE_INDEX_MAINTENANCE_INTERVAL_SECS)
+                })
+                .unwrap_or(true);
+            if run_maintenance {
+                match compact_desktop_file_index_store(&root).await {
+                    Ok(stats) if stats.changed() => {
+                        eprintln!(
+                            "[business-os] desktop file index maintenance: tombstoned {} unsafe file(s), \
+                             removed {} unsafe chunk(s), {} stale chunk(s), {} deleted chunk tombstone(s)",
+                            stats.tombstoned_unsafe_files,
+                            stats.removed_unsafe_chunks,
+                            stats.removed_stale_chunks,
+                            stats.removed_deleted_chunks
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        eprintln!("[business-os] desktop file index maintenance failed: {err:#}");
+                    }
+                }
+                last_maintenance_at = SystemTime::now();
+            }
             sync_desktop_file_index_with_database(&root, &database).await
         };
         if let Err(err) = result {
@@ -4323,30 +4366,22 @@ async fn sync_business_record_projections_with_database(
     .context("join support communication intake projection")??;
     let collections = business_record_projection_collections();
     let root = root.to_path_buf();
-    let pull_jobs = collections
-        .iter()
-        .map(|collection| {
-            let collection = collection.clone();
-            let root = root.clone();
-            let since_ms = *since_by_collection.get(&collection).unwrap_or(&0);
-            tokio::task::spawn_blocking(move || {
-                let pulled = store::pull_collection_records(
-                    &root,
-                    &collection,
-                    Some(since_ms),
-                    Some(BUSINESS_RECORD_PROJECTION_SYNC_LIMIT),
-                )?;
-                Ok::<_, anyhow::Error>((collection, since_ms, pulled))
-            })
+    let mut pulled_collections = Vec::with_capacity(collections.len());
+    for collection in collections {
+        let root = root.clone();
+        let since_ms = *since_by_collection.get(&collection).unwrap_or(&0);
+        let pulled_collection = tokio::task::spawn_blocking(move || {
+            let pulled = store::pull_collection_records(
+                &root,
+                &collection,
+                Some(since_ms),
+                Some(BUSINESS_RECORD_PROJECTION_SYNC_LIMIT),
+            )?;
+            Ok::<_, anyhow::Error>((collection, since_ms, pulled))
         })
-        .collect::<Vec<_>>();
-
-    let mut pulled_collections = Vec::with_capacity(pull_jobs.len());
-    for job in pull_jobs {
-        pulled_collections.push(
-            job.await
-                .context("join native business record projection load")??,
-        );
+        .await
+        .context("join native business record projection load")??;
+        pulled_collections.push(pulled_collection);
     }
 
     let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
@@ -6419,6 +6454,217 @@ async fn sync_desktop_file_scan_roots_with_database(
     Ok(indexed)
 }
 
+#[derive(Debug, Default)]
+struct DesktopFileIndexMaintenanceStats {
+    tombstoned_unsafe_files: usize,
+    removed_unsafe_chunks: usize,
+    removed_stale_chunks: usize,
+    removed_deleted_chunks: usize,
+}
+
+impl DesktopFileIndexMaintenanceStats {
+    fn changed(&self) -> bool {
+        self.tombstoned_unsafe_files > 0
+            || self.removed_unsafe_chunks > 0
+            || self.removed_stale_chunks > 0
+            || self.removed_deleted_chunks > 0
+    }
+}
+
+async fn compact_desktop_file_index_store(
+    root: &Path,
+) -> anyhow::Result<DesktopFileIndexMaintenanceStats> {
+    let root = root.to_path_buf();
+    tokio::task::spawn_blocking(move || compact_desktop_file_index_store_sync(&root, None))
+        .await
+        .context("join desktop file index maintenance")?
+}
+
+fn compact_desktop_file_index_store_sync(
+    root: &Path,
+    home: Option<&Path>,
+) -> anyhow::Result<DesktopFileIndexMaintenanceStats> {
+    const FILES_TABLE: &str = "\"ctox_business_os__desktop_files__v0\"";
+    const CHUNKS_TABLE: &str = "\"ctox_business_os__desktop_file_chunks__v0\"";
+
+    let database_path = store::rxdb_store_path(root);
+    if !database_path.exists() {
+        return Ok(DesktopFileIndexMaintenanceStats::default());
+    }
+    let mut conn = Connection::open(&database_path)
+        .with_context(|| format!("open RxDB store {}", database_path.display()))?;
+    conn.busy_timeout(Duration::from_secs(10))
+        .context("set RxDB maintenance busy timeout")?;
+    let has_tables = sqlite_table_exists(&conn, "ctox_business_os__desktop_files__v0")?
+        && sqlite_table_exists(&conn, "ctox_business_os__desktop_file_chunks__v0")?;
+    if !has_tables {
+        return Ok(DesktopFileIndexMaintenanceStats::default());
+    }
+
+    let unsafe_files = {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT id, revision, data FROM {FILES_TABLE} WHERE COALESCE(deleted, 0) = 0"
+        ))?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut unsafe_files = Vec::new();
+        for row in rows {
+            let (id, revision, data) = row?;
+            let Ok(document) = serde_json::from_str::<Value>(&data) else {
+                continue;
+            };
+            if desktop_file_index_document_is_unsafe(&document, home) {
+                unsafe_files.push((id, revision, document));
+            }
+        }
+        unsafe_files
+    };
+
+    let tx = conn.transaction()?;
+    let now = now_ms() as f64;
+    let mut stats = DesktopFileIndexMaintenanceStats::default();
+    for (file_id, revision, mut document) in unsafe_files {
+        let next_revision = maintenance_revision(
+            document
+                .get("_rev")
+                .and_then(Value::as_str)
+                .or(revision.as_deref()),
+        );
+        prepare_unsafe_desktop_file_tombstone(&mut document, &next_revision, now);
+        let data = serde_json::to_string(&document)?;
+        let changed = tx.execute(
+            &format!(
+                "UPDATE {FILES_TABLE}
+                 SET revision = ?2, deleted = 1, lastWriteTime = ?3, data = ?4
+                 WHERE id = ?1"
+            ),
+            params![file_id, next_revision, now, data],
+        )?;
+        if changed > 0 {
+            stats.tombstoned_unsafe_files += changed;
+            stats.removed_unsafe_chunks += tx.execute(
+                &format!("DELETE FROM {CHUNKS_TABLE} WHERE json_extract(data, '$.file_id') = ?1"),
+                params![file_id],
+            )?;
+        }
+    }
+
+    stats.removed_deleted_chunks = tx.execute(
+        &format!("DELETE FROM {CHUNKS_TABLE} WHERE COALESCE(deleted, 0) = 1"),
+        [],
+    )?;
+    stats.removed_stale_chunks = tx.execute(
+        &format!(
+            "DELETE FROM {CHUNKS_TABLE}
+             WHERE rowid IN (
+               SELECT c.rowid FROM {CHUNKS_TABLE} AS c
+               WHERE COALESCE(c.deleted, 0) = 0
+                 AND NOT EXISTS (
+                   SELECT 1 FROM {FILES_TABLE} AS f
+                   WHERE f.id = json_extract(c.data, '$.file_id')
+                     AND COALESCE(f.deleted, 0) = 0
+                     AND COALESCE(json_extract(f.data, '$._deleted'), 0) = 0
+                     AND COALESCE(json_extract(f.data, '$.is_deleted'), 0) = 0
+                     AND json_extract(f.data, '$.content_generation_id') =
+                         json_extract(c.data, '$.generation_id')
+                 )
+               )"
+        ),
+        [],
+    )?;
+    tx.commit()?;
+    Ok(stats)
+}
+
+fn desktop_file_index_document_is_unsafe(document: &Value, home: Option<&Path>) -> bool {
+    if document.get("kind").and_then(Value::as_str) != Some("file") {
+        return false;
+    }
+    if document.get("source").and_then(Value::as_str) != Some("ctox-core") {
+        return false;
+    }
+    let Some(path) = document
+        .get("local_path")
+        .or_else(|| document.get("path"))
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+    else {
+        return false;
+    };
+    is_unsafe_desktop_file_index_path(&path, home)
+}
+
+fn is_unsafe_desktop_file_index_path(path: &Path, home: Option<&Path>) -> bool {
+    if is_ctox_internal_path_layout(path) {
+        return true;
+    }
+    if let Some(home) = home {
+        if is_ctox_internal_desktop_scan_root(path, home) {
+            return true;
+        }
+    }
+    path.starts_with("/tmp")
+        || path.starts_with("/var/tmp")
+        || path.starts_with("/var/folders")
+        || path.starts_with("/private/var/folders")
+}
+
+fn is_ctox_internal_path_layout(path: &Path) -> bool {
+    path_has_component_sequence(path, &[".local", "lib", "ctox"])
+        || path_has_component_sequence(path, &[".local", "state", "ctox"])
+}
+
+fn path_has_component_sequence(path: &Path, sequence: &[&str]) -> bool {
+    if sequence.is_empty() {
+        return false;
+    }
+    let components = path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    components
+        .windows(sequence.len())
+        .any(|window| window == sequence)
+}
+
+fn prepare_unsafe_desktop_file_tombstone(document: &mut Value, revision: &str, now: f64) {
+    let now_u64 = now as u64;
+    if let Some(object) = document.as_object_mut() {
+        object.insert("_rev".to_string(), Value::String(revision.to_string()));
+        object.insert("_deleted".to_string(), Value::Bool(true));
+        object.insert("_attachments".to_string(), json!({}));
+        object.insert("_meta".to_string(), json!({ "lwt": now }));
+        object.insert("is_deleted".to_string(), Value::Bool(true));
+        object.insert(
+            "content_state".to_string(),
+            Value::String("missing".to_string()),
+        );
+        object.insert("content_generation_id".to_string(), Value::Null);
+        object.insert("content_hash".to_string(), Value::String(String::new()));
+        object.insert("content_synced_at_ms".to_string(), Value::Null);
+        object.insert("deleted_at_ms".to_string(), Value::from(now_u64));
+        object.insert("updated_at_ms".to_string(), Value::from(now_u64));
+        object.insert(
+            "tombstone_reason".to_string(),
+            Value::String("unsafe_internal_ctox_path".to_string()),
+        );
+    }
+}
+
+fn maintenance_revision(previous: Option<&str>) -> String {
+    let height = previous
+        .and_then(|revision| revision.split_once('-').map(|(height, _)| height))
+        .and_then(|height| height.parse::<u64>().ok())
+        .unwrap_or(0)
+        .saturating_add(1);
+    format!("{height}-ctox-maintenance")
+}
+
 fn collect_desktop_file_index_candidates(
     scan_roots: &[DesktopFileScanRoot],
 ) -> Vec<DesktopFileIndexCandidate> {
@@ -6444,7 +6690,7 @@ fn normalize_desktop_file_scan_roots(roots: &mut Vec<DesktopFileScanRoot>) {
 }
 
 fn desktop_file_scan_roots(root: &Path) -> Vec<DesktopFileScanRoot> {
-    let mut roots = vec![
+    let roots = vec![
         (root.join("runtime/business-os/notes"), "Notes".to_string()),
         (
             root.join("runtime/business-os/documents/generated"),
@@ -6455,23 +6701,6 @@ fn desktop_file_scan_roots(root: &Path) -> Vec<DesktopFileScanRoot> {
             "Imports".to_string(),
         ),
     ];
-    if let Ok(tasks) = channels::list_queue_tasks(root, &[], 128) {
-        roots.extend(
-            tasks
-                .into_iter()
-                .filter_map(|task| task.workspace_root)
-                .map(PathBuf::from)
-                .map(|path| {
-                    let label = path
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .filter(|name| !name.trim().is_empty())
-                        .map(str::to_string)
-                        .unwrap_or_else(|| desktop_file_scan_root_label(&path));
-                    (path, label)
-                }),
-        );
-    }
     roots
         .into_iter()
         .filter_map(|(path, label)| {
@@ -9961,6 +10190,87 @@ mod tests {
             &home.join("workspace/project"),
             &home
         ));
+    }
+
+    #[test]
+    fn background_desktop_scan_uses_only_static_business_os_roots() {
+        let root = tempfile::tempdir().expect("temp root");
+        for rel in [
+            "runtime/business-os/notes",
+            "runtime/business-os/documents/generated",
+            "runtime/business-os-imports",
+        ] {
+            fs::create_dir_all(root.path().join(rel)).expect("create static scan root");
+        }
+
+        let roots = desktop_file_scan_roots(root.path());
+        let labels: HashSet<&str> = roots.iter().map(|root| root.label.as_str()).collect();
+        assert_eq!(roots.len(), 3);
+        assert!(labels.contains("Notes"));
+        assert!(labels.contains("Generated Documents"));
+        assert!(labels.contains("Imports"));
+        assert!(
+            !roots
+                .iter()
+                .any(|root| root.path.to_string_lossy().contains(".local/lib/ctox")),
+            "background scan must not index CTOX release/install roots"
+        );
+    }
+
+    #[test]
+    fn desktop_file_index_maintenance_removes_internal_file_chunks() {
+        let root = tempfile::tempdir().expect("temp root");
+        let home = tempfile::tempdir().expect("temp home");
+        let internal_dir = home
+            .path()
+            .join(".local/lib/ctox/releases/test-release/bin");
+        fs::create_dir_all(&internal_dir).expect("create internal dir");
+        let internal_file = internal_dir.join("ctox-real.log");
+        fs::write(&internal_file, b"internal file content").expect("write internal file");
+
+        sync_desktop_file_from_path(root.path(), &internal_file).expect("sync internal file");
+        let canonical = internal_file
+            .canonicalize()
+            .expect("canonical internal file");
+        let file_id = desktop_file_id(&canonical);
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
+        let before_chunks: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ctox_business_os__desktop_file_chunks__v0 WHERE id LIKE ?1",
+                params![format!("{file_id}_%")],
+                |row| row.get(0),
+            )
+            .expect("chunk count before maintenance");
+        assert!(before_chunks > 0, "test setup must create an eager chunk");
+        drop(conn);
+
+        let stats = compact_desktop_file_index_store_sync(root.path(), Some(home.path()))
+            .expect("compact desktop index");
+        assert_eq!(stats.tombstoned_unsafe_files, 1);
+        assert_eq!(stats.removed_unsafe_chunks, before_chunks as usize);
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("reopen sqlite");
+        let file_row = read_desktop_file_row(&conn, &file_id);
+        assert_eq!(
+            file_row.get("_deleted").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            file_row.get("is_deleted").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            file_row.get("tombstone_reason").and_then(Value::as_str),
+            Some("unsafe_internal_ctox_path")
+        );
+        let after_chunks: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ctox_business_os__desktop_file_chunks__v0 WHERE id LIKE ?1",
+                params![format!("{file_id}_%")],
+                |row| row.get(0),
+            )
+            .expect("chunk count after maintenance");
+        assert_eq!(after_chunks, 0);
     }
 
     /// REGRESSION (data-plane churn): rescanning an UNCHANGED workspace must
