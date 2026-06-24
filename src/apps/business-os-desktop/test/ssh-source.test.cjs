@@ -760,6 +760,77 @@ test("ssh-managed fresh install runs official installer contract and registers p
   assert.equal(secrets.size, 1);
 });
 
+test("normalizeSshProfile rejects installRoot with control characters", () => {
+  assert.throws(
+    () => normalizeSshProfile({ host: "h", user: "ubuntu", installRoot: "/opt/ctox\n; rm -rf /" }),
+    /installRoot contains control characters/,
+  );
+  assert.doesNotThrow(() => normalizeSshProfile({ host: "h", user: "ubuntu", installRoot: "~/.local/lib/ctox/current" }));
+});
+
+test("installFresh refuses the unverified dev installer unless explicitly acknowledged", async () => {
+  let freshRan = false;
+  const makeSource = () => new SshManagedInstanceSource(
+    () => createDefaultRegistry(),
+    () => undefined,
+    { get: async () => "", set: async () => undefined },
+    {
+      inspectHostKey: async () => ({
+        host: "fresh.example.com",
+        port: 22,
+        keyType: "ssh-ed25519",
+        algorithm: "SHA256",
+        fingerprint: "SHA256:trusted",
+        knownHostsLine: "fresh.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC6Q",
+        scannedAt: "2026-06-12T10:00:00.000Z",
+      }),
+      runPreflightCommand: async () => ({
+        os_name: "Linux",
+        os_arch: "x86_64",
+        shell_path: "/usr/bin/sh",
+        bash_path: "/usr/bin/bash",
+        curl_path: "/usr/bin/curl",
+        systemctl_path: "/usr/bin/systemctl",
+        sudo_path: "/usr/bin/sudo",
+        sudo_nopasswd: "true",
+        ctox_path: "",
+      }),
+      runFreshInstallCommand: async (_profile, install) => {
+        freshRan = true;
+        return { ok: true, mode: "fresh", releaseChannel: install.releaseChannel, stdout: "", stderr: "" };
+      },
+      runEnsureCommand: async () => ({
+        instance_id: "fresh-vps",
+        sync_room: "ctox-business-os:fresh-vps:abc",
+        signaling_room_password: "fresh-room-secret",
+        signaling_urls: ["wss://signaling.ctox.dev"],
+        native_rxdb_peer_available: true,
+      }),
+    },
+  );
+
+  await assert.rejects(
+    () => makeSource().installFresh({
+      host: "fresh.example.com",
+      user: "ubuntu",
+      releaseChannel: "dev",
+      trustedHostKeyFingerprint: "SHA256:trusted",
+    }),
+    /unverified curl\|bash installer/,
+  );
+  assert.equal(freshRan, false);
+
+  // With the explicit acknowledgement the dev installer proceeds.
+  const result = await makeSource().installFresh({
+    host: "fresh.example.com",
+    user: "ubuntu",
+    releaseChannel: "dev",
+    trustedHostKeyFingerprint: "SHA256:trusted",
+    acknowledgeUnverifiedInstaller: true,
+  });
+  assert.equal(result.install.releaseChannel, "dev");
+});
+
 test("ssh-managed install refuses hosts without existing ctox", async () => {
   const source = new SshManagedInstanceSource(
     () => createDefaultRegistry(),

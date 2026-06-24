@@ -434,6 +434,7 @@ class SshManagedInstanceSource extends RegistryBackedSource {
   async installFresh(options = {}) {
     const profile = normalizeSshProfile(options);
     const install = normalizeSshInstallOptions(options);
+    assertVerifiableFreshInstall(install, options);
     const { hostKey, commandProfile } = await this.trustedCommandProfile(profile, options.trustedHostKeyFingerprint);
     const preflight = normalizeSshPreflight(await this.runPreflightCommand(commandProfile), profile);
     assertFreshSshInstallPreflight(preflight, install);
@@ -747,6 +748,23 @@ function buildSshFreshCtoxInstallCommand(_profile, install) {
 
 function shouldUseStableReleaseBundleInstall(install = {}) {
   return install.releaseChannel === "stable";
+}
+
+// The stable release-bundle path verifies a sha256 checksum before executing the
+// downloaded binary, and the local-artifact path uploads an operator-chosen file.
+// The dev/source path pipes `curl <install.sh> | bash` with TLS-only trust and no
+// pinned integrity, which is remote code execution as the SSH user if the install
+// origin is compromised or MITM'd. Require an explicit acknowledgement so a fresh
+// host can never be bootstrapped from unverified code by accident.
+function assertVerifiableFreshInstall(install, options = {}) {
+  if (install.localArtifactPath) return;
+  if (install.releaseChannel === "stable") return;
+  if (options.acknowledgeUnverifiedInstaller === true) return;
+  throw new Error(
+    "ssh dev fresh install runs an unverified curl|bash installer; pass "
+    + "acknowledgeUnverifiedInstaller: true to proceed, or use the stable "
+    + "release-bundle channel (sha256-verified) or a local artifact",
+  );
 }
 
 function buildSshStableReleaseBundleFreshInstallCommand(install) {
@@ -1088,11 +1106,17 @@ function normalizeSshProfile(options = {}) {
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     throw new Error("ssh port must be between 1 and 65535");
   }
+  const installRoot = String(options.installRoot || "").trim();
+  // Reject NUL/control characters defense-in-depth, even though installRoot is
+  // always shell-quoted before use.
+  if (/[\u0000-\u001f]/.test(installRoot)) {
+    throw new Error("ssh installRoot contains control characters");
+  }
   const profile = {
     host,
     user,
     port,
-    installRoot: String(options.installRoot || "").trim(),
+    installRoot,
   };
   const sshPasswordRef = String(options.sshPasswordRef || "").trim();
   if (sshPasswordRef) {

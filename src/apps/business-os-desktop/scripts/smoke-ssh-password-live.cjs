@@ -370,6 +370,9 @@ async function runFreshInstallFlow({
       displayName,
       releaseChannel: install.releaseChannel,
       restartService: install.restartService,
+      // This opt-in live smoke is an explicit operator action; acknowledge the
+      // unverified dev curl|bash installer so the integrity gate lets it run.
+      acknowledgeUnverifiedInstaller: true,
       ...(install.apiProvider ? { apiProvider: install.apiProvider } : {}),
       ...(install.model ? { model: install.model } : {}),
       ...(install.backend ? { backend: install.backend } : {}),
