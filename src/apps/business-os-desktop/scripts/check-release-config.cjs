@@ -65,10 +65,31 @@ function main() {
   assert.match(mainSource, /configureAutoUpdates/);
   assert.match(mainSource, /electron-updater/);
 
+  assertLockfileIntegrity();
   assertCiWorkflowMatrix();
   assertReleaseWorkflowMatrix();
 
   console.log("desktop release config OK");
+}
+
+function assertLockfileIntegrity() {
+  const lock = JSON.parse(fs.readFileSync(path.join(appRoot, "package-lock.json"), "utf8"));
+  assert.equal(lock.lockfileVersion, 3, "package-lock.json must be lockfileVersion 3");
+  const missing = [];
+  for (const [name, entry] of Object.entries(lock.packages || {})) {
+    if (!name) continue; // the root package legitimately has no integrity
+    if (entry.link) continue; // local workspace links carry no integrity
+    if (!entry.integrity) missing.push(name);
+  }
+  // npm ci (used by CI and release) can only verify downloaded tarballs against a
+  // pinned subresource-integrity hash if every package entry has one. A stripped
+  // lockfile defeats the purpose of committing it for a code-signed artifact.
+  assert.equal(
+    missing.length,
+    0,
+    `package-lock.json has ${missing.length} entries without integrity (npm ci cannot verify supply chain): `
+    + `${missing.slice(0, 5).join(", ")}${missing.length > 5 ? ` (+${missing.length - 5} more)` : ""}`,
+  );
 }
 
 function assertCiWorkflowMatrix() {
@@ -152,7 +173,7 @@ function assertReleaseWorkflowMatrix() {
   }
   assert.match(
     workflow,
-    /needs:\s*\[build-desktop-macos,\s*build-desktop-linux,\s*build-desktop-windows,\s*build-business-os-desktop,\s*build-ctox\]/,
+    /needs:\s*\[(?:[\w-]+,\s*)*build-desktop-macos,\s*build-desktop-linux,\s*build-desktop-windows,\s*build-business-os-desktop,\s*build-ctox\]/,
     "GitHub release job must wait for Business OS Desktop artifacts",
   );
 }

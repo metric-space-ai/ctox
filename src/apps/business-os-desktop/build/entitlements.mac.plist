@@ -2,6 +2,16 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
+<!--
+  Minimal hardened-runtime entitlements for the Electron shell. These three are
+  the standard, required Electron/Chromium set and intentionally the only ones:
+  - allow-jit + allow-unsigned-executable-memory: V8 needs writable+executable
+    memory for JIT compilation.
+  - disable-library-validation: lets the app load the bundled CTOX helper and
+    Electron's own unsigned-by-Apple native modules under the same team signature.
+  No broader com.apple.security.* entitlements are granted; do not add any without
+  a documented reason, since each one widens the sandbox.
+-->
 <dict>
   <key>com.apple.security.cs.allow-jit</key>
   <true/>
