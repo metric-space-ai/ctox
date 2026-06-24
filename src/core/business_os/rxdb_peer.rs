@@ -129,6 +129,7 @@ const BUSINESS_RECORD_PROJECTION_SYNC_INTERVAL_SECS: u64 = 3;
 const BUSINESS_RECORD_PROJECTION_IDLE_SYNC_INTERVAL_SECS: u64 = 60;
 const BUSINESS_RECORD_PROJECTION_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 const BUSINESS_RECORD_PROJECTION_SYNC_LIMIT: usize = 2_000;
+const SUPPORT_COMMUNICATION_INTAKE_SINCE_KEY: &str = "__support_communication_intake";
 const TICKET_STATE_SYNC_LIMIT: usize = 500;
 const BROWSER_RUNTIME_ACTIVE_MAINTENANCE_INTERVAL_MS: u64 = 300;
 const BROWSER_RUNTIME_IDLE_MAINTENANCE_INTERVAL_SECS: u64 = 10;
@@ -4362,14 +4363,24 @@ async fn sync_business_record_projections_with_database(
     since_by_collection: &mut HashMap<String, i64>,
 ) -> anyhow::Result<usize> {
     let support_intake_root = root.to_path_buf();
+    let support_intake_since_ms = *since_by_collection
+        .get(SUPPORT_COMMUNICATION_INTAKE_SINCE_KEY)
+        .unwrap_or(&0);
     let support_intake_count = tokio::task::spawn_blocking(move || {
         super::support::project_communication_intake(
             &support_intake_root,
+            support_intake_since_ms,
             BUSINESS_RECORD_PROJECTION_SYNC_LIMIT,
         )
     })
     .await
     .context("join support communication intake projection")??;
+    if support_intake_count.max_updated_at_ms >= support_intake_since_ms {
+        since_by_collection.insert(
+            SUPPORT_COMMUNICATION_INTAKE_SINCE_KEY.to_string(),
+            support_intake_count.max_updated_at_ms.saturating_add(1),
+        );
+    }
     let collections = business_record_projection_collections();
     let root = root.to_path_buf();
     let mut pulled_collections = Vec::with_capacity(collections.len());
@@ -4391,7 +4402,7 @@ async fn sync_business_record_projections_with_database(
     }
 
     let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
-    let mut count = support_intake_count;
+    let mut count = support_intake_count.changed_count;
     for (collection_name, since_ms, pulled) in pulled_collections {
         let documents = pulled
             .get("documents")

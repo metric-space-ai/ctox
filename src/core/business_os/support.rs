@@ -1332,18 +1332,36 @@ pub(super) fn handle_business_command(
     Ok(result)
 }
 
-pub(super) fn project_communication_intake(root: &Path, limit: usize) -> anyhow::Result<usize> {
-    let threads = channels::pull_communication_threads_for_business_os(root, Some(0), Some(limit))
-        .context("pull communication thread projection for support intake")?
-        .get("documents")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+pub(super) struct CommunicationIntakeProjection {
+    pub changed_count: usize,
+    pub max_updated_at_ms: i64,
+}
+
+pub(super) fn project_communication_intake(
+    root: &Path,
+    since_ms: i64,
+    limit: usize,
+) -> anyhow::Result<CommunicationIntakeProjection> {
+    let threads =
+        channels::pull_communication_threads_for_business_os(root, Some(since_ms), Some(limit))
+            .context("pull communication thread projection for support intake")?
+            .get("documents")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
     if threads.is_empty() {
-        return Ok(0);
+        return Ok(CommunicationIntakeProjection {
+            changed_count: 0,
+            max_updated_at_ms: since_ms,
+        });
     }
+    let max_updated_at_ms = threads
+        .iter()
+        .filter_map(|thread| number_field(thread, &["updated_at_ms"]))
+        .max()
+        .unwrap_or(since_ms);
     let messages =
-        channels::pull_communication_messages_for_business_os(root, Some(0), Some(limit))
+        channels::pull_communication_messages_for_business_os(root, Some(since_ms), Some(limit))
             .context("pull communication message projection for support intake")?
             .get("documents")
             .and_then(Value::as_array)
@@ -1372,7 +1390,10 @@ pub(super) fn project_communication_intake(root: &Path, limit: usize) -> anyhow:
         }
     }
     if inbound_by_thread.is_empty() {
-        return Ok(0);
+        return Ok(CommunicationIntakeProjection {
+            changed_count: 0,
+            max_updated_at_ms,
+        });
     }
 
     let conn = store::open_store(root)?;
@@ -1406,14 +1427,35 @@ pub(super) fn project_communication_intake(root: &Path, limit: usize) -> anyhow:
         let search_text = first_string_field(&thread, &["subject"])
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| thread_key.clone());
+        let channel = first_string_field(&thread, &["channel"]).unwrap_or_default();
+        let account_key = first_string_field(&thread, &["account_key"]).unwrap_or_default();
+        let existing_conversation = load_conversation(&conn, &conversation_id)?;
+        let conversation_current = existing_conversation.as_ref().is_some_and(|conversation| {
+            conversation.primary_thread_key == thread_key
+                && conversation.last_message_key == last_message_key
+                && conversation.last_activity_at_ms == last_activity_at_ms
+                && conversation.unread_count == unread_count
+                && conversation.search_text == search_text
+        });
+        let link_current = support_thread_link_current(
+            &conn,
+            &conversation_id,
+            &thread_key,
+            &channel,
+            &account_key,
+            "primary",
+        )?;
+        if conversation_current && link_current {
+            continue;
+        }
         upsert_conversation_from_payload(
             &conn,
             &conversation_id,
             &json!({
                 "conversation_id": conversation_id,
                 "thread_key": thread_key,
-                "channel": first_string_field(&thread, &["channel"]).unwrap_or_default(),
-                "account_key": first_string_field(&thread, &["account_key"]).unwrap_or_default(),
+                "channel": channel,
+                "account_key": account_key,
                 "last_message_key": last_message_key,
                 "last_activity_at_ms": last_activity_at_ms,
                 "unread_count": unread_count,
@@ -1445,19 +1487,18 @@ pub(super) fn project_communication_intake(root: &Path, limit: usize) -> anyhow:
             &conn,
             &conversation_id,
             &thread_key,
-            first_string_field(&thread, &["channel"])
-                .unwrap_or_default()
-                .as_str(),
-            first_string_field(&thread, &["account_key"])
-                .unwrap_or_default()
-                .as_str(),
+            channel.as_str(),
+            account_key.as_str(),
             "primary",
             now,
             &mut projections,
         )?;
         projected += projections.len();
     }
-    Ok(projected)
+    Ok(CommunicationIntakeProjection {
+        changed_count: projected,
+        max_updated_at_ms,
+    })
 }
 
 fn is_support_internal_thread_key(thread_key: &str) -> bool {
@@ -3039,6 +3080,38 @@ fn linked_conversation_for_thread(
     .map_err(Into::into)
 }
 
+fn support_thread_link_current(
+    conn: &Connection,
+    conversation_id: &str,
+    thread_key: &str,
+    channel: &str,
+    account_key: &str,
+    link_role: &str,
+) -> anyhow::Result<bool> {
+    let row = conn
+        .query_row(
+            "SELECT conversation_id, channel, account_key
+             FROM support_thread_links
+             WHERE thread_key = ?1 AND link_role = ?2",
+            params![thread_key, link_role],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()?;
+    Ok(row.is_some_and(
+        |(stored_conversation_id, stored_channel, stored_account_key)| {
+            stored_conversation_id == conversation_id
+                && stored_channel == channel
+                && stored_account_key == account_key
+        },
+    ))
+}
+
 fn insert_note(
     conn: &Connection,
     note_id: &str,
@@ -4480,8 +4553,18 @@ mod tests {
         channels::refresh_thread(&mut channel_conn, "mail:thread-intake")?;
         drop(channel_conn);
 
-        let projected = project_communication_intake(root.path(), 100)?;
-        assert!(projected >= 2);
+        let projected = project_communication_intake(root.path(), 0, 100)?;
+        assert!(projected.changed_count >= 2);
+
+        let idempotent = project_communication_intake(root.path(), 0, 100)?;
+        assert_eq!(idempotent.changed_count, 0);
+
+        let repeated = project_communication_intake(
+            root.path(),
+            projected.max_updated_at_ms.saturating_add(1),
+            100,
+        )?;
+        assert_eq!(repeated.changed_count, 0);
 
         let conn = store::open_store(root.path())?;
         let conversation: String = conn.query_row(
@@ -4549,8 +4632,8 @@ mod tests {
         channels::refresh_thread(&mut channel_conn, "business-os/support/conv_existing")?;
         drop(channel_conn);
 
-        let projected = project_communication_intake(root.path(), 100)?;
-        assert_eq!(projected, 0);
+        let projected = project_communication_intake(root.path(), 0, 100)?;
+        assert_eq!(projected.changed_count, 0);
 
         let conn = store::open_store(root.path())?;
         let conversations: i64 = conn.query_row(

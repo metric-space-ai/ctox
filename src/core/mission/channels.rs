@@ -1605,9 +1605,10 @@ pub fn pull_communication_accounts_for_business_os(
 /// RxDB-shaped projection of communication_threads.
 pub fn pull_communication_threads_for_business_os(
     root: &Path,
-    _since_ms: Option<i64>,
+    since_ms: Option<i64>,
     limit: Option<usize>,
 ) -> Result<Value> {
+    let since_ms = since_ms.unwrap_or(0).max(0);
     let limit = limit.unwrap_or(500).clamp(1, 2_000);
     let db_path = resolve_db_path(root, None);
     let Some(conn) = open_channel_db_read_only(&db_path)? else {
@@ -1618,18 +1619,22 @@ pub fn pull_communication_threads_for_business_os(
     }
     let mut stmt = conn.prepare(
         r#"
-        SELECT
-            thread_key, channel, account_key, subject,
-            participant_keys_json, last_message_key, last_message_at,
-            message_count, unread_count, metadata_json, updated_at,
-            CAST(strftime('%s', COALESCE(updated_at, last_message_at)) AS INTEGER) * 1000 AS updated_at_ms
-        FROM communication_threads
-        ORDER BY updated_at_ms DESC, thread_key ASC
-        LIMIT ?1
+        SELECT *
+        FROM (
+            SELECT
+                thread_key, channel, account_key, subject,
+                participant_keys_json, last_message_key, last_message_at,
+                message_count, unread_count, metadata_json, updated_at,
+                CAST(strftime('%s', COALESCE(updated_at, last_message_at)) AS INTEGER) * 1000 AS updated_at_ms
+            FROM communication_threads
+        )
+        WHERE COALESCE(updated_at_ms, 0) >= ?1
+        ORDER BY updated_at_ms ASC, thread_key ASC
+        LIMIT ?2
         "#,
     )?;
     let documents = stmt
-        .query_map(params![limit as i64], |row| {
+        .query_map(params![since_ms, limit as i64], |row| {
             let thread_key: String = row.get(0)?;
             let channel: String = row.get(1)?;
             let account_key: String = row.get(2)?;
@@ -1666,7 +1671,7 @@ pub fn pull_communication_threads_for_business_os(
         "collection": "communication_threads",
         "documents": documents,
         "count": count,
-        "since_ms": 0,
+        "since_ms": since_ms,
     }))
 }
 
@@ -1676,9 +1681,10 @@ pub fn pull_communication_threads_for_business_os(
 /// flowview without extra round-trips.
 pub fn pull_communication_messages_for_business_os(
     root: &Path,
-    _since_ms: Option<i64>,
+    since_ms: Option<i64>,
     limit: Option<usize>,
 ) -> Result<Value> {
+    let since_ms = since_ms.unwrap_or(0).max(0);
     let limit = limit.unwrap_or(500).clamp(1, 2_000);
     let db_path = resolve_db_path(root, None);
     let Some(conn) = open_channel_db_read_only(&db_path)? else {
@@ -1692,23 +1698,27 @@ pub fn pull_communication_messages_for_business_os(
     }
     let mut stmt = conn.prepare(
         r#"
-        SELECT
-            m.message_key, m.channel, m.account_key, m.thread_key, m.remote_id,
-            m.direction, m.folder_hint, m.sender_display, m.sender_address,
-            m.recipient_addresses_json, m.cc_addresses_json, m.bcc_addresses_json,
-            m.subject, m.preview, m.body_text, m.body_html, m.raw_payload_ref,
-            m.trust_level, m.status, m.seen, m.has_attachments,
-            m.external_created_at, m.observed_at, m.metadata_json,
-            r.route_status,
-            CAST(strftime('%s', COALESCE(m.observed_at, m.external_created_at)) AS INTEGER) * 1000 AS updated_at_ms
-        FROM communication_messages m
-        LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
-        ORDER BY updated_at_ms DESC, m.message_key ASC
-        LIMIT ?1
+        SELECT *
+        FROM (
+            SELECT
+                m.message_key, m.channel, m.account_key, m.thread_key, m.remote_id,
+                m.direction, m.folder_hint, m.sender_display, m.sender_address,
+                m.recipient_addresses_json, m.cc_addresses_json, m.bcc_addresses_json,
+                m.subject, m.preview, m.body_text, m.body_html, m.raw_payload_ref,
+                m.trust_level, m.status, m.seen, m.has_attachments,
+                m.external_created_at, m.observed_at, m.metadata_json,
+                r.route_status,
+                CAST(strftime('%s', COALESCE(m.observed_at, m.external_created_at)) AS INTEGER) * 1000 AS updated_at_ms
+            FROM communication_messages m
+            LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
+        )
+        WHERE COALESCE(updated_at_ms, 0) >= ?1
+        ORDER BY updated_at_ms ASC, message_key ASC
+        LIMIT ?2
         "#,
     )?;
     let documents = stmt
-        .query_map(params![limit as i64], |row| {
+        .query_map(params![since_ms, limit as i64], |row| {
             let message_key: String = row.get(0)?;
             let channel: String = row.get(1)?;
             let account_key: String = row.get(2)?;
@@ -1785,7 +1795,7 @@ pub fn pull_communication_messages_for_business_os(
         "collection": "communication_messages",
         "documents": documents,
         "count": count,
-        "since_ms": 0,
+        "since_ms": since_ms,
     }))
 }
 
