@@ -612,6 +612,7 @@ pub fn handle_update_command(root: &Path, args: &[String]) -> Result<()> {
                     force,
                     keep_failed_release,
                     UpdateSourceKind::Source,
+                    false,
                 )?
             } else {
                 let request = if use_latest {
@@ -841,6 +842,7 @@ fn apply_remote_update(
     ));
     // Branch requests only have a source tarball — no binary assets for arbitrary branches.
     let is_branch = matches!(request, RemoteReleaseRequest::Branch(_));
+    let skip_optional_runtime_builds = is_branch;
     let from_source = is_branch || from_source;
     // Branch HEADs move; always bypass the on-disk cache so `ctox upgrade --dev`
     // genuinely picks up the latest commit.
@@ -873,6 +875,7 @@ fn apply_remote_update(
         force,
         keep_failed_release,
         kind,
+        skip_optional_runtime_builds,
     )?;
     prune_release_cache(
         &layout.cache_root,
@@ -969,7 +972,7 @@ fn adopt_installation(
     copy_workspace(root, &release_root, UpdateSourceKind::Source)?;
     ensure_runtime_symlink(&release_root, state_root)?;
     if !skip_build {
-        run_release_installer(&release_root, state_root)?;
+        run_release_installer(&release_root, state_root, false)?;
     }
     let current_link = install_root.join("current");
     switch_current_release(&current_link, &release_root)?;
@@ -1022,6 +1025,7 @@ fn apply_update(
     force: bool,
     keep_failed_release: bool,
     kind: UpdateSourceKind,
+    skip_optional_runtime_builds: bool,
 ) -> Result<ApplyResult> {
     let update_started = Instant::now();
     progress_step(format!(
@@ -1091,7 +1095,11 @@ fn apply_update(
     persist_update_phase(&layout.update_state_path(), "building", None)?;
     if kind == UpdateSourceKind::Source {
         progress_step("running release installer / source build");
-        if let Err(err) = run_release_installer(&release_root, &layout.state_root) {
+        if let Err(err) = run_release_installer(
+            &release_root,
+            &layout.state_root,
+            skip_optional_runtime_builds,
+        ) {
             persist_update_phase(
                 &layout.update_state_path(),
                 "failed",
@@ -2095,7 +2103,11 @@ fn migrate_legacy_state(root: &Path, state_root: &Path, force: bool) -> Result<(
     })
 }
 
-fn run_release_installer(release_root: &Path, state_root: &Path) -> Result<()> {
+fn run_release_installer(
+    release_root: &Path,
+    state_root: &Path,
+    skip_optional_runtime_builds: bool,
+) -> Result<()> {
     let started = Instant::now();
     let script = release_root.join("install.sh");
     let source_layout_script = release_root.join("src/scripts/install.sh");
@@ -2123,6 +2135,9 @@ fn run_release_installer(release_root: &Path, state_root: &Path) -> Result<()> {
     let mut cmd = Command::new(chosen_script);
     cmd.current_dir(release_root)
         .env("CTOX_STATE_ROOT", state_root);
+    if skip_optional_runtime_builds && env::var_os("CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS").is_none() {
+        cmd.env("CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS", "1");
+    }
     if let Some(bwrap_source_dir) = resolve_bwrap_source_dir_for_installer(release_root) {
         cmd.env("CODEX_BWRAP_SOURCE_DIR", bwrap_source_dir);
     }

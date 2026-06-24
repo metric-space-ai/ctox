@@ -1556,6 +1556,11 @@ build_ctox() {
   local cargo; cargo="$(resolve_cargo)"
   local main_target_dir="$source_root/runtime/build/cargo-target"
   local managed_release_build=0
+  local skip_optional_runtime_builds=0
+  if [[ "${CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS:-0}" == "1" ]]; then
+    skip_optional_runtime_builds=1
+    printf '[build] skipping optional runtime rebuilds (CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS=1)\n'
+  fi
   local -a workspace_cargo_env=()
   case "$source_root" in
     "$INSTALL_ROOT"/releases/*)
@@ -1582,7 +1587,7 @@ build_ctox() {
   done
   [[ -n "$ctox_built_binary" ]] && cp "$ctox_built_binary" "$source_root/bin/" 2>/dev/null || true
 
-  if [[ -f "$source_root/src/apps/desktop/Cargo.toml" && "${CTOX_SKIP_DESKTOP_HOST_BUILD:-0}" != "1" ]]; then
+  if [[ -f "$source_root/src/apps/desktop/Cargo.toml" && "${CTOX_SKIP_DESKTOP_HOST_BUILD:-0}" != "1" && "$skip_optional_runtime_builds" -ne 1 ]]; then
     prepare_cargo_target_cache "$source_root/src/apps/desktop/target" "ctox-desktop"
     run_build_module "ctox desktop host" "$source_root" "${workspace_cargo_env[@]}" "$cargo" build --release --manifest-path src/apps/desktop/Cargo.toml --bin ctox-desktop-host
     local desktop_built_binary=""
@@ -1597,6 +1602,8 @@ build_ctox() {
       fi
     done
     [[ -n "$desktop_built_binary" ]] && cp "$desktop_built_binary" "$source_root/bin/" 2>/dev/null || true
+  elif [[ "$skip_optional_runtime_builds" -eq 1 ]]; then
+    printf '[build] skipping optional ctox desktop host (CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS=1)\n'
   elif [[ "${CTOX_SKIP_DESKTOP_HOST_BUILD:-0}" == "1" ]]; then
     printf '[build] skipping optional ctox desktop host (CTOX_SKIP_DESKTOP_HOST_BUILD=1)\n'
   fi
@@ -1605,7 +1612,7 @@ build_ctox() {
   # llama.cpp/ggml CUDA binary. It is not part of the top-level workspace, so
   # build it explicitly when the source crate is present.
   local qwen36_backend_dir="$source_root/src/core/inference/models/qwen36_35b_a3b_ggml"
-  if [[ -f "$qwen36_backend_dir/Cargo.toml" ]]; then
+  if [[ -f "$qwen36_backend_dir/Cargo.toml" && "$skip_optional_runtime_builds" -ne 1 ]]; then
     prepare_cargo_target_cache "$qwen36_backend_dir/target" "qwen36-35b-a3b-ggml"
     local -a qwen36_cargo_env=()
     if [[ "$managed_release_build" -eq 1 ]]; then
@@ -1629,6 +1636,8 @@ build_ctox() {
       cp "$qwen36_built_binary" "$qwen36_expected_binary"
       chmod 775 "$qwen36_expected_binary" 2>/dev/null || true
     fi
+  elif [[ -f "$qwen36_backend_dir/Cargo.toml" ]]; then
+    printf '[build] skipping optional Qwen3.6 ggml backend (CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS=1)\n'
   fi
 
   # 2. If CUDA features requested, prepare build environment
@@ -1674,7 +1683,7 @@ build_ctox() {
   # 3. Build the internal inference runtime. CPU-only hosts still need a
   # usable ctox-engine payload, so an empty ENGINE_FEATURES must not skip the
   # build entirely.
-  if [[ -f "$source_root/tools/model-runtime/Cargo.toml" ]]; then
+  if [[ -f "$source_root/tools/model-runtime/Cargo.toml" && "$skip_optional_runtime_builds" -ne 1 ]]; then
     prepare_cargo_target_cache "$source_root/tools/model-runtime/target" "model-runtime"
     local -a engine_cargo_env=()
     if [[ "$managed_release_build" -eq 1 ]]; then
@@ -1710,6 +1719,12 @@ build_ctox() {
 
     # Clean up any leftover .nvcc_tmp from previous installer versions
     rm -rf "$source_root/.nvcc_tmp" 2>/dev/null || true
+  elif [[ -f "$source_root/tools/model-runtime/Cargo.toml" ]]; then
+    if [[ -x "$TOOLS_ROOT/model-runtime/bin/ctox-engine" ]]; then
+      printf '[build] reusing installed ctox model engine at %s\n' "$TOOLS_ROOT/model-runtime/bin/ctox-engine"
+    else
+      printf '[build] skipping optional ctox model engine (CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS=1; no installed engine found)\n'
+    fi
   fi
 
   # 4. Do not build or publish a secondary agent-runtime CLI. CTOX consumes
@@ -2374,6 +2389,7 @@ parse_args() {
         printf '  CTOX_RELEASE_RETENTION      Managed releases to keep after upgrade (default: 2)\n'
         printf '  CTOX_DISABLE_CARGO_TARGET_CACHE=1 Disable persistent upgrade build cache\n'
         printf '  CTOX_SKIP_DESKTOP_HOST_BUILD=1 Skip optional desktop host build on headless/server installs\n'
+        printf '  CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS=1 Skip optional desktop/inference runtime rebuilds during source upgrades\n'
         printf '  CTOX_REPO                   Same as --repo\n'
         printf '  CTOX_BRANCH                 Same as --branch\n\n'
         exit 0
