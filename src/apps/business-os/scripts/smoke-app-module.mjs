@@ -155,6 +155,36 @@ function printResult(result, json) {
   }
 }
 
+async function waitForPrimaryCreateAction(page, moduleId, timeoutMs) {
+  const handle = await page.waitForFunction((id) => {
+    function isVisible(el) {
+      const box = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return box.width > 0
+        && box.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none'
+        && !el.disabled;
+    }
+    function isPrimaryCreateAction(value) {
+      const action = String(value || '').trim().toLowerCase();
+      if (!action) return false;
+      if (/(^|[-_:])(follow-?up|review|save|submit|cancel|close|edit|archive|delete|remove)([-_:]|$)/.test(action)) return false;
+      return /^(add|new|create)([-_:]|$)/.test(action);
+    }
+    const root = document.querySelector(`[data-module-root="${id}"]`);
+    if (!root) return false;
+    const actions = Array.from(root.querySelectorAll('[data-action]'))
+      .map((el) => ({
+        action: el.getAttribute('data-action'),
+        visible: isVisible(el),
+      }))
+      .filter((item) => item.visible && isPrimaryCreateAction(item.action));
+    return actions[0]?.action || false;
+  }, moduleId, { timeout: timeoutMs, polling: 500 });
+  return handle.jsonValue();
+}
+
 async function runSmoke(options) {
   const result = {
     ok: false,
@@ -244,33 +274,7 @@ async function runSmoke(options) {
     }, options.moduleId);
     await page.waitForSelector(rootSelector, { state: 'visible', timeout: options.timeoutMs });
 
-    const action = options.createAction || await page.evaluate((moduleId) => {
-      function isVisible(el) {
-        const box = el.getBoundingClientRect();
-        const style = window.getComputedStyle(el);
-        return box.width > 0
-          && box.height > 0
-          && style.visibility !== 'hidden'
-          && style.display !== 'none'
-          && !el.disabled;
-      }
-      function isPrimaryCreateAction(value) {
-        const action = String(value || '').trim().toLowerCase();
-        if (!action) return false;
-        if (/(^|[-_:])(follow-?up|review|save|submit|cancel|close|edit|archive|delete|remove)([-_:]|$)/.test(action)) return false;
-        return /^(add|new|create)([-_:]|$)/.test(action);
-      }
-      const root = document.querySelector(`[data-module-root="${moduleId}"]`);
-      if (!root) return null;
-      const actions = Array.from(root.querySelectorAll('[data-action]'))
-        .map((el) => ({
-          action: el.getAttribute('data-action'),
-          text: el.textContent.trim(),
-          visible: isVisible(el),
-        }))
-        .filter((item) => item.visible && isPrimaryCreateAction(item.action));
-      return actions[0]?.action || null;
-    }, options.moduleId);
+    const action = options.createAction || await waitForPrimaryCreateAction(page, options.moduleId, options.timeoutMs);
     result.create_action = action;
     if (!action) {
       result.failures.push('no visible primary create action found under module root');

@@ -282,6 +282,14 @@ async function findPrimaryCreateAction(page, rootSelector) {
   }, rootSelector);
 }
 
+async function waitForPrimaryCreateAction(page, rootSelector, timeoutMs) {
+  return pollUntil(
+    () => findPrimaryCreateAction(page, rootSelector),
+    timeoutMs,
+    500,
+  );
+}
+
 async function collectBrowserDiagnostics(page, moduleId, rootSelector) {
   try {
     return await page.evaluate(({ moduleId, rootSelector }) => {
@@ -350,6 +358,37 @@ async function fillVisibleForm(page, rootSelector, marker) {
       if (name.includes('hour')) return '40';
       return '10';
     }
+    function isoDateFromToday(days) {
+      const date = new Date();
+      date.setDate(date.getDate() + days);
+      return date.toISOString().slice(0, 10);
+    }
+    function dateValue(el) {
+      const name = labelFor(el).toLowerCase();
+      if (/due|deadline|expiry|expires|renewal|review|audit/.test(name)) return isoDateFromToday(-30);
+      return isoDateFromToday(180);
+    }
+    function selectValue(el) {
+      const name = labelFor(el).toLowerCase();
+      const options = Array.from(el.options || []).filter((option) => !option.disabled);
+      if (!options.length) return '';
+      if (/\b(status|state)\b/.test(name)) {
+        const preferred = [
+          /checked[_ -]?out/i,
+          /overdue/i,
+          /active/i,
+          /open/i,
+          /pending/i,
+          /in[_ -]?progress/i,
+          /at[_ -]?risk/i,
+        ];
+        for (const pattern of preferred) {
+          const candidate = options.find((option) => pattern.test(`${option.value} ${option.textContent || ''}`));
+          if (candidate?.value) return candidate.value;
+        }
+      }
+      return options.find((option) => option.value)?.value || options[0].value;
+    }
     function setValue(el, value) {
       el.value = value;
       el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -367,9 +406,8 @@ async function fillVisibleForm(page, rootSelector, marker) {
       const type = String(el.getAttribute('type') || '').toLowerCase();
       if (['hidden', 'button', 'submit', 'reset', 'file', 'image'].includes(type)) continue;
       if (tag === 'select') {
-        const options = Array.from(el.options || []);
-        const candidate = options.find((option) => option.value && !option.disabled) || options.find((option) => !option.disabled);
-        if (candidate && !el.value) setValue(el, candidate.value);
+        const value = selectValue(el);
+        if (value) setValue(el, value);
         filled.push({ kind: 'select', name: labelFor(el), value: el.value });
       } else if (type === 'checkbox') {
         el.checked = true;
@@ -382,7 +420,7 @@ async function fillVisibleForm(page, rootSelector, marker) {
         }
         filled.push({ kind: 'radio', name: labelFor(el), value: el.value });
       } else if (type === 'date') {
-        setValue(el, '2026-12-31');
+        setValue(el, dateValue(el));
         filled.push({ kind: 'date', name: labelFor(el), value: el.value });
       } else if (type === 'number' || type === 'range') {
         setValue(el, numberValue(el));
@@ -523,7 +561,7 @@ async function runE2e(options) {
 
   try {
     let rootSelector = await openModule(page, options.moduleId, options.url, options.timeoutMs);
-    const action = await findPrimaryCreateAction(page, rootSelector);
+    const action = await waitForPrimaryCreateAction(page, rootSelector, options.timeoutMs);
     result.evidence.create_action = action;
     if (!action) {
       result.evidence.browser_diagnostics = await collectBrowserDiagnostics(page, options.moduleId, rootSelector);
