@@ -924,11 +924,49 @@ stop_ctox_services() {
 }
 
 kill_residual_processes() {
-  command -v pkill >/dev/null 2>&1 || return 0
-  pkill -x ctox >/dev/null 2>&1 || true
-  pkill -x ctox-real >/dev/null 2>&1 || true
-  pkill -f 'ctox business-os serve' >/dev/null 2>&1 || true
-  pkill -f 'ctox-real business-os serve' >/dev/null 2>&1 || true
+  command -v pgrep >/dev/null 2>&1 || return 0
+
+  local -a protected_pids=()
+  local pid="$$"
+  while [[ -n "$pid" && "$pid" != "0" ]]; do
+    protected_pids+=("$pid")
+    pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+    [[ "$pid" == "1" ]] && break
+  done
+
+  is_protected_pid() {
+    local candidate="$1"
+    local protected
+    for protected in "${protected_pids[@]}"; do
+      [[ "$candidate" == "$protected" ]] && return 0
+    done
+    return 1
+  }
+
+  kill_by_name_except_self_tree() {
+    local name="$1"
+    local target
+    while IFS= read -r target; do
+      [[ -n "$target" ]] || continue
+      is_protected_pid "$target" && continue
+      kill "$target" >/dev/null 2>&1 || true
+    done < <(pgrep -x "$name" 2>/dev/null || true)
+  }
+
+  kill_by_pattern_except_self_tree() {
+    local pattern="$1"
+    local target
+    while IFS= read -r target; do
+      [[ -n "$target" ]] || continue
+      is_protected_pid "$target" && continue
+      kill "$target" >/dev/null 2>&1 || true
+    done < <(pgrep -f "$pattern" 2>/dev/null || true)
+  }
+
+  kill_by_name_except_self_tree ctox
+  kill_by_name_except_self_tree ctox-real
+  kill_by_pattern_except_self_tree 'ctox business-os serve'
+  kill_by_pattern_except_self_tree 'ctox-real business-os serve'
 }
 
 sync_skills_to_codex_home() {
