@@ -4388,7 +4388,7 @@ async fn sync_business_record_projections_with_database(
         let root = root.clone();
         let since_ms = *since_by_collection.get(&collection).unwrap_or(&0);
         let pulled_collection = tokio::task::spawn_blocking(move || {
-            let pulled = store::pull_collection_records(
+            let pulled = store::pull_collection_records_for_projection(
                 &root,
                 &collection,
                 Some(since_ms),
@@ -4914,7 +4914,12 @@ async fn upsert_business_record_projection(
     record_id: String,
 ) -> anyhow::Result<()> {
     let document = tokio::task::spawn_blocking(move || {
-        let pulled = store::pull_collection_records(&root, collection_name, Some(0), Some(2_000))?;
+        let pulled = store::pull_collection_records_for_projection(
+            &root,
+            collection_name,
+            Some(0),
+            Some(2_000),
+        )?;
         let document = pulled
             .get("documents")
             .and_then(Value::as_array)

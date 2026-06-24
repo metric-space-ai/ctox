@@ -1542,9 +1542,10 @@ pub fn save_channel_settings_for_business_os(
 /// audit module.
 pub fn pull_communication_accounts_for_business_os(
     root: &Path,
-    _since_ms: Option<i64>,
+    since_ms: Option<i64>,
     limit: Option<usize>,
 ) -> Result<Value> {
+    let since_ms = since_ms.unwrap_or(0).max(0);
     let limit = limit.unwrap_or(500).clamp(1, 2_000);
     let db_path = resolve_db_path(root, None);
     let Some(conn) = open_channel_db_read_only(&db_path)? else {
@@ -1555,17 +1556,21 @@ pub fn pull_communication_accounts_for_business_os(
     }
     let mut stmt = conn.prepare(
         r#"
-        SELECT
-            account_key, channel, address, provider, profile_json,
-            created_at, updated_at, last_inbound_ok_at, last_outbound_ok_at,
-            CAST(strftime('%s', COALESCE(updated_at, created_at)) AS INTEGER) * 1000 AS updated_at_ms
-        FROM communication_accounts
-        ORDER BY updated_at_ms DESC, account_key ASC
-        LIMIT ?1
+        SELECT *
+        FROM (
+            SELECT
+                account_key, channel, address, provider, profile_json,
+                created_at, updated_at, last_inbound_ok_at, last_outbound_ok_at,
+                CAST(strftime('%s', COALESCE(updated_at, created_at)) AS INTEGER) * 1000 AS updated_at_ms
+            FROM communication_accounts
+        )
+        WHERE COALESCE(updated_at_ms, 0) >= ?1
+        ORDER BY updated_at_ms ASC, account_key ASC
+        LIMIT ?2
         "#,
     )?;
     let documents = stmt
-        .query_map(params![limit as i64], |row| {
+        .query_map(params![since_ms, limit as i64], |row| {
             let account_key: String = row.get(0)?;
             let channel: String = row.get(1)?;
             let address: String = row.get(2)?;
@@ -1598,7 +1603,7 @@ pub fn pull_communication_accounts_for_business_os(
         "collection": "communication_accounts",
         "documents": documents,
         "count": count,
-        "since_ms": 0,
+        "since_ms": since_ms,
     }))
 }
 
@@ -9479,6 +9484,54 @@ mod tests {
                 .unwrap_or_default()
                 .as_nanos()
         ))
+    }
+
+    #[test]
+    fn communication_accounts_projection_respects_since_ms() -> Result<()> {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-communication-accounts-projection-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root)?;
+        let mut conn = open_channel_db(&resolve_db_path(&root, None))?;
+        upsert_communication_account(
+            &mut conn,
+            "email:founder@example.test",
+            "email",
+            "founder@example.test",
+            "imap",
+            json!({ "display": "Founder" }),
+        )?;
+        drop(conn);
+
+        let first = pull_communication_accounts_for_business_os(&root, Some(0), Some(10))?;
+        assert_eq!(first.get("count").and_then(Value::as_i64), Some(1));
+        assert_eq!(first.get("since_ms").and_then(Value::as_i64), Some(0));
+        let updated_at_ms = first
+            .pointer("/documents/0/updated_at_ms")
+            .and_then(Value::as_i64)
+            .context("expected projected account updated_at_ms")?;
+        assert!(updated_at_ms > 0);
+
+        let after_checkpoint = pull_communication_accounts_for_business_os(
+            &root,
+            Some(updated_at_ms.saturating_add(1)),
+            Some(10),
+        )?;
+        assert_eq!(
+            after_checkpoint.get("count").and_then(Value::as_i64),
+            Some(0)
+        );
+        assert_eq!(
+            after_checkpoint.get("since_ms").and_then(Value::as_i64),
+            Some(updated_at_ms.saturating_add(1))
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        Ok(())
     }
 
     /// EGRESS-3: the reviewed-outbound evidence the kernel gate compares must be

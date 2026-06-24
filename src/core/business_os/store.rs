@@ -12314,6 +12314,29 @@ pub fn pull_collection_records(
     since_ms: Option<i64>,
     limit: Option<usize>,
 ) -> anyhow::Result<Value> {
+    let projected = pull_collection_records_for_projection(root, collection, since_ms, limit)?;
+    let documents_are_empty = projected
+        .get("documents")
+        .and_then(Value::as_array)
+        .map_or(true, Vec::is_empty);
+    if documents_are_empty {
+        let since_ms = since_ms.unwrap_or(0);
+        let limit = limit.unwrap_or(500).clamp(1, 2_000);
+        if let Some(rxdb_projection) =
+            pull_rxdb_collection_table_records(root, collection, since_ms, limit)?
+        {
+            return Ok(rxdb_projection);
+        }
+    }
+    Ok(projected)
+}
+
+pub fn pull_collection_records_for_projection(
+    root: &Path,
+    collection: &str,
+    since_ms: Option<i64>,
+    limit: Option<usize>,
+) -> anyhow::Result<Value> {
     // Conversations module reads communication_* collections. These live in
     // CTOX's channels SQLite (runtime/ctox.sqlite3), not in business-os.sqlite3 —
     // so we delegate to channels.rs helpers that read from the canonical tables
@@ -12365,19 +12388,13 @@ pub fn pull_collection_records(
         }
         Ok(documents)
     })?;
-    if documents.is_empty() {
-        if let Some(rxdb_projection) =
-            pull_rxdb_collection_table_records(root, collection, since_ms, limit)?
-        {
-            return Ok(rxdb_projection);
-        }
-    }
     Ok(serde_json::json!({
         "ok": true,
         "collection": collection,
         "documents": documents,
         "count": documents.len(),
-        "since_ms": since_ms
+        "since_ms": since_ms,
+        "source": "business_records"
     }))
 }
 
@@ -35114,6 +35131,60 @@ mod tests {
                 .pointer("/documents/0/status")
                 .and_then(Value::as_str),
             Some("completed")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn projection_pull_never_uses_rxdb_table_fallback() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        let sqlite_path = rxdb_store_path(root);
+        let conn = Connection::open(sqlite_path)?;
+        conn.execute(
+            "CREATE TABLE ctox_business_os__business_commands__v1 (id TEXT PRIMARY KEY, data TEXT NOT NULL)",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO ctox_business_os__business_commands__v1 (id, data) VALUES ('cmd-rxdb-only', ?1)",
+            [serde_json::json!({
+                "id": "cmd-rxdb-only",
+                "command_type": "ctox.source.list_snapshots",
+                "status": "completed",
+                "updated_at_ms": 1_700
+            })
+            .to_string()],
+        )?;
+        drop(conn);
+
+        let normal_pull =
+            pull_collection_records(root, "business_commands", Some(1_000), Some(10))?;
+        assert_eq!(
+            normal_pull.get("source").and_then(Value::as_str),
+            Some("rxdb_projection")
+        );
+
+        let projection_pull = pull_collection_records_for_projection(
+            root,
+            "business_commands",
+            Some(1_000),
+            Some(10),
+        )?;
+        assert_eq!(
+            projection_pull.get("source").and_then(Value::as_str),
+            Some("business_records")
+        );
+        assert_eq!(
+            projection_pull.get("count").and_then(Value::as_i64),
+            Some(0)
+        );
+        assert_eq!(
+            projection_pull
+                .get("documents")
+                .and_then(Value::as_array)
+                .map(Vec::is_empty),
+            Some(true)
         );
         Ok(())
     }
