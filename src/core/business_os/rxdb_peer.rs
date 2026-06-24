@@ -423,6 +423,7 @@ fn spawn_iot_agent_supervisors(root: PathBuf) -> Vec<Arc<AtomicBool>> {
 type WebRtcPool = Arc<RxWebRTCReplicationPool<WebRTCRsConnectionHandler>>;
 
 struct NativePeer {
+    root: PathBuf,
     database: Arc<RxDatabase>,
     peer_session_id: String,
     shutdown_tx: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
@@ -860,7 +861,8 @@ pub fn sync_desktop_files_from_workspace_root(
             .add_collections(collection_creators())
             .await
             .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
-        let indexed = sync_desktop_file_scan_roots_with_database(&database, scan_roots).await?;
+        let indexed =
+            sync_desktop_file_scan_roots_with_database(root, &database, scan_roots).await?;
         database
             .close()
             .await
@@ -1102,6 +1104,39 @@ fn sync_ticket_state(root: &Path) -> anyhow::Result<usize> {
             .await
             .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
         let synced = sync_ticket_state_with_database(root, &database).await?;
+        database
+            .close()
+            .await
+            .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
+        Ok(synced)
+    })
+}
+
+#[cfg(test)]
+fn sync_knowledge_tables(root: &Path) -> anyhow::Result<usize> {
+    let database_path = store::rxdb_store_path(root);
+    if let Some(parent) = database_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create RxDB runtime dir {}", parent.display()))?;
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to create Business OS knowledge tables sync runtime")?;
+    let _database_guard = TEMPORARY_RXDB_DATABASE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    runtime.block_on(async move {
+        if let Some(peer) = current_peer() {
+            return sync_knowledge_tables_with_database(root, &peer.database).await;
+        }
+
+        let database = open_database(database_path).await?;
+        database
+            .add_collections(collection_creators())
+            .await
+            .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
+        let synced = sync_knowledge_tables_with_database(root, &database).await?;
         database
             .close()
             .await
@@ -1574,6 +1609,7 @@ async fn run_native_peer(
     // handle into the peer so `shutdown` can stop it and so it is dropped (and
     // signalled to stop) on any unwind of this function.
     let peer = Arc::new(NativePeer {
+        root: root.clone(),
         database,
         peer_session_id,
         shutdown_tx: Mutex::new(Some(shutdown_tx)),
@@ -2029,7 +2065,7 @@ impl NativePeer {
         &self,
         scan_roots: Vec<DesktopFileScanRoot>,
     ) -> anyhow::Result<usize> {
-        sync_desktop_file_scan_roots_with_database(&self.database, scan_roots).await
+        sync_desktop_file_scan_roots_with_database(&self.root, &self.database, scan_roots).await
     }
 }
 
@@ -2240,15 +2276,22 @@ async fn sync_knowledge_tables_background_loop(
     database: Arc<RxDatabase>,
     database_write_lock: Arc<AsyncMutex<()>>,
 ) {
+    let mut consecutive_idle_rounds = 0u32;
     loop {
         let result = {
             let _guard = database_write_lock.lock().await;
             sync_knowledge_tables_with_database(&root, &database).await
         };
-        if let Err(err) = result {
-            eprintln!("[business-os] native rxdb knowledge tables sync failed: {err:#}");
-        }
-        tokio::time::sleep(Duration::from_secs(KNOWLEDGE_TABLES_SYNC_INTERVAL_SECS)).await;
+        update_projection_idle_rounds(
+            result,
+            &mut consecutive_idle_rounds,
+            "[business-os] native rxdb knowledge tables sync failed",
+        );
+        tokio::time::sleep(Duration::from_secs(business_os_projection_sleep_secs(
+            KNOWLEDGE_TABLES_SYNC_INTERVAL_SECS,
+            consecutive_idle_rounds,
+        )))
+        .await;
     }
 }
 
@@ -4402,11 +4445,11 @@ async fn sync_knowledge_tables_with_database(
             object.insert("_deleted".to_string(), Value::Bool(false));
             object.insert("is_deleted".to_string(), Value::Bool(false));
         }
-        collection
-            .incremental_upsert(document)
-            .await
-            .map_err(|err| anyhow::anyhow!("upsert knowledge_tables projection: {err}"))?;
-        count += 1;
+        if incremental_upsert_projection_if_changed(&collection, document, "knowledge table")
+            .await?
+        {
+            count += 1;
+        }
     }
     let existing = collection
         .find(Some(MangoQuery {
@@ -6743,10 +6786,11 @@ async fn sync_desktop_file_index_with_database(
     root: &Path,
     database: &Arc<RxDatabase>,
 ) -> anyhow::Result<usize> {
-    sync_desktop_file_scan_roots_with_database(database, desktop_file_scan_roots(root)).await
+    sync_desktop_file_scan_roots_with_database(root, database, desktop_file_scan_roots(root)).await
 }
 
 async fn sync_desktop_file_scan_roots_with_database(
+    root: &Path,
     database: &Arc<RxDatabase>,
     mut scan_roots: Vec<DesktopFileScanRoot>,
 ) -> anyhow::Result<usize> {
@@ -6799,7 +6843,7 @@ async fn sync_desktop_file_scan_roots_with_database(
         indexed += 1;
     }
     if candidate_count < DESKTOP_FILE_SCAN_MAX_FILES {
-        mark_missing_scanned_desktop_files(database, &scan_roots, &seen_file_ids).await?;
+        mark_missing_scanned_desktop_files(root, database, &scan_roots, &seen_file_ids).await?;
     }
     Ok(indexed)
 }
@@ -6850,6 +6894,7 @@ fn compact_desktop_file_index_store_sync(
     if !has_tables {
         return Ok(DesktopFileIndexMaintenanceStats::default());
     }
+    ensure_desktop_file_index_query_indexes(&conn)?;
 
     let unsafe_files = {
         let mut stmt = conn.prepare(&format!(
@@ -7011,6 +7056,27 @@ fn is_unsafe_desktop_file_index_path(path: &Path, home: Option<&Path>) -> bool {
 fn is_ctox_internal_path_layout(path: &Path) -> bool {
     path_has_component_sequence(path, &[".local", "lib", "ctox"])
         || path_has_component_sequence(path, &[".local", "state", "ctox"])
+}
+
+fn ensure_desktop_file_index_query_indexes(conn: &Connection) -> anyhow::Result<()> {
+    if !sqlite_table_has_column(conn, "ctox_business_os__desktop_files__v0", "deleted")? {
+        return Ok(());
+    }
+    conn.execute(
+        r#"
+        CREATE INDEX IF NOT EXISTS ctox_business_os_desktop_files_live_core_idx
+        ON "ctox_business_os__desktop_files__v0" (
+            json_extract(data, '$.source'),
+            json_extract(data, '$.kind'),
+            COALESCE(json_extract(data, '$.is_deleted'), 0),
+            COALESCE(json_extract(data, '$.local_path'), json_extract(data, '$.path'))
+        )
+        WHERE COALESCE(deleted, 0) = 0
+        "#,
+        [],
+    )
+    .context("ensure desktop_files live ctox-core index")?;
+    Ok(())
 }
 
 fn path_has_component_sequence(path: &Path, sequence: &[&str]) -> bool {
@@ -7310,6 +7376,7 @@ fn desktop_folder_id(virtual_path: &str) -> String {
 }
 
 async fn mark_missing_scanned_desktop_files(
+    root: &Path,
     database: &Arc<RxDatabase>,
     scan_roots: &[DesktopFileScanRoot],
     seen_file_ids: &HashSet<String>,
@@ -7320,26 +7387,17 @@ async fn mark_missing_scanned_desktop_files(
     let files = database
         .collection("desktop_files")
         .context("desktop_files collection is not registered")?;
-    let documents = files
-        .find(None)
-        .map_err(|err| anyhow::anyhow!("query desktop_files for tombstones: {err}"))?
-        .exec(false)
+    ensure_desktop_file_index_query_indexes_for_root(root)
         .await
-        .map_err(|err| anyhow::anyhow!("exec desktop_files tombstone query: {err}"))?;
-    let Some(rows) = documents.as_array() else {
-        return Ok(0);
-    };
+        .context("ensure ctox-core desktop_files query index")?;
+    let rows = load_live_ctox_desktop_file_documents(root)
+        .await
+        .context("load ctox-core desktop_files for missing scan")?;
 
     let mut marked = 0usize;
     let now = now_ms();
-    for row in rows {
+    for row in &rows {
         let mut document = row.clone();
-        if document.get("kind").and_then(Value::as_str) != Some("file") {
-            continue;
-        }
-        if document.get("source").and_then(Value::as_str) != Some("ctox-core") {
-            continue;
-        }
         let Some(file_id) = document
             .get("id")
             .and_then(Value::as_str)
@@ -7394,6 +7452,81 @@ async fn mark_missing_scanned_desktop_files(
         marked += 1;
     }
     Ok(marked)
+}
+
+async fn load_live_ctox_desktop_file_documents(root: &Path) -> anyhow::Result<Vec<Value>> {
+    let root = root.to_path_buf();
+    tokio::task::spawn_blocking(move || load_live_ctox_desktop_file_documents_sync(&root))
+        .await
+        .context("join ctox-core desktop_files scan")?
+}
+
+async fn ensure_desktop_file_index_query_indexes_for_root(root: &Path) -> anyhow::Result<()> {
+    let root = root.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        ensure_desktop_file_index_query_indexes_for_root_sync(&root)
+    })
+    .await
+    .context("join desktop_files query index ensure")?
+}
+
+fn ensure_desktop_file_index_query_indexes_for_root_sync(root: &Path) -> anyhow::Result<()> {
+    const FILES_TABLE_NAME: &str = "ctox_business_os__desktop_files__v0";
+
+    let database_path = store::rxdb_store_path(root);
+    if !database_path.exists() {
+        return Ok(());
+    }
+    let conn = Connection::open(&database_path)
+        .with_context(|| format!("open RxDB store {}", database_path.display()))?;
+    conn.busy_timeout(Duration::from_secs(10))
+        .context("set RxDB index busy timeout")?;
+    if !sqlite_table_exists(&conn, FILES_TABLE_NAME)? {
+        return Ok(());
+    }
+    ensure_desktop_file_index_query_indexes(&conn)
+}
+
+fn load_live_ctox_desktop_file_documents_sync(root: &Path) -> anyhow::Result<Vec<Value>> {
+    const FILES_TABLE: &str = "\"ctox_business_os__desktop_files__v0\"";
+    const FILES_TABLE_NAME: &str = "ctox_business_os__desktop_files__v0";
+
+    let database_path = store::rxdb_store_path(root);
+    if !database_path.exists() {
+        return Ok(Vec::new());
+    }
+    let conn = Connection::open_with_flags(
+        &database_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("open RxDB store {}", database_path.display()))?;
+    conn.busy_timeout(Duration::from_secs(10))
+        .context("set RxDB read busy timeout")?;
+    if !sqlite_table_exists(&conn, FILES_TABLE_NAME)? {
+        return Ok(Vec::new());
+    }
+    let deleted_predicate = if sqlite_table_has_column(&conn, FILES_TABLE_NAME, "deleted")? {
+        "COALESCE(deleted, 0) = 0 AND"
+    } else {
+        ""
+    };
+    let mut stmt = conn.prepare(&format!(
+        "SELECT data FROM {FILES_TABLE}
+         WHERE {deleted_predicate}
+           json_extract(data, '$.kind') = 'file'
+           AND json_extract(data, '$.source') = 'ctox-core'
+           AND COALESCE(json_extract(data, '$.is_deleted'), 0) = 0"
+    ))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let mut documents = Vec::new();
+    for row in rows {
+        let data = row?;
+        let Ok(document) = serde_json::from_str::<Value>(&data) else {
+            continue;
+        };
+        documents.push(document);
+    }
+    Ok(documents)
 }
 
 fn hex_sha256(bytes: &[u8]) -> String {
@@ -7751,6 +7884,11 @@ fn business_record_projection_collections() -> Vec<String> {
         // rows-bearing projection the single writer, so the generic
         // business-record projection cannot overwrite it with a row-less doc.
         .filter(|name| {
+            // Dedicated singleton/status projections are single-writer too:
+            // the generic business-record projector must not create a second
+            // `_rev`/`_meta.lwt` stream for semantically identical runtime
+            // settings or module catalog snapshots.
+            //
             // `desktop_files` is owned by the desktop-file index
             // (scan/materialize/browser masterWrite write the RxDB directly);
             // its store records exist for the MCP/store view only. Projecting
@@ -7761,7 +7899,12 @@ fn business_record_projection_collections() -> Vec<String> {
             // single-writer rule as `knowledge_tables` below.
             !matches!(
                 name.as_str(),
-                "browser_frames" | "desktop_files" | "desktop_file_chunks" | "knowledge_tables"
+                "browser_frames"
+                    | "business_module_catalog"
+                    | "ctox_runtime_settings"
+                    | "desktop_files"
+                    | "desktop_file_chunks"
+                    | "knowledge_tables"
             )
         })
         .collect()
@@ -8150,6 +8293,21 @@ fn sqlite_table_exists(conn: &Connection, table: &str) -> anyhow::Result<bool> {
         .is_some())
 }
 
+fn sqlite_table_has_column(conn: &Connection, table: &str, column: &str) -> anyhow::Result<bool> {
+    let quoted_table = table.replace('"', "\"\"");
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info(\"{quoted_table}\")"))
+        .with_context(|| format!("inspect SQLite columns for {table}"))?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn sqlite_trigger_exists(conn: &Connection, trigger: &str) -> anyhow::Result<bool> {
     Ok(conn
         .query_row(
@@ -8204,6 +8362,12 @@ mod tests {
         let collections = business_record_projection_collections();
         assert!(!collections.iter().any(|name| name == "browser_frames"));
         assert!(!collections.iter().any(|name| name == "desktop_file_chunks"));
+        assert!(!collections
+            .iter()
+            .any(|name| name == "ctox_runtime_settings"));
+        assert!(!collections
+            .iter()
+            .any(|name| name == "business_module_catalog"));
         // `knowledge_tables` is owned by the dedicated rows-embedding
         // projection (`sync_knowledge_tables_with_database`); the generic
         // business-record projection must not also write it.
@@ -9630,6 +9794,55 @@ mod tests {
     }
 
     #[test]
+    fn sync_knowledge_tables_tombstones_stale_once_then_noops() {
+        let root = tempfile::tempdir().expect("temp root");
+        assert_eq!(
+            sync_knowledge_tables(root.path()).expect("initial empty knowledge sync"),
+            0
+        );
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open rxdb sqlite");
+        let stale = json!({
+            "id": "stale-knowledge-table",
+            "kind": "table",
+            "title": "Stale Knowledge Table",
+            "updated_at_ms": 1,
+            "_deleted": false,
+            "_meta": { "lwt": 1.0 },
+            "_rev": "1-test",
+            "_attachments": {}
+        });
+        conn.execute(
+            "INSERT INTO ctox_business_os__knowledge_tables__v0 \
+             (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, ?3, ?4)",
+            params![
+                "stale-knowledge-table",
+                "1-test",
+                1.0_f64,
+                serde_json::to_string(&stale).expect("stale knowledge json")
+            ],
+        )
+        .expect("seed stale knowledge table");
+        drop(conn);
+
+        let synced = sync_knowledge_tables(root.path()).expect("tombstone stale knowledge table");
+        assert_eq!(synced, 1);
+        let resynced = sync_knowledge_tables(root.path()).expect("resync stale knowledge table");
+        assert_eq!(resynced, 0);
+
+        let conn =
+            Connection::open(store::rxdb_store_path(root.path())).expect("reopen rxdb sqlite");
+        let deleted: i64 = conn
+            .query_row(
+                "SELECT deleted FROM ctox_business_os__knowledge_tables__v0 WHERE id = ?1",
+                ["stale-knowledge-table"],
+                |row| row.get(0),
+            )
+            .expect("stale knowledge tombstone row");
+        assert_eq!(deleted, 1);
+    }
+
+    #[test]
     fn sync_business_record_projections_materializes_generic_collections() {
         let root = tempfile::tempdir().expect("temp root");
         let conn = store::open_store(root.path()).expect("open business store");
@@ -10825,6 +11038,108 @@ mod tests {
             )
             .expect("chunk count after maintenance");
         assert_eq!(after_chunks, 0);
+    }
+
+    #[test]
+    fn live_ctox_desktop_file_loader_filters_non_core_and_deleted_rows() {
+        let root = tempfile::tempdir().expect("temp root");
+        let database_path = store::rxdb_store_path(root.path());
+        fs::create_dir_all(database_path.parent().expect("rxdb parent")).expect("create rxdb dir");
+        let conn = Connection::open(&database_path).expect("open rxdb sqlite");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE ctox_business_os__desktop_files__v0 (
+                id TEXT NOT NULL PRIMARY KEY UNIQUE,
+                revision TEXT,
+                deleted INTEGER NOT NULL CHECK (deleted IN (0, 1)),
+                lastWriteTime REAL NOT NULL,
+                data TEXT NOT NULL
+            );
+            "#,
+        )
+        .expect("create desktop_files table");
+        for (id, deleted, document) in [
+            (
+                "core-live",
+                0,
+                json!({
+                    "id": "core-live",
+                    "kind": "file",
+                    "source": "ctox-core",
+                    "is_deleted": false,
+                    "local_path": "/Users/test/runtime/output/live.md"
+                }),
+            ),
+            (
+                "upload-live",
+                0,
+                json!({
+                    "id": "upload-live",
+                    "kind": "file",
+                    "source": "upload",
+                    "is_deleted": false,
+                    "local_path": "/Users/test/Downloads/upload.md"
+                }),
+            ),
+            (
+                "core-deleted-json",
+                0,
+                json!({
+                    "id": "core-deleted-json",
+                    "kind": "file",
+                    "source": "ctox-core",
+                    "is_deleted": true,
+                    "local_path": "/Users/test/runtime/output/deleted.md"
+                }),
+            ),
+            (
+                "core-deleted-column",
+                1,
+                json!({
+                    "id": "core-deleted-column",
+                    "kind": "file",
+                    "source": "ctox-core",
+                    "is_deleted": false,
+                    "local_path": "/Users/test/runtime/output/deleted-column.md"
+                }),
+            ),
+        ] {
+            conn.execute(
+                "INSERT INTO ctox_business_os__desktop_files__v0 \
+                 (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    id,
+                    "1-test",
+                    deleted,
+                    1.0_f64,
+                    serde_json::to_string(&document).expect("desktop file json")
+                ],
+            )
+            .expect("insert desktop file row");
+        }
+        drop(conn);
+
+        ensure_desktop_file_index_query_indexes_for_root_sync(root.path()).expect("ensure index");
+        let conn = Connection::open(&database_path).expect("reopen rxdb sqlite");
+        let index_names = conn
+            .prepare("PRAGMA index_list('ctox_business_os__desktop_files__v0')")
+            .expect("prepare index list")
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("query index list")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect index list");
+        assert!(index_names
+            .iter()
+            .any(|name| name == "ctox_business_os_desktop_files_live_core_idx"));
+        drop(conn);
+
+        let documents = load_live_ctox_desktop_file_documents_sync(root.path())
+            .expect("load ctox-core desktop files");
+        let ids = documents
+            .iter()
+            .filter_map(|doc| doc.get("id").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["core-live"]);
     }
 
     /// REGRESSION (data-plane churn): rescanning an UNCHANGED workspace must
