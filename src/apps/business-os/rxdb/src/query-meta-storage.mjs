@@ -76,16 +76,27 @@ export class QueryMetaStorage {
 
   async touchDocuments(collection, ids, { estimatedBytes = 0, pinReason = PIN_RECENT_READ } = {}) {
     const now = this.clock();
-    for (const id of ids) {
+    const normalizedIds = Array.isArray(ids) ? ids.filter(Boolean) : [];
+    if (!normalizedIds.length) return;
+    const perDocumentBytes = normalizeEstimatedBytes(estimatedBytes);
+    let deltaBytes = 0;
+    for (const id of normalizedIds) {
       const previous = (await this.backend.getDocumentAccess(collection, id)) || {};
+      const nextEstimatedBytes = perDocumentBytes || previous.estimatedBytes || 0;
+      deltaBytes += nextEstimatedBytes - (previous.estimatedBytes || 0);
       await this.backend.putDocumentAccess({
         collection,
         id,
         lastAccessedAt: now,
         pinReason: previous.dirty ? 'dirty' : pinReason,
         dirty: Boolean(previous.dirty),
-        estimatedBytes: estimatedBytes || previous.estimatedBytes || 0,
+        estimatedBytes: nextEstimatedBytes,
       });
+    }
+    if (deltaBytes !== 0) {
+      const stats = await this.getCacheStats();
+      stats.estimatedBytes = Math.max(0, (stats.estimatedBytes || 0) + deltaBytes);
+      await this.backend.putCacheStats(stats);
     }
   }
 
@@ -139,6 +150,7 @@ export class QueryMetaStorage {
       lastEvictionAt: null,
     };
     stats.lastEvictionAt = removed > 0 ? now : stats.lastEvictionAt;
+    stats.estimatedBytes = await this.estimateWorkingSetBytes();
     await this.backend.putCacheStats(stats);
     return removed;
   }
@@ -183,7 +195,12 @@ export class QueryMetaStorage {
   /// document records removed.
   async runEvictionIfOverBudget() {
     const stats = await this.getCacheStats();
-    if (!stats.budgetBytes || stats.estimatedBytes <= stats.budgetBytes) {
+    const workingSetBytes = await this.estimateWorkingSetBytes();
+    if (stats.estimatedBytes !== workingSetBytes) {
+      stats.estimatedBytes = workingSetBytes;
+      await this.backend.putCacheStats(stats);
+    }
+    if (!stats.budgetBytes || workingSetBytes <= stats.budgetBytes) {
       return 0;
     }
     const all = await this.backend.scanDocumentAccess();
@@ -197,7 +214,7 @@ export class QueryMetaStorage {
       })
       .sort((a, b) => a.lastAccessedAt - b.lastAccessedAt);
     let removed = 0;
-    let remainingBytes = stats.estimatedBytes;
+    let remainingBytes = workingSetBytes;
     for (const candidate of candidates) {
       if (remainingBytes <= stats.budgetBytes) break;
       if (this.primaryDelete) {
@@ -291,6 +308,11 @@ export class QueryMetaStorage {
     }
     return removed;
   }
+}
+
+function normalizeEstimatedBytes(estimatedBytes) {
+  const bytes = Math.max(0, Number(estimatedBytes) || 0);
+  return bytes > 0 ? Math.max(1, Math.ceil(bytes)) : 0;
 }
 
 function isQuotaExceeded(err) {

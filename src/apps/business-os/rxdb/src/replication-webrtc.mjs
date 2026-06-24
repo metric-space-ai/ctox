@@ -130,6 +130,7 @@ function stableSignalingUrlKey(signalingUrl) {
 export const replicationWebRtcTestInternals = Object.freeze({
   sharedRoomPeerKey,
   stableSignalingUrlKey,
+  shouldAttachQueryDemandLoader,
   // Lazy accessor (class is declared below): lets the activation-catch-up
   // smoke drive the real SharedRoomPeer registry wiring without a network.
   getSharedRoomPeerClass: () => SharedRoomPeer,
@@ -1144,6 +1145,17 @@ class CtoxWebRtcReplicationState {
     if (this.demandLoaderActive) return this.demandLoader;
     const demandTransport = this.shared?.demandTransport;
     if (!demandTransport) return null;
+    const queryDemandEnabled = shouldAttachQueryDemandLoader(this.collection.name);
+    const fileDemandEnabled = shouldAttachFileDemandLoader(this.collection.name);
+    if (!queryDemandEnabled && !fileDemandEnabled) {
+      if (typeof this.collection.setDemandLoader === 'function') {
+        this.collection.setDemandLoader(null);
+      }
+      this.demandLoader = null;
+      this.demandFileLoader = null;
+      this.demandLoaderActive = true;
+      return null;
+    }
     const dbName = databaseName || `ctox_business_os_v1_5_meta_${this.collection.name}`;
     const backend = indexedDbAvailable
       ? createIndexedDbMetaBackend({ databaseName: dbName })
@@ -1176,7 +1188,7 @@ class CtoxWebRtcReplicationState {
       this.replicationOriginForPeer(this.activeRemotePeerId)
         || { role: 'ctox_instance', peerId: this.activeRemotePeerId || '', sessionId: '', collection: this.collection.name }
     );
-    this.demandLoader = createQueryDemandLoader({
+    this.demandLoader = queryDemandEnabled ? createQueryDemandLoader({
       storageCollection: this.collection.storageCollection,
       sidecar: this.demandSidecar,
       collectionName: this.collection.name,
@@ -1185,12 +1197,12 @@ class CtoxWebRtcReplicationState {
       requestCancel: ({ requestId, reason }) => demandTransport.requestQueryCancel({ requestId, reason }),
       status: null,
       replicationOrigin: demandReplicationOrigin,
-    });
+    }) : null;
     if (typeof this.collection.setDemandLoader === 'function') {
       this.collection.setDemandLoader(this.demandLoader);
     }
 
-    this.demandFileLoader = createFileDemandLoader({
+    this.demandFileLoader = fileDemandEnabled ? createFileDemandLoader({
       collectionName: this.collection.name,
       storageCollection: this.collection.storageCollection,
       sidecarBackend: backend,
@@ -1204,7 +1216,7 @@ class CtoxWebRtcReplicationState {
           knownSequences,
           collectionName: this.collection.name,
         }),
-    });
+    }) : null;
 
     this.demandLoaderActive = true;
     return this.demandLoader;
@@ -1489,6 +1501,14 @@ function primaryValue(doc = {}, primaryPath = 'id') {
 
 function shouldPersistFetchedFileChunks(collectionName = '') {
   return String(collectionName || '').endsWith('_chunks');
+}
+
+function shouldAttachQueryDemandLoader(collectionName = '') {
+  return !String(collectionName || '').endsWith('_chunks');
+}
+
+function shouldAttachFileDemandLoader(collectionName = '') {
+  return String(collectionName || '') !== 'desktop_file_chunks';
 }
 
 function replicationValueAtPath(obj, path) {

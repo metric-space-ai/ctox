@@ -113,7 +113,7 @@ export function createQueryDemandLoader({
             authoritativeRevision: result.authoritativeRevision ?? null,
           });
           await sidecar.touchDocuments(collectionName, documentIds, {
-            estimatedBytes: estimateBytes(result.documents || []),
+            estimatedBytes: estimateBytesPerDocument(result.documents || []),
           });
           bumpStatus(status, 'queryFetchSuccessCount');
           if (status) status.lastQueryFetchMs = clock() - startedAt;
@@ -320,6 +320,11 @@ function estimateBytes(documents) {
   } catch {
     return documents.length * 256;
   }
+}
+
+function estimateBytesPerDocument(documents) {
+  if (!Array.isArray(documents) || documents.length === 0) return 0;
+  return Math.max(1, Math.ceil(estimateBytes(documents) / documents.length));
 }
 
 function bumpStatus(status, field, delta = 1) {

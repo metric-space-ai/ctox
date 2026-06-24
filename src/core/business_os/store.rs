@@ -6335,10 +6335,27 @@ fn rxdb_desktop_file_chunks(
         .with_context(|| format!("failed to open {}", database_path.display()))?;
     conn.busy_timeout(std::time::Duration::from_secs(10))?;
     conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 10000;")?;
+    let (chunk_id_lower, chunk_id_upper) =
+        desktop_file_generation_chunk_id_bounds(file_id, generation_id);
+    let live_filter = if rxdb_table_has_column(
+        &conn,
+        "ctox_business_os__desktop_file_chunks__v0",
+        "deleted",
+    )? {
+        " AND COALESCE(deleted, 0) = 0"
+    } else {
+        ""
+    };
     let mut stmt = conn
-        .prepare("SELECT data FROM ctox_business_os__desktop_file_chunks__v0")
+        .prepare(&format!(
+            "SELECT data FROM ctox_business_os__desktop_file_chunks__v0
+             WHERE id >= ?1 AND id < ?2{live_filter}
+             ORDER BY id",
+        ))
         .context("desktop file chunk collection is not available")?;
-    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let rows = stmt.query_map(params![chunk_id_lower, chunk_id_upper], |row| {
+        row.get::<_, String>(0)
+    })?;
     let mut chunks = Vec::new();
     for row in rows {
         let raw = row?;
@@ -6352,6 +6369,11 @@ fn rxdb_desktop_file_chunks(
         }
     }
     Ok(chunks)
+}
+
+fn desktop_file_generation_chunk_id_bounds(file_id: &str, generation_id: &str) -> (String, String) {
+    let prefix = format!("{file_id}_{generation_id}_");
+    (prefix.clone(), format!("{prefix}`"))
 }
 
 fn resolve_business_os_app_root(root: &Path) -> anyhow::Result<PathBuf> {

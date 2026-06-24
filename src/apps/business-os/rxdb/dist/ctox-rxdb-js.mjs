@@ -3522,7 +3522,7 @@ function createQueryDemandLoader({
               authoritativeRevision: result.authoritativeRevision ?? null
             });
             await sidecar.touchDocuments(collectionName, documentIds, {
-              estimatedBytes: estimateBytes(result.documents || [])
+              estimatedBytes: estimateBytesPerDocument(result.documents || [])
             });
             bumpStatus(status, "queryFetchSuccessCount");
             if (status) status.lastQueryFetchMs = clock() - startedAt;
@@ -3699,6 +3699,10 @@ function estimateBytes(documents) {
     return documents.length * 256;
   }
 }
+function estimateBytesPerDocument(documents) {
+  if (!Array.isArray(documents) || documents.length === 0) return 0;
+  return Math.max(1, Math.ceil(estimateBytes(documents) / documents.length));
+}
 function bumpStatus(status, field, delta = 1) {
   if (!status) return;
   if (typeof status[field] !== "number") status[field] = 0;
@@ -3770,6 +3774,7 @@ function createFileDemandLoader({
   requestFileFetch,
   status = null,
   clock = Date.now,
+  persistChunks = true,
   // Origin stamp (object or provider fn): fetched chunk rows are master
   // state, not local writes — see query-demand-loader.mjs for the failure
   // modes an unstamped write causes (push echo, LWW veto of later pulls).
@@ -3793,7 +3798,7 @@ function createFileDemandLoader({
         const startedAt = clock();
         bump(status, "activeFileStreams", 1);
         try {
-          const presence = await getPresence(sidecarBackend, collectionName, fileId);
+          const presence = persistChunks ? await getPresence(sidecarBackend, collectionName, fileId) : null;
           const chunks = await requestFileFetch({
             requestId: `file-${fileId}-${startedAt}`,
             collectionName,
@@ -3804,42 +3809,47 @@ function createFileDemandLoader({
           if (!Array.isArray(chunks)) {
             throw new TypeError("requestFileFetch must return an array of chunks");
           }
-          for (const chunk of chunks) {
-            if (!chunk || typeof chunk !== "object") continue;
-            await storageCollection.bulkWrite([
-              {
-                id: `${fileId}-${chunk.sequence}`,
-                file_id: fileId,
-                sequence: chunk.sequence,
-                bytes_base64: chunk.bytesBase64,
-                hash: chunk.hash || null
-              }
-            ], { replicationOrigin: resolveReplicationOrigin() });
-            bump(status, "fileBytesReceived", chunk.bytesBase64?.length || 0);
+          for (const chunk of chunks) bump(status, "fileBytesReceived", chunk?.bytesBase64?.length || 0);
+          if (persistChunks) {
+            for (const chunk of chunks) {
+              if (!chunk || typeof chunk !== "object") continue;
+              await storageCollection.bulkWrite([
+                {
+                  id: `${fileId}-${chunk.sequence}`,
+                  file_id: fileId,
+                  sequence: chunk.sequence,
+                  bytes_base64: chunk.bytesBase64,
+                  hash: chunk.hash || null
+                }
+              ], { replicationOrigin: resolveReplicationOrigin() });
+            }
           }
           const sequences = chunks.map((c) => c.sequence).sort((a, b) => a - b);
-          const expectedTotal = Math.max(
-            ...sequences,
-            presence?.expectedChunkCount || 0
-          ) + 1;
-          await sidecarBackend.putDocumentAccess({
-            collection: collectionName,
-            id: `${fileId}-presence`,
-            lastAccessedAt: clock(),
-            pinReason: "file-chunks",
-            dirty: false,
-            estimatedBytes: 0
-          });
-          await putPresence(sidecarBackend, collectionName, fileId, {
-            collection: collectionName,
-            fileId,
-            expectedChunkCount: expectedTotal,
-            presentSequences: dedupeSorted([
-              ...presence?.presentSequences || [],
-              ...sequences
-            ]),
-            lastVerifiedAt: clock()
-          });
+          if (persistChunks) {
+            const highestSequence = sequences.length ? Math.max(...sequences) : -1;
+            const expectedTotal = Math.max(
+              highestSequence,
+              presence?.expectedChunkCount || 0
+            ) + 1;
+            await sidecarBackend.putDocumentAccess({
+              collection: collectionName,
+              id: `${fileId}-presence`,
+              lastAccessedAt: clock(),
+              pinReason: "file-chunks",
+              dirty: false,
+              estimatedBytes: 0
+            });
+            await putPresence(sidecarBackend, collectionName, fileId, {
+              collection: collectionName,
+              fileId,
+              expectedChunkCount: expectedTotal,
+              presentSequences: dedupeSorted([
+                ...presence?.presentSequences || [],
+                ...sequences
+              ]),
+              lastVerifiedAt: clock()
+            });
+          }
           if (status) status.lastFileFetchMs = clock() - startedAt;
           return chunks;
         } catch (error) {
@@ -4010,16 +4020,27 @@ var QueryMetaStorage = class {
   }
   async touchDocuments(collection, ids, { estimatedBytes = 0, pinReason = PIN_RECENT_READ } = {}) {
     const now = this.clock();
-    for (const id of ids) {
+    const normalizedIds = Array.isArray(ids) ? ids.filter(Boolean) : [];
+    if (!normalizedIds.length) return;
+    const perDocumentBytes = normalizeEstimatedBytes(estimatedBytes);
+    let deltaBytes = 0;
+    for (const id of normalizedIds) {
       const previous = await this.backend.getDocumentAccess(collection, id) || {};
+      const nextEstimatedBytes = perDocumentBytes || previous.estimatedBytes || 0;
+      deltaBytes += nextEstimatedBytes - (previous.estimatedBytes || 0);
       await this.backend.putDocumentAccess({
         collection,
         id,
         lastAccessedAt: now,
         pinReason: previous.dirty ? "dirty" : pinReason,
         dirty: Boolean(previous.dirty),
-        estimatedBytes: estimatedBytes || previous.estimatedBytes || 0
+        estimatedBytes: nextEstimatedBytes
       });
+    }
+    if (deltaBytes !== 0) {
+      const stats = await this.getCacheStats();
+      stats.estimatedBytes = Math.max(0, (stats.estimatedBytes || 0) + deltaBytes);
+      await this.backend.putCacheStats(stats);
     }
   }
   async markDirty(collection, id, dirty) {
@@ -4066,6 +4087,7 @@ var QueryMetaStorage = class {
       lastEvictionAt: null
     };
     stats.lastEvictionAt = removed > 0 ? now : stats.lastEvictionAt;
+    stats.estimatedBytes = await this.estimateWorkingSetBytes();
     await this.backend.putCacheStats(stats);
     return removed;
   }
@@ -4102,7 +4124,12 @@ var QueryMetaStorage = class {
   /// document records removed.
   async runEvictionIfOverBudget() {
     const stats = await this.getCacheStats();
-    if (!stats.budgetBytes || stats.estimatedBytes <= stats.budgetBytes) {
+    const workingSetBytes = await this.estimateWorkingSetBytes();
+    if (stats.estimatedBytes !== workingSetBytes) {
+      stats.estimatedBytes = workingSetBytes;
+      await this.backend.putCacheStats(stats);
+    }
+    if (!stats.budgetBytes || workingSetBytes <= stats.budgetBytes) {
       return 0;
     }
     const all = await this.backend.scanDocumentAccess();
@@ -4112,7 +4139,7 @@ var QueryMetaStorage = class {
       return now - record.lastAccessedAt >= SIDECAR_PIN_RECENT_READ_TTL_MS;
     }).sort((a, b) => a.lastAccessedAt - b.lastAccessedAt);
     let removed = 0;
-    let remainingBytes = stats.estimatedBytes;
+    let remainingBytes = workingSetBytes;
     for (const candidate of candidates) {
       if (remainingBytes <= stats.budgetBytes) break;
       if (this.primaryDelete) {
@@ -4201,6 +4228,10 @@ var QueryMetaStorage = class {
     return removed;
   }
 };
+function normalizeEstimatedBytes(estimatedBytes) {
+  const bytes = Math.max(0, Number(estimatedBytes) || 0);
+  return bytes > 0 ? Math.max(1, Math.ceil(bytes)) : 0;
+}
 function isQuotaExceeded(err) {
   if (!err) return false;
   if (err.name === "QuotaExceededError") return true;
@@ -4381,6 +4412,7 @@ var ActiveCollectionRegistry = class {
     this.lastExecAt = /* @__PURE__ */ new Map();
     this.listeners = /* @__PURE__ */ new Set();
     this.notifyTimer = null;
+    this.expiryTimer = null;
     this.lastNotifiedKey = null;
   }
   // A live query/collection subscription started for `collectionName`.
@@ -4409,6 +4441,7 @@ var ActiveCollectionRegistry = class {
     if (!collectionName) return;
     this.lastExecAt.set(collectionName, this.clock());
     this.scheduleNotify();
+    this.scheduleExpiryNotify();
   }
   // The current active set: every collection with a live subscription, plus
   // every collection read within the recent-exec window.
@@ -4457,6 +4490,25 @@ var ActiveCollectionRegistry = class {
         }
       }
     }, ACTIVE_NOTIFY_DEBOUNCE_MS);
+  }
+  scheduleExpiryNotify() {
+    if (this.expiryTimer != null) {
+      clearTimeout(this.expiryTimer);
+      this.expiryTimer = null;
+    }
+    if (!this.lastExecAt.size) return;
+    const now = this.clock();
+    let nextExpiryAt = Infinity;
+    for (const at of this.lastExecAt.values()) {
+      nextExpiryAt = Math.min(nextExpiryAt, at + this.recentExecMs);
+    }
+    if (!Number.isFinite(nextExpiryAt)) return;
+    const delayMs = Math.max(0, nextExpiryAt - now + 1);
+    this.expiryTimer = setTimeout(() => {
+      this.expiryTimer = null;
+      this.scheduleNotify();
+      this.scheduleExpiryNotify();
+    }, delayMs);
   }
 };
 var SINGLETON = null;
@@ -4532,6 +4584,7 @@ function stableSignalingUrlKey(signalingUrl) {
 var replicationWebRtcTestInternals = Object.freeze({
   sharedRoomPeerKey,
   stableSignalingUrlKey,
+  shouldAttachQueryDemandLoader,
   // Lazy accessor (class is declared below): lets the activation-catch-up
   // smoke drive the real SharedRoomPeer registry wiring without a network.
   getSharedRoomPeerClass: () => SharedRoomPeer
@@ -5215,11 +5268,11 @@ var CtoxWebRtcReplicationState = class {
       const result = response.result || {};
       const documents = Array.isArray(result?.documents) ? result.documents : [];
       if (documents.length) {
-        await this.invalidateDemandCacheForRemoteWrite();
+        await this.invalidateDemandCacheForRemoteWrite(documents);
         await this.collection.storageCollection.bulkWrite(documents, {
           replicationOrigin: this.replicationOriginForPeer(activePeerId)
         });
-        await this.invalidateDemandCacheForRemoteWrite();
+        await this.invalidateDemandCacheForRemoteWrite(documents);
       }
       checkpoint = result?.checkpoint || checkpoint;
       this.pullCheckpointsByPeer.set(activePeerId, checkpoint);
@@ -5343,11 +5396,11 @@ var CtoxWebRtcReplicationState = class {
     const rows = Array.isArray(params?.[0]) ? params[0] : [];
     const docs = rows.map((row) => row?.newDocumentState || row?.document || row).filter(Boolean);
     if (docs.length) {
-      await this.invalidateDemandCacheForRemoteWrite();
+      await this.invalidateDemandCacheForRemoteWrite(docs);
       await this.collection.storageCollection.bulkWrite(docs, {
         replicationOrigin: this.replicationOriginForPeer(peerId)
       });
-      await this.invalidateDemandCacheForRemoteWrite();
+      await this.invalidateDemandCacheForRemoteWrite(docs);
     }
     return [];
   }
@@ -5412,6 +5465,17 @@ var CtoxWebRtcReplicationState = class {
     if (this.demandLoaderActive) return this.demandLoader;
     const demandTransport = this.shared?.demandTransport;
     if (!demandTransport) return null;
+    const queryDemandEnabled = shouldAttachQueryDemandLoader(this.collection.name);
+    const fileDemandEnabled = shouldAttachFileDemandLoader(this.collection.name);
+    if (!queryDemandEnabled && !fileDemandEnabled) {
+      if (typeof this.collection.setDemandLoader === "function") {
+        this.collection.setDemandLoader(null);
+      }
+      this.demandLoader = null;
+      this.demandFileLoader = null;
+      this.demandLoaderActive = true;
+      return null;
+    }
     const dbName = databaseName || `ctox_business_os_v1_5_meta_${this.collection.name}`;
     const backend = indexedDbAvailable ? createIndexedDbMetaBackend({ databaseName: dbName }) : createMemoryMetaBackend();
     const primaryDelete = async (collection, id) => {
@@ -5433,7 +5497,7 @@ var CtoxWebRtcReplicationState = class {
     } catch {
     }
     const demandReplicationOrigin = () => this.replicationOriginForPeer(this.activeRemotePeerId) || { role: "ctox_instance", peerId: this.activeRemotePeerId || "", sessionId: "", collection: this.collection.name };
-    this.demandLoader = createQueryDemandLoader({
+    this.demandLoader = queryDemandEnabled ? createQueryDemandLoader({
       storageCollection: this.collection.storageCollection,
       sidecar: this.demandSidecar,
       collectionName: this.collection.name,
@@ -5442,14 +5506,15 @@ var CtoxWebRtcReplicationState = class {
       requestCancel: ({ requestId, reason }) => demandTransport.requestQueryCancel({ requestId, reason }),
       status: null,
       replicationOrigin: demandReplicationOrigin
-    });
+    }) : null;
     if (typeof this.collection.setDemandLoader === "function") {
       this.collection.setDemandLoader(this.demandLoader);
     }
-    this.demandFileLoader = createFileDemandLoader({
+    this.demandFileLoader = fileDemandEnabled ? createFileDemandLoader({
       collectionName: this.collection.name,
       storageCollection: this.collection.storageCollection,
       sidecarBackend: backend,
+      persistChunks: shouldPersistFetchedFileChunks(this.collection.name),
       replicationOrigin: demandReplicationOrigin,
       requestFileFetch: ({ requestId, fileId, range, knownSequences }) => demandTransport.requestFileFetch({
         requestId,
@@ -5458,7 +5523,7 @@ var CtoxWebRtcReplicationState = class {
         knownSequences,
         collectionName: this.collection.name
       })
-    });
+    }) : null;
     this.demandLoaderActive = true;
     return this.demandLoader;
   }
@@ -5516,9 +5581,14 @@ var CtoxWebRtcReplicationState = class {
     const role = this.replicationOriginForPeer(peerId)?.role || "";
     return role ? { excludeReplicationOriginRole: role } : {};
   }
-  async invalidateDemandCacheForRemoteWrite() {
+  async invalidateDemandCacheForRemoteWrite(changedDocuments = []) {
     try {
-      await this.demandLoader?.invalidateCollectionChange?.();
+      const ids = changedDocuments.map((doc) => primaryValue(doc, this.collection.schema.primaryPath)).filter(Boolean);
+      if (typeof this.demandLoader?.invalidateDocumentChange === "function") {
+        await this.demandLoader.invalidateDocumentChange(ids);
+      } else {
+        await this.demandLoader?.invalidateCollectionChange?.();
+      }
     } catch {
     }
   }
@@ -5545,6 +5615,7 @@ var CtoxWebRtcReplicationState = class {
     return 0;
   }
   periodicPushIntervalMs() {
+    if (!this.push) return 0;
     return ["business_commands", "ctox_queue_tasks"].includes(this.collection.name) ? 1e3 : 0;
   }
   openPeerIds() {
@@ -5686,6 +5757,15 @@ function primaryValue(doc = {}, primaryPath = "id") {
   if (doc.id != null) return String(doc.id);
   if (doc._id != null) return String(doc._id);
   return String(replicationValueAtPath(doc, primaryPath) ?? "");
+}
+function shouldPersistFetchedFileChunks(collectionName = "") {
+  return String(collectionName || "").endsWith("_chunks");
+}
+function shouldAttachQueryDemandLoader(collectionName = "") {
+  return !String(collectionName || "").endsWith("_chunks");
+}
+function shouldAttachFileDemandLoader(collectionName = "") {
+  return String(collectionName || "") !== "desktop_file_chunks";
 }
 function replicationValueAtPath(obj, path) {
   if (!path || path === "id") return obj?.id;

@@ -2,7 +2,6 @@ import {
   FILE_CHUNK_HASH_SCHEME,
   FILE_CONTENT_HASH_SCHEME,
   base64ToBytes,
-  readStoredFileFromChunks,
   readStoredFileFromDemandChunks,
   sha256Hex,
 } from '../../shared/file-integrity.js?v=20260624-demand-file-fetch1';
@@ -159,7 +158,7 @@ export async function mount(container, ctx) {
       return;
     }
     try {
-      const docs = await collection.find().exec();
+      const docs = await collection.find(activeDocumentQueryForSource(state.activeSource)).exec();
       const data = docs.map((doc) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc));
       const activeData = data.filter((item) => !item.is_deleted);
       if (isFilesystemSource()) {
@@ -602,6 +601,11 @@ export async function mount(container, ctx) {
     return state.activeSource.filesystem === true;
   }
 
+  function activeDocumentQueryForSource(source) {
+    if (!source?.filesystem) return {};
+    return { selector: { is_deleted: { $ne: true } } };
+  }
+
   function renderFooter(rows = filteredRows()) {
     const sourceLabel = isFilesystemSource() ? (currentFolder()?.path || '/') : state.activeSource.label;
     const sourceState = state.lastLoad?.ok === false ? 'Fehler' : `${state.lastLoad?.total ?? rows.length} geladen`;
@@ -716,7 +720,7 @@ async function readStoredFile(ctx, fileId, mimeType = 'application/octet-stream'
     const chunks = await loader.fetchFile(fileId);
     return readStoredFileFromDemandChunks(chunks, mimeType, options);
   }
-  return readStoredFileFromLocalChunks(ctx?.db, fileId, mimeType, options);
+  throw new Error('Dateiinhalt ist noch nicht über den Sync-Demand-Pfad verfügbar.');
 }
 
 async function fileDemandLoaderFor(ctx) {
@@ -740,14 +744,6 @@ async function waitForReplicationBridge(bridge, collection, timeoutMs = 20000) {
       setTimeout(() => reject(new Error(`${collection} replication did not become ready in time`)), timeoutMs);
     }),
   ]);
-}
-
-async function readStoredFileFromLocalChunks(db, fileId, mimeType = 'application/octet-stream', options = {}) {
-  const chunks = db?.collection?.('desktop_file_chunks');
-  if (!chunks) throw new Error('Datei-Chunks sind nicht verfügbar.');
-  const docs = await chunks.find().exec();
-  const allChunks = docs.map((doc) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc));
-  return readStoredFileFromChunks(allChunks, fileId, mimeType, options);
 }
 
 function normalizeFileRow(data) {

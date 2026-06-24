@@ -6132,6 +6132,49 @@ fn expected_desktop_file_chunk_total(size_bytes: u64) -> u64 {
     encoded_len.div_ceil(DESKTOP_FILE_CHUNK_SIZE as u64).max(1)
 }
 
+fn desktop_file_generation_verified_by_metadata(
+    document: &Value,
+    generation_id: &str,
+    size_bytes: u64,
+) -> bool {
+    if generation_id.is_empty() {
+        return false;
+    }
+    document
+        .get("content_generation_id")
+        .and_then(Value::as_str)
+        == Some(generation_id)
+        && document.get("content_state").and_then(Value::as_str) == Some("available")
+        && document.get("chunk_count").and_then(Value::as_u64)
+            == Some(expected_desktop_file_chunk_total(size_bytes))
+        && document
+            .get("generation_verified_at_ms")
+            .and_then(Value::as_u64)
+            .is_some_and(|value| value > 0)
+}
+
+async fn mark_desktop_file_chunk_generation_verified(
+    files: &Arc<RxCollection>,
+    document: &Value,
+    expected_total: u64,
+    now: u128,
+) -> anyhow::Result<()> {
+    let mut next = document.clone();
+    let Some(object) = next.as_object_mut() else {
+        return Ok(());
+    };
+    object.insert("chunk_count".to_string(), Value::from(expected_total));
+    object.insert(
+        "generation_verified_at_ms".to_string(),
+        Value::from(u64::try_from(now).unwrap_or(u64::MAX)),
+    );
+    files
+        .incremental_upsert(next)
+        .await
+        .map_err(|err| anyhow::anyhow!("mark desktop file chunks verified: {err}"))?;
+    Ok(())
+}
+
 async fn find_rxdb_document_by_id(
     database: &Arc<RxDatabase>,
     collection_name: &str,
@@ -6303,17 +6346,41 @@ async fn upsert_desktop_file_with_parent(
                         .get("content_generation_id")
                         .and_then(Value::as_str)
                         .unwrap_or_default();
-                    desktop_file_chunk_generation_is_complete(
-                        database,
-                        &file_id,
-                        generation,
-                        metadata.len(),
-                    )
-                    .await
+                    if desktop_file_generation_verified_by_metadata(doc, generation, metadata.len())
+                    {
+                        true
+                    } else {
+                        desktop_file_chunk_generation_is_complete(
+                            database,
+                            &file_id,
+                            generation,
+                            metadata.len(),
+                        )
+                        .await
+                    }
                 }
                 DesktopFileContentPolicy::Lazy => true,
             };
             if chunks_complete {
+                if policy == DesktopFileContentPolicy::Eager {
+                    let generation = doc
+                        .get("content_generation_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    if !desktop_file_generation_verified_by_metadata(
+                        doc,
+                        generation,
+                        metadata.len(),
+                    ) {
+                        mark_desktop_file_chunk_generation_verified(
+                            &files,
+                            doc,
+                            expected_desktop_file_chunk_total(metadata.len()),
+                            now,
+                        )
+                        .await?;
+                    }
+                }
                 return Ok(());
             }
         }
@@ -6342,13 +6409,17 @@ async fn upsert_desktop_file_with_parent(
             // fall through to a full rewrite (self-healing repair).
             let mut reused_generation_id = reused_generation_id;
             if let Some(generation) = reused_generation_id.as_deref() {
-                if !desktop_file_chunk_generation_is_complete(
-                    database,
-                    &file_id,
-                    generation,
-                    metadata.len(),
-                )
-                .await
+                let verified_by_metadata = existing_file_doc.as_ref().is_some_and(|doc| {
+                    desktop_file_generation_verified_by_metadata(doc, generation, metadata.len())
+                });
+                if !verified_by_metadata
+                    && !desktop_file_chunk_generation_is_complete(
+                        database,
+                        &file_id,
+                        generation,
+                        metadata.len(),
+                    )
+                    .await
                 {
                     reused_generation_id = None;
                 }
@@ -6443,6 +6514,16 @@ async fn upsert_desktop_file_with_parent(
             "content_hash": content_hash,
             "content_hash_scheme": DESKTOP_FILE_CONTENT_HASH_SCHEME,
             "content_generation_id": content_generation_id,
+            "chunk_count": if policy == DesktopFileContentPolicy::Eager {
+                Value::from(expected_desktop_file_chunk_total(metadata.len()))
+            } else {
+                Value::Null
+            },
+            "generation_verified_at_ms": if policy == DesktopFileContentPolicy::Eager {
+                Value::from(now_u64)
+            } else {
+                Value::Null
+            },
             "mtime_ms": modified_at_ms,
             "content_synced_at_ms": content_synced_at_ms,
             "sort_index": now,
@@ -6563,40 +6644,42 @@ fn stream_demand_file_chunks(
             })),
         )
     })?;
-    let query = MangoQuery {
-        selector: Some(json!({ key_field: { "$eq": file_id } })),
-        ..Default::default()
-    };
-    // The stream source closure is sync, but the file-fetch dispatcher runs it
-    // inside a tokio task (`tokio::spawn` in index_mod.rs). `block_in_place`
-    // hands the blocking work to a dedicated worker so the async storage query
-    // can be driven to completion without stalling the runtime, keeping the
-    // file-read loop owned by this closure (bounded memory, no full-file
-    // materialization on the wire).
-    let prepared = chunk_collection.find(Some(query))?;
-    let rows = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
-            prepared.exec(false).await.map_err(|err| {
-                rxdb::rx_error::new_rx_error(
-                    "RC_WEBRTC_PEER",
-                    Some(json!({
-                        "message": format!("query {collection} chunks for {file_id}: {err}"),
-                    })),
-                )
-            })
-        })
-    })?;
-    let mut chunk_rows = rows.as_array().cloned().unwrap_or_default();
-    if collection == "desktop_file_chunks" {
-        if let Some(active_generation_id) = active_desktop_file_generation_id(database, file_id) {
-            chunk_rows.retain(|chunk| {
-                chunk
-                    .get("generation_id")
-                    .and_then(Value::as_str)
-                    .is_some_and(|generation_id| generation_id == active_generation_id)
-            });
+    let mut chunk_rows = if collection == "desktop_file_chunks" {
+        match active_desktop_file_metadata(database, file_id) {
+            Some(metadata) => desktop_file_chunk_rows_by_id(
+                &chunk_collection,
+                file_id,
+                &metadata.generation_id,
+                metadata.size_bytes,
+            )?,
+            None => Vec::new(),
         }
-    }
+    } else {
+        let query = MangoQuery {
+            selector: Some(json!({ key_field: { "$eq": file_id } })),
+            ..Default::default()
+        };
+        // The stream source closure is sync, but the file-fetch dispatcher runs it
+        // inside a tokio task (`tokio::spawn` in index_mod.rs). `block_in_place`
+        // hands the blocking work to a dedicated worker so the async storage query
+        // can be driven to completion without stalling the runtime, keeping the
+        // file-read loop owned by this closure (bounded memory, no full-file
+        // materialization on the wire).
+        let prepared = chunk_collection.find(Some(query))?;
+        let rows = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                prepared.exec(false).await.map_err(|err| {
+                    rxdb::rx_error::new_rx_error(
+                        "RC_WEBRTC_PEER",
+                        Some(json!({
+                            "message": format!("query {collection} chunks for {file_id}: {err}"),
+                        })),
+                    )
+                })
+            })
+        })?;
+        rows.as_array().cloned().unwrap_or_default()
+    };
     // Order by `idx` so the reassembled byte stream is correct.
     chunk_rows.sort_by_key(|chunk: &Value| chunk.get("idx").and_then(Value::as_u64).unwrap_or(0));
 
@@ -6644,23 +6727,87 @@ fn stream_demand_file_chunks(
     Ok(())
 }
 
-fn active_desktop_file_generation_id(database: &Arc<RxDatabase>, file_id: &str) -> Option<String> {
+struct DesktopFileDemandMetadata {
+    generation_id: String,
+    size_bytes: u64,
+}
+
+fn active_desktop_file_metadata(
+    database: &Arc<RxDatabase>,
+    file_id: &str,
+) -> Option<DesktopFileDemandMetadata> {
     let files = database.collection("desktop_files")?;
-    let prepared = files
-        .find_one(Some(MangoQuery {
-            selector: Some(json!({ "id": { "$eq": file_id } })),
-            ..Default::default()
-        }))
-        .ok()?;
-    let file_row = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async { prepared.exec(false).await.ok() })
+    let ids = vec![file_id.to_string()];
+    let mut file_rows = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            files
+                .storage_instance
+                .find_documents_by_id(&ids, false)
+                .await
+                .ok()
+        })
     })?;
+    let file_row = file_rows.pop()?;
     let generation_id = file_row
         .get("content_generation_id")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .trim();
-    (!generation_id.is_empty()).then(|| generation_id.to_string())
+    if generation_id.is_empty() {
+        return None;
+    }
+    Some(DesktopFileDemandMetadata {
+        generation_id: generation_id.to_string(),
+        size_bytes: file_row
+            .get("size_bytes")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+    })
+}
+
+fn desktop_file_chunk_rows_by_id(
+    chunks: &Arc<RxCollection>,
+    file_id: &str,
+    generation_id: &str,
+    size_bytes: u64,
+) -> rxdb::rx_error::RxResult<Vec<Value>> {
+    let expected_total = expected_desktop_file_chunk_total(size_bytes);
+    let expected_total_usize = usize::try_from(expected_total).map_err(|err| {
+        rxdb::rx_error::new_rx_error(
+            "RC_WEBRTC_PEER",
+            Some(json!({
+                "message": format!("desktop file chunk count overflow for {file_id}: {err}"),
+            })),
+        )
+    })?;
+    let ids: Vec<String> = (0..expected_total_usize)
+        .map(|idx| format!("{file_id}_{generation_id}_{idx}"))
+        .collect();
+    let mut rows = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            chunks
+                .storage_instance
+                .find_documents_by_id(&ids, false)
+                .await
+                .map_err(|err| {
+                    rxdb::rx_error::new_rx_error(
+                        "RC_WEBRTC_PEER",
+                        Some(json!({
+                            "message": format!("load desktop file chunks by id for {file_id}: {err}"),
+                        })),
+                    )
+                })
+        })
+    })?;
+    rows.retain(|chunk| {
+        chunk.get("file_id").and_then(Value::as_str) == Some(file_id)
+            && chunk.get("generation_id").and_then(Value::as_str) == Some(generation_id)
+            && chunk
+                .get("idx")
+                .and_then(Value::as_u64)
+                .is_some_and(|idx| idx < expected_total)
+    });
+    Ok(rows)
 }
 
 async fn prune_desktop_file_chunk_generations(
@@ -8978,16 +9125,42 @@ mod tests {
             .await
             .expect("open db");
         database
-            .add_collections(HashMap::from([(
-                "desktop_file_chunks".to_string(),
-                RxCollectionCreator {
-                    schema: business_os_schema("desktop_file_chunks", "id"),
-                    conflict_handler: None,
-                    options: HashMap::new(),
-                },
-            )]))
+            .add_collections(HashMap::from([
+                (
+                    "desktop_files".to_string(),
+                    RxCollectionCreator {
+                        schema: business_os_schema("desktop_files", "id"),
+                        conflict_handler: None,
+                        options: HashMap::new(),
+                    },
+                ),
+                (
+                    "desktop_file_chunks".to_string(),
+                    RxCollectionCreator {
+                        schema: business_os_schema("desktop_file_chunks", "id"),
+                        conflict_handler: None,
+                        options: HashMap::new(),
+                    },
+                ),
+            ]))
             .await
-            .expect("add desktop_file_chunks");
+            .expect("add desktop file collections");
+        let files = database
+            .collection("desktop_files")
+            .expect("desktop_files collection");
+        files
+            .incremental_upsert(json!({
+                "id": "f1",
+                "name": "file.txt",
+                "kind": "file",
+                "size_bytes": DESKTOP_FILE_CHUNK_SIZE as u64,
+                "content_state": "available",
+                "content_generation_id": "gen-active",
+                "created_at_ms": 1,
+                "updated_at_ms": 1,
+            }))
+            .await
+            .expect("upsert file");
         let chunks = database
             .collection("desktop_file_chunks")
             .expect("desktop_file_chunks collection");
@@ -8997,8 +9170,9 @@ mod tests {
         for (idx, payload) in [(1u64, &b"world!"[..]), (0u64, &b"Hello, "[..])] {
             chunks
                 .incremental_upsert(json!({
-                    "id": format!("f1_{idx}"),
+                    "id": format!("f1_gen-active_{idx}"),
                     "file_id": "f1",
+                    "generation_id": "gen-active",
                     "idx": idx,
                     "total": 2,
                     "encoding": "base64",
@@ -9099,6 +9273,7 @@ mod tests {
                 "kind": "file",
                 "content_state": "available",
                 "content_generation_id": "gen-active",
+                "created_at_ms": 1,
                 "updated_at_ms": 1,
             }))
             .await

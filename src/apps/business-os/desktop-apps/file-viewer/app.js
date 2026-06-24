@@ -1,6 +1,5 @@
 import {
   FILE_CHUNK_ERROR_CODES,
-  readStoredFileFromChunks,
   readStoredFileFromDemandChunks,
 } from '../../shared/file-integrity.js?v=20260624-demand-file-fetch1';
 
@@ -296,7 +295,7 @@ async function readStoredFile(ctx, fileId, mimeType = 'application/octet-stream'
     const chunks = await loader.fetchFile(fileId);
     return readStoredFileFromDemandChunks(chunks, mimeType, options);
   }
-  return readStoredFileFromLocalChunks(ctx?.db, fileId, mimeType, options);
+  throw new Error('Dateiinhalt ist noch nicht über den Sync-Demand-Pfad verfügbar.');
 }
 
 async function fileDemandLoaderFor(ctx) {
@@ -304,14 +303,6 @@ async function fileDemandLoaderFor(ctx) {
   const bridge = await ctx.sync.startCollection('desktop_files');
   await waitForReplicationBridge(bridge, 'desktop_files');
   return bridge?.state?.demandFileLoader || null;
-}
-
-async function readStoredFileFromLocalChunks(db, fileId, mimeType = 'application/octet-stream', options = {}) {
-  const chunks = db?.collection?.('desktop_file_chunks');
-  if (!chunks) throw new Error('Datei-Chunks sind nicht verfügbar.');
-  const docs = await chunks.find().exec();
-  const allChunks = docs.map((doc) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc));
-  return readStoredFileFromChunks(allChunks, fileId, mimeType, options);
 }
 
 function ensureStyles() {
