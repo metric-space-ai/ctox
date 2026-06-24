@@ -108,6 +108,8 @@ const DESKTOP_FILE_SCAN_MAX_FILES: usize = 200;
 const DESKTOP_FILE_CHUNK_RETAIN_GENERATIONS: usize = 2;
 const DESKTOP_FILE_CHUNK_CLEANUP_SCAN_LIMIT: u64 = 100_000;
 const DESKTOP_FILE_INDEX_MAINTENANCE_INTERVAL_SECS: u64 = 10 * 60;
+const DESKTOP_FILE_INDEX_MAINTENANCE_FILE_LIMIT: usize = 1_000;
+const DESKTOP_FILE_INDEX_MAINTENANCE_CHUNK_DELETE_LIMIT: usize = 5_000;
 const DESKTOP_FILE_CONTENT_HASH_SCHEME: &str = "sha256-bytes-v1";
 const DESKTOP_FILE_CHUNK_HASH_SCHEME: &str = "sha256-base64-chunk-v1";
 const CTOX_DESKTOP_FOLDER_ID: &str = "fs_ctox";
@@ -6524,6 +6526,9 @@ fn compact_desktop_file_index_store_sync(
             };
             if desktop_file_index_document_is_unsafe(&document, home) {
                 unsafe_files.push((id, revision, document));
+                if unsafe_files.len() >= DESKTOP_FILE_INDEX_MAINTENANCE_FILE_LIMIT {
+                    break;
+                }
             }
         }
         unsafe_files
@@ -6532,7 +6537,8 @@ fn compact_desktop_file_index_store_sync(
     let tx = conn.transaction()?;
     let now = now_ms() as f64;
     let mut stats = DesktopFileIndexMaintenanceStats::default();
-    for (file_id, revision, mut document) in unsafe_files {
+    for (file_id, revision, document) in &unsafe_files {
+        let mut document = document.clone();
         let next_revision = maintenance_revision(
             document
                 .get("_rev")
@@ -6551,38 +6557,78 @@ fn compact_desktop_file_index_store_sync(
         )?;
         if changed > 0 {
             stats.tombstoned_unsafe_files += changed;
-            stats.removed_unsafe_chunks += tx.execute(
-                &format!("DELETE FROM {CHUNKS_TABLE} WHERE json_extract(data, '$.file_id') = ?1"),
-                params![file_id],
-            )?;
         }
     }
 
+    let mut remaining_chunk_delete_limit = DESKTOP_FILE_INDEX_MAINTENANCE_CHUNK_DELETE_LIMIT;
+    for (file_id, _, _) in &unsafe_files {
+        if remaining_chunk_delete_limit == 0 {
+            break;
+        }
+        let (chunk_id_lower, chunk_id_upper) = desktop_file_chunk_id_bounds(file_id);
+        let removed = tx.execute(
+            &format!(
+                "DELETE FROM {CHUNKS_TABLE}
+                 WHERE rowid IN (
+                   SELECT rowid FROM {CHUNKS_TABLE}
+                   WHERE id >= ?1 AND id < ?2
+                   LIMIT ?3
+                 )"
+            ),
+            params![
+                chunk_id_lower,
+                chunk_id_upper,
+                remaining_chunk_delete_limit as i64
+            ],
+        )?;
+        stats.removed_unsafe_chunks += removed;
+        remaining_chunk_delete_limit = remaining_chunk_delete_limit.saturating_sub(removed);
+    }
     stats.removed_deleted_chunks = tx.execute(
-        &format!("DELETE FROM {CHUNKS_TABLE} WHERE COALESCE(deleted, 0) = 1"),
-        [],
-    )?;
-    stats.removed_stale_chunks = tx.execute(
         &format!(
             "DELETE FROM {CHUNKS_TABLE}
              WHERE rowid IN (
-               SELECT c.rowid FROM {CHUNKS_TABLE} AS c
-               WHERE COALESCE(c.deleted, 0) = 0
-                 AND NOT EXISTS (
-                   SELECT 1 FROM {FILES_TABLE} AS f
-                   WHERE f.id = json_extract(c.data, '$.file_id')
-                     AND COALESCE(f.deleted, 0) = 0
-                     AND COALESCE(json_extract(f.data, '$._deleted'), 0) = 0
-                     AND COALESCE(json_extract(f.data, '$.is_deleted'), 0) = 0
-                     AND json_extract(f.data, '$.content_generation_id') =
-                         json_extract(c.data, '$.generation_id')
-                 )
-               )"
+               SELECT rowid FROM {CHUNKS_TABLE}
+               WHERE COALESCE(deleted, 0) = 1
+               LIMIT {DESKTOP_FILE_INDEX_MAINTENANCE_CHUNK_DELETE_LIMIT}
+             )"
         ),
         [],
     )?;
+    if stats.tombstoned_unsafe_files == 0
+        && stats.removed_unsafe_chunks == 0
+        && stats.removed_deleted_chunks == 0
+    {
+        stats.removed_stale_chunks = tx.execute(
+            &format!(
+                "DELETE FROM {CHUNKS_TABLE}
+                 WHERE rowid IN (
+                   SELECT c.rowid FROM {CHUNKS_TABLE} AS c
+                   WHERE COALESCE(c.deleted, 0) = 0
+                     AND NOT EXISTS (
+                       SELECT 1 FROM {FILES_TABLE} AS f
+                       WHERE f.id = json_extract(c.data, '$.file_id')
+                         AND COALESCE(f.deleted, 0) = 0
+                         AND COALESCE(json_extract(f.data, '$._deleted'), 0) = 0
+                         AND COALESCE(json_extract(f.data, '$.is_deleted'), 0) = 0
+                         AND json_extract(f.data, '$.content_generation_id') =
+                             json_extract(c.data, '$.generation_id')
+                     )
+                   LIMIT {DESKTOP_FILE_INDEX_MAINTENANCE_CHUNK_DELETE_LIMIT}
+                 )"
+            ),
+            [],
+        )?;
+    }
     tx.commit()?;
     Ok(stats)
+}
+
+fn desktop_file_chunk_id_bounds(file_id: &str) -> (String, String) {
+    // Chunk IDs are "{file_id}_{generation_id}_{idx}". The upper bound uses
+    // the next ASCII character after '_' so SQLite can use the primary-key
+    // index instead of extracting file_id from every JSON payload.
+    (format!("{file_id}_"), format!("{file_id}`"))
 }
 
 fn desktop_file_index_document_is_unsafe(document: &Value, home: Option<&Path>) -> bool {
