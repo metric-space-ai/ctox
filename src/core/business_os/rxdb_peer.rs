@@ -24,7 +24,7 @@ use crate::mission::tickets;
 use anyhow::Context;
 use base64::Engine;
 use chrono::{DateTime, FixedOffset};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use rxdb::plugins::replication_webrtc::{
     RTCIceServer, RxWebRTCReplicationPool, WebRTCRsConnectionHandler,
 };
@@ -925,6 +925,49 @@ fn sync_channel_state(root: &Path) -> anyhow::Result<usize> {
             .await
             .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
         let synced = sync_channel_state_with_database(root, &database).await?;
+        database
+            .close()
+            .await
+            .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
+        Ok(synced)
+    })
+}
+
+#[cfg(test)]
+fn sync_channel_state_if_changed(
+    root: &Path,
+    last_projection_stamp: &mut Option<ChannelStateProjectionStamp>,
+) -> anyhow::Result<usize> {
+    let database_path = store::rxdb_store_path(root);
+    if let Some(parent) = database_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create RxDB runtime dir {}", parent.display()))?;
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to create Business OS channel state sync runtime")?;
+    let _database_guard = TEMPORARY_RXDB_DATABASE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    runtime.block_on(async move {
+        if let Some(peer) = current_peer() {
+            return sync_channel_state_with_database_if_changed(
+                root,
+                &peer.database,
+                last_projection_stamp,
+            )
+            .await;
+        }
+
+        let database = open_database(database_path).await?;
+        database
+            .add_collections(collection_creators())
+            .await
+            .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
+        let synced =
+            sync_channel_state_with_database_if_changed(root, &database, last_projection_stamp)
+                .await?;
         database
             .close()
             .await
@@ -2069,10 +2112,16 @@ async fn sync_channel_state_background_loop(
     database: Arc<RxDatabase>,
     database_write_lock: Arc<AsyncMutex<()>>,
 ) {
+    let mut last_projection_stamp: Option<ChannelStateProjectionStamp> = None;
     loop {
         let result = {
             let _guard = database_write_lock.lock().await;
-            sync_channel_state_with_database(&root, &database).await
+            sync_channel_state_with_database_if_changed(
+                &root,
+                &database,
+                &mut last_projection_stamp,
+            )
+            .await
         };
         if let Err(err) = result {
             eprintln!("[business-os] native rxdb channel state sync failed: {err:#}");
@@ -5509,6 +5558,53 @@ struct ChannelStateProjection {
     pairing_states: Vec<Value>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChannelStateProjectionStamp {
+    accounts: ChannelAccountsProjectionStamp,
+    pairing_artifacts: Vec<ChannelPairingArtifactStamp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChannelAccountsProjectionStamp {
+    table_exists: bool,
+    row_count: usize,
+    latest_updated_at_ms: i64,
+    content_hash: String,
+    channels: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChannelPairingArtifactStamp {
+    channel: String,
+    status: ProjectionFileStamp,
+    qr: ProjectionFileStamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectionFileStamp {
+    len: u64,
+    modified_ns: u128,
+}
+
+async fn sync_channel_state_with_database_if_changed(
+    root: &Path,
+    database: &Arc<RxDatabase>,
+    last_projection_stamp: &mut Option<ChannelStateProjectionStamp>,
+) -> anyhow::Result<usize> {
+    let root_for_stamp = root.to_path_buf();
+    let projection_stamp =
+        tokio::task::spawn_blocking(move || channel_state_projection_stamp(&root_for_stamp))
+            .await
+            .context("join native channel state projection stamp")??;
+    if last_projection_stamp.as_ref() == Some(&projection_stamp) {
+        return Ok(0);
+    }
+
+    let synced = sync_channel_state_with_database(root, database).await?;
+    *last_projection_stamp = Some(projection_stamp);
+    Ok(synced)
+}
+
 async fn sync_channel_state_with_database(
     root: &Path,
     database: &Arc<RxDatabase>,
@@ -5547,11 +5643,11 @@ async fn sync_channel_state_with_database(
             object.insert("is_deleted".to_string(), Value::Bool(false));
             object.insert("_deleted".to_string(), Value::Bool(false));
         }
-        accounts
-            .incremental_upsert(document)
-            .await
-            .map_err(|err| anyhow::anyhow!("upsert communication account projection: {err}"))?;
-        synced += 1;
+        if incremental_upsert_projection_if_changed(&accounts, document, "communication account")
+            .await?
+        {
+            synced += 1;
+        }
     }
 
     let existing_accounts = accounts
@@ -5610,14 +5706,66 @@ async fn sync_channel_state_with_database(
             object.remove("_rev");
             object.remove("_meta");
         }
-        pairing_states
-            .incremental_upsert(document)
-            .await
-            .map_err(|err| anyhow::anyhow!("upsert channel pairing state projection: {err}"))?;
-        synced += 1;
+        if incremental_upsert_projection_if_changed(
+            &pairing_states,
+            document,
+            "channel pairing state",
+        )
+        .await?
+        {
+            synced += 1;
+        }
     }
 
     Ok(synced)
+}
+
+async fn incremental_upsert_projection_if_changed(
+    collection: &Arc<RxCollection>,
+    document: Value,
+    label: &str,
+) -> anyhow::Result<bool> {
+    let schema = collection
+        .schema_required()
+        .map_err(|err| anyhow::anyhow!("{err}"))?;
+    let primary_path = schema.primary_path.clone();
+    let document_id = document
+        .get(&primary_path)
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("{label} projection missing primary key {primary_path}"))?
+        .to_string();
+    let existing = collection
+        .storage_instance
+        .find_documents_by_id(std::slice::from_ref(&document_id), true)
+        .await
+        .map_err(|err| anyhow::anyhow!("load existing {label} projection: {err}"))?
+        .into_iter()
+        .next();
+    if let Some(existing) = existing {
+        if canonical_projection_document_for_compare(&existing)
+            == canonical_projection_document_for_compare(&document)
+        {
+            return Ok(false);
+        }
+    }
+    collection
+        .incremental_upsert(document)
+        .await
+        .map_err(|err| anyhow::anyhow!("upsert {label} projection: {err}"))?;
+    Ok(true)
+}
+
+fn canonical_projection_document_for_compare(document: &Value) -> Value {
+    let mut value = document.clone();
+    if let Some(object) = value.as_object_mut() {
+        object.remove("_rev");
+        object.remove("_meta");
+        object.remove("_attachments");
+        object.remove("_deleted");
+        object.remove("updated_at_ms");
+    }
+    value
 }
 
 fn load_channel_state_projection(root: &Path) -> anyhow::Result<ChannelStateProjection> {
@@ -5655,6 +5803,131 @@ fn load_channel_state_projection(root: &Path) -> anyhow::Result<ChannelStateProj
         accounts,
         pairing_states,
     })
+}
+
+fn channel_state_projection_stamp(root: &Path) -> anyhow::Result<ChannelStateProjectionStamp> {
+    let accounts = channel_accounts_projection_stamp(root)?;
+    let mut channel_ids: BTreeSet<String> = BUSINESS_OS_CHANNEL_IDS
+        .iter()
+        .map(|channel| (*channel).to_string())
+        .collect();
+    channel_ids.extend(accounts.channels.iter().cloned());
+    let pairing_artifacts = channel_ids
+        .into_iter()
+        .map(|channel| {
+            let artifacts =
+                crate::communication::runtime::artifacts_dir_for_business_os(root, &channel);
+            ChannelPairingArtifactStamp {
+                channel,
+                status: projection_file_stamp(&artifacts.join("pairing-status.json")),
+                qr: projection_file_stamp(&artifacts.join("pairing-qr.svg")),
+            }
+        })
+        .collect();
+    Ok(ChannelStateProjectionStamp {
+        accounts,
+        pairing_artifacts,
+    })
+}
+
+fn channel_accounts_projection_stamp(
+    root: &Path,
+) -> anyhow::Result<ChannelAccountsProjectionStamp> {
+    let db_path = crate::paths::core_db(root);
+    if !db_path.exists() {
+        return Ok(empty_channel_accounts_projection_stamp(false));
+    }
+    let conn = Connection::open_with_flags(
+        &db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("open communication accounts DB {}", db_path.display()))?;
+    let table_exists = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'communication_accounts' LIMIT 1",
+            [],
+            |_| Ok(()),
+        )
+        .optional()
+        .context("check communication_accounts table")?
+        .is_some();
+    if !table_exists {
+        return Ok(empty_channel_accounts_projection_stamp(false));
+    }
+
+    let mut hasher = sha2::Sha256::new();
+    let mut channels = BTreeSet::new();
+    let mut row_count = 0usize;
+    let mut latest_updated_at_ms = 0i64;
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT
+                account_key, channel, address, provider, profile_json,
+                created_at, updated_at, last_inbound_ok_at, last_outbound_ok_at,
+                CAST(strftime('%s', COALESCE(updated_at, created_at)) AS INTEGER) * 1000 AS updated_at_ms
+            FROM communication_accounts
+            ORDER BY account_key ASC
+            "#,
+        )
+        .context("prepare communication account stamp query")?;
+    let mut rows = stmt
+        .query([])
+        .context("query communication account stamp")?;
+    while let Some(row) = rows
+        .next()
+        .context("read communication account stamp row")?
+    {
+        row_count += 1;
+        for index in 0..9 {
+            let value = row.get::<_, Option<String>>(index)?.unwrap_or_default();
+            if index == 1 && !value.trim().is_empty() {
+                channels.insert(value.clone());
+            }
+            hasher.update(value.len().to_le_bytes());
+            hasher.update(value.as_bytes());
+        }
+        let updated_at_ms = row.get::<_, Option<i64>>(9)?.unwrap_or(0);
+        latest_updated_at_ms = latest_updated_at_ms.max(updated_at_ms);
+        hasher.update(updated_at_ms.to_le_bytes());
+    }
+
+    Ok(ChannelAccountsProjectionStamp {
+        table_exists: true,
+        row_count,
+        latest_updated_at_ms,
+        content_hash: format!("{:x}", hasher.finalize()),
+        channels: channels.into_iter().collect(),
+    })
+}
+
+fn empty_channel_accounts_projection_stamp(table_exists: bool) -> ChannelAccountsProjectionStamp {
+    ChannelAccountsProjectionStamp {
+        table_exists,
+        row_count: 0,
+        latest_updated_at_ms: 0,
+        content_hash: String::new(),
+        channels: Vec::new(),
+    }
+}
+
+fn projection_file_stamp(path: &Path) -> ProjectionFileStamp {
+    let Ok(metadata) = fs::metadata(path) else {
+        return ProjectionFileStamp {
+            len: 0,
+            modified_ns: 0,
+        };
+    };
+    let modified_ns = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    ProjectionFileStamp {
+        len: metadata.len(),
+        modified_ns,
+    }
 }
 
 fn channel_pairing_state_document(channel: String, state: Value, now: u128) -> Value {
@@ -9080,6 +9353,55 @@ mod tests {
             tombstone.get("is_deleted").and_then(Value::as_bool),
             Some(true)
         );
+    }
+
+    #[test]
+    fn sync_channel_state_idle_gate_skips_unchanged_projection() {
+        let root = tempfile::tempdir().expect("temp root");
+        channels::list_communication_accounts_for_business_os(root.path())
+            .expect("initialize channel schema");
+        let conn = Connection::open(root.path().join("runtime/ctox.sqlite3"))
+            .expect("open channel sqlite");
+        conn.execute(
+            r#"
+            INSERT INTO communication_accounts (
+                account_key, channel, address, provider, profile_json,
+                created_at, updated_at, last_inbound_ok_at, last_outbound_ok_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, NULL, NULL)
+            "#,
+            params![
+                "jami:idle",
+                "jami",
+                "idle@example.test",
+                "jami",
+                "{}",
+                "2026-05-20T08:00:00Z",
+            ],
+        )
+        .expect("insert communication account");
+        drop(conn);
+
+        let mut last_projection_stamp = None;
+        let first = sync_channel_state_if_changed(root.path(), &mut last_projection_stamp)
+            .expect("first changed sync");
+        assert!(first >= BUSINESS_OS_CHANNEL_IDS.len() + 1);
+
+        let second = sync_channel_state_if_changed(root.path(), &mut last_projection_stamp)
+            .expect("unchanged idle sync");
+        assert_eq!(second, 0);
+
+        let artifacts =
+            crate::communication::runtime::artifacts_dir_for_business_os(root.path(), "jami");
+        fs::create_dir_all(&artifacts).expect("create pairing artifacts");
+        fs::write(
+            artifacts.join("pairing-status.json"),
+            r#"{"status":"qr_ready","qr_payload":"idle-pair"}"#,
+        )
+        .expect("write pairing status");
+
+        let third = sync_channel_state_if_changed(root.path(), &mut last_projection_stamp)
+            .expect("changed artifact sync");
+        assert!(third >= 1);
     }
 
     #[test]
