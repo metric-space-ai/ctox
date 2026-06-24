@@ -1,5 +1,7 @@
 "use strict";
 
+const { isSafeExternalUrl } = require("./url-safety.cjs");
+
 function normalizeCtoxDevBaseUrl(baseUrl) {
   return String(baseUrl || "https://ctox.dev").replace(/\/+$/, "");
 }
@@ -114,6 +116,38 @@ function cookieMatchesCtoxDevBase(domain, host) {
     || host.endsWith(`.${domain}`);
 }
 
+function lockDownLoginWindowNavigation(loginWindow, shell) {
+  const webContents = loginWindow?.webContents;
+  if (!webContents) return;
+  const openExternalSafely = (url) => {
+    if (shell?.openExternal && isSafeExternalUrl(url)) {
+      Promise.resolve(shell.openExternal(url)).catch(() => undefined);
+    }
+  };
+  if (typeof webContents.setWindowOpenHandler === "function") {
+    webContents.setWindowOpenHandler(({ url }) => {
+      openExternalSafely(url);
+      return { action: "deny" };
+    });
+  }
+  if (typeof webContents.on === "function") {
+    webContents.on("will-navigate", (event, rawUrl) => {
+      // http(s) navigations stay inside the window so cross-origin auth/SSO
+      // redirects keep working; non-web schemes (file:, data:, custom) are blocked
+      // and only safe ones are handed to the OS browser.
+      let protocol = "";
+      try {
+        protocol = new URL(String(rawUrl || "")).protocol;
+      } catch (_error) {
+        protocol = "";
+      }
+      if (protocol === "http:" || protocol === "https:") return;
+      if (event && typeof event.preventDefault === "function") event.preventDefault();
+      openExternalSafely(rawUrl);
+    });
+  }
+}
+
 async function openCtoxDevLoginWindow({
   BrowserWindow,
   baseUrl,
@@ -121,6 +155,7 @@ async function openCtoxDevLoginWindow({
   isAuthenticated,
   parentWindow,
   onWindowCreated,
+  shell,
   show = true,
   timeoutMs = 0,
   width = 520,
@@ -138,8 +173,10 @@ async function openCtoxDevLoginWindow({
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
     },
   });
+  lockDownLoginWindowNavigation(loginWindow, shell);
   return new Promise((resolve) => {
     let settled = false;
     let authCheckInFlight = false;

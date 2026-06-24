@@ -2,6 +2,11 @@
 
 const path = require("node:path");
 
+// A remotely-loaded instance shell is denied every device/capability permission
+// by default; only the minimal, non-sensitive set the Business-OS UI needs is
+// allowed. Camera, microphone, geolocation, MIDI, clipboard-read, etc. are denied.
+const ALLOWED_INSTANCE_PERMISSIONS = new Set(["notifications", "clipboard-sanitized-write"]);
+
 function createInstanceBrowserView({
   BrowserView,
   instance,
@@ -10,34 +15,68 @@ function createInstanceBrowserView({
   scrubCtoxConfigFromWebContents,
   isAllowedBusinessOsNavigation,
   isForbiddenBusinessOsHttpDataRequest,
+  isForbiddenBusinessOsDataResourceRequest,
+  isSafeExternalUrl,
   instancePreloadPath = path.join(__dirname, "../instance-preload.cjs"),
 }) {
   if (!BrowserView) throw new Error("Electron BrowserView is required");
+  const launchOrigin = originOf(launch?.launchUrl);
   const view = new BrowserView({
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
       partition: instance.sessionPartition,
       preload: instancePreloadPath,
     },
   });
-  view.webContents.setWindowOpenHandler(({ url }) => {
+  installInstancePermissionPolicy(view);
+  const openExternalSafely = (url) => {
+    if (typeof isSafeExternalUrl === "function" && !isSafeExternalUrl(url)) return;
     shell.openExternal(url);
+  };
+  view.webContents.setWindowOpenHandler(({ url }) => {
+    openExternalSafely(url);
     return { action: "deny" };
   });
   view.webContents.on("will-navigate", (event, url) => {
-    const allowedOrigins = new Set([new URL(launch.launchUrl).origin]);
+    const allowedOrigins = new Set([launchOrigin].filter(Boolean));
     if (!isAllowedBusinessOsNavigation(url, allowedOrigins)) {
       event.preventDefault();
-      shell.openExternal(url);
+      openExternalSafely(url);
     }
   });
   view.webContents.on("did-finish-load", () => {
     scrubCtoxConfigFromWebContents(view.webContents).catch(() => undefined);
     installDesktopInstanceSwitcher(view, instance).catch(() => undefined);
   });
-  installBusinessOsHttpDataGuard(view, isForbiddenBusinessOsHttpDataRequest);
+  installBusinessOsHttpDataGuard(view, isForbiddenBusinessOsHttpDataRequest, {
+    launchOrigin,
+    isForbiddenBusinessOsDataResourceRequest,
+  });
   return view;
+}
+
+function originOf(rawUrl) {
+  try {
+    return new URL(String(rawUrl || "")).origin;
+  } catch (_error) {
+    return "";
+  }
+}
+
+function installInstancePermissionPolicy(view) {
+  const ses = view?.webContents?.session;
+  if (!ses) return false;
+  if (typeof ses.setPermissionRequestHandler === "function") {
+    ses.setPermissionRequestHandler((_webContents, permission, callback) => {
+      callback(ALLOWED_INSTANCE_PERMISSIONS.has(permission));
+    });
+  }
+  if (typeof ses.setPermissionCheckHandler === "function") {
+    ses.setPermissionCheckHandler((_webContents, permission) => ALLOWED_INSTANCE_PERMISSIONS.has(permission));
+  }
+  return true;
 }
 
 async function installDesktopInstanceSwitcher(view, instance) {
@@ -95,14 +134,24 @@ async function installDesktopInstanceSwitcher(view, instance) {
   })()`, true);
 }
 
-function installBusinessOsHttpDataGuard(view, isForbiddenBusinessOsHttpDataRequest) {
+function installBusinessOsHttpDataGuard(view, isForbiddenBusinessOsHttpDataRequest, options = {}) {
+  const { launchOrigin = "", isForbiddenBusinessOsDataResourceRequest } = options;
   const webRequest = view.webContents.session?.webRequest;
   if (!webRequest?.onBeforeRequest || typeof isForbiddenBusinessOsHttpDataRequest !== "function") {
+    // The instance shell would be able to reach HTTP data routes unguarded; make
+    // the failure loud rather than silently shipping an open data path.
+    console.error("Business OS HTTP data guard could not be installed for an instance view");
     return false;
   }
-  webRequest.onBeforeRequest({ urls: ["http://*/*", "https://*/*"] }, (details, callback) => {
-    callback({ cancel: isForbiddenBusinessOsHttpDataRequest(details.url) });
-  });
+  webRequest.onBeforeRequest(
+    { urls: ["http://*/*", "https://*/*", "ws://*/*", "wss://*/*"] },
+    (details, callback) => {
+      const cancel = isForbiddenBusinessOsHttpDataRequest(details.url)
+        || (typeof isForbiddenBusinessOsDataResourceRequest === "function"
+          && isForbiddenBusinessOsDataResourceRequest(details.url, details.resourceType, launchOrigin));
+      callback({ cancel: Boolean(cancel) });
+    },
+  );
   return true;
 }
 

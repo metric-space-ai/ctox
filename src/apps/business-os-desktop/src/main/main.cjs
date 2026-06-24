@@ -25,7 +25,9 @@ const {
 } = require("./session-view.cjs");
 const {
   isForbiddenBusinessOsHttpDataRequest,
+  isForbiddenBusinessOsDataResourceRequest,
   isAllowedBusinessOsNavigation,
+  isSafeExternalUrl,
   scrubCtoxConfigFromWebContents,
 } = require("./url-safety.cjs");
 const { installDesktopProtocolHandling } = require("./protocol-handler.cjs");
@@ -95,13 +97,31 @@ async function createWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
       preload: path.join(__dirname, "../preload.cjs"),
     },
   });
+  lockDownPrivilegedWindowNavigation(mainWindow);
   mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
   mainWindow.on("resize", layoutActiveView);
   mainWindow.on("closed", () => {
     mainWindow = null;
+  });
+}
+
+function lockDownPrivilegedWindowNavigation(window) {
+  // The shell window holds the full, SSH/secret-capable `ctoxDesktop` preload
+  // bridge and only ever renders the bundled local index.html. Forbid it from
+  // navigating or opening windows to remote content, which would otherwise hand
+  // that bridge to an arbitrary origin. Safe links are deflected to the OS browser.
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (isSafeExternalUrl(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
+  window.webContents.on("will-navigate", (event, url) => {
+    if (url.startsWith("file:")) return;
+    event.preventDefault();
+    if (isSafeExternalUrl(url)) shell.openExternal(url);
   });
 }
 
@@ -168,6 +188,8 @@ async function activateInstance(instance) {
       scrubCtoxConfigFromWebContents,
       isAllowedBusinessOsNavigation,
       isForbiddenBusinessOsHttpDataRequest,
+      isForbiddenBusinessOsDataResourceRequest,
+      isSafeExternalUrl,
     });
     await view.webContents.loadURL(launch.launchUrl);
     await scrubCtoxConfigFromWebContents(view.webContents).catch(() => undefined);
@@ -241,6 +263,7 @@ async function openCtoxDevLogin() {
     baseUrl: registry.settings.ctoxDevBaseUrl,
     isAuthenticated: isCtoxDevSessionAuthenticated,
     parentWindow: mainWindow,
+    shell,
   });
   const instances = await sourceManager.listInstances();
   return {
