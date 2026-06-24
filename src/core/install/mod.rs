@@ -2138,6 +2138,15 @@ fn run_release_installer(
     if skip_optional_runtime_builds && env::var_os("CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS").is_none() {
         cmd.env("CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS", "1");
     }
+    if skip_optional_runtime_builds && env::var_os("CTOX_VOXTRAL_BUILD_GGML").is_none() {
+        cmd.env("CTOX_VOXTRAL_BUILD_GGML", "0");
+    }
+    if skip_optional_runtime_builds && env::var_os("CTOX_QWEN3_EMBEDDING_BUILD_CUDA").is_none() {
+        cmd.env("CTOX_QWEN3_EMBEDDING_BUILD_CUDA", "0");
+    }
+    if skip_optional_runtime_builds && env::var_os("CTOX_VOXTRAL_TTS_BUILD_CUDA").is_none() {
+        cmd.env("CTOX_VOXTRAL_TTS_BUILD_CUDA", "0");
+    }
     if let Some(bwrap_source_dir) = resolve_bwrap_source_dir_for_installer(release_root) {
         cmd.env("CODEX_BWRAP_SOURCE_DIR", bwrap_source_dir);
     }

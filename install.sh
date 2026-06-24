@@ -1561,14 +1561,25 @@ build_ctox() {
     skip_optional_runtime_builds=1
     printf '[build] skipping optional runtime rebuilds (CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS=1)\n'
   fi
-  local -a workspace_cargo_env=()
+  local -a cargo_env=()
   case "$source_root" in
     "$INSTALL_ROOT"/releases/*)
       managed_release_build=1
       main_target_dir="$source_root/target"
-      workspace_cargo_env=(env "CARGO_TARGET_DIR=$main_target_dir")
+      cargo_env+=("CARGO_TARGET_DIR=$main_target_dir")
       ;;
   esac
+  if [[ "$skip_optional_runtime_builds" -eq 1 ]]; then
+    cargo_env+=(
+      "CTOX_VOXTRAL_BUILD_GGML=0"
+      "CTOX_QWEN3_EMBEDDING_BUILD_CUDA=0"
+      "CTOX_VOXTRAL_TTS_BUILD_CUDA=0"
+    )
+  fi
+  local -a workspace_cargo_env=()
+  if [[ "${#cargo_env[@]}" -gt 0 ]]; then
+    workspace_cargo_env=(env "${cargo_env[@]}")
+  fi
   prepare_cargo_target_cache "$main_target_dir" "ctox-main"
   clean_stale_cmake_cache_dirs "$main_target_dir" "$source_root"
 
