@@ -3,8 +3,9 @@ import {
   FILE_CONTENT_HASH_SCHEME,
   base64ToBytes,
   readStoredFileFromChunks,
+  readStoredFileFromDemandChunks,
   sha256Hex,
-} from '../../shared/file-integrity.js?v=20260605-rxdb-cancel1';
+} from '../../shared/file-integrity.js?v=20260624-demand-file-fetch1';
 
 export const manifest = {
   id: 'explorer',
@@ -368,7 +369,7 @@ export async function mount(container, ctx) {
       return;
     }
     try {
-      const blob = await readStoredFile(ctx.db, row.id, row.mimeType, row);
+      const blob = await readStoredFile(ctx, row.id, row.mimeType, row);
       if (state.selectedId !== row.id) return;
       state.previewUrl = URL.createObjectURL(blob);
       if (row.mimeType.startsWith('image/')) {
@@ -419,7 +420,7 @@ export async function mount(container, ctx) {
       }
       let blob;
       try {
-        blob = await readStoredFile(ctx.db, row.id, row.mimeType, row);
+        blob = await readStoredFile(ctx, row.id, row.mimeType, row);
       } catch (error) {
         ctx.reportFileIntegrityError?.(error, {
           fileId: row.id,
@@ -709,7 +710,39 @@ async function storeFile(db, parentId, parentPath, name, file) {
   });
 }
 
-async function readStoredFile(db, fileId, mimeType = 'application/octet-stream', options = {}) {
+async function readStoredFile(ctx, fileId, mimeType = 'application/octet-stream', options = {}) {
+  const loader = await fileDemandLoaderFor(ctx).catch(() => null);
+  if (loader?.fetchFile) {
+    const chunks = await loader.fetchFile(fileId);
+    return readStoredFileFromDemandChunks(chunks, mimeType, options);
+  }
+  return readStoredFileFromLocalChunks(ctx?.db, fileId, mimeType, options);
+}
+
+async function fileDemandLoaderFor(ctx) {
+  if (!ctx?.sync?.startCollection) return null;
+  const bridge = await ctx.sync.startCollection('desktop_files');
+  await waitForReplicationBridge(bridge, 'desktop_files');
+  return bridge?.state?.demandFileLoader || null;
+}
+
+async function waitForReplicationBridge(bridge, collection, timeoutMs = 20000) {
+  const state = bridge?.state;
+  const wait = typeof state?.awaitInSync === 'function'
+    ? state.awaitInSync.bind(state)
+    : typeof state?.awaitInitialReplication === 'function'
+      ? state.awaitInitialReplication.bind(state)
+      : null;
+  if (!wait) return;
+  await Promise.race([
+    wait(),
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(`${collection} replication did not become ready in time`)), timeoutMs);
+    }),
+  ]);
+}
+
+async function readStoredFileFromLocalChunks(db, fileId, mimeType = 'application/octet-stream', options = {}) {
   const chunks = db?.collection?.('desktop_file_chunks');
   if (!chunks) throw new Error('Datei-Chunks sind nicht verfügbar.');
   const docs = await chunks.find().exec();

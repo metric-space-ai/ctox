@@ -602,7 +602,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     // single shared CtoxWebRtcNativePeer for this room.
     topic: room,
     connectionHandlerCreator,
-    pull: { batchSize },
+    pull: isDemandOnlyPullCollection(collection) ? null : { batchSize },
     push: isReadOnlyProjectionCollection(collection) ? null : { batchSize },
     retryTime: 5000,
     ctox: {
@@ -1799,4 +1799,8 @@ function isReadOnlyProjectionCollection(collection) {
     || collection === 'communication_accounts'
     || collection === 'knowledge_tables'
     || collection === 'ctox_runtime_settings';
+}
+
+function isDemandOnlyPullCollection(collection) {
+  return collection === 'desktop_file_chunks';
 }

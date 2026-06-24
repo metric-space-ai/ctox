@@ -6466,17 +6466,37 @@ async fn upsert_desktop_file_with_parent(
     Ok(())
 }
 
-/// Phase 4: the file-bearing chunk collections and the chunk-document field
-/// that carries the per-file grouping key. `rxdb.file.fetch` requests a
-/// `(collectionName, fileId)`; the source reads every chunk doc whose key field
-/// equals `fileId`, orders them by `idx`, base64-decodes each `data` field, and
-/// streams the raw bytes back. Each collection is keyed by a different field
-/// because they were authored independently (desktop vs. document/spreadsheet
-/// blobs), but the chunk shape (`idx` + base64 `data`) is uniform.
-const DEMAND_FILE_CHUNK_COLLECTIONS: &[(&str, &str)] = &[
-    ("desktop_file_chunks", "file_id"),
-    ("document_blob_chunks", "blob_id"),
-    ("spreadsheet_blob_chunks", "blob_id"),
+/// Phase 4: file-demand sources exposed to the browser. The request collection
+/// can be metadata (`desktop_files`) while the bytes still live in a separate
+/// chunk collection (`desktop_file_chunks`); this keeps large payloads off the
+/// normal background replication path.
+struct DemandFileChunkCollection {
+    request_collection: &'static str,
+    storage_collection: &'static str,
+    key_field: &'static str,
+}
+
+const DEMAND_FILE_CHUNK_COLLECTIONS: &[DemandFileChunkCollection] = &[
+    DemandFileChunkCollection {
+        request_collection: "desktop_files",
+        storage_collection: "desktop_file_chunks",
+        key_field: "file_id",
+    },
+    DemandFileChunkCollection {
+        request_collection: "desktop_file_chunks",
+        storage_collection: "desktop_file_chunks",
+        key_field: "file_id",
+    },
+    DemandFileChunkCollection {
+        request_collection: "document_blob_chunks",
+        storage_collection: "document_blob_chunks",
+        key_field: "blob_id",
+    },
+    DemandFileChunkCollection {
+        request_collection: "spreadsheet_blob_chunks",
+        storage_collection: "spreadsheet_blob_chunks",
+        key_field: "blob_id",
+    },
 ];
 
 /// Phase 4: register a bounded-memory file stream source on the pool's file
@@ -6486,20 +6506,25 @@ const DEMAND_FILE_CHUNK_COLLECTIONS: &[(&str, &str)] = &[
 /// loop); it `block_on`s the async storage query to fetch the chunk docs, then
 /// emits decoded bytes chunk-by-chunk so server RAM stays bounded to one chunk.
 fn register_demand_file_sources(pool: &WebRtcPool, database: &Arc<RxDatabase>) {
-    for (collection_name, key_field) in DEMAND_FILE_CHUNK_COLLECTIONS.iter().copied() {
-        // Only register collections the database actually carries (the catalog
-        // is fault-tolerant; an optional chunk collection may be absent).
-        if database.collection(collection_name).is_none() {
+    for source_config in DEMAND_FILE_CHUNK_COLLECTIONS {
+        // Only register sources whose backing storage collection exists (the
+        // catalog is fault-tolerant; optional chunk collections may be absent).
+        if database
+            .collection(source_config.storage_collection)
+            .is_none()
+        {
             continue;
         }
         let database = Arc::clone(database);
-        let key_field = key_field.to_string();
+        let request_collection = source_config.request_collection;
+        let storage_collection = source_config.storage_collection.to_string();
+        let key_field = source_config.key_field.to_string();
         let closure_key_field = key_field.clone();
         let source: Arc<rxdb::plugins::replication_webrtc::file_fetch_handler::FileChunkStreamFn> =
-            Arc::new(move |collection, file_id, range, emit| {
+            Arc::new(move |_collection, file_id, range, emit| {
                 stream_demand_file_chunks(
                     &database,
-                    collection,
+                    &storage_collection,
                     &closure_key_field,
                     file_id,
                     range,
@@ -6507,9 +6532,11 @@ fn register_demand_file_sources(pool: &WebRtcPool, database: &Arc<RxDatabase>) {
                 )
             });
         pool.file_fetch_registry
-            .register_stream_source(collection_name, source);
+            .register_stream_source(request_collection, source);
         eprintln!(
-            "[business-os] demand-fetch file source registered for `{collection_name}` (key `{key_field}`)"
+            "[business-os] demand-fetch file source registered for `{request_collection}` \
+             via `{}` (key `{key_field}`)",
+            source_config.storage_collection
         );
     }
 }
@@ -6560,6 +6587,16 @@ fn stream_demand_file_chunks(
         })
     })?;
     let mut chunk_rows = rows.as_array().cloned().unwrap_or_default();
+    if collection == "desktop_file_chunks" {
+        if let Some(active_generation_id) = active_desktop_file_generation_id(database, file_id) {
+            chunk_rows.retain(|chunk| {
+                chunk
+                    .get("generation_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|generation_id| generation_id == active_generation_id)
+            });
+        }
+    }
     // Order by `idx` so the reassembled byte stream is correct.
     chunk_rows.sort_by_key(|chunk: &Value| chunk.get("idx").and_then(Value::as_u64).unwrap_or(0));
 
@@ -6605,6 +6642,25 @@ fn stream_demand_file_chunks(
         }
     }
     Ok(())
+}
+
+fn active_desktop_file_generation_id(database: &Arc<RxDatabase>, file_id: &str) -> Option<String> {
+    let files = database.collection("desktop_files")?;
+    let prepared = files
+        .find_one(Some(MangoQuery {
+            selector: Some(json!({ "id": { "$eq": file_id } })),
+            ..Default::default()
+        }))
+        .ok()?;
+    let file_row = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async { prepared.exec(false).await.ok() })
+    })?;
+    let generation_id = file_row
+        .get("content_generation_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim();
+    (!generation_id.is_empty()).then(|| generation_id.to_string())
 }
 
 async fn prune_desktop_file_chunk_generations(
@@ -9004,6 +9060,83 @@ mod tests {
         )
         .expect("stream missing");
         assert!(none.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn demand_file_source_streams_active_desktop_file_generation() {
+        let root = tempfile::tempdir().expect("temp root");
+        let database = open_test_database(root.path().join("demand-active-generation.sqlite3"))
+            .await
+            .expect("open db");
+        database
+            .add_collections(HashMap::from([
+                (
+                    "desktop_files".to_string(),
+                    RxCollectionCreator {
+                        schema: business_os_schema("desktop_files", "id"),
+                        conflict_handler: None,
+                        options: HashMap::new(),
+                    },
+                ),
+                (
+                    "desktop_file_chunks".to_string(),
+                    RxCollectionCreator {
+                        schema: business_os_schema("desktop_file_chunks", "id"),
+                        conflict_handler: None,
+                        options: HashMap::new(),
+                    },
+                ),
+            ]))
+            .await
+            .expect("add desktop file collections");
+        let files = database
+            .collection("desktop_files")
+            .expect("desktop_files collection");
+        files
+            .incremental_upsert(json!({
+                "id": "f1",
+                "name": "file.txt",
+                "kind": "file",
+                "content_state": "available",
+                "content_generation_id": "gen-active",
+                "updated_at_ms": 1,
+            }))
+            .await
+            .expect("upsert file");
+        let chunks = database
+            .collection("desktop_file_chunks")
+            .expect("desktop_file_chunks collection");
+        let enc = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        for (generation_id, payload) in [("gen-old", &b"old"[..]), ("gen-active", &b"active"[..])] {
+            chunks
+                .incremental_upsert(json!({
+                    "id": format!("f1_{generation_id}_0"),
+                    "file_id": "f1",
+                    "generation_id": generation_id,
+                    "idx": 0,
+                    "total": 1,
+                    "encoding": "base64",
+                    "data": enc(payload),
+                    "created_at_ms": 1,
+                }))
+                .await
+                .expect("upsert chunk");
+        }
+
+        let mut collected: Vec<u8> = Vec::new();
+        stream_demand_file_chunks(
+            &database,
+            "desktop_file_chunks",
+            "file_id",
+            "f1",
+            None,
+            &mut |bytes| {
+                collected.extend_from_slice(bytes);
+                Ok(true)
+            },
+        )
+        .expect("stream active generation");
+        assert_eq!(String::from_utf8(collected).unwrap(), "active");
     }
 
     async fn open_test_database(database_path: PathBuf) -> anyhow::Result<Arc<RxDatabase>> {

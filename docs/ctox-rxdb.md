@@ -114,7 +114,7 @@ All descriptions verified against the file headers.
 | `protocol-contract.generated.mjs` | GENERATED protocol/capability/error-code constants (do not edit; see §7). |
 | `demand-loading-transport.mjs` | Turns the bidirectional `peer.request` channel into a `rxdb.query.fetch` / `rxdb.file.fetch` request/response layer, correlating pushed chunk frames. |
 | `query-demand-loader.mjs` | Sits between `RxQuery.exec` and storage; fetches missing (collection, fingerprint, window) data over WebRTC, with in-flight dedup. |
-| `file-demand-loader.mjs` | Streams large files in chunks; sidecar tracks chunk presence so reloads resume. |
+| `file-demand-loader.mjs` | Streams large files in chunks. Chunk collections can persist fetched chunk presence; metadata collections such as `desktop_files` use the same RPC without writing binary chunks into the metadata store. |
 | `chunk-decoder.mjs` | V1.5 chunk envelope decoder (plain and deflate-raw via native `DecompressionStream`). |
 | `query-fingerprint.mjs` | Canonical SHA-256 query fingerprint, byte-identical between JS and Rust (corpus-verified). |
 | `query-meta-storage.mjs` | V1.5 sidecar metadata store (`ctox_business_os_v1_5_meta`): query-window completeness, access times, cache stats. Separate from the primary store. |
@@ -443,6 +443,14 @@ asynchronously and correlated by `requestId`
 `demand-loading-transport.mjs`). Capability gate:
 `ctox-rxdb-query-fetch-v1`.
 
+`desktop_file_chunks` is not a normal background-pull surface for browser file
+reads. The browser disables pull for that collection and the file viewer opens
+`desktop_files`, then uses `rxdb.file.fetch` against the `desktop_files`
+demand source. Native CTOX serves that source from `desktop_file_chunks`, scoped
+to the active `desktop_files.content_generation_id`, so opening a file does not
+replicate the full chunk store into IndexedDB. Browser-side chunk writes (for
+uploads/attachments) may still use the chunk collection push path.
+
 ---
 
 ## 7. Contracts pipeline
@@ -512,6 +520,7 @@ that fails on the pre-fix code.
 | **Every browser-store write carrying master state passes `{ replicationOrigin }`** — replication pulls, query/file demand-loader materialisation, cache-eviction tombstones. | Unstamped demand-fetched docs counted as local writes: they vetoed later master pulls (above) **and** were push-eligible — cache-eviction tombstones (`_deleted: true`) of partial query windows could replay to the master as real deletions. | `query-demand-loader.mjs`, `file-demand-loader.mjs`, wired in `replication-webrtc.mjs::enableDemandLoading` | `replication-lww-origin-smoke` (§4) |
 | **The desktop-file index scan is change-detecting and self-healing.** A rescan of an unchanged file is a byte-level no-op (fingerprint match + chunk-set completeness check); content changes re-chunk; incomplete chunk sets are repaired. | Every 15 s scan pass minted a fresh timestamped generation per file and tombstoned the previous one — ~200 docs/scan of insert/tombstone churn that pull (batchSize 2 for chunks) could never catch up with. | `rxdb_peer.rs::upsert_desktop_file_with_parent` | `rescan_of_unchanged_workspace_is_a_no_op` |
 | **Materialisation is sticky.** Once `ctox.file.materialize` made a file `available`, the scan keeps maintaining it eagerly — it must never demote it back to its size/extension lazy policy. | The next scan rewrote the doc to `lazy` with an empty generation id, stranding replicated chunks; the file viewer reverted to unreadable ~15 s after every materialise. | `rxdb_peer.rs` (policy upgrade before the fast path) | `materialized_large_file_survives_lazy_rescan` |
+| **Desktop file bytes are demand-fetched, not background-pulled.** `desktop_file_chunks` remains the native chunk store and browser upload push surface, but file viewing reads bytes via `rxdb.file.fetch` on `desktop_files`; the native source filters chunks to the active file generation. | Opening a file or granting file access started normal `desktop_file_chunks` replication; a browser could pull every stored chunk and drive sustained SCTP/SQLite CPU while the daemon had no queued work. | `sync.js::isDemandOnlyPullCollection`, `file-viewer/app.js`, `file-demand-loader.mjs`, `rxdb_peer.rs::register_demand_file_sources` / `stream_demand_file_chunks` | `demand_file_source_streams_active_desktop_file_generation` |
 | **Active-collection gating must never lose events permanently.** Three sub-rules: (a) a peer that has never reported an active set is fail-open (all relays delivered) until its first report; (b) applying a new active set pushes one resync master-change per re-activated collection (closes the send→apply transit window); (c) the browser runs one checkpoint pull per newly-activated collection on every registry change. | Relays for "inactive" collections are dropped and browser pulls are purely event-driven — each hole left a collection permanently stale (viewer-restart soak mode: the browser file doc stayed `lazy` forever while the native doc was `available`). | `connection_handler_rs.rs::is_collection_active_for_peer` / `apply_active_collections` (+ the resync push in its message loop); relay drop point in `index_mod.rs`; `replication-webrtc.mjs` registry subscription | gating tests in `connection_handler_rs.rs`; `active-collections-catchup-smoke` (browser); viewer-restart soak mode |
 | **The multiplex room handshake carries per-collection checkpoints** (`collectionCheckpoints`, mirroring `collectionSchemas`; key absent for single-collection rooms). | Collections deriving their protocol from the room handshake advertised the REPRESENTATIVE collection's checkpoint epoch — wrong-collection checkpoint evidence after every native restart. | `index_mod.rs::collection_checkpoints_payload`; consumed by `replication-webrtc.mjs::remoteProtocolForCollection` | `handshake_payload_omits_collection_schemas_when_none` |
 | **A terminal `completed` command ack without `task_id` is success.** Control commands (`ctox.file.materialize`, `ctox.module.*`, …) are executed directly and intentionally never get a queue-task projection. | The command bus waited 45 s for a task that never comes — every control command dispatched through it failed. | `command-bus.js::waitForAuthoritativeQueueProjection` | `command-bus-projection-smoke` |

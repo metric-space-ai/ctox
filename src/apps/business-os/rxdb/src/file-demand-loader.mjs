@@ -14,6 +14,7 @@ export function createFileDemandLoader({
   requestFileFetch,
   status = null,
   clock = Date.now,
+  persistChunks = true,
   // Origin stamp (object or provider fn): fetched chunk rows are master
   // state, not local writes — see query-demand-loader.mjs for the failure
   // modes an unstamped write causes (push echo, LWW veto of later pulls).
@@ -41,7 +42,7 @@ export function createFileDemandLoader({
         const startedAt = clock();
         bump(status, 'activeFileStreams', 1);
         try {
-          const presence = await getPresence(sidecarBackend, collectionName, fileId);
+          const presence = persistChunks ? await getPresence(sidecarBackend, collectionName, fileId) : null;
           const chunks = await requestFileFetch({
             requestId: `file-${fileId}-${startedAt}`,
             collectionName,
@@ -52,42 +53,47 @@ export function createFileDemandLoader({
           if (!Array.isArray(chunks)) {
             throw new TypeError('requestFileFetch must return an array of chunks');
           }
-          for (const chunk of chunks) {
-            if (!chunk || typeof chunk !== 'object') continue;
-            await storageCollection.bulkWrite([
-              {
-                id: `${fileId}-${chunk.sequence}`,
-                file_id: fileId,
-                sequence: chunk.sequence,
-                bytes_base64: chunk.bytesBase64,
-                hash: chunk.hash || null,
-              },
-            ], { replicationOrigin: resolveReplicationOrigin() });
-            bump(status, 'fileBytesReceived', (chunk.bytesBase64?.length || 0));
+          for (const chunk of chunks) bump(status, 'fileBytesReceived', (chunk?.bytesBase64?.length || 0));
+          if (persistChunks) {
+            for (const chunk of chunks) {
+              if (!chunk || typeof chunk !== 'object') continue;
+              await storageCollection.bulkWrite([
+                {
+                  id: `${fileId}-${chunk.sequence}`,
+                  file_id: fileId,
+                  sequence: chunk.sequence,
+                  bytes_base64: chunk.bytesBase64,
+                  hash: chunk.hash || null,
+                },
+              ], { replicationOrigin: resolveReplicationOrigin() });
+            }
           }
           const sequences = chunks.map((c) => c.sequence).sort((a, b) => a - b);
-          const expectedTotal = Math.max(
-            ...sequences,
-            presence?.expectedChunkCount || 0,
-          ) + 1;
-          await sidecarBackend.putDocumentAccess({
-            collection: collectionName,
-            id: `${fileId}-presence`,
-            lastAccessedAt: clock(),
-            pinReason: 'file-chunks',
-            dirty: false,
-            estimatedBytes: 0,
-          });
-          await putPresence(sidecarBackend, collectionName, fileId, {
-            collection: collectionName,
-            fileId,
-            expectedChunkCount: expectedTotal,
-            presentSequences: dedupeSorted([
-              ...(presence?.presentSequences || []),
-              ...sequences,
-            ]),
-            lastVerifiedAt: clock(),
-          });
+          if (persistChunks) {
+            const highestSequence = sequences.length ? Math.max(...sequences) : -1;
+            const expectedTotal = Math.max(
+              highestSequence,
+              presence?.expectedChunkCount || 0,
+            ) + 1;
+            await sidecarBackend.putDocumentAccess({
+              collection: collectionName,
+              id: `${fileId}-presence`,
+              lastAccessedAt: clock(),
+              pinReason: 'file-chunks',
+              dirty: false,
+              estimatedBytes: 0,
+            });
+            await putPresence(sidecarBackend, collectionName, fileId, {
+              collection: collectionName,
+              fileId,
+              expectedChunkCount: expectedTotal,
+              presentSequences: dedupeSorted([
+                ...(presence?.presentSequences || []),
+                ...sequences,
+              ]),
+              lastVerifiedAt: clock(),
+            });
+          }
           if (status) status.lastFileFetchMs = clock() - startedAt;
           return chunks;
         } catch (error) {

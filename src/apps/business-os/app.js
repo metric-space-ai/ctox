@@ -4385,7 +4385,6 @@ const DESKTOP_APP_DB_COLLECTIONS = {
   ],
   'file-viewer': [
     'business_commands',
-    'desktop_file_chunks',
     'desktop_files',
   ],
 };

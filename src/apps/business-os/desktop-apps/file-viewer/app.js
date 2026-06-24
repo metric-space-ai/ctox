@@ -1,4 +1,8 @@
-import { FILE_CHUNK_ERROR_CODES, readStoredFileFromChunks } from '../../shared/file-integrity.js?v=20260603-active-chunk-query2';
+import {
+  FILE_CHUNK_ERROR_CODES,
+  readStoredFileFromChunks,
+  readStoredFileFromDemandChunks,
+} from '../../shared/file-integrity.js?v=20260624-demand-file-fetch1';
 
 export const manifest = {
   id: 'file-viewer',
@@ -68,10 +72,10 @@ export async function mount(container, ctx) {
 async function readStoredOrMaterializeFile(ctx, file) {
   if (file.contentState === 'lazy' || file.contentState === 'missing') {
     const commandId = await materializeStoredFile(ctx, file);
-    return waitForStoredFile(ctx.db, file.fileId, file.mimeType, commandId);
+    return waitForStoredFile(ctx, file.fileId, file.mimeType, commandId);
   }
   try {
-    return await readStoredFile(ctx.db, file.fileId, file.mimeType, {
+    return await readStoredFile(ctx, file.fileId, file.mimeType, {
       contentGenerationId: file.contentGenerationId,
       contentHash: file.contentHash,
       contentHashScheme: file.contentHashScheme,
@@ -80,7 +84,7 @@ async function readStoredOrMaterializeFile(ctx, file) {
     if (!isMissingContentError(error) || !file.path) throw error;
   }
   const commandId = await materializeStoredFile(ctx, file);
-  return waitForStoredFile(ctx.db, file.fileId, file.mimeType, commandId);
+  return waitForStoredFile(ctx, file.fileId, file.mimeType, commandId);
 }
 
 function isMissingContentError(error) {
@@ -108,7 +112,6 @@ async function materializeStoredFile(ctx, file) {
   const [commandBridge] = await Promise.all([
     ctx.sync?.startCollection?.('business_commands'),
     ctx.sync?.startCollection?.('desktop_files'),
-    ctx.sync?.startCollection?.('desktop_file_chunks'),
   ]);
   await waitForReplicationBridge(commandBridge, 'business_commands');
   const commandId = `cmd_${crypto.randomUUID()}`;
@@ -200,69 +203,43 @@ async function waitForMaterializedFileProjection(ctx, fileId, timeoutMs = 90000)
   let restarted = false;
   let lastFileState = '';
   let lastGenerationId = '';
-  let lastChunkCount = 0;
   let lastSyncNudgeAt = 0;
-  let nextMetadataRestartAt = Date.now() + 5000;
   while (Date.now() < deadline) {
     const file = await ctx.db?.collection?.('desktop_files')?.findOne(fileId).exec();
     const fileData = file?.toJSON?.();
     lastFileState = fileData?.content_state || '';
     lastGenerationId = fileData?.content_generation_id || '';
-    const chunks = await ctx.db?.collection?.('desktop_file_chunks')?.find().exec();
-    lastChunkCount = (chunks || []).filter((doc) => {
-      const chunk = doc?.toJSON?.() || doc;
-      return chunk?.file_id === fileId && chunk?._deleted !== true;
-    }).length;
-    if (lastChunkCount > 0 && lastFileState === 'available' && lastGenerationId) return;
+    if (lastFileState === 'available' && lastGenerationId) return;
     if (Date.now() - lastSyncNudgeAt > 1000) {
       lastSyncNudgeAt = Date.now();
       await nudgeFileProjectionSync(ctx);
     }
-    if (lastChunkCount > 0 && lastFileState !== 'available' && Date.now() >= nextMetadataRestartAt) {
-      nextMetadataRestartAt = Date.now() + 5000;
+    if (!restarted && Date.now() > deadline - timeoutMs + 5000) {
+      restarted = true;
       const bridge = typeof ctx.sync?.restartCollection === 'function'
         ? await ctx.sync.restartCollection('desktop_files')
         : await ctx.sync?.startCollection?.('desktop_files');
       await waitForReplicationBridge(bridge, 'desktop_files');
     }
-    if (!restarted && Date.now() > deadline - timeoutMs + 5000) {
-      restarted = true;
-      const bridges = await Promise.all([
-        typeof ctx.sync?.restartCollection === 'function'
-          ? ctx.sync.restartCollection('desktop_files')
-          : ctx.sync?.startCollection?.('desktop_files'),
-        typeof ctx.sync?.restartCollection === 'function'
-          ? ctx.sync.restartCollection('desktop_file_chunks')
-          : ctx.sync?.startCollection?.('desktop_file_chunks'),
-      ]);
-      await Promise.all(bridges.map((bridge, index) => (
-        waitForReplicationBridge(bridge, index === 0 ? 'desktop_files' : 'desktop_file_chunks')
-      )));
-    }
     await delay(300);
   }
-  throw new Error(`RxDB WebRTC hat die materialisierte Datei nicht in den Browser repliziert: state=${lastFileState || 'missing'}, generation=${lastGenerationId || 'missing'}, chunks=${lastChunkCount}`);
+  throw new Error(`RxDB WebRTC hat die materialisierte Datei nicht in den Browser repliziert: state=${lastFileState || 'missing'}, generation=${lastGenerationId || 'missing'}`);
 }
 
 async function nudgeFileProjectionSync(ctx) {
   if (!ctx.sync?.startCollection) return;
-  const bridges = await Promise.all([
-    ctx.sync.startCollection('desktop_files').catch(() => null),
-    ctx.sync.startCollection('desktop_file_chunks').catch(() => null),
-  ]);
-  await Promise.all(bridges.map((bridge, index) => (
-    bridge ? waitForReplicationBridge(bridge, index === 0 ? 'desktop_files' : 'desktop_file_chunks').catch(() => {}) : null
-  )));
+  const bridge = await ctx.sync.startCollection('desktop_files').catch(() => null);
+  if (bridge) await waitForReplicationBridge(bridge, 'desktop_files').catch(() => {});
 }
 
-async function waitForStoredFile(db, fileId, mimeType, commandId = '', timeoutMs = 90000) {
+async function waitForStoredFile(ctx, fileId, mimeType, commandId = '', timeoutMs = 90000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const file = await db?.collection?.('desktop_files')?.findOne(fileId).exec();
+      const file = await ctx.db?.collection?.('desktop_files')?.findOne(fileId).exec();
       const fileData = file?.toJSON?.();
       const fileAvailable = fileData?.content_state === 'available';
-      return await readStoredFile(db, fileId, mimeType, {
+      return await readStoredFile(ctx, fileId, mimeType, {
         contentGenerationId: fileAvailable ? fileData?.content_generation_id || '' : '',
         contentHash: fileAvailable ? fileData?.content_hash || '' : '',
         contentHashScheme: fileAvailable ? fileData?.content_hash_scheme || '' : '',
@@ -270,7 +247,7 @@ async function waitForStoredFile(db, fileId, mimeType, commandId = '', timeoutMs
     } catch (error) {
       if (!isRetryableMaterializationReadError(error)) throw error;
       if (commandId) {
-        const command = await readCommandProjection(db, commandId);
+        const command = await readCommandProjection(ctx.db, commandId);
         if (command?.status === 'failed') {
           const message = command?.result?.error || command?.error || 'Datei konnte nicht materialisiert werden.';
           throw new Error(message);
@@ -313,7 +290,23 @@ async function renderBlob(container, objectUrl, blob, name, mimeType) {
   `;
 }
 
-async function readStoredFile(db, fileId, mimeType = 'application/octet-stream', options = {}) {
+async function readStoredFile(ctx, fileId, mimeType = 'application/octet-stream', options = {}) {
+  const loader = await fileDemandLoaderFor(ctx).catch(() => null);
+  if (loader?.fetchFile) {
+    const chunks = await loader.fetchFile(fileId);
+    return readStoredFileFromDemandChunks(chunks, mimeType, options);
+  }
+  return readStoredFileFromLocalChunks(ctx?.db, fileId, mimeType, options);
+}
+
+async function fileDemandLoaderFor(ctx) {
+  if (!ctx?.sync?.startCollection) return null;
+  const bridge = await ctx.sync.startCollection('desktop_files');
+  await waitForReplicationBridge(bridge, 'desktop_files');
+  return bridge?.state?.demandFileLoader || null;
+}
+
+async function readStoredFileFromLocalChunks(db, fileId, mimeType = 'application/octet-stream', options = {}) {
   const chunks = db?.collection?.('desktop_file_chunks');
   if (!chunks) throw new Error('Datei-Chunks sind nicht verfügbar.');
   const docs = await chunks.find().exec();

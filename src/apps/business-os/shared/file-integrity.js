@@ -41,6 +41,46 @@ export async function readStoredFileFromChunks(chunks, fileId, mimeType = 'appli
   return new Blob([bytes], { type: mimeType || 'application/octet-stream' });
 }
 
+export async function readStoredFileFromDemandChunks(chunks, mimeType = 'application/octet-stream', options = {}) {
+  const normalized = normalizeOptions(options);
+  const ordered = (Array.isArray(chunks) ? chunks : [])
+    .filter((chunk) => chunk && typeof chunk === 'object' && chunk.cancelled !== true)
+    .sort((a, b) => Number(a.sequence) - Number(b.sequence));
+
+  if (!ordered.length) {
+    const empty = new Uint8Array();
+    await validateContentHash(empty, normalized.contentHash, normalized.contentHashScheme);
+    if (normalized.contentHash && normalized.contentHashScheme === FILE_CONTENT_HASH_SCHEME) {
+      return new Blob([empty], { type: mimeType || 'application/octet-stream' });
+    }
+    throw fileChunkError(FILE_CHUNK_ERROR_CODES.MISSING, 'Dateiinhalt fehlt.');
+  }
+
+  if (ordered.some((chunk, index) => Number(chunk.sequence) !== index)) {
+    throw fileChunkError(FILE_CHUNK_ERROR_CODES.MISSING, 'Dateiinhalt fehlt.', {
+      available: ordered.length,
+    });
+  }
+
+  const parts = [];
+  for (const chunk of ordered) {
+    const bytes = base64ToBytes(chunk.bytesBase64 ?? chunk.bytes_base64 ?? '');
+    if (chunk.hash) {
+      const actualHash = await sha256Hex(bytes);
+      if (actualHash !== chunk.hash) {
+        throw fileChunkError(FILE_CHUNK_ERROR_CODES.INTEGRITY_MISMATCH, 'Dateiinhalt ist unvollständig oder beschädigt.', {
+          sequence: Number(chunk.sequence),
+        });
+      }
+    }
+    parts.push(bytes);
+  }
+
+  const bytes = concatBytes(parts);
+  await validateContentHash(bytes, normalized.contentHash, normalized.contentHashScheme);
+  return new Blob([bytes], { type: mimeType || 'application/octet-stream' });
+}
+
 export function isDeletedChunk(chunk) {
   return chunk?._deleted === true || chunk?.deleted === true || chunk?.is_deleted === true;
 }
@@ -77,6 +117,17 @@ export async function sha256Hex(value) {
   const bytes = value instanceof Uint8Array ? value : new TextEncoder().encode(String(value ?? ''));
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function concatBytes(parts) {
+  const total = parts.reduce((sum, part) => sum + part.byteLength, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.byteLength;
+  }
+  return out;
 }
 
 function normalizeOptions(options) {

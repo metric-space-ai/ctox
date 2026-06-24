@@ -924,11 +924,11 @@ class CtoxWebRtcReplicationState {
       const result = response.result || {};
       const documents = Array.isArray(result?.documents) ? result.documents : [];
       if (documents.length) {
-        await this.invalidateDemandCacheForRemoteWrite();
+        await this.invalidateDemandCacheForRemoteWrite(documents);
         await this.collection.storageCollection.bulkWrite(documents, {
           replicationOrigin: this.replicationOriginForPeer(activePeerId),
         });
-        await this.invalidateDemandCacheForRemoteWrite();
+        await this.invalidateDemandCacheForRemoteWrite(documents);
       }
       checkpoint = result?.checkpoint || checkpoint;
       this.pullCheckpointsByPeer.set(activePeerId, checkpoint);
@@ -1074,11 +1074,11 @@ class CtoxWebRtcReplicationState {
     const rows = Array.isArray(params?.[0]) ? params[0] : [];
     const docs = rows.map((row) => row?.newDocumentState || row?.document || row).filter(Boolean);
     if (docs.length) {
-      await this.invalidateDemandCacheForRemoteWrite();
+      await this.invalidateDemandCacheForRemoteWrite(docs);
       await this.collection.storageCollection.bulkWrite(docs, {
         replicationOrigin: this.replicationOriginForPeer(peerId),
       });
-      await this.invalidateDemandCacheForRemoteWrite();
+      await this.invalidateDemandCacheForRemoteWrite(docs);
     }
     return [];
   }
@@ -1194,6 +1194,7 @@ class CtoxWebRtcReplicationState {
       collectionName: this.collection.name,
       storageCollection: this.collection.storageCollection,
       sidecarBackend: backend,
+      persistChunks: shouldPersistFetchedFileChunks(this.collection.name),
       replicationOrigin: demandReplicationOrigin,
       requestFileFetch: ({ requestId, fileId, range, knownSequences }) =>
         demandTransport.requestFileFetch({
@@ -1276,9 +1277,16 @@ class CtoxWebRtcReplicationState {
     return role ? { excludeReplicationOriginRole: role } : {};
   }
 
-  async invalidateDemandCacheForRemoteWrite() {
+  async invalidateDemandCacheForRemoteWrite(changedDocuments = []) {
     try {
-      await this.demandLoader?.invalidateCollectionChange?.();
+      const ids = changedDocuments
+        .map((doc) => primaryValue(doc, this.collection.schema.primaryPath))
+        .filter(Boolean);
+      if (typeof this.demandLoader?.invalidateDocumentChange === 'function') {
+        await this.demandLoader.invalidateDocumentChange(ids);
+      } else {
+        await this.demandLoader?.invalidateCollectionChange?.();
+      }
     } catch {
       // Demand-cache invalidation is a freshness hint; replication must not fail
       // just because the sidecar backend is unavailable.
@@ -1310,6 +1318,7 @@ class CtoxWebRtcReplicationState {
   }
 
   periodicPushIntervalMs() {
+    if (!this.push) return 0;
     return ['business_commands', 'ctox_queue_tasks'].includes(this.collection.name) ? 1000 : 0;
   }
 
@@ -1476,6 +1485,10 @@ function primaryValue(doc = {}, primaryPath = 'id') {
   if (doc.id != null) return String(doc.id);
   if (doc._id != null) return String(doc._id);
   return String(replicationValueAtPath(doc, primaryPath) ?? '');
+}
+
+function shouldPersistFetchedFileChunks(collectionName = '') {
+  return String(collectionName || '').endsWith('_chunks');
 }
 
 function replicationValueAtPath(obj, path) {
