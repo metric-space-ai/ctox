@@ -55,6 +55,14 @@ assert.ok(
   'Desktop launcher must use shell-filtered ctx.modules before falling back to registry.json'
 );
 assert.ok(
+  desktopSource.includes("ctx.eventBus.on('modules:changed'"),
+  'Desktop launcher must refresh after the RxDB module catalog replaces the startup module snapshot'
+);
+assert.ok(
+  desktopSource.includes('ensureIcons(iconsCollection, launcher)'),
+  'Desktop launcher must seed missing icons after module catalog changes'
+);
+assert.ok(
   desktopSource.includes('!launcher.knows(doc.target_module)'),
   'Desktop icons must not render persisted targets outside the current launcher scope'
 );

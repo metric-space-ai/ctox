@@ -35,7 +35,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260623-cv-print-hotfix10';
+const APP_BUILD = '20260624-desktop-catalog-refresh1';
 
 ensureShellStylesheets();
 
@@ -4185,6 +4185,8 @@ function createModuleContext(mod) {
   return {
     module: mod,
     modules: state.modules,
+    getModules: () => state.modules,
+    getDesktopApps: () => listDesktopApps(),
     locale: document.documentElement.lang === 'en' ? 'en' : 'de',
     shellStyle: document.documentElement.dataset.shellStyle === 'macos' ? 'macos' : 'windows',
     host: els.host.querySelector('[data-module-content]') || els.host.querySelector('[data-module-root]'),
@@ -6416,11 +6418,17 @@ async function refreshModules() {
   }
   state.modules = nextModules;
   state.moduleCatalogFingerprint = nextFingerprint || state.moduleCatalogFingerprint;
-  await registerCustomModuleIcons();
   state.governance = modules.governance || state.governance;
+  await registerCustomModuleIcons();
   state.moduleLayout = normalizeModuleLayout(state.moduleLayout || readModuleLayout(), state.modules);
   persistModuleLayout();
   renderTabs();
+  state.eventBus?.emitAsync?.('modules:changed', {
+    modules: state.modules,
+    governance: state.governance,
+    moduleAllowlist: state.moduleAllowlist,
+    catalogFingerprint: state.moduleCatalogFingerprint,
+  });
   // Phase 2: re-warm the module-script cache after a catalog change. Pure
   // render concern — no sync orchestration.
   scheduleModuleScriptPreload();

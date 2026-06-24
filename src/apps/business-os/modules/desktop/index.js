@@ -76,12 +76,8 @@ export async function mount(ctx) {
     widgetStatus: root.querySelector('[data-widget-status]'),
   };
 
-  const launcher = createCtoxLauncher({
-    modules: Array.isArray(ctx.modules) ? ctx.modules : await loadModuleRegistry(),
-    apps: ctx.desktopApps || [],
-    currentModuleId: ctx.module.id,
-    openApp: ctx.openDesktopApp,
-  });
+  const initialModules = Array.isArray(ctx.modules) ? ctx.modules : await loadModuleRegistry();
+  let launcher = createLauncher(initialModules);
 
   const cleanups = [];
 
@@ -124,6 +120,7 @@ export async function mount(ctx) {
   await renderIcons();
 
   cleanups.push(subscribeIcons());
+  cleanups.push(subscribeModuleCatalogChanges());
   if (commandsCollection) cleanups.push(subscribeCommandStream());
 
   const onDragOverSurface = (event) => {
@@ -161,6 +158,33 @@ export async function mount(ctx) {
   };
 
   // ---------- helpers (closures over the mount scope) ----------
+
+  function createLauncher(modules) {
+    return createCtoxLauncher({
+      modules: Array.isArray(modules) ? modules : [],
+      apps: typeof ctx.getDesktopApps === 'function' ? ctx.getDesktopApps() : (ctx.desktopApps || []),
+      currentModuleId: ctx.module.id,
+      openApp: ctx.openDesktopApp,
+    });
+  }
+
+  function subscribeModuleCatalogChanges() {
+    if (!ctx.eventBus?.on) return () => {};
+    const token = ctx.eventBus.on('modules:changed', (payload = {}) => {
+      const nextModules = Array.isArray(payload.modules)
+        ? payload.modules
+        : (typeof ctx.getModules === 'function' ? ctx.getModules() : ctx.modules);
+      launcher = createLauncher(nextModules);
+      Promise.resolve()
+        .then(() => ensureIcons(iconsCollection, launcher))
+        .then(renderIcons)
+        .catch((error) => {
+          if (isDatabaseClosingError(error)) return;
+          console.error('[desktop] module catalog refresh failed:', error);
+        });
+    });
+    return () => ctx.eventBus.off?.('modules:changed', token);
+  }
 
   async function renderIcons() {
     if (disposed) return;
