@@ -4,10 +4,12 @@ use rusqlite::params;
 use rusqlite::Connection;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
+use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::OnceLock;
+use std::time::UNIX_EPOCH;
 
 use crate::inference::runtime_state;
 use crate::secrets;
@@ -20,8 +22,81 @@ fn initialized_runtime_env_paths() -> &'static Mutex<HashSet<PathBuf>> {
     INITIALIZED.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuntimeEnvStoreStamp {
+    exists: bool,
+    len: u64,
+    modified_ms: u128,
+}
+
+#[derive(Debug, Clone)]
+struct CachedRuntimeEnvMap {
+    stamp: RuntimeEnvStoreStamp,
+    map: BTreeMap<String, String>,
+}
+
+fn cached_runtime_env_maps() -> &'static Mutex<BTreeMap<PathBuf, CachedRuntimeEnvMap>> {
+    static CACHE: OnceLock<Mutex<BTreeMap<PathBuf, CachedRuntimeEnvMap>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
 pub fn runtime_config_path(root: &Path) -> PathBuf {
     root.join("runtime").join(RUNTIME_ENV_STORE_FILE)
+}
+
+fn runtime_env_store_stamp(path: &Path) -> RuntimeEnvStoreStamp {
+    match fs::metadata(path) {
+        Ok(metadata) => RuntimeEnvStoreStamp {
+            exists: true,
+            len: metadata.len(),
+            modified_ms: metadata
+                .modified()
+                .ok()
+                .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis())
+                .unwrap_or(0),
+        },
+        Err(_) => RuntimeEnvStoreStamp {
+            exists: false,
+            len: 0,
+            modified_ms: 0,
+        },
+    }
+}
+
+fn invalidate_runtime_env_cache(root: &Path) {
+    let path = runtime_config_path(root);
+    cached_runtime_env_maps()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .remove(&path);
+}
+
+fn load_persisted_runtime_env_map_cached(root: &Path) -> Result<BTreeMap<String, String>> {
+    let path = runtime_config_path(root);
+    let stamp = runtime_env_store_stamp(&path);
+    if let Some(cached) = cached_runtime_env_maps()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .get(&path)
+        .filter(|cached| cached.stamp == stamp)
+        .cloned()
+    {
+        return Ok(cached.map);
+    }
+    let map = load_persisted_runtime_env_map(root)?;
+    let stamp = runtime_env_store_stamp(&path);
+    cached_runtime_env_maps()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .insert(
+            path,
+            CachedRuntimeEnvMap {
+                stamp,
+                map: map.clone(),
+            },
+        );
+    Ok(map)
 }
 
 pub fn load_runtime_env_map(root: &Path) -> Result<BTreeMap<String, String>> {
@@ -213,6 +288,7 @@ fn write_runtime_env_map(root: &Path, env_map: &BTreeMap<String, String>) -> Res
     }
     tx.commit()
         .context("failed to commit runtime env transaction")?;
+    invalidate_runtime_env_cache(root);
     Ok(())
 }
 
@@ -234,6 +310,7 @@ pub fn set_runtime_env_value(root: &Path, key: &str, value: &str) -> Result<()> 
         params![key, value],
     )
     .with_context(|| format!("failed to upsert runtime key {key}"))?;
+    invalidate_runtime_env_cache(root);
     Ok(())
 }
 
@@ -248,13 +325,20 @@ pub fn clear_runtime_env_value(root: &Path, key: &str) -> Result<()> {
         params![key],
     )
     .with_context(|| format!("failed to clear runtime key {key}"))?;
+    invalidate_runtime_env_cache(root);
     Ok(())
 }
 
 /// Read exactly ONE persisted key from the runtime_env_kv store (bypassing the
 /// secrets/runtime-state merge). Returns None for an absent or blank value.
 pub fn get_runtime_env_value(root: &Path, key: &str) -> Option<String> {
-    load_persisted_runtime_env_map(root)
+    if key.trim().is_empty()
+        || secrets::is_secret_key(key)
+        || runtime_state::is_runtime_state_key(key)
+    {
+        return None;
+    }
+    load_persisted_runtime_env_map_cached(root)
         .ok()
         .and_then(|map| map.get(key).cloned())
         .filter(|value| !value.trim().is_empty())
@@ -495,6 +579,26 @@ mod tests {
             env_or_config(&root, "CTOX_DISABLE_MISSION_WATCHDOG").as_deref(),
             Some("0")
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn get_runtime_env_value_caches_non_secret_values_and_invalidates_on_write() {
+        let root = make_temp_root();
+        set_runtime_env_value(&root, "CTOX_AUTONOMY_LEVEL", "balanced").unwrap();
+
+        assert_eq!(
+            get_runtime_env_value(&root, "CTOX_AUTONOMY_LEVEL").as_deref(),
+            Some("balanced")
+        );
+
+        set_runtime_env_value(&root, "CTOX_AUTONOMY_LEVEL", "progressive").unwrap();
+
+        assert_eq!(
+            get_runtime_env_value(&root, "CTOX_AUTONOMY_LEVEL").as_deref(),
+            Some("progressive")
+        );
+        assert!(!crate::secrets::secret_store_path(&root).exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 

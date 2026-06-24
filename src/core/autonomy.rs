@@ -39,11 +39,12 @@ pub enum AutonomyLevel {
 impl AutonomyLevel {
     /// Resolve from the persistent CTOX runtime state. Falls back to `balanced`.
     pub fn from_root(root: &Path) -> Self {
-        if let Some(raw) = crate::inference::runtime_env::env_or_config(root, "CTOX_AUTONOMY_LEVEL")
+        if let Some(raw) =
+            crate::inference::runtime_env::get_runtime_env_value(root, "CTOX_AUTONOMY_LEVEL")
         {
             return Self::from_str_lossy(&raw);
         }
-        if crate::inference::runtime_env::env_or_config(root, "CTOX_AUTO_APPROVE_GATES")
+        if crate::inference::runtime_env::get_runtime_env_value(root, "CTOX_AUTO_APPROVE_GATES")
             .map(|value| matches!(value.trim(), "1" | "true" | "yes" | "on"))
             .unwrap_or(false)
         {
@@ -142,5 +143,36 @@ impl Default for AutonomyLevel {
 impl fmt::Display for AutonomyLevel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn make_temp_root() -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("ctox-autonomy-test-{unique}"));
+        std::fs::create_dir_all(path.join("runtime")).unwrap();
+        path
+    }
+
+    #[test]
+    fn from_root_reads_non_secret_runtime_config_without_secret_store() {
+        let root = make_temp_root();
+        crate::inference::runtime_env::set_runtime_env_value(
+            &root,
+            "CTOX_AUTONOMY_LEVEL",
+            "progressive",
+        )
+        .unwrap();
+
+        assert_eq!(AutonomyLevel::from_root(&root), AutonomyLevel::Progressive);
+        assert!(!crate::secrets::secret_store_path(&root).exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
