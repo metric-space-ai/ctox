@@ -87,13 +87,61 @@ function smokeWindowsArtifacts(releaseRoot) {
   assertDirectory(unpacked, "Windows unpacked app directory is missing");
   assertFile(asarPath, "Windows app.asar is missing");
   assertFile(helperPath, "Windows bundled CTOX helper is missing");
+
+  // Capture the Authenticode signature status so an unsigned NSIS installer can
+  // never ship silently (electron-updater relies on the publisher identity for
+  // Windows update verification). --require-signature turns this into a hard gate
+  // once a code-signing certificate is configured; otherwise the status is
+  // recorded in the evidence and a warning is emitted.
+  const skipSignature = hasFlag("--skip-signature");
+  const requireSignature = hasFlag("--require-signature");
+  const signature = skipSignature
+    ? { checked: false, skipped: true }
+    : inspectWindowsAuthenticode(installer);
+  if (requireSignature) {
+    assert.ok(
+      signature.signed === true,
+      `Windows installer is not Authenticode-signed: ${installer} (status: ${signature.status || signature.reason || "unknown"})`,
+    );
+  }
+  if (signature.checked && signature.signed === false) {
+    console.warn(`WARNING: Windows installer is NOT Authenticode-signed and will ship unsigned: ${installer}`);
+  }
+
   console.log(`desktop signed artifact smoke OK (win): ${installer}`);
   return createEvidence(releaseRoot, "win", {
     nsisInstaller: fileEvidence(releaseRoot, installer),
     unpackedApp: directoryEvidence(releaseRoot, unpacked),
     appAsar: fileEvidence(releaseRoot, asarPath),
     bundledHelper: fileEvidence(releaseRoot, helperPath),
+    signature,
   });
+}
+
+function inspectWindowsAuthenticode(filePath) {
+  if (process.platform !== "win32") {
+    return { checked: false, signed: null, reason: "Authenticode status can only be read on win32" };
+  }
+  try {
+    const script = "$ErrorActionPreference='Stop'; "
+      + `$s = Get-AuthenticodeSignature -LiteralPath ${JSON.stringify(filePath)}; `
+      + "[pscustomobject]@{ Status = [int]$s.Status; StatusMessage = [string]$s.StatusMessage; "
+      + "Subject = [string]$s.SignerCertificate.Subject } | ConvertTo-Json -Compress";
+    const out = execFileSync(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    ).toString();
+    const parsed = JSON.parse(out);
+    return {
+      checked: true,
+      signed: Number(parsed.Status) === 0, // 0 == Valid
+      status: parsed.StatusMessage || String(parsed.Status),
+      subject: parsed.Subject || "",
+    };
+  } catch (error) {
+    return { checked: true, signed: false, status: "error", error: String(error.message || error) };
+  }
 }
 
 function findMacAppBundle(releaseRoot) {

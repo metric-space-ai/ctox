@@ -25,8 +25,11 @@ test("signed artifact smoke writes platform evidence for all release targets", (
     assert.equal(macEvidence.checks.bundledHelper.executable, true);
     assertEvidence(linuxEvidence, "linux", ["appImage", "deb", "unpackedApp", "appAsar", "bundledHelper"]);
     assert.equal(linuxEvidence.checks.bundledHelper.executable, true);
-    assertEvidence(winEvidence, "win", ["nsisInstaller", "unpackedApp", "appAsar", "bundledHelper"]);
+    assertEvidence(winEvidence, "win", ["nsisInstaller", "unpackedApp", "appAsar", "bundledHelper", "signature"]);
     assert.match(winEvidence.checks.bundledHelper.path, /ctox\.exe$/);
+    // Off-Windows the Authenticode status cannot be read, but the evidence must
+    // still record that it was considered (never silently absent).
+    assert.equal(winEvidence.checks.signature.checked, false);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

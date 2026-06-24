@@ -159,6 +159,11 @@ function assertReleaseWorkflowMatrix() {
   }
   assert.match(signedArtifactSmoke, /ctox-business-os-desktop-release-artifact-smoke\/v1/);
   assert.match(signedArtifactSmoke, /writeEvidence/);
+  // The Windows artifact smoke must inspect the Authenticode signature so an
+  // unsigned NSIS installer is never shipped silently, and must support a hard
+  // --require-signature gate for when a signing certificate is configured.
+  assert.match(signedArtifactSmoke, /Get-AuthenticodeSignature/, "windows artifact smoke must check Authenticode signature");
+  assert.match(signedArtifactSmoke, /--require-signature/, "windows artifact smoke must support enforcing a signature");
   for (const linuxDependency of ["gnome-keyring", "libsecret-tools"]) {
     assert.match(workflow, new RegExp(escapeRegExp(linuxDependency)), `release workflow missing Linux keychain dependency: ${linuxDependency}`);
   }
