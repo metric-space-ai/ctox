@@ -28,7 +28,7 @@ test("normalizes ctox.dev session package into managed instances", () => {
   assert.equal(instances[0].id, "managed:tenant_skf");
   assert.equal(instances[0].source, "ctox_dev");
   assert.equal(instances[0].displayName, "SKF");
-  assert.equal(instances[0].sessionPartition, "persist:ctox-managed-managed:tenant_skf");
+  assert.match(instances[0].sessionPartition, /^persist:ctox-managed-[A-Za-z0-9_-]{18}$/);
   assert.equal(instances[0].healthSummary.httpDataProxy, false);
 });
 

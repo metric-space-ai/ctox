@@ -2,12 +2,17 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const {
   applyUsageToInstances,
   createDefaultRegistry,
+  loadRegistry,
   markInstanceUsed,
   normalizeRegistry,
   removeInstance,
+  saveRegistry,
   upsertInstance,
 } = require("../src/main/registry.cjs");
 
@@ -39,6 +44,33 @@ test("registry rejects cleartext secret fields", () => {
     }),
     /secret-like key/,
   );
+});
+
+test("a corrupt registry file falls back to an empty registry instead of bricking startup", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ctox-registry-"));
+  const filePath = path.join(dir, "instances.json");
+  fs.writeFileSync(filePath, "{ this is not valid json");
+  const registry = loadRegistry(filePath);
+  assert.deepEqual(registry.instances, []);
+  // The broken file is preserved for forensics, not silently destroyed.
+  const backups = fs.readdirSync(dir).filter((name) => name.startsWith("instances.json.corrupt-"));
+  assert.equal(backups.length, 1);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("saveRegistry writes atomically and round-trips", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ctox-registry-"));
+  const filePath = path.join(dir, "instances.json");
+  saveRegistry(filePath, upsertInstance(createDefaultRegistry(), {
+    id: "local-a",
+    source: "local_daemon",
+    displayName: "Local",
+  }));
+  // No temp file is left behind after an atomic rename.
+  assert.deepEqual(fs.readdirSync(dir), ["instances.json"]);
+  const reloaded = loadRegistry(filePath);
+  assert.equal(reloaded.instances[0].id, "local-a");
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test("usage is separate from instance metadata", () => {

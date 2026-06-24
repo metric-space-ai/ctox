@@ -8,13 +8,14 @@ const {
   sessionPartitionFor,
 } = require("../src/common/instance-model.cjs");
 
-test("normalizes mixed source instances with deterministic partitions", () => {
+test("normalizes mixed source instances with deterministic collision-free partitions", () => {
   const local = normalizeInstance({
     id: "local-main",
     source: "local_daemon",
     displayName: "Local CTOX",
   });
-  assert.equal(local.sessionPartition, "persist:ctox-local-local-main");
+  assert.match(local.sessionPartition, /^persist:ctox-local-[A-Za-z0-9_-]{18}$/);
+  // Deterministic: re-deriving yields the same partition.
   assert.equal(sessionPartitionFor(local), local.sessionPartition);
 
   const managed = normalizeInstance({
@@ -23,7 +24,28 @@ test("normalizes mixed source instances with deterministic partitions", () => {
     displayName: "SKF",
     tenantId: "tenant_skf",
   });
-  assert.equal(managed.sessionPartition, "persist:ctox-managed-managed:tenant_skf");
+  assert.match(managed.sessionPartition, /^persist:ctox-managed-[A-Za-z0-9_-]{18}$/);
+  assert.notEqual(managed.sessionPartition, local.sessionPartition);
+});
+
+test("case- or punctuation-variant ids never collide onto one partition", () => {
+  const a = sessionPartitionFor({ id: "managed:Tenant_SKF", source: "ctox_dev" });
+  const b = sessionPartitionFor({ id: "managed:tenant_skf", source: "ctox_dev" });
+  const c = sessionPartitionFor({ id: "managed:tenant#1", source: "ctox_dev" });
+  const d = sessionPartitionFor({ id: "managed:tenant 1", source: "ctox_dev" });
+  assert.notEqual(a, b);
+  assert.notEqual(c, d);
+});
+
+test("a caller-supplied sessionPartition is ignored and re-derived", () => {
+  const instance = normalizeInstance({
+    id: "local-main",
+    source: "local_daemon",
+    displayName: "Local CTOX",
+    sessionPartition: "persist:ctox-managed-someone-elses-partition",
+  });
+  assert.equal(instance.sessionPartition, sessionPartitionFor({ id: "local-main", source: "local_daemon" }));
+  assert.notEqual(instance.sessionPartition, "persist:ctox-managed-someone-elses-partition");
 });
 
 test("mergeInstances keeps all source kinds in one sorted list", () => {

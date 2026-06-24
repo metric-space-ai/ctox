@@ -18,13 +18,43 @@ function createDefaultRegistry() {
 
 function loadRegistry(filePath) {
   if (!fs.existsSync(filePath)) return createDefaultRegistry();
-  return normalizeRegistry(JSON.parse(fs.readFileSync(filePath, "utf8")));
+  let raw;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch (error) {
+    console.error("failed to read instance registry; using defaults", error?.message || error);
+    return createDefaultRegistry();
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    // A truncated/corrupt registry (e.g. from a crash mid-write) must never brick
+    // app startup. Preserve the bad file for forensics and start empty so the user
+    // can re-add instances instead of facing a dead window.
+    backupBrokenRegistry(filePath, "corrupt");
+    console.error("instance registry is corrupt; starting with an empty registry", error?.message || error);
+    return createDefaultRegistry();
+  }
+  return normalizeRegistry(parsed);
+}
+
+function backupBrokenRegistry(filePath, kind) {
+  try {
+    fs.renameSync(filePath, `${filePath}.${kind}-${Date.now()}`);
+  } catch (_error) {
+    // best-effort; leave the original in place if the rename fails
+  }
 }
 
 function saveRegistry(filePath, registry) {
   const normalized = normalizeRegistry(registry);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(normalized, null, 2)}\n`);
+  // Write atomically (temp file + rename) so a crash or power loss mid-write can
+  // never leave a truncated instances.json that bricks the next startup.
+  const tempPath = `${filePath}.${process.pid}.tmp`;
+  fs.writeFileSync(tempPath, `${JSON.stringify(normalized, null, 2)}\n`);
+  fs.renameSync(tempPath, filePath);
   return normalized;
 }
 

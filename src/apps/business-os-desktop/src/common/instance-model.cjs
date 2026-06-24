@@ -44,17 +44,16 @@ function sourcePrefix(source) {
 
 function sessionPartitionFor(instance) {
   const source = assertSourceKind(instance.source);
-  const localId = String(instance.id || stableId([source, instance.tenantId, instance.instanceId, instance.displayName]));
-  return `persist:ctox-${sourcePrefix(source)}-${safePartitionId(localId)}`;
-}
-
-function safePartitionId(value) {
-  return String(value)
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_.:-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 96) || "instance";
+  const localId = String(
+    instance.id || stableId([source, instance.tenantId, instance.instanceId, instance.displayName]),
+  ).trim() || "instance";
+  // Derive the Electron session partition from a collision-resistant hash of the
+  // EXACT (source, id) pair. A lossy lowercase/dash-fold/truncation slug could
+  // collapse two distinct ids (e.g. `Tenant_SKF` vs `tenant_skf`, or ids longer
+  // than the truncation limit) onto one partition, which is the Electron
+  // session-isolation boundary -> cross-tenant cookie/IndexedDB leak. Hashing the
+  // untruncated id makes every distinct instance get a distinct partition.
+  return `persist:ctox-${sourcePrefix(source)}-${stableId([source, localId])}`;
 }
 
 function assertSourceKind(value) {
@@ -80,7 +79,10 @@ function normalizeInstance(raw) {
     source,
     displayName,
     status,
-    sessionPartition: raw.sessionPartition || sessionPartitionFor({ ...raw, id, source }),
+    // Always re-derive the partition from the trusted (id, source); never honor a
+    // caller-/registry-supplied sessionPartition, which could be tampered to alias
+    // another instance's partition and leak its cookies/IndexedDB.
+    sessionPartition: sessionPartitionFor({ ...raw, id, source }),
     secretRefs: Array.isArray(raw.secretRefs) ? raw.secretRefs.map(String).filter(Boolean) : [],
   };
   copyString(raw, instance, "domain");
