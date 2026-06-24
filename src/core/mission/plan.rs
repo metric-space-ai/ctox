@@ -16,10 +16,10 @@ use std::collections::HashSet;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use std::time::Duration as StdDuration;
-use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -29,24 +29,23 @@ use crate::governance;
 const DEFAULT_DB_RELATIVE_PATH: &str = "runtime/ctox.sqlite3";
 const DEFAULT_GOAL_THREAD_PREFIX: &str = "plan";
 const DEFAULT_RESULT_EXCERPT_CHARS: usize = 420;
-const EMIT_DUE_STEPS_IDLE_SAFETY_SECS: u64 = 60;
+const PLAN_STATE_STAMP_RELATIVE_PATH: &str = "runtime/mission/plan-state.stamp";
 
 static PLAN_SCHEMA_READY: OnceLock<Mutex<HashSet<PlanDbKey>>> = OnceLock::new();
 static EMIT_DUE_STEPS_GATE: OnceLock<Mutex<Option<EmitDueStepsGateState>>> = OnceLock::new();
+static PLAN_STATE_STAMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone)]
 struct EmitDueStepsGateState {
     db_path: PathBuf,
-    stamp: CoreDbChangeStamp,
+    stamp: PlanStateChangeStamp,
     next_due_at: Option<DateTime<Utc>>,
-    last_scan: Instant,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct CoreDbChangeStamp {
-    main: FileChangeStamp,
-    wal: FileChangeStamp,
-    shm: FileChangeStamp,
+struct PlanStateChangeStamp {
+    file: FileChangeStamp,
+    content_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -318,6 +317,7 @@ pub fn complete_goal(root: &Path, goal_id: &str, result_text: &str) -> Result<us
     }
     refresh_goal_status_tx(&tx, goal_id)?;
     tx.commit()?;
+    touch_plan_state_stamp(root)?;
     Ok(updated)
 }
 
@@ -356,6 +356,7 @@ pub fn complete_step_by_message_key(
     }
     tx.commit()?;
     if updated > 0 {
+        touch_plan_state_stamp(root)?;
         settle_plan_queue_message(root, Some(message_key), "handled")?;
     }
     Ok(updated)
@@ -498,6 +499,7 @@ fn create_goal(root: &Path, request: PlanCreateRequest) -> Result<GoalWithStepsV
         }
     }
     tx.commit()?;
+    touch_plan_state_stamp(root)?;
 
     // P1 — record one governance event per superseded goal after the
     // supersede commit, so the supersede mapping is durably auditable. We
@@ -726,6 +728,7 @@ pub fn emit_next_step_for_goal(root: &Path, goal_id: &str) -> Result<Option<Emit
         params![pending.goal.goal_id, GOAL_STATUS_ACTIVE, now],
     )?;
     tx.commit()?;
+    touch_plan_state_stamp(root)?;
     Ok(Some(EmittedPlanStepView {
         goal_id: pending.goal.goal_id,
         step_id: pending.step.step_id,
@@ -761,6 +764,7 @@ fn prepare_next_step_emission(
     let Some(step) = next_eligible_step_tx(&tx, goal_id)? else {
         refresh_goal_status_tx(&tx, goal_id)?;
         tx.commit()?;
+        touch_plan_state_stamp(root)?;
         return Ok(None);
     };
     let prompt = render_step_prompt(root, &goal, &step, &list_completed_steps_tx(&tx, goal_id)?);
@@ -784,6 +788,7 @@ fn mark_step_completed(root: &Path, step_id: &str, result_text: &str) -> Result<
     }
     tx.commit()?;
     if updated > 0 {
+        touch_plan_state_stamp(root)?;
         settle_plan_queue_message(root, message_key.as_deref(), "handled")?;
     }
     let _ = emit_due_steps(root)?;
@@ -822,6 +827,7 @@ fn mark_step_failed(root: &Path, step_id: &str, reason: &str) -> Result<usize> {
     }
     tx.commit()?;
     if updated > 0 {
+        touch_plan_state_stamp(root)?;
         settle_plan_queue_message(root, message_key.as_deref(), "failed")?;
     }
     Ok(updated)
@@ -878,6 +884,7 @@ fn mark_step_blocked(root: &Path, step_id: &str, reason: &str) -> Result<usize> 
     }
     tx.commit()?;
     if updated > 0 {
+        touch_plan_state_stamp(root)?;
         settle_plan_queue_message(root, message_key.as_deref(), "blocked")?;
     }
     Ok(updated)
@@ -912,6 +919,7 @@ fn reset_step_to_pending(root: &Path, step_id: &str, defer_until: Option<String>
     }
     tx.commit()?;
     if updated > 0 {
+        touch_plan_state_stamp(root)?;
         settle_plan_queue_message(root, message_key.as_deref(), "cancelled")?;
     }
     Ok(updated)
@@ -960,6 +968,9 @@ pub fn repair_stale_step_routing_state(root: &Path) -> Result<usize> {
         repaired += 1;
     }
     tx.commit()?;
+    if repaired > 0 {
+        touch_plan_state_stamp(root)?;
+    }
     Ok(repaired)
 }
 
@@ -1251,7 +1262,7 @@ fn load_next_due_step_at(conn: &Connection, now: &DateTime<Utc>) -> Result<Optio
 
 fn should_skip_emit_due_step_scan(root: &Path, now: &DateTime<Utc>) -> bool {
     let db_path = resolve_db_path(root);
-    let stamp = core_db_change_stamp(&db_path);
+    let stamp = plan_state_change_stamp(root);
     let gate = EMIT_DUE_STEPS_GATE.get_or_init(|| Mutex::new(None));
     let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let Some(previous) = guard.as_ref() else {
@@ -1268,24 +1279,44 @@ fn should_skip_emit_due_step_scan(root: &Path, now: &DateTime<Utc>) -> bool {
     {
         return false;
     }
-    previous.last_scan.elapsed() < StdDuration::from_secs(EMIT_DUE_STEPS_IDLE_SAFETY_SECS)
+    true
 }
 
 fn mark_emit_due_step_scan(root: &Path, next_due_at: Option<DateTime<Utc>>) {
     let db_path = resolve_db_path(root);
-    let stamp = core_db_change_stamp(&db_path);
+    let stamp = plan_state_change_stamp(root);
     let gate = EMIT_DUE_STEPS_GATE.get_or_init(|| Mutex::new(None));
     let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     *guard = Some(EmitDueStepsGateState {
         db_path,
         stamp,
         next_due_at,
-        last_scan: Instant::now(),
     });
+}
+
+fn touch_plan_state_stamp(root: &Path) -> Result<()> {
+    let path = resolve_plan_state_stamp_path(root);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create plan state stamp parent {}",
+                parent.display()
+            )
+        })?;
+    }
+    let sequence = PLAN_STATE_STAMP_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1;
+    std::fs::write(&path, format!("{}\n{sequence}\n", now_iso_string()))
+        .with_context(|| format!("failed to write plan state stamp {}", path.display()))?;
+    clear_emit_due_step_scan_gate();
+    Ok(())
 }
 
 #[cfg(test)]
 fn clear_emit_due_step_scan_gate_for_tests() {
+    clear_emit_due_step_scan_gate();
+}
+
+fn clear_emit_due_step_scan_gate() {
     if let Some(gate) = EMIT_DUE_STEPS_GATE.get() {
         let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         *guard = None;
@@ -1801,18 +1832,18 @@ fn resolve_db_path(root: &Path) -> std::path::PathBuf {
     root.join(DEFAULT_DB_RELATIVE_PATH)
 }
 
-fn core_db_change_stamp(path: &Path) -> CoreDbChangeStamp {
-    CoreDbChangeStamp {
-        main: file_change_stamp(path),
-        wal: file_change_stamp(&sqlite_sidecar_path(path, "-wal")),
-        shm: file_change_stamp(&sqlite_sidecar_path(path, "-shm")),
-    }
+fn resolve_plan_state_stamp_path(root: &Path) -> PathBuf {
+    root.join(PLAN_STATE_STAMP_RELATIVE_PATH)
 }
 
-fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
-    let mut value = path.as_os_str().to_os_string();
-    value.push(suffix);
-    PathBuf::from(value)
+fn plan_state_change_stamp(root: &Path) -> PlanStateChangeStamp {
+    let path = resolve_plan_state_stamp_path(root);
+    PlanStateChangeStamp {
+        file: file_change_stamp(&path),
+        content_hash: std::fs::read(&path)
+            .ok()
+            .map(|bytes| format!("{:x}", Sha256::digest(&bytes))),
+    }
 }
 
 fn file_change_stamp(path: &Path) -> FileChangeStamp {
@@ -1959,7 +1990,7 @@ mod tests {
     }
 
     #[test]
-    fn emit_due_step_scan_gate_skips_idle_until_plan_db_changes_or_due_time_arrives() {
+    fn emit_due_step_scan_gate_ignores_core_db_noise_until_plan_state_or_due_time_changes() {
         clear_emit_due_step_scan_gate_for_tests();
         let root = temp_plan_root("idle-gate");
         let now = now_utc();
@@ -2017,11 +2048,19 @@ mod tests {
         {
             let conn = open_plan_db(&root).expect("reopen plan db");
             conn.execute(
-                "UPDATE planned_steps SET title = ?2, updated_at = ?3 WHERE step_id = ?1",
-                params!["step-future", "changed", now_iso_string()],
+                "CREATE TABLE IF NOT EXISTS unrelated_idle_noise (id INTEGER PRIMARY KEY, value TEXT)",
+                [],
             )
-            .expect("mutate plan step");
+            .expect("create unrelated table");
+            conn.execute(
+                "INSERT INTO unrelated_idle_noise (value) VALUES (?1)",
+                params![now_iso_string()],
+            )
+            .expect("mutate unrelated core state");
         }
+        assert!(should_skip_emit_due_step_scan(&root, &now_utc()));
+
+        touch_plan_state_stamp(&root).expect("plan stamp touch");
         assert!(!should_skip_emit_due_step_scan(&root, &now_utc()));
 
         let _ = std::fs::remove_dir_all(root);

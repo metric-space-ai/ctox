@@ -389,6 +389,7 @@ ctox process-mining deadlocks [--limit <n>]            # Detect activities that 
 ctox process-mining violations [--limit <n>]          # Inspect raw protocol and transition violations
 ctox process-mining scan-violations                    # Force-execute a protocol violation audit
 ctox process-mining prune [--sqlite-access-window <n>] # Prune high-volume SQLite statement events only
+ctox process-mining compact-payloads [--limit <n>] [--vacuum] # Compact oversized row snapshots; optional VACUUM reclaims disk
 ```
 
 ## Harness Mining
@@ -429,4 +430,4 @@ ctox reset all --hard --confirm            # Hard-reset process-mining + clear h
 - **soft** (default) empties the recorded-data tables (`ctox_process_events`, `ctox_process_context`, the `ctox_pm_*` analysis tables, and the `ctox_core_transition_proofs` / `ctox_core_spawn_edges` evidence) while leaving the schema, mutation triggers, and transition-rule configuration in place.
 - **`--hard`** (process-mining only) first drops every process-mining trigger so a broken instrumentation layer can no longer block live writes, then drops the process-mining tables and rebuilds a clean schema — reinstalling fresh triggers and re-seeding the default transition rules. This is the recovery path when the instrumentation itself is the problem.
 - **Self-recording.** Every `ctox` invocation is itself recorded in the audit trail, so a confirmed reset is immediately followed by a small number of rows describing the reset command run. This is expected: the log faithfully records that a reset happened.
-- For routine retention (trimming only the high-volume `sqlite-access:` events rather than wiping the trail), use `ctox process-mining prune` instead.
+- For routine retention, use `ctox process-mining prune` to trim only the high-volume `sqlite-access:` events rather than wiping the trail. Use `ctox process-mining compact-payloads --vacuum` when old row snapshots contain oversized JSON/BLOB payloads and disk space must be reclaimed.

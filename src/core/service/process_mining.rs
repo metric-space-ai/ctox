@@ -21,7 +21,7 @@ const PROCESS_CONTEXT_TABLE: &str = "ctox_process_context";
 const PROCESS_EVENTS_TABLE: &str = "ctox_process_events";
 const PROCESS_TRIGGER_REGISTRY_TABLE: &str = "ctox_process_trigger_registry";
 const PROCESS_MODEL_TABLE_PREFIX: &str = "ctox_pm_";
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const PROCESS_MINING_USAGE: &str = "usage:
   ctox process-mining ensure
   ctox process-mining schema
@@ -49,6 +49,7 @@ const PROCESS_MINING_USAGE: &str = "usage:
   ctox process-mining coverage [--limit <n>]
   ctox process-mining violations [--limit <n>]
   ctox process-mining prune [--sqlite-access-window <n>]
+  ctox process-mining compact-payloads [--limit <n>] [--vacuum]
   ctox process-mining scan-violations";
 static SQLITE_ACCESS_BUFFER: OnceLock<Mutex<Vec<SqliteAccessRecord>>> = OnceLock::new();
 static SQLITE_ACCESS_SEQ: AtomicU64 = AtomicU64::new(1);
@@ -57,6 +58,9 @@ const SQLITE_ACCESS_READS_ENV: &str = "CTOX_PROCESS_MINING_RECORD_SQLITE_READS";
 const SQLITE_ACCESS_MAX_EVENTS_PER_COMMAND: usize = 512;
 const SQLITE_ACCESS_RETENTION_WINDOW: i64 = 200_000;
 const SQLITE_ACCESS_RETENTION_INTERVAL_FLUSHES: u64 = 128;
+const PROCESS_EVENT_TEXT_FULL_LIMIT_CHARS: usize = 4096;
+const PROCESS_EVENT_TEXT_PREVIEW_CHARS: usize = 1024;
+const PROCESS_EVENT_COMPACT_JSON_BYTES: i64 = 16_384;
 // Safety ceiling on the full process-mining event log across all case_ids. The
 // per-source sqlite-access window above only caps recorder noise; this bounds
 // total audit volume so a runaway producer (e.g. a stuck internal-work spawn
@@ -557,6 +561,47 @@ fn prune_process_events_global(conn: &Connection, keep_window: i64) -> Result<us
         params![keep_window],
     )?;
     Ok(deleted)
+}
+
+fn compact_large_process_event_payloads(conn: &Connection, limit: i64) -> Result<usize> {
+    let limit = limit.max(1);
+    let updated = conn.execute(
+        r#"
+        UPDATE ctox_process_events
+        SET row_before_json = CASE
+                WHEN length(row_before_json) > ?1 THEN json_object(
+                    '_ctox_compacted', 1,
+                    'field', 'row_before_json',
+                    'original_bytes', length(row_before_json),
+                    'table_name', table_name,
+                    'operation', operation,
+                    'event_seq', event_seq
+                )
+                ELSE row_before_json
+            END,
+            row_after_json = CASE
+                WHEN length(row_after_json) > ?1 THEN json_object(
+                    '_ctox_compacted', 1,
+                    'field', 'row_after_json',
+                    'original_bytes', length(row_after_json),
+                    'table_name', table_name,
+                    'operation', operation,
+                    'event_seq', event_seq
+                )
+                ELSE row_after_json
+            END
+        WHERE event_seq IN (
+            SELECT event_seq
+            FROM ctox_process_events
+            WHERE length(row_before_json) > ?1
+               OR length(row_after_json) > ?1
+            ORDER BY event_seq ASC
+            LIMIT ?2
+        )
+        "#,
+        params![PROCESS_EVENT_COMPACT_JSON_BYTES, limit],
+    )?;
+    Ok(updated)
 }
 
 /// Recorded process-mining "Mitschrieb" tables — the audit trail and derived
@@ -1545,6 +1590,29 @@ pub fn handle_process_mining_command(root: &Path, args: &[String]) -> Result<()>
             );
             Ok(())
         }
+        Some("compact-payloads") => {
+            ensure_process_mining_schema(&conn, &db_path)?;
+            let limit = find_flag_value(args, "--limit")
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or(25_000)
+                .clamp(1, 1_000_000);
+            let compacted = compact_large_process_event_payloads(&conn, limit)?;
+            let vacuum = args.iter().any(|arg| arg == "--vacuum");
+            if vacuum && compacted > 0 {
+                conn.execute_batch("VACUUM")?;
+            }
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "ok": true,
+                    "compacted_process_events": compacted,
+                    "payload_threshold_bytes": PROCESS_EVENT_COMPACT_JSON_BYTES,
+                    "limit": limit,
+                    "vacuum": vacuum && compacted > 0
+                }))?
+            );
+            Ok(())
+        }
         Some("scan-violations") => {
             ensure_process_mining_schema(&conn, &db_path)?;
             let detected_at = now_expr_value();
@@ -2109,11 +2177,19 @@ fn json_safe_column_expr(alias: &str, column: &ColumnInfo) -> String {
     let column_ref = format!("{alias}.{}", quote_ident(&column.name));
     if column.decl_type.to_ascii_uppercase().contains("BLOB") {
         return format!(
-            "CASE WHEN {column_ref} IS NULL THEN NULL ELSE '[blob:' || length({column_ref}) || ':' || lower(hex({column_ref})) || ']' END"
+            "CASE WHEN {column_ref} IS NULL THEN NULL ELSE '[blob:' || length({column_ref}) || ' bytes]' END"
         );
     }
     format!(
-        "CASE WHEN typeof({column_ref}) = 'blob' THEN '[blob:' || length({column_ref}) || ':' || lower(hex({column_ref})) || ']' ELSE {column_ref} END"
+        "CASE \
+            WHEN typeof({column_ref}) = 'blob' \
+                THEN '[blob:' || length({column_ref}) || ' bytes]' \
+            WHEN typeof({column_ref}) = 'text' AND length({column_ref}) > {full_limit} \
+                THEN substr({column_ref}, 1, {preview}) || '...[truncated:' || length({column_ref}) || ' chars]' \
+            ELSE {column_ref} \
+        END",
+        full_limit = PROCESS_EVENT_TEXT_FULL_LIMIT_CHARS,
+        preview = PROCESS_EVENT_TEXT_PREVIEW_CHARS,
     )
 }
 
@@ -4729,6 +4805,22 @@ fn scan_core_state_machine_violations(conn: &Connection, limit: i64) -> Result<V
             continue;
         }
 
+        if is_terminal_queue_insert_snapshot(&event) {
+            mapped_telemetry += 1;
+            record_event_coverage(
+                conn,
+                &event,
+                "telemetry",
+                Some(&rule.rule_id),
+                Some(&rule.petri_transition_id),
+                "terminal_queue_insert_snapshot",
+                &scanned_at,
+            )?;
+            clear_unmapped_event(conn, &event.event_id)?;
+            clear_state_violations_for_event(conn, &event.event_id)?;
+            continue;
+        }
+
         let Some(request) = infer_core_transition_from_rule(conn, &rule, &event) else {
             rule_matched_without_core_transition += 1;
             record_event_coverage(
@@ -4907,6 +4999,32 @@ fn scan_core_state_machine_violations(conn: &Connection, limit: i64) -> Result<V
         "recent_unmapped": recent_unmapped,
         "scanned_at": scanned_at,
     }))
+}
+
+fn is_terminal_queue_insert_snapshot(event: &ProcessEventForStateMachine) -> bool {
+    if !event.operation.eq_ignore_ascii_case("INSERT") {
+        return false;
+    }
+    if !(event.table_name == "communication_routing_state"
+        || event.table_name.contains("queue")
+        || event.entity_type.eq_ignore_ascii_case("queue"))
+    {
+        return false;
+    }
+    let after = parse_json_value(&event.row_after_json);
+    let state = map_queue_state(event.to_state.as_deref()).or_else(|| {
+        json_string(&after, &["route_status", "queue_status", "status", "state"])
+            .and_then(|value| map_queue_state(Some(&value)))
+    });
+    matches!(
+        state,
+        Some(
+            csm::CoreState::Completed
+                | csm::CoreState::Blocked
+                | csm::CoreState::Failed
+                | csm::CoreState::Superseded
+        )
+    )
 }
 
 fn is_state_preserving_update(event: &ProcessEventForStateMachine) -> bool {
@@ -6135,6 +6253,78 @@ mod tests {
     }
 
     #[test]
+    fn process_mining_summarizes_large_blob_columns() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("ctox.sqlite3");
+        let conn = Connection::open(&db_path)?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE ctox_skill_files (
+                skill_id TEXT NOT NULL,
+                relative_path TEXT NOT NULL,
+                content_blob BLOB NOT NULL,
+                PRIMARY KEY (skill_id, relative_path)
+            );
+            "#,
+        )?;
+        ensure_process_mining_schema(&conn, &db_path)?;
+        let payload = vec![b'x'; 20_000];
+        conn.execute(
+            "INSERT INTO ctox_skill_files (skill_id, relative_path, content_blob) VALUES ('skill-a', 'README.md', ?1)",
+            params![payload],
+        )?;
+
+        let row_after: String = conn.query_row(
+            "SELECT row_after_json FROM ctox_process_events WHERE table_name = 'ctox_skill_files'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert!(
+            row_after.len() < 512,
+            "blob audit payload should stay small, got {} bytes",
+            row_after.len()
+        );
+        assert!(row_after.contains("[blob:20000 bytes]"));
+        assert!(!row_after.contains("7878787878"));
+        Ok(())
+    }
+
+    #[test]
+    fn process_mining_truncates_large_text_columns() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("ctox.sqlite3");
+        let conn = Connection::open(&db_path)?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE knowledge_notes (
+                note_id TEXT PRIMARY KEY,
+                body TEXT NOT NULL,
+                status TEXT NOT NULL
+            );
+            "#,
+        )?;
+        ensure_process_mining_schema(&conn, &db_path)?;
+        let body = "a".repeat(PROCESS_EVENT_TEXT_FULL_LIMIT_CHARS + 500);
+        conn.execute(
+            "INSERT INTO knowledge_notes (note_id, body, status) VALUES ('n1', ?1, 'active')",
+            params![body],
+        )?;
+
+        let row_after: String = conn.query_row(
+            "SELECT row_after_json FROM ctox_process_events WHERE table_name = 'knowledge_notes'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert!(
+            row_after.len() < PROCESS_EVENT_TEXT_PREVIEW_CHARS + 256,
+            "text audit payload should be capped, got {} bytes",
+            row_after.len()
+        );
+        assert!(row_after.contains("...[truncated:4596 chars]"));
+        Ok(())
+    }
+
+    #[test]
     fn sqlite_authorizer_skips_read_events_by_default() -> Result<()> {
         let dir = tempdir()?;
         let db_path = dir.path().join("ctox.sqlite3");
@@ -6277,6 +6467,44 @@ mod tests {
             genuine, 3,
             "genuine transition rows behind a debug burst must survive"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn compact_large_process_event_payloads_replaces_oversized_snapshots() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("ctox.sqlite3");
+        let conn = Connection::open(&db_path)?;
+        ensure_process_mining_schema(&conn, &db_path)?;
+        let large_json = format!("{{\"body\":\"{}\"}}", "x".repeat(32_000));
+        conn.execute(
+            r#"
+            INSERT INTO ctox_process_events (
+                event_id, observed_at, case_id, activity, lifecycle_transition,
+                entity_type, entity_id, table_name, operation, from_state, to_state,
+                primary_key_json, row_before_json, row_after_json, changed_columns_json,
+                turn_id, command_id, actor_key, source, command_name, db_path, metadata_json
+            )
+            VALUES (
+                'large-payload', '2026-05-01T00:00:00Z', 'case', 'act', 'transition',
+                'skill', 'e', 'ctox_skill_files', 'INSERT', NULL, 'row_present',
+                json_object(), json_object(), ?1, json_array(),
+                'turn', 'cmd', 'agent', 'test', 'insert', 'db', json_object()
+            )
+            "#,
+            params![large_json],
+        )?;
+
+        let compacted = compact_large_process_event_payloads(&conn, 10)?;
+        let row_after: String = conn.query_row(
+            "SELECT row_after_json FROM ctox_process_events WHERE event_id = 'large-payload'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(compacted, 1);
+        assert!(row_after.len() < 256);
+        assert!(row_after.contains("_ctox_compacted"));
+        assert!(row_after.contains("original_bytes"));
         Ok(())
     }
 
