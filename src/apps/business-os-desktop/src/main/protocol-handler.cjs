@@ -56,12 +56,29 @@ function protocolAction(url) {
   return firstPath || url.host;
 }
 
-async function handleDesktopProtocolUrl(rawUrl, handlers) {
+async function handleDesktopProtocolUrl(rawUrl, handlers, options = {}) {
   const parsed = parseDesktopProtocolUrl(rawUrl);
+  const confirmAction = typeof options.confirmAction === "function" ? options.confirmAction : null;
   if (parsed.action === "pair") {
+    // A pair link from any web page would otherwise silently import an
+    // attacker-controlled invite (writing a sync room + room password) and open
+    // it. Require explicit user confirmation before touching the registry/keychain.
+    if (confirmAction && !(await confirmAction({ action: "pair", payload: parsed.payload, rawUrl }))) {
+      return { ok: false, declined: true, action: "pair" };
+    }
     return handlers.importInvite(parsed.rawInvite);
   }
   if (parsed.action === "instance") {
+    // Switching the foreground instance from an untrusted deep-link also needs
+    // explicit consent, even though it can only select an already-registered tenant.
+    if (confirmAction && !(await confirmAction({
+      action: "instance",
+      instanceId: parsed.instanceId,
+      tenantId: parsed.tenantId,
+      rawUrl,
+    }))) {
+      return { ok: false, declined: true, action: "instance" };
+    }
     return handlers.activateManagedInstance(parsed.instanceId);
   }
   if (parsed.action === "auth") {
@@ -80,6 +97,8 @@ function installDesktopProtocolHandling({
   handlersProvider,
   isReady,
   onError,
+  confirmAction,
+  onActivate,
   registerDefaultProtocolClient = true,
   singleInstanceLock = true,
 } = {}) {
@@ -111,7 +130,7 @@ function installDesktopProtocolHandling({
       return { queued: true };
     }
     try {
-      return await handleDesktopProtocolUrl(url, handlersProvider());
+      return await handleDesktopProtocolUrl(url, handlersProvider(), { confirmAction });
     } catch (error) {
       if (typeof onError === "function") onError(error, url);
       return {
@@ -123,10 +142,12 @@ function installDesktopProtocolHandling({
 
   app.on("open-url", (event, rawUrl) => {
     if (event && typeof event.preventDefault === "function") event.preventDefault();
+    if (typeof onActivate === "function") onActivate();
     track(dispatchOrQueue(rawUrl));
   });
 
   app.on("second-instance", (_event, commandLine) => {
+    if (typeof onActivate === "function") onActivate();
     for (const rawUrl of extractDesktopProtocolUrls(commandLine, protocol)) {
       track(dispatchOrQueue(rawUrl));
     }

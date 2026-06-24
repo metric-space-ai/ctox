@@ -6,6 +6,7 @@ const {
   BrowserView,
   BrowserWindow,
   crashReporter,
+  dialog,
   ipcMain,
   session,
   shell,
@@ -50,6 +51,8 @@ const protocolHandling = installDesktopProtocolHandling({
   app,
   handlersProvider: protocolHandlers,
   isReady: () => Boolean(sourceManager && mainWindow),
+  confirmAction: confirmDeepLinkAction,
+  onActivate: focusMainWindow,
   onError: (error, rawUrl) => {
     console.error("Desktop protocol link failed", {
       rawUrl,
@@ -57,6 +60,53 @@ const protocolHandling = installDesktopProtocolHandling({
     });
   },
 });
+
+function focusMainWindow() {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized?.()) mainWindow.restore?.();
+  mainWindow.show?.();
+  mainWindow.focus?.();
+}
+
+// Deep-links arrive from outside the app (a web page, email, chat). Acting on a
+// pair/instance link without consent would let any page silently add an
+// attacker-controlled instance or switch the active one, so require an explicit,
+// window-focused confirmation before the action runs.
+async function confirmDeepLinkAction(descriptor) {
+  focusMainWindow();
+  if (!dialog?.showMessageBox) return true; // no UI (headless/test) -> do not hard-block
+  const copy = describeDeepLinkAction(descriptor);
+  const { response } = await dialog.showMessageBox(mainWindow ?? undefined, {
+    type: "warning",
+    buttons: ["Abbrechen", copy.confirmLabel],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+    title: copy.title,
+    message: copy.message,
+    detail: copy.detail,
+  });
+  return response === 1;
+}
+
+function describeDeepLinkAction(descriptor) {
+  if (descriptor?.action === "instance") {
+    return {
+      title: "Instanz öffnen?",
+      message: "Ein externer Link möchte zu einer verwalteten CTOX-Instanz wechseln.",
+      detail: `Instanz: ${descriptor.tenantId || descriptor.instanceId || "unbekannt"}\n`
+        + "Nur fortfahren, wenn du diesen Link erwartet hast.",
+      confirmLabel: "Wechseln",
+    };
+  }
+  return {
+    title: "Instanz koppeln?",
+    message: "Ein externer Link möchte eine neue CTOX-Instanz hinzufügen und öffnen.",
+    detail: "Pairing-Links enthalten Zugangsdaten zu einem fremden Sync-Raum. "
+      + "Nur fortfahren, wenn du diesen Link von einer vertrauenswürdigen Quelle erhalten hast.",
+    confirmLabel: "Koppeln & öffnen",
+  };
+}
 
 function registryProvider() {
   return registry;

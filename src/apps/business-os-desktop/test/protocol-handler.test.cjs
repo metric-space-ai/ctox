@@ -45,6 +45,36 @@ test("dispatches protocol links to the right handler", async () => {
   assert.deepEqual(calls, ["managed:tenant_1", "ctox-business-os-desktop://auth/callback"]);
 });
 
+test("deep-link pair/instance actions are blocked when the user declines confirmation", async () => {
+  const calls = [];
+  const handlers = {
+    importInvite: async (raw) => calls.push(["invite", raw]),
+    activateManagedInstance: async (id) => calls.push(["managed", id]),
+  };
+  const deny = async () => false;
+  const pair = await handleDesktopProtocolUrl(
+    "ctox-business-os-desktop://pair?payload=abc",
+    handlers,
+    { confirmAction: deny },
+  );
+  const inst = await handleDesktopProtocolUrl(
+    "ctox-business-os-desktop://instance/tenant_x",
+    handlers,
+    { confirmAction: deny },
+  );
+  assert.deepEqual(calls, []);
+  assert.equal(pair.declined, true);
+  assert.equal(inst.declined, true);
+
+  // An approving confirmation lets the action through.
+  await handleDesktopProtocolUrl(
+    "ctox-business-os-desktop://instance/tenant_x",
+    handlers,
+    { confirmAction: async () => true },
+  );
+  assert.deepEqual(calls, [["managed", "managed:tenant_x"]]);
+});
+
 test("extracts desktop protocol links from noisy process argv", () => {
   assert.deepEqual(extractDesktopProtocolUrls([
     "/Applications/CTOX.app",
