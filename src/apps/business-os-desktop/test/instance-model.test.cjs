@@ -73,3 +73,20 @@ test("secret-like instance fields are rejected", () => {
   );
 });
 
+test("broadened secret-like keys are rejected while public host-key fields are allowed", () => {
+  for (const key of ["apiKey", "accessKey", "passphrase", "sessionCookie", "authorization"]) {
+    assert.throws(
+      () => normalizeInstance({ id: "bad", source: "local_daemon", displayName: "Bad", [key]: "x" }),
+      /secret-like key/,
+      `expected ${key} to be rejected`,
+    );
+  }
+  // Host-key fingerprints are public and must remain persistable.
+  assert.doesNotThrow(() => normalizeInstance({
+    id: "ok",
+    source: "ssh_managed",
+    displayName: "VPS",
+    connection: { host: "h", user: "u", hostKeyFingerprint: "SHA256:abc" },
+  }));
+});
+

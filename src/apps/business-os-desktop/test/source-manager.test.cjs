@@ -5,6 +5,17 @@ const assert = require("node:assert/strict");
 const { createDefaultRegistry, upsertInstance } = require("../src/main/registry.cjs");
 const { SourceManager } = require("../src/main/source-manager.cjs");
 
+test("source manager wires an app-owned known_hosts path into the ssh source", () => {
+  const manager = new SourceManager({
+    registryProvider: () => createDefaultRegistry(),
+    registrySaver: () => undefined,
+    secretStore: { get: async () => "", set: async () => undefined, delete: async () => undefined },
+    fetchImpl: async () => ({ status: 401, ok: false }),
+    knownHostsPath: "/tmp/ctox/known_hosts",
+  });
+  assert.equal(manager.sources.ssh_managed.knownHostsPath, "/tmp/ctox/known_hosts");
+});
+
 test("source manager removes unmanaged instances and blocks managed local delete", async () => {
   let registry = createDefaultRegistry();
   registry = upsertInstance(registry, {

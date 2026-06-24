@@ -10,10 +10,13 @@ const {
 } = require("./sources.cjs");
 
 class SourceManager {
-  constructor({ registryProvider, registrySaver, secretStore, ctoxDevBaseUrl, shellUrl, fetchImpl }) {
+  constructor({ registryProvider, registrySaver, secretStore, ctoxDevBaseUrl, shellUrl, fetchImpl, knownHostsPath }) {
     this.registryProvider = registryProvider;
     this.registrySaver = registrySaver;
-    const pairingOptions = { shellUrl };
+    // Wire an app-owned known_hosts path so SSH host-key pinning is durable and
+    // independent of the operator's personal ~/.ssh/known_hosts. Without this the
+    // implemented ensureKnownHost/UserKnownHostsFile machinery never ran in prod.
+    const pairingOptions = { shellUrl, knownHostsPath };
     this.sources = {
       ctox_dev: new CtoxDevInstanceSource({ baseUrl: ctoxDevBaseUrl, fetchImpl }),
       local_daemon: new LocalDaemonInstanceSource(registryProvider, registrySaver, secretStore, pairingOptions),

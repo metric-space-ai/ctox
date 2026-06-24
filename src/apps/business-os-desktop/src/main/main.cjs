@@ -137,6 +137,7 @@ async function createWindow() {
     ctoxDevBaseUrl: registry.settings.ctoxDevBaseUrl,
     shellUrl: registry.settings.shellUrl,
     fetchImpl: session.defaultSession.fetch.bind(session.defaultSession),
+    knownHostsPath: path.join(app.getPath("userData"), "ssh", "known_hosts"),
   });
   mainWindow = new BrowserWindow({
     width: 1440,

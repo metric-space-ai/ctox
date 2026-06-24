@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const { SECRET_KEY_SUBSTRING_RE } = require("./secret-keys.cjs");
 
 const SOURCE_KINDS = Object.freeze([
   "ctox_dev",
@@ -18,7 +19,7 @@ const STATUS_VALUES = Object.freeze([
   "error",
 ]);
 
-const SECRET_KEY_RE = /(password|token|secret|credential|private[_-]?key|room[_-]?password|ctox[_-]?config)/i;
+const SECRET_KEY_RE = SECRET_KEY_SUBSTRING_RE;
 const SECRET_KEY_ALLOWLIST = new Set(["secretRef", "secretRefs"]);
 const DYNAMIC_KEY_PATHS = new Set(["registry.usage"]);
 

@@ -52,6 +52,28 @@ test("redacts nested secret-like object keys recursively", () => {
   assert.equal(output.nested.list[0].ctox_config, REDACTED);
 });
 
+test("redacts broadened credential key names but not public host-key fields", () => {
+  const output = redactSensitiveValue({
+    apiKey: "live-abc",
+    api_key: "live-def",
+    accessKey: "AKIA123",
+    passphrase: "open-sesame",
+    authorization: "Bearer xyz",
+    sessionCookie: "sid=secret",
+    // Public, non-secret fields must survive redaction.
+    hostKeyFingerprint: "SHA256:abcdef",
+    displayName: "VPS Demo",
+  });
+  assert.equal(output.apiKey, REDACTED);
+  assert.equal(output.api_key, REDACTED);
+  assert.equal(output.accessKey, REDACTED);
+  assert.equal(output.passphrase, REDACTED);
+  assert.equal(output.authorization, REDACTED);
+  assert.equal(output.sessionCookie, REDACTED);
+  assert.equal(output.hostKeyFingerprint, "SHA256:abcdef");
+  assert.equal(output.displayName, "VPS Demo");
+});
+
 test("support bundle snapshot does not include known secret values", () => {
   const snapshot = createSupportBundleSnapshot({
     now: new Date("2026-06-12T10:00:00.000Z"),

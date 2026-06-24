@@ -1,6 +1,8 @@
 "use strict";
 
-const SECRET_KEY_RE = /(^|_)(password|token|secret|credential|private_key|room_password|ctox_config)($|_)/i;
+const { SECRET_KEY_SEGMENT_RE } = require("../common/secret-keys.cjs");
+
+const SECRET_KEY_RE = SECRET_KEY_SEGMENT_RE;
 const REDACTED = "[REDACTED]";
 
 function redactSensitiveText(value) {
