@@ -120,6 +120,9 @@ const BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS: u64 = 180;
 const BUSINESS_OS_APP_RECOVERY_STALE_SECS: u64 = 180;
 const BUSINESS_OS_APP_RECOVERY_PREFLIGHT_IDLE_SAFETY_SECS: u64 = 60;
 const BUSINESS_OS_APP_RECOVERY_SCAN_LIMIT: usize = 128;
+const BUSINESS_OS_APP_UNSTARTED_REQUEUE_BLOCK_THRESHOLD: usize = 1;
+const BUSINESS_OS_APP_UNSTARTED_REQUEUE_COUNT_KEY: &str = "business_os_app_unstarted_requeue_count";
+const BUSINESS_OS_APP_UNSTARTED_REQUEUED_AT_KEY: &str = "business_os_app_unstarted_requeued_at";
 const CHANNEL_ROUTER_LEASE_OWNER: &str = "ctox-service";
 const QUEUE_PRESSURE_GUARD_THRESHOLD: usize = 20;
 const QUEUE_GUARD_SOURCE_LABEL: &str = "queue-guard";
@@ -12168,6 +12171,38 @@ fn requeue_unstarted_business_os_app_queue_task(
     if business_os_app_artifact_dir_has_user_content(&artifact_dir)? {
         return Ok(false);
     }
+    let previous_requeues = business_os_app_unstarted_requeue_count(root, task)?;
+    let next_requeues = previous_requeues.saturating_add(1);
+    channels::set_queue_task_metadata_value(
+        root,
+        &task.message_key,
+        BUSINESS_OS_APP_UNSTARTED_REQUEUE_COUNT_KEY,
+        Value::from(next_requeues as u64),
+    )?;
+    channels::set_queue_task_metadata_value(
+        root,
+        &task.message_key,
+        BUSINESS_OS_APP_UNSTARTED_REQUEUED_AT_KEY,
+        Value::String(now_iso_string()),
+    )?;
+    if previous_requeues >= BUSINESS_OS_APP_UNSTARTED_REQUEUE_BLOCK_THRESHOLD {
+        let _updated = channels::update_queue_task(
+            root,
+            channels::QueueTaskUpdateRequest {
+                message_key: task.message_key.clone(),
+                route_status: Some("blocked".to_string()),
+                status_note: Some(format!(
+                    "business-os:blocked-unstarted-app: app target still missing or empty after {previous_requeues} automatic requeue(s); owner review required before retry"
+                )),
+                ..Default::default()
+            },
+        )?;
+        let _ = crate::business_os::store::refresh_business_command_queue_task_projection(
+            root,
+            &task.message_key,
+        );
+        return Ok(true);
+    }
     let _updated = channels::update_queue_task(
         root,
         channels::QueueTaskUpdateRequest {
@@ -12184,6 +12219,30 @@ fn requeue_unstarted_business_os_app_queue_task(
         &task.message_key,
     );
     Ok(true)
+}
+
+fn business_os_app_unstarted_requeue_count(
+    root: &Path,
+    task: &channels::QueueTaskView,
+) -> Result<usize> {
+    let stored = channels::queue_task_metadata_value(
+        root,
+        &task.message_key,
+        BUSINESS_OS_APP_UNSTARTED_REQUEUE_COUNT_KEY,
+    )?;
+    let mut count = match stored {
+        Some(Value::Number(number)) => number.as_u64().unwrap_or(0) as usize,
+        Some(Value::String(value)) => value.trim().parse::<usize>().unwrap_or(0),
+        _ => 0,
+    };
+    if task
+        .status_note
+        .as_deref()
+        .is_some_and(|note| note.starts_with("business-os:requeued-unstarted-app:"))
+    {
+        count = count.max(1);
+    }
+    Ok(count)
 }
 
 fn recover_business_os_app_queue_task_after_worker_finalization(
@@ -23604,6 +23663,62 @@ Business OS command:
         assert_eq!(
             reloaded.status_note.as_deref(),
             Some("business-os:requeued-unstarted-app: app target missing or empty")
+        );
+    }
+
+    #[test]
+    fn repeated_abandoned_app_recovery_blocks_missing_target_after_auto_requeue() {
+        let root = temp_root("abandoned-app-recovery-missing-target-block");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create quality app".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: quality\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/quality".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        let first = recover_abandoned_business_os_app_queue_tasks(&root, &state, 10)
+            .expect("first abandoned app recovery failed");
+
+        assert_eq!(first, 1);
+        let requeued = channels::load_queue_task(&root, &task.message_key)
+            .expect("load requeued task")
+            .expect("queue task exists");
+        assert_eq!(requeued.route_status, "pending");
+        assert_eq!(
+            business_os_app_unstarted_requeue_count(&root, &requeued)
+                .expect("read unstarted requeue count"),
+            1
+        );
+
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease requeued app task");
+        let second = recover_abandoned_business_os_app_queue_tasks(&root, &state, 10)
+            .expect("second abandoned app recovery failed");
+
+        assert_eq!(second, 1);
+        let blocked = channels::load_queue_task(&root, &task.message_key)
+            .expect("load blocked task")
+            .expect("queue task exists");
+        assert_eq!(blocked.route_status, "blocked");
+        assert_eq!(
+            blocked.status_note.as_deref(),
+            Some("business-os:blocked-unstarted-app: app target still missing or empty after 1 automatic requeue(s); owner review required before retry")
+        );
+        assert_eq!(
+            business_os_app_unstarted_requeue_count(&root, &blocked)
+                .expect("read blocked requeue count"),
+            2
         );
     }
 

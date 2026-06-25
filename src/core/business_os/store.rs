@@ -13708,14 +13708,26 @@ pub fn refresh_business_command_queue_task_projection(
         return Ok(None);
     };
     let updated_at_ms = now_ms() as i64;
-    let command_status = conn
-        .query_row(
-            "SELECT status FROM business_commands WHERE command_id = ?1",
-            params![command_id.as_str()],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?
-        .unwrap_or_else(|| "accepted".to_string());
+    let terminal_command_status = command_status_for_queue_route_status(&task.route_status);
+    if let Some(command_status) = terminal_command_status {
+        conn.execute(
+            "UPDATE business_commands
+             SET status = ?2, observed_at_ms = ?3
+             WHERE command_id = ?1",
+            params![command_id.as_str(), command_status, updated_at_ms],
+        )?;
+    }
+    let command_status = match terminal_command_status {
+        Some(command_status) => command_status.to_string(),
+        None => conn
+            .query_row(
+                "SELECT status FROM business_commands WHERE command_id = ?1",
+                params![command_id.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .unwrap_or_else(|| "accepted".to_string()),
+    };
     let mut command_projection = conn
         .query_row(
             "SELECT payload_json
@@ -13743,6 +13755,10 @@ pub fn refresh_business_command_queue_task_projection(
     if let Some(object) = command_projection.as_object_mut() {
         object.insert("status".to_string(), Value::String(command_status.clone()));
         object.insert(
+            "route_status".to_string(),
+            Value::String(task.route_status.clone()),
+        );
+        object.insert(
             "task_id".to_string(),
             Value::String(task.message_key.clone()),
         );
@@ -13765,6 +13781,15 @@ pub fn refresh_business_command_queue_task_projection(
         updated_at_ms,
         command_projection.clone(),
     )?;
+    if terminal_command_status.is_some() {
+        upsert_rxdb_collection_record(
+            root,
+            "business_commands",
+            &command_id,
+            updated_at_ms,
+            command_projection.clone(),
+        )?;
+    }
     refresh_queue_task_projection(
         root,
         &conn,
@@ -34114,6 +34139,108 @@ mod tests {
         assert_eq!(
             queue_projection.get("route_status").and_then(Value::as_str),
             Some("failed")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_queue_task_projection_marks_terminal_blocked_command() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_blocked_queue_chat",
+                "command_id": "cmd_blocked_queue_chat",
+                "module": "research",
+                "command_type": "business_os.chat.task",
+                "record_id": "research",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Kontext-Aufgabe",
+                    "instruction": "teste blocked projection",
+                    "prompt": "teste blocked projection"
+                },
+                "client_context": {
+                    "source": "business-os-chat",
+                    "module": "research"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?
+            .to_string();
+
+        channels::lease_queue_task(root, &task_id, "ctox-service")?;
+        channels::update_queue_task(
+            root,
+            channels::QueueTaskUpdateRequest {
+                message_key: task_id.clone(),
+                route_status: Some("blocked".to_string()),
+                status_note: Some(
+                    "business-os:blocked-unstarted-app: app target still missing or empty"
+                        .to_string(),
+                ),
+                ..Default::default()
+            },
+        )?;
+        let rxdb_conn = create_repair_rxdb_tables(root)?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__business_commands__v1",
+            "cmd_blocked_queue_chat",
+            serde_json::json!({
+                "id": "cmd_blocked_queue_chat",
+                "command_id": "cmd_blocked_queue_chat",
+                "status": "accepted",
+                "route_status": "leased",
+                "task_id": task_id,
+                "task_status": "running",
+                "updated_at_ms": 1
+            }),
+        )?;
+        drop(rxdb_conn);
+
+        let projected = refresh_business_command_queue_task_projection(root, &task_id)?
+            .context("expected blocked command projection")?;
+        assert_eq!(
+            projected.get("status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            projected.get("route_status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            projected.get("task_status").and_then(Value::as_str),
+            Some("blocked")
+        );
+
+        let conn = open_store(root)?;
+        let stored_status: String = conn.query_row(
+            "SELECT status FROM business_commands WHERE command_id = 'cmd_blocked_queue_chat'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(stored_status, "blocked");
+        drop(conn);
+
+        let rxdb_command =
+            load_rxdb_collection_record(root, "business_commands", "cmd_blocked_queue_chat")?
+                .context("expected blocked rxdb command row")?;
+        assert_eq!(
+            rxdb_command.get("status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            rxdb_command.get("route_status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            rxdb_command.get("task_status").and_then(Value::as_str),
+            Some("blocked")
         );
         Ok(())
     }
