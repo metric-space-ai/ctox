@@ -2068,12 +2068,27 @@ fn handle_business_os_auth(root: &Path, args: &[String]) -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
         Some("issue-capability") => {
             let mut user_id: Option<String> = None;
+            let mut display_name: Option<String> = None;
+            let mut role: Option<String> = None;
+            let mut ensure_user = false;
             let mut idx = 1;
             while idx < args.len() {
                 match args[idx].as_str() {
                     "--user" | "--user-id" => {
                         user_id = args.get(idx + 1).cloned();
                         idx += 2;
+                    }
+                    "--display-name" => {
+                        display_name = args.get(idx + 1).cloned();
+                        idx += 2;
+                    }
+                    "--role" => {
+                        role = args.get(idx + 1).cloned();
+                        idx += 2;
+                    }
+                    "--ensure-user" => {
+                        ensure_user = true;
+                        idx += 1;
                     }
                     other => {
                         if user_id.is_none() {
@@ -2089,8 +2104,17 @@ fn handle_business_os_auth(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as i64)
                 .unwrap_or(0);
-            let (token, expires_at_ms) =
-                crate::business_os::store::issue_business_os_capability_token(root, &user_id, now)?;
+            let (token, expires_at_ms) = if ensure_user {
+                crate::business_os::store::issue_business_os_capability_token_for_managed_user(
+                    root,
+                    &user_id,
+                    display_name.as_deref().unwrap_or(&user_id),
+                    role.as_deref().unwrap_or("user"),
+                    now,
+                )?
+            } else {
+                crate::business_os::store::issue_business_os_capability_token(root, &user_id, now)?
+            };
             print_json(&serde_json::json!({
                 "ok": true,
                 "user_id": user_id,
@@ -2880,6 +2904,10 @@ fn business_os_usage() -> String {
         .replace(
             "  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]",
             "  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]\n  ctox business-os app bench status --run-id <id> [--validate]",
+        )
+        .replace(
+            "  ctox business-os peer start\n  ctox business-os desktop invite",
+            "  ctox business-os peer start\n  ctox business-os auth issue-capability --user <user-id> [--display-name <name>] [--role chef|admin|founder|user] [--ensure-user]\n  ctox business-os desktop invite",
         )
         .replace(
             "  ctox business-os backup prune-drills [--dry-run]",

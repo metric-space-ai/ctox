@@ -20153,6 +20153,48 @@ pub fn issue_business_os_capability_token(
     Ok((token, expires_at_ms))
 }
 
+/// Issue a capability token for a trusted managed-control-plane session.
+///
+/// ctox.dev authenticates the tenant user on the managed subdomain, then calls
+/// this path locally over the instance SSH control plane. This keeps Business OS
+/// records on RxDB/WebRTC while allowing the browser command bus to carry a
+/// native-signed role token instead of a spoofable actor claim.
+pub fn issue_business_os_capability_token_for_managed_user(
+    root: &Path,
+    user_id: &str,
+    display_name: &str,
+    role: &str,
+    now_ms: i64,
+) -> anyhow::Result<(String, i64)> {
+    let user_id = user_id.trim();
+    anyhow::ensure!(!user_id.is_empty(), "user id is required");
+    let role = normalize_business_role(role);
+    anyhow::ensure!(
+        matches!(role.as_str(), "chef" | "admin" | "founder" | "user"),
+        "role must be chef, admin, founder, or user"
+    );
+    let conn = open_store(root)?;
+    seed_configured_business_users(&conn)?;
+    let display_name = display_name.trim();
+    let display_name = if display_name.is_empty() {
+        user_id
+    } else {
+        display_name
+    };
+    conn.execute(
+        "INSERT INTO business_users
+            (user_id, display_name, role, active, created_at_ms, updated_at_ms)
+         VALUES (?1, ?2, ?3, 1, ?4, ?4)
+         ON CONFLICT(user_id) DO UPDATE SET
+            display_name = excluded.display_name,
+            role = excluded.role,
+            active = 1,
+            updated_at_ms = excluded.updated_at_ms",
+        params![user_id, display_name, role.as_str(), now_ms],
+    )?;
+    issue_business_os_capability_token(root, user_id, now_ms)
+}
+
 fn rxdb_command_session(
     root: &Path,
     command: &BusinessCommand,
@@ -27576,6 +27618,33 @@ mod tests {
              VALUES (?1, ?1, ?2, 1, ?3, ?3)",
             params![id, normalize_business_role(role), now],
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn managed_control_plane_capability_ensures_native_business_user() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let now = now_ms() as i64;
+        let (token, expires_at_ms) = issue_business_os_capability_token_for_managed_user(
+            root.path(),
+            "michael@example.test",
+            "Michael Example",
+            "owner",
+            now,
+        )?;
+
+        assert!(expires_at_ms > now);
+        assert_eq!(verify_capability_role(root.path(), &token).as_deref(), Some("chef"));
+
+        let conn = open_store(root.path())?;
+        let (display_name, role, active): (String, String, i64) = conn.query_row(
+            "SELECT display_name, role, active FROM business_users WHERE user_id = ?1",
+            params!["michael@example.test"],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(display_name, "Michael Example");
+        assert_eq!(role, "chef");
+        assert_eq!(active, 1);
         Ok(())
     }
 
