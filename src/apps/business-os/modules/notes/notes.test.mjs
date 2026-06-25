@@ -66,6 +66,49 @@ test('default notes provide notebooks, tags, and favorites for first render', ()
   assert.equal(notes.every(note => note.notebook && note.tags), true);
 });
 
+test('locked notes never persist cleartext passcode or title to the synced store', () => {
+  // A locked note whose in-memory object still carries a cleartext title and a
+  // passcode must serialize to a payload that leaks neither — the synced store
+  // is the threat surface (zero-knowledge claim in index.html).
+  const locked = {
+    id: 'n-locked',
+    title: 'My secret first line',
+    is_locked: true,
+    lock_passcode: 'hunter2',
+    notebook: 'Privat',
+    tags: 'a,b',
+    is_favorite: true,
+    is_trashed: false,
+  };
+  const payload = hooks.buildNotePersistPayload(locked, t);
+
+  assert.equal(payload.lock_passcode, '');
+  assert.notEqual(payload.title, 'My secret first line');
+  assert.equal(payload.title, 'Gesperrte Notiz');
+  assert.equal(payload.is_locked, true);
+  // Non-secret metadata is preserved.
+  assert.equal(payload.notebook, 'Privat');
+  assert.equal(payload.tags, 'a,b');
+  assert.equal(payload.is_favorite, true);
+});
+
+test('unlocked notes keep a content-derived title and empty passcode', () => {
+  const open = {
+    id: 'n-open',
+    title: 'Visible title',
+    is_locked: false,
+    lock_passcode: '',
+  };
+  const payload = hooks.buildNotePersistPayload(open, t);
+
+  assert.equal(payload.title, 'Visible title');
+  assert.equal(payload.lock_passcode, '');
+  assert.equal(payload.is_locked, false);
+
+  assert.equal(hooks.deriveTitleFromPlainText('# Heading line\nbody', t), 'Heading line');
+  assert.equal(hooks.deriveTitleFromPlainText('   \n  \n', t), 'Unbenannte Notiz');
+});
+
 test('draft and destructive note actions expose safe modes', () => {
   const draft = { id: 'draft-1', [hooks.DRAFT_NOTE_MARKER]: true };
   assert.deepEqual(hooks.noteActionAvailability(draft), {
