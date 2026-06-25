@@ -64,6 +64,9 @@
   in the real Business OS shell.
 - Do not copy `layout.icon_svg`, inline SVG, `store.installable`, or
   `entry: modules/...` from a source manifest into a runtime-installed app.
+- Do not stop, start, restart, upgrade, bootout, disable, or otherwise manage
+  the CTOX service while building an app. The service must stay running for the
+  app creator, RxDB/WebRTC, validation, smoke, and E2E proof.
 - Do not copy internal shell/developer apps such as App Creator, App Store,
   Browser, CTOX, Credentials, or Coding Agents as default business-app UI
   templates.

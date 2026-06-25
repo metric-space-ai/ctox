@@ -101,7 +101,7 @@ USAGE
 
 EVERYDAY
   ctox start                     start the persistent mission loop (systemd service)
-  ctox stop                      stop the mission loop
+  ctox stop [--force]            stop the mission loop
   ctox status                    show service status (JSON)
   ctox work-hours set 08:00 18:00
                                  restrict CTOX work loop to local hours
@@ -587,7 +587,11 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
             Ok(())
         }
         Some("stop") => {
-            println!("{}", service::stop_background(root)?);
+            let flags: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            if flags.iter().any(|flag| *flag != "--force") {
+                anyhow::bail!("usage: ctox stop [--force]");
+            }
+            println!("{}", service::stop_background_guarded(root, flags.contains(&"--force"))?);
             Ok(())
         }
         Some("status") => {

@@ -25777,6 +25777,7 @@ Business OS app task metadata:
 - resource.architecture_translation: src/skills/system/product_engineering/business-os-app-module-development/references/architecture-translation.md
 - reference_catalog: ctox business-os app references --json
 - validation: ctox business-os app validate {module_id} {mode_flag}
+- tool_boundary: do not run ctox stop/start/upgrade, launchctl, systemctl, or service lifecycle commands during app creation; the running CTOX service is the required app runtime.
 "#
     )
 }

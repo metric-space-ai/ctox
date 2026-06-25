@@ -20,6 +20,7 @@ use libc::SIGPIPE;
 use libc::SIG_IGN;
 use rusqlite::params;
 use rusqlite::Connection;
+use rusqlite::OpenFlags;
 use rusqlite::OptionalExtension;
 use serde::Deserialize;
 use serde::Serialize;
@@ -1885,6 +1886,21 @@ fn configure_background_service_process(command: &mut Command) {
 
 #[cfg(not(unix))]
 fn configure_background_service_process(_command: &mut Command) {}
+
+pub fn stop_background_guarded(root: &Path, force: bool) -> Result<String> {
+    if !force {
+        match leased_business_os_app_queue_task_exists(root) {
+            Ok(true) => anyhow::bail!(
+                "refusing to stop CTOX while a Business OS app creation/modification task is leased; wait for the app task to finish or run `ctox stop --force`"
+            ),
+            Ok(false) => {}
+            Err(err) => eprintln!(
+                "ctox stop guard could not inspect Business OS app queue tasks: {err}"
+            ),
+        }
+    }
+    stop_background(root)
+}
 
 pub fn stop_background(root: &Path) -> Result<String> {
     let _systemd_cache_guard = SystemdCacheInvalidator;
@@ -6989,7 +7005,7 @@ fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
         return job.prompt.clone();
     };
     format!(
-        "{}\n\nBusiness OS app resource context:\n- module_id: {}\n- install_target: {}\n- app_directory: {}\n- skill: business-os-app-module-development\n- resource.module_contract: src/skills/system/product_engineering/business-os-app-module-development/references/module-contract.md\n- resource.dos_and_donts: src/skills/system/product_engineering/business-os-app-module-development/references/dos-and-donts.md\n- resource.green_checklist: src/skills/system/product_engineering/business-os-app-module-development/references/green-checklist.md\n- resource.architecture_translation: src/skills/system/product_engineering/business-os-app-module-development/references/architecture-translation.md\n- reference_catalog: ctox business-os app references --json\n- validation: ctox business-os app validate {} {}",
+        "{}\n\nBusiness OS app resource context:\n- module_id: {}\n- install_target: {}\n- app_directory: {}\n- skill: business-os-app-module-development\n- resource.module_contract: src/skills/system/product_engineering/business-os-app-module-development/references/module-contract.md\n- resource.dos_and_donts: src/skills/system/product_engineering/business-os-app-module-development/references/dos-and-donts.md\n- resource.green_checklist: src/skills/system/product_engineering/business-os-app-module-development/references/green-checklist.md\n- resource.architecture_translation: src/skills/system/product_engineering/business-os-app-module-development/references/architecture-translation.md\n- reference_catalog: ctox business-os app references --json\n- validation: ctox business-os app validate {} {}\n- tool_boundary: do not run ctox stop/start/upgrade, launchctl, systemctl, or service lifecycle commands during app creation; the running CTOX service is the required app runtime.",
         job.prompt,
         target.module_id,
         target.install_target,
@@ -11741,7 +11757,69 @@ fn business_os_queue_task_is_app_module(task: &channels::QueueTaskView) -> bool 
 
 fn leased_business_os_app_queue_task_exists(root: &Path) -> Result<bool> {
     let tasks = channels::list_queue_tasks(root, &["leased".to_string()], 32)?;
-    Ok(tasks.iter().any(business_os_queue_task_is_app_module))
+    if tasks.iter().any(business_os_queue_task_is_app_module) {
+        return Ok(true);
+    }
+    leased_business_os_rxdb_app_queue_task_exists(root)
+}
+
+fn leased_business_os_rxdb_app_queue_task_exists(root: &Path) -> Result<bool> {
+    let db_path = crate::paths::runtime_dir(root).join("business-os-rxdb.sqlite3");
+    if !db_path.is_file() {
+        return Ok(false);
+    }
+    let conn = Connection::open_with_flags(
+        &db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| {
+        format!(
+            "failed to open Business OS RxDB queue store {}",
+            db_path.display()
+        )
+    })?;
+    let mut stmt = match conn.prepare(
+        r#"
+        SELECT data
+        FROM ctox_business_os__ctox_queue_tasks__v0
+        WHERE deleted = 0
+        ORDER BY lastWriteTime DESC
+        LIMIT 512
+        "#,
+    ) {
+        Ok(stmt) => stmt,
+        Err(err) if err.to_string().contains("no such table") => return Ok(false),
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "failed to inspect Business OS RxDB queue table {}",
+                    db_path.display()
+                )
+            })
+        }
+    };
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    for row in rows {
+        let data = row?;
+        let Ok(json) = serde_json::from_str::<Value>(&data) else {
+            continue;
+        };
+        let route_status = json
+            .get("route_status")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if route_status != "leased" {
+            continue;
+        }
+        let prompt = json
+            .get("prompt")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if business_os_app_module_target_from_prompt(prompt).is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn maybe_lease_next_durable_queue_prompt(
@@ -22605,6 +22683,75 @@ Business OS command:
         assert!(prompt.contains("resource.architecture_translation:"));
         assert!(prompt.contains("reference_catalog: ctox business-os app references --json"));
         assert!(prompt.contains("validation: ctox business-os app validate contracts --installed"));
+        assert!(prompt.contains("tool_boundary: do not run ctox stop/start/upgrade"));
+    }
+
+    #[test]
+    fn stop_guard_blocks_leased_business_os_app_queue_task() {
+        let root = temp_root("business-os-app-stop-guard");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create contracts app".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/contracts".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, CHANNEL_ROUTER_LEASE_OWNER)
+            .expect("failed to lease app queue task");
+
+        let err = stop_background_guarded(&root, false)
+            .expect_err("plain stop must be blocked while app task is leased")
+            .to_string();
+
+        assert!(err.contains("refusing to stop CTOX while a Business OS app"));
+    }
+
+    #[test]
+    fn stop_guard_blocks_leased_business_os_rxdb_app_queue_task() {
+        let root = temp_root("business-os-app-rxdb-stop-guard");
+        let runtime = root.join("runtime");
+        std::fs::create_dir_all(&runtime).expect("failed to create runtime dir");
+        let conn =
+            Connection::open(runtime.join("business-os-rxdb.sqlite3")).expect("open rxdb queue db");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS "ctox_business_os__ctox_queue_tasks__v0"(
+                id TEXT NOT NULL PRIMARY KEY UNIQUE,
+                revision TEXT,
+                deleted INTEGER NOT NULL CHECK (deleted IN (0, 1)),
+                lastWriteTime REAL NOT NULL,
+                data TEXT NOT NULL
+            );
+            "#,
+        )
+        .expect("create rxdb queue table");
+        let data = serde_json::json!({
+            "id": "queue:system::contracts",
+            "route_status": "leased",
+            "prompt": "Build the contracts app.\n\nBusiness OS app task metadata:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\n\nBusiness OS command:\n- type: ctox.business_os.app.create\n"
+        });
+        conn.execute(
+            r#"
+            INSERT INTO "ctox_business_os__ctox_queue_tasks__v0"
+                (id, revision, deleted, lastWriteTime, data)
+            VALUES (?1, ?2, 0, 1, ?3)
+            "#,
+            params!["queue:system::contracts", "1-test", data.to_string()],
+        )
+        .expect("insert rxdb queue task");
+
+        let err = stop_background_guarded(&root, false)
+            .expect_err("plain stop must be blocked while RxDB app task is leased")
+            .to_string();
+
+        assert!(err.contains("refusing to stop CTOX while a Business OS app"));
     }
 
     #[test]

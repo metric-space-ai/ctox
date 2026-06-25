@@ -34,3 +34,6 @@ Use this before claiming a Business OS app is done.
 - Tests cover record helper behavior and automation payloads.
 - `ctox business-os app validate <module-id> --installed` or `--source` passes.
 - `ctox business-os app smoke <module-id> --installed` passes.
+- No service lifecycle command was used during the app build:
+  no `ctox stop/start/upgrade`, `launchctl`, `systemctl`, bootout, disable, or
+  daemon restart.
