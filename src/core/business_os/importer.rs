@@ -435,6 +435,47 @@ fn outbound_company_research(
     })
 }
 
+/// GDPR provenance for persisted outbound contact rows. Outbound B2B contact
+/// research relies on the legitimate-interest basis; the operator must maintain
+/// a documented Legitimate Interest Assessment and honor erasure requests. We
+/// stamp every persisted person row with a lawful basis, purpose, and retention
+/// horizon so the data is accountable (Art. 5/6) and erasable by `subject_key`.
+/// Field names mirror the CONSENT-1 ledger shape in `ats_gates.rs`.
+const OUTBOUND_CONTACT_LEGAL_BASIS: &str = "legitimate_interest";
+const OUTBOUND_CONTACT_PURPOSE: &str = "outbound_b2b_contact_research";
+const OUTBOUND_CONTACT_BASIS_EVIDENCE: &str =
+    "Operator-asserted B2B prospecting; operator must keep a documented Legitimate \
+     Interest Assessment (LIA) and honor Art. 17 erasure requests.";
+/// Default retention horizon: 180 days. Personal data persisted past this is
+/// over-retained and should be purged by the retention sweep.
+const OUTBOUND_CONTACT_RETENTION_MS: i64 = 180 * 24 * 60 * 60 * 1000;
+
+/// Stable, opaque per-subject key so persisted person rows can be found and
+/// erased on request: the lower-cased email when present, else name + company.
+fn outbound_contact_subject_key(contact: &Value, company_name: &str) -> String {
+    let email = contact
+        .get("email")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
+    let seed = if !email.is_empty() {
+        email
+    } else {
+        format!(
+            "{}|{}",
+            contact
+                .get("contact_name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_lowercase(),
+            company_name.trim().to_lowercase()
+        )
+    };
+    format!("subj_{}", &hex_sha256(seed.as_bytes())[..16])
+}
+
 fn outbound_contact_research(
     root: &Path,
     command_id: &str,
@@ -512,6 +553,15 @@ fn outbound_contact_research(
                 "custom_instruction": str_path(&command.payload, &["custom_instruction"]),
                 "evidence_json": serde_json::to_string(contact.get("evidence").unwrap_or(&Value::Array(Vec::new()))).unwrap_or_else(|_| "[]".to_string()),
                 "updated_at_ms": now,
+                // GDPR provenance (WS2-01 / H2): every persisted person row
+                // carries a lawful basis, purpose, and retention horizon and is
+                // erasable by subject_key.
+                "legal_basis": OUTBOUND_CONTACT_LEGAL_BASIS,
+                "basis_evidence": OUTBOUND_CONTACT_BASIS_EVIDENCE,
+                "purpose": OUTBOUND_CONTACT_PURPOSE,
+                "granted_at_ms": now,
+                "expires_at_ms": now + OUTBOUND_CONTACT_RETENTION_MS,
+                "subject_key": outbound_contact_subject_key(contact, &company_name),
             })
         })
         .collect::<Vec<_>>();
@@ -3893,6 +3943,30 @@ fn short_hash(value: &str) -> String {
     let digest = sha2::Sha256::digest(value.as_bytes());
     base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, &digest)[..10]
         .to_string()
+}
+
+#[cfg(test)]
+mod outbound_provenance_tests {
+    use super::outbound_contact_subject_key;
+    use serde_json::json;
+
+    #[test]
+    fn subject_key_is_stable_and_email_first() {
+        let a = json!({"contact_name": "Anna Müller", "email": "Anna.Mueller@ACME.de"});
+        let b = json!({"contact_name": "different name", "email": "anna.mueller@acme.de"});
+        // Same email (case-insensitive) → same subject key regardless of name.
+        assert_eq!(
+            outbound_contact_subject_key(&a, "ACME GmbH"),
+            outbound_contact_subject_key(&b, "Other GmbH")
+        );
+        // Falls back to name+company when no email; different company → different key.
+        let no_email = json!({"contact_name": "Anna Müller"});
+        assert_ne!(
+            outbound_contact_subject_key(&no_email, "ACME GmbH"),
+            outbound_contact_subject_key(&no_email, "Beta GmbH")
+        );
+        assert!(outbound_contact_subject_key(&a, "ACME GmbH").starts_with("subj_"));
+    }
 }
 
 #[cfg(test)]
