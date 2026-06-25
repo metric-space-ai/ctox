@@ -2473,6 +2473,10 @@ pub struct ThreadStartParams {
     pub sandbox: Option<SandboxMode>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, JsonValue>>,
+    /// Internal session-scoped override for agent runs that must not expose
+    /// configured MCP servers or plugin-provided MCP tools to the model.
+    #[ts(optional)]
+    pub disable_mcp_servers: Option<bool>,
     #[ts(optional = nullable)]
     pub service_name: Option<String>,
     #[ts(optional = nullable)]

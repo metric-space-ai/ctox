@@ -41,6 +41,11 @@ fn turn_counters() -> &'static Mutex<HashMap<i64, RefreshState>> {
     COUNTERS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ChatTurnSessionOptions {
+    pub(crate) disable_mcp_servers: bool,
+}
+
 /// Decide whether the current turn should run a continuity refresh.
 ///
 /// New adaptive model — two passive triggers plus one hard safety net:
@@ -420,7 +425,36 @@ pub(crate) fn run_chat_turn_with_events_extended_guarded<F>(
     conversation_id: i64,
     suggested_skill: Option<&str>,
     force_continuity_refresh: bool,
+    session: Option<&mut PersistentSession>,
+    emit: F,
+) -> Result<String>
+where
+    F: FnMut(&str),
+{
+    run_chat_turn_with_events_extended_guarded_with_options(
+        root,
+        db_path,
+        prompt,
+        _workspace_root,
+        conversation_id,
+        suggested_skill,
+        force_continuity_refresh,
+        session,
+        ChatTurnSessionOptions::default(),
+        emit,
+    )
+}
+
+pub(crate) fn run_chat_turn_with_events_extended_guarded_with_options<F>(
+    root: &Path,
+    db_path: &Path,
+    prompt: &str,
+    _workspace_root: Option<&Path>,
+    conversation_id: i64,
+    suggested_skill: Option<&str>,
+    force_continuity_refresh: bool,
     mut session: Option<&mut PersistentSession>,
+    options: ChatTurnSessionOptions,
     mut emit: F,
 ) -> Result<String>
 where
@@ -437,7 +471,15 @@ where
     let operator_settings = runtime_env::effective_operator_env_map(root).unwrap_or_default();
     emit("session-start");
     let mut owned_session = if session.is_none() {
-        Some(PersistentSession::start(root, &operator_settings)?)
+        if options.disable_mcp_servers {
+            emit("session-mcp-servers-disabled");
+            Some(PersistentSession::start_without_mcp_servers(
+                root,
+                &operator_settings,
+            )?)
+        } else {
+            Some(PersistentSession::start(root, &operator_settings)?)
+        }
     } else {
         None
     };

@@ -4356,16 +4356,18 @@ fn start_prompt_worker(
                     ),
                 }
             }
+            let app_module_job = business_os_app_module_target_from_prompt(&job.prompt).is_some();
             let base_execution_prompt = if is_business_os_chat_queue_job(&root, &job) {
                 business_os_chat_execution_prompt(&job)
-            } else if business_os_app_module_target_from_prompt(&job.prompt).is_some() {
+            } else if app_module_job {
                 business_os_app_module_execution_prompt(&job)
             } else {
                 artifact_first_execution_prompt(&job)
             };
             let execution_prompt =
                 outbound_email_first_execution_prompt(&job, base_execution_prompt);
-            let result = turn_loop::run_chat_turn_with_events_extended_guarded(
+            let session_options = chat_turn_session_options_for_queue_job(&job);
+            let result = turn_loop::run_chat_turn_with_events_extended_guarded_with_options(
                 &root,
                 &db_path,
                 &execution_prompt,
@@ -4374,6 +4376,7 @@ fn start_prompt_worker(
                 job.suggested_skill.as_deref(),
                 force_continuity_refresh,
                 None, // TUI service: per-turn clients (persistent session TODO)
+                session_options,
                 |event| {
                     push_event(&event_state, format!("phase {} {}", event_source, event));
                 },
@@ -7126,6 +7129,14 @@ fn business_os_chat_execution_prompt(job: &QueuedPrompt) -> String {
         "{}\n\nBusiness OS chat execution rules:\n- Your final assistant message is shown verbatim to a non-technical business user inside a small chat bubble. Write it as a direct, concise answer addressed to that user.\n- Answer in the user's language (German unless the request is clearly in another language).\n- Do NOT include internal reasoning, chain-of-thought, planning notes, tool transcripts, command output, file paths, diffs, stack traces, raw JSON, or queue/command/task IDs. Do NOT paste source code or large data dumps unless the user explicitly asked for code — summarize the result in plain words instead.\n- Light Markdown is allowed (short paragraphs, **bold**, bullet lists, and fenced code blocks only when the user actually asked for code). Keep it brief.\n- Do not update Business OS SQLite stores, RxDB projections, queue rows, command rows, chat rows, or runtime status tables yourself.\n- Do not call `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or equivalent direct SQL for this Business OS command.\n- You may inspect referenced files or readonly state when needed to answer accurately.\n- The CTOX service will persist your final answer back into the Business OS chat and acknowledge the queue item.",
         job.prompt
     )
+}
+
+fn chat_turn_session_options_for_queue_job(
+    job: &QueuedPrompt,
+) -> turn_loop::ChatTurnSessionOptions {
+    turn_loop::ChatTurnSessionOptions {
+        disable_mcp_servers: business_os_app_module_target_from_prompt(&job.prompt).is_some(),
+    }
 }
 
 fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
@@ -23145,6 +23156,29 @@ Business OS command:
         assert!(prompt.contains("reference_catalog: ctox business-os app references --json"));
         assert!(prompt.contains("validation: ctox business-os app validate contracts --installed"));
         assert!(prompt.contains("tool_boundary: do not run ctox stop/start/upgrade"));
+    }
+
+    #[test]
+    fn business_os_app_queue_jobs_use_lean_mcp_free_session() {
+        let mut job = QueuedPrompt {
+            prompt: "Business OS app task metadata:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+            goal: "Build contracts app".to_string(),
+            preview: "Build contracts app".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("business-os-app-module-development".to_string()),
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("business-os/apps/contracts".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        assert!(chat_turn_session_options_for_queue_job(&job).disable_mcp_servers);
+
+        job.prompt = "Write a short implementation note.".to_string();
+        assert!(!chat_turn_session_options_for_queue_job(&job).disable_mcp_servers);
     }
 
     #[test]

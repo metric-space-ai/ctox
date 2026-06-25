@@ -1669,6 +1669,7 @@ impl CodexMessageProcessor {
             approvals_reviewer,
             sandbox,
             config,
+            disable_mcp_servers,
             service_name,
             base_instructions,
             developer_instructions,
@@ -1691,6 +1692,7 @@ impl CodexMessageProcessor {
             developer_instructions,
             personality,
         );
+        typesafe_overrides.disable_mcp_servers = disable_mcp_servers.unwrap_or(false);
         typesafe_overrides.ephemeral = ephemeral;
         let cli_overrides = self.cli_overrides.clone();
         let cloud_requirements = self.current_cloud_requirements();

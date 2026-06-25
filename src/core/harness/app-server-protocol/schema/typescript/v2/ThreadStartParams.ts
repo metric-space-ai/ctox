@@ -12,7 +12,11 @@ export type ThreadStartParams = {model?: string | null, modelProvider?: string |
  * Override where approval requests are routed for review on this thread
  * and subsequent turns.
  */
-approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, serviceName?: string | null, baseInstructions?: string | null, developerInstructions?: string | null, personality?: Personality | null, ephemeral?: boolean | null, /**
+approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, /**
+ * Internal session-scoped override for agent runs that must not expose
+ * configured MCP servers or plugin-provided MCP tools to the model.
+ */
+disableMcpServers?: boolean, serviceName?: string | null, baseInstructions?: string | null, developerInstructions?: string | null, personality?: Personality | null, ephemeral?: boolean | null, /**
  * If true, opt into emitting raw Responses API items on the event stream.
  * This is for internal use only (e.g. Codex Cloud).
  */

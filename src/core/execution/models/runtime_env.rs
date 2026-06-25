@@ -1,7 +1,7 @@
 use anyhow::Context;
 use anyhow::Result;
-use rusqlite::Connection;
 use rusqlite::params;
+use rusqlite::Connection;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::fs;
@@ -402,9 +402,6 @@ fn migrate_legacy_runtime_env(root: &Path, target: &Connection) -> Result<()> {
         )
         .unwrap_or(0)
         != 0;
-    if has_rows {
-        return Ok(());
-    }
     let legacy = Connection::open(&legacy_path).with_context(|| {
         format!(
             "failed to open legacy runtime env db {}",
@@ -436,6 +433,17 @@ fn migrate_legacy_runtime_env(root: &Path, target: &Connection) -> Result<()> {
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for (key, value) in rows {
+        if value.trim().is_empty() {
+            continue;
+        }
+        if secrets::is_secret_key(&key) {
+            secrets::set_credential(root, &key, &value)
+                .with_context(|| format!("failed to migrate legacy secret {key}"))?;
+            continue;
+        }
+        if has_rows {
+            continue;
+        }
         target.execute(
             &format!(
                 "INSERT OR IGNORE INTO {RUNTIME_ENV_TABLE} (env_key, env_value) VALUES (?1, ?2)"
@@ -649,6 +657,54 @@ mod tests {
             Some("/tmp/ctox-engine.log")
         );
 
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_runtime_env_secret_migrates_even_when_new_store_has_rows() {
+        let root = make_temp_root();
+        let legacy_path = crate::persistence::sqlite_path(&root);
+        let legacy = rusqlite::Connection::open(&legacy_path).unwrap();
+        legacy
+            .execute_batch(
+                "CREATE TABLE runtime_env_kv (
+                    env_key TEXT PRIMARY KEY,
+                    env_value TEXT NOT NULL
+                );",
+            )
+            .unwrap();
+        legacy
+            .execute(
+                "INSERT INTO runtime_env_kv (env_key, env_value) VALUES (?1, ?2)",
+                rusqlite::params!["CTOX_LLM_PROXY_API_KEY", "proxy-secret"],
+            )
+            .unwrap();
+
+        let target_path = runtime_config_path(&root);
+        let target = rusqlite::Connection::open(&target_path).unwrap();
+        target
+            .execute_batch(
+                "CREATE TABLE runtime_env_kv (
+                    env_key TEXT PRIMARY KEY,
+                    env_value TEXT NOT NULL
+                );
+                INSERT INTO runtime_env_kv (env_key, env_value)
+                VALUES ('CTOX_API_PROVIDER', 'minimax');",
+            )
+            .unwrap();
+
+        let effective = effective_operator_env_map(&root).unwrap();
+
+        assert_eq!(
+            effective.get("CTOX_LLM_PROXY_API_KEY").map(String::as_str),
+            Some("proxy-secret")
+        );
+        let persisted = load_persisted_runtime_env_map(&root).unwrap();
+        assert!(!persisted.contains_key("CTOX_LLM_PROXY_API_KEY"));
+        assert_eq!(
+            secrets::get_credential(&root, "CTOX_LLM_PROXY_API_KEY").as_deref(),
+            Some("proxy-secret")
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
