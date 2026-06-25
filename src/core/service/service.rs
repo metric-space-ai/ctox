@@ -141,6 +141,11 @@ const BUSINESS_OS_APP_VALIDATION_CLEANUP_RETRY_DELAYS_MS: &[u64] = &[20, 100, 25
 #[cfg(not(test))]
 const BUSINESS_OS_APP_VALIDATION_CLEANUP_RETRY_DELAYS_MS: &[u64] = &[1_500, 5_000, 15_000];
 const BUSINESS_OS_APP_VALIDATION_MAX_REPAIR_ATTEMPTS: usize = 3;
+const BUSINESS_OS_APP_VALIDATION_REPORT_MAX_CHARS: usize = 6_000;
+const BUSINESS_OS_APP_VALIDATION_REQUEST_MAX_CHARS: usize = 1_600;
+const BUSINESS_OS_APP_VALIDATION_FEEDBACK_MAX_CHARS: usize = 12_000;
+const BUSINESS_OS_APP_VALIDATION_FAILURE_MARKER: &str =
+    "Business OS app artifact validation failed.";
 #[cfg(test)]
 const BUSINESS_OS_APP_REQUIRED_ARTIFACTS: &[&str] = &[
     "module.json",
@@ -7227,14 +7232,31 @@ fn business_os_app_artifact_dir_has_user_content(path: &Path) -> Result<bool> {
 }
 
 fn business_os_app_validation_repair_attempt_count(prompt: &str) -> usize {
+    if let Some(attempt) = business_os_app_validation_explicit_repair_attempt(prompt) {
+        return attempt.min(BUSINESS_OS_APP_VALIDATION_MAX_REPAIR_ATTEMPTS);
+    }
     prompt
-        .match_indices("Business OS app artifact validation failed.")
+        .match_indices(BUSINESS_OS_APP_VALIDATION_FAILURE_MARKER)
         .count()
+        .min(BUSINESS_OS_APP_VALIDATION_MAX_REPAIR_ATTEMPTS)
 }
 
 fn business_os_app_validation_repair_exhausted(prompt: &str) -> bool {
     business_os_app_validation_repair_attempt_count(prompt)
         >= BUSINESS_OS_APP_VALIDATION_MAX_REPAIR_ATTEMPTS
+}
+
+fn business_os_app_validation_explicit_repair_attempt(prompt: &str) -> Option<usize> {
+    prompt.lines().find_map(|line| {
+        let value = line
+            .trim()
+            .strip_prefix("Validation repair attempt:")?
+            .trim();
+        let first = value
+            .split(|ch: char| !ch.is_ascii_digit())
+            .find(|part| !part.is_empty())?;
+        first.parse::<usize>().ok()
+    })
 }
 
 fn business_os_app_validation_audit_key(
@@ -7566,17 +7588,126 @@ fn render_business_os_app_module_validation_feedback(
     target: &BusinessOsAppModuleTarget,
     report: &str,
 ) -> String {
-    format!(
-        "Business OS app artifact validation failed.\n\nBusiness OS app validation failed.\n\nTask source: {}\n\nBusiness OS app task metadata:\n- module_id: {}\n- install_target: {}\n- app_directory: {}\n- resource.module_contract: src/skills/system/product_engineering/business-os-app-module-development/references/module-contract.md\n- resource.dos_and_donts: src/skills/system/product_engineering/business-os-app-module-development/references/dos-and-donts.md\n- resource.green_checklist: src/skills/system/product_engineering/business-os-app-module-development/references/green-checklist.md\n- validation: ctox business-os app validate {} {}\n\nValidator report:\n{}\n\nOriginal task remains active:\n{}",
+    let next_attempt = business_os_app_validation_repair_attempt_count(&job.prompt)
+        .saturating_add(1)
+        .min(BUSINESS_OS_APP_VALIDATION_MAX_REPAIR_ATTEMPTS);
+    let report = clip_multiline_text(
+        &redact_business_os_app_prompt_secrets(report.trim()),
+        BUSINESS_OS_APP_VALIDATION_REPORT_MAX_CHARS,
+    );
+    let request_summary = business_os_app_original_request_summary(&job.prompt);
+    let feedback = format!(
+        "{BUSINESS_OS_APP_VALIDATION_FAILURE_MARKER}\n\nValidation repair attempt: {} of {}\n\nTask source: {}\n\nBusiness OS app task metadata:\n- module_id: {}\n- install_target: {}\n- app_directory: {}\n- resource.module_contract: src/skills/system/product_engineering/business-os-app-module-development/references/module-contract.md\n- resource.dos_and_donts: src/skills/system/product_engineering/business-os-app-module-development/references/dos-and-donts.md\n- resource.green_checklist: src/skills/system/product_engineering/business-os-app-module-development/references/green-checklist.md\n- resource.architecture_translation: src/skills/system/product_engineering/business-os-app-module-development/references/architecture-translation.md\n- validation: ctox business-os app validate {} {}\n\nWhat to do now:\nCreate or repair the vanilla HTML/CSS/JS app files under the app_directory above, then run the validation command. Keep the same Business OS app request active; do not edit skill/resource files or service lifecycle state.\n\nValidator report:\n{}\n\nOriginal app request summary:\n{}",
+        next_attempt,
+        BUSINESS_OS_APP_VALIDATION_MAX_REPAIR_ATTEMPTS,
         job.source_label,
         target.module_id,
         target.install_target,
         target.artifact_directory,
         target.module_id,
         target.mode_flag,
-        clip_text(report.trim(), 6000),
-        clip_text(&job.prompt, 6000),
-    )
+        report,
+        request_summary,
+    );
+    clip_multiline_text(&feedback, BUSINESS_OS_APP_VALIDATION_FEEDBACK_MAX_CHARS)
+}
+
+fn business_os_app_original_request_summary(prompt: &str) -> String {
+    for marker in [
+        "Original app request summary:",
+        "Business OS app request summary:",
+    ] {
+        if let Some(summary) = prompt_section_after_marker(prompt, marker) {
+            let summary = redact_business_os_app_prompt_secrets(summary.trim());
+            if !summary.trim().is_empty() {
+                return clip_multiline_text(
+                    summary.trim(),
+                    BUSINESS_OS_APP_VALIDATION_REQUEST_MAX_CHARS,
+                );
+            }
+        }
+    }
+
+    let mut lines = Vec::new();
+    for line in prompt.lines() {
+        let trimmed = line.trim_end();
+        if trimmed.starts_with("Business OS task resources:")
+            || trimmed.starts_with("Business OS app task metadata:")
+            || trimmed.starts_with("Business OS command:")
+            || trimmed.starts_with("Payload JSON:")
+            || trimmed.starts_with("Client context JSON:")
+        {
+            break;
+        }
+        if lines.is_empty() && trimmed.trim().is_empty() {
+            continue;
+        }
+        lines.push(trimmed);
+    }
+    let summary = lines.join("\n");
+    let summary = redact_business_os_app_prompt_secrets(summary.trim());
+    if summary.trim().is_empty() {
+        return "Use the app metadata above and the persisted Business OS command record if more request detail is needed.".to_string();
+    }
+    clip_multiline_text(summary.trim(), BUSINESS_OS_APP_VALIDATION_REQUEST_MAX_CHARS)
+}
+
+fn prompt_section_after_marker<'a>(prompt: &'a str, marker: &str) -> Option<&'a str> {
+    let rest = prompt.split_once(marker)?.1;
+    let section = rest
+        .split("\nBusiness OS command:")
+        .next()
+        .unwrap_or(rest)
+        .split("\nBusiness OS app task metadata:")
+        .next()
+        .unwrap_or(rest)
+        .split("\nPayload JSON:")
+        .next()
+        .unwrap_or(rest)
+        .split("\nClient context JSON:")
+        .next()
+        .unwrap_or(rest)
+        .split("\nValidator report:")
+        .next()
+        .unwrap_or(rest)
+        .split("\nWhat to do now:")
+        .next()
+        .unwrap_or(rest)
+        .split(BUSINESS_OS_APP_VALIDATION_FAILURE_MARKER)
+        .next()
+        .unwrap_or(rest);
+    Some(section)
+}
+
+fn redact_business_os_app_prompt_secrets(value: &str) -> String {
+    let mut redacted = Vec::new();
+    for line in value.lines() {
+        let lowered = line.to_ascii_lowercase();
+        if lowered.contains("capability_token")
+            || lowered.contains("authorization")
+            || lowered.contains("cookie")
+            || lowered.contains("set-cookie")
+            || lowered.contains("bearer ")
+        {
+            redacted.push("[redacted sensitive Business OS context line]".to_string());
+        } else {
+            redacted.push(line.to_string());
+        }
+    }
+    redacted.join("\n")
+}
+
+fn clip_multiline_text(value: &str, max_chars: usize) -> String {
+    let value = value.trim();
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let mut clipped = value
+        .chars()
+        .take(max_chars.saturating_sub(56))
+        .collect::<String>();
+    clipped.push_str("\n... truncated; full record is persisted in CTOX ...");
+    clipped
 }
 
 fn is_business_os_chat_queue_job(root: &Path, job: &QueuedPrompt) -> bool {
@@ -22955,19 +23086,23 @@ Business OS command:
             "module.json install_scope must be installed",
         );
 
-        assert!(feedback.contains("Business OS app validation failed."));
+        assert!(feedback.contains(BUSINESS_OS_APP_VALIDATION_FAILURE_MARKER));
+        assert!(feedback.contains("Validation repair attempt: 1 of 3"));
         assert!(feedback.contains("- module_id: contracts"));
         assert!(feedback.contains("- install_target: runtime-installed-module"));
         assert!(
             feedback.contains("- app_directory: runtime/business-os/installed-modules/contracts")
         );
         assert!(feedback.contains("module.json install_scope must be installed"));
+        assert!(feedback.contains("Original app request summary:"));
         assert!(feedback.contains("resource.module_contract:"));
         assert!(feedback.contains("resource.dos_and_donts:"));
         assert!(feedback.contains("resource.green_checklist:"));
+        assert!(feedback.contains("resource.architecture_translation:"));
         assert!(
             feedback.contains("validation: ctox business-os app validate contracts --installed")
         );
+        assert!(!feedback.contains("Original task remains active"));
         assert!(!feedback.contains("Edit only the app files under the app_directory"));
         assert!(!feedback.contains("Do not add React, Next.js"));
         assert!(!feedback.contains("index.js` must export `mount(ctx)"));
@@ -23127,9 +23262,69 @@ Business OS command:
 
         assert_eq!(business_os_app_validation_repair_attempt_count(&prompt), 3);
         assert!(business_os_app_validation_repair_exhausted(&prompt));
+        assert_eq!(
+            business_os_app_validation_repair_attempt_count(
+                "Business OS app artifact validation failed.\n\nValidation repair attempt: 2 of 3\n"
+            ),
+            2
+        );
         assert!(!business_os_app_validation_repair_exhausted(
             &prompt.replace("\n\nBusiness OS app artifact validation failed.\nthird", "")
         ));
+    }
+
+    #[test]
+    fn business_os_app_validation_feedback_is_bounded_and_redacts_context() {
+        let marker = "Business OS app artifact validation failed.";
+        let huge_prompt = format!(
+            "Build a Business OS office assets app.\n\nBusiness OS app request summary:\n- app_title: Office Assets\n- description: Track office assets.\n\nClient context JSON:\n{{\"capability_token\":\"SECRET_TOKEN_SHOULD_NOT_LEAK\"}}\n\n{}",
+            std::iter::repeat(marker)
+                .take(20)
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let job = QueuedPrompt {
+            prompt: huge_prompt,
+            goal: "Build office assets app".to_string(),
+            preview: "Build office assets app".to_string(),
+            source_label: "business-os:app-create".to_string(),
+            suggested_skill: Some("business-os-app-module-development".to_string()),
+            leased_message_keys: vec!["queue:system::assets".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("business-os/apps/assets".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let target = BusinessOsAppModuleTarget {
+            module_id: "office-assets".to_string(),
+            install_target: "runtime-installed-module".to_string(),
+            mode_flag: "--installed",
+            artifact_directory: "runtime/business-os/installed-modules/office-assets".to_string(),
+        };
+
+        let feedback = render_business_os_app_module_validation_feedback(
+            &job,
+            &target,
+            &format!(
+                "module.json missing\n{}",
+                "long validator detail\n".repeat(2_000)
+            ),
+        );
+
+        assert!(feedback.chars().count() <= BUSINESS_OS_APP_VALIDATION_FEEDBACK_MAX_CHARS);
+        assert_eq!(
+            feedback
+                .matches(BUSINESS_OS_APP_VALIDATION_FAILURE_MARKER)
+                .count(),
+            1
+        );
+        assert!(feedback.contains("Validation repair attempt: 3 of 3"));
+        assert!(!feedback.contains("SECRET_TOKEN_SHOULD_NOT_LEAK"));
+        assert!(!feedback.contains("capability_token"));
+        assert!(feedback.contains("- app_title: Office Assets"));
+        assert!(feedback.contains("module.json missing"));
     }
 
     #[test]
@@ -23206,11 +23401,11 @@ Business OS command:
             .expect("missing queue task");
         assert!(reloaded
             .prompt
-            .contains("Business OS app validation failed."));
+            .contains(BUSINESS_OS_APP_VALIDATION_FAILURE_MARKER));
         assert!(reloaded
             .prompt
             .contains("module.json install_scope must be installed"));
-        assert!(reloaded.prompt.contains("Original task remains active"));
+        assert!(reloaded.prompt.contains("Original app request summary"));
         assert_eq!(route_status_for(&root, &task.message_key), "review_rework");
         let conn =
             channels::open_channel_db(&crate::paths::core_db(&root)).expect("open channel db");
@@ -23294,9 +23489,9 @@ Business OS command:
         assert_eq!(route_status_for(&root, &task.message_key), "review_rework");
         assert!(reloaded
             .prompt
-            .contains("Business OS app validation failed."));
+            .contains(BUSINESS_OS_APP_VALIDATION_FAILURE_MARKER));
         assert!(reloaded.prompt.contains("layout.right is not allowed"));
-        assert!(reloaded.prompt.contains("Original task remains active"));
+        assert!(reloaded.prompt.contains("Original app request summary"));
         let conn =
             channels::open_channel_db(&crate::paths::core_db(&root)).expect("open channel db");
         let proof_count: i64 = conn
@@ -25346,7 +25541,9 @@ Business OS command:
             route_status_for(&root, &pending_task.message_key),
             "pending"
         );
-        assert!(leased.prompt.contains("Business OS app validation failed."));
+        assert!(leased
+            .prompt
+            .contains(BUSINESS_OS_APP_VALIDATION_FAILURE_MARKER));
     }
 
     #[test]

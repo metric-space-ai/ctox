@@ -107,6 +107,7 @@ const BUSINESS_OS_BACKUP_RAW_RETENTION_DAYS: i64 = 14;
 const BUSINESS_OS_BACKUP_PORTABLE_CHUNK_SIZE: usize = 4 * 1024 * 1024;
 const BUSINESS_OS_BACKUP_PORTABLE_MAGIC: &[u8] = b"CTOX-BOS-PORTABLE-BACKUP-V1\n";
 const BUSINESS_OS_QUEUE_PROMPT_MAX_CHARS: usize = 96_000;
+const BUSINESS_OS_APP_QUEUE_PROMPT_MAX_CHARS: usize = 24_000;
 const BUSINESS_OS_QUEUE_PROMPT_JSON_PREVIEW_CHARS: usize = 18_000;
 const BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS: usize = 8_000;
 const BUSINESS_OS_QUEUE_ORPHAN_REPAIR_AGE_MS: i64 = 10 * 60 * 1_000;
@@ -26027,7 +26028,7 @@ fn create_ctox_queue_task(
                 "business_os_command_type": command.command_type,
                 "business_os_record_id": command.record_id,
                 "business_os_attachments": attachments,
-                "client_context": command.client_context
+                "client_context": policy_audit_client_context(command)
             })),
         },
     )?;
@@ -26129,12 +26130,17 @@ fn command_prompt(
     let instruction =
         truncate_text_preserve(instruction, BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS);
     let required_skill_names = required_skill_names(command);
-    let mut payload_preview_value = command.payload.clone();
-    let mut context_preview_value = command.client_context.clone();
     if is_business_os_app_module_command(command) {
-        rewrite_required_skills_preview(&mut payload_preview_value, &required_skill_names);
-        rewrite_required_skills_preview(&mut context_preview_value, &required_skill_names);
+        return business_os_app_command_prompt(
+            command_id,
+            command,
+            attachments,
+            &instruction,
+            &required_skill_names,
+        );
     }
+    let payload_preview_value = command.payload.clone();
+    let context_preview_value = command.client_context.clone();
     let payload = prompt_json_preview(
         &payload_preview_value,
         BUSINESS_OS_QUEUE_PROMPT_JSON_PREVIEW_CHARS,
@@ -26161,6 +26167,34 @@ fn command_prompt(
         command.record_id.as_deref().unwrap_or("")
     );
     truncate_text_preserve(&prompt, BUSINESS_OS_QUEUE_PROMPT_MAX_CHARS)
+}
+
+fn business_os_app_command_prompt(
+    command_id: &str,
+    command: &BusinessCommand,
+    attachments: &[MaterializedBusinessChatAttachment],
+    instruction: &str,
+    required_skill_names: &[String],
+) -> String {
+    let required_skills = if required_skill_names.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nBusiness OS task resources:\n- required_skills: {}\n- skill_context: {}\n",
+            required_skill_names.join(", "),
+            business_os_required_skill_prompt_contract()
+        )
+    };
+    let app_target = business_os_app_command_target_prompt_block(command);
+    let request_summary = business_os_app_command_request_summary(command);
+    let attachment_manifest = business_chat_attachment_prompt_manifest(attachments);
+    let prompt = format!(
+        "{instruction}{required_skills}{app_target}\nBusiness OS app request summary:\n{request_summary}\nBusiness OS command:\n- command_id: {command_id}\n- module: {}\n- type: {}\n- record_id: {}{attachment_manifest}\n\nThe full command payload and client context remain persisted on the Business OS command record. Do not copy raw client context into app code or prompts.",
+        command.module,
+        command.command_type,
+        command.record_id.as_deref().unwrap_or("")
+    );
+    truncate_text_preserve(&prompt, BUSINESS_OS_APP_QUEUE_PROMPT_MAX_CHARS)
 }
 
 const BUSINESS_OS_APP_MODULE_SKILL_NAME: &str = "business-os-app-module-development";
@@ -26298,27 +26332,82 @@ fn business_os_app_command_target_metadata(
     Some((module_id, install_target, module_dir))
 }
 
-fn rewrite_required_skills_preview(value: &mut Value, required_skills: &[String]) {
-    if required_skills.is_empty() {
+fn business_os_app_command_request_summary(command: &BusinessCommand) -> String {
+    let mut lines = Vec::new();
+    push_business_os_app_summary_string(
+        &mut lines,
+        "app_title",
+        first_non_empty_json_string(&[
+            command.payload.get("app_title"),
+            command.payload.get("title"),
+        ]),
+    );
+    push_business_os_app_summary_string(
+        &mut lines,
+        "description",
+        first_non_empty_json_string(&[command.payload.get("description")]),
+    );
+    push_business_os_app_summary_string(
+        &mut lines,
+        "category",
+        first_non_empty_json_string(&[command.payload.get("category")]),
+    );
+    push_business_os_app_summary_string(
+        &mut lines,
+        "layout_hint",
+        first_non_empty_json_string(&[command.payload.get("layout_hint")]),
+    );
+    push_business_os_app_summary_string(
+        &mut lines,
+        "desired_version",
+        first_non_empty_json_string(&[command.payload.get("desired_version")]),
+    );
+    push_business_os_app_summary_string(
+        &mut lines,
+        "source",
+        first_non_empty_json_string(&[command.client_context.get("source")]),
+    );
+    let collections = business_os_app_summary_string_array(command.payload.get("collections_hint"));
+    if !collections.is_empty() {
+        lines.push(format!("- collections_hint: {}", collections.join(", ")));
+    }
+    push_business_os_app_summary_string(
+        &mut lines,
+        "collection_hint",
+        first_non_empty_json_string(&[
+            command.payload.get("collection"),
+            command.payload.get("collection_id"),
+            command.payload.get("primary_collection"),
+        ]),
+    );
+    if lines.is_empty() {
+        "- no extra summary fields".to_string()
+    } else {
+        lines.join("\n")
+    }
+}
+
+fn push_business_os_app_summary_string(lines: &mut Vec<String>, key: &str, value: Option<&str>) {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
         return;
-    }
-    if let Some(object) = value.as_object_mut() {
-        object.insert(
-            "required_skills".to_owned(),
-            Value::Array(
-                required_skills
-                    .iter()
-                    .map(|skill| Value::String(skill.clone()))
-                    .collect(),
-            ),
-        );
-        if object.contains_key("suggested_skill") {
-            object.insert(
-                "suggested_skill".to_owned(),
-                Value::String(BUSINESS_OS_APP_MODULE_SKILL_NAME.to_owned()),
-            );
-        }
-    }
+    };
+    lines.push(format!("- {key}: {}", clip_text(value, 240)));
+}
+
+fn business_os_app_summary_string_array(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .take(12)
+                .map(|item| clip_text(item, 80))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn first_non_empty_json_string<'a>(values: &[Option<&'a Value>]) -> Option<&'a str> {
@@ -27634,7 +27723,10 @@ mod tests {
         )?;
 
         assert!(expires_at_ms > now);
-        assert_eq!(verify_capability_role(root.path(), &token).as_deref(), Some("chef"));
+        assert_eq!(
+            verify_capability_role(root.path(), &token).as_deref(),
+            Some("chef")
+        );
 
         let conn = open_store(root.path())?;
         let (display_name, role, active): (String, String, i64) = conn.query_row(
@@ -28676,11 +28768,18 @@ mod tests {
             payload: serde_json::json!({
                 "title": "Build Inventory",
                 "instruction": "Build a Business OS inventory app.",
+                "app_title": "Inventory",
+                "description": "Track stock levels and reorder dates.",
+                "category": "operations",
+                "layout_hint": "full-workspace",
+                "collections_hint": ["inventory_items"],
+                "desired_version": "0.1.0",
                 "module_id": "inventory",
                 "install_target": "runtime-installed-module"
             }),
             client_context: serde_json::json!({
-                "source": "business-os-app-creator"
+                "source": "business-os-app-creator",
+                "capability_token": "SECRET_CAPABILITY_TOKEN_SHOULD_NOT_LEAK"
             }),
         };
 
@@ -28697,6 +28796,14 @@ mod tests {
         assert!(
             prompt.contains("- validation: ctox business-os app validate inventory --installed")
         );
+        assert!(prompt.contains("Business OS app request summary:"));
+        assert!(prompt.contains("- app_title: Inventory"));
+        assert!(prompt.contains("- collections_hint: inventory_items"));
+        assert!(prompt.contains("- desired_version: 0.1.0"));
+        assert!(!prompt.contains("Payload JSON"));
+        assert!(!prompt.contains("Client context JSON"));
+        assert!(!prompt.contains("SECRET_CAPABILITY_TOKEN_SHOULD_NOT_LEAK"));
+        assert!(!prompt.contains("capability_token"));
         assert!(!prompt.contains("business-basic-module-development"));
     }
 
@@ -28720,7 +28827,8 @@ mod tests {
                 },
                 "client_context": {
                     "source": "business-os-app-creator-native-test",
-                    "target": "app"
+                    "target": "app",
+                    "capability_token": "SECRET_QUEUE_METADATA_TOKEN"
                 }
             }),
         )?;
@@ -28752,6 +28860,23 @@ mod tests {
             task.thread_key
         );
         assert!(task.prompt.contains("- type: ctox.business_os.app.create"));
+        assert!(!task.prompt.contains("SECRET_QUEUE_METADATA_TOKEN"));
+        assert!(!task.prompt.contains("capability_token"));
+        let channel_conn = channels::open_channel_db(&crate::paths::core_db(root))?;
+        let metadata_raw: String = channel_conn.query_row(
+            "SELECT metadata_json FROM communication_messages WHERE message_key = ?1",
+            params![task_id],
+            |row| row.get(0),
+        )?;
+        assert!(!metadata_raw.contains("SECRET_QUEUE_METADATA_TOKEN"));
+        assert!(!metadata_raw.contains("capability_token"));
+        let metadata: Value = serde_json::from_str(&metadata_raw)?;
+        assert_eq!(
+            metadata
+                .pointer("/client_context/source")
+                .and_then(Value::as_str),
+            Some("business-os-app-creator-native-test")
+        );
         Ok(())
     }
 
