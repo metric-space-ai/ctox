@@ -24322,6 +24322,7 @@ pub fn is_ats_mutating_command(command_type: &str) -> bool {
             | "ats.leistungsnachweis.signoff"
             | "ats.signature.request"
             | "ats.signature.sign"
+            | "ats.credential.verify"
             | "ats.interview.transcribe"
             | "ats.subject.export"
             | "ats.subject.erase"
@@ -25084,6 +25085,20 @@ fn handle_ats_mutating_command(
                 .context("ats.signature.sign requires request_id")?;
             let signer_id = first_string_field(p, &["signer_id"])
                 .context("ats.signature.sign requires signer_id")?;
+            // H11: signing must be performed by an authenticated actor; the event
+            // is recorded as attributable (signed_by_actor_id) and integrity-
+            // stamped (signed_artifact_id). NOTE: this still records an operator
+            // acting on a signer's behalf — true signer self-authentication needs
+            // a server-side signer identity model and is a separate change.
+            let actor_id = session
+                .user
+                .as_ref()
+                .map(|user| user.id.clone())
+                .unwrap_or_default();
+            anyhow::ensure!(
+                !actor_id.is_empty() && actor_id != "rxdb-command",
+                "ats.signature.sign requires an authenticated actor"
+            );
             let existing = conn
                 .query_row(
                     "SELECT payload_json FROM business_records WHERE collection = 'signature_requests' AND record_id = ?1 AND deleted = 0",
@@ -25093,15 +25108,26 @@ fn handle_ats_mutating_command(
                 .optional()?
                 .context("signature request not found")?;
             let mut payload: Value = serde_json::from_str(&existing)?;
+            let mut signed_any = false;
             if let Some(signers) = payload.get_mut("signers").and_then(Value::as_array_mut) {
                 for signer in signers.iter_mut() {
                     if signer.get("id").and_then(Value::as_str) == Some(signer_id.as_str()) {
                         if let Some(obj) = signer.as_object_mut() {
                             obj.insert("state".to_string(), Value::String("signed".to_string()));
+                            obj.insert(
+                                "signed_by_actor_id".to_string(),
+                                Value::String(actor_id.clone()),
+                            );
+                            obj.insert("signed_at_ms".to_string(), serde_json::json!(now));
                         }
+                        signed_any = true;
                     }
                 }
             }
+            anyhow::ensure!(
+                signed_any,
+                "signer_id does not match any signer on this request"
+            );
             let signers = payload
                 .get("signers")
                 .and_then(Value::as_array)
@@ -25113,8 +25139,27 @@ fn handle_ats_mutating_command(
                 payload.get("sent_at_ms").and_then(Value::as_i64),
                 now,
             );
+            // Immutable signed artifact (content hash) for non-repudiation; the
+            // signoff / AÜG path can require this on a completed request.
+            let artifact_id = format!(
+                "sig_{}",
+                hex_sha256(
+                    format!(
+                        "{request_id}|{actor_id}|{now}|{}",
+                        serde_json::to_string(&signers).unwrap_or_default()
+                    )
+                    .as_bytes()
+                )
+            );
+            let completed = status == "completed";
             if let Some(obj) = payload.as_object_mut() {
                 obj.insert("status".to_string(), Value::String(status.to_string()));
+                if completed {
+                    obj.insert(
+                        "signed_artifact_id".to_string(),
+                        Value::String(artifact_id.clone()),
+                    );
+                }
             }
             upsert_business_record(&conn, "signature_requests", &request_id, now, payload)?;
             record_ats_governance_event(
@@ -25122,10 +25167,72 @@ fn handle_ats_mutating_command(
                 command,
                 &actor,
                 "business_os.ats.signature_signed",
-                serde_json::json!({ "request_id": request_id, "signer_id": signer_id, "status": status }),
+                serde_json::json!({
+                    "request_id": request_id,
+                    "signer_id": signer_id,
+                    "status": status,
+                    "signed_by_actor_id": actor_id,
+                    "signed_artifact_id": completed.then(|| artifact_id.clone()),
+                }),
                 now,
             )?;
-            Ok(serde_json::json!({ "ok": true, "request_id": request_id, "status": status }))
+            Ok(serde_json::json!({
+                "ok": true,
+                "request_id": request_id,
+                "status": status,
+                "signed_artifact_id": completed.then_some(artifact_id),
+            }))
+        }
+        "ats.credential.verify" => {
+            // H12: the deployment / AÜG gate trusts the credential `verified`
+            // flag, but no native command ever set it (the browser inserted
+            // verified:false and there was no server-gated verification path).
+            // This is the native verify — routed through is_ats_mutating_command
+            // -> rxdb_command_session, so it is chef/admin + capability-token
+            // gated — that stamps verified=true and the authenticated verifier.
+            let credential_id = first_string_field(p, &["credential_id", "record_id", "id"])
+                .context("ats.credential.verify requires credential_id")?;
+            let verified_by = session
+                .user
+                .as_ref()
+                .map(|user| user.id.clone())
+                .unwrap_or_default();
+            anyhow::ensure!(
+                !verified_by.is_empty() && verified_by != "rxdb-command",
+                "ats.credential.verify requires an authenticated verifier"
+            );
+            let existing = conn
+                .query_row(
+                    "SELECT payload_json FROM business_records WHERE collection = 'business_credentials' AND record_id = ?1 AND deleted = 0",
+                    params![credential_id.as_str()],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+                .context("credential not found")?;
+            let mut payload: Value = serde_json::from_str(&existing)?;
+            if let Some(obj) = payload.as_object_mut() {
+                obj.insert("verified".to_string(), Value::Bool(true));
+                obj.insert(
+                    "verified_by".to_string(),
+                    Value::String(verified_by.clone()),
+                );
+                obj.insert("verified_at_ms".to_string(), serde_json::json!(now));
+            }
+            upsert_business_record(&conn, "business_credentials", &credential_id, now, payload)?;
+            record_ats_governance_event(
+                &conn,
+                command,
+                &actor,
+                "business_os.ats.credential_verified",
+                serde_json::json!({ "credential_id": credential_id, "verified_by": verified_by }),
+                now,
+            )?;
+            Ok(serde_json::json!({
+                "ok": true,
+                "credential_id": credential_id,
+                "verified": true,
+                "verified_by": verified_by,
+            }))
         }
         "ats.placement.early_leave" => {
             // Guarantee/replacement: if the candidate leaves within the guarantee
@@ -29294,6 +29401,118 @@ mod tests {
             command_status(root.path(), "a1")?.as_deref(),
             Some("accepted"),
             "allowed command must be accepted/processed"
+        );
+        Ok(())
+    }
+
+    // H12: the native ats.credential.verify command stamps verified=true and the
+    // authenticated verifier — the deployment/AÜG gate no longer trusts a flag
+    // that only the browser could set.
+    #[test]
+    fn ats_credential_verify_stamps_verified_and_verifier() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let now = now_ms() as i64;
+        {
+            let conn = open_store(root.path())?;
+            upsert_business_record(
+                &conn,
+                "business_credentials",
+                "cred-1",
+                now,
+                serde_json::json!({
+                    "id": "cred-1", "subject_id": "cand-1",
+                    "credential_type": "license", "verified": false
+                }),
+            )?;
+        }
+        let session = test_session("chef1", "chef");
+        let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("vc1".into()),
+            module: "ats".into(),
+            command_type: "ats.credential.verify".into(),
+            record_id: None,
+            payload: serde_json::json!({ "credential_id": "cred-1" }),
+            client_context: Value::Null,
+        };
+        let outcome = handle_ats_mutating_command(root.path(), &session, &command)?;
+        assert_eq!(outcome.get("verified").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            outcome.get("verified_by").and_then(Value::as_str),
+            Some("chef1")
+        );
+
+        let conn = open_store(root.path())?;
+        let stored: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'business_credentials' AND record_id = 'cred-1'",
+            [],
+            |row| row.get(0),
+        )?;
+        let v: Value = serde_json::from_str(&stored)?;
+        assert_eq!(v.get("verified").and_then(Value::as_bool), Some(true));
+        assert_eq!(v.get("verified_by").and_then(Value::as_str), Some("chef1"));
+        Ok(())
+    }
+
+    // H11: ats.signature.sign requires an authenticated actor and stamps an
+    // attributable signed_by_actor_id on the signer.
+    #[test]
+    fn ats_signature_sign_requires_actor_and_stamps_attribution() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let now = now_ms() as i64;
+        {
+            let conn = open_store(root.path())?;
+            upsert_business_record(
+                &conn,
+                "signature_requests",
+                "req-1",
+                now,
+                serde_json::json!({
+                    "id": "req-1", "document_id": "doc-1", "sent_at_ms": now,
+                    "signers": [{ "id": "s1", "state": "pending" }]
+                }),
+            )?;
+        }
+        let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("sg1".into()),
+            module: "ats".into(),
+            command_type: "ats.signature.sign".into(),
+            record_id: None,
+            payload: serde_json::json!({ "request_id": "req-1", "signer_id": "s1" }),
+            client_context: Value::Null,
+        };
+
+        // An unauthenticated actor (no session user) is rejected.
+        let anon = BusinessOsSession {
+            ok: true,
+            authenticated: true,
+            auth_required: false,
+            user: None,
+            login_url: None,
+            reason: None,
+        };
+        assert!(
+            handle_ats_mutating_command(root.path(), &anon, &command).is_err(),
+            "unauthenticated signing must be rejected"
+        );
+
+        // An authenticated actor signs and is recorded on the signer.
+        let session = test_session("chef1", "chef");
+        handle_ats_mutating_command(root.path(), &session, &command)?;
+        let conn = open_store(root.path())?;
+        let stored: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'signature_requests' AND record_id = 'req-1'",
+            [],
+            |row| row.get(0),
+        )?;
+        let v: Value = serde_json::from_str(&stored)?;
+        let signer = &v["signers"][0];
+        assert_eq!(signer.get("state").and_then(Value::as_str), Some("signed"));
+        assert_eq!(
+            signer.get("signed_by_actor_id").and_then(Value::as_str),
+            Some("chef1"),
+            "signer must record the authenticated signing actor: {v:?}"
         );
         Ok(())
     }
