@@ -325,6 +325,7 @@ pub(crate) struct ToolsConfig {
     pub experimental_supported_tools: Vec<String>,
     pub agent_jobs_tools: bool,
     pub agent_jobs_worker_tools: bool,
+    pub lean_tool_surface: bool,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -460,6 +461,7 @@ impl ToolsConfig {
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             agent_jobs_tools: include_agent_jobs,
             agent_jobs_worker_tools,
+            lean_tool_surface: false,
         }
     }
 
@@ -508,6 +510,11 @@ impl ToolsConfig {
 
     pub fn with_ctox_doc_stack_enabled(mut self, ctox_doc_stack_enabled: bool) -> Self {
         self.ctox_doc_stack_enabled = ctox_doc_stack_enabled;
+        self
+    }
+
+    pub fn with_lean_tool_surface(mut self, lean_tool_surface: bool) -> Self {
+        self.lean_tool_surface = lean_tool_surface;
         self
     }
 
@@ -3810,6 +3817,29 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let js_repl_reset_handler = Arc::new(JsReplResetHandler);
     let artifacts_handler = Arc::new(ArtifactsHandler);
     let exec_permission_approvals_enabled = config.exec_permission_approvals_enabled;
+    let add_apply_patch_tool = |builder: &mut ToolRegistryBuilder| {
+        if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
+            match apply_patch_tool_type {
+                ApplyPatchToolType::Freeform => {
+                    push_tool_spec(
+                        builder,
+                        create_apply_patch_freeform_tool(),
+                        /*supports_parallel_tool_calls*/ false,
+                        config.code_mode_enabled,
+                    );
+                }
+                ApplyPatchToolType::Function => {
+                    push_tool_spec(
+                        builder,
+                        create_apply_patch_json_tool(),
+                        /*supports_parallel_tool_calls*/ false,
+                        config.code_mode_enabled,
+                    );
+                }
+            }
+            builder.register_handler("apply_patch", apply_patch_handler.clone());
+        }
+    };
 
     if config.code_mode_enabled {
         let nested_config = config.for_code_mode_nested_tools();
@@ -3910,6 +3940,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.register_handler("container.exec", shell_handler.clone());
         builder.register_handler("local_shell", shell_handler);
         builder.register_handler("shell_command", shell_command_handler);
+    }
+
+    if config.lean_tool_surface {
+        add_apply_patch_tool(&mut builder);
+        return builder;
     }
 
     if mcp_tools.is_some() {
@@ -4015,27 +4050,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.register_handler(TOOL_SUGGEST_TOOL_NAME, tool_suggest_handler);
     }
 
-    if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
-        match apply_patch_tool_type {
-            ApplyPatchToolType::Freeform => {
-                push_tool_spec(
-                    &mut builder,
-                    create_apply_patch_freeform_tool(),
-                    /*supports_parallel_tool_calls*/ false,
-                    config.code_mode_enabled,
-                );
-            }
-            ApplyPatchToolType::Function => {
-                push_tool_spec(
-                    &mut builder,
-                    create_apply_patch_json_tool(),
-                    /*supports_parallel_tool_calls*/ false,
-                    config.code_mode_enabled,
-                );
-            }
-        }
-        builder.register_handler("apply_patch", apply_patch_handler);
-    }
+    add_apply_patch_tool(&mut builder);
 
     if config
         .experimental_supported_tools

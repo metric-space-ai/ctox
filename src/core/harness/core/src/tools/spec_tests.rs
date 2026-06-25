@@ -100,6 +100,79 @@ fn channel_tools_are_registered_in_default_tool_router() {
 }
 
 #[test]
+fn lean_tool_surface_exposes_only_authoring_tools() {
+    let model_info = model_info_from_models_json("gpt-5-codex");
+    let mut features = Features::with_defaults();
+    features.enable(Feature::ApplyPatchFreeform);
+    features.enable(Feature::Collab);
+    features.enable(Feature::Artifact);
+    features.enable(Feature::JsRepl);
+    features.enable(Feature::ToolSuggest);
+    let available_models = Vec::new();
+    let config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Live),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_lean_tool_surface(true);
+    let mut mcp_tools = std::collections::HashMap::new();
+    mcp_tools.insert(
+        "demo__oversized_tool".to_string(),
+        mcp_tool(
+            "oversized_tool",
+            "A tool that should not be model-visible in lean authoring sessions.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "payload": { "type": "string" }
+                }
+            }),
+        ),
+    );
+
+    let (tools, _) = build_specs(&config, Some(mcp_tools), None, &[]).build();
+    let names = tools
+        .iter()
+        .map(|tool| tool_name(&tool.spec).to_string())
+        .collect::<Vec<_>>();
+
+    assert!(
+        names.iter().any(|name| matches!(
+            name.as_str(),
+            "exec_command" | "shell_command" | "shell" | "local_shell"
+        )),
+        "expected a shell authoring tool; had: {names:?}"
+    );
+    assert!(names.iter().any(|name| name == "apply_patch"));
+    for absent in [
+        "update_plan",
+        "view_image",
+        "request_user_input",
+        "tool_search",
+        "tool_suggest",
+        "artifacts",
+        "channel_send",
+        "context_retrieve",
+        "meeting_status",
+        "list_mcp_resources",
+        "demo__oversized_tool",
+    ] {
+        assert!(
+            !names.iter().any(|name| name == absent),
+            "expected lean tool surface to omit {absent}; had: {names:?}"
+        );
+    }
+    assert!(
+        names.len() <= 3,
+        "lean authoring surface should stay small; had: {names:?}"
+    );
+}
+
+#[test]
 fn mcp_tool_to_openai_tool_inserts_empty_properties() {
     let mut schema = rmcp::model::JsonObject::new();
     schema.insert("type".to_string(), serde_json::json!("object"));

@@ -844,6 +844,33 @@ impl ModelClientSession {
         }
     }
 
+    fn log_responses_request_payload_metrics(
+        &self,
+        label: &'static str,
+        request: &ResponsesApiRequest,
+    ) {
+        let body_bytes = serde_json::to_vec(request)
+            .map(|bytes| bytes.len())
+            .unwrap_or(0);
+        let tools_bytes = serde_json::to_vec(&request.tools)
+            .map(|bytes| bytes.len())
+            .unwrap_or(0);
+        let input_bytes = serde_json::to_vec(&request.input)
+            .map(|bytes| bytes.len())
+            .unwrap_or(0);
+        tracing::info!(
+            label,
+            body_bytes,
+            tools_count = request.tools.len(),
+            tools_bytes,
+            input_items = request.input.len(),
+            input_bytes,
+            instructions_bytes = request.instructions.len(),
+            has_previous_response_id = request.previous_response_id.is_some(),
+            "responses request payload metrics"
+        );
+    }
+
     fn get_incremental_items(
         &self,
         request: &ResponsesApiRequest,
@@ -1327,6 +1354,7 @@ impl ModelClientSession {
             } else {
                 self.prepare_http_request(&request)
             };
+            self.log_responses_request_payload_metrics("responses_http", &wire_request);
             let client = ApiResponsesClient::new(
                 transport,
                 client_setup.api_provider,
