@@ -16,14 +16,15 @@
 
 ## Fortschritt (Stand 2026-06-25)
 
-Umgesetzt & verifiziert (6 atomare Commits, alle Tests/Builds grün):
+**16 atomare Commits, alle berührten Builds/Tests grün.** Von 7 bestätigten HIGH-Befunden sind **6 substanziell adressiert**; alle P0 + P1 erledigt (bis auf den unpraktikablen Static-Validation-Teil von WS3-02).
 
-- **W1 (P0, SSRF/Injection):** ☑ Egress-Guard (`egress.rs`, IP/Redirect/Scheme), an `web_search`/`deep_research` verdrahtet · ☑ Untrusted-Content-Fencing in beiden Modell-Renderern. (◐ Source-Adapter-Guards offen.)
-- **W2 (P0, DSGVO):** ☑ `person_discovery` opt-in-gegated (H3) · ☑ Geschlechts-Inferenz aus beiden Emittern entfernt · ☑ LinkedIn/Xing-Doku korrigiert · ☑ Legal/Egress-README. (☐ **WS2-01 lawful-basis-Persistenz, H2 — Top-Folgeticket**.)
-- **W3 (P1, Auto-Heal):** ☑ `env_clear`+Allowlist (H6-ACE) · ☑ Prozessgruppen-Kill gegen Chromium-Orphans (beide Stellen). (☐ WS3-02 Body-Validierung.)
-- **W4 (P1, Scraper):** ☑ Bundesanzeiger-Umsatz-Spalten · ☑ Unlock-Seed-Pfad · ◐ Unpaywall-Mail. (☐ WS4-02 Framework, ☐ WS4-04 Dedup.)
+- **W1 (P0, SSRF/Injection):** ☑ Egress-Guard (`egress.rs`) an `web_search`/`deep_research` **und allen 6 Source-Adaptern** · ☑ Untrusted-Content-Fencing.
+- **W2 (P0, DSGVO):** ☑ `person_discovery` opt-in (H3) · ☑ Geschlechts-Inferenz entfernt · ☑ LinkedIn/Xing-Doku · ☑ Legal/Egress-README · ◐ **WS2-01 (H2): Lawful-Basis/Retention-Stamp umgesetzt+verifiziert; Erasure-Sweep = Folgeticket**.
+- **W3 (P1, Auto-Heal):** ☑ `env_clear`+Allowlist (H6-ACE) · ☑ Prozessgruppen-Kill (Chromium-Orphans, beide Stellen). (☐ WS3-02 Body-Validierung = unpraktikabel/dokumentiert.)
+- **W4 (P1, Scraper):** ☑ Bundesanzeiger-Umsatz · ☑ Unlock-Seed · ☑ Unpaywall+Polite-Pool-Mail · ☑ Dedup. (☐ WS4-02 = 4-Quellen-Framework.)
+- **W5 (P2, Reife):** ☑ Cache-Key+Empty-Skip · ☑ Cooldown-Persistenz · ☑ Env-Toggle→SQLite · ☑ Toter Code/Fixtures · ◐ Brave-Regressions-Test. (☐ WS5-01 Refactor, WS5-05 OpenAI-Passthrough, WS5-06 App-Surface.)
 
-Offen: **WS2-01** (HIGH, Core+Governance-Epic), WS3-02, WS4-02/04, W5 (P2-Cleanup), Coverage-Lücken. Details je Ticket unten.
+**Offen (eigenständige Tasks/Entscheidungen):** WS2-01-Erasure-Sweep, WS4-02 (Framework), WS5-01/05/06, WS2-04-Removal (Produktentscheidung), WS5-04-serde (braucht Sample), Coverage-Lücken. Details je Ticket unten.
 
 ## 0. Zielbild & Reihenfolge
 
