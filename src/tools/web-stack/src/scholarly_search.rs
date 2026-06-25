@@ -789,6 +789,16 @@ fn is_doi_suffix_byte(b: u8) -> bool {
 }
 
 fn augment_results_with_open_access_pdfs(root: &Path, results: &mut [ScholarlyResult]) {
+    // Unpaywall's API policy requires a real contact email on every request.
+    // Never query it with a placeholder address: without an operator-configured
+    // `CTOX_UNPAYWALL_EMAIL` we skip OA-PDF augmentation entirely rather than
+    // violate the API terms (and risk getting the shared default blocked).
+    let Some(contact_email) = runtime_config::get(root, "CTOX_UNPAYWALL_EMAIL")
+        .map(|email| email.trim().to_string())
+        .filter(|email| !email.is_empty())
+    else {
+        return;
+    };
     let timeout_ms = runtime_config::get(root, "CTOX_SCHOLARLY_TIMEOUT_MS")
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(8000);
@@ -802,8 +812,6 @@ fn augment_results_with_open_access_pdfs(root: &Path, results: &mut [ScholarlyRe
         .build();
     let unpaywall_base = runtime_config::get(root, "CTOX_UNPAYWALL_BASE_URL")
         .unwrap_or_else(|| UNPAYWALL_DEFAULT_BASE_URL.to_string());
-    let contact_email = runtime_config::get(root, "CTOX_UNPAYWALL_EMAIL")
-        .unwrap_or_else(|| "ctox@example.org".to_string());
     for hit in results.iter_mut() {
         let Some(doi) = hit.doi.as_deref() else {
             continue;

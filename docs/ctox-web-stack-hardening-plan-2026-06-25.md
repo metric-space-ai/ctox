@@ -115,30 +115,33 @@ Empfohlene Milestones: **M1 = W1+W4** (Sicherheit + billige Korrektheit-Bugs), *
 
 Billige, klar falsifizierbare Bugs — alle mit Fixture/Test abschließen.
 
-### WS4-01 ☐ Bundesanzeiger Umsatz-Regex (Spalten-Verkettung)
+### WS4-01 ☑ Bundesanzeiger Umsatz-Regex (Spalten-Verkettung)
 - **Datei:** [sources/bundesanzeiger.rs:209](../src/tools/web-stack/src/sources/bundesanzeiger.rs)
 - **Change:** Capture an einen einzelnen Monetär-Token ankern (kein `\s` im Zahl-Run), z. B. `([\-\(]?\d[\d\.]*(?:,\d+)?\)?)`.
 - **Akzeptanz:** Fixture mit zwei numerischen Spalten — nur die erste wird gecaptured.
+- **Umgesetzt (2026-06-25):** Fix in `normalise_amount` (statt Regex), da das Whitespace-Collapse dort die Vorjahresspalte einsammelte: `first_column_break` schneidet beim ersten 2+-Whitespace-Lauf (Spaltenlücke) ab, erhält aber Einzelspace-Splits (`485 .732 .145`). Deckt Dezimal- **und** Integer-Spalten ab. Guard-Test `umsatz_keeps_current_year_when_prior_year_column_is_adjacent`.
 
 ### WS4-02 ☐ D&B-Detail-Token durchreichen
 - **Datei:** [sources/dnbhoovers.rs:380](../src/tools/web-stack/src/sources/dnbhoovers.rs)
 - **Change:** Detail-Record in `fetch_direct` einbetten oder Modul-Token im Read-Pfad injizieren.
 - **Akzeptanz:** E2E/Mock-Test, der den credentialed Detail-Pfad ohne Fixture-Spezialfall durchläuft.
 
-### WS4-03 ☐ Web-Unlock-Seed `script_path`-Präfix
+### WS4-03 ☑ Web-Unlock-Seed `script_path`-Präfix
 - **Datei:** [assets/web_unlock_seed.json:8](../src/tools/web-stack/assets/web_unlock_seed.json) (alle Einträge)
 - **Change:** `skills/...` → `src/skills/...` (Dateien liegen unter `src/skills/system/communication/web-unlock/agents/probe-scripts/`). Alternativ Resolver repo-root-relativ + `src/` ergänzen.
 - **Akzeptanz:** Baseline-Probe lädt das Seed-Skript in-tree erfolgreich.
+- **Umgesetzt (2026-06-25):** Alle 5 `script_path`-Einträge auf `src/skills/...` (resolver macht `root.join(script_path)`, unlock.rs:293; Dateien verifiziert vorhanden). Kein Test pinnte den alten String; Seed-JSON gültig.
 
 ### WS4-04 ☐ Scrape-Target-/Rust-Doppel-Extraktion
 - **Datei:** [person_research.rs:162](../src/tools/web-stack/src/person_research.rs)
 - **Change:** Bei erfolgreicher Scrape-Target-Extraktion **nicht** zusätzlich in Rust-`extract_fields` durchfallen (Evidence-Duplikat vermeiden).
 - **Akzeptanz:** Test, dass pro Quelle bei Target-Erfolg keine doppelte Evidence entsteht.
 
-### WS4-05 ☐ Unpaywall-Kontakt-E-Mail
+### WS4-05 ◐ Unpaywall-Kontakt-E-Mail
 - **Datei:** [scholarly_search.rs:805](../src/tools/web-stack/src/scholarly_search.rs)
 - **Change:** Platzhalter-E-Mail durch eine echte, aus `runtime_config`/Secret-Store bezogene Kontakt-Adresse ersetzen; ohne Konfiguration den Unpaywall-Pfad sauber überspringen statt mit Fake-Mail anzufragen. Auch Crossref-`mailto` (Polite-Pool) ergänzen.
 - **Akzeptanz:** Ohne konfigurierte Mail kein Unpaywall-Call mit Platzhalter.
+- **Umgesetzt (2026-06-25):** `augment_results_with_open_access_pdfs` macht jetzt einen Early-Return, wenn `CTOX_UNPAYWALL_EMAIL` fehlt/leer ist (kein Platzhalter `ctox@example.org` mehr). **Offen:** Crossref-Polite-Pool-`mailto` noch nicht ergänzt → W5.
 
 ---
 
