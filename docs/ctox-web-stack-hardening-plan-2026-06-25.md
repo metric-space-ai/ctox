@@ -14,6 +14,17 @@
 
 ---
 
+## Fortschritt (Stand 2026-06-25)
+
+Umgesetzt & verifiziert (6 atomare Commits, alle Tests/Builds grün):
+
+- **W1 (P0, SSRF/Injection):** ☑ Egress-Guard (`egress.rs`, IP/Redirect/Scheme), an `web_search`/`deep_research` verdrahtet · ☑ Untrusted-Content-Fencing in beiden Modell-Renderern. (◐ Source-Adapter-Guards offen.)
+- **W2 (P0, DSGVO):** ☑ `person_discovery` opt-in-gegated (H3) · ☑ Geschlechts-Inferenz aus beiden Emittern entfernt · ☑ LinkedIn/Xing-Doku korrigiert · ☑ Legal/Egress-README. (☐ **WS2-01 lawful-basis-Persistenz, H2 — Top-Folgeticket**.)
+- **W3 (P1, Auto-Heal):** ☑ `env_clear`+Allowlist (H6-ACE) · ☑ Prozessgruppen-Kill gegen Chromium-Orphans (beide Stellen). (☐ WS3-02 Body-Validierung.)
+- **W4 (P1, Scraper):** ☑ Bundesanzeiger-Umsatz-Spalten · ☑ Unlock-Seed-Pfad · ◐ Unpaywall-Mail. (☐ WS4-02 Framework, ☐ WS4-04 Dedup.)
+
+Offen: **WS2-01** (HIGH, Core+Governance-Epic), WS3-02, WS4-02/04, W5 (P2-Cleanup), Coverage-Lücken. Details je Ticket unten.
+
 ## 0. Zielbild & Reihenfolge
 
 Fünf Workstreams, nach Hebelwirkung sortiert. W1 und W2 sind die eigentlichen Risiko-Reduzierer und sollten zuerst landen.
@@ -64,10 +75,12 @@ Empfohlene Milestones: **M1 = W1+W4** (Sicherheit + billige Korrektheit-Bugs), *
 
 **Problem:** Personen-Dossiers werden ohne Rechtsgrundlage/Zweck/Retention persistiert; „Immer-an"-Personen-Discovery umgeht den Opt-in; Geschlechts-Inferenz ohne Consent; ein Browser-LinkedIn-Capture-Pfad widerspricht der eigenen „never scrape"-Zusage. Ein CONSENT-1-Ledger + Art.15/17-Engine existiert bereits (ATS) und ist hier nicht verdrahtet.
 
-### WS2-01 ☐ Rechtsgrundlage/Retention an Personen-Persistenz hängen
-- **Dateien:** [business_os/importer.rs:481 `append_knowledge_rows`](../src/core/business_os/importer.rs), [person_research.rs:64](../src/tools/web-stack/src/person_research.rs)
-- **Change:** Vor dem Persistieren jeder Zeile mit `person_*`-PII einen Stamp verlangen/setzen: `legal_basis`, `purpose`, `retention_until`, `subject_key` (Modell aus CONSENT-1 / ATS wiederverwenden). Personen-Collections in den bestehenden `ats.subject.export/erase`-Sweep aufnehmen.
-- **Akzeptanz:** Persistenz ohne Stamp schlägt fehl (Guard-Test); ein `erase`-Sweep entfernt persistierte Personen-Zeilen.
+### WS2-01 ☐ Rechtsgrundlage/Retention an Personen-Persistenz hängen — **HIGH (H2), zurückgestellt: Core+Governance-Epic**
+- **Dateien:** [business_os/importer.rs:481](../src/core/business_os/importer.rs) (`outbound_contact_research` → `contacts`/`rows` mit `contact_name`/`role`/`email`/`linkedin_url`), [person_research.rs:64](../src/tools/web-stack/src/person_research.rs)
+- **Wiederzuverwendende Infrastruktur (gefunden 2026-06-25):** [ats_gates.rs](../src/core/business_os/ats_gates.rs) ist die CONSENT-1-Engine — `consent_valid`/`has_valid_consent`/`evaluate_consent_gate` mit Feldern `legal_basis`, `purpose`, `granted_at_ms`, `withdrawn_at_ms`, `expires_at_ms`, `basis_evidence`.
+- **Change:** Vor dem Persistieren jeder Personen-PII-Zeile in `importer.rs` einen Stamp setzen/verlangen: `legal_basis` (z. B. `legitimate_interest` mit `basis_evidence`), `purpose`, `expires_at_ms`/`retention_until`, `subject_key`. Über `evaluate_consent_gate` gaten und die Knowledge-/Contact-Collections in den bestehenden ATS-`subject.export/erase`-Sweep aufnehmen.
+- **Akzeptanz:** Persistenz ohne Stamp schlägt fehl (Guard-Test); `erase`-Sweep entfernt persistierte Personen-Zeilen.
+- **Warum zurückgestellt:** Liegt im strikt geführten `src/core/business_os/` (eigene AGENTS.md): erfordert `cargo check` **plus** `cargo test --manifest-path src/core/rxdb/Cargo.toml` **plus** `node src/apps/business-os/rxdb/tests/run-all.mjs` und berührt RxDB-persistierte Records + Governance. Mehrstündiger, eigenständiger Fokus-Task statt schneller Fix; **Top-Folgeticket** (letzter offener HIGH-Befund).
 
 ### WS2-02 ☑ `person_discovery` hinter expliziten Opt-in (default off)
 - **Datei:** [sources/person_discovery.rs:65](../src/tools/web-stack/src/sources/person_discovery.rs)
@@ -98,7 +111,7 @@ Empfohlene Milestones: **M1 = W1+W4** (Sicherheit + billige Korrektheit-Bugs), *
 
 **Problem:** Drift → Repair-Skill (`universal-scraping`) → LLM schreibt `runtime/scraping/targets/<key>/scripts/v1.js` → `register_script` persistiert ohne Validierung (nur SHA-256) → nächster Run führt `node {script}` **ohne `env_clear()`** mit vollem Daemon-Env + `CTOX_BIN` aus. Wer die gescrapte Seite beeinflusst, kann das Rewrite formen → lokale Code-Ausführung mit Daemon-Rechten.
 
-### WS3-01 ◐ Minimal-Env beim Ausführen gescripteter Runner
+### WS3-01 ☑ Minimal-Env beim Ausführen gescripteter Runner
 - **Datei:** [capabilities/scrape.rs:2620–2668](../src/core/capabilities/scrape.rs) (`default_entry_command` @4384)
 - **Change:** Child-Prozess mit `Command::env_clear()` starten und nur die explizit benötigten `CTOX_SCRAPE_*`-Variablen + minimales `PATH` setzen. `CTOX_BIN` nur wenn zwingend nötig.
 - **Akzeptanz:** Test, dass der Child kein Daemon-Secret-Env erbt.
@@ -109,7 +122,7 @@ Empfohlene Milestones: **M1 = W1+W4** (Sicherheit + billige Korrektheit-Bugs), *
 - **Change:** Vor Persistenz: statische Validierung (Größe, kein `child_process`/`require('fs')`-Ausbruch jenseits der definierten Schnittstelle, optional AST-Allowlist) oder Ausführung in einer engeren Node-Sandbox. Mindestens: Trust-Boundary in `capabilities/scrape.rs` als Kommentar dokumentieren.
 - **Akzeptanz:** Ein Skript-Body mit verbotenem Pattern wird beim Register abgelehnt (Test).
 
-### WS3-03 ◐ Chromium-Orphan an beiden Kill-Stellen beheben
+### WS3-03 ☑ Chromium-Orphan an beiden Kill-Stellen beheben
 - **Dateien:** [browser.rs:221](../src/tools/web-stack/src/browser.rs), [capabilities/scrape.rs:2705](../src/core/capabilities/scrape.rs)
 - **Change:** Beim Timeout die **Prozessgruppe** killen (setsid/process-group) statt nur den Node-Parent, damit Playwright/Chromium-Kinder mitsterben.
 - **Akzeptanz:** Nach simuliertem Timeout keine verwaisten Browser-Prozesse (manueller Smoke + ggf. Test-Harness).
