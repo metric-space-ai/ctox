@@ -28,8 +28,9 @@ use crate::types::{
 
 use super::cleanup::cleanup_deleted_documents;
 use super::sql::{
-    document_by_id, drop_table, for_each_document, insert_document, quote_identifier,
-    update_document,
+    compile_count_sql, compile_query_sql, count_with_compiled_sql, document_by_id, drop_table,
+    for_each_document, for_each_document_with_compiled_sql, insert_document,
+    query_documents_with_compiled_sql, quote_identifier, update_document,
 };
 use super::types::{sqlite_error, SharedSqliteConnection};
 
@@ -680,6 +681,22 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         let matcher = get_query_matcher(&self.schema, &query);
         let comparator = get_sort_comparator(&self.schema, &query);
         let primary_ids = primary_key_selector_ids(&query, &self.primary_path);
+        let compiled_sql = if primary_ids.is_none() {
+            compile_query_sql(&self.table_name, &self.primary_path, &query)
+        } else {
+            None
+        };
+
+        if let Some(compiled) = compiled_sql.clone() {
+            if let Ok(read_conn) = self.open_read_only_connection() {
+                let documents = tokio::task::spawn_blocking(move || -> RxResult<Vec<Value>> {
+                    query_documents_with_compiled_sql(&read_conn, &compiled)
+                })
+                .await
+                .map_err(join_error)??;
+                return Ok(RxStorageQueryResult { documents });
+            }
+        }
 
         // FIX 1: run the full-table scan + sort off the tokio worker thread.
         // The matcher/comparator are `Arc<dyn Fn .. + Send + Sync>` so they
@@ -701,6 +718,8 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
                         }
                     }
                 }
+            } else if let Some(compiled) = compiled_sql {
+                return query_documents_with_compiled_sql(&conn, &compiled);
             } else {
                 // Stream rows one at a time and keep only those that match.
                 // Sort and truncate at the end so we never materialize the
@@ -724,6 +743,39 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
     }
 
     async fn count(&self, prepared_query: &Value) -> Result<RxStorageCountResult, RxError> {
+        self.ensure_open("count")?;
+        let query: FilledMangoQuery =
+            serde_json::from_value(prepared_query.get("query").cloned().unwrap_or(Value::Null))
+                .map_err(|err| {
+                    new_rx_error(
+                        "SQLITE_QUERY",
+                        Some(json!({ "message": format!("invalid prepared query: {err}") })),
+                    )
+                })?;
+        if let Some(compiled) = compile_count_sql(&self.table_name, &self.primary_path, &query) {
+            if let Ok(read_conn) = self.open_read_only_connection() {
+                let count = tokio::task::spawn_blocking(move || -> RxResult<u64> {
+                    count_with_compiled_sql(&read_conn, &compiled)
+                })
+                .await
+                .map_err(join_error)??;
+                return Ok(RxStorageCountResult {
+                    count,
+                    mode: "fast".to_string(),
+                });
+            }
+            let connection = Arc::clone(&self.connection);
+            let count = tokio::task::spawn_blocking(move || -> RxResult<u64> {
+                let conn = connection.lock();
+                count_with_compiled_sql(&conn, &compiled)
+            })
+            .await
+            .map_err(join_error)??;
+            return Ok(RxStorageCountResult {
+                count,
+                mode: "fast".to_string(),
+            });
+        }
         let result = self.query(prepared_query).await?;
         Ok(RxStorageCountResult {
             count: result.documents.len() as u64,
@@ -878,6 +930,29 @@ impl RxStorageInstanceSqlite {
         // peers, replication, and same-process writes. WAL mode (set in
         // `RxStorageSqlite::connection`) makes concurrent readers cheap.
         let read_conn = self.open_read_only_connection()?;
+
+        if let Some(compiled) = compile_query_sql(&self.table_name, &self.primary_path, &query) {
+            let chunk = chunk_size.max(1);
+            let mut batch = Vec::with_capacity(chunk);
+            let mut keep_streaming = true;
+            for_each_document_with_compiled_sql(&read_conn, &compiled, |doc| {
+                batch.push(doc);
+                if batch.len() >= chunk {
+                    let emit = std::mem::take(&mut batch);
+                    keep_streaming = visit(emit)?;
+                    if !keep_streaming {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            })?;
+            if keep_streaming && !batch.is_empty() {
+                if !visit(batch)? {
+                    return Ok(());
+                }
+            }
+            return Ok(());
+        }
 
         // Correctness: skip + global sort require us to know the order of
         // ALL matches before deciding which N to emit. Per-chunk sorting
@@ -1393,6 +1468,214 @@ mod tests {
 
         let count = instance.count(&prepared).await.unwrap();
         assert_eq!(count.count, 2);
+    }
+
+    #[tokio::test]
+    async fn query_indexed_selector_pushes_filter_and_window_into_sqlite() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("ctox.sqlite3"),
+        });
+        let schema = test_schema();
+        let instance = create_storage_instance(&storage, params(schema.clone()))
+            .await
+            .unwrap();
+        let rows: Vec<BulkWriteRow> = (0..1_000)
+            .map(|idx| BulkWriteRow {
+                previous: None,
+                document: doc(&format!("doc-{idx:04}"), "1-a", idx, false, idx as f64),
+            })
+            .collect();
+        instance.bulk_write(rows, "seed").await.unwrap();
+
+        let mut sort = HashMap::new();
+        sort.insert("age".to_string(), "asc".to_string());
+        let filled = normalize_mango_query(
+            &schema,
+            MangoQuery {
+                selector: Some(json!({ "age": { "$gte": 990 } })),
+                sort: Some(vec![sort]),
+                index: None,
+                limit: Some(3),
+                skip: Some(0),
+            },
+        );
+        let prepared = prepare_query(&schema, filled.clone()).unwrap();
+        let result = instance.query(&prepared).await.unwrap();
+        let ages = result
+            .documents
+            .iter()
+            .map(|doc| doc.get("age").and_then(Value::as_i64).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(ages, vec![990, 991, 992]);
+
+        let count_filled = normalize_mango_query(
+            &schema,
+            MangoQuery {
+                selector: Some(json!({ "age": { "$gte": 990 } })),
+                sort: None,
+                index: None,
+                limit: None,
+                skip: None,
+            },
+        );
+        let count_prepared = prepare_query(&schema, count_filled).unwrap();
+        let count = instance.count(&count_prepared).await.unwrap();
+        assert_eq!(count.count, 10);
+
+        let compiled = compile_query_sql(&instance.table_name, &instance.primary_path, &filled)
+            .expect("age selector should compile to SQL");
+        let conn = storage.connection().unwrap();
+        let conn = conn.lock();
+        let mut statement = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {}", compiled.sql))
+            .unwrap();
+        let plan = statement
+            .query_map(rusqlite::params_from_iter(compiled.params.iter()), |row| {
+                row.get::<_, String>(3)
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .join("\n");
+        assert!(
+            plan.contains("_json_age_idx"),
+            "expected SQLite to use the schema expression index, got plan:\n{plan}"
+        );
+    }
+
+    #[tokio::test]
+    async fn compiled_query_and_count_do_not_wait_for_writer_mutex() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("ctox.sqlite3"),
+        });
+        let schema = test_schema();
+        let instance = create_storage_instance(&storage, params(schema.clone()))
+            .await
+            .unwrap();
+        let rows: Vec<BulkWriteRow> = (0..100)
+            .map(|idx| BulkWriteRow {
+                previous: None,
+                document: doc(&format!("doc-{idx:03}"), "1-a", idx, false, idx as f64),
+            })
+            .collect();
+        instance.bulk_write(rows, "seed").await.unwrap();
+
+        let mut sort = HashMap::new();
+        sort.insert("age".to_string(), "asc".to_string());
+        let prepared = prepare_query(
+            &schema,
+            normalize_mango_query(
+                &schema,
+                MangoQuery {
+                    selector: Some(json!({ "age": { "$gte": 95 } })),
+                    sort: Some(vec![sort]),
+                    index: None,
+                    limit: Some(2),
+                    skip: Some(0),
+                },
+            ),
+        )
+        .unwrap();
+
+        let shared_conn = storage.connection().unwrap();
+        let _writer_guard = shared_conn.lock();
+
+        let query_instance = Arc::clone(&instance);
+        let query_prepared = prepared.clone();
+        let (query_tx, mut query_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let _ = query_tx.send(query_instance.query(&query_prepared).await);
+        });
+        let query_result = tokio::time::timeout(Duration::from_secs(1), &mut query_rx)
+            .await
+            .expect("compiled query waited for shared writer mutex")
+            .expect("compiled query task dropped")
+            .unwrap();
+        let ages = query_result
+            .documents
+            .iter()
+            .map(|doc| doc.get("age").and_then(Value::as_i64).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(ages, vec![95, 96]);
+
+        let count_instance = Arc::clone(&instance);
+        let count_prepared = prepared.clone();
+        let (count_tx, mut count_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let _ = count_tx.send(count_instance.count(&count_prepared).await);
+        });
+        let count_result = tokio::time::timeout(Duration::from_secs(1), &mut count_rx)
+            .await
+            .expect("compiled count waited for shared writer mutex")
+            .expect("compiled count task dropped")
+            .unwrap();
+        assert_eq!(count_result.count, 2);
+    }
+
+    #[tokio::test]
+    async fn query_stream_compiled_sql_stops_without_materializing_remaining_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("ctox.sqlite3"),
+        });
+        let mut schema = test_schema();
+        schema.indexes = vec![vec!["id".to_string()]];
+        let instance = create_storage_instance(&storage, params(schema.clone()))
+            .await
+            .unwrap();
+        let rows: Vec<BulkWriteRow> = (0..100)
+            .map(|idx| BulkWriteRow {
+                previous: None,
+                document: doc(&format!("doc-{idx:03}"), "1-a", idx, false, idx as f64),
+            })
+            .collect();
+        instance.bulk_write(rows, "seed").await.unwrap();
+
+        {
+            let conn = storage.connection().unwrap();
+            conn.lock()
+                .execute(
+                    &format!(
+                        "UPDATE {} SET data = ? WHERE id = ?",
+                        quote_identifier(&instance.table_name)
+                    ),
+                    params!["{not-json", "doc-099"],
+                )
+                .unwrap();
+        }
+
+        let mut sort = HashMap::new();
+        sort.insert("id".to_string(), "asc".to_string());
+        let prepared = prepare_query(
+            &schema,
+            normalize_mango_query(
+                &schema,
+                MangoQuery {
+                    selector: Some(json!({})),
+                    sort: Some(vec![sort]),
+                    index: None,
+                    limit: None,
+                    skip: Some(0),
+                },
+            ),
+        )
+        .unwrap();
+
+        let mut seen = Vec::new();
+        instance
+            .query_stream(&prepared, 2, |batch| {
+                seen.extend(
+                    batch
+                        .iter()
+                        .filter_map(|doc| doc.get("id").and_then(Value::as_str).map(str::to_owned)),
+                );
+                Ok(false)
+            })
+            .unwrap();
+
+        assert_eq!(seen, vec!["doc-000".to_string(), "doc-001".to_string()]);
     }
 
     #[tokio::test]

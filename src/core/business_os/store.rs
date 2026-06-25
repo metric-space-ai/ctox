@@ -719,7 +719,7 @@ fn open_store_connection(path: &Path) -> anyhow::Result<Connection> {
         .context("failed to configure Business OS SQLite busy_timeout")?;
     let busy_timeout_ms = crate::persistence::sqlite_busy_timeout_millis();
     conn.execute_batch(&format!(
-        "PRAGMA journal_mode=WAL; PRAGMA busy_timeout={busy_timeout_ms};"
+        "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout={busy_timeout_ms};"
     ))
     .context("failed to configure Business OS SQLite pragmas")?;
     Ok(conn)

@@ -9,7 +9,7 @@ use crate::rx_storage_helper::ensure_rx_storage_instance_params_are_correct;
 use crate::types::{RxStorage, RxStorageInstance, RxStorageInstanceCreationParams};
 
 use super::instance::RxStorageInstanceSqlite;
-use super::sql::{ensure_collection_table, table_name};
+use super::sql::{ensure_collection_schema_indexes, ensure_collection_table, table_name};
 use super::types::{RxStorageSqlite, RxStorageSqliteSettings};
 
 pub const RX_STORAGE_NAME_SQLITE: &str = "sqlite";
@@ -32,6 +32,12 @@ pub async fn create_storage_instance(
     {
         let conn = connection.lock();
         ensure_collection_table(&conn, &table_name)?;
+        ensure_collection_schema_indexes(
+            &conn,
+            &table_name,
+            &params.schema,
+            &crate::rx_schema_helper::get_primary_field_of_primary_key(&params.schema.primary_key),
+        )?;
     }
     let database_path = storage.settings.database_path.clone();
     Ok(Arc::new(RxStorageInstanceSqlite::new(
@@ -62,6 +68,14 @@ impl RxStorage for RxStorageSqlite {
         {
             let conn = connection.lock();
             ensure_collection_table(&conn, &table_name)?;
+            ensure_collection_schema_indexes(
+                &conn,
+                &table_name,
+                &params.schema,
+                &crate::rx_schema_helper::get_primary_field_of_primary_key(
+                    &params.schema.primary_key,
+                ),
+            )?;
         }
         let database_path = self.settings.database_path.clone();
         Ok(Arc::new(RxStorageInstanceSqlite::new(

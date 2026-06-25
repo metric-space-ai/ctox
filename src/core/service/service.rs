@@ -121,6 +121,8 @@ const BUSINESS_OS_APP_RECOVERY_STALE_SECS: u64 = 180;
 const BUSINESS_OS_APP_RECOVERY_PREFLIGHT_IDLE_SAFETY_SECS: u64 = 60;
 const BUSINESS_OS_APP_RECOVERY_SCAN_LIMIT: usize = 128;
 const IDLE_DURABLE_QUEUE_EMPTY_BACKOFF_MAX_SECS: u64 = 60;
+const SERVICE_PROCESS_SCAN_STATUS_CACHE_TTL_SECS: u64 = 5;
+const SERVICE_STATUS_DURABLE_CACHE_TTL_SECS: u64 = 2;
 const BUSINESS_OS_APP_UNSTARTED_REQUEUE_BLOCK_THRESHOLD: usize = 1;
 const BUSINESS_OS_APP_UNSTARTED_REQUEUE_COUNT_KEY: &str = "business_os_app_unstarted_requeue_count";
 const BUSINESS_OS_APP_UNSTARTED_REQUEUED_AT_KEY: &str = "business_os_app_unstarted_requeued_at";
@@ -2996,29 +2998,41 @@ fn resolve_scrape_api_payload(root: &Path, raw_url: &str) -> Result<(u16, serde_
     }
 }
 
-fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<ServiceStatus> {
-    recover_business_os_app_queue_tasks_for_idle_status_snapshot(root, state);
-    let shared = lock_shared_state(state);
-    let worker_active_count = shared.worker_active_count;
-    let worker_phase = shared.worker_phase.clone();
-    let busy = shared.busy || worker_active_count > 0;
-    let pid = Some(std::process::id());
-    let current_goal_preview = shared.current_goal_preview.clone();
-    let active_source_label = shared.active_source_label.clone();
-    let recent_events = shared.recent_events.iter().cloned().collect::<Vec<_>>();
-    let last_error = shared.last_error.clone();
-    let last_completed_at = shared.last_completed_at.clone();
-    let last_reply_chars = shared.last_reply_chars;
-    let mut pending_previews = shared
-        .pending_prompts
-        .iter()
-        .take(6)
-        .map(|item| format!("{}  {}", item.source_label, item.preview))
-        .collect::<Vec<_>>();
-    let in_memory_pending_count = shared.pending_prompts.len();
-    drop(shared);
+#[derive(Clone, Debug, Default)]
+struct DurableServiceStatusSnapshot {
+    runnable_count: usize,
+    pending_previews: Vec<String>,
+    blocked_count: usize,
+    blocked_previews: Vec<String>,
+    last_agent_outcome: Option<String>,
+}
 
+type DurableServiceStatusCache = Mutex<Option<(Instant, PathBuf, DurableServiceStatusSnapshot)>>;
+
+fn durable_status_snapshot_cache() -> &'static DurableServiceStatusCache {
+    static CACHE: OnceLock<DurableServiceStatusCache> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn durable_status_snapshot_cached(root: &Path, ttl: Duration) -> DurableServiceStatusSnapshot {
+    let cache = durable_status_snapshot_cache();
+    if let Some((loaded_at, cached_root, snapshot)) =
+        cache.lock().unwrap_or_else(|err| err.into_inner()).as_ref()
+    {
+        if cached_root.as_path() == root && loaded_at.elapsed() < ttl {
+            return snapshot.clone();
+        }
+    }
+
+    let snapshot = load_durable_status_snapshot(root);
+    *cache.lock().unwrap_or_else(|err| err.into_inner()) =
+        Some((Instant::now(), root.to_path_buf(), snapshot.clone()));
+    snapshot
+}
+
+fn load_durable_status_snapshot(root: &Path) -> DurableServiceStatusSnapshot {
     let runnable_statuses = ["pending".to_string(), "leased".to_string()];
+    let mut pending_previews = Vec::new();
     let runnable_durable_tasks = match channels::list_queue_tasks(root, &runnable_statuses, 6) {
         Ok(tasks) => tasks,
         Err(err) => {
@@ -3030,8 +3044,9 @@ fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Res
             Vec::new()
         }
     };
-    let runnable_durable_count = channels::count_queue_tasks(root, &runnable_statuses)
+    let runnable_count = channels::count_queue_tasks(root, &runnable_statuses)
         .unwrap_or(runnable_durable_tasks.len());
+
     let blocked_statuses = ["blocked".to_string()];
     let blocked_durable_tasks = match channels::list_queue_tasks(root, &blocked_statuses, 6) {
         Ok(tasks) => tasks,
@@ -3040,10 +3055,10 @@ fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Res
             Vec::new()
         }
     };
-    let blocked_durable_count =
+    let blocked_count =
         channels::count_queue_tasks(root, &blocked_statuses).unwrap_or(blocked_durable_tasks.len());
     let mut blocked_previews = Vec::new();
-    let ticket_cases = tickets::list_cases(root, None, 6).unwrap_or_default();
+
     for task in &runnable_durable_tasks {
         if pending_previews.len() >= 6 {
             break;
@@ -3062,7 +3077,8 @@ fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Res
             blocked_previews.push(preview);
         }
     }
-    for case in ticket_cases
+    for case in tickets::list_cases(root, None, 6)
+        .unwrap_or_default()
         .into_iter()
         .filter(|case| !matches!(case.state.as_str(), "closed"))
     {
@@ -3091,6 +3107,57 @@ fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Res
             })
             .map(|outcome| outcome.as_str().to_string())
     };
+
+    DurableServiceStatusSnapshot {
+        runnable_count,
+        pending_previews,
+        blocked_count,
+        blocked_previews,
+        last_agent_outcome,
+    }
+}
+
+fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<ServiceStatus> {
+    // Keep service status a read-side control-plane operation. Business OS app
+    // recovery runs from the dedicated maintenance loop and worker-finalization
+    // paths; a status poll must not start validation, queue mutation, or broad
+    // recovery scans.
+    let shared = lock_shared_state(state);
+    let worker_active_count = shared.worker_active_count;
+    let worker_phase = shared.worker_phase.clone();
+    let busy = shared.busy || worker_active_count > 0;
+    let pid = Some(std::process::id());
+    let current_goal_preview = shared.current_goal_preview.clone();
+    let active_source_label = shared.active_source_label.clone();
+    let recent_events = shared.recent_events.iter().cloned().collect::<Vec<_>>();
+    let last_error = shared.last_error.clone();
+    let last_completed_at = shared.last_completed_at.clone();
+    let last_reply_chars = shared.last_reply_chars;
+    let mut pending_previews = shared
+        .pending_prompts
+        .iter()
+        .take(6)
+        .map(|item| format!("{}  {}", item.source_label, item.preview))
+        .collect::<Vec<_>>();
+    let in_memory_pending_count = shared.pending_prompts.len();
+    drop(shared);
+
+    let durable_status = durable_status_snapshot_cached(
+        root,
+        Duration::from_secs(SERVICE_STATUS_DURABLE_CACHE_TTL_SECS),
+    );
+    let blocked_previews = durable_status.blocked_previews.clone();
+    for preview in &durable_status.pending_previews {
+        if pending_previews.len() >= 6 {
+            break;
+        }
+        if !pending_previews.iter().any(|existing| existing == preview) {
+            pending_previews.push(preview.clone());
+        }
+    }
+    let runnable_durable_count = durable_status.runnable_count;
+    let blocked_durable_count = durable_status.blocked_count;
+    let last_agent_outcome = durable_status.last_agent_outcome.clone();
     // One cached probe instead of two fresh rounds (six systemctl spawns)
     // per status request: this handler answers the 250ms-budget UI poll
     // every 500ms, and a slow answer makes the TUI fall back to a degraded
@@ -3256,7 +3323,15 @@ fn runtime_lifecycle_alerts(
             ));
         }
     }
-    let duplicate_service_pids = matching_service_processes(root, current_pid)?;
+    let duplicate_service_pids = if service_running {
+        matching_service_processes_cached(
+            root,
+            current_pid,
+            Duration::from_secs(SERVICE_PROCESS_SCAN_STATUS_CACHE_TTL_SECS),
+        )?
+    } else {
+        matching_service_processes(root, current_pid)?
+    };
     if !duplicate_service_pids.is_empty() {
         alerts.push(format!(
             "duplicate service foreground processes {duplicate_service_pids:?}"
@@ -3535,6 +3610,36 @@ fn matching_service_processes(root: &Path, keep_pid: Option<u32>) -> Result<Vec<
     matches.sort_unstable();
     matches.dedup();
     Ok(matches)
+}
+
+type ServiceProcessCache = Mutex<Option<(Instant, PathBuf, Option<u32>, Vec<u32>)>>;
+
+fn matching_service_processes_cache() -> &'static ServiceProcessCache {
+    static CACHE: OnceLock<ServiceProcessCache> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn matching_service_processes_cached(
+    root: &Path,
+    keep_pid: Option<u32>,
+    ttl: Duration,
+) -> Result<Vec<u32>> {
+    let cache = matching_service_processes_cache();
+    if let Some((probed_at, cached_root, cached_keep_pid, cached)) =
+        cache.lock().unwrap_or_else(|err| err.into_inner()).as_ref()
+    {
+        if cached_root.as_path() == root
+            && *cached_keep_pid == keep_pid
+            && probed_at.elapsed() < ttl
+        {
+            return Ok(cached.clone());
+        }
+    }
+
+    let fresh = matching_service_processes(root, keep_pid)?;
+    *cache.lock().unwrap_or_else(|err| err.into_inner()) =
+        Some((Instant::now(), root.to_path_buf(), keep_pid, fresh.clone()));
+    Ok(fresh)
 }
 
 fn cleanup_orphan_service_processes(root: &Path, keep_pid: Option<u32>) -> Result<usize> {
@@ -21521,7 +21626,14 @@ mod tests {
             let _ = stream.flush();
         });
 
-        let status = service_status_snapshot(&root).unwrap();
+        let status = service_status_snapshot_with(
+            &root,
+            &StatusProbeOptions {
+                status_ipc_timeout: Some(Duration::from_millis(100)),
+                ..StatusProbeOptions::default()
+            },
+        )
+        .unwrap();
         handle.join().unwrap();
 
         // A daemon that misses the reply budget is alive-but-slow, not
@@ -24122,8 +24234,8 @@ Business OS command:
     }
 
     #[test]
-    fn status_snapshot_recovery_completes_green_business_os_app_queue_lease() {
-        let root = temp_root("status-snapshot-green-app-recovery");
+    fn status_snapshot_does_not_run_business_os_app_recovery() {
+        let root = temp_root("status-snapshot-no-app-recovery");
         let script_dir = root.join("src/apps/business-os/scripts");
         std::fs::create_dir_all(&script_dir).expect("create validator script dir");
         std::fs::write(
@@ -24156,6 +24268,50 @@ Business OS command:
         let state = Arc::new(Mutex::new(SharedState::default()));
 
         status_from_shared_state(&root, &state).expect("status snapshot failed");
+
+        assert_eq!(route_status_for(&root, &task.message_key), "leased");
+        let shared = lock_shared_state(&state);
+        assert!(!shared.recent_events.iter().any(|event| {
+            event.contains("Recovered green Business OS app queue task")
+                || event.contains("Recovered 1 abandoned Business OS app queue task")
+        }));
+    }
+
+    #[test]
+    fn explicit_idle_recovery_completes_green_business_os_app_queue_lease() {
+        let root = temp_root("status-snapshot-green-app-recovery");
+        let script_dir = root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "process.exit(0);\n",
+        )
+        .expect("write green validator script fixture");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create projects app".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: projects\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/projects".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        seed_business_os_app_artifacts(&root, "projects");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        age_queue_task_lease(
+            &root,
+            &task.message_key,
+            BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS + 5,
+        );
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        recover_business_os_app_queue_tasks_for_idle_status_snapshot(&root, &state);
         for _ in 0..40 {
             if route_status_for(&root, &task.message_key) == "handled" {
                 break;
@@ -24195,7 +24351,7 @@ Business OS command:
             .expect("failed to lease app queue task");
         let state = Arc::new(Mutex::new(SharedState::default()));
 
-        status_from_shared_state(&root, &state).expect("status snapshot failed");
+        recover_business_os_app_queue_tasks_for_idle_status_snapshot(&root, &state);
 
         assert_eq!(route_status_for(&root, &task.message_key), "handled");
         let shared = lock_shared_state(&state);
@@ -24250,7 +24406,7 @@ Business OS command:
         .expect("failed to create next app queue task");
         let state = Arc::new(Mutex::new(SharedState::default()));
 
-        status_from_shared_state(&root, &state).expect("status snapshot failed");
+        recover_business_os_app_queue_tasks_for_idle_status_snapshot(&root, &state);
 
         assert_eq!(
             route_status_for(&root, &completed_task.message_key),
@@ -24330,7 +24486,7 @@ Business OS command:
         .expect("failed to create pending app queue task");
         let state = Arc::new(Mutex::new(SharedState::default()));
 
-        status_from_shared_state(&root, &state).expect("status snapshot failed");
+        recover_business_os_app_queue_tasks_for_idle_status_snapshot(&root, &state);
 
         let reloaded = channels::load_queue_task(&root, &leased_task.message_key)
             .expect("load leased task")
@@ -24388,7 +24544,7 @@ Business OS command:
                 Some(current_epoch_secs().saturating_sub(BUSINESS_OS_APP_RECOVERY_STALE_SECS + 1));
         }
 
-        status_from_shared_state(&root, &state).expect("status snapshot failed");
+        recover_business_os_app_queue_tasks_for_idle_status_snapshot(&root, &state);
 
         assert_eq!(route_status_for(&root, &task.message_key), "handled");
         let shared = lock_shared_state(&state);
@@ -24443,7 +24599,7 @@ Business OS command:
             );
         }
 
-        status_from_shared_state(&root, &state).expect("status snapshot failed");
+        recover_business_os_app_queue_tasks_for_idle_status_snapshot(&root, &state);
 
         assert_eq!(route_status_for(&root, &task.message_key), "handled");
         let shared = lock_shared_state(&state);
@@ -24496,7 +24652,7 @@ Business OS command:
             shared.app_recovery_started_epoch_secs = Some(current_epoch_secs());
         }
 
-        status_from_shared_state(&root, &state).expect("status snapshot failed");
+        recover_business_os_app_queue_tasks_for_idle_status_snapshot(&root, &state);
 
         assert_eq!(route_status_for(&root, &task.message_key), "handled");
         let shared = lock_shared_state(&state);
@@ -24560,7 +24716,7 @@ Business OS command:
         );
         let state = Arc::new(Mutex::new(SharedState::default()));
 
-        status_from_shared_state(&root, &state).expect("status snapshot failed");
+        recover_business_os_app_queue_tasks_for_idle_status_snapshot(&root, &state);
         assert_eq!(route_status_for(&root, &task.message_key), "review_rework");
         let shared = lock_shared_state(&state);
         assert!(shared.pending_prompts.is_empty());
@@ -24601,7 +24757,7 @@ Business OS command:
                 .push_back(queued_prompt_from_queue_task(leased));
         }
 
-        status_from_shared_state(&root, &state).expect("status snapshot failed");
+        recover_business_os_app_queue_tasks_for_idle_status_snapshot(&root, &state);
 
         assert_eq!(route_status_for(&root, &task.message_key), "review_rework");
         let shared = lock_shared_state(&state);
@@ -24660,7 +24816,7 @@ Business OS command:
         .expect("failed to create pending app queue task");
         let state = Arc::new(Mutex::new(SharedState::default()));
 
-        status_from_shared_state(&root, &state).expect("status snapshot failed");
+        recover_business_os_app_queue_tasks_for_idle_status_snapshot(&root, &state);
 
         assert_eq!(
             route_status_for(&root, &red_task.message_key),

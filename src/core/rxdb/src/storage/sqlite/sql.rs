@@ -1,10 +1,11 @@
 //! SQL helpers for the SQLite storage backend.
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::types::Value as SqlValue;
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde_json::Value;
 
 use crate::rx_error::{new_rx_error, RxResult};
-use crate::types::BulkWriteRow;
+use crate::types::{BulkWriteRow, FilledMangoQuery, RxJsonSchema};
 
 use super::types::sqlite_error;
 
@@ -83,8 +84,317 @@ pub fn ensure_collection_table(conn: &Connection, table: &str) -> RxResult<()> {
     .map_err(sqlite_error)
 }
 
+pub fn ensure_collection_schema_indexes(
+    conn: &Connection,
+    table: &str,
+    schema: &RxJsonSchema,
+    primary_path: &str,
+) -> RxResult<()> {
+    let quoted = quote_identifier(table);
+    for index in &schema.indexes {
+        for field in index {
+            if sqlite_backing_column(primary_path, field).is_some() {
+                continue;
+            }
+            let index_name = quote_identifier(&format!(
+                "{}_json_{}_idx",
+                table,
+                sanitize_index_name(field)
+            ));
+            let json_path = quote_sql_literal(&json_path_for_field(field));
+            conn.execute_batch(&format!(
+                "CREATE INDEX IF NOT EXISTS {index_name}
+                 ON {quoted}(json_extract(data, {json_path}), id);"
+            ))
+            .map_err(sqlite_error)?;
+        }
+    }
+    Ok(())
+}
+
 fn quote_sql_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
+}
+
+fn sanitize_index_name(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect()
+}
+
+#[derive(Debug, Clone)]
+pub struct CompiledSqliteQuery {
+    pub sql: String,
+    pub params: Vec<SqlValue>,
+}
+
+pub fn compile_query_sql(
+    table: &str,
+    primary_path: &str,
+    query: &FilledMangoQuery,
+) -> Option<CompiledSqliteQuery> {
+    let (where_sql, mut params) = compile_selector_sql(primary_path, &query.selector)?;
+    let order_sql = compile_order_sql(primary_path, query)?;
+    let mut sql = format!("SELECT data FROM {}", quote_identifier(table));
+    if !where_sql.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&where_sql);
+    }
+    if !order_sql.is_empty() {
+        sql.push_str(" ORDER BY ");
+        sql.push_str(&order_sql);
+    }
+    if let Some(limit) = query.limit {
+        sql.push_str(" LIMIT ?");
+        params.push(sql_integer_param(limit)?);
+        if let Some(skip) = query.skip.filter(|skip| *skip > 0) {
+            sql.push_str(" OFFSET ?");
+            params.push(sql_integer_param(skip)?);
+        }
+    } else if let Some(skip) = query.skip.filter(|skip| *skip > 0) {
+        sql.push_str(" LIMIT -1 OFFSET ?");
+        params.push(sql_integer_param(skip)?);
+    }
+    Some(CompiledSqliteQuery { sql, params })
+}
+
+pub fn compile_count_sql(
+    table: &str,
+    primary_path: &str,
+    query: &FilledMangoQuery,
+) -> Option<CompiledSqliteQuery> {
+    let (where_sql, mut params) = compile_selector_sql(primary_path, &query.selector)?;
+    let has_window = query.limit.is_some() || query.skip.unwrap_or(0) > 0;
+    let sql = if has_window {
+        let order_sql = compile_order_sql(primary_path, query)?;
+        let mut inner = format!("SELECT 1 FROM {}", quote_identifier(table));
+        if !where_sql.is_empty() {
+            inner.push_str(" WHERE ");
+            inner.push_str(&where_sql);
+        }
+        if !order_sql.is_empty() {
+            inner.push_str(" ORDER BY ");
+            inner.push_str(&order_sql);
+        }
+        if let Some(limit) = query.limit {
+            inner.push_str(" LIMIT ?");
+            params.push(sql_integer_param(limit)?);
+        } else {
+            inner.push_str(" LIMIT -1");
+        }
+        if let Some(skip) = query.skip.filter(|skip| *skip > 0) {
+            inner.push_str(" OFFSET ?");
+            params.push(sql_integer_param(skip)?);
+        }
+        format!("SELECT COUNT(*) FROM ({inner})")
+    } else {
+        let mut sql = format!("SELECT COUNT(*) FROM {}", quote_identifier(table));
+        if !where_sql.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&where_sql);
+        }
+        sql
+    };
+    Some(CompiledSqliteQuery { sql, params })
+}
+
+pub fn query_documents_with_compiled_sql(
+    conn: &Connection,
+    compiled: &CompiledSqliteQuery,
+) -> RxResult<Vec<Value>> {
+    let mut documents = Vec::new();
+    for_each_document_with_compiled_sql(conn, compiled, |doc| {
+        documents.push(doc);
+        Ok(true)
+    })?;
+    Ok(documents)
+}
+
+pub fn for_each_document_with_compiled_sql<F>(
+    conn: &Connection,
+    compiled: &CompiledSqliteQuery,
+    mut visit: F,
+) -> RxResult<()>
+where
+    F: FnMut(Value) -> RxResult<bool>,
+{
+    let mut statement = conn.prepare(&compiled.sql).map_err(sqlite_error)?;
+    let rows = statement
+        .query_map(params_from_iter(compiled.params.iter()), |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(sqlite_error)?;
+    for row in rows {
+        let data = row.map_err(sqlite_error)?;
+        let doc = serde_json::from_str(&data).map_err(|err| {
+            new_rx_error(
+                "SQLITE_JSON",
+                Some(serde_json::json!({ "message": err.to_string() })),
+            )
+        })?;
+        if !visit(doc)? {
+            break;
+        }
+    }
+    Ok(())
+}
+
+pub fn count_with_compiled_sql(conn: &Connection, compiled: &CompiledSqliteQuery) -> RxResult<u64> {
+    let count: i64 = conn
+        .query_row(
+            &compiled.sql,
+            params_from_iter(compiled.params.iter()),
+            |row| row.get(0),
+        )
+        .map_err(sqlite_error)?;
+    Ok(u64::try_from(count).unwrap_or(0))
+}
+
+fn compile_selector_sql(primary_path: &str, selector: &Value) -> Option<(String, Vec<SqlValue>)> {
+    let selector = selector.as_object()?;
+    if selector.is_empty() {
+        return Some((String::new(), Vec::new()));
+    }
+    let mut clauses = Vec::new();
+    let mut params = Vec::new();
+    for (field, matcher) in selector {
+        if field.starts_with('$') {
+            return None;
+        }
+        let expression = field_sql_expression(primary_path, field);
+        if let Some(operators) = matcher.as_object() {
+            if operators.is_empty() {
+                return None;
+            }
+            for (operator, value) in operators {
+                match operator.as_str() {
+                    "$eq" => {
+                        clauses.push(format!("{expression} = ?"));
+                        params.push(json_value_to_sql_param(value)?);
+                    }
+                    "$gt" => {
+                        clauses.push(format!("{expression} > ?"));
+                        params.push(json_value_to_sql_param(value)?);
+                    }
+                    "$gte" => {
+                        clauses.push(format!("{expression} >= ?"));
+                        params.push(json_value_to_sql_param(value)?);
+                    }
+                    "$lt" => {
+                        clauses.push(format!("{expression} < ?"));
+                        params.push(json_value_to_sql_param(value)?);
+                    }
+                    "$lte" => {
+                        clauses.push(format!("{expression} <= ?"));
+                        params.push(json_value_to_sql_param(value)?);
+                    }
+                    "$in" => {
+                        let values = value.as_array()?;
+                        if values.is_empty() {
+                            clauses.push("0 = 1".to_string());
+                            continue;
+                        }
+                        let placeholders = std::iter::repeat("?")
+                            .take(values.len())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        clauses.push(format!("{expression} IN ({placeholders})"));
+                        for value in values {
+                            params.push(json_value_to_sql_param(value)?);
+                        }
+                    }
+                    _ => return None,
+                }
+            }
+        } else {
+            clauses.push(format!("{expression} = ?"));
+            params.push(json_value_to_sql_param(matcher)?);
+        }
+    }
+    Some((clauses.join(" AND "), params))
+}
+
+fn compile_order_sql(primary_path: &str, query: &FilledMangoQuery) -> Option<String> {
+    let mut parts = Vec::new();
+    for sort_block in &query.sort {
+        let (field, direction) = sort_block.iter().next()?;
+        let direction = match direction.as_str() {
+            "asc" | "ASC" => "ASC",
+            "desc" | "DESC" => "DESC",
+            _ => return None,
+        };
+        parts.push(format!(
+            "{} {}",
+            field_sql_expression(primary_path, field),
+            direction
+        ));
+    }
+    Some(parts.join(", "))
+}
+
+fn field_sql_expression(primary_path: &str, field: &str) -> String {
+    if let Some(column) = sqlite_backing_column(primary_path, field) {
+        return quote_identifier(column);
+    }
+    format!(
+        "json_extract(data, {})",
+        quote_sql_literal(&json_path_for_field(field))
+    )
+}
+
+fn sqlite_backing_column<'a>(primary_path: &str, field: &'a str) -> Option<&'a str> {
+    if field == primary_path || field == "id" {
+        return Some("id");
+    }
+    match field {
+        "_deleted" | "deleted" => Some("deleted"),
+        "_meta.lwt" | "lastWriteTime" => Some("lastWriteTime"),
+        _ => None,
+    }
+}
+
+fn json_path_for_field(field: &str) -> String {
+    let mut path = "$".to_string();
+    for part in field.split('.') {
+        if part
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        {
+            path.push('.');
+            path.push_str(part);
+        } else {
+            path.push_str(".\"");
+            path.push_str(&part.replace('"', "\\\""));
+            path.push('"');
+        }
+    }
+    path
+}
+
+fn json_value_to_sql_param(value: &Value) -> Option<SqlValue> {
+    match value {
+        Value::Null => Some(SqlValue::Null),
+        Value::Bool(value) => Some(SqlValue::Integer(i64::from(*value))),
+        Value::Number(number) => {
+            if let Some(value) = number.as_i64() {
+                Some(SqlValue::Integer(value))
+            } else if let Some(value) = number.as_u64() {
+                i64::try_from(value)
+                    .map(SqlValue::Integer)
+                    .ok()
+                    .or_else(|| number.as_f64().map(SqlValue::Real))
+            } else {
+                number.as_f64().map(SqlValue::Real)
+            }
+        }
+        Value::String(value) => Some(SqlValue::Text(value.clone())),
+        Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+fn sql_integer_param(value: u64) -> Option<SqlValue> {
+    i64::try_from(value).ok().map(SqlValue::Integer)
 }
 
 pub fn insert_document(

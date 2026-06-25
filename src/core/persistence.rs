@@ -196,6 +196,7 @@ fn open_sqlite(root: &Path) -> Result<Connection> {
         let busy_timeout_ms = sqlite_busy_timeout_millis();
         conn.execute_batch(&format!(
             "PRAGMA journal_mode=WAL;
+             PRAGMA synchronous=NORMAL;
              PRAGMA busy_timeout={busy_timeout_ms};
              CREATE TABLE IF NOT EXISTS {PAYLOAD_TABLE} (
                  payload_key TEXT PRIMARY KEY,

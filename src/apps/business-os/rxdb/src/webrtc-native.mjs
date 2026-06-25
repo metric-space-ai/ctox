@@ -64,6 +64,7 @@ const ICE_DISCONNECTED_GRACE_MS = 8_000;
 // sync.js's higher-level restart engine.
 const SIGNALING_RECONNECT_BASE_MS = 1_000;
 const SIGNALING_RECONNECT_MAX_MS = 30_000;
+const TRANSPORT_STATUS_EMIT_MIN_INTERVAL_MS = 250;
 // Single source of truth for the shell-critical collection set. app.js derives
 // its CRITICAL_SYNC_COLLECTIONS from this exported list so the two lists cannot
 // silently drift. Browser_* members only register when the Browser module is
@@ -172,6 +173,8 @@ export class CtoxWebRtcNativePeer {
     this.lastControlPlaneError = null;
     this.recentConnectionEvents = [];
     this.recentMessages = [];
+    this.transportStatusEmitTimer = null;
+    this.lastTransportStatusEmitAtMs = 0;
     this.connectionRequests = new Map();
     this.forceInitiatorPeers = new Set();
     this.closed = false;
@@ -225,6 +228,10 @@ export class CtoxWebRtcNativePeer {
     if (this.signalingReconnectTimer) {
       clearTimeout(this.signalingReconnectTimer);
       this.signalingReconnectTimer = null;
+    }
+    if (this.transportStatusEmitTimer) {
+      clearTimeout(this.transportStatusEmitTimer);
+      this.transportStatusEmitTimer = null;
     }
     for (const timer of this.disconnectedGraceTimers.values()) clearTimeout(timer);
     this.disconnectedGraceTimers.clear();
@@ -1449,7 +1456,7 @@ export class CtoxWebRtcNativePeer {
     if (this.recentConnectionEvents.length > RECENT_RTC_EVENT_LIMIT) {
       this.recentConnectionEvents.splice(0, this.recentConnectionEvents.length - RECENT_RTC_EVENT_LIMIT);
     }
-    this.events.emit('transport-status', this.getTransportStatus());
+    this.emitTransportStatus({ immediate: true });
   }
 
   recordSentTransportFrame(payload, channel) {
@@ -1489,12 +1496,34 @@ export class CtoxWebRtcNativePeer {
     if (this.recentMessages.length > 60) {
       this.recentMessages.splice(0, this.recentMessages.length - 60);
     }
-    this.events.emit('transport-status', this.getTransportStatus());
+    this.emitTransportStatus();
   }
 
   recordTransportStatus(patch = {}) {
     Object.assign(this.transportStats, patch, { updatedAtMs: Date.now() });
-    this.events.emit('transport-status', this.getTransportStatus());
+    this.emitTransportStatus();
+  }
+
+  emitTransportStatus({ immediate = false } = {}) {
+    if (this.closed) return;
+    const now = Date.now();
+    const elapsed = now - this.lastTransportStatusEmitAtMs;
+    if (immediate || elapsed >= TRANSPORT_STATUS_EMIT_MIN_INTERVAL_MS) {
+      if (this.transportStatusEmitTimer) {
+        clearTimeout(this.transportStatusEmitTimer);
+        this.transportStatusEmitTimer = null;
+      }
+      this.lastTransportStatusEmitAtMs = now;
+      this.events.emit('transport-status', this.getTransportStatus());
+      return;
+    }
+    if (this.transportStatusEmitTimer) return;
+    this.transportStatusEmitTimer = setTimeout(() => {
+      this.transportStatusEmitTimer = null;
+      if (this.closed) return;
+      this.lastTransportStatusEmitAtMs = Date.now();
+      this.events.emit('transport-status', this.getTransportStatus());
+    }, Math.max(0, TRANSPORT_STATUS_EMIT_MIN_INTERVAL_MS - elapsed));
   }
 
   refreshSendQueueStatus(connection = null) {

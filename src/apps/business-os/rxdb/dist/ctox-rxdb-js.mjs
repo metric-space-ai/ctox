@@ -1060,6 +1060,7 @@ var RECENT_RTC_EVENT_LIMIT = 40;
 var ICE_DISCONNECTED_GRACE_MS = 8e3;
 var SIGNALING_RECONNECT_BASE_MS = 1e3;
 var SIGNALING_RECONNECT_MAX_MS = 3e4;
+var TRANSPORT_STATUS_EMIT_MIN_INTERVAL_MS = 250;
 var SHELL_CRITICAL_COLLECTIONS = /* @__PURE__ */ new Set([
   "ctox_runtime_settings",
   "business_module_catalog",
@@ -1161,6 +1162,8 @@ var CtoxWebRtcNativePeer = class {
     this.lastControlPlaneError = null;
     this.recentConnectionEvents = [];
     this.recentMessages = [];
+    this.transportStatusEmitTimer = null;
+    this.lastTransportStatusEmitAtMs = 0;
     this.connectionRequests = /* @__PURE__ */ new Map();
     this.forceInitiatorPeers = /* @__PURE__ */ new Set();
     this.closed = false;
@@ -1204,6 +1207,10 @@ var CtoxWebRtcNativePeer = class {
     if (this.signalingReconnectTimer) {
       clearTimeout(this.signalingReconnectTimer);
       this.signalingReconnectTimer = null;
+    }
+    if (this.transportStatusEmitTimer) {
+      clearTimeout(this.transportStatusEmitTimer);
+      this.transportStatusEmitTimer = null;
     }
     for (const timer of this.disconnectedGraceTimers.values()) clearTimeout(timer);
     this.disconnectedGraceTimers.clear();
@@ -2347,7 +2354,7 @@ var CtoxWebRtcNativePeer = class {
     if (this.recentConnectionEvents.length > RECENT_RTC_EVENT_LIMIT) {
       this.recentConnectionEvents.splice(0, this.recentConnectionEvents.length - RECENT_RTC_EVENT_LIMIT);
     }
-    this.events.emit("transport-status", this.getTransportStatus());
+    this.emitTransportStatus({ immediate: true });
   }
   recordSentTransportFrame(payload, channel) {
     this.recordTransportStatus({
@@ -2383,11 +2390,32 @@ var CtoxWebRtcNativePeer = class {
     if (this.recentMessages.length > 60) {
       this.recentMessages.splice(0, this.recentMessages.length - 60);
     }
-    this.events.emit("transport-status", this.getTransportStatus());
+    this.emitTransportStatus();
   }
   recordTransportStatus(patch = {}) {
     Object.assign(this.transportStats, patch, { updatedAtMs: Date.now() });
-    this.events.emit("transport-status", this.getTransportStatus());
+    this.emitTransportStatus();
+  }
+  emitTransportStatus({ immediate = false } = {}) {
+    if (this.closed) return;
+    const now = Date.now();
+    const elapsed = now - this.lastTransportStatusEmitAtMs;
+    if (immediate || elapsed >= TRANSPORT_STATUS_EMIT_MIN_INTERVAL_MS) {
+      if (this.transportStatusEmitTimer) {
+        clearTimeout(this.transportStatusEmitTimer);
+        this.transportStatusEmitTimer = null;
+      }
+      this.lastTransportStatusEmitAtMs = now;
+      this.events.emit("transport-status", this.getTransportStatus());
+      return;
+    }
+    if (this.transportStatusEmitTimer) return;
+    this.transportStatusEmitTimer = setTimeout(() => {
+      this.transportStatusEmitTimer = null;
+      if (this.closed) return;
+      this.lastTransportStatusEmitAtMs = Date.now();
+      this.events.emit("transport-status", this.getTransportStatus());
+    }, Math.max(0, TRANSPORT_STATUS_EMIT_MIN_INTERVAL_MS - elapsed));
   }
   refreshSendQueueStatus(connection = null) {
     let high = 0;
