@@ -35,7 +35,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260624-cv-print-parser-hotfix19';
+const APP_BUILD = '20260625-sync-toast1';
 
 ensureShellStylesheets();
 
@@ -1644,6 +1644,7 @@ function setupSyncToast() {
   function computeProgress() {
     const mod = state.activeModule;
     const diag = state.syncDiagnostics;
+    if (!window.ctoxBusinessOsSyncDiagnostics) return null;
     if (!mod || !diag || diag.mode !== 'webrtc') return null;
     const collections = Array.isArray(mod.collections) ? mod.collections : [];
     if (!collections.length) return null;
@@ -1714,6 +1715,9 @@ function setupSyncToast() {
   };
 
   window.addEventListener('ctox-business-os-sync-diagnostics', refresh);
+  window.setInterval(() => {
+    if (!toast.hidden) refresh();
+  }, 1000);
 }
 
 function teardownModuleResizers() {
