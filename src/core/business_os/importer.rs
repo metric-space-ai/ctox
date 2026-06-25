@@ -3554,8 +3554,7 @@ fn build_match_items(
     ];
     dimensions
         .iter()
-        .enumerate()
-        .map(|(idx, (req_id, title, dimension, priority))| {
+        .map(|(req_id, title, dimension, priority)| {
             let score = dimension_score(dimension, job_text, cv_text);
             let match_level = if score >= 0.78 {
                 "full"
@@ -3593,7 +3592,7 @@ fn build_match_items(
                 "updatedAt": now_iso,
                 "priorityKey": priority_key,
                 "matchLevelKey": match_level_key,
-                "matchScoreKey": match_score_key + idx as i64 - idx as i64
+                "matchScoreKey": match_score_key
             })
         })
         .collect()
