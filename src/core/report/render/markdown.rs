@@ -9,8 +9,8 @@
 use std::fmt::Write as _;
 
 use crate::report::render::manuscript::{
-    AbbreviationRow, Manuscript, ManuscriptBlock, ManuscriptBlockKind, ManuscriptDoc,
-    ManuscriptTable, ReferenceEntry, StructuredFigure, StructuredTable,
+    AbbreviationRow, Manuscript, ManuscriptBlock, ManuscriptDoc, ManuscriptTable, ReferenceEntry,
+    StructuredFigure, StructuredTable,
 };
 use std::collections::HashMap;
 
@@ -370,19 +370,14 @@ fn write_block(out: &mut String, block: &ManuscriptBlock) {
         out.push_str("\n\n");
     }
 
-    if matches!(
-        block.kind,
-        ManuscriptBlockKind::Matrix
-            | ManuscriptBlockKind::ScenarioGrid
-            | ManuscriptBlockKind::RiskRegister
-            | ManuscriptBlockKind::DefectCatalog
-            | ManuscriptBlockKind::CompetitorMatrix
-            | ManuscriptBlockKind::CriteriaTable
-            | ManuscriptBlockKind::AbbreviationTable
-    ) {
-        if let Some(table) = &block.table {
-            write_table(out, table);
-        }
+    // `build_manuscript` parses and strips the first Markdown table out of the
+    // body for EVERY block kind (see manuscript.rs `parse_first_markdown_table` /
+    // `extract_non_table_markdown`), storing it on `block.table`. The renderer
+    // must therefore re-emit it for every kind that carries one — gating on a
+    // kind allowlist silently dropped tables embedded in Narrative and
+    // EvidenceRegister blocks.
+    if let Some(table) = &block.table {
+        write_table(out, table);
     }
 }
 
@@ -500,4 +495,60 @@ fn ascii_dashes(value: &str) -> String {
         out.push(replacement);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::report::render::manuscript::ManuscriptBlockKind;
+
+    fn sample_table() -> ManuscriptTable {
+        ManuscriptTable {
+            headers: vec!["Abk".into(), "Bedeutung".into()],
+            rows: vec![vec!["CTOX".into(), "Daemon".into()]],
+        }
+    }
+
+    fn block_with_table(kind: ManuscriptBlockKind) -> ManuscriptBlock {
+        ManuscriptBlock {
+            instance_id: "doc__b".into(),
+            block_id: "b".into(),
+            title: "Title".into(),
+            ord: 0,
+            level: 2,
+            kind,
+            // `build_manuscript` would have stripped the table out of the body,
+            // leaving only the surrounding prose here.
+            markdown: "Prose before.".into(),
+            table: Some(sample_table()),
+        }
+    }
+
+    #[test]
+    fn block_table_is_emitted_for_every_kind_not_just_table_kinds() {
+        // Regression for the silent table drop: `build_manuscript` parses and
+        // strips the first table out of EVERY block's body, so the renderer must
+        // re-emit it regardless of kind. Narrative and EvidenceRegister were not
+        // in the old allowlist, so their tables vanished from the output.
+        for kind in [
+            ManuscriptBlockKind::Narrative,
+            ManuscriptBlockKind::EvidenceRegister,
+            ManuscriptBlockKind::Matrix,
+        ] {
+            let mut out = String::new();
+            write_block(&mut out, &block_with_table(kind.clone()));
+            assert!(
+                out.contains("| Abk | Bedeutung |"),
+                "header row missing for {kind:?}: {out}"
+            );
+            assert!(
+                out.contains("| CTOX | Daemon |"),
+                "data row missing for {kind:?}: {out}"
+            );
+            assert!(
+                out.contains("Prose before."),
+                "surrounding prose missing for {kind:?}: {out}"
+            );
+        }
+    }
 }
