@@ -181,8 +181,9 @@ Billige, klar falsifizierbare Bugs — alle mit Fixture/Test abschließen.
 - Per-call-`BTreeMap` (web_search.rs:1140) durch persistenten Cooldown (runtime/ JSON oder Runtime-Store, key=Provider) ersetzen, damit ein 429 über Tool-Calls hinweg respektiert wird.
 - **Umgesetzt (2026-06-25):** `runtime/web_search_provider_cooldown.json` (Provider-Label → Expiry-Epoch). `search_with_query_plan` seedet die lokale Map jetzt aus `load_provider_cooldowns(root)`; bei 429 schreibt `persist_provider_cooldown` den 60s-Cooldown auf Platte. Abgelaufene Einträge werden beim Laden/Schreiben geprunt; `provider_from_label` round-trip-validiert gegen korrupte Dateien. Guard-Test `provider_cooldown_persists_across_calls_and_expires`.
 
-### WS5-04 ☐ Brave-Parser absichern
+### WS5-04 ◐ Brave-Parser absichern
 - Positions-Regex (web_search.rs:1568) durch serde-Parse der JSON-Insel ersetzen; Fixture + Unit-Test ergänzen.
+- **Umgesetzt (2026-06-25):** Regressions-Test `brave_parser_extracts_hits_and_skips_noise` ergänzt — pinnt das erwartete `title/url/description`-Shape, deckt `description:void 0` (leerer Snippet) und Nicht-http-Skip ab. Damit hat die fragilste Fallback-Quelle erstmals Test-Coverage. **Offen:** serde-Parse der JSON-Insel statt Positions-Regex — braucht ein echtes Brave-SERP-Sample (sonst Risiko, die Live-Struktur falsch zu treffen); als Folgeticket mit captured Fixture.
 
 ### WS5-05 ☐ OpenAI-Passthrough verdrahten oder entfernen
 - `should_passthrough_openai_web_search` / `augment_responses_request` haben keinen Prod-Caller. Entweder am Gateway-Seam einhängen (Mode tatsächlich konsultieren) oder als Dead-Code entfernen. Naming `local_stack`↔`CtoxPrimary` vereinheitlichen.

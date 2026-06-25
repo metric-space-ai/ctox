@@ -7217,6 +7217,28 @@ mod tests {
     }
 
     #[test]
+    fn brave_parser_extracts_hits_and_skips_noise() {
+        // Regression guard for the positional regex over Brave's embedded JS
+        // state (the documented first fallback after Google). Pins the expected
+        // title/url/description shape so an accidental regex change is caught.
+        let body = r#"window.__data={"results":[
+{title:"Rust Programming Language",lang:"en",url:"https://www.rust-lang.org/",rank:1,description:"A language empowering everyone to build reliable software."},
+{title:"Tokio",url:"https://tokio.rs/",description:void 0},
+{title:"bad scheme",url:"ftp://example.com/x",description:"skip me"}
+]};"#;
+        let hits = parse_brave_html_results(body, 0, 10).expect("brave parse");
+        assert_eq!(hits.len(), 2, "two http hits, ftp hit skipped");
+        assert_eq!(hits[0].title, "Rust Programming Language");
+        assert_eq!(hits[0].url, "https://www.rust-lang.org/");
+        assert!(hits[0].snippet.contains("empowering"));
+        assert_eq!(hits[1].url, "https://tokio.rs/");
+        assert!(
+            hits[1].snippet.is_empty(),
+            "description:void 0 yields an empty snippet"
+        );
+    }
+
+    #[test]
     fn provider_cooldown_persists_across_calls_and_expires() {
         let root = unique_test_root("provider-cooldown");
         assert!(
