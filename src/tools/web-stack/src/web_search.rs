@@ -1406,6 +1406,10 @@ impl<'a> WebSearchSession<'a> {
         resolved.into_iter().flatten().collect()
     }
 
+    /// Cache-aware single-doc fetch. Only exercised by the test suite; the
+    /// production path goes through `fetch_evidence` (batched). Gated to test
+    /// builds so it does not read as dead production code.
+    #[cfg(test)]
     fn fetch_evidence_doc(&mut self, query: &str, hit: &SearchHit) -> Result<EvidenceDoc> {
         if let Some(doc) = self.resolve_cached_evidence_doc(query, hit) {
             return Ok(doc);

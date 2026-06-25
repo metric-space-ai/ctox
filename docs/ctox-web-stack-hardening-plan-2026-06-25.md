@@ -189,8 +189,9 @@ Billige, klar falsifizierbare Bugs — alle mit Fixture/Test abschließen.
 ### WS5-06 ☐ App-Surface für Web-Capabilities
 - `business_commands`-Surface für WebSearch/Read/Deep-Research/Unlock ergänzen (heute CLI/Harness-only) → Guardrail „serve apps AND harness".
 
-### WS5-07 ☐ Toten Code/Fixtures entfernen
+### WS5-07 ☑ Toten Code/Fixtures entfernen
 - Ungenutzte `fixtures/google_results*.html` (Playwright-Umbau), `fetch_evidence_doc` (web_search.rs:1379, vom Build als dead gemeldet), unreachable arm in `northdata.rs:105`.
+- **Umgesetzt (2026-06-25):** 3 unreferenzierte `fixtures/google_results*.html` per `git rm` entfernt; `WebSearchSession::fetch_evidence_doc` (nur Test-Nutzung) auf `#[cfg(test)]` gegated; toten `Some(_)`-Arm in `northdata.rs` entfernt (Match bleibt exhaustiv über DE/AT/CH+None, künftige Varianten erzwingen jetzt eine Entscheidung). Beide gemeldeten Warnungen weg; 316 Tests grün. (`handelsregister.rs:40` `Duration`-Warnung ist cfg-bedingt/vorbestehend in nicht berührtem File → gelassen.)
 
 ### WS5-08 ☑ `CTOX_WEB_BROWSER_REFERENCE_DIR` aus Env entfernen
 - **Datei:** [browser.rs:871](../src/tools/web-stack/src/browser.rs)

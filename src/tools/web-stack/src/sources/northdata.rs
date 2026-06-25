@@ -100,9 +100,11 @@ impl SourceModule for Northdata {
     /// Zeilen). Andere Länder geben `None` und werden vom Orchestrator
     /// übersprungen.
     fn shape_query(&self, query: &str, ctx: &SourceCtx<'_>) -> Option<ShapedQuery> {
+        // Country currently has only DE/AT/CH; all are valid for Northdata, as
+        // is an unset hint. A future non-DACH variant should force a decision
+        // here via exhaustiveness, so there is no catch-all arm.
         match ctx.country {
             Some(Country::De) | Some(Country::At) | Some(Country::Ch) | None => {}
-            Some(_) => return None,
         }
         let trimmed = query.trim();
         if trimmed.is_empty() {
