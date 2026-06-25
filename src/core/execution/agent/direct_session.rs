@@ -40,7 +40,7 @@ use ctox_protocol::user_input::UserInput;
 use ctox_utils_absolute_path::AbsolutePathBuf;
 
 use crate::api_costs::{self, ApiCallTelemetry, ApiTokenUsage};
-use crate::context::compact::{CompactDecision, CompactMode, CompactPolicy, CompactTrigger};
+use crate::context::compact::{CompactDecision, CompactPolicy, CompactTrigger};
 use crate::context::live_context;
 use crate::inference::engine;
 use crate::inference::runtime_kernel;

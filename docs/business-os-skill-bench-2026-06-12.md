@@ -582,9 +582,9 @@ SKILL.md now makes wrong-path app writes a hard stop:
   - no root-level collections.schema.json
   - no root-level <id>/ directory
   - no src/skills or skill-named deliverable paths
-runtime-installed modules must write only under src/apps/business-os/installed-modules/<id>/.
+runtime-installed modules must write only under runtime/business-os/installed-modules/<id>/.
 the CTOX Business OS command prompt now includes:
-  only_allowed_app_artifact_directory: src/apps/business-os/installed-modules/<id>
+  only_allowed_app_artifact_directory: runtime/business-os/installed-modules/<id>
   first file action: create that directory and write all app files inside it
   explicit root-level artifact ban
 module_static_check.mjs now supports `--installed` and fails the exact R5 pattern.
@@ -623,7 +623,7 @@ Evidence:
 ```text
 the embedded skill contained the R5 hardening, including only_allowed_app_artifact_directory and module_static_check.mjs --installed.
 the first worker created the correct directory:
-  src/apps/business-os/installed-modules/contracts/
+  runtime/business-os/installed-modules/contracts/
 but later shell heredocs wrote root-level artifacts:
   /tmp/ctox-bos-native-install-r6-20260613-095513/module.json
   /tmp/ctox-bos-native-install-r6-20260613-095513/collections.schema.json
@@ -648,7 +648,7 @@ Skill/Runtime changes taken from CTOX-native R6:
 
 ```text
 the Business OS command prompt now warns that shell tools run from the install root, not the module directory.
-the prompt now requires a MODULE_DIR="src/apps/business-os/installed-modules/<id>" write pattern for every generated file.
+the prompt now requires a MODULE_DIR="runtime/business-os/installed-modules/<id>" write pattern for every generated file.
 the prompt explicitly forbids bare redirects such as > module.json, > collections.schema.json, > <id>/index.js, and mkdir <id>.
 SKILL.md now contains the same MODULE_DIR write pattern.
 SKILL.md now states schema.js and collections.schema.json must export only module-owned collections; shell collections may be listed in module.json but never exported by module schema files.
@@ -686,7 +686,7 @@ Evidence:
 ```text
 the embedded skill included the MODULE_DIR write pattern and module-owned schema rule.
 the worker eventually set MODULE_DIR correctly:
-  MODULE_DIR="src/apps/business-os/installed-modules/contracts"
+  MODULE_DIR="runtime/business-os/installed-modules/contracts"
   mkdir -p "$MODULE_DIR/locales" "$MODULE_DIR/tests"
 but a later write ignored it:
   cd /tmp/ctox-bos-native-install-r7-20260613-105539 && cat > module.json
@@ -708,7 +708,7 @@ Runtime changes taken from CTOX-native R7:
 
 ```text
 Unified exec now blocks root-level writes to module.json and collections.schema.json when the cwd is inside a Business OS app workspace.
-The guard returns a tool error that tells the agent to write under src/apps/business-os/installed-modules/<module_id>/ using MODULE_DIR.
+The guard returns a tool error that tells the agent to write under runtime/business-os/installed-modules/<module_id>/ using MODULE_DIR.
 The guard is intentionally narrow: reads such as cat module.json remain allowed, and writes under installed-modules/<id>/module.json remain allowed.
 Harness-core tests cover blocked root module.json writes, blocked root collections.schema.json writes, and allowed installed-module writes/reads.
 ```
@@ -948,7 +948,7 @@ What improved:
 
 ```text
 The agent did not create root-level module.json or collections.schema.json.
-The root-write runtime guard and MODULE_DIR skill instructions moved file writes into src/apps/business-os/installed-modules/contracts/.
+The root-write runtime guard and MODULE_DIR skill instructions moved file writes into runtime/business-os/installed-modules/contracts/.
 The agent inspected existing Business OS modules before writing the app.
 The app attempted a normal automation path by creating business_commands records from follow-up actions.
 ```
@@ -1026,7 +1026,7 @@ Hardening taken from this round:
 module_static_check.mjs now rejects module.json layout.icon_svg.
 module_static_check.mjs now requires installed App Creator/runtime modules to include command_type: business_os.chat.task and record_snapshot in the automation command.
 validate-app-module.test.mjs now has regression fixtures for embedded icon_svg, missing command_type, and missing record_snapshot.
-SKILL.md and references/verification.md now state the same requirements explicitly.
+SKILL.md and references/green-checklist.md now state the same requirements explicitly.
 ```
 
 ## Claude Code CLI Runtime-Installed R2 Findings
@@ -1105,5 +1105,5 @@ Hardening taken from this retry:
 module_static_check.mjs now rejects self-referential CSS custom properties.
 assert-module-conformance.mjs now rejects the same issue for source modules.
 validate-app-module.test.mjs now has a regression fixture for --token: var(--token).
-SKILL.md, references/verification.md, and references/module-contract.md now explain the exact CSS alias pattern and warn against broad token search/replace repairs.
+SKILL.md, references/green-checklist.md, and references/module-contract.md now explain the exact CSS alias pattern and warn against broad token search/replace repairs.
 ```

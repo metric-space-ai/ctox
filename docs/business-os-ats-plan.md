@@ -195,7 +195,7 @@ template generator. The hardened prompt block lives in
 `.../business-os-app-module-development/scripts/module_static_check.mjs`. The
 authoring skill is
 `src/skills/system/product_engineering/business-os-app-module-development/`
-(`SKILL.md` + `references/module-contract.md` + `references/verification.md`).
+(`SKILL.md` + `references/module-contract.md` + `references/green-checklist.md`).
 
 ### 3.1 The fragment contract (hard rules — black-box validator gates)
 

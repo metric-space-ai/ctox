@@ -869,6 +869,17 @@ impl ModelClientSession {
             has_previous_response_id = request.previous_response_id.is_some(),
             "responses request payload metrics"
         );
+        eprintln!(
+            "[ctox responses-request] label={} body_bytes={} tools_count={} tools_bytes={} input_items={} input_bytes={} instructions_bytes={} has_previous_response_id={}",
+            label,
+            body_bytes,
+            request.tools.len(),
+            tools_bytes,
+            request.input.len(),
+            input_bytes,
+            request.instructions.len(),
+            request.previous_response_id.is_some(),
+        );
     }
 
     fn get_incremental_items(
