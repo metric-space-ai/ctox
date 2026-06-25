@@ -98,3 +98,20 @@ test('evaluateGridData falls back to raw cells when the engine cannot build', ()
   const out = hooks.evaluateGridData(raw, brokenEngine);
   assert.deepEqual(out, [['=A1+B1']]);
 });
+
+test('CSV serialization quotes only when required, preserving numeric round-trip', () => {
+  // Plain and numeric cells stay unquoted so their type survives re-import.
+  assert.equal(hooks.escapeCsvCell(30), '30');
+  assert.equal(hooks.escapeCsvCell('plain'), 'plain');
+  assert.equal(hooks.escapeCsvCell(''), '');
+  // Delimiters, quotes, newlines, and edge whitespace force quoting.
+  assert.equal(hooks.escapeCsvCell('a,b'), '"a,b"');
+  assert.equal(hooks.escapeCsvCell('a"b'), '"a""b"');
+  assert.equal(hooks.escapeCsvCell('line1\nline2'), '"line1\nline2"');
+  assert.equal(hooks.escapeCsvCell(' pad '), '" pad "');
+
+  assert.equal(
+    hooks.rowsToCsv([['Name', 'Total'], ['Acme, Inc', 30], ['', 'plain']]),
+    'Name,Total\n"Acme, Inc",30\n,plain'
+  );
+});

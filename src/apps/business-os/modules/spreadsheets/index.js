@@ -274,7 +274,7 @@ async function createNewSpreadsheet(state, input = {}) {
   };
 
   // Convert to CSV string representation for raw blob persist
-  const csvText = modelJson.data.map(row => row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(',')).join('\n');
+  const csvText = rowsToCsv(modelJson.data);
   const bytes = new TextEncoder().encode(csvText);
 
   await saveBlobChunks(state.ctx, {
@@ -996,6 +996,24 @@ function recalculateSpreadsheet(state) {
 // exported artifacts use so non-browser consumers of the canonical CSV never see
 // raw "=SUM(...)" strings. `engine` is injectable for tests. Falls back to the
 // raw cells if the engine cannot build.
+// Serialize one CSV cell with minimal RFC-4180 quoting: only quote when the
+// value contains a delimiter, quote, newline, or leading/trailing whitespace.
+// Numeric and plain cells are emitted raw so their type survives a CSV
+// round-trip (force-quoting every cell turned every value into a string on
+// re-import).
+function escapeCsvCell(value) {
+  const str = String(value ?? '');
+  if (/[",\r\n]/.test(str) || str !== str.trim()) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+// Serialize a 2D array of cells to CSV text.
+function rowsToCsv(rows) {
+  return (rows || []).map(row => (row || []).map(escapeCsvCell).join(',')).join('\n');
+}
+
 function evaluateGridData(rawData, engine = HyperFormula) {
   if (!Array.isArray(rawData)) return rawData;
   let hf;
@@ -1113,7 +1131,7 @@ async function saveActiveSpreadsheetDraft(state) {
     const now = Date.now();
 
     // Serialize evaluated values to the canonical CSV blob.
-    const csvText = evaluatedData.map(row => row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const csvText = rowsToCsv(evaluatedData);
     const bytes = new TextEncoder().encode(csvText);
 
     // Delete previous blob chunks first to avoid stacking duplicate indices
@@ -1575,7 +1593,7 @@ function openExportModal(state) {
       } else {
         // CSV exports evaluated values (a flat CSV consumer wants results, not
         // raw "=SUM(...)").
-        content = evaluatedData.map(row => row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(',')).join('\n');
+        content = rowsToCsv(evaluatedData);
       }
 
       const downloadName = ensureExtension(slugFilename(record.title || 'export'), fileExt);
@@ -2162,6 +2180,8 @@ export const __spreadsheetsTestHooks = {
   validateNewSpreadsheetInput,
   visibleSpreadsheets,
   evaluateGridData,
+  escapeCsvCell,
+  rowsToCsv,
 };
 
 function iconSvg(name) {
