@@ -35,7 +35,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260625-sync-toast1';
+const APP_BUILD = '20260625-sync-toast2';
 
 ensureShellStylesheets();
 
@@ -114,6 +114,7 @@ let moduleLayoutSaveTimer = null;
 let taskbarPinSaveTimer = null;
 let shellColumnResizeSync = null;
 let syncToastRefresh = null;
+let syncToastWatchdog = 0;
 let moduleResizers = [];
 let syncRecoveryRepairTimer = null;
 let syncRecoveryRepairRunning = false;
@@ -1601,6 +1602,12 @@ function wireShellActions() {
 // collections replicate. Fully automatic — modules contribute nothing beyond the
 // `collections` they already declare in module.json.
 function setupSyncToast() {
+  if (!syncToastWatchdog) {
+    syncToastWatchdog = window.setInterval(() => {
+      const currentToast = document.querySelector('[data-sync-toast]');
+      if (currentToast && !window.ctoxBusinessOsSyncDiagnostics) currentToast.hidden = true;
+    }, 250);
+  }
   if (document.querySelector('[data-sync-toast]')) return;
   const toast = document.createElement('div');
   toast.className = 'sync-toast';
@@ -1649,12 +1656,15 @@ function setupSyncToast() {
     const collections = Array.isArray(mod.collections) ? mod.collections : [];
     if (!collections.length) return null;
     let ready = 0;
+    let observed = 0;
     for (const name of collections) {
       const c = diag.collections?.[name];
       if (!c) continue;
+      observed += 1;
       const status = c.connectionStatus || c.status || '';
       if (c.initialReplicationAt || ['connected', 'running', 'reused'].includes(status)) ready += 1;
     }
+    if (!observed) return null;
     return { ready, total: collections.length };
   }
 
