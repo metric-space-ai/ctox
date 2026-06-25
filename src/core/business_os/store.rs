@@ -4635,6 +4635,157 @@ pub fn install_template_module_command(
     }))
 }
 
+/// Baseline bundle hash for a module: the bundle this instance last
+/// installed/updated from (latest install/update/app_create row), falling back
+/// to the earliest recorded version. Mirrors `module_version_states` so the
+/// update precondition and the projected `update_available` agree.
+fn installed_baseline_bundle_sha(root: &Path, module_id: &str) -> anyhow::Result<String> {
+    let conn = open_store(root)?;
+    let sha: Option<String> = conn
+        .query_row(
+            "SELECT bundle_sha256 FROM business_module_versions v1
+             WHERE v1.module_id = ?1
+               AND v1.seq = COALESCE(
+                   (SELECT MAX(seq) FROM business_module_versions v2
+                    WHERE v2.module_id = ?1
+                      AND v2.origin IN ('install', 'update', 'app_create')),
+                   (SELECT MIN(seq) FROM business_module_versions v3
+                    WHERE v3.module_id = ?1))",
+            params![module_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(sha.unwrap_or_default())
+}
+
+/// Re-sync a runtime-installed module to the current catalog bundle of the
+/// catalog module it was installed from. Vanilla apps update in place; a
+/// customized app requires `mode = "discard"` and gets an auto-recovery snapshot
+/// first. The copy is staged outside `installed-modules/` and swapped so a
+/// mid-update failure never leaves a half-written module directory.
+pub fn update_module_to_catalog(
+    root: &Path,
+    source_app_root: &Path,
+    installed_app_root: &Path,
+    session: &BusinessOsSession,
+    request: ModuleUpdateRequest,
+) -> anyhow::Result<Value> {
+    let module_id = source_sanitize_slug(&request.module_id);
+    anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+    let installed_dir = installed_app_root
+        .join("installed-modules")
+        .join(&module_id);
+    let manifest_path = installed_dir.join("module.json");
+    anyhow::ensure!(
+        manifest_path.is_file(),
+        "module `{module_id}` is not a runtime-installed app"
+    );
+    let installed_manifest: Value = serde_json::from_str(&fs::read_to_string(&manifest_path)?)?;
+    let source_module = module_catalog_source_id(source_app_root, &installed_manifest)
+        .context("installed module has no catalog source to update from")?;
+    let source_dir = source_app_root.join("modules").join(&source_module);
+    anyhow::ensure!(
+        source_dir.join("module.json").is_file(),
+        "catalog source `{source_module}` is missing"
+    );
+
+    let current_sha = compute_module_bundle(installed_app_root, &module_id)
+        .map(|bundle| bundle.sha256)
+        .unwrap_or_default();
+    let catalog_sha = compute_module_bundle(source_app_root, &source_module)
+        .map(|bundle| bundle.sha256)
+        .unwrap_or_default();
+    let installed_from = installed_baseline_bundle_sha(root, &module_id)?;
+    let mode = request.mode.trim();
+    let is_customized = !installed_from.is_empty() && current_sha != installed_from;
+
+    if !request.expected_baseline_sha256.trim().is_empty()
+        && request.expected_baseline_sha256.trim() != installed_from
+    {
+        anyhow::bail!("update precondition failed: install baseline has moved");
+    }
+    if is_customized && mode != "discard" {
+        anyhow::bail!(
+            "module `{module_id}` has local changes; pass mode=discard to overwrite (a recovery version is saved first)"
+        );
+    }
+    if !catalog_sha.is_empty() && catalog_sha == current_sha {
+        return Ok(serde_json::json!({
+            "ok": true,
+            "module_id": module_id,
+            "updated": false,
+            "reason": "already_current",
+        }));
+    }
+
+    let created_by = session_user_id(session).unwrap_or("").to_string();
+    if is_customized {
+        record_module_version(
+            root,
+            installed_app_root,
+            &module_id,
+            "edit",
+            "Auto-Sicherung vor Update",
+            &created_by,
+        )?;
+    }
+
+    let staging = installed_app_root.join(format!(".module-update-{module_id}-{}", Uuid::new_v4()));
+    if staging.exists() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    copy_dir_recursive(&source_dir, &staging)?;
+    let staged_manifest_path = staging.join("module.json");
+    let mut staged: Value = serde_json::from_str(&fs::read_to_string(&staged_manifest_path)?)?;
+    staged["id"] = Value::String(module_id.clone());
+    if let Some(title) = installed_manifest.get("title").filter(|value| value.is_string()) {
+        staged["title"] = title.clone();
+    }
+    staged["entry"] = Value::String(format!("installed-modules/{module_id}/index.html"));
+    staged["install_scope"] = Value::String("installed".to_owned());
+    staged["default_installed"] = Value::Bool(false);
+    if let Some(template_id) = installed_manifest
+        .get("template_id")
+        .filter(|value| value.is_string())
+    {
+        staged["template_id"] = template_id.clone();
+    }
+    staged["source_module_id"] = Value::String(source_module.clone());
+    ensure_local_icon_manifest_value(&mut staged, &staging);
+    fs::write(&staged_manifest_path, serde_json::to_vec_pretty(&staged)?)?;
+
+    // Swap: move the live dir aside, move staging into place, drop the backup.
+    // On failure, restore the backup so the installed module is never lost.
+    let backup = installed_app_root.join(format!(".module-backup-{module_id}-{}", Uuid::new_v4()));
+    fs::rename(&installed_dir, &backup)
+        .with_context(|| format!("failed to move {} aside", installed_dir.display()))?;
+    if let Err(error) = fs::rename(&staging, &installed_dir) {
+        let _ = fs::rename(&backup, &installed_dir);
+        let _ = fs::remove_dir_all(&staging);
+        return Err(anyhow::Error::new(error).context("failed to swap updated module into place"));
+    }
+    let _ = fs::remove_dir_all(&backup);
+
+    let catalog_version = catalog_module_version(source_app_root, &source_module);
+    record_module_version(
+        root,
+        installed_app_root,
+        &module_id,
+        "update",
+        &format!("Update auf Katalog {catalog_version}"),
+        &created_by,
+    )?;
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "module_id": module_id,
+        "updated": true,
+        "source_module_id": source_module,
+        "catalog_version": catalog_version,
+        "mode": if is_customized { "discard" } else { "vanilla" },
+    }))
+}
+
 pub fn delete_installed_module_command(
     root: &Path,
     app_root: &Path,
@@ -15599,6 +15750,46 @@ pub fn accept_rxdb_business_command_with_origin(
                 &session,
                 mutation,
             )?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.module.update" => {
+            let request: ModuleUpdateRequest = serde_json::from_value(command.payload.clone())
+                .context("invalid ctox.module.update payload")?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let module_id = source_sanitize_slug(&request.module_id);
+            anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+            let decision = module_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::AppsInstall,
+                &module_id,
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            let app_root = resolve_business_os_app_root(root)?;
+            let installed_app_root = resolve_business_os_installed_app_root(root);
+            let outcome = match update_module_to_catalog(
+                root,
+                &app_root,
+                &installed_app_root,
+                &session,
+                request,
+            ) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    return write_rxdb_failed_control_command_outcome(
+                        root, &command, "update", error,
+                    );
+                }
+            };
             return write_rxdb_control_command_outcome(
                 root,
                 &command,
@@ -29797,6 +29988,17 @@ mod tests {
                     "version_id": "version_1"
                 }),
                 "apps.rollback",
+                "module",
+                Some("inventory"),
+            ),
+            (
+                "cmd_deny_module_update",
+                "ctox.module.update",
+                "inventory",
+                serde_json::json!({
+                    "module_id": "inventory"
+                }),
+                "apps.install",
                 "module",
                 Some("inventory"),
             ),
