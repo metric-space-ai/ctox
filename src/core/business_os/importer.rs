@@ -698,11 +698,7 @@ fn import_matching_requirement(
 
     let mut http_status = 0;
     if html.trim().is_empty() {
-        let response = ureq::get(&url)
-            .set("User-Agent", "Mozilla/5.0 CTOX Business OS Importer")
-            .timeout(Duration::from_secs(30))
-            .call()
-            .with_context(|| format!("failed to fetch {url}"))?;
+        let response = fetch_url_guarded(&url)?;
         http_status = response.status();
         html = response
             .into_string()
@@ -1140,10 +1136,7 @@ fn import_requirement_url(
     let url = str_path(&command.payload, &["source", "url"]);
     anyhow::ensure!(!url.trim().is_empty(), "URL import requires source.url");
 
-    let response = ureq::get(&url)
-        .set("User-Agent", "Mozilla/5.0 CTOX Business OS Importer")
-        .call()
-        .with_context(|| format!("failed to fetch {url}"))?;
+    let response = fetch_url_guarded(&url)?;
     let http_status = response.status();
     let html = response
         .into_string()
@@ -2403,6 +2396,83 @@ fn parse_candidate_text(filename: &str, text: &str) -> CandidateParse {
         skills,
         leadership,
         confidence: if text.trim().is_empty() { 0.25 } else { 0.78 },
+    }
+}
+
+/// SSRF-guarded HTTP GET for caller-supplied job-posting URLs. Rejects
+/// non-http(s) schemes and installs a resolver that filters every DNS result —
+/// including redirect re-resolutions — down to publicly routable addresses, so
+/// a supplied URL cannot reach loopback / RFC1918 / link-local / CGNAT / cloud-
+/// metadata endpoints.
+///
+/// NOTE: the IP-range logic duplicates `ctox-web-stack`'s `egress` module
+/// (currently `pub(crate)`); fold onto that shared guard once it is exposed.
+fn fetch_url_guarded(url: &str) -> anyhow::Result<ureq::Response> {
+    let parsed =
+        url::Url::parse(url).map_err(|err| anyhow::anyhow!("invalid URL '{url}': {err}"))?;
+    match parsed.scheme() {
+        "http" | "https" => {}
+        other => anyhow::bail!("refusing to fetch URL with non-http(s) scheme '{other}': {url}"),
+    }
+    let agent = ureq::AgentBuilder::new()
+        .resolver(PublicOnlyResolver)
+        .timeout(Duration::from_secs(30))
+        .build();
+    agent
+        .get(url)
+        .set("User-Agent", "Mozilla/5.0 CTOX Business OS Importer")
+        .call()
+        .with_context(|| format!("failed to fetch {url}"))
+}
+
+struct PublicOnlyResolver;
+
+impl ureq::Resolver for PublicOnlyResolver {
+    fn resolve(&self, netloc: &str) -> std::io::Result<Vec<std::net::SocketAddr>> {
+        use std::net::ToSocketAddrs;
+        let public: Vec<std::net::SocketAddr> = netloc
+            .to_socket_addrs()?
+            .filter(|addr| is_public_ip(addr.ip()))
+            .collect();
+        if public.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!("SSRF guard: '{netloc}' resolves only to non-public addresses"),
+            ));
+        }
+        Ok(public)
+    }
+}
+
+/// True for publicly routable addresses; false for loopback, RFC1918 private,
+/// link-local (incl. 169.254.169.254 metadata), CGNAT (100.64/10), broadcast,
+/// documentation, unspecified, and the IPv6 equivalents. Uses only stable
+/// `std::net` predicates.
+fn is_public_ip(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            !(v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+                || v4.is_unspecified()
+                || o[0] == 0
+                || (o[0] == 100 && (64..=127).contains(&o[1])))
+        }
+        IpAddr::V6(v6) => {
+            if v6.is_loopback() || v6.is_unspecified() {
+                return false;
+            }
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                return is_public_ip(IpAddr::V4(mapped));
+            }
+            let seg = v6.segments();
+            // fe80::/10 link-local, fc00::/7 unique-local.
+            !((seg[0] & 0xffc0) == 0xfe80 || (seg[0] & 0xfe00) == 0xfc00)
+        }
     }
 }
 
@@ -4078,6 +4148,57 @@ mod outbound_provenance_tests {
             outbound_contact_subject_key(&no_email, "Beta GmbH")
         );
         assert!(outbound_contact_subject_key(&a, "ACME GmbH").starts_with("subj_"));
+    }
+}
+
+#[cfg(test)]
+mod ssrf_guard_tests {
+    use super::is_public_ip;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    fn v4(s: &str) -> IpAddr {
+        IpAddr::V4(s.parse::<Ipv4Addr>().unwrap())
+    }
+    fn v6(s: &str) -> IpAddr {
+        IpAddr::V6(s.parse::<Ipv6Addr>().unwrap())
+    }
+
+    #[test]
+    fn blocks_non_public_v4() {
+        for ip in [
+            "127.0.0.1",
+            "10.0.0.5",
+            "192.168.1.1",
+            "172.16.0.1",
+            "169.254.169.254",
+            "100.64.0.1",
+            "0.0.0.0",
+            "255.255.255.255",
+        ] {
+            assert!(!is_public_ip(v4(ip)), "{ip} must be blocked");
+        }
+    }
+
+    #[test]
+    fn allows_public_v4() {
+        for ip in ["8.8.8.8", "1.1.1.1", "93.184.216.34"] {
+            assert!(is_public_ip(v4(ip)), "{ip} must be allowed");
+        }
+    }
+
+    #[test]
+    fn blocks_non_public_v6_and_mapped() {
+        assert!(!is_public_ip(v6("::1")));
+        assert!(!is_public_ip(v6("fe80::1")));
+        assert!(!is_public_ip(v6("fc00::1")));
+        assert!(
+            !is_public_ip(v6("::ffff:10.0.0.1")),
+            "IPv4-mapped private must be blocked"
+        );
+        assert!(
+            is_public_ip(v6("2606:4700:4700::1111")),
+            "public v6 must be allowed"
+        );
     }
 }
 
