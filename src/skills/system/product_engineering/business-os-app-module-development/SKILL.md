@@ -25,10 +25,30 @@ This file is a resource index. Use the linked contracts and checklists as the wo
 
 ## Resource Index
 
-- `references/module-contract.md`: file layout, manifest, schema, mount contract, persistence contract, automation contract.
+- `references/module-contract.md`: file layout, manifest, schema, mount contract, persistence contract, automation contract, agent right-click context.
 - `references/dos-and-donts.md`: short rules for correct Business OS app implementation.
 - `references/green-checklist.md`: finalization checklist before a task can be considered done.
 - `references/architecture-translation.md`: mapping from familiar web app patterns to CTOX Business OS app patterns.
+
+## Required Agent Context (Right-Click)
+
+Mandatory for every app and every record -- not optional, not deferrable. The
+shell, not the app, owns the right-click menu; the app's job is to label its
+records so the agent knows what was clicked.
+
+- Put `data-context-record-id`, `data-context-record-type`, and
+  `data-context-label` on the outermost element of every record (list row, card,
+  table row, tree node). The shell's global "Chat to CTOX" right-click menu reads
+  them and tells the agent which record the user clicked. Without them the agent
+  gets only loose text and cannot act on the record.
+- The shell also accepts any `data-*-id` as a fallback (record type derived from
+  the attribute name), but the explicit trio above is required because it pins a
+  clean record type and human label.
+- Mark side panes with a `*-left` / `*-right` / `*-sidebar` class or
+  `data-left-content` / `data-right-content` so the agent learns the column.
+- Do not build a per-app context menu or a `ctox:context-action` bridge for this;
+  the shell handles it. Full contract and shell internals:
+  `references/module-contract.md` ("Agent Context (Right-Click)").
 
 ## Required Context
 
