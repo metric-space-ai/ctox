@@ -854,6 +854,15 @@ fn import_matching_objects(
             eprintln!("[business-os-import] PDF parse failed for {name}: {err:#}");
             String::new()
         });
+        if raw_text.trim().is_empty() {
+            // The native parser succeeded but extracted no text — almost always a
+            // scanned/image-only PDF. There is no OCR path, so surface this
+            // instead of silently importing an empty candidate (the emitted
+            // record also carries raw_text_length: 0 as a machine-readable signal).
+            eprintln!(
+                "[business-os-import] no extractable text from {name} (likely a scanned/image PDF; OCR is not available)"
+            );
+        }
         let candidate = parse_candidate_text(name, &raw_text);
         let now_iso = now_iso();
         let now_ms = now_ms() as i64;
@@ -1395,6 +1404,15 @@ fn import_candidate_documents(
             eprintln!("[business-os-import] PDF parse failed for {name}: {err:#}");
             String::new()
         });
+        if raw_text.trim().is_empty() {
+            // The native parser succeeded but extracted no text — almost always a
+            // scanned/image-only PDF. There is no OCR path, so surface this
+            // instead of silently importing an empty candidate (the emitted
+            // record also carries raw_text_length: 0 as a machine-readable signal).
+            eprintln!(
+                "[business-os-import] no extractable text from {name} (likely a scanned/image PDF; OCR is not available)"
+            );
+        }
         let candidate = parse_candidate_text(name, &raw_text);
         let now_iso = now_iso();
         let now_ms = now_ms() as i64;
