@@ -118,12 +118,16 @@ const BUSINESS_OS_AUDIT_RETENTION_POLICY_PAYLOAD_KEY: &str =
     "business_os.audit_retention_policy.v1";
 const RXDB_TABLE_CACHE_MAX_ENTRIES: usize = 64;
 const RXDB_TABLE_CACHE_TTL_SECS: u64 = 60;
-const RUNTIME_SETTINGS_RXDB_CACHE_TTL_SECS: u64 = 5;
+const RUNTIME_SETTINGS_RXDB_CACHE_TTL_SECS: u64 = 300;
+const SYNC_CONNECTION_CONFIG_CACHE_TTL_SECS: u64 = 300;
 
 static RXDB_TABLE_NAMES_CACHE: OnceLock<Mutex<BTreeMap<PathBuf, RxdbTableNamesCacheEntry>>> =
     OnceLock::new();
 static RUNTIME_SETTINGS_RXDB_CACHE: OnceLock<Mutex<BTreeMap<PathBuf, RuntimeSettingsCacheEntry>>> =
     OnceLock::new();
+static SYNC_CONNECTION_CONFIG_CACHE: OnceLock<
+    Mutex<BTreeMap<PathBuf, SyncConnectionConfigCacheEntry>>,
+> = OnceLock::new();
 static BUSINESS_OS_STORE_SCHEMA_READY: OnceLock<Mutex<HashSet<BusinessOsStoreDbKey>>> =
     OnceLock::new();
 
@@ -148,6 +152,11 @@ type RuntimeSettingsCacheStamp = (
     BusinessOsFileChangeStamp,
     BusinessOsFileChangeStamp,
 );
+type SyncConnectionConfigCacheStamp = (
+    BusinessOsFileChangeStamp,
+    BusinessOsFileChangeStamp,
+    BusinessOsFileChangeStamp,
+);
 
 #[derive(Debug, Clone)]
 struct RxdbTableNamesCacheEntry {
@@ -161,6 +170,13 @@ struct RuntimeSettingsCacheEntry {
     generated_at: Instant,
     stamp: RuntimeSettingsCacheStamp,
     value: Value,
+}
+
+#[derive(Debug, Clone)]
+struct SyncConnectionConfigCacheEntry {
+    generated_at: Instant,
+    stamp: SyncConnectionConfigCacheStamp,
+    config: BusinessOsSyncConnectionConfig,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -208,6 +224,15 @@ pub struct BusinessOsSyncConfig {
     /// (`CTOX_BUSINESS_OS_MODULE_ALLOWLIST`) so it is configurable per instance without
     /// a rebuild and without a process-env toggle.
     pub module_allowlist: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct BusinessOsSyncConnectionConfig {
+    pub(crate) instance_id: String,
+    pub(crate) sync_room: String,
+    pub(crate) signaling_room_password: String,
+    pub(crate) signaling_urls: Vec<String>,
+    pub(crate) signaling_urls_source: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1134,14 +1159,14 @@ fn process_is_running(_pid: u32) -> bool {
 
 /// Per-instance module allowlist for the Business OS shell.
 ///
-/// Read from the persisted SQLite runtime store via `runtime_env::env_or_config`
+/// Read from the persisted SQLite runtime store via `runtime_env::get_runtime_env_value`
 /// (key `CTOX_BUSINESS_OS_MODULE_ALLOWLIST`). The value is a comma/whitespace
 /// separated list of module ids (e.g. `desktop,documents,research,knowledge,app-store,ctox`).
 /// An empty/unset value means "no restriction" — the shell surfaces every packaged
 /// module. This is intentionally not a process-env toggle: operators set it in the
 /// runtime store so each instance can scope its visible apps independently.
 pub fn business_os_module_allowlist(root: &Path) -> Vec<String> {
-    let raw = match crate::inference::runtime_env::env_or_config(
+    let raw = match crate::inference::runtime_env::get_runtime_env_value(
         root,
         "CTOX_BUSINESS_OS_MODULE_ALLOWLIST",
     ) {
@@ -1162,10 +1187,60 @@ pub fn business_os_module_allowlist(root: &Path) -> Vec<String> {
     ids
 }
 
-pub fn sync_config(root: &Path) -> anyhow::Result<BusinessOsSyncConfig> {
+pub(crate) fn sync_connection_config(
+    root: &Path,
+) -> anyhow::Result<BusinessOsSyncConnectionConfig> {
+    let key = business_os_root_cache_key(root);
+    let stamp = sync_connection_config_cache_stamp(root);
+    let cache = SYNC_CONNECTION_CONFIG_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    {
+        let cache = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(entry) = cache.get(&key).filter(|entry| {
+            entry.stamp == stamp
+                && entry.generated_at.elapsed()
+                    < Duration::from_secs(SYNC_CONNECTION_CONFIG_CACHE_TTL_SECS)
+        }) {
+            return Ok(entry.config.clone());
+        }
+    }
+
+    let config = build_sync_connection_config(root)?;
+    let stamp = sync_connection_config_cache_stamp(root);
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache.insert(
+        key,
+        SyncConnectionConfigCacheEntry {
+            generated_at: Instant::now(),
+            stamp,
+            config: config.clone(),
+        },
+    );
+    Ok(config)
+}
+
+fn build_sync_connection_config(root: &Path) -> anyhow::Result<BusinessOsSyncConnectionConfig> {
     let instance_id = stable_instance_id(root)?;
     let signaling_room_password = business_os_room_password(root)?;
-    let peer_id = format!("ctox-core-{}", short_hash(&instance_id));
+    let signaling = signaling_urls_config(root);
+    Ok(BusinessOsSyncConnectionConfig {
+        sync_room: format!(
+            "ctox-business-os:{instance_id}:{}",
+            room_secret_id(&signaling_room_password)
+        ),
+        signaling_room_password,
+        instance_id,
+        signaling_urls: signaling.urls,
+        signaling_urls_source: signaling.source,
+    })
+}
+
+pub fn sync_config(root: &Path) -> anyhow::Result<BusinessOsSyncConfig> {
+    let connection = sync_connection_config(root)?;
+    let peer_id = format!("ctox-core-{}", short_hash(&connection.instance_id));
     let native_rxdb_peer_available = super::rxdb_peer::is_native_peer_running_for_root(root);
     let native_rxdb_peer_status = super::rxdb_peer::native_peer_status(root);
     let native_peer_id = native_rxdb_peer_status
@@ -1173,22 +1248,18 @@ pub fn sync_config(root: &Path) -> anyhow::Result<BusinessOsSyncConfig> {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
-    let signaling = signaling_urls_config(root);
     Ok(BusinessOsSyncConfig {
         ok: true,
         app_hosting: "ctox_instance_webserver",
         sync_mode: "p2p-first",
-        sync_room: format!(
-            "ctox-business-os:{instance_id}:{}",
-            room_secret_id(&signaling_room_password)
-        ),
-        signaling_room_password,
-        instance_id,
+        sync_room: connection.sync_room,
+        signaling_room_password: connection.signaling_room_password,
+        instance_id: connection.instance_id,
         peer_id,
         native_peer_id,
         peer_role: "ctox_instance",
-        signaling_urls: signaling.urls,
-        signaling_urls_source: signaling.source,
+        signaling_urls: connection.signaling_urls,
+        signaling_urls_source: connection.signaling_urls_source,
         ice_servers: ice_servers_config(),
         transport: "webrtc",
         http_bridge_available: false,
@@ -3356,6 +3427,15 @@ fn runtime_settings_cache_stamp(root: &Path) -> RuntimeSettingsCacheStamp {
     (
         business_os_file_change_stamp(&runtime.join("ctox.sqlite3")),
         business_os_file_change_stamp(&runtime.join("ctox-runtime.sqlite3")),
+        business_os_file_change_stamp(&runtime.join("ctox-secrets.sqlite3")),
+    )
+}
+
+fn sync_connection_config_cache_stamp(root: &Path) -> SyncConnectionConfigCacheStamp {
+    let runtime = root.join("runtime");
+    (
+        business_os_file_change_stamp(&runtime.join("business-os-instance-id")),
+        business_os_file_change_stamp(&runtime.join(BUSINESS_OS_SIGNALING_URLS_FILE)),
         business_os_file_change_stamp(&runtime.join("ctox-secrets.sqlite3")),
     )
 }

@@ -1,13 +1,18 @@
 use anyhow::Context;
 use anyhow::Result;
-use rusqlite::params;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
+use rusqlite::params;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::collections::HashSet;
+use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::sync::OnceLock;
+use std::time::UNIX_EPOCH;
 
 use crate::inference::engine;
 use crate::inference::model_adapters;
@@ -37,6 +42,77 @@ const API_PROVIDER_MINIMAX: &str = "minimax";
 const API_PROVIDER_AZURE_FOUNDRY: &str = "azure_foundry";
 pub const CTOX_LLM_PROXY_API_KEY_ENV: &str = "CTOX_LLM_PROXY_API_KEY";
 pub const CTOX_LLM_PROXY_BASE_URL_ENV: &str = "CTOX_LLM_PROXY_BASE_URL";
+
+type RuntimeStateFileStamp = (u64, u128);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuntimeStateStoreStamp {
+    db: RuntimeStateFileStamp,
+    wal: RuntimeStateFileStamp,
+    shm: RuntimeStateFileStamp,
+}
+
+#[derive(Debug, Clone)]
+struct CachedRuntimeState {
+    stamp: RuntimeStateStoreStamp,
+    state: Option<InferenceRuntimeState>,
+}
+
+fn initialized_runtime_state_paths() -> &'static Mutex<HashSet<PathBuf>> {
+    static INITIALIZED: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+    INITIALIZED.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn cached_runtime_states() -> &'static Mutex<BTreeMap<PathBuf, CachedRuntimeState>> {
+    static CACHE: OnceLock<Mutex<BTreeMap<PathBuf, CachedRuntimeState>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn runtime_state_file_stamp(path: &Path) -> RuntimeStateFileStamp {
+    match fs::metadata(path) {
+        Ok(metadata) => (
+            metadata.len(),
+            metadata
+                .modified()
+                .ok()
+                .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0),
+        ),
+        Err(_) => (0, 0),
+    }
+}
+
+fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut raw = path.as_os_str().to_os_string();
+    raw.push(suffix);
+    PathBuf::from(raw)
+}
+
+fn runtime_state_store_stamp(path: &Path) -> RuntimeStateStoreStamp {
+    RuntimeStateStoreStamp {
+        db: runtime_state_file_stamp(path),
+        wal: runtime_state_file_stamp(&sqlite_sidecar_path(path, "-wal")),
+        shm: runtime_state_file_stamp(&sqlite_sidecar_path(path, "-shm")),
+    }
+}
+
+fn invalidate_runtime_state_cache(root: &Path) {
+    let path = runtime_state_path(root);
+    cached_runtime_states()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .remove(&path);
+}
+
+fn update_runtime_state_cache(root: &Path, state: Option<InferenceRuntimeState>) {
+    let path = runtime_state_path(root);
+    let stamp = runtime_state_store_stamp(&path);
+    cached_runtime_states()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .insert(path, CachedRuntimeState { stamp, state });
+}
 
 fn default_auxiliary_enabled() -> bool {
     true
@@ -429,6 +505,34 @@ pub fn is_local_loopback_base_url(base_url: &str) -> bool {
 }
 
 pub fn load_runtime_state(root: &Path) -> Result<Option<InferenceRuntimeState>> {
+    let path = runtime_state_path(root);
+    let stamp = runtime_state_store_stamp(&path);
+    if let Some(cached) = cached_runtime_states()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .get(&path)
+        .filter(|cached| cached.stamp == stamp)
+        .cloned()
+    {
+        return Ok(cached.state);
+    }
+
+    let state = load_runtime_state_uncached(root)?;
+    let stamp = runtime_state_store_stamp(&path);
+    cached_runtime_states()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .insert(
+            path,
+            CachedRuntimeState {
+                stamp,
+                state: state.clone(),
+            },
+        );
+    Ok(state)
+}
+
+fn load_runtime_state_uncached(root: &Path) -> Result<Option<InferenceRuntimeState>> {
     let conn = open_runtime_state_db(root)?;
     if let Some(raw) = load_runtime_state_json_from_db(&conn)? {
         let mut state: InferenceRuntimeState = serde_json::from_str(&raw).with_context(|| {
@@ -462,6 +566,8 @@ pub fn persist_runtime_state(root: &Path, state: &InferenceRuntimeState) -> Resu
             runtime_state_path(root).display()
         )
     })?;
+    invalidate_runtime_state_cache(root);
+    update_runtime_state_cache(root, Some(state.clone()));
     Ok(())
 }
 
@@ -861,17 +967,30 @@ fn open_runtime_state_db(root: &Path) -> Result<Connection> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create runtime db dir {}", parent.display()))?;
     }
+    let existed_before_open = path.exists();
     let conn = Connection::open(&path)
         .with_context(|| format!("failed to open runtime db {}", path.display()))?;
-    conn.execute_batch(&format!(
-        "PRAGMA journal_mode=WAL;
-         CREATE TABLE IF NOT EXISTS {RUNTIME_STATE_TABLE} (
-             state_id INTEGER PRIMARY KEY CHECK (state_id = 1),
-             state_json TEXT NOT NULL
-         );"
-    ))
-    .context("failed to initialize runtime state table")?;
-    migrate_legacy_runtime_state_store(root, &conn)?;
+    let needs_init = {
+        let guard = initialized_runtime_state_paths()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        !existed_before_open || !guard.contains(&path)
+    };
+    if needs_init {
+        conn.execute_batch(&format!(
+            "PRAGMA journal_mode=WAL;
+             CREATE TABLE IF NOT EXISTS {RUNTIME_STATE_TABLE} (
+                 state_id INTEGER PRIMARY KEY CHECK (state_id = 1),
+                 state_json TEXT NOT NULL
+             );"
+        ))
+        .context("failed to initialize runtime state table")?;
+        migrate_legacy_runtime_state_store(root, &conn)?;
+        initialized_runtime_state_paths()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .insert(path);
+    }
     Ok(conn)
 }
 
@@ -1146,33 +1265,7 @@ fn derive_auxiliary_runtime_state(
 }
 
 fn load_runtime_env_map_for_resolution(root: &Path) -> Result<BTreeMap<String, String>> {
-    let conn = open_runtime_state_db(root)?;
-    let has_runtime_env_table = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'runtime_env_kv'",
-            [],
-            |_| Ok(()),
-        )
-        .optional()
-        .context("failed to inspect runtime env table")?
-        .is_some();
-    if !has_runtime_env_table {
-        return Ok(BTreeMap::new());
-    }
-    let mut stmt = conn
-        .prepare("SELECT env_key, env_value FROM runtime_env_kv ORDER BY env_key")
-        .context("failed to prepare runtime env resolution query")?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
-        .context("failed to query runtime env resolution rows")?;
-    let mut env_map = BTreeMap::new();
-    for row in rows {
-        let (key, value) = row.context("failed to decode runtime env resolution row")?;
-        env_map.insert(key, value);
-    }
-    Ok(env_map)
+    crate::inference::runtime_env::load_persisted_runtime_env_map_cached(root)
 }
 
 #[cfg(test)]

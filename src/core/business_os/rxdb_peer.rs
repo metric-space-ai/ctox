@@ -1766,7 +1766,7 @@ fn native_peer_sync_config_changed(
     active_signaling_room_password: &str,
     active_signaling_urls: &[String],
 ) -> anyhow::Result<bool> {
-    let config = store::sync_config(root)?;
+    let config = store::sync_connection_config(root)?;
     Ok(config.sync_room != active_sync_room
         || config.signaling_room_password != active_signaling_room_password
         || normalized_signaling_urls(&config.signaling_urls)

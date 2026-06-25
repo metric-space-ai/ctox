@@ -1,7 +1,7 @@
 use anyhow::Context;
 use anyhow::Result;
-use rusqlite::params;
 use rusqlite::Connection;
+use rusqlite::params;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::fs;
@@ -24,9 +24,9 @@ fn initialized_runtime_env_paths() -> &'static Mutex<HashSet<PathBuf>> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RuntimeEnvStoreStamp {
-    exists: bool,
-    len: u64,
-    modified_ms: u128,
+    db: RuntimeEnvFileStamp,
+    wal: RuntimeEnvFileStamp,
+    shm: RuntimeEnvFileStamp,
 }
 
 #[derive(Debug, Clone)]
@@ -34,6 +34,8 @@ struct CachedRuntimeEnvMap {
     stamp: RuntimeEnvStoreStamp,
     map: BTreeMap<String, String>,
 }
+
+type RuntimeEnvFileStamp = (u64, u128);
 
 fn cached_runtime_env_maps() -> &'static Mutex<BTreeMap<PathBuf, CachedRuntimeEnvMap>> {
     static CACHE: OnceLock<Mutex<BTreeMap<PathBuf, CachedRuntimeEnvMap>>> = OnceLock::new();
@@ -44,23 +46,32 @@ pub fn runtime_config_path(root: &Path) -> PathBuf {
     root.join("runtime").join(RUNTIME_ENV_STORE_FILE)
 }
 
-fn runtime_env_store_stamp(path: &Path) -> RuntimeEnvStoreStamp {
+fn runtime_env_file_stamp(path: &Path) -> RuntimeEnvFileStamp {
     match fs::metadata(path) {
-        Ok(metadata) => RuntimeEnvStoreStamp {
-            exists: true,
-            len: metadata.len(),
-            modified_ms: metadata
+        Ok(metadata) => (
+            metadata.len(),
+            metadata
                 .modified()
                 .ok()
                 .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-                .map(|duration| duration.as_millis())
+                .map(|duration| duration.as_nanos())
                 .unwrap_or(0),
-        },
-        Err(_) => RuntimeEnvStoreStamp {
-            exists: false,
-            len: 0,
-            modified_ms: 0,
-        },
+        ),
+        Err(_) => (0, 0),
+    }
+}
+
+fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut raw = path.as_os_str().to_os_string();
+    raw.push(suffix);
+    PathBuf::from(raw)
+}
+
+fn runtime_env_store_stamp(path: &Path) -> RuntimeEnvStoreStamp {
+    RuntimeEnvStoreStamp {
+        db: runtime_env_file_stamp(path),
+        wal: runtime_env_file_stamp(&sqlite_sidecar_path(path, "-wal")),
+        shm: runtime_env_file_stamp(&sqlite_sidecar_path(path, "-shm")),
     }
 }
 
@@ -72,7 +83,9 @@ fn invalidate_runtime_env_cache(root: &Path) {
         .remove(&path);
 }
 
-fn load_persisted_runtime_env_map_cached(root: &Path) -> Result<BTreeMap<String, String>> {
+pub(crate) fn load_persisted_runtime_env_map_cached(
+    root: &Path,
+) -> Result<BTreeMap<String, String>> {
     let path = runtime_config_path(root);
     let stamp = runtime_env_store_stamp(&path);
     if let Some(cached) = cached_runtime_env_maps()
@@ -100,7 +113,7 @@ fn load_persisted_runtime_env_map_cached(root: &Path) -> Result<BTreeMap<String,
 }
 
 pub fn load_runtime_env_map(root: &Path) -> Result<BTreeMap<String, String>> {
-    let mut env_map = load_persisted_runtime_env_map(root)?;
+    let mut env_map = load_persisted_runtime_env_map_cached(root)?;
     // Merge credentials from the encrypted secret store so callers see a
     // unified map regardless of where the value lives.
     secrets::merge_credentials_into_env_map(root, &mut env_map);
@@ -119,7 +132,7 @@ pub fn effective_runtime_env_map(root: &Path) -> Result<BTreeMap<String, String>
 }
 
 pub fn effective_operator_env_map(root: &Path) -> Result<BTreeMap<String, String>> {
-    let mut env_map = load_persisted_runtime_env_map(root)?;
+    let mut env_map = load_persisted_runtime_env_map_cached(root)?;
     env_map.retain(|key, _| !runtime_state::is_runtime_state_key(key));
     secrets::merge_credentials_into_env_map(root, &mut env_map);
     Ok(env_map)
@@ -166,10 +179,7 @@ pub fn env_or_config(root: &Path, key: &str) -> Option<String> {
     if secrets::is_secret_key(key) {
         return secrets::get_credential(root, key).filter(|value| !value.trim().is_empty());
     }
-    load_runtime_env_map(root)
-        .ok()
-        .and_then(|map| map.get(key).cloned())
-        .filter(|value| !value.trim().is_empty())
+    get_runtime_env_value(root, key)
 }
 
 pub fn configured_chat_model(root: &Path) -> Option<String> {
@@ -350,6 +360,7 @@ fn open_runtime_persistence_db(root: &Path) -> Result<Connection> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create runtime db dir {}", parent.display()))?;
     }
+    let existed_before_open = path.exists();
     let conn = Connection::open(&path)
         .with_context(|| format!("failed to open runtime db {}", path.display()))?;
     conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
@@ -358,7 +369,7 @@ fn open_runtime_persistence_db(root: &Path) -> Result<Connection> {
         let guard = initialized_runtime_env_paths()
             .lock()
             .unwrap_or_else(|err| err.into_inner());
-        !guard.contains(&path)
+        !existed_before_open || !guard.contains(&path)
     };
     if needs_init {
         conn.execute_batch(&format!(
