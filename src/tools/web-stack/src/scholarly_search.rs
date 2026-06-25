@@ -957,16 +957,29 @@ fn database_response(
     }
 }
 
+/// Contact email for the Crossref / OpenAlex "polite pool" (better rate limits,
+/// and a way for the providers to reach the operator). Reuses the Unpaywall
+/// contact email when a dedicated one is not set. `None` → anonymous pool.
+fn scholarly_contact_email(root: &Path) -> Option<String> {
+    runtime_config::get(root, "CTOX_SCHOLARLY_CONTACT_EMAIL")
+        .or_else(|| runtime_config::get(root, "CTOX_UNPAYWALL_EMAIL"))
+        .map(|email| email.trim().to_string())
+        .filter(|email| !email.is_empty())
+}
+
 fn crossref_search(root: &Path, request: &ScholarlySearchRequest) -> Result<Vec<ScholarlyResult>> {
     let limit = request.max_results.unwrap_or(20).clamp(1, 20);
     let base = runtime_config::get(root, "CTOX_CROSSREF_BASE_URL")
         .unwrap_or_else(|| "https://api.crossref.org".to_string());
-    let url = format!(
+    let mut url = format!(
         "{}/works?rows={}&query.bibliographic={}",
         base.trim_end_matches('/'),
         limit,
         encode_query(request.query.trim())
     );
+    if let Some(email) = scholarly_contact_email(root) {
+        url.push_str(&format!("&mailto={}", encode_query(&email)));
+    }
     let payload = fetch_json(&url)?;
     let items = payload
         .get("message")
@@ -1018,12 +1031,15 @@ fn openalex_search(root: &Path, request: &ScholarlySearchRequest) -> Result<Vec<
     let limit = request.max_results.unwrap_or(25).clamp(1, 25);
     let base = runtime_config::get(root, "CTOX_OPENALEX_BASE_URL")
         .unwrap_or_else(|| "https://api.openalex.org".to_string());
-    let url = format!(
+    let mut url = format!(
         "{}/works?per-page={}&search={}",
         base.trim_end_matches('/'),
         limit,
         encode_query(request.query.trim())
     );
+    if let Some(email) = scholarly_contact_email(root) {
+        url.push_str(&format!("&mailto={}", encode_query(&email)));
+    }
     let payload = fetch_json(&url)?;
     let items = payload
         .get("results")

@@ -159,11 +159,11 @@ Billige, klar falsifizierbare Bugs — alle mit Fixture/Test abschließen.
 - **Akzeptanz:** Test, dass pro Quelle bei Target-Erfolg keine doppelte Evidence entsteht.
 - **Umgesetzt (2026-06-25):** Per-`(source,field)`-Dedup statt komplettem Skip — der Fall-through ist laut Code-Kommentar **gewollt** (Cascade ergänzt Felder, die das Scrape-Target nicht lieferte). Pro Loop-Iteration sammelt `scrape_covered_fields: BTreeSet<FieldKey>` die vom Target gelieferten Felder; Snippet- und Read-Cascade überspringen genau diese → keine Doppel-Evidence für dasselbe Feld, Supplement-Verhalten bleibt. 315 Tests grün (volle Extraktions-Schleife nur via Netz-Mocks unit-testbar → kein Einzeltest).
 
-### WS4-05 ◐ Unpaywall-Kontakt-E-Mail
+### WS4-05 ☑ Unpaywall-Kontakt-E-Mail
 - **Datei:** [scholarly_search.rs:805](../src/tools/web-stack/src/scholarly_search.rs)
 - **Change:** Platzhalter-E-Mail durch eine echte, aus `runtime_config`/Secret-Store bezogene Kontakt-Adresse ersetzen; ohne Konfiguration den Unpaywall-Pfad sauber überspringen statt mit Fake-Mail anzufragen. Auch Crossref-`mailto` (Polite-Pool) ergänzen.
 - **Akzeptanz:** Ohne konfigurierte Mail kein Unpaywall-Call mit Platzhalter.
-- **Umgesetzt (2026-06-25):** `augment_results_with_open_access_pdfs` macht jetzt einen Early-Return, wenn `CTOX_UNPAYWALL_EMAIL` fehlt/leer ist (kein Platzhalter `ctox@example.org` mehr). **Offen:** Crossref-Polite-Pool-`mailto` noch nicht ergänzt → W5.
+- **Umgesetzt (2026-06-25):** `augment_results_with_open_access_pdfs` macht jetzt einen Early-Return, wenn `CTOX_UNPAYWALL_EMAIL` fehlt/leer ist (kein Platzhalter `ctox@example.org` mehr). Crossref **und** OpenAlex hängen jetzt `&mailto=<email>` an (Polite-Pool), via Helfer `scholarly_contact_email` (`CTOX_SCHOLARLY_CONTACT_EMAIL` → Fallback `CTOX_UNPAYWALL_EMAIL`; ohne Mail → anonymer Pool, kein Platzhalter). 32 Scholarly-Tests grün. **Vollständig.**
 
 ---
 
