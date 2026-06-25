@@ -3257,8 +3257,8 @@ fn runtime_lifecycle_alerts(
             "duplicate service foreground processes {duplicate_service_pids:?}"
         ));
     }
-    let backend_alerts = supervisor::persistent_backend_alerts(root)?;
-    if !service_running && !backend_alerts.is_empty() {
+    if !service_running {
+        let backend_alerts = supervisor::persistent_backend_alerts(root)?;
         alerts.extend(
             backend_alerts
                 .into_iter()
