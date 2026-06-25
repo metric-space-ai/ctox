@@ -27,7 +27,7 @@ no paired manual/CTOX stories exist for the workflow being implemented
 an action is visible in the UI but has no command, runtime mutation, persistence, smoke assertion, and browser assertion
 drag/drop, right-click, drawer, modal, or toolbar affordances are present but only update local decoration or status text
 browser proof was not run after the last UI/runtime change
-the app's global context menu bridge captures right-clicks and no module handler consumes its direct actions
+a record element (row, card, tree node) lacks data-context-record-id/-record-type/-label (or any data-*-id), so the shell right-click hands the agent no record
 smoke data can collide across repeated runs
 ```
 
@@ -286,7 +286,7 @@ central object selectable
 one create/edit mutation persists
 reload keeps mutation
 right-click opens actions
-Prompt CTOX sees module/submodule/record context
+Chat to CTOX sees module/record/column context
 visible affordance inventory has no unimplemented action
 smoke command passes
 browser proof passes
@@ -305,7 +305,7 @@ left/center/right/bottom work surface when the workflow needs it
 actions at the object, not detached toolbar-only controls
 drag/drop or direct in-place move when movement is a core workflow
 right-click for object actions
-Prompt CTOX from selected object
+Chat to CTOX from selected object
 visible missing/blocked/ready/done states
 handoff to adjacent module represented
 browser coverage for main workflow
@@ -437,59 +437,52 @@ US-31 first right-click action
 US-36 first CTOX-assisted action
 ```
 
-### 9. Required CTOX Context
+### 9. Required CTOX Context (real shell contract)
 
-Every central object element must expose:
+The shipped Business OS runs as vanilla HTML/JS/CSS modules under
+`src/apps/business-os/modules/<module>/`, served by the CTOX instance. The shell
+owns the right-click -> agent flow; a generated app must NOT build its own
+context-menu bridge or event bus. Canonical reference:
+`src/apps/business-os/ARCHITECTURE.md` ("Right-Click -> Agent Context").
 
-```tsx
-data-context-module="<module>"
-data-context-submodule="<submodule>"
-data-context-record-type="<recordType>"
+On the outermost element of every record (list row, card, table row, tree node --
+the thing a user right-clicks to mean "this record"), expose:
+
+```html
 data-context-record-id="<recordId>"
+data-context-record-type="<recordType>"
 data-context-label="<label>"
-data-context-skill="product_engineering/business-basic-module-development"
 ```
 
-Every context-menu direct action must be consumed by the module:
+The shell walks ancestors, so child buttons inside the row need nothing extra.
+Optional richer routing: `data-context-module`, `data-context-submodule`,
+`data-context-skill="product_engineering/business-basic-module-development"`.
 
-```tsx
-window.addEventListener("ctox:context-action", onContextAction);
-```
+How the shell consumes it: `app.js` installs a global capture-phase `contextmenu`
+handler (`handleGlobalContextMenu`) that reads these attributes off the clicked
+element and opens the "Chat to CTOX" popover, handing the agent
+`{ module, column, record_type, record_id, label, deep_link, selected_text,
+clicked_text }`. There is NO `ctox:context-action` event and NO `ContextMenuBridge`
+to implement or consume -- do not invent one. On full-workspace modules this
+capture-phase handler pre-empts any module-local `contextmenu` listener, except on
+`input` / `textarea` / `select` / `[contenteditable]` / `.monaco-editor` /
+`.no-ctox-context` targets (which keep the native menu).
 
-The handler must call the same command path as the visible UI action. It must not only
-select the object or set explanatory text.
+Record resolution is forgiving: the shell resolves the explicit trio above, and as
+a fallback ANY `data-*-id` attribute (record type derived from the attribute name),
+so a module's own domain id such as `data-shift-id` already works -- but the explicit
+trio is preferred because it pins a clean type and human label.
 
-In `templates/business-basic`, `ContextMenuBridge` listens to `contextmenu` in capture
-phase for every `data-context-*` object. Do not assume a component-level
-`onContextMenu` will win. If the object has `data-context-*`, add direct actions in
-`context-menu-bridge.tsx` and consume `ctox:context-action` inside the module. Browser
-proof must right-click the object and execute at least one direct action from the
-visible CTOX menu.
+Column resolution: the agent learns `column = left | center | right` only when a
+pane ancestor matches a `*-left` / `*-right` / `*-sidebar` class or carries
+`data-left-content` / `data-right-content`. Mark each side pane accordingly;
+otherwise everything reports as `center`.
 
-For drag/drop, do not rely on decorative HTML5 `draggable` alone. If the browser proof
-cannot complete the drag reliably, implement pointer-based drag release detection that
-finds the target work cell under the cursor and calls the same move command. Browser
-proof must show the object inside the target cell after the drag and a saved state.
-
-`Prompt CTOX` payload:
-
-```json
-{
-  "prompt": "<allowed action> for <record label>",
-  "action": "<allowedAction>",
-  "items": [
-    {
-      "moduleId": "<module>",
-      "submoduleId": "<submodule>",
-      "recordType": "<recordType>",
-      "recordId": "<recordId>",
-      "label": "<label>",
-      "href": "/app/<module>/<submodule>?recordId=<recordId>",
-      "skill": "product_engineering/business-basic-module-development"
-    }
-  ]
-}
-```
+For drag/drop, do not rely on decorative HTML5 `draggable` alone. If the browser
+proof cannot complete the drag reliably, implement pointer-based drag release
+detection that finds the target work cell under the cursor and calls the same move
+command. Browser proof must show the object inside the target cell after the drag
+and a saved state.
 
 ### 10. Required Proof Commands
 
@@ -524,7 +517,7 @@ return {
   route: initial.url,
   objectVisible: initial.text.includes("<object label>"),
   selectedVisible: selected.text.includes("<selected label or drawer label>"),
-  promptCtoxVisible: menu.text.includes("Prompt CTOX")
+  chatToCtoxVisible: menu.text.includes("CTOX")
 };
 ```
 
@@ -537,7 +530,7 @@ open bottom drawer
 edit a field and save
 reload and confirm persistence
 right-click the same object
-execute one direct context action
+confirm the "Chat to CTOX" popover opens with the record label
 drag/drop or move the object when movement is a core story
 confirm visible state changed where the user performed the action
 confirm no console errors
@@ -570,7 +563,7 @@ M1 proof exists
 acceptance matrix has no core missing/partial/needs proof
 smoke command passed
 browser proof passed
-right-click Prompt CTOX works
+right-click Chat to CTOX works
 all visible affordances have command/runtime/persistence/test/browser evidence
 early story regression check passed
 ```
