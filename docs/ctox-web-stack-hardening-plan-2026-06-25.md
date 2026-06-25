@@ -54,14 +54,14 @@ Empfohlene Milestones: **M1 = W1+W4** (Sicherheit + billige Korrektheit-Bugs), *
 - **Akzeptanz/Tests:** Unit-Tests: `127.0.0.1`, `[::1]`, `10.0.0.1`, `169.254.169.254`, `file://`, und ein Public-Host der per 302 auf `127.0.0.1` umleitet → alle `Err`. Ein echter Public-Host → `Ok`.
 - **Umgesetzt (2026-06-25):** `SsrfResolver` (ureq-`Resolver`) filtert beim Connect auf öffentliche IPs — deckt damit auch jeden Redirect-Hop ab (ureq re-resolved pro Hop), ohne manuelles Redirect-Following. Plus `assert_fetchable_url` (Schema-Check) und Operator-Allowlist (`CTOX_WEB_EGRESS_ALLOW` + SearXNG-Host). 6 Unit-Tests grün (v4/v6/mapped/CGNAT/metadata/allowlist/scheme).
 
-### WS1-02 ◐ Fetch-Sinks auf die Guard umstellen
+### WS1-02 ☑ Fetch-Sinks auf die Guard umstellen
 - **Dateien:**
   - [web_search.rs:5812 `build_agent`](../src/tools/web-stack/src/web_search.rs) + Aufrufstellen `fetch_page_content` (2340), Evidence-Fetch (2364), `fetch_wikipedia_extract`, `fetch_github_*`.
   - [deep_research.rs:1503 / 1705 `fetch_limited_snapshot`](../src/tools/web-stack/src/deep_research.rs)
   - [scholarly_search.rs:799 OA-PDF/DOI-Resolution](../src/tools/web-stack/src/scholarly_search.rs)
 - **Change:** Jeden direkten `ureq`-Get durch `egress::guarded_get` ersetzen.
 - **Akzeptanz:** Grep `\.get\(` in der Crate findet keinen ungeschützten Fetch externer URLs mehr (Provider-SERP-Fetches mit statischen Host-URLs ausgenommen, aber dokumentieren).
-- **Umgesetzt (2026-06-25):** `web_search::build_agent` (deckt `ctox_web_read` + Evidence-Fetch von SERP-`hit.url` + Provider-Fetches) und `deep_research::{fetch_limited_snapshot,fetch_text}` gehen über die Guard; `run_ctox_web_read_tool` macht zusätzlich den frühen Schema-Check. **scholarly entfällt:** `resolve_unpaywall_oa_pdf` fetcht nur die konfigurierte Unpaywall-Base (Test-Mock 127.0.0.1) und liest die OA-PDF-URL nur aus JSON — der eigentliche PDF-Fetch läuft downstream über die o. g. (jetzt geschützten) Pfade. **Offen:** Source-Adapter (`sources/*` `build_agent`) noch ungeschützt → siehe Coverage-Lücke; 313 Crate-Tests grün.
+- **Umgesetzt (2026-06-25):** `web_search::build_agent` (deckt `ctox_web_read` + Evidence-Fetch von SERP-`hit.url` + Provider-Fetches) und `deep_research::{fetch_limited_snapshot,fetch_text}` gehen über die Guard; `run_ctox_web_read_tool` macht zusätzlich den frühen Schema-Check. **scholarly entfällt:** `resolve_unpaywall_oa_pdf` fetcht nur die konfigurierte Unpaywall-Base (Test-Mock 127.0.0.1) und liest die OA-PDF-URL nur aus JSON — der eigentliche PDF-Fetch läuft downstream über die o. g. (jetzt geschützten) Pfade. **Source-Adapter (2026-06-25):** Alle 6 Quell-Agents (dnbhoovers/leadfeeder/xing/zefix/linkedin `build_agent` + handelsregister inline) gehen jetzt ebenfalls über die Guard — schließt die Coverage-Lücke „Attacker-SERP → Source-Read → interne URL". Kein Source-Test nutzt 127.0.0.1-Mocks; 316 Tests grün. **Damit WS1-02 vollständig.**
 
 ### WS1-03 ☑ Prompt-Injection: Untrusted-Content-Markierung
 - **Datei:** [web_search.rs](../src/tools/web-stack/src/web_search.rs) (`render_direct_read_context`, `render_results_context`)

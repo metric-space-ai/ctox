@@ -170,6 +170,9 @@ fn build_agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .user_agent(USER_AGENT)
         .timeout(Duration::from_millis(TIMEOUT_MS))
+        // SSRF guard: a resolved or redirected host must never reach an
+        // internal/loopback/metadata address.
+        .resolver(crate::egress::SsrfResolver::new(Vec::new()))
         .build()
 }
 

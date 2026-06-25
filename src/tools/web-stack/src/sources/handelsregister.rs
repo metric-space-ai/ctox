@@ -653,6 +653,9 @@ fn fetch_raw_search(query: &str) -> Result<String, super::SourceError> {
     );
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_millis(12_000))
+        // SSRF guard: a resolved or redirected host must never reach an
+        // internal/loopback/metadata address.
+        .resolver(crate::egress::SsrfResolver::new(Vec::new()))
         .build();
     let response = agent
         .get(&url)
