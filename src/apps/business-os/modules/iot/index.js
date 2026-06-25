@@ -219,7 +219,7 @@ function renderNode(asset, depth) {
   const signalRows = open ? signals.map((s) => {
     const name = s.attribute_name || s.name;
     const val = (typeof s.value === 'number') ? `${s.value}${unitOf(s)}` : '';
-    return `<div class="iot-signal" data-act="signal" data-asset="${esc(asset.id)}" data-attr="${esc(name)}" style="padding-left:${8 + (depth + 1) * 16}px" title="${esc(t('signal.hint', 'Rechtsklick: Auftrag von diesem Signal'))}">
+    return `<div class="iot-signal" data-id="${esc(asset.id)}" data-act="signal" data-asset="${esc(asset.id)}" data-attr="${esc(name)}" style="padding-left:${8 + (depth + 1) * 16}px" title="${esc(t('signal.hint', 'Rechtsklick: Auftrag von diesem Signal'))}">
       <span class="iot-signal-glyph">∿</span><span class="iot-signal-name">${esc(name)}</span><span class="iot-signal-val">${esc(val)}</span></div>`;
   }).join('') : '';
   return `
@@ -303,7 +303,7 @@ function renderWidgetCard(w) {
   const a = attrOf(aid, attr);
   const last = a && typeof a.value === 'number' ? `${a.value}${unitOf(a)}` : (series.length ? `${series[series.length - 1].v}` : '—');
   return `
-    <div class="iot-widget" data-widget="${esc(w.id)}" draggable="true">
+    <div class="iot-widget" data-id="${esc(w.id)}" data-widget="${esc(w.id)}" draggable="true">
       <div class="iot-widget-head">
         <span class="iot-status-dot ${st.dot}" title="${esc(st.label)}"></span>
         <span class="iot-widget-title">${esc(signalLabel(w.signal_ref))}</span>
@@ -328,7 +328,7 @@ function renderList(widgets) {
   if (!widgets.length) return renderCards(widgets);
   const rows = widgets.map((w) => {
     const st = statusOf(w);
-    return `<tr data-widget="${esc(w.id)}">
+    return `<tr data-id="${esc(w.id)}" data-widget="${esc(w.id)}">
       <td><span class="iot-status-dot ${st.dot}"></span> ${esc(signalLabel(w.signal_ref))}</td>
       <td>${esc(w.cond_text || '—')}</td>
       <td>${esc(w.action_prompt || '—')}</td>

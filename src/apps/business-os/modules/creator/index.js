@@ -312,7 +312,7 @@ function renderCreatorRightRail(host) {
 
 function renderInstalledAppCard(app) {
   return `
-    <article class="creator-mini-card" data-creator-installed-app="${escapeHtml(app.id)}">
+    <article class="creator-mini-card" data-creator-installed-app="${escapeHtml(app.id)}" data-context-record-id="${escapeHtml(app.id)}" data-context-record-type="application" data-context-label="${escapeHtml(app.title || app.id)}">
       <div class="creator-mini-card-main">
         <strong>${escapeHtml(app.title)}</strong>
         <span>${escapeHtml(app.category)} · ${escapeHtml(app.version)}</span>
@@ -333,7 +333,7 @@ function renderInstalledAppCard(app) {
 function renderCreatorRequestCard(item) {
   const request = item.request.length > 140 ? `${item.request.slice(0, 137)}...` : item.request;
   return `
-    <article class="creator-mini-card" data-creator-request="${escapeHtml(item.id)}">
+    <article class="creator-mini-card" data-creator-request="${escapeHtml(item.id)}" data-context-record-id="${escapeHtml(item.id)}" data-context-record-type="app-request" data-context-label="${escapeHtml(item.title || item.id)}">
       <div class="creator-mini-card-main">
         <strong>${escapeHtml(item.title)}</strong>
         <span>${escapeHtml(item.status)}</span>

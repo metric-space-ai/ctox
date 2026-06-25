@@ -189,3 +189,39 @@ defined in `src/apps/business-os/app.css` (`--bg`, `--surface`,
 `--danger`, `--panel-radius`, `--control-radius`, `--panel-shadow`,
 `--shadow`, `--shell-*`); neither the module nor the shared helpers
 introduce their own theme variables.
+
+## Right-Click → Agent Context
+
+Right-click anywhere inside a module opens a shell-owned "Chat to CTOX"
+popover that hands the agent a structured context for **where** the click
+happened: `module`, `column` (left/center/right), `record_type`,
+`record_id`, `label`, `deep_link`, plus `selected_text` and `clicked_text`.
+The handler lives in `app.js` (`handleGlobalContextMenu` →
+`extractGlobalCtoxContext`); it is a capture-phase listener on `document`,
+so it pre-empts any module-local `contextmenu` handler. It is active for
+every full-workspace module and skips `input`/`textarea`/`select`/
+`[contenteditable]`/`.monaco-editor`/`.no-ctox-context` targets (those keep
+the native menu). A module can suppress the shell menu and run its own by
+marking its host with `data-ctox-local-context-menu` (e.g. `app-store`); the
+pane-mode reference apps `documents`/`spreadsheets` ship an equivalent
+in-module menu because the shell menu only binds to full-workspace modules.
+
+For the agent to know **which record** was clicked, the clicked element (or
+an ancestor) must expose an id. `detectRecordFromElement` resolves, in order:
+
+1. `data-context-record-id` (+ `data-context-record-type`, `data-context-label`)
+   — the **canonical, preferred hook**: it pins a clean type and human label.
+   Put this trio on the outermost element of each record row/card/tree-node;
+   the shell walks ancestors, so child buttons inside the row need nothing.
+2. Any `data-*-id` attribute (e.g. `data-id`, `data-customer-id`,
+   `data-shift-id`) — recognized generically, with the record type derived
+   from the attribute name. This means a module's own domain id attributes
+   already work without the explicit hook; add the hook only when you want a
+   precise type/label or the record element carries no id at all.
+
+`detectColumnFromElement` reports left/right only when a pane ancestor
+matches a `*-left`/`*-right`/`*-sidebar` class or carries
+`data-left-content`/`data-right-content`; mark a pane root with those
+attributes if its class names do not encode the column. New modules should
+satisfy at least rule 2 on their record elements so the agent never loses
+the click location.
