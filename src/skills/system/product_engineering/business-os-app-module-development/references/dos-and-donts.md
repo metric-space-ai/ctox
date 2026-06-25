@@ -9,6 +9,7 @@
   `module.json`.
 - Export `mount(ctx)` from `index.js`.
 - Render into `ctx.host`.
+- Put `data-context-record-id`/`-record-type`/`-label` on every record row/card/tree node so the shell right-click hands the agent that record (see module-contract "Agent Context").
 - In runtime-installed apps, load `index.html` into `ctx.host` from `mount(ctx)`
   or render the primary UI in JS. The shell does not preload runtime module
   `index.html`.

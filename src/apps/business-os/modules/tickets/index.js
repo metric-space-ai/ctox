@@ -1020,7 +1020,7 @@ function recordContextObject(context = {}) {
     'data-context-record-type': context.type || '',
     'data-context-record-id': context.id || '',
     'data-context-label': context.label || '',
-    'data-context-skill': 'product_engineering/business-basic-module-development',
+    'data-context-skill': 'product_engineering/business-os-app-module-development',
     'data-record-type': context.type || '',
     'data-record-id': context.id || '',
     'data-label': context.label || '',
