@@ -4,6 +4,11 @@ Status: M0/M1 implementation in progress
 Datum: 2026-05-07  
 Route: `/app/operations/workforce`
 
+Historical note: This RFC describes the retired Business Basic template shape.
+It is not the current CTOX Business OS app-creation contract. New Business OS
+apps use `business-os-app-module-development` and runtime-installed vanilla
+HTML/CSS/browser ESM modules.
+
 ## Ziel
 
 Business Basic bekommt ein echtes Einsatzplanungs- und Zeiterfassungsmodul zwischen Operations und Payroll. Das Modul plant Personen auf Schichten/Auftraege, erfasst Istzeiten, prueft Abweichungen, gibt Zeiten frei und bereitet Uebergaben an Rechnungen und Payroll vor.
@@ -133,7 +138,6 @@ Jede relevante Karte traegt:
 - `data-context-submodule="workforce"`
 - `data-context-record-type`
 - `data-context-record-id`
-- `data-context-skill="product_engineering/business-basic-module-development"`
 
 Kontextaktionen:
 

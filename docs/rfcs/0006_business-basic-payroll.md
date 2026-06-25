@@ -6,6 +6,11 @@ German UI label: `Lohnabrechnung`
 Created: 2026-05-07
 Last‑touched: 2026-05-08 (top‑level module wiring + workforce hourly bridge + country pack `payroll-de` + DSL feasibility RFC 0007)
 
+Historical note: This RFC describes the retired Business Basic template shape.
+It is not the current CTOX Business OS app-creation contract. New Business OS
+apps use `business-os-app-module-development` and runtime-installed vanilla
+HTML/CSS/browser ESM modules.
+
 ## OSS Evidence Summary
 
 Research notes: `templates/business-basic/docs/payroll-oss-implementation-notes.md`
@@ -176,11 +181,11 @@ Slip detail is reached only through drawer/inspector — no deep navigable recor
 
 ## Right-Click Actions
 
-- on `payroll_run`: `Slips neu generieren`, `Slips neu berechnen`, `Run absenden`, `Run abbrechen`, `Prompt CTOX`.
-- on `payroll_payslip`: `Bearbeiten`, `Markiere zur Prüfung`, `Markiere zurückgestellt`, `Buchen`, `Stornieren`, `Prompt CTOX`.
-- on `payroll_payslip_line`: `Komponente anzeigen`, `Wert überschreiben`, `Prompt CTOX`.
-- on `payroll_structure_assignment`: `Beenden`, `Duplizieren`, `Prompt CTOX`.
-- on `payroll_component`: `Bearbeiten`, `Deaktivieren`, `Prompt CTOX`.
+- on `payroll_run`: `Slips neu generieren`, `Slips neu berechnen`, `Run absenden`, `Run abbrechen`, `Chat to CTOX`.
+- on `payroll_payslip`: `Bearbeiten`, `Markiere zur Prüfung`, `Markiere zurückgestellt`, `Buchen`, `Stornieren`, `Chat to CTOX`.
+- on `payroll_payslip_line`: `Komponente anzeigen`, `Wert überschreiben`, `Chat to CTOX`.
+- on `payroll_structure_assignment`: `Beenden`, `Duplizieren`, `Chat to CTOX`.
+- on `payroll_component`: `Bearbeiten`, `Deaktivieren`, `Chat to CTOX`.
 
 Every right-clickable element exposes `data-context-*` per the Business Basic contract.
 
@@ -194,10 +199,9 @@ data-context-submodule="operations"
 data-context-record-type="payroll_run | payroll_payslip | payroll_payslip_line | payroll_structure_assignment | payroll_component"
 data-context-record-id="<id>"
 data-context-label="<human label, e.g. 'Lohnlauf 2026-04 monatlich' or 'Lohnabrechnung Müller 2026-04'>"
-data-context-skill="product_engineering/business-basic-module-development"
 ```
 
-Prompt CTOX payload schema:
+Chat to CTOX context payload schema:
 
 ```json
 {
@@ -210,8 +214,7 @@ Prompt CTOX payload schema:
       "recordType": "payroll_payslip",
       "recordId": "<id>",
       "label": "<label>",
-      "href": "/app/operations/payroll?recordId=<id>&drawer=right",
-      "skill": "product_engineering/business-basic-module-development"
+      "href": "/app/operations/payroll?recordId=<id>&drawer=right"
     }
   ]
 }
@@ -227,7 +230,7 @@ M0 is one end-to-end payroll workflow:
 4. Operator opens a slip in the bottom drawer, reviews, and transitions it to `Review`, then posts it.
 5. Posting creates a journal entry through the existing `accounting` posting surface; the slip moves to `Posted` with `journal_entry_id` populated.
 6. Reload preserves all state.
-7. Right-click on the slip exposes `Buchen`, `Stornieren`, `Prompt CTOX`. The CTOX payload contains module, submodule, record type, id, label.
+7. Right-click on the slip exposes `Buchen`, `Stornieren`, `Chat to CTOX`. The CTOX payload contains module, submodule, record type, id, label.
 8. The operations smoke script `apps/web/scripts/payroll-smoke.mjs` exercises create-period → create-structure → create-assignment → run → review → post → ledger-readback.
 9. Browser proof verifies route render, slip click, drawer open, right-click, post action, persistence on reload.
 
@@ -274,7 +277,7 @@ Implementation may claim M0 only after:
 - Run materializes one slip per assigned employee with computed `gross_pay`, `total_deduction`, `net_pay`.
 - Slip post creates a journal entry in `business/ledger` and `payroll_payslip.journal_entry_id` is populated.
 - Slip and run state transitions are recorded in `payroll_audit` with actor and timestamp.
-- Right-click menu opens on run, slip, and slip line; menu includes `Prompt CTOX`.
+- Right-click menu opens on run, slip, and slip line; menu includes `Chat to CTOX`.
 - CTOX payload contains `operations`/`payroll`/record-type/id/label.
 - `apps/web/scripts/payroll-smoke.mjs` exits 0.
 - Browser proof verifies click, right-click, mutation, post, reload, ledger readback.

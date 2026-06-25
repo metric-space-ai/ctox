@@ -46,8 +46,8 @@ records so the agent knows what was clicked.
   clean record type and human label.
 - Mark side panes with a `*-left` / `*-right` / `*-sidebar` class or
   `data-left-content` / `data-right-content` so the agent learns the column.
-- Do not build a per-app context menu or a `ctox:context-action` bridge for this;
-  the shell handles it. Full contract and shell internals:
+- Do not build a per-app context menu or app-owned right-click event bridge for
+  this; the shell handles it. Full contract and shell internals:
   `references/module-contract.md` ("Agent Context (Right-Click)").
 
 ## Required Context

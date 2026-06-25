@@ -102,8 +102,8 @@ Keep extra files rare. Use extra local ESM helpers only when the app would other
 - The shell owns the right-click -> agent flow. A capture-phase `contextmenu`
   handler in `src/apps/business-os/app.js` opens a "Chat to CTOX" popover and
   hands the agent `{ module, column, record_type, record_id, label, deep_link,
-  selected_text, clicked_text }`. Do not build a per-app context menu or a
-  `ctox:context-action`/`ContextMenuBridge` for this; there is none.
+  selected_text, clicked_text }`. Do not build a per-app context menu or
+  app-owned event bus for this flow.
 - On the OUTERMOST element of every record (list row, card, table row, tree
   node), set `data-context-record-id`, `data-context-record-type`, and
   `data-context-label`. The shell walks ancestors, so child buttons inside the

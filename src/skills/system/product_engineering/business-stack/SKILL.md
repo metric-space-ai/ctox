@@ -195,7 +195,7 @@ primitive where that matches the view. The context menu is a productivity
 shortcut, not the only path to an action; important actions still need visible
 buttons, drawers, or keyboard-accessible controls.
 
-The right-click menu must always include `Prompt CTOX`. Every context-menu item
+The right-click menu must always include `Chat to CTOX`. Every context-menu item
 must expose structured context metadata:
 
 ```text
@@ -332,6 +332,6 @@ pnpm test:all
 
 This runs TypeScript, UI contract checks, Operations coverage, full module
 route/API/queue smoke tests, and the production build. Interactive QA should
-also cover at least one drawer toggle per module, right-click `Prompt CTOX`,
+also cover at least one drawer toggle per module, right-click `Chat to CTOX`,
 bug report markup, language/theme preservation, and any module-specific editor
 or axis controls changed in the task.

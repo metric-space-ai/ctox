@@ -26198,15 +26198,13 @@ fn business_os_app_command_prompt(
 }
 
 const BUSINESS_OS_APP_MODULE_SKILL_NAME: &str = "business-os-app-module-development";
-const BUSINESS_OS_LEGACY_BASIC_MODULE_SKILL_NAME: &str = "business-basic-module-development";
-const BUSINESS_OS_LEGACY_BASIC_MODULE_SKILL_PATH: &str =
-    "product_engineering/business-basic-module-development";
 
 fn required_skill_names(command: &BusinessCommand) -> Vec<String> {
-    let mut names = Vec::new();
     if is_business_os_app_module_command(command) {
-        push_required_skill(&mut names, BUSINESS_OS_APP_MODULE_SKILL_NAME);
+        return vec![BUSINESS_OS_APP_MODULE_SKILL_NAME.to_string()];
     }
+
+    let mut names = Vec::new();
     if let Some(items) = command
         .payload
         .get("required_skills")
@@ -26230,10 +26228,7 @@ fn required_skill_names(command: &BusinessCommand) -> Vec<String> {
 
 fn push_required_skill(names: &mut Vec<String>, raw: &str) {
     let name = raw.trim();
-    if name.is_empty()
-        || name == BUSINESS_OS_LEGACY_BASIC_MODULE_SKILL_NAME
-        || name == BUSINESS_OS_LEGACY_BASIC_MODULE_SKILL_PATH
-    {
+    if name.is_empty() {
         return;
     }
     if !names.iter().any(|existing| existing == name) {
@@ -28709,7 +28704,7 @@ mod tests {
     }
 
     #[test]
-    fn app_modify_queue_prompt_targets_app_module_not_skill_files() {
+    fn app_modify_queue_prompt_ignores_payload_skill_overrides() {
         let command = BusinessCommand {
             origin: CommandOrigin::TrustedLocal,
             id: Some("cmd_app_bench".to_owned()),
@@ -28723,12 +28718,12 @@ mod tests {
                 "mode": "app",
                 "module_id": "subscriptions",
                 "install_target": "runtime-installed-module",
-                "required_skills": ["business-basic-module-development"]
+                "required_skills": ["nextjs-postgres-port"]
             }),
             client_context: serde_json::json!({
                 "source": "business-os-app-creator",
-                "suggested_skill": "business-basic-module-development",
-                "required_skills": ["product_engineering/business-basic-module-development"]
+                "suggested_skill": "nextjs-postgres-port",
+                "required_skills": ["frontend-skill"]
             }),
         };
 
@@ -28749,8 +28744,8 @@ mod tests {
         assert!(prompt.contains("- reference_catalog: ctox business-os app references --json"));
         assert!(prompt
             .contains("- validation: ctox business-os app validate subscriptions --installed"));
-        assert!(!prompt.contains("business-basic-module-development"));
-        assert!(!prompt.contains("product_engineering/business-basic-module-development"));
+        assert!(!prompt.contains("nextjs-postgres-port"));
+        assert!(!prompt.contains("frontend-skill"));
         assert_eq!(
             suggested_skill_for_command(&command).as_deref(),
             Some(BUSINESS_OS_APP_MODULE_SKILL_NAME)
@@ -28804,7 +28799,6 @@ mod tests {
         assert!(!prompt.contains("Client context JSON"));
         assert!(!prompt.contains("SECRET_CAPABILITY_TOKEN_SHOULD_NOT_LEAK"));
         assert!(!prompt.contains("capability_token"));
-        assert!(!prompt.contains("business-basic-module-development"));
     }
 
     #[test]
