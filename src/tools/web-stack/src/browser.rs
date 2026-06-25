@@ -889,11 +889,15 @@ fn resolve_reference_dir(root: &Path, args: &[String]) -> PathBuf {
 }
 
 fn browser_reference_dir(root: &Path, dir: Option<PathBuf>) -> PathBuf {
-    resolve_root_relative_path(
-        root,
-        dir.or_else(|| std::env::var_os("CTOX_WEB_BROWSER_REFERENCE_DIR").map(PathBuf::from))
-            .unwrap_or_else(|| PathBuf::from(DEFAULT_REFERENCE_RELATIVE_DIR)),
-    )
+    // Precedence: explicit `--dir`/request value, then the SQLite runtime config
+    // key, then the default. Runtime config lives in the CTOX SQLite store (not
+    // a process-env toggle) per the repository guardrails.
+    let configured = dir
+        .or_else(|| {
+            crate::runtime_config::get(root, "CTOX_WEB_BROWSER_REFERENCE_DIR").map(PathBuf::from)
+        })
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_REFERENCE_RELATIVE_DIR));
+    resolve_root_relative_path(root, configured)
 }
 
 fn bootstrap_payload(reference_dir: &Path) -> serde_json::Value {

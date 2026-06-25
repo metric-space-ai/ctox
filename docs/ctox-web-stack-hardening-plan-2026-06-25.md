@@ -191,9 +191,10 @@ Billige, klar falsifizierbare Bugs — alle mit Fixture/Test abschließen.
 ### WS5-07 ☐ Toten Code/Fixtures entfernen
 - Ungenutzte `fixtures/google_results*.html` (Playwright-Umbau), `fetch_evidence_doc` (web_search.rs:1379, vom Build als dead gemeldet), unreachable arm in `northdata.rs:105`.
 
-### WS5-08 ☐ `CTOX_WEB_BROWSER_REFERENCE_DIR` aus Env entfernen
+### WS5-08 ☑ `CTOX_WEB_BROWSER_REFERENCE_DIR` aus Env entfernen
 - **Datei:** [browser.rs:871](../src/tools/web-stack/src/browser.rs)
 - Über `runtime_config::get` lesen statt `std::env::var_os`; README-Aussage „nicht aus Env" wieder wahr machen. (Einzige Guardrail-Verletzung der Crate.)
+- **Umgesetzt (2026-06-25):** `browser_reference_dir` liest den Key jetzt via `crate::runtime_config::get(root, …)` (SQLite); Präzedenz `--dir` > SQLite-Config > Default. Grep bestätigt: **keine** `CTOX_*`-Env-Prod-Toggles mehr in der Crate (verbleibende `std::env::var` sind OS-Reads DISPLAY/WAYLAND/PATH + `#[cfg(test)]`-Bench). README-Tabelle stimmt nun.
 
 ---
 
