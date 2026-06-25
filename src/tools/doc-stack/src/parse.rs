@@ -785,17 +785,39 @@ fn strip_rtf_text(raw: &str) -> String {
     clean_text(&text)
 }
 
+/// Maximum decompressed size read from a single zip entry. OOXML/ODF text parts
+/// (document.xml, sheetN.xml, slideN.xml, sharedStrings.xml) are XML and stay
+/// well under this even for very large documents; an entry that decompresses
+/// beyond it is treated as a zip bomb and rejected instead of being read into
+/// memory unbounded.
+const MAX_ZIP_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
+
 fn open_zip_archive(bytes: &[u8]) -> Result<ZipArchive<Cursor<&[u8]>>> {
     ZipArchive::new(Cursor::new(bytes)).context("failed to parse zipped document container")
 }
 
+/// Read a zip entry into memory, capping the decompressed size at `limit` so a
+/// crafted container cannot exhaust memory. Reads one byte past the limit to
+/// detect (and reject) oversized entries.
+fn read_zip_entry_capped<R: Read>(reader: R, name: &str, limit: u64) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let read = reader
+        .take(limit + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("failed to read archive entry {name}"))?;
+    if read as u64 > limit {
+        anyhow::bail!(
+            "archive entry {name} exceeds the {limit}-byte decompression limit (possible zip bomb)"
+        );
+    }
+    Ok(bytes)
+}
+
 fn read_zip_entry_string(archive: &mut ZipArchive<Cursor<&[u8]>>, name: &str) -> Result<String> {
-    let mut file = archive
+    let file = archive
         .by_name(name)
         .with_context(|| format!("missing archive entry {name}"))?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .with_context(|| format!("failed to read archive entry {name}"))?;
+    let bytes = read_zip_entry_capped(file, name, MAX_ZIP_ENTRY_BYTES)?;
     Ok(String::from_utf8_lossy(&bytes).to_string())
 }
 
@@ -804,10 +826,8 @@ fn read_optional_zip_entry_string(
     name: &str,
 ) -> Result<Option<String>> {
     match archive.by_name(name) {
-        Ok(mut file) => {
-            let mut bytes = Vec::new();
-            file.read_to_end(&mut bytes)
-                .with_context(|| format!("failed to read archive entry {name}"))?;
+        Ok(file) => {
+            let bytes = read_zip_entry_capped(file, name, MAX_ZIP_ENTRY_BYTES)?;
             Ok(Some(String::from_utf8_lossy(&bytes).to_string()))
         }
         Err(zip::result::ZipError::FileNotFound) => Ok(None),
@@ -1051,6 +1071,26 @@ mod tests {
         assert_eq!(chunks[1].section_title.as_deref(), Some("Section"));
         assert_eq!(chunks[1].start_line, Some(5));
         assert!(chunks[1].text.contains("Line a"));
+    }
+
+    #[test]
+    fn capped_zip_entry_read_rejects_decompression_bombs() {
+        use super::read_zip_entry_capped;
+        use std::io::Cursor;
+
+        // An entry whose decompressed size exceeds the cap is rejected rather
+        // than read into memory unbounded.
+        let oversized = vec![b'a'; 128];
+        let err =
+            read_zip_entry_capped(Cursor::new(oversized), "sharedStrings.xml", 16).unwrap_err();
+        assert!(
+            err.to_string().contains("decompression limit"),
+            "unexpected error: {err}"
+        );
+
+        // An entry within the cap reads through unchanged.
+        let ok = read_zip_entry_capped(Cursor::new(vec![b'a'; 10]), "document.xml", 16).unwrap();
+        assert_eq!(ok.len(), 10);
     }
 
     #[test]
