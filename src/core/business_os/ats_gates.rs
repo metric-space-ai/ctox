@@ -496,7 +496,10 @@ mod tests {
             &["staplerschein"],
             NOW,
         );
-        assert!(dup.ready, "a valid credential should cover an expired duplicate");
+        assert!(
+            dup.ready,
+            "a valid credential should cover an expired duplicate"
+        );
 
         // Regression (#5): a required type that is present but expired and NOT
         // flagged deployment_blocking must still be caught.
@@ -506,7 +509,10 @@ mod tests {
             NOW,
         );
         assert!(!stale.ready);
-        assert!(stale.blockers.iter().any(|(t, why)| t == "g25" && why == "expired"));
+        assert!(stale
+            .blockers
+            .iter()
+            .any(|(t, why)| t == "g25" && why == "expired"));
     }
 
     #[test]
@@ -521,11 +527,19 @@ mod tests {
             NOW,
             false
         ));
-        assert!(consent_valid(&json!({"legal_basis": "contract"}), NOW, false));
+        assert!(consent_valid(
+            &json!({"legal_basis": "contract"}),
+            NOW,
+            false
+        ));
 
         // §9.2: with evidence required, a bare non-consent basis is rejected, but
         // one carrying basis_evidence passes.
-        assert!(!consent_valid(&json!({"legal_basis": "legitimate_interest"}), NOW, true));
+        assert!(!consent_valid(
+            &json!({"legal_basis": "legitimate_interest"}),
+            NOW,
+            true
+        ));
         assert!(consent_valid(
             &json!({"legal_basis": "legitimate_interest", "basis_evidence": "LIA documented 2026-06"}),
             NOW,
@@ -547,7 +561,12 @@ mod tests {
             NOW,
             false
         ));
-        assert!(!evaluate_consent_gate(Some("talent_pool"), &ledger, NOW, false));
+        assert!(!evaluate_consent_gate(
+            Some("talent_pool"),
+            &ledger,
+            NOW,
+            false
+        ));
         assert!(evaluate_consent_gate(None, &[], NOW, false));
     }
 

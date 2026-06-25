@@ -29,6 +29,9 @@ const labels = {
   modifyApp: 'App ändern',
   workData: 'Mit Daten arbeiten',
   answer: 'Frage beantworten',
+  note: 'Notiz an User',
+  mention: 'User erwähnen',
+  approval: 'Freigabe anfragen',
 };
 
 const governance = {
@@ -308,22 +311,35 @@ test('module why diagnostics html uses stable rows and does not leak raw grant j
 
 test('global CTOX context modes render app mode only when app modification is allowed', () => {
   const deniedModes = buildGlobalCtoxContextModes({ canModify: false, labels });
-  assert.deepEqual(deniedModes.map((mode) => mode.value), ['data', 'ask']);
+  assert.deepEqual(deniedModes.map((mode) => mode.value), ['data', 'ask', 'note', 'mention', 'approval']);
 
   const allowedModes = buildGlobalCtoxContextModes({ canModify: true, labels });
-  assert.deepEqual(allowedModes.map((mode) => mode.value), ['data', 'ask', 'app']);
+  assert.deepEqual(allowedModes.map((mode) => mode.value), ['data', 'ask', 'app', 'note', 'mention', 'approval']);
   assert.equal(allowedModes.find((mode) => mode.value === 'app')?.label, 'App ändern');
+  assert.equal(deniedModes.find((mode) => mode.value === 'approval')?.label, 'Freigabe anfragen');
 
   const deniedHtml = renderGlobalCtoxContextModeHtml({ canModify: false, labels });
   assert.doesNotMatch(deniedHtml, /value="app"/);
   assert.doesNotMatch(deniedHtml, /App ändern/);
   assert.doesNotMatch(deniedHtml, /App modifizieren|Modul bearbeiten/);
+  assert.match(deniedHtml, /value="note"/);
+  assert.match(deniedHtml, /value="mention"/);
+  assert.match(deniedHtml, /value="approval"/);
 
   const allowedHtml = renderGlobalCtoxContextModeHtml({ canModify: true, labels });
   assert.match(allowedHtml, /value="data" checked/);
   assert.match(allowedHtml, /value="app"/);
   assert.match(allowedHtml, /App ändern/);
+  assert.match(allowedHtml, /Freigabe anfragen/);
   assert.doesNotMatch(allowedHtml, /App modifizieren|Modul bearbeiten/);
+});
+
+test('global CTOX context modes default to human-in-the-loop actions', () => {
+  const modes = buildGlobalCtoxContextModes({ canModify: false });
+  assert.deepEqual(modes.map((mode) => mode.value), ['data', 'ask', 'note', 'mention', 'approval']);
+  assert.equal(modes.find((mode) => mode.value === 'note')?.label, 'Notiz an User');
+  assert.equal(modes.find((mode) => mode.value === 'mention')?.label, 'User erwähnen');
+  assert.equal(modes.find((mode) => mode.value === 'approval')?.label, 'Freigabe anfragen');
 });
 
 test('global CTOX agent scope view exposes actor app data and external boundaries', () => {

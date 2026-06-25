@@ -17,9 +17,10 @@
 
 import { createCommandBus } from '../../shared/command-bus.js';
 
-function mockCollection(docsById) {
+function mockCollection(docsById, events = null, name = '') {
   return {
     async insert(doc) {
+      events?.push(`insert:${name}`);
       docsById.set(doc.id, doc);
     },
     findOne(id) {
@@ -32,10 +33,10 @@ function mockCollection(docsById) {
   };
 }
 
-function makeDb({ commandAck, queueTask = null }) {
+function makeDb({ commandAck, queueTask = null, events = null }) {
   const commands = new Map();
   const queue = new Map();
-  const commandCollection = mockCollection(commands);
+  const commandCollection = mockCollection(commands, events, 'business_commands');
   // After the bus inserts the pending command doc, simulate the native
   // acknowledgement by overlaying the accepted fields on the stored doc.
   const originalInsert = commandCollection.insert;
@@ -47,7 +48,25 @@ function makeDb({ commandAck, queueTask = null }) {
   return {
     raw: {
       business_commands: commandCollection,
-      ctox_queue_tasks: mockCollection(queue),
+      ctox_queue_tasks: mockCollection(queue, events, 'ctox_queue_tasks'),
+    },
+  };
+}
+
+function makeSync(events) {
+  return {
+    async startCollection(name) {
+      events.push(`start:${name}`);
+      return {
+        state: {
+          async awaitInSync() {
+            events.push(`ready:${name}`);
+          },
+          async pushToRemotePeers() {
+            events.push(`flush:${name}`);
+          },
+        },
+      };
     },
   };
 }
@@ -104,7 +123,42 @@ const assert = (condition, message) => {
   assert(result.result.outcome.data.provider === 'codex', 'coding-agent direct outcome: structured data preserved');
 }
 
-// --- 4. failed command rejects with the command error ----------------------
+// --- 4. file-backed commands flush dependencies before command insert ------
+{
+  const events = [];
+  const db = makeDb({
+    events,
+    commandAck: { status: 'accepted', task_id: 'queue:system::sync-order' },
+    queueTask: { id: 'queue:system::sync-order', status: 'queued' },
+  });
+  const bus = createCommandBus({ db, sync: makeSync(events) });
+  const result = await bus.dispatch({
+    type: 'business_os.chat.task',
+    module: 'cv-print-builder',
+    sync_collections: ['documents', 'desktop_file_chunks', 'desktop_files'],
+    payload: {
+      attachments: [{
+        kind: 'desktop_file',
+        file_id: 'desktop_file_cv',
+        generation_id: 'desktop_file_cv_g1',
+      }],
+    },
+  });
+  assert(result.ok === true, 'dependency sync command: ok');
+  const commandInsert = events.indexOf('insert:business_commands');
+  assert(commandInsert >= 0, 'dependency sync command: command inserted');
+  for (const name of ['documents', 'desktop_file_chunks', 'desktop_files']) {
+    const flush = events.indexOf(`flush:${name}`);
+    assert(flush >= 0, `dependency sync command: ${name} flushed`);
+    assert(flush < commandInsert, `dependency sync command: ${name} flushed before command insert`);
+  }
+  assert(
+    events.indexOf('flush:business_commands') > commandInsert,
+    'dependency sync command: business_commands flushed after command insert',
+  );
+}
+
+// --- 5. failed command rejects with the command error ----------------------
 {
   const db = makeDb({
     commandAck: {

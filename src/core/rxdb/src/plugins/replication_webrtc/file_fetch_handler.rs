@@ -6,24 +6,24 @@
 //! that already has chunks 0..49 can resume from 50.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::rx_error::{new_rx_error, RxError, RxResult};
+use crate::rx_error::{RxError, RxResult, new_rx_error};
 
 use super::protocol_contract_generated::{
     CTOX_FILE_MAX_BYTES_PER_CHUNK, CTOX_FILE_RPC_CANCEL, CTOX_FILE_RPC_CHUNK, CTOX_FILE_RPC_ERROR,
     CTOX_FILE_RPC_FETCH, CTOX_QUERY_MAX_RUNTIME_MS,
 };
 use super::webrtc_types::{
-    WebRTCConnectionHandler, WebRTCMessage, WebRTCResponse, WebRTCWireFrame,
-    WEBRTC_BUFFERED_HIGH_WATER,
+    WEBRTC_BUFFERED_HIGH_WATER, WebRTCConnectionHandler, WebRTCMessage, WebRTCResponse,
+    WebRTCWireFrame,
 };
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -505,15 +505,17 @@ async fn send_file_chunk<H: WebRTCConnectionHandler>(
     let frame = WebRTCMessage {
         id: format!("{}-f{}", request.request_id, sequence),
         method: CTOX_FILE_RPC_CHUNK.to_string(),
-        params: vec![serde_json::to_value(FileFetchChunk {
-            request_id: request.request_id.clone(),
-            sequence,
-            bytes_base64: b64,
-            hash: Some(hash),
-            complete,
-            cancelled: if cancelled { Some(true) } else { None },
-        })
-        .unwrap_or(Value::Null)],
+        params: vec![
+            serde_json::to_value(FileFetchChunk {
+                request_id: request.request_id.clone(),
+                sequence,
+                bytes_base64: b64,
+                hash: Some(hash),
+                complete,
+                cancelled: if cancelled { Some(true) } else { None },
+            })
+            .unwrap_or(Value::Null),
+        ],
         collection: Some(request.collection_name.clone()),
     };
     let _ = handler.send(peer, WebRTCWireFrame::Message(frame)).await;

@@ -60,7 +60,7 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   browser_sessions: "8f9d925480b6fa11755bb0800e47da9d4b8dca59f510fb5c6bfb3d84cec212d3",
   browser_tabs: "3387a8373cad98f4651b15173cf920568970ad2afa7f14758bbfffe9d77d5004",
   business_chats: "4f7fc2d29ea54ef9cabef037caa01f0ef2567fc2fa156835c952bef2dd2fd456",
-  business_commands: "4c273d32175717566fdc42c6f7b5d32e144f9d2ed1c7f5db15d1b9ef04c89d5e",
+  business_commands: "cea41185cea8447fd7ef3684217e5030e7ab25a1fa71d7c1978182d153013357",
   business_consents: "4e0031090f60e466e8d9b2818a73faac41d89adabba5c2f2fd75a4b48cef9d68",
   business_credentials: "5583908188482df5c694d6214ef4f3a250fdcd09d7111a5a859a5976f4a40b7d",
   business_module_acl: "7f2c6c44ffadefb0c9be30dba9f3067fc48e0847424e3f2709638c5ebcd8bedf",
@@ -85,9 +85,10 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   communication_messages: "10d120234ec23bbe98124d255599f44d2ef68ecb5ff29787b9b647aaf6537b6f",
   communication_threads: "2111d907ee8cc8c7c2c4e9f10a43bc56f217071dbee0610a96b0457ef6473a8d",
   ctox_bug_reports: "f7329368ad5144b8ea740600265f06c6ac19ad049de751cec92818d9d9de94b5",
-  ctox_queue_tasks: "2a5c7c35f65a2ad0e35d19902bbb0c45456137c30f046e9d322406872fbd0824",
+  ctox_queue_tasks: "7543fede543cd27a60fd405d1046b98951916bf917c5d596fa78b32c6abcbc5c",
   ctox_runs: "73df37bddc2e511b0567496f6199089aef436dd598a3e0bf85f462d38b4f3fff",
   ctox_runtime_settings: "3958bb6580e9705f3688fcf453a80ec33c486b43ac6988f015ffc16cb5ac918d",
+  ctox_task_approval_requests: "5bbda4583cadd08e30c5948d2ed197cbf4a1f8f342580c1e531fd2a054da84fe",
   ctox_ticket_approvals: "b233b5e15b0f46ccfa864976861b8e0665dcee8f3e5d920f1c2341b2a3366ba9",
   ctox_ticket_cases: "b233b5e15b0f46ccfa864976861b8e0665dcee8f3e5d920f1c2341b2a3366ba9",
   ctox_ticket_clarification_requests: "b233b5e15b0f46ccfa864976861b8e0665dcee8f3e5d920f1c2341b2a3366ba9",
@@ -112,7 +113,7 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   customer_view_filters: "abd2880ebc48b29b72ef205a4b09085ee7acf1bdde3ffebcea08059ed7e99123",
   customer_view_sorts: "be8feb8ba887879e7c223d4883b9b7771a0b137e9523c732d4de3432b3f4dc51",
   customer_views: "c20ecce31428596148a2a4348061465eb8055aee14ef84ed9755d1a84503936e",
-  desktop_file_chunks: "e59672c6f729c100b9076f88be0abb695f8e780f5cd03c2fabc7abc770ae44d9",
+  desktop_file_chunks: "f3d9e6f8278f3140993109de6e34617376a4cd2b850e59dc066c0af066d6cc63",
   desktop_files: "5c8ea6eddecd37233ef1b99ad10280afe9ae5654bc77819d85d56236257be627",
   desktop_icons: "b3fc7cde6c2df59469255353b9ce91e5213ad091b86e8b3f2372e63db8c5ecd9",
   desktop_layout: "d741aa98029c7e0c38fb2ef53e32319ee4c7891b808c875802c540d60bdf5c3c",
@@ -193,7 +194,11 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   support_sla_policies: "c8f69d71947f117259d132c02e7b513d20a9467d400c2c08b573618177724953",
   support_thread_links: "c144074785a1e22697f7f2ebc30b297d404fd3ff2bfca797b78371e9f205a8be",
   support_view_filters: "e8988877eef64c437758f90f5d6868d8310122bb5f78e854fad31d256d3cafe5",
-  support_views: "10ac9212258aef30b798d1d4e6d58712b9f59ee725966a8c7bd0fa49f72c1033"
+  support_views: "10ac9212258aef30b798d1d4e6d58712b9f59ee725966a8c7bd0fa49f72c1033",
+  user_notifications: "28593fbad81de44fc2218886d67284cc140ca4b657bf75267412859a32753e5b",
+  user_thread_links: "cc911076015a884b58fda2b28b5e8d840b048e78d958081429db31d573916129",
+  user_thread_messages: "27f6e6e683c5ae1ccce85e4a73ce6d7df44639faeaad85f9f3fbadf0762a573a",
+  user_threads: "5074a07e8b5b03b69f6f47e4f908cbbe52b920a10f0ce615459afb3af47edb63"
 });
 function canonicalJson(value) {
   return JSON.stringify(sortCanonical(value));

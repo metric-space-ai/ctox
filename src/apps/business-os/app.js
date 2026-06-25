@@ -35,7 +35,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260625-sync-toast2';
+const APP_BUILD = '20260625-cv-print-parser-v18';
 
 ensureShellStylesheets();
 
@@ -4444,6 +4444,15 @@ const SCOPED_SYSTEM_MODULE_DB_COLLECTIONS = Object.freeze({
     'ctox_bug_reports',
     'ctox_queue_tasks',
   ]),
+  threads: Object.freeze([
+    'business_commands',
+    'ctox_queue_tasks',
+    'ctox_task_approval_requests',
+    'user_notifications',
+    'user_thread_links',
+    'user_thread_messages',
+    'user_threads',
+  ]),
   tickets: Object.freeze([
     'business_commands',
     'ctox_ticket_approvals',
@@ -7027,6 +7036,32 @@ function getOfflineFallbackCatalog() {
         }
       },
       {
+        "id": "threads",
+        "title": "Threads",
+        "description": "User-focused Business OS hub for app-linked notes, mentions, handoffs, and CTOX approval requests across durable work lifecycle records.",
+        "entry": "modules/threads/index.html",
+        "collections": [
+          "business_commands",
+          "ctox_queue_tasks",
+          "user_threads",
+          "user_thread_messages",
+          "user_thread_links",
+          "user_notifications",
+          "ctox_task_approval_requests"
+        ],
+        "source": "core",
+        "core": true,
+        "editable": true,
+        "deletable": false,
+        "layout": {
+          "shell": "full-workspace",
+          "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-threads\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-threads\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\" /><stop offset=\"100%\" stop-color=\"#7c3aed\" /></linearGradient></defs><path d=\"M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v7A2.5 2.5 0 0 1 17.5 15H10l-5 4v-4.2A2.5 2.5 0 0 1 4 12.5z\" fill=\"url(#grad-threads)\" fill-opacity=\"0.12\" stroke=\"url(#grad-threads)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><path d=\"M8 8h8M8 11h5\" stroke=\"url(#grad-threads)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><circle cx=\"18\" cy=\"18\" r=\"3\" fill=\"#fff\" stroke=\"url(#grad-threads)\" stroke-width=\"1.5\"></circle><path d=\"M18 16.6v1.7l1.2.8\" stroke=\"url(#grad-threads)\" stroke-width=\"1.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path></svg>",
+          "left": "personal inbox, approvals, and source filters",
+          "center": "durable thread timeline tied to app records",
+          "right": "new notes, CTOX approval requests, and lifecycle context"
+        }
+      },
+      {
         "id": "reports",
         "title": "Bugs & Features",
         "description": "Historical bug and feature request tracker with CTOX acceptance, change evidence, screenshots, and module rollback actions.",
@@ -8499,9 +8534,22 @@ function extractGlobalCtoxContext(mod, target) {
     record_type: record?.type || 'module',
     record_id: record?.id || '',
     label: record?.label || mod?.title || mod?.id || '',
+    deep_link: buildGlobalCtoxContextDeepLink(mod?.id || '', record),
     selected_text: selectedText,
     clicked_text: clickedText
   };
+}
+
+function buildGlobalCtoxContextDeepLink(moduleId, record) {
+  const cleanModule = String(moduleId || '').trim();
+  if (!cleanModule) return '';
+  const params = new URLSearchParams();
+  const recordId = String(record?.id || '').trim();
+  const recordType = String(record?.type || '').trim();
+  if (recordId) params.set('record', recordId);
+  if (recordType) params.set('record_type', recordType);
+  const query = params.toString();
+  return `#${encodeURIComponent(cleanModule)}${query ? `?${query}` : ''}`;
 }
 
 function detectColumnFromElement(moduleId, element) {
@@ -8533,6 +8581,15 @@ function detectRecordFromElement(moduleId, element) {
   ];
 
   while (current && current !== document.body) {
+    const contextRecordId = current.getAttribute('data-context-record-id') || current.getAttribute('data-context-id');
+    if (contextRecordId) {
+      return {
+        type: current.getAttribute('data-context-record-type') || current.getAttribute('data-record-type') || moduleId || 'item',
+        id: contextRecordId,
+        label: current.getAttribute('data-context-label') || deriveLabelFromElement(current)
+      };
+    }
+
     // 1. Check ID attributes
     for (const attr of idAttributePatterns) {
       if (current.hasAttribute(attr)) {
@@ -8624,12 +8681,23 @@ function showGlobalCtoxContextMenu(context, x, y) {
   const workDataLabel = shellText('chatWorkDataLabel') || (lang === 'de' ? 'Mit Daten arbeiten' : 'Work with data');
   const answerLabel = shellText('chatAnswerLabel') || (lang === 'de' ? 'Frage beantworten' : 'Answer question');
   const modifyAppLabel = shellText('chatModifyAppLabel') || (lang === 'de' ? 'App ändern' : 'Change app');
+  const noteLabel = lang === 'de' ? 'Notiz an User' : 'Note to user';
+  const mentionLabel = lang === 'de' ? 'User erwähnen' : 'Mention user';
+  const approvalLabel = lang === 'de' ? 'Freigabe anfragen' : 'Request approval';
   const placeholderText = shellText('chatPlaceholder') || (lang === 'de' ? 'Was soll CTOX hier tun oder prüfen?' : 'What should CTOX do or check here?');
+  const notePlaceholderText = lang === 'de' ? 'Welche Notiz soll am Kontext hängen?' : 'What note should stay attached to this context?';
+  const mentionPlaceholderText = lang === 'de' ? 'Warum soll dieser User hier eingebunden werden?' : 'Why should this user be pulled into this context?';
+  const approvalPlaceholderText = lang === 'de' ? 'Was soll CTOX nach Freigabe tun?' : 'What should CTOX do after approval?';
   const sendLabel = shellText('send') || (lang === 'de' ? 'Senden' : 'Send');
   const closeLabel = lang === 'de' ? 'Schließen' : 'Close';
   const missingMsgLabel = lang === 'de' ? 'Nachricht fehlt.' : 'Message is missing.';
+  const missingUserLabel = lang === 'de' ? 'User fehlt.' : 'User is missing.';
   const chatNotReadyLabel = lang === 'de' ? 'Chat ist noch nicht bereit.' : 'Chat is not ready.';
   const chatOpeningLabel = shellText('chatOpening') || (lang === 'de' ? 'Öffne Chat...' : 'Opening Chat...');
+  const commandOpeningLabel = lang === 'de' ? 'Sende an Threads...' : 'Sending to Threads...';
+  const userInputLabel = lang === 'de' ? 'User' : 'User';
+  const noteUserPlaceholder = lang === 'de' ? 'user-id, mehrere mit Komma' : 'user-id, comma separated';
+  const reviewerPlaceholder = lang === 'de' ? 'reviewer-user-id' : 'reviewer-user-id';
 
   const subtitle = context.label || shellText('moduleTitles')?.[mod.id] || mod.title || mod.id;
 
@@ -8649,10 +8717,17 @@ function showGlobalCtoxContextMenu(context, x, y) {
             workData: workDataLabel,
             answer: answerLabel,
             modifyApp: modifyAppLabel,
+            note: noteLabel,
+            mention: mentionLabel,
+            approval: approvalLabel,
           },
         })}
       </div>
       ${renderGlobalCtoxAgentScopeHtml({ view: agentScope })}
+      <label class="ctox-context-user-row" hidden style="display: grid; gap: 5px; color: var(--text-muted, var(--muted, #64747c)); font-size: 11.5px; font-weight: 700;">
+        <span class="ctox-context-user-label">${escapeHtml(userInputLabel)}</span>
+        <input class="ctox-context-user-input" type="text" autocomplete="off" placeholder="${escapeHtml(noteUserPlaceholder)}" style="width: 100%; box-sizing: border-box; height: 32px; border: 1px solid var(--line, #d8e1e5); border-radius: 8px; background: var(--surface-2, #eef3f7); color: var(--text, #18222d); font-family: inherit; font-size: 12.5px; padding: 0 10px; outline: none;">
+      </label>
       <textarea class="ctox-context-textarea" placeholder="${escapeHtml(placeholderText)}" style="width: 100%; box-sizing: border-box; min-height: 96px; max-height: 180px; border: 1px solid var(--line, #d8e1e5); border-radius: 8px; background: var(--surface-2, #eef3f7); color: var(--text, #18222d); font-family: inherit; font-size: 12.5px; line-height: 1.4; padding: 10px; resize: vertical; outline: none; transition: border-color 0.2s ease;"></textarea>
       <footer style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
         <span class="ctox-context-status" style="font-size: 11px; color: var(--text-muted, var(--muted, #64747c)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></span>
@@ -8674,6 +8749,9 @@ function showGlobalCtoxContextMenu(context, x, y) {
 
   const form = globalCtoxContextMenuEl.querySelector('form');
   const textarea = globalCtoxContextMenuEl.querySelector('.ctox-context-textarea');
+  const userRow = globalCtoxContextMenuEl.querySelector('.ctox-context-user-row');
+  const userInput = globalCtoxContextMenuEl.querySelector('.ctox-context-user-input');
+  const userLabel = globalCtoxContextMenuEl.querySelector('.ctox-context-user-label');
   const statusEl = globalCtoxContextMenuEl.querySelector('.ctox-context-status');
   const closeBtn = globalCtoxContextMenuEl.querySelector('.ctox-context-close-btn');
 
@@ -8682,14 +8760,42 @@ function showGlobalCtoxContextMenu(context, x, y) {
   });
 
   const modeLabels = globalCtoxContextMenuEl.querySelectorAll('.ctox-context-mode label');
+  const syncModeInputs = () => {
+    const mode = new FormData(form).get('contextMode') || 'data';
+    const needsUser = mode === 'note' || mode === 'mention' || mode === 'approval';
+    if (userRow) {
+      userRow.hidden = !needsUser;
+      userRow.style.display = needsUser ? 'grid' : 'none';
+    }
+    if (userInput) {
+      userInput.placeholder = mode === 'approval' ? reviewerPlaceholder : noteUserPlaceholder;
+      userInput.value = needsUser ? userInput.value : '';
+    }
+    if (userLabel) {
+      userLabel.textContent = mode === 'approval'
+        ? (lang === 'de' ? 'Reviewer' : 'Reviewer')
+        : mode === 'mention'
+          ? (lang === 'de' ? 'Erwähnte User' : 'Mentioned users')
+          : userInputLabel;
+    }
+    textarea.placeholder = mode === 'approval'
+      ? approvalPlaceholderText
+      : mode === 'mention'
+        ? mentionPlaceholderText
+      : mode === 'note'
+        ? notePlaceholderText
+        : placeholderText;
+  };
   modeLabels.forEach(label => {
     label.addEventListener('click', () => {
       modeLabels.forEach(l => l.classList.remove('is-selected'));
       label.classList.add('is-selected');
       const input = label.querySelector('input');
       if (input) input.checked = true;
+      syncModeInputs();
     });
   });
+  syncModeInputs();
 
   const closeBtnHover = () => { closeBtn.style.color = 'var(--text-strong)'; };
   const closeBtnOut = () => { closeBtn.style.color = 'var(--text-muted)'; };
@@ -8713,6 +8819,94 @@ function showGlobalCtoxContextMenu(context, x, y) {
       return;
     }
 
+    let mode = new FormData(form).get('contextMode') || 'data';
+    if (mode === 'app' && !canModify) mode = 'data';
+
+    if (mode === 'note' || mode === 'mention' || mode === 'approval') {
+      const rawUserValue = String(userInput?.value || '').trim();
+      if (!rawUserValue) {
+        if (statusEl) statusEl.textContent = missingUserLabel;
+        userInput?.focus?.();
+        return;
+      }
+      if (!state.commandBus?.dispatch) {
+        if (statusEl) statusEl.textContent = chatNotReadyLabel;
+        return;
+      }
+      if (statusEl) statusEl.textContent = commandOpeningLabel;
+      const sourceContext = {
+        module: mod.id,
+        column: context.column,
+        record_type: context.record_type,
+        record_id: context.record_id,
+        label: context.label || mod.title || mod.id,
+        deep_link: context.deep_link,
+        selected_text: context.selected_text,
+        clicked_text: context.clicked_text,
+      };
+      const recordId = context.record_id || mod.id;
+      const title = `${mode === 'approval' ? approvalLabel : mode === 'mention' ? mentionLabel : noteLabel} · ${subtitle}`;
+      const payload = mode === 'approval'
+        ? {
+            prompt,
+            instruction: prompt,
+            reviewer_user_id: rawUserValue,
+            title,
+            target_command_type: 'business_os.chat.task',
+            target_module: mod.id,
+            target_record_id: recordId,
+            source_context: sourceContext,
+            target_payload: {
+              title,
+              instruction: prompt,
+              prompt,
+              user_message: prompt,
+              mode: 'data',
+              target: 'data',
+              context: sourceContext,
+              thread_key: `business-os/${mod.id}/${recordId || 'module'}`,
+            },
+          }
+        : {
+            body: prompt,
+            kind: mode === 'mention' ? 'mention' : 'note',
+            target_user_ids: splitShellUserIds(rawUserValue),
+            title,
+            source_context: sourceContext,
+          };
+      try {
+        await state.commandBus.dispatch({
+          id: `cmd_${crypto.randomUUID()}`,
+          module: 'threads',
+          command_type: mode === 'approval' ? 'threads.ctox_approval.request' : 'threads.note.create',
+          record_id: recordId,
+          inbound_channel: mod.id,
+          payload,
+          client_context: {
+            action: mode === 'approval'
+              ? 'context-approval-request'
+              : mode === 'mention'
+                ? 'context-mention'
+                : 'context-note',
+            mode,
+            module: 'threads',
+            module_id: 'threads',
+            app_id: 'threads',
+            source_module: mod.id,
+            actor: agentScope.actor,
+            visible_scope: agentScope,
+            column: context.column,
+            record_type: context.record_type,
+            record_id: context.record_id,
+          },
+        });
+        hideGlobalCtoxContextMenu();
+      } catch (error) {
+        if (statusEl) statusEl.textContent = error?.message || chatNotReadyLabel;
+      }
+      return;
+    }
+
     if (!document.querySelector('[data-ctox-chat-root]')) {
       if (statusEl) statusEl.textContent = chatNotReadyLabel;
       return;
@@ -8720,8 +8914,6 @@ function showGlobalCtoxContextMenu(context, x, y) {
 
     if (statusEl) statusEl.textContent = chatOpeningLabel;
 
-    let mode = new FormData(form).get('contextMode') || 'data';
-    if (mode === 'app' && !canModify) mode = 'data';
     let title;
     let instruction;
     if (mode === 'app') {
@@ -8757,6 +8949,7 @@ function showGlobalCtoxContextMenu(context, x, y) {
             record_type: context.record_type,
             record_id: context.record_id,
             label: context.label || mod.title || mod.id,
+            deep_link: context.deep_link,
             selected_text: context.selected_text,
             clicked_text: context.clicked_text,
           },
@@ -8790,4 +8983,12 @@ function hideGlobalCtoxContextMenu() {
   if (globalCtoxContextMenuEl) {
     globalCtoxContextMenuEl.hidden = true;
   }
+}
+
+function splitShellUserIds(value) {
+  return String(value || '')
+    .split(/[,\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .filter((item, index, list) => list.indexOf(item) === index);
 }

@@ -12,6 +12,7 @@ mod rxdb_peer;
 pub mod server;
 pub mod store;
 mod support;
+mod threads;
 
 pub use rxdb_peer::browser_context_capture;
 pub use rxdb_peer::browser_session_status;

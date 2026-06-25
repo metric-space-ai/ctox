@@ -16,6 +16,12 @@ export const collections = {
       updated_at_ms: { type: 'number' }
     },
     required: ['id', 'command_id', 'module', 'command_type', 'status', 'updated_at_ms'],
+    indexes: [
+      'status',
+      'command_id',
+      ['status', 'updated_at_ms'],
+      ['module', 'command_type', 'status', 'updated_at_ms']
+    ],
     additionalProperties: true
   },
   ctox_queue_tasks: {
@@ -24,6 +30,8 @@ export const collections = {
     type: 'object',
     properties: {
       id: { type: 'string', maxLength: 128 },
+      command_id: { type: 'string' },
+      command_type: { type: 'string' },
       title: { type: 'string' },
       status: { type: 'string' },
       module: { type: 'string' },
@@ -32,6 +40,13 @@ export const collections = {
       updated_at_ms: { type: 'number' }
     },
     required: ['id', 'title', 'status', 'module'],
+    indexes: [
+      'status',
+      'command_id',
+      'updated_at_ms',
+      ['status', 'updated_at_ms'],
+      ['command_id', 'status']
+    ],
     additionalProperties: true
   },
   business_chats: {

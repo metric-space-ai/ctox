@@ -1,11 +1,11 @@
-use anyhow::{anyhow, bail, Context, Result};
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine as _;
-use mailparse::{parse_mail, DispositionType, MailHeaderMap, ParsedMail};
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use mailparse::{DispositionType, MailHeaderMap, ParsedMail, parse_mail};
 use native_tls::{TlsConnector, TlsStream};
 use roxmltree::Document;
 use rusqlite::{Connection, OptionalExtension};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -19,13 +19,13 @@ use crate::communication::adapters::{
 };
 use crate::communication::attachments::{load_outbound_attachments, refs_for_paths};
 use crate::communication::microsoft_graph_auth::{
-    acquire_app_token, acquire_ropc_token, ROPC_PUBLIC_CLIENT_ID,
+    ROPC_PUBLIC_CLIENT_ID, acquire_app_token, acquire_ropc_token,
 };
 use crate::communication::runtime as communication_runtime;
 use crate::mission::channels::{
-    ensure_account, ensure_routing_rows_for_inbound, now_iso_string, open_channel_db, preview_text,
-    record_communication_sync_run, refresh_thread, stable_digest, upsert_communication_message,
-    CommunicationSyncRun, UpsertMessage,
+    CommunicationSyncRun, UpsertMessage, ensure_account, ensure_routing_rows_for_inbound,
+    now_iso_string, open_channel_db, preview_text, record_communication_sync_run, refresh_thread,
+    stable_digest, upsert_communication_message,
 };
 
 const DEFAULT_IMAP_HOST: &str = "imap.one.com";
@@ -506,7 +506,13 @@ fn execute_sync(options: &EmailOptions) -> Result<Value> {
                 let mut imap = ImapClient::connect(options)?;
                 imap.login(&options.email, &options.password)?;
                 imap.select(&options.folder)?;
-                let selected = latest_imap_uids(imap.search_all_uids()?, options.limit);
+                let known_uid = latest_known_imap_uid(&conn, &account_key, &options.folder)?;
+                let candidate_uids = if let Some(known_uid) = known_uid {
+                    imap.search_uids_since(known_uid.saturating_add(1))?
+                } else {
+                    imap.search_all_uids()?
+                };
+                let selected = latest_imap_uids(candidate_uids, options.limit);
                 fetched_count = selected.len() as i64;
                 for uid in selected {
                     let message_key = message_key_from_remote(&account_key, &options.folder, &uid);
@@ -752,6 +758,37 @@ fn known_communication_message(conn: &Connection, message_key: &str) -> Result<b
         )
         .optional()?;
     Ok(exists.is_some())
+}
+
+const LATEST_KNOWN_IMAP_UID_SQL: &str = r#"
+    SELECT remote_id
+    FROM communication_messages
+    WHERE channel = 'email'
+      AND account_key = ?1
+      AND folder_hint = ?2
+      AND remote_id <> ''
+      AND remote_id NOT GLOB '*[^0-9]*'
+    ORDER BY CAST(remote_id AS INTEGER) DESC
+    LIMIT 1
+"#;
+
+fn latest_known_imap_uid(
+    conn: &Connection,
+    account_key: &str,
+    folder_hint: &str,
+) -> Result<Option<u64>> {
+    conn.query_row(
+        LATEST_KNOWN_IMAP_UID_SQL,
+        (account_key, folder_hint),
+        |row| row.get::<_, String>(0),
+    )
+    .optional()?
+    .map(|value| {
+        value
+            .parse::<u64>()
+            .with_context(|| format!("stored IMAP UID is not numeric: {value}"))
+    })
+    .transpose()
 }
 
 fn sync_options_from_args(
@@ -2090,6 +2127,21 @@ impl ImapClient {
 
     fn search_all_uids(&mut self) -> Result<Vec<String>> {
         let response = self.command("UID SEARCH ALL")?;
+        let text = String::from_utf8_lossy(&response);
+        let match_line = text
+            .lines()
+            .find(|line| line.starts_with("* SEARCH "))
+            .unwrap_or("");
+        Ok(match_line
+            .trim_start_matches("* SEARCH ")
+            .split_whitespace()
+            .map(|value| value.to_string())
+            .collect())
+    }
+
+    fn search_uids_since(&mut self, start_uid: u64) -> Result<Vec<String>> {
+        let start_uid = start_uid.max(1);
+        let response = self.command(&format!("UID SEARCH UID {start_uid}:*"))?;
         let text = String::from_utf8_lossy(&response);
         let match_line = text
             .lines()
@@ -3721,10 +3773,12 @@ fn acquire_graph_access_token(options: &EmailOptions) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        acquire_graph_access_token, build_ews_file_attachments_xml, effective_graph_password,
-        effective_graph_username, extract_address, latest_imap_uids, require_provider_credentials,
-        synced_message_direction, EmailOptions,
+        EmailOptions, LATEST_KNOWN_IMAP_UID_SQL, acquire_graph_access_token,
+        build_ews_file_attachments_xml, effective_graph_password, effective_graph_username,
+        extract_address, latest_imap_uids, latest_known_imap_uid, require_provider_credentials,
+        synced_message_direction,
     };
+    use crate::mission::channels::{UpsertMessage, open_channel_db, upsert_communication_message};
     use std::io::Write;
     use std::path::PathBuf;
 
@@ -3815,6 +3869,78 @@ mod tests {
             3,
         );
         assert_eq!(selected, vec!["101", "100", "99"]);
+    }
+
+    #[test]
+    fn latest_known_imap_uid_uses_numeric_account_folder_remote_ids() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let db_path = temp.path().join("ctox.sqlite3");
+        let mut conn = open_channel_db(&db_path)?;
+        for (message_key, account_key, folder_hint, remote_id) in [
+            ("msg-98", "email:agent@example.test", "INBOX", "98"),
+            ("msg-101", "email:agent@example.test", "INBOX", "101"),
+            ("msg-lexical", "email:agent@example.test", "INBOX", "99a"),
+            ("msg-sent", "email:agent@example.test", "sent", "999"),
+            (
+                "msg-other-account",
+                "email:other@example.test",
+                "INBOX",
+                "777",
+            ),
+        ] {
+            upsert_communication_message(
+                &mut conn,
+                UpsertMessage {
+                    message_key,
+                    channel: "email",
+                    account_key,
+                    thread_key: message_key,
+                    remote_id,
+                    direction: "inbound",
+                    folder_hint,
+                    sender_display: "Sender",
+                    sender_address: "sender@example.test",
+                    recipient_addresses_json: "[]",
+                    cc_addresses_json: "[]",
+                    bcc_addresses_json: "[]",
+                    subject: "Subject",
+                    preview: "Preview",
+                    body_text: "Body",
+                    body_html: "",
+                    raw_payload_ref: "",
+                    trust_level: "low",
+                    status: "received",
+                    seen: false,
+                    has_attachments: false,
+                    external_created_at: "2026-06-25T00:00:00Z",
+                    observed_at: "2026-06-25T00:00:00Z",
+                    metadata_json: "{}",
+                },
+            )?;
+        }
+
+        assert_eq!(
+            latest_known_imap_uid(&conn, "email:agent@example.test", "INBOX")?,
+            Some(101)
+        );
+        assert_eq!(
+            latest_known_imap_uid(&conn, "email:agent@example.test", "Archive")?,
+            None
+        );
+
+        let explain_sql = format!("EXPLAIN QUERY PLAN {LATEST_KNOWN_IMAP_UID_SQL}");
+        let plan = conn
+            .prepare(&explain_sql)?
+            .query_map(("email:agent@example.test", "INBOX"), |row| {
+                row.get::<_, String>(3)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        assert!(
+            plan.iter()
+                .any(|detail| detail.contains("idx_communication_messages_email_folder_remote")),
+            "latest-known IMAP UID query must use the email folder/remote index, got {plan:?}"
+        );
+        Ok(())
     }
 
     #[test]

@@ -6,22 +6,47 @@
 // associated Parquet files as opaque blobs. No content interpretation,
 // no schema reading, no row access. That is Level 3.
 
-use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::bail;
 use chrono::Utc;
-use rusqlite::params;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
-use serde_json::json;
+use rusqlite::params;
 use serde_json::Map;
 use serde_json::Value;
+use serde_json::json;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::UNIX_EPOCH;
 use uuid::Uuid;
 
 const KNOWLEDGE_DATA_ROOT: &str = "runtime/knowledge/data";
+
+type KnowledgeFileChangeStamp = (bool, u64, u128);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnowledgeTablesProjectionSourceStamp {
+    catalog_rows: Vec<KnowledgeTablesCatalogSourceStamp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct KnowledgeTablesCatalogSourceStamp {
+    table_id: String,
+    domain: String,
+    table_key: String,
+    source_system: String,
+    title: String,
+    description: String,
+    schema_hash: String,
+    row_count: i64,
+    bytes: i64,
+    tags_json: String,
+    updated_at: String,
+    parquet_path: String,
+    parquet_file: KnowledgeFileChangeStamp,
+}
 
 pub fn handle_data_command(root: &Path, args: &[String]) -> Result<()> {
     let sub = args.first().map(String::as_str);
@@ -697,6 +722,87 @@ pub(super) fn compute_parquet_path(root: &Path, domain: &str, table_key: &str) -
         .join(format!("{table_key}.parquet"))
 }
 
+pub fn knowledge_tables_projection_source_stamp(
+    root: &Path,
+) -> Result<KnowledgeTablesProjectionSourceStamp> {
+    let conn = open_runtime_db(root)?;
+    let mut stmt = conn.prepare(
+        "SELECT table_id, domain, table_key, source_system, title, description,
+                schema_hash, row_count, bytes, tags_json, updated_at
+         FROM knowledge_data_tables
+         WHERE archived_at IS NULL
+         ORDER BY updated_at DESC, title, table_id",
+    )?;
+    let catalog_rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, i64>(8)?,
+                row.get::<_, String>(9)?,
+                row.get::<_, String>(10)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let catalog_rows = catalog_rows
+        .into_iter()
+        .map(
+            |(
+                table_id,
+                domain,
+                table_key,
+                source_system,
+                title,
+                description,
+                schema_hash,
+                row_count,
+                bytes,
+                tags_json,
+                updated_at,
+            )| {
+                let parquet_path = compute_parquet_path(root, &domain, &table_key);
+                KnowledgeTablesCatalogSourceStamp {
+                    table_id,
+                    domain,
+                    table_key,
+                    source_system,
+                    title,
+                    description,
+                    schema_hash,
+                    row_count,
+                    bytes,
+                    tags_json,
+                    updated_at,
+                    parquet_path: parquet_path.display().to_string(),
+                    parquet_file: knowledge_file_change_stamp(&parquet_path),
+                }
+            },
+        )
+        .collect();
+
+    Ok(KnowledgeTablesProjectionSourceStamp { catalog_rows })
+}
+
+fn knowledge_file_change_stamp(path: &Path) -> KnowledgeFileChangeStamp {
+    let Ok(metadata) = fs::metadata(path) else {
+        return (false, 0, 0);
+    };
+    let modified_at = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    (metadata.is_file(), metadata.len(), modified_at)
+}
+
 /// Hard upper bound on rows embedded into a single `knowledge_tables` RxDB
 /// doc. Record-shape knowledge tables in CTOX are small (tens to low
 /// thousands of rows), but the cap keeps a pathological table from inflating
@@ -886,8 +992,7 @@ pub(super) fn print_json(value: &Value) -> Result<()> {
     crate::knowledge::print_json(value)
 }
 
-const USAGE_CREATE: &str =
-    "ctox knowledge data create --domain X --key Y [--source-system S] [--title T] [--description D]";
+const USAGE_CREATE: &str = "ctox knowledge data create --domain X --key Y [--source-system S] [--title T] [--description D]";
 const USAGE_DESCRIBE: &str = "ctox knowledge data describe --domain X --key Y";
 const USAGE_CLONE: &str = "ctox knowledge data clone --from-domain A --from-key B --to-domain C --to-key D [--title T] [--description D] [--source-system S]";
 const USAGE_RENAME: &str =
@@ -1024,6 +1129,42 @@ mod tests {
         )?;
         let docs = knowledge_tables_rxdb_documents(root)?;
         assert!(docs.is_empty(), "archived tables are not projected");
+        Ok(())
+    }
+
+    #[test]
+    fn knowledge_tables_projection_source_stamp_tracks_live_parquet_file() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let conn = open_runtime_db(root)?;
+        let now = now_rfc3339();
+        conn.execute(
+            "INSERT INTO knowledge_data_tables (
+                 table_id, domain, table_key, source_system, title, description,
+                 parquet_path, schema_hash, row_count, bytes, tags_json, archived_at,
+                 created_at, updated_at
+             ) VALUES ('kdt-stamp', 'stamp_domain', 'stamp_key', 'agent',
+                       'Stamp Table', 'tracks parquet metadata',
+                       '/stale.parquet', '', 0, 0, '{}', NULL, ?1, ?1)",
+            params![now],
+        )?;
+
+        let first = knowledge_tables_projection_source_stamp(root)?;
+        let second = knowledge_tables_projection_source_stamp(root)?;
+        assert_eq!(first, second);
+
+        let live_path = compute_parquet_path(root, "stamp_domain", "stamp_key");
+        let rows = vec![
+            json!({"id": "row-1", "value": "first"}),
+            json!({"id": "row-2", "value": "second and longer"}),
+            json!({"id": "row-3", "value": "third and longer still"}),
+        ];
+        let df = super::super::parquet_io::rows_to_df(&rows)?;
+        super::super::parquet_io::commit_parquet(&live_path, df)?;
+
+        let changed = knowledge_tables_projection_source_stamp(root)?;
+        assert_ne!(first, changed);
+        assert_eq!(changed, knowledge_tables_projection_source_stamp(root)?);
         Ok(())
     }
 }

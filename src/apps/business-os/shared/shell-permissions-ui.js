@@ -301,6 +301,23 @@ export function buildGlobalCtoxContextModes({
       selected: false,
     });
   }
+  modes.push(
+    {
+      value: 'note',
+      label: labels.note || 'Notiz an User',
+      selected: false,
+    },
+    {
+      value: 'mention',
+      label: labels.mention || 'User erwähnen',
+      selected: false,
+    },
+    {
+      value: 'approval',
+      label: labels.approval || 'Freigabe anfragen',
+      selected: false,
+    },
+  );
   return modes;
 }
 

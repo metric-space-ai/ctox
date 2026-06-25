@@ -28,7 +28,7 @@ test("skill contract covers exactly the Rust MCP tool descriptors", () => {
   assert.deepEqual(result, {
     ok: true,
     errors: [],
-    toolCount: 23
+    toolCount: 25
   });
 });
 

@@ -122,6 +122,10 @@ export const collections = {
       created_at_ms: { type: 'number' },
     },
     required: ['id', 'file_id', 'idx', 'total', 'encoding', 'data', 'created_at_ms'],
+    indexes: [
+      'file_id',
+      ['file_id', 'generation_id', 'idx']
+    ],
     additionalProperties: true,
   },
   communication_accounts: conversationsCollections.communication_accounts,

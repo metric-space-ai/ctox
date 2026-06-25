@@ -39,6 +39,12 @@ codex mcp add cto1-kunstmen-business-os \
 The skill does not provide CTOX access by itself. Access comes only through a
 configured MCP server and the server-side Business OS MCP policy.
 
+MCP policy is only the channel gate. Remote agents still follow Business OS
+roles and app/data grants: `Owner`/`chef`, `Admin`/`admin`,
+`App-Verantwortliche:r`/`founder`, and `Teammitglied`/`user`; private
+`0.x.y` apps require app visibility grants, `1.0.0+` apps are team-visible by
+default unless restricted, and data reads/writes remain explicit.
+
 ## Validation
 
 From the repository root:

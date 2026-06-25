@@ -588,135 +588,135 @@ fn post_invoice_in_conn(
     // serialises the number-series reservation.
     conn.execute_batch("SAVEPOINT post_invoice")?;
     let posted = (|| -> anyhow::Result<Value> {
-    let mut invoice = load_accounting_invoice(conn, invoice_id)?
-        .ok_or_else(|| anyhow!("invoice {invoice_id} not found"))?;
-    let state = invoice
-        .get("state")
-        .and_then(Value::as_str)
-        .unwrap_or("draft");
-    anyhow::ensure!(
-        state == "draft",
-        "invoices.invoice.post requires state=draft (current: {state})"
-    );
+        let mut invoice = load_accounting_invoice(conn, invoice_id)?
+            .ok_or_else(|| anyhow!("invoice {invoice_id} not found"))?;
+        let state = invoice
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or("draft");
+        anyhow::ensure!(
+            state == "draft",
+            "invoices.invoice.post requires state=draft (current: {state})"
+        );
 
-    // Strict post gate: a posted invoice must have a real customer, at least
-    // one balanced line item, and consistent tax_breakdown / reverse_charge /
-    // small_business flags. The JS validator in modules/invoices/core runs
-    // the same checks at the editor boundary; this is the safety net for
-    // paths that bypass the UI (ReST callers, App-Creator hardeners, future
-    // recurring hooks).
-    validate_invoice_for_command(&invoice, true)?;
+        // Strict post gate: a posted invoice must have a real customer, at least
+        // one balanced line item, and consistent tax_breakdown / reverse_charge /
+        // small_business flags. The JS validator in modules/invoices/core runs
+        // the same checks at the editor boundary; this is the safety net for
+        // paths that bypass the UI (ReST callers, App-Creator hardeners, future
+        // recurring hooks).
+        validate_invoice_for_command(&invoice, true)?;
 
-    let fiscal_year = iso_year_from_ms(invoice_invoice_date_ms(&invoice));
-    let party = resolve_party_account(conn, invoice_id)?;
+        let fiscal_year = iso_year_from_ms(invoice_invoice_date_ms(&invoice));
+        let party = resolve_party_account(conn, invoice_id)?;
 
-    // 1. Reserve the next invoice number from accounting_number_series.
-    let invoice_number = reserve_next_invoice_number(conn, &invoice, fiscal_year, now)?;
-    invoice["invoice_number"] = json!(invoice_number);
-    invoice["updated_at_ms"] = json!(now);
+        // 1. Reserve the next invoice number from accounting_number_series.
+        let invoice_number = reserve_next_invoice_number(conn, &invoice, fiscal_year, now)?;
+        invoice["invoice_number"] = json!(invoice_number);
+        invoice["updated_at_ms"] = json!(now);
 
-    // 1b. Compute the gross total from the line items (matches the JS
-    // poster's balance check). Set subtotal/tax/total/paid/open on the
-    // invoice so downstream commands (allocate, dunning) have the totals.
-    // `quantity` is stored in thousandths (XRechnung/UBL convention):
-    // quantity=1000 means 1.000 natural units, quantity=1500 means 1.500.
-    // Net is therefore (gross_unit_cents * quantity) / 1000.
-    let mut net_total: i64 = 0;
-    let mut tax_total: i64 = 0;
-    if let Some(lines) = invoice.get("lines").and_then(Value::as_array) {
-        for line in lines {
-            let quantity = line.get("quantity").and_then(Value::as_i64).unwrap_or(0);
-            let unit_price = line
-                .get("unit_price_cents")
-                .and_then(Value::as_i64)
-                .unwrap_or(0);
-            let discount = line
-                .get("discount_percent")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0)
-                .clamp(0.0, 100.0)
-                / 100.0;
-            let tax_rate = line.get("tax_rate").and_then(Value::as_f64).unwrap_or(0.0);
-            let gross_unit = ((unit_price as f64) * (1.0 - discount)).round() as i64;
-            let net = ((gross_unit as f64) * (quantity as f64) / 1000.0).round() as i64;
-            let tax = ((net as f64) * tax_rate).round() as i64;
-            net_total += net;
-            tax_total += tax;
+        // 1b. Compute the gross total from the line items (matches the JS
+        // poster's balance check). Set subtotal/tax/total/paid/open on the
+        // invoice so downstream commands (allocate, dunning) have the totals.
+        // `quantity` is stored in thousandths (XRechnung/UBL convention):
+        // quantity=1000 means 1.000 natural units, quantity=1500 means 1.500.
+        // Net is therefore (gross_unit_cents * quantity) / 1000.
+        let mut net_total: i64 = 0;
+        let mut tax_total: i64 = 0;
+        if let Some(lines) = invoice.get("lines").and_then(Value::as_array) {
+            for line in lines {
+                let quantity = line.get("quantity").and_then(Value::as_i64).unwrap_or(0);
+                let unit_price = line
+                    .get("unit_price_cents")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                let discount = line
+                    .get("discount_percent")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0)
+                    .clamp(0.0, 100.0)
+                    / 100.0;
+                let tax_rate = line.get("tax_rate").and_then(Value::as_f64).unwrap_or(0.0);
+                let gross_unit = ((unit_price as f64) * (1.0 - discount)).round() as i64;
+                let net = ((gross_unit as f64) * (quantity as f64) / 1000.0).round() as i64;
+                let tax = ((net as f64) * tax_rate).round() as i64;
+                net_total += net;
+                tax_total += tax;
+            }
         }
-    }
-    let small_business = invoice
-        .get("small_business")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let reverse_charge = invoice
-        .get("reverse_charge")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let effective_tax = if small_business || reverse_charge {
-        0
-    } else {
-        tax_total
-    };
-    let total_cents = net_total + effective_tax;
-    invoice["subtotal_cents"] = json!(net_total);
-    invoice["tax_cents"] = json!(effective_tax);
-    invoice["total_cents"] = json!(total_cents);
-    invoice["paid_cents"] = json!(0);
-    invoice["open_cents"] = json!(total_cents);
+        let small_business = invoice
+            .get("small_business")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let reverse_charge = invoice
+            .get("reverse_charge")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let effective_tax = if small_business || reverse_charge {
+            0
+        } else {
+            tax_total
+        };
+        let total_cents = net_total + effective_tax;
+        invoice["subtotal_cents"] = json!(net_total);
+        invoice["tax_cents"] = json!(effective_tax);
+        invoice["total_cents"] = json!(total_cents);
+        invoice["paid_cents"] = json!(0);
+        invoice["open_cents"] = json!(total_cents);
 
-    // 2. Build the journal entry payload (pure helper, see core/invoice-poster.js).
-    //    We do not import the JS module here; instead we replicate the
-    //    balanced journal shape via a Rust-side helper. JS-side validation
-    //    is enforced at the command boundary; the native handler
-    //    re-validates with the same rules below.
-    let journal = invoices_build_journal_entry(&invoice, &party, &invoice_number, now)?;
+        // 2. Build the journal entry payload (pure helper, see core/invoice-poster.js).
+        //    We do not import the JS module here; instead we replicate the
+        //    balanced journal shape via a Rust-side helper. JS-side validation
+        //    is enforced at the command boundary; the native handler
+        //    re-validates with the same rules below.
+        let journal = invoices_build_journal_entry(&invoice, &party, &invoice_number, now)?;
 
-    // 3. Persist the journal entry and lines.
-    let journal_id = format!("je_{invoice_id}_post");
-    invoices_upsert_invoice(conn, invoice_id, &invoice, now)?;
-    upsert_business_record_helper(
-        conn,
-        "accounting_journal_entries",
-        &journal_id,
-        now,
-        journal.header.clone(),
-    )?;
-    for (idx, line) in journal.lines.iter().enumerate() {
-        let line_id = format!("{journal_id}_l{}", idx + 1);
-        let line_id_for_record = line_id.clone();
-        let mut line_doc = line.clone();
-        if let Some(obj) = line_doc.as_object_mut() {
-            obj.insert("id".to_string(), Value::String(line_id));
-            obj.insert(
-                "journal_entry_id".to_string(),
-                Value::String(journal_id.clone()),
-            );
-            obj.insert("line_no".to_string(), Value::from(idx as i64 + 1));
-            obj.insert("updated_at_ms".to_string(), Value::from(now));
-        }
+        // 3. Persist the journal entry and lines.
+        let journal_id = format!("je_{invoice_id}_post");
+        invoices_upsert_invoice(conn, invoice_id, &invoice, now)?;
         upsert_business_record_helper(
             conn,
-            "accounting_journal_entry_lines",
-            &line_id_for_record,
+            "accounting_journal_entries",
+            &journal_id,
             now,
-            line_doc,
+            journal.header.clone(),
         )?;
-    }
+        for (idx, line) in journal.lines.iter().enumerate() {
+            let line_id = format!("{journal_id}_l{}", idx + 1);
+            let line_id_for_record = line_id.clone();
+            let mut line_doc = line.clone();
+            if let Some(obj) = line_doc.as_object_mut() {
+                obj.insert("id".to_string(), Value::String(line_id));
+                obj.insert(
+                    "journal_entry_id".to_string(),
+                    Value::String(journal_id.clone()),
+                );
+                obj.insert("line_no".to_string(), Value::from(idx as i64 + 1));
+                obj.insert("updated_at_ms".to_string(), Value::from(now));
+            }
+            upsert_business_record_helper(
+                conn,
+                "accounting_journal_entry_lines",
+                &line_id_for_record,
+                now,
+                line_doc,
+            )?;
+        }
 
-    // 4. Mark the invoice as posted and GoBD-immutable.
-    invoice["state"] = json!("posted");
-    invoice["post_journal_entry_id"] = json!(journal_id);
-    invoice["posted_at"] = json!(now);
-    invoice["state_changed_at_ms"] = json!(now);
-    invoice["state_changed_by_command_id"] = json!(command_id);
-    invoice["updated_at_ms"] = json!(now);
-    invoices_upsert_invoice(conn, invoice_id, &invoice, now)?;
+        // 4. Mark the invoice as posted and GoBD-immutable.
+        invoice["state"] = json!("posted");
+        invoice["post_journal_entry_id"] = json!(journal_id);
+        invoice["posted_at"] = json!(now);
+        invoice["state_changed_at_ms"] = json!(now);
+        invoice["state_changed_by_command_id"] = json!(command_id);
+        invoice["updated_at_ms"] = json!(now);
+        invoices_upsert_invoice(conn, invoice_id, &invoice, now)?;
 
-    Ok(json!({
-        "ok": true,
-        "invoice": invoice,
-        "journal_entry": journal.header,
-    }))
+        Ok(json!({
+            "ok": true,
+            "invoice": invoice,
+            "journal_entry": journal.header,
+        }))
     })();
     match &posted {
         Ok(_) => conn.execute_batch("RELEASE SAVEPOINT post_invoice")?,
@@ -1427,7 +1427,10 @@ fn invoices_line_create(root: &Path, command: &BusinessCommand) -> anyhow::Resul
         .get("line")
         .cloned()
         .ok_or_else(|| anyhow!("invoices.line.create requires a 'line' object"))?;
-    anyhow::ensure!(line.is_object(), "invoices.line.create 'line' must be an object");
+    anyhow::ensure!(
+        line.is_object(),
+        "invoices.line.create 'line' must be an object"
+    );
     let conn = open_business_os_store(root)?;
     let now = now_ms() as i64;
     let (invoice, mut lines) = load_draft_invoice_lines(&conn, &invoice_id)?;

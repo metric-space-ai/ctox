@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -17,7 +19,9 @@ use tokio::sync::Notify;
 
 use crate::plugins::utils::utils_string::random_token;
 use crate::rx_error::{new_rx_error, RxError, RxResult};
-use crate::rx_query_helper::{get_query_matcher, get_sort_comparator};
+use crate::rx_query_helper::{
+    get_query_matcher, get_sort_comparator, DeterministicSortComparator, QueryMatcher,
+};
 use crate::rx_schema_helper::get_primary_field_of_primary_key;
 use crate::rxjs_compat::{RxStream, RxSubject};
 use crate::types::{
@@ -28,9 +32,10 @@ use crate::types::{
 
 use super::cleanup::cleanup_deleted_documents;
 use super::sql::{
-    compile_count_sql, compile_query_sql, count_with_compiled_sql, document_by_id, drop_table,
-    for_each_document, for_each_document_with_compiled_sql, insert_document,
-    query_documents_with_compiled_sql, quote_identifier, update_document,
+    compile_count_sql, compile_query_sql, count_with_compiled_sql, document_by_id,
+    documents_by_ids, drop_table, for_each_document, for_each_document_with_compiled_sql,
+    insert_document, query_documents_with_compiled_sql, quote_identifier, update_document,
+    CompiledSqliteQuery,
 };
 use super::types::{sqlite_error, SharedSqliteConnection};
 
@@ -38,6 +43,12 @@ const SQLITE_EXTERNAL_POLL_FILE_CHUNK_LIMIT: u64 = 2;
 const SQLITE_EXTERNAL_POLL_SAFETY_INTERVAL: Duration = Duration::from_secs(60);
 
 static INSTANCE_ID: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static FIND_DOCUMENTS_BY_ID_WRITER_FALLBACKS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+static CHANGED_DOCUMENTS_SINCE_WRITER_FALLBACKS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+static QUERY_WRITER_FALLBACKS: AtomicUsize = AtomicUsize::new(0);
 
 /// FIX 1: map a `tokio::task::JoinError` (blocking task panicked or was
 /// cancelled) into an `RxError` so the storage methods can keep their
@@ -267,6 +278,46 @@ fn primary_key_selector_ids(query: &FilledMangoQuery, primary_path: &str) -> Opt
             .map(ToString::to_string)
             .collect()
     })
+}
+
+fn execute_query_documents(
+    conn: &rusqlite::Connection,
+    table_name: &str,
+    primary_ids: Option<Vec<String>>,
+    compiled_sql: Option<CompiledSqliteQuery>,
+    matcher: QueryMatcher,
+    comparator: DeterministicSortComparator,
+    skip: usize,
+    skip_plus_limit: usize,
+) -> RxResult<Vec<Value>> {
+    if let Some(ids) = primary_ids {
+        let mut rows = Vec::new();
+        for doc in documents_by_ids(conn, table_name, &ids, true)? {
+            if matcher(&doc) {
+                rows.push(doc);
+            }
+        }
+        rows.sort_by(|a, b| comparator(a, b));
+        let start = skip.min(rows.len());
+        let end = skip_plus_limit.min(rows.len());
+        return Ok(rows[start..end].to_vec());
+    }
+
+    if let Some(compiled) = compiled_sql {
+        return query_documents_with_compiled_sql(conn, &compiled);
+    }
+
+    let mut rows: Vec<Value> = Vec::new();
+    for_each_document(conn, table_name, |doc| {
+        if matcher(&doc) {
+            rows.push(doc);
+        }
+        Ok(true)
+    })?;
+    rows.sort_by(|a, b| comparator(a, b));
+    let start = skip.min(rows.len());
+    let end = skip_plus_limit.min(rows.len());
+    Ok(rows[start..end].to_vec())
 }
 
 fn start_external_write_poll(
@@ -626,25 +677,26 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         with_deleted: bool,
     ) -> Result<Vec<Value>, RxError> {
         self.ensure_open("find_documents_by_id")?;
-        // FIX 1: read off the tokio worker thread.
-        let connection = Arc::clone(&self.connection);
         let table_name = self.table_name.clone();
         let ids = ids.to_vec();
+        if let Ok(read_conn) = self.open_read_only_connection() {
+            return tokio::task::spawn_blocking(move || -> RxResult<Vec<Value>> {
+                documents_by_ids(&read_conn, &table_name, &ids, with_deleted)
+            })
+            .await
+            .map_err(join_error)?;
+        }
+
+        #[cfg(test)]
+        FIND_DOCUMENTS_BY_ID_WRITER_FALLBACKS.fetch_add(1, Ordering::SeqCst);
+
+        // In-memory test databases cannot be reopened as independent read-only
+        // connections. Keep that legacy fallback, but file-backed production
+        // storage must stay off the shared writer mutex for this read path.
+        let connection = Arc::clone(&self.connection);
         tokio::task::spawn_blocking(move || -> RxResult<Vec<Value>> {
             let conn = connection.lock();
-            let mut ret = Vec::new();
-            for id in &ids {
-                if let Some(doc) = document_by_id(&conn, &table_name, id)? {
-                    let deleted = doc
-                        .get("_deleted")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false);
-                    if with_deleted || !deleted {
-                        ret.push(doc);
-                    }
-                }
-            }
-            Ok(ret)
+            documents_by_ids(&conn, &table_name, &ids, with_deleted)
         })
         .await
         .map_err(join_error)?
@@ -687,55 +739,44 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
             None
         };
 
-        if let Some(compiled) = compiled_sql.clone() {
-            if let Ok(read_conn) = self.open_read_only_connection() {
-                let documents = tokio::task::spawn_blocking(move || -> RxResult<Vec<Value>> {
-                    query_documents_with_compiled_sql(&read_conn, &compiled)
-                })
-                .await
-                .map_err(join_error)??;
-                return Ok(RxStorageQueryResult { documents });
-            }
+        let table_name = self.table_name.clone();
+        if let Ok(read_conn) = self.open_read_only_connection() {
+            let documents = tokio::task::spawn_blocking(move || -> RxResult<Vec<Value>> {
+                execute_query_documents(
+                    &read_conn,
+                    &table_name,
+                    primary_ids,
+                    compiled_sql,
+                    matcher,
+                    comparator,
+                    skip,
+                    skip_plus_limit,
+                )
+            })
+            .await
+            .map_err(join_error)??;
+            return Ok(RxStorageQueryResult { documents });
         }
 
-        // FIX 1: run the full-table scan + sort off the tokio worker thread.
-        // The matcher/comparator are `Arc<dyn Fn .. + Send + Sync>` so they
-        // move cleanly into `spawn_blocking`.
+        #[cfg(test)]
+        QUERY_WRITER_FALLBACKS.fetch_add(1, Ordering::SeqCst);
+
+        // In-memory storage cannot be reopened as a separate read-only
+        // connection. File-backed storage should use the branch above, including
+        // complex Rust matcher fallbacks that cannot be compiled into SQL.
         let connection = Arc::clone(&self.connection);
-        let table_name = self.table_name.clone();
         let documents = tokio::task::spawn_blocking(move || -> RxResult<Vec<Value>> {
             let conn = connection.lock();
-            let mut rows: Vec<Value> = Vec::new();
-
-            if let Some(ids) = primary_ids {
-                // Query/count callers are not all routed through RxQuery's
-                // find-by-id fast path. Keep primary-key equality bounded by
-                // the requested id set instead of scanning large collections.
-                for id in ids {
-                    if let Some(doc) = document_by_id(&conn, &table_name, &id)? {
-                        if matcher(&doc) {
-                            rows.push(doc);
-                        }
-                    }
-                }
-            } else if let Some(compiled) = compiled_sql {
-                return query_documents_with_compiled_sql(&conn, &compiled);
-            } else {
-                // Stream rows one at a time and keep only those that match.
-                // Sort and truncate at the end so we never materialize the
-                // whole table. Memory bound: O(number of matches), not
-                // O(table size).
-                for_each_document(&conn, &table_name, |doc| {
-                    if matcher(&doc) {
-                        rows.push(doc);
-                    }
-                    Ok(true)
-                })?;
-            }
-            rows.sort_by(|a, b| comparator(a, b));
-            let start = skip.min(rows.len());
-            let end = skip_plus_limit.min(rows.len());
-            Ok(rows[start..end].to_vec())
+            execute_query_documents(
+                &conn,
+                &table_name,
+                primary_ids,
+                compiled_sql,
+                matcher,
+                comparator,
+                skip,
+                skip_plus_limit,
+            )
         })
         .await
         .map_err(join_error)??;
@@ -789,11 +830,29 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         checkpoint: Option<&Value>,
     ) -> Result<RxStorageChangedDocumentsSinceResult, RxError> {
         self.ensure_open("get_changed_documents_since")?;
-        // FIX 1: read off the tokio worker thread.
-        let connection = Arc::clone(&self.connection);
         let table_name = self.table_name.clone();
         let primary_path = self.primary_path.clone();
         let checkpoint = checkpoint.cloned();
+        if let Ok(read_conn) = self.open_read_only_connection() {
+            return tokio::task::spawn_blocking(
+                move || -> Result<RxStorageChangedDocumentsSinceResult, RxError> {
+                    changed_documents_since(
+                        &read_conn,
+                        &table_name,
+                        &primary_path,
+                        limit,
+                        checkpoint.as_ref(),
+                    )
+                },
+            )
+            .await
+            .map_err(join_error)?;
+        }
+
+        #[cfg(test)]
+        CHANGED_DOCUMENTS_SINCE_WRITER_FALLBACKS.fetch_add(1, Ordering::SeqCst);
+
+        let connection = Arc::clone(&self.connection);
         tokio::task::spawn_blocking(
             move || -> Result<RxStorageChangedDocumentsSinceResult, RxError> {
                 let conn = connection.lock();
@@ -1086,6 +1145,9 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::rx_query_helper::{normalize_mango_query, prepare_query};
+    use crate::storage::sqlite::sql::{
+        reset_sqlite_json_document_decode_count, sqlite_json_document_decode_count,
+    };
     use crate::storage::sqlite::{
         create_storage_instance, get_rx_storage_sqlite, RxStorageSqliteSettings,
     };
@@ -1220,6 +1282,73 @@ mod tests {
             .unwrap();
         assert_eq!(docs.len(), 1);
         assert_eq!(docs[0].get("age").and_then(Value::as_i64), Some(1));
+    }
+
+    #[tokio::test]
+    async fn find_documents_by_id_file_backed_uses_read_only_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("ctox.sqlite3"),
+        });
+        let instance = create_storage_instance(&storage, params(test_schema()))
+            .await
+            .unwrap();
+        instance
+            .bulk_write(
+                vec![
+                    BulkWriteRow {
+                        previous: None,
+                        document: doc("a", "1-a", 1, false, 1.0),
+                    },
+                    BulkWriteRow {
+                        previous: None,
+                        document: doc("b", "1-b", 2, false, 2.0),
+                    },
+                    BulkWriteRow {
+                        previous: None,
+                        document: doc("deleted", "1-c", 3, true, 3.0),
+                    },
+                ],
+                "seed",
+            )
+            .await
+            .unwrap();
+
+        FIND_DOCUMENTS_BY_ID_WRITER_FALLBACKS.store(0, Ordering::SeqCst);
+        let docs = instance
+            .find_documents_by_id(
+                &[
+                    "missing".to_string(),
+                    "b".to_string(),
+                    "a".to_string(),
+                    "b".to_string(),
+                    "deleted".to_string(),
+                ],
+                false,
+            )
+            .await
+            .unwrap();
+        let ids = docs
+            .iter()
+            .filter_map(|doc| doc.get("id").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["b", "a", "b"]);
+        assert_eq!(
+            FIND_DOCUMENTS_BY_ID_WRITER_FALLBACKS.load(Ordering::SeqCst),
+            0,
+            "file-backed find_documents_by_id must not use the shared writer connection fallback"
+        );
+
+        let deleted = instance
+            .find_documents_by_id(&["deleted".to_string()], true)
+            .await
+            .unwrap();
+        assert_eq!(deleted.len(), 1);
+        assert_eq!(
+            FIND_DOCUMENTS_BY_ID_WRITER_FALLBACKS.load(Ordering::SeqCst),
+            0,
+            "with_deleted lookup must also stay on the read-only connection"
+        );
     }
 
     #[tokio::test]
@@ -1501,6 +1630,7 @@ mod tests {
             },
         );
         let prepared = prepare_query(&schema, filled.clone()).unwrap();
+        reset_sqlite_json_document_decode_count();
         let result = instance.query(&prepared).await.unwrap();
         let ages = result
             .documents
@@ -1508,6 +1638,11 @@ mod tests {
             .map(|doc| doc.get("age").and_then(Value::as_i64).unwrap())
             .collect::<Vec<_>>();
         assert_eq!(ages, vec![990, 991, 992]);
+        assert_eq!(
+            sqlite_json_document_decode_count(),
+            3,
+            "indexed LIMIT 3 query must decode only returned rows, not the whole table"
+        );
 
         let count_filled = normalize_mango_query(
             &schema,
@@ -1520,8 +1655,14 @@ mod tests {
             },
         );
         let count_prepared = prepare_query(&schema, count_filled).unwrap();
+        reset_sqlite_json_document_decode_count();
         let count = instance.count(&count_prepared).await.unwrap();
         assert_eq!(count.count, 10);
+        assert_eq!(
+            sqlite_json_document_decode_count(),
+            0,
+            "compiled COUNT(*) must not deserialize matching documents"
+        );
 
         let compiled = compile_query_sql(&instance.table_name, &instance.primary_path, &filled)
             .expect("age selector should compile to SQL");
@@ -1612,6 +1753,69 @@ mod tests {
             .expect("compiled count task dropped")
             .unwrap();
         assert_eq!(count_result.count, 2);
+    }
+
+    #[tokio::test]
+    async fn query_fallback_does_not_wait_for_writer_mutex() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("ctox.sqlite3"),
+        });
+        let schema = test_schema();
+        let instance = create_storage_instance(&storage, params(schema.clone()))
+            .await
+            .unwrap();
+        let rows: Vec<BulkWriteRow> = (0..100)
+            .map(|idx| BulkWriteRow {
+                previous: None,
+                document: doc(&format!("doc-{idx:03}"), "1-a", idx, false, idx as f64),
+            })
+            .collect();
+        instance.bulk_write(rows, "seed").await.unwrap();
+
+        let mut sort = HashMap::new();
+        sort.insert("age".to_string(), "asc".to_string());
+        let prepared = prepare_query(
+            &schema,
+            normalize_mango_query(
+                &schema,
+                MangoQuery {
+                    selector: Some(json!({ "id": { "$regex": "^doc-09[57]$" } })),
+                    sort: Some(vec![sort]),
+                    index: None,
+                    limit: None,
+                    skip: Some(0),
+                },
+            ),
+        )
+        .unwrap();
+
+        QUERY_WRITER_FALLBACKS.store(0, Ordering::SeqCst);
+        let shared_conn = storage.connection().unwrap();
+        let _writer_guard = shared_conn.lock();
+
+        let query_instance = Arc::clone(&instance);
+        let query_prepared = prepared.clone();
+        let (query_tx, mut query_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let _ = query_tx.send(query_instance.query(&query_prepared).await);
+        });
+        let query_result = tokio::time::timeout(Duration::from_secs(1), &mut query_rx)
+            .await
+            .expect("fallback query waited for shared writer mutex")
+            .expect("fallback query task dropped")
+            .unwrap();
+        let ages = query_result
+            .documents
+            .iter()
+            .map(|doc| doc.get("age").and_then(Value::as_i64).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(ages, vec![95, 97]);
+        assert_eq!(
+            QUERY_WRITER_FALLBACKS.load(Ordering::SeqCst),
+            0,
+            "file-backed query fallback must not use the shared writer connection fallback"
+        );
     }
 
     #[tokio::test]
@@ -1996,6 +2200,59 @@ mod tests {
             .collect();
         assert_eq!(ids, vec!["b", "c"]);
         assert_eq!(changed.checkpoint, json!({ "id": "c", "lwt": 2.0 }));
+    }
+
+    #[tokio::test]
+    async fn changed_documents_since_file_backed_uses_read_only_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("ctox.sqlite3"),
+        });
+        let instance = create_storage_instance(&storage, params(test_schema()))
+            .await
+            .unwrap();
+        instance
+            .bulk_write(
+                vec![
+                    BulkWriteRow {
+                        previous: None,
+                        document: doc("a", "1-a", 1, false, 1.0),
+                    },
+                    BulkWriteRow {
+                        previous: None,
+                        document: doc("b", "1-b", 1, false, 2.0),
+                    },
+                ],
+                "insert",
+            )
+            .await
+            .unwrap();
+
+        CHANGED_DOCUMENTS_SINCE_WRITER_FALLBACKS.store(0, Ordering::SeqCst);
+        let shared_conn = storage.connection().unwrap();
+        let _writer_guard = shared_conn.lock();
+
+        let changed_instance = Arc::clone(&instance);
+        let (changed_tx, mut changed_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let _ = changed_tx.send(changed_instance.get_changed_documents_since(10, None).await);
+        });
+        let changed = tokio::time::timeout(Duration::from_secs(1), &mut changed_rx)
+            .await
+            .expect("changed_documents_since waited for shared writer mutex")
+            .expect("changed_documents_since task dropped")
+            .unwrap();
+        let ids = changed
+            .documents
+            .iter()
+            .filter_map(|doc| doc.get("id").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["a", "b"]);
+        assert_eq!(
+            CHANGED_DOCUMENTS_SINCE_WRITER_FALLBACKS.load(Ordering::SeqCst),
+            0,
+            "file-backed get_changed_documents_since must not use the shared writer connection fallback"
+        );
     }
 
     #[tokio::test]

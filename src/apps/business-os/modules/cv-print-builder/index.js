@@ -1,12 +1,23 @@
-const BUILD = '20260611-cv-print-builder-v2';
+const BUILD = '20260625-cv-print-parser-v18';
 const MODULE_ID = 'cv-print-builder';
 const PROFILE_MIME = 'application/vnd.ctox.cv-print-profile+json';
-const CHUNK_SIZE = 256000;
+const CHUNK_SIZE = 16 * 1024;
+const CONTENT_HASH_SCHEME = 'sha256-bytes-v1';
+const CHUNK_HASH_SCHEME = 'sha256-base64-chunk-v1';
+const REQUIRED_COLLECTIONS = [
+  'documents',
+  'document_versions',
+  'desktop_files',
+  'desktop_file_chunks',
+  'business_chats',
+  'business_commands',
+  'ctox_queue_tasks',
+];
 
 const TEMPLATES = [
-  { id: 'minimal', label: 'Minimal', description: 'Zeitlos, ruhig, kundentauglich und ohne Anbieteroptik.' },
-  { id: 'classic', label: 'Klassisch', description: 'Formaler CV mit chronologischer Einspalten-Struktur.' },
-  { id: 'modern', label: 'Modern', description: 'Logo-Kopf, Akzentlinie und kompakte Fakten.' },
+  { id: 'minimal', label: 'Minimal', description: 'Zeitloses Qualifikationsprofil ohne Schmuck.' },
+  { id: 'classic', label: 'Klassisch', description: 'Formales Qualifikationsprofil mit ruhiger Typografie.' },
+  { id: 'modern', label: 'Modern', description: 'Qualifikationsprofil mit Logo, Akzentlinie und kompakten Fakten.' },
 ];
 
 const VIEW_LABELS = {
@@ -14,6 +25,47 @@ const VIEW_LABELS = {
   split: 'Beide',
   print: 'Print',
 };
+
+const COMMON_FIRST_NAMES = new Set([
+  'anna',
+  'julia',
+  'sascha',
+  'matthias',
+  'simon',
+  'mohamed',
+  'mohammed',
+  'muhammad',
+  'ulrich',
+  'michael',
+  'christian',
+  'thomas',
+  'stefan',
+  'stephan',
+  'andreas',
+  'martin',
+  'sebastian',
+  'daniel',
+  'jan',
+  'jens',
+  'tobias',
+  'patrick',
+  'florian',
+  'marco',
+  'marcel',
+  'niklas',
+  'lena',
+  'sarah',
+  'sara',
+  'sandra',
+  'katharina',
+  'christina',
+  'nina',
+  'laura',
+  'melanie',
+  'nadine',
+  'anne',
+  'maria',
+]);
 
 export async function mount(ctx) {
   await ensureStyles();
@@ -30,16 +82,27 @@ export async function mount(ctx) {
     selectedId: '',
     lastSelectedId: '',
     lastSelectedPhase: '',
+    query: '',
+    sortMode: 'updated_desc',
     viewMode: 'original',
     originalUrls: new Map(),
     disposers: [],
     refreshTimer: null,
     renderSerial: 0,
+    ready: false,
+    importing: false,
   };
 
   bindStaticEvents(state);
   subscribeToCollections(state);
+  setModuleBusy(state, true);
+  state.ready = await waitForRequiredCollectionsReady(state.ctx, REQUIRED_COLLECTIONS, 120000);
+  setModuleBusy(state, !state.ready);
   await refresh(state);
+  if (!state.ready) {
+    notify(state, 'error', 'CV-Daten noch nicht synchronisiert', 'Import und Parsing bleiben gesperrt, bis die Business-OS Collections bereit sind.');
+    scheduleReadinessRetry(state);
+  }
 
   return () => {
     state.disposers.forEach((dispose) => dispose?.());
@@ -62,14 +125,31 @@ async function ensureStyles() {
 
 function bindStaticEvents(state) {
   state.host.querySelector('[data-cv-new]')?.addEventListener('click', () => {
+    if (!state.ready) {
+      notify(state, 'info', 'Synchronisierung läuft', 'CVs können importiert werden, sobald die Arbeitsdaten geladen sind.');
+      return;
+    }
     state.host.querySelector('[data-cv-upload]')?.click();
   });
-  state.host.querySelector('[data-cv-upload]')?.addEventListener('change', async (event) => {
-    const file = event.target.files?.[0];
+  state.host.querySelector('[data-cv-search]')?.addEventListener('input', (event) => {
+    state.query = event.target.value || '';
+    renderSidebar(state);
+  });
+  state.host.querySelector('[data-cv-sort]')?.addEventListener('change', (event) => {
+    state.sortMode = event.target.value || 'updated_desc';
+    renderSidebar(state);
+  });
+  state.host.addEventListener('change', async (event) => {
+    if (!event.target?.matches?.('[data-cv-upload]')) return;
+    const files = Array.from(event.target.files || []);
     event.target.value = '';
-    if (!file) return;
+    if (!files.length) return;
+    if (!state.ready) {
+      notify(state, 'info', 'Synchronisierung läuft', 'Bitte kurz warten, bis die CV-Liste geladen ist.');
+      return;
+    }
     try {
-      await importPdf(state, file);
+      await importPdfs(state, files);
     } catch (error) {
       notify(state, 'error', 'PDF konnte nicht importiert werden', String(error?.message || error));
     }
@@ -103,17 +183,126 @@ function subscribeToCollections(state) {
     });
 }
 
+function setModuleBusy(state, busy) {
+  state.host.toggleAttribute('data-cv-busy', Boolean(busy));
+  const upload = state.host.querySelector('[data-cv-upload]');
+  const newButton = state.host.querySelector('[data-cv-new]');
+  if (upload) {
+    upload.disabled = Boolean(busy);
+    upload.toggleAttribute('disabled', Boolean(busy));
+  }
+  if (newButton) {
+    newButton.disabled = Boolean(busy);
+    newButton.toggleAttribute('disabled', Boolean(busy));
+  }
+}
+
+async function waitForRequiredCollectionsReady(ctx, collections, timeoutMs) {
+  const localReady = await waitForLocalCollections(ctx, collections, Math.min(timeoutMs, 10000));
+  if (!localReady) return false;
+  warmRequiredCollectionSync(ctx, collections, timeoutMs);
+  return true;
+}
+
+async function waitForLocalCollections(ctx, collections, timeoutMs) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      requireCollections(ctx, collections);
+      return true;
+    } catch {
+      await delay(250);
+    }
+  }
+  return false;
+}
+
+function warmRequiredCollectionSync(ctx, collections, timeoutMs) {
+  if (!ctx.sync?.startCollection) return;
+  Promise.all(collections.map((collection) => ctx.sync.startCollection(collection).catch(() => null)))
+    .then((bridges) => Promise.race([
+      Promise.all(bridges.map((bridge) => waitForSyncBridgeReady(bridge, Math.min(timeoutMs, 30000)))).catch(() => {}),
+      delay(Math.min(timeoutMs, 30000)),
+    ]))
+    .catch(() => {});
+}
+
+async function waitForBusinessOsCollectionsReady(collections, timeoutMs) {
+  const statusApi = globalThis.CTOX_BUSINESS_OS_STATUS;
+  if (!statusApi?.snapshot) return true;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const status = await statusApi.snapshot({
+      includeCounts: false,
+      requiredCollections: collections,
+      allowRestart: true,
+    }).catch(() => null);
+    if (isBusinessOsCollectionsReady(status, collections)) return true;
+    await delay(750);
+  }
+  return false;
+}
+
+function isBusinessOsCollectionsReady(status, collections = []) {
+  const checks = status?.checks || {};
+  const entries = status?.sync?.initialSync?.entries || [];
+  const entryByCollection = new Map(entries.map((entry) => [entry.collection, entry]));
+  const strictCollections = collections.filter((collection) => collection !== 'desktop_file_chunks');
+  const initialReplicationComplete = strictCollections.every((collection) => {
+    const entry = entryByCollection.get(collection);
+    return entry?.state === 'complete' || Boolean(entry?.initialReplicationAt);
+  });
+  const chunksReady = collections.includes('desktop_file_chunks')
+    ? Boolean(entryByCollection.get('desktop_file_chunks')?.streamingReady)
+    : true;
+  return Boolean(
+    checks.requiredCollectionsConnected
+      && initialReplicationComplete
+      && chunksReady
+      && checks.requiredCollectionsCheckpointEpochAdvertised
+      && checks.frameTransportRealtimeHealthy
+      && checks.noCheckpointProtocolErrors
+      && checks.noSchemaProtocolErrors
+      && checks.noReplicationIoErrors
+      && checks.noFailedCollections
+      && checks.noStalledReconnect
+  );
+}
+
+function scheduleReadinessRetry(state) {
+  window.setTimeout(async () => {
+    if (!state.host?.isConnected || state.ready) return;
+    const ready = await waitForRequiredCollectionsReady(state.ctx, REQUIRED_COLLECTIONS, 30000);
+    if (!ready) {
+      scheduleReadinessRetry(state);
+      return;
+    }
+    state.ready = true;
+    setModuleBusy(state, false);
+    await refresh(state);
+    notify(state, 'success', 'CV-Daten synchronisiert', 'Import und Parsing sind bereit.');
+  }, 3000);
+}
+
 async function refresh(state) {
-  const documents = await findAll(state.ctx, 'documents');
-  const versions = await findAll(state.ctx, 'document_versions');
+  const [documents, versions, commands, queueTasks] = await Promise.all([
+    findAll(state.ctx, 'documents'),
+    findAll(state.ctx, 'document_versions'),
+    findAll(state.ctx, 'business_commands'),
+    findAll(state.ctx, 'ctox_queue_tasks'),
+  ]);
   const versionById = new Map(versions.map((item) => [item.id, item]));
+  const liveStatus = buildLiveStatusIndex(commands, queueTasks);
   state.items = documents
     .filter((doc) => doc.document_type === 'cv_print_profile' && !doc.is_deleted)
-    .map((doc) => ({
-      record: doc,
-      version: versionById.get(doc.current_version_id),
-      model: versionById.get(doc.current_version_id)?.model_json || null,
-    }))
+    .map((doc) => {
+      const version = versionById.get(doc.current_version_id);
+      return {
+        record: doc,
+        version,
+        model: applyLiveWorkflowState(version?.model_json || null, doc, liveStatus),
+      };
+    })
     .filter((item) => item.model)
     .sort((a, b) => (b.record.updated_at_ms || 0) - (a.record.updated_at_ms || 0));
 
@@ -146,16 +335,22 @@ async function refresh(state) {
 function render(state) {
   renderSidebar(state);
   renderStage(state);
+  setModuleBusy(state, !state.ready || state.importing);
 }
 
 function renderSidebar(state) {
   const list = state.host.querySelector('[data-cv-list]');
   const count = state.host.querySelector('[data-cv-count]');
-  count.textContent = `${state.items.length} CV${state.items.length === 1 ? '' : 's'}`;
-  list.innerHTML = state.items.map((item) => renderCandidateCard(state, item)).join('');
+  const visible = visibleItems(state);
+  count.textContent = state.query.trim()
+    ? `${visible.length}/${state.items.length} CVs`
+    : `${state.items.length} CV${state.items.length === 1 ? '' : 's'}`;
+  list.innerHTML = visible.length
+    ? visible.map((item) => renderCandidateCard(state, item)).join('')
+    : '<div class="cv-list-empty">Keine Kandidaten gefunden.</div>';
   list.querySelectorAll('[data-cv-select]').forEach((button) => {
     button.addEventListener('click', (event) => {
-      if (event.target.closest('[data-cv-action],[data-cv-view],[data-cv-template],[data-cv-toggle-logo],[data-cv-toggle-anon],[data-cv-upload-logo]')) return;
+      if (event.target.closest('[data-cv-action],[data-cv-view],[data-cv-template],[data-cv-toggle-anon],[data-cv-logo-control],[data-cv-open-task]')) return;
       const id = button.dataset.cvSelect;
       const item = state.items.find((candidate) => candidate.record.id === id);
       state.selectedId = id;
@@ -181,6 +376,13 @@ function renderSidebar(state) {
       } catch (error) {
         notify(state, 'error', 'Aktion fehlgeschlagen', String(error?.message || error));
       }
+    });
+  });
+  list.querySelectorAll('[data-cv-open-task]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openCtoxTask(button.dataset.cvTaskId || '', button.dataset.cvCommandId || '');
     });
   });
   list.querySelectorAll('[data-cv-view]').forEach((button) => {
@@ -211,8 +413,14 @@ function renderSidebar(state) {
       }));
     });
   });
-  list.querySelectorAll('[data-cv-toggle-logo]').forEach((button) => {
+  list.querySelectorAll('[data-cv-logo-control]').forEach((button) => {
     button.addEventListener('click', async () => {
+      const item = getSelectedItem(state);
+      if (!item) return;
+      if (!item.model.print?.logoDataUrl) {
+        state.host.querySelector('[data-cv-logo-upload]')?.click();
+        return;
+      }
       await patchSelectedModel(state, (model) => ({
         ...model,
         print: {
@@ -233,11 +441,129 @@ function renderSidebar(state) {
       }));
     });
   });
-  list.querySelectorAll('[data-cv-upload-logo]').forEach((button) => {
-    button.addEventListener('click', () => {
-      state.host.querySelector('[data-cv-logo-upload]')?.click();
+}
+
+function visibleItems(state) {
+  const query = state.query.trim().toLowerCase();
+  const candidates = query
+    ? state.items.filter((item) => candidateSearchText(item).includes(query))
+    : state.items.slice();
+  return candidates.sort((a, b) => compareCandidates(a, b, state.sortMode));
+}
+
+function candidateSearchText(item) {
+  const model = item.model || {};
+  const candidate = model.candidate || {};
+  return [
+    displayCandidateName(model),
+    candidate.currentRole,
+    candidate.location,
+    candidate.availability,
+    model.source?.filename,
+    item.record?.filename,
+    workflowPhase(model),
+    templateLabel(model.print?.template),
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+function compareCandidates(a, b, mode) {
+  if (mode === 'name_asc') return displayCandidateName(a.model).localeCompare(displayCandidateName(b.model), 'de', { sensitivity: 'base' });
+  if (mode === 'phase_asc') return phaseOrder(a.model) - phaseOrder(b.model)
+    || displayCandidateName(a.model).localeCompare(displayCandidateName(b.model), 'de', { sensitivity: 'base' });
+  if (mode === 'template_asc') return templateLabel(a.model.print?.template).localeCompare(templateLabel(b.model.print?.template), 'de', { sensitivity: 'base' })
+    || displayCandidateName(a.model).localeCompare(displayCandidateName(b.model), 'de', { sensitivity: 'base' });
+  return Number(b.record.updated_at_ms || 0) - Number(a.record.updated_at_ms || 0);
+}
+
+function phaseOrder(model) {
+  return ({ error: 0, uploaded: 1, parsing: 2, review: 3, approved: 4 })[workflowPhase(model)] ?? 9;
+}
+
+function buildLiveStatusIndex(commands, queueTasks) {
+  const byCommandId = new Map();
+  const byRecordId = new Map();
+  const tasksById = new Map();
+  const tasksByCommandId = new Map();
+  commands
+    .filter(isCvPrintParseCommandProjection)
+    .sort((a, b) => Number(b.updated_at_ms || 0) - Number(a.updated_at_ms || 0))
+    .forEach((command) => {
+      const commandId = command.command_id || command.id;
+      if (commandId && !byCommandId.has(commandId)) byCommandId.set(commandId, command);
+      const recordId = command.record_id || command.payload?.document_id || command.client_context?.document_id;
+      if (recordId && !byRecordId.has(recordId)) byRecordId.set(recordId, command);
     });
+  queueTasks.forEach((task) => {
+    if (task.id) tasksById.set(task.id, task);
+    const commandId = task.command_id || task.business_os_command_id;
+    if (commandId && !tasksByCommandId.has(commandId)) tasksByCommandId.set(commandId, task);
   });
+  return { byCommandId, byRecordId, tasksById, tasksByCommandId };
+}
+
+function isCvPrintParseCommandProjection(command) {
+  return command?.module === MODULE_ID
+    || command?.client_context?.module === MODULE_ID
+    || command?.client_context?.source_module === MODULE_ID
+    || command?.payload?.source_module === MODULE_ID
+    || command?.payload?.writeback_contract?.command_type === 'ctox.cv_print.apply_parse';
+}
+
+function applyLiveWorkflowState(model, record, liveStatus) {
+  if (!model) return null;
+  const next = structuredClone(model);
+  next.workflow = next.workflow || {};
+  const commandId = next.workflow.command_id || '';
+  const taskId = next.workflow.task_id || '';
+  const command = (commandId && liveStatus.byCommandId.get(commandId))
+    || liveStatus.byRecordId.get(record.id)
+    || null;
+  const task = (taskId && liveStatus.tasksById.get(taskId))
+    || (command?.task_id && liveStatus.tasksById.get(command.task_id))
+    || (command?.command_id && liveStatus.tasksByCommandId.get(command.command_id))
+    || null;
+  const live = liveWorkflowStatus(command, task);
+  if (command?.command_id && !next.workflow.command_id) next.workflow.command_id = command.command_id;
+  if (task?.id && !next.workflow.task_id) next.workflow.task_id = task.id;
+  if (command?.task_id && !next.workflow.task_id) next.workflow.task_id = command.task_id;
+  if (live.status) next.workflow.task_status = live.status;
+  if (live.error) next.workflow.error = live.error;
+
+  const phase = workflowPhase(next);
+  if (phase === 'parsing' && live.status === 'failed') {
+    next.workflow.phase = 'error';
+    next.workflow.view_mode = 'original';
+  }
+  return next;
+}
+
+function liveWorkflowStatus(command, task) {
+  const rawStatus = [
+    command?.status,
+    command?.task_status,
+    task?.status,
+    task?.task_status,
+    task?.route_status,
+  ].find((value) => String(value || '').trim());
+  const status = normalizeLiveStatus(rawStatus);
+  const error = [
+    command?.error,
+    command?.status_note,
+    command?.queue_status_note,
+    task?.error,
+    task?.status_note,
+  ].find((value) => String(value || '').trim()) || '';
+  return { status, error: String(error || '') };
+}
+
+function normalizeLiveStatus(value) {
+  const status = String(value || '').trim().toLowerCase();
+  if (!status) return '';
+  if (['failed', 'error'].includes(status)) return 'failed';
+  if (['handled', 'completed', 'complete', 'done'].includes(status)) return 'completed';
+  if (['leased', 'running', 'active', 'in_progress'].includes(status)) return 'running';
+  if (['pending', 'queued', 'accepted', 'pending_sync'].includes(status)) return 'queued';
+  return status;
 }
 
 function renderCandidateCard(state, item) {
@@ -250,7 +576,7 @@ function renderCandidateCard(state, item) {
   const role = candidate.currentRole || 'CV Profil';
   const location = [candidate.location, candidate.availability].filter(Boolean).join(' · ');
   const template = normalizeTemplateId(model.print?.template || 'modern');
-  const controlsDisabled = phase === 'uploaded' || phase === 'parsing';
+  const controlsDisabled = !state.ready || phase === 'uploaded' || phase === 'parsing';
   const approved = phase === 'approved';
   const templateOptions = TEMPLATES.map((entry) => (
     `<option value="${escapeHtml(entry.id)}"${entry.id === template ? ' selected' : ''}>${escapeHtml(entry.label)}</option>`
@@ -284,11 +610,10 @@ function renderCandidateCard(state, item) {
               ${templateOptions}
             </select>
             <button class="cv-small-btn${model.print?.anonymize ? ' is-active' : ''}" type="button" data-cv-toggle-anon title="Anonymisieren" aria-label="Anonymisieren" ${controlsDisabled || approved ? 'disabled' : ''}>${iconEyeOff()}</button>
-            <button class="cv-small-btn${model.print?.showLogo ? ' is-active' : ''}" type="button" data-cv-toggle-logo title="Logo anzeigen" aria-label="Logo anzeigen" ${controlsDisabled || approved ? 'disabled' : ''}>${iconImage()}</button>
-            <button class="cv-small-btn" type="button" data-cv-upload-logo title="Logo wählen" aria-label="Logo wählen" ${controlsDisabled || approved ? 'disabled' : ''}>${iconUpload()}</button>
+            <button class="cv-small-btn${model.print?.showLogo ? ' is-active' : ''}" type="button" data-cv-logo-control title="${model.print?.logoDataUrl ? 'Logo anzeigen' : 'Logo wählen'}" aria-label="${model.print?.logoDataUrl ? 'Logo anzeigen' : 'Logo wählen'}" ${controlsDisabled || approved ? 'disabled' : ''}>${iconImage()}</button>
           </div>
         </div>
-        <div class="cv-card-foot">${escapeHtml(phaseFootnote(model))}</div>
+        <div class="cv-card-foot">${phaseFootnoteHtml(model)}</div>
       ` : ''}
     </article>
   `;
@@ -318,6 +643,7 @@ function renderStage(state) {
   if (mode === 'print' || mode === 'split') views.push(renderPrintPane(item));
   stage.innerHTML = `<div class="cv-view-grid${mode === 'split' ? ' is-split' : ''}">${views.join('')}</div>`;
   bindEditablePrintFields(state);
+  bindFieldEditor(state);
   ensureOriginalUrl(state, item).then(() => {
     if (serial === state.renderSerial) renderOriginalFrame(state, item);
   });
@@ -345,12 +671,13 @@ function renderOriginalFrame(state, item) {
     body.innerHTML = '<div class="cv-original-placeholder">Original-PDF ist noch nicht lokal materialisiert.</div>';
     return;
   }
-  body.innerHTML = `<iframe class="cv-original-frame" title="Original PDF" src="${escapeAttr(url)}"></iframe>`;
+  body.innerHTML = `<iframe class="cv-original-frame" title="Original PDF" src="${escapeAttr(`${url}#toolbar=0&navpanes=0&view=FitH`)}"></iframe>`;
 }
 
 function renderPrintPane(item) {
   const model = item.model;
   const template = normalizeTemplateId(model.print?.template || 'modern');
+  const editor = workflowPhase(model) === 'review' ? renderFieldEditor(model) : '';
   return `
     <section class="cv-pane">
       <header class="cv-pane-head">
@@ -358,8 +685,11 @@ function renderPrintPane(item) {
         <span>${escapeHtml(templateLabel(template))}${workflowPhase(model) === 'review' ? ' · Korrekturmodus' : ''}</span>
       </header>
       <div class="cv-pane-body">
-        <div class="cv-print-wrap">
+        <div class="cv-print-workarea${editor ? ' has-editor' : ''}">
+          ${editor}
+          <div class="cv-print-wrap">
           ${renderPrintSheet(model)}
+          </div>
         </div>
       </div>
     </section>
@@ -374,146 +704,492 @@ function renderPrintSheet(model) {
 }
 
 function renderModernPrintSheet(model) {
-  const data = getPrintData(model);
+  const data = getQualificationPrintData(model);
   return `
-    <article class="cv-print-sheet cv-template-modern">
-      <header class="cv-print-head cv-modern-head">
-        <div>
-          <div class="cv-print-kicker">Qualifikationsprofil</div>
-          <h1 class="cv-print-name cv-editable" ${editableAttr(data.editable, 'candidate.name')}>${escapeHtml(data.name)}</h1>
-          <div class="cv-print-role cv-editable" ${editableAttr(data.editable, 'candidate.currentRole')}>${escapeHtml(data.role)}</div>
-          <div class="cv-print-meta cv-editable" ${editableAttr(data.editable, 'candidate.location')}>${escapeHtml(data.meta || 'Ort / Verfügbarkeit')}</div>
-        </div>
-        ${data.logo}
-      </header>
-      <div class="cv-print-body cv-modern-body">
-        <aside>
-          <section class="cv-print-section">
-            <h3>Kontakt</h3>
-            <p>${escapeHtml(data.contact)}</p>
-          </section>
-          <section class="cv-print-section">
-            <h3>Skills</h3>
-            <ul class="cv-print-tags">${renderTags(data.skills, 'Skills nachtragen')}</ul>
-          </section>
-          <section class="cv-print-section">
-            <h3>Sprachen</h3>
-            <ul class="cv-print-list">${renderSimpleList(data.languages, 'Sprachen nachtragen')}</ul>
-          </section>
-        </aside>
-        <main>
-          <section class="cv-print-section">
-            <h3>Profil</h3>
-            <p class="cv-editable" ${editableAttr(data.editable, 'candidate.summary')}>${escapeHtml(data.summary)}</p>
-          </section>
-          <section class="cv-print-section">
-            <h3>Berufserfahrung</h3>
-            <ul class="cv-print-list">${renderTimeline(data.experience, 'Erfahrung nachtragen')}</ul>
-          </section>
-          <section class="cv-print-section">
-            <h3>Ausbildung</h3>
-            <ul class="cv-print-list">${renderTimeline(data.education, 'Ausbildung nachtragen')}</ul>
-          </section>
-        </main>
-      </div>
+    <article class="cv-print-sheet cv-qprofile cv-template-modern">
+      ${renderQualificationHeader(data, 'modern')}
+      <main class="cv-q-body">
+        ${renderQualificationProfile(data)}
+        ${renderQualificationMethods(data)}
+        ${renderQualificationEntries('BERUFLICHER WERDEGANG / PROJEKTKOMPETENZ', data.career, 'career')}
+        ${renderQualificationEntries('AUSBILDUNG', data.education, 'education')}
+      </main>
+      ${renderQualificationFooter(data)}
     </article>
   `;
 }
 
 function renderMinimalPrintSheet(model) {
-  const data = getPrintData(model, { minimalLogo: true });
+  const data = getQualificationPrintData(model, { minimalLogo: true });
   return `
-    <article class="cv-print-sheet cv-template-minimal">
-      <header class="cv-minimal-head">
-        <div class="cv-minimal-title">
-          <h1 class="cv-print-name cv-editable" ${editableAttr(data.editable, 'candidate.name')}>${escapeHtml(data.name)}</h1>
-          <div class="cv-print-role cv-editable" ${editableAttr(data.editable, 'candidate.currentRole')}>${escapeHtml(data.role)}</div>
-        </div>
-        ${data.logo}
-      </header>
-      <div class="cv-minimal-facts">
-        <span>${escapeHtml(data.meta || 'Ort / Verfügbarkeit')}</span>
-        <span>${escapeHtml(data.contact)}</span>
-        <span>${escapeHtml(data.degree || 'Abschluss nachtragen')}</span>
-      </div>
-      <main class="cv-minimal-body">
-        <section class="cv-print-section cv-minimal-summary">
-          <h3>Profil</h3>
-          <p class="cv-editable" ${editableAttr(data.editable, 'candidate.summary')}>${escapeHtml(data.summary)}</p>
-        </section>
-        <section class="cv-print-section">
-          <h3>Kernkompetenzen</h3>
-          <ul class="cv-print-tags cv-minimal-tags">${renderTags(data.skills, 'Skills nachtragen')}</ul>
-        </section>
-        <section class="cv-print-section">
-          <h3>Beruflicher Verlauf</h3>
-          <ul class="cv-print-list cv-minimal-timeline">${renderTimeline(data.experience, 'Erfahrung nachtragen')}</ul>
-        </section>
-        <div class="cv-minimal-columns">
-          <section class="cv-print-section">
-            <h3>Ausbildung</h3>
-            <ul class="cv-print-list">${renderTimeline(data.education, 'Ausbildung nachtragen')}</ul>
-          </section>
-          <section class="cv-print-section">
-            <h3>Sprachen</h3>
-            <ul class="cv-print-list">${renderSimpleList(data.languages, 'Sprachen nachtragen')}</ul>
-          </section>
-        </div>
+    <article class="cv-print-sheet cv-qprofile cv-template-minimal">
+      ${renderQualificationHeader(data, 'minimal')}
+      <main class="cv-q-body">
+        ${renderQualificationProfile(data)}
+        ${renderQualificationMethods(data)}
+        ${renderQualificationEntries('BERUFLICHER WERDEGANG / PROJEKTKOMPETENZ', data.career, 'career')}
+        ${renderQualificationEntries('AUSBILDUNG', data.education, 'education')}
       </main>
+      ${renderQualificationFooter(data)}
     </article>
   `;
 }
 
 function renderClassicPrintSheet(model) {
-  const data = getPrintData(model, { classicLogo: true });
+  const data = getQualificationPrintData(model, { classicLogo: true });
   return `
-    <article class="cv-print-sheet cv-template-classic">
-      <header class="cv-classic-head">
-        ${data.logo}
-        <div class="cv-print-kicker">Curriculum Vitae</div>
-        <h1 class="cv-print-name cv-editable" ${editableAttr(data.editable, 'candidate.name')}>${escapeHtml(data.name)}</h1>
-        <div class="cv-print-role cv-editable" ${editableAttr(data.editable, 'candidate.currentRole')}>${escapeHtml(data.role)}</div>
-        <div class="cv-print-meta">${escapeHtml([data.meta, data.contact].filter(Boolean).join(' | '))}</div>
-      </header>
-      <main class="cv-classic-body">
-        <section class="cv-print-section">
-          <h3>Profil</h3>
-          <p class="cv-editable" ${editableAttr(data.editable, 'candidate.summary')}>${escapeHtml(data.summary)}</p>
-        </section>
-        <section class="cv-print-section">
-          <h3>Berufserfahrung</h3>
-          <ul class="cv-print-list cv-classic-timeline">${renderClassicTimeline(data.experience, 'Erfahrung nachtragen')}</ul>
-        </section>
-        <section class="cv-print-section">
-          <h3>Ausbildung</h3>
-          <ul class="cv-print-list cv-classic-timeline">${renderClassicTimeline(data.education, 'Ausbildung nachtragen')}</ul>
-        </section>
-        <section class="cv-print-section cv-classic-skills">
-          <h3>Kompetenzen und Sprachen</h3>
-          <p>${escapeHtml([...data.skills.map(labelOf), ...data.languages.map(labelOf)].join(' · ') || 'Kompetenzen nachtragen')}</p>
-        </section>
+    <article class="cv-print-sheet cv-qprofile cv-template-classic">
+      ${renderQualificationHeader(data, 'classic')}
+      <main class="cv-q-body">
+        ${renderQualificationProfile(data)}
+        ${renderQualificationMethods(data)}
+        ${renderQualificationEntries('BERUFLICHER WERDEGANG / PROJEKTKOMPETENZ', data.career, 'career')}
+        ${renderQualificationEntries('AUSBILDUNG', data.education, 'education')}
       </main>
+      ${renderQualificationFooter(data)}
     </article>
   `;
 }
 
-function getPrintData(model, options = {}) {
+function getQualificationPrintData(model, options = {}) {
   const candidate = model.candidate || {};
   const phase = workflowPhase(model);
   const editable = phase === 'review';
   const anonymize = Boolean(model.print?.anonymize);
   const logo = model.print?.showLogo ? renderLogo(model, options) : '';
   const name = anonymize ? anonymizedName(candidate.name) : displayCandidateName(model);
-  const role = candidate.currentRole || 'Position / Rolle';
-  const meta = [candidate.location, candidate.availability, candidate.highestDegree].filter(Boolean).join(' · ');
-  const summary = candidate.summary || 'Kurzprofil nach dem Parsing korrigieren.';
-  const skills = normalizeArray(candidate.skills).slice(0, 16);
-  const languages = normalizeArray(candidate.languages).slice(0, 8);
-  const experience = normalizeTimeline(candidate.additional, 'cv.experience').slice(0, 5);
-  const education = normalizeTimeline(candidate.additional, 'cv.education').slice(0, 4);
-  const contact = anonymize ? 'Anonymisiert' : contactLine(candidate);
-  const degree = candidate.highestDegree || candidate.degree || '';
-  return { candidate, editable, anonymize, logo, name, role, meta, summary, skills, languages, experience, education, contact, degree };
+  const additional = candidate.additional || [];
+  const cvMeta = {
+    ...(candidate.cv?.meta || {}),
+    ...(additionalValue(additional, 'cv.meta') || {}),
+  };
+  const role = candidate.currentRole || candidate.desiredPosition || cvMeta.currentPosition || 'CV Profil';
+  const facts = buildQualificationFacts(candidate, cvMeta, anonymize);
+  const skills = normalizeCvSkillsObject(candidate);
+  const methods = buildMethodsFromCvSkills(skills, {
+    ...cvMeta,
+    languages: normalizeLanguageItems(candidate.languages || cvMeta.languages || []),
+  });
+  const career = normalizeExperienceToCareerEntries(normalizeTimeline(additional, 'cv.experience'));
+  const education = normalizeEducationToEntries(normalizeTimeline(additional, 'cv.education'));
+  const footer = {
+    userName: 'Steffen Ratschan',
+    companyLine: 'pmX GmbH | Kegelenstr. 3 | 70372 Stuttgart',
+    contactLine: anonymize ? 'Anonymisiert' : contactLine(candidate),
+  };
+  return { candidate, editable, anonymize, logo, name, role, facts, methods, career, education, footer };
+}
+
+function renderQualificationHeader(data, theme) {
+  const logo = theme === 'minimal' ? '' : data.logo;
+  return `
+    <header class="cv-q-head">
+      <div>
+        <h1>QUALIFIKATIONSPROFIL</h1>
+        <div class="cv-q-rule"></div>
+      </div>
+      ${logo}
+    </header>
+  `;
+}
+
+function renderQualificationProfile(data) {
+  return `
+    <section class="cv-q-profile">
+      <div class="cv-q-avatar">${escapeHtml(initials(data.name))}</div>
+      <div>
+        <h2>${escapeHtml(data.name)}</h2>
+        <div class="cv-q-role">${escapeHtml(data.role)}</div>
+        <dl class="cv-q-facts">
+          ${data.facts.map((fact) => `
+            <div>
+              <dt>${escapeHtml(fact.label)}:</dt>
+              <dd>${escapeHtml(fact.value || '-')}</dd>
+            </div>
+          `).join('')}
+        </dl>
+      </div>
+    </section>
+  `;
+}
+
+function renderQualificationMethods(data) {
+  return `
+    <section class="cv-q-section">
+      <h3>METHODEN- / SYSTEMKOMPETENZ / SPRACHKENNTNISSE</h3>
+      <dl class="cv-q-methods">
+        ${data.methods.length ? data.methods.map((item) => `
+          <div>
+            <dt>${escapeHtml(item.label)}</dt>
+            <dd>${escapeHtml(item.value)}</dd>
+          </div>
+        `).join('') : '<div><dt>Kompetenzen</dt><dd>Nach Parsing korrigieren</dd></div>'}
+      </dl>
+    </section>
+  `;
+}
+
+function renderQualificationEntries(title, entries, kind) {
+  return `
+    <section class="cv-q-section">
+      <h3>${escapeHtml(title)}</h3>
+      <div class="cv-q-entries">
+        ${entries.length ? entries.map((entry) => renderQualificationEntry(entry, kind)).join('') : `
+          <article class="cv-q-entry">
+            <div class="cv-q-when">-</div>
+            <div><strong>Keine Einträge hinterlegt</strong></div>
+          </article>
+        `}
+      </div>
+    </section>
+  `;
+}
+
+function renderQualificationEntry(entry, kind) {
+  const title = kind === 'education' ? entry.title : entry.title;
+  const org = kind === 'education' ? entry.org : entry.employer;
+  const bullets = Array.isArray(entry.bullets) ? entry.bullets : [];
+  const extra = Array.isArray(entry.extra) ? entry.extra : [];
+  return `
+    <article class="cv-q-entry">
+      <div class="cv-q-when">${escapeHtml([entry.from, entry.to].filter(Boolean).join(' - ') || '-')}</div>
+      <div class="cv-q-entry-main">
+        <strong>${escapeHtml(title || 'Station')}</strong>
+        ${org ? `<span>${escapeHtml(org)}</span>` : ''}
+        ${extra.map((item) => `<em>${escapeHtml(item)}</em>`).join('')}
+        ${bullets.length ? `<ul>${bullets.map((bullet) => `<li>${escapeHtml(bullet.text || bullet)}</li>`).join('')}</ul>` : ''}
+      </div>
+    </article>
+  `;
+}
+
+function renderQualificationFooter(data) {
+  const line = data.footer.companyLine || '';
+  return `
+    <footer class="cv-q-foot">
+      <div>
+        <strong>${escapeHtml(data.footer.userName || '-')}</strong>
+        <span>${escapeHtml(line)}</span>
+        <span>${escapeHtml(data.footer.contactLine || '-')}</span>
+      </div>
+      <div>${escapeHtml(new Date().toLocaleDateString('de-DE'))}</div>
+    </footer>
+  `;
+}
+
+function buildQualificationFacts(candidate, cvMeta, anonymize) {
+  const facts = [];
+  const highestDegree = candidate.highestDegree || cvMeta.highestDegree || '';
+  const degree = candidate.degree || cvMeta.degree || '';
+  const birthDate = candidate.birthDate || cvMeta.birthDate || '';
+  const nationality = candidate.nationality || cvMeta.nationality || '';
+  const availability = candidate.availability || cvMeta.availabilityFrom || '';
+  if (highestDegree) facts.push({ label: 'Höchster Abschluss', value: highestDegree });
+  if (degree) facts.push({ label: 'Fachrichtung', value: degree });
+  if (birthDate) facts.push({ label: anonymize ? 'Geburtsjahr' : 'Geburtsdatum', value: anonymize ? yearFromDateText(birthDate) : formatCvDisplayDate(birthDate) });
+  if (nationality) facts.push({ label: 'Nationalität', value: nationality });
+  if (availability) facts.push({ label: 'Verfügbarkeit', value: formatCvDisplayDate(availability) });
+  if (!facts.length) facts.push({ label: 'Profil', value: 'Felder prüfen' });
+  return facts;
+}
+
+function normalizeExperienceToCareerEntries(experience) {
+  return (Array.isArray(experience) ? experience : []).map((entry) => {
+    const title = firstNonEmpty(entry?.job_title, entry?.title, entry?.role, entry?.jobTitle, entry?.position) || 'Position';
+    const employer = firstNonEmpty(entry?.employer, entry?.company, entry?.companyName, entry?.org) || '';
+    const from = firstNonEmpty(entry?.start_date, entry?.startDate, entry?.start, entry?.from);
+    const to = firstNonEmpty(entry?.end_date, entry?.endDate, entry?.end, entry?.to) || 'heute';
+    const bullets = valueToLines(entry?.job_description || entry?.description || entry?.summary)
+      .slice(0, 12)
+      .map((text) => ({ text }));
+    return { from, to, title, employer, bullets };
+  });
+}
+
+function normalizeEducationToEntries(education) {
+  return (Array.isArray(education) ? education : []).map((entry) => {
+    const title = firstNonEmpty(entry?.degree, entry?.title, entry?.program) || 'Ausbildung';
+    const org = firstNonEmpty(entry?.institution, entry?.school, entry?.university, entry?.provider, entry?.org) || '';
+    const from = firstNonEmpty(entry?.start_date, entry?.startDate, entry?.start, entry?.from);
+    const to = firstNonEmpty(entry?.end_date, entry?.endDate, entry?.end, entry?.to) || 'dato';
+    const extra = [entry?.major, entry?.location, entry?.specialization].filter((item) => String(item || '').trim());
+    const bullets = valueToLines(entry?.details || entry?.description || entry?.summary)
+      .slice(0, 8)
+      .map((text) => ({ text }));
+    return { from, to, title, org, extra, bullets };
+  });
+}
+
+function buildMethodsFromCvSkills(cvSkills, candidateMeta) {
+  const out = [];
+  const fach = cvSkills.Fachkenntnisse || cvSkills.fachkenntnisse || cvSkills.skills;
+  const sprachen = cvSkills.Sprachkenntnisse || cvSkills.sprachkenntnisse || cvSkills.languages;
+  const other = cvSkills['Weitere Fähigkeiten'] || cvSkills['Weitere Faehigkeiten'] || cvSkills.other_skills;
+  if (fach) out.push({ label: 'Fachkenntnisse', value: valueToLines(fach).join(', ') });
+  if (other) out.push({ label: 'Weitere Fähigkeiten', value: valueToLines(other).join(', ') });
+  if (sprachen) out.push({ label: 'Sprachkenntnisse', value: valueToLines(sprachen).join(', ') });
+  if (!sprachen) {
+    const languageText = normalizeLanguageItems(candidateMeta?.languages || [])
+      .map((item) => [item.label || item.code || item.language || item.name, item.level].filter(Boolean).join(' '))
+      .filter(Boolean)
+      .join(', ');
+    if (languageText) out.push({ label: 'Sprachkenntnisse', value: languageText });
+  }
+  return out.filter((item) => item.value);
+}
+
+function renderFieldEditor(model) {
+  const candidate = model.candidate || {};
+  const cv = getCvEditorData(model);
+  return `
+    <aside class="cv-field-editor" data-cv-field-editor>
+      <header>
+        <strong>Felder</strong>
+        <span>Ninja CV-Profil</span>
+      </header>
+      <section class="cv-editor-block">
+        <h4>Stammdaten</h4>
+        <div class="cv-editor-grid">
+          ${renderEditorInput('Name', 'candidate.name', displayCandidateName(model))}
+          ${renderEditorInput('Rolle', 'candidate.currentRole', candidate.currentRole || '')}
+          ${renderEditorInput('Ort', 'candidate.location', candidate.location || '')}
+          ${renderEditorInput('Verfügbarkeit', 'candidate.availability', candidate.availability || '')}
+          ${renderEditorInput('Abschluss', 'candidate.highestDegree', candidate.highestDegree || '')}
+          ${renderEditorInput('Fachrichtung', 'candidate.degree', candidate.degree || '')}
+          ${renderEditorInput('Geburtsdatum', 'candidate.birthDate', candidate.birthDate || '')}
+          ${renderEditorInput('Nationalität', 'candidate.nationality', candidate.nationality || '')}
+        </div>
+      </section>
+      <section class="cv-editor-block">
+        <div class="cv-editor-title-row">
+          <h4>Beruflicher Werdegang</h4>
+          <button type="button" data-cv-editor-action="add-experience">+</button>
+        </div>
+        <div data-cv-editor-list="experience">
+          ${renderExperienceEditorRows(cv.experience)}
+        </div>
+      </section>
+      <section class="cv-editor-block">
+        <div class="cv-editor-title-row">
+          <h4>Ausbildung</h4>
+          <button type="button" data-cv-editor-action="add-education">+</button>
+        </div>
+        <div data-cv-editor-list="education">
+          ${renderEducationEditorRows(cv.education)}
+        </div>
+      </section>
+      <section class="cv-editor-block">
+        <h4>Skills</h4>
+        ${renderSkillEditor('Fachkenntnisse', cv.skills.Fachkenntnisse || cv.skills.skills || [])}
+        ${renderSkillEditor('Sprachkenntnisse', cv.skills.Sprachkenntnisse || cv.skills.languages || [])}
+        ${renderSkillEditor('Weitere Fähigkeiten', cv.skills['Weitere Fähigkeiten'] || cv.skills['Weitere Faehigkeiten'] || cv.skills.other_skills || [])}
+      </section>
+    </aside>
+  `;
+}
+
+function renderEditorInput(label, path, value) {
+  return `
+    <label>
+      <span>${escapeHtml(label)}</span>
+      <input data-cv-field-path="${escapeAttr(path)}" value="${escapeAttr(value || '')}" />
+    </label>
+  `;
+}
+
+function renderExperienceEditorRows(items) {
+  if (!items.length) return '<div class="cv-editor-empty">Keine Stationen.</div>';
+  return items.map((item, index) => `
+    <article class="cv-editor-row" data-cv-entry-kind="experience" data-cv-index="${index}">
+      <button type="button" data-cv-editor-action="remove-experience" data-cv-index="${index}" aria-label="Station entfernen">x</button>
+      <input data-cv-entry-field="job_title" value="${escapeAttr(firstNonEmpty(item.job_title, item.title, item.role, item.jobTitle))}" placeholder="Position" />
+      <input data-cv-entry-field="employer" value="${escapeAttr(firstNonEmpty(item.employer, item.company, item.companyName))}" placeholder="Arbeitgeber" />
+      <input data-cv-entry-field="start_date" value="${escapeAttr(firstNonEmpty(item.start_date, item.startDate, item.start, item.from))}" placeholder="Start" />
+      <input data-cv-entry-field="end_date" value="${escapeAttr(firstNonEmpty(item.end_date, item.endDate, item.end, item.to))}" placeholder="Ende" />
+      <textarea data-cv-entry-field="job_description" rows="2" placeholder="Aufgaben / Erfolge">${escapeHtml(valueToLines(item.job_description || item.description || item.summary).join('\n'))}</textarea>
+    </article>
+  `).join('');
+}
+
+function renderEducationEditorRows(items) {
+  if (!items.length) return '<div class="cv-editor-empty">Keine Ausbildung.</div>';
+  return items.map((item, index) => `
+    <article class="cv-editor-row" data-cv-entry-kind="education" data-cv-index="${index}">
+      <button type="button" data-cv-editor-action="remove-education" data-cv-index="${index}" aria-label="Ausbildung entfernen">x</button>
+      <input data-cv-entry-field="degree" value="${escapeAttr(firstNonEmpty(item.degree, item.title, item.program))}" placeholder="Abschluss" />
+      <input data-cv-entry-field="institution" value="${escapeAttr(firstNonEmpty(item.institution, item.school, item.university, item.provider))}" placeholder="Institution" />
+      <input data-cv-entry-field="major" value="${escapeAttr(item.major || '')}" placeholder="Hauptfach" />
+      <input data-cv-entry-field="specialization" value="${escapeAttr(item.specialization || '')}" placeholder="Schwerpunkt" />
+      <input data-cv-entry-field="start_date" value="${escapeAttr(firstNonEmpty(item.start_date, item.startDate, item.start, item.from))}" placeholder="Start" />
+      <input data-cv-entry-field="end_date" value="${escapeAttr(firstNonEmpty(item.end_date, item.endDate, item.end, item.to))}" placeholder="Ende" />
+      <textarea data-cv-entry-field="details" rows="2" placeholder="Details">${escapeHtml(valueToLines(item.details || item.description || item.summary).join('\n'))}</textarea>
+    </article>
+  `).join('');
+}
+
+function renderSkillEditor(label, value) {
+  return `
+    <label class="cv-editor-skill">
+      <span>${escapeHtml(label)}</span>
+      <textarea data-cv-skill-group="${escapeAttr(label)}" rows="2">${escapeHtml(valueToLines(value).join('\n'))}</textarea>
+    </label>
+  `;
+}
+
+function bindFieldEditor(state) {
+  const editor = state.host.querySelector('[data-cv-field-editor]');
+  if (!editor) return;
+  editor.querySelectorAll('[data-cv-field-path]').forEach((input) => {
+    input.addEventListener('blur', async () => {
+      const path = input.dataset.cvFieldPath;
+      const value = input.value.trim();
+      await patchSelectedModel(state, (model) => syncCandidateMetaAdditional(setPath({ ...model }, path, value)));
+    });
+  });
+  editor.querySelectorAll('[data-cv-entry-field]').forEach((input) => {
+    input.addEventListener('blur', async () => {
+      await patchSelectedModel(state, (model) => patchCvEditorData(model, readCvEditorData(editor)));
+    });
+  });
+  editor.querySelectorAll('[data-cv-skill-group]').forEach((input) => {
+    input.addEventListener('blur', async () => {
+      await patchSelectedModel(state, (model) => patchCvEditorData(model, readCvEditorData(editor)));
+    });
+  });
+  editor.querySelectorAll('[data-cv-editor-action]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      await patchSelectedModel(state, (model) => applyEditorButtonAction(model, button.dataset.cvEditorAction, Number(button.dataset.cvIndex || -1)));
+    });
+  });
+}
+
+function getCvEditorData(model) {
+  const candidate = model.candidate || {};
+  return {
+    experience: normalizeTimeline(candidate.additional, 'cv.experience'),
+    education: normalizeTimeline(candidate.additional, 'cv.education'),
+    skills: normalizeCvSkillsObject(candidate),
+  };
+}
+
+function readCvEditorData(editor) {
+  const experience = Array.from(editor.querySelectorAll('[data-cv-entry-kind="experience"]')).map((row) => ({
+    job_title: row.querySelector('[data-cv-entry-field="job_title"]')?.value.trim() || '',
+    employer: row.querySelector('[data-cv-entry-field="employer"]')?.value.trim() || '',
+    start_date: row.querySelector('[data-cv-entry-field="start_date"]')?.value.trim() || '',
+    end_date: row.querySelector('[data-cv-entry-field="end_date"]')?.value.trim() || '',
+    job_description: valueToLines(row.querySelector('[data-cv-entry-field="job_description"]')?.value || ''),
+  })).filter((row) => Object.values(row).some((value) => Array.isArray(value) ? value.length : value));
+  const education = Array.from(editor.querySelectorAll('[data-cv-entry-kind="education"]')).map((row) => ({
+    degree: row.querySelector('[data-cv-entry-field="degree"]')?.value.trim() || '',
+    institution: row.querySelector('[data-cv-entry-field="institution"]')?.value.trim() || '',
+    major: row.querySelector('[data-cv-entry-field="major"]')?.value.trim() || '',
+    specialization: row.querySelector('[data-cv-entry-field="specialization"]')?.value.trim() || '',
+    start_date: row.querySelector('[data-cv-entry-field="start_date"]')?.value.trim() || '',
+    end_date: row.querySelector('[data-cv-entry-field="end_date"]')?.value.trim() || '',
+    details: valueToLines(row.querySelector('[data-cv-entry-field="details"]')?.value || ''),
+  })).filter((row) => Object.values(row).some((value) => Array.isArray(value) ? value.length : value));
+  const skills = {};
+  editor.querySelectorAll('[data-cv-skill-group]').forEach((field) => {
+    const key = field.dataset.cvSkillGroup;
+    const values = valueToLines(field.value || '');
+    if (key && values.length) skills[key] = values;
+  });
+  return { experience, education, skills };
+}
+
+function applyEditorButtonAction(model, action, index) {
+  const candidate = { ...(model.candidate || {}) };
+  const cv = getCvEditorData(model);
+  if (action === 'add-experience') cv.experience.push({ job_title: '', employer: '', start_date: '', end_date: '', job_description: [] });
+  if (action === 'add-education') cv.education.push({ degree: '', institution: '', major: '', specialization: '', start_date: '', end_date: '', details: [] });
+  if (action === 'remove-experience' && index >= 0) cv.experience.splice(index, 1);
+  if (action === 'remove-education' && index >= 0) cv.education.splice(index, 1);
+  return patchCvEditorData({ ...model, candidate }, cv);
+}
+
+function patchCvEditorData(model, cv) {
+  const candidate = { ...(model.candidate || {}) };
+  candidate.additional = upsertAdditionalValue(candidate.additional, 'cv.experience', 'Berufserfahrung (CV)', cv.experience || []);
+  candidate.additional = upsertAdditionalValue(candidate.additional, 'cv.education', 'Ausbildung (CV)', cv.education || []);
+  candidate.additional = upsertAdditionalValue(candidate.additional, 'cv.skills', 'Skills (CV)', cv.skills || {});
+  candidate.skills = valueToLines(cv.skills?.Fachkenntnisse || cv.skills?.skills || []);
+  candidate.languages = valueToLines(cv.skills?.Sprachkenntnisse || cv.skills?.languages || []).map((label) => ({ label }));
+  return syncCandidateMetaAdditional({ ...model, candidate });
+}
+
+function syncCandidateMetaAdditional(model) {
+  const candidate = { ...(model.candidate || {}) };
+  const currentMeta = additionalValue(candidate.additional, 'cv.meta') || {};
+  const nextMeta = {
+    ...currentMeta,
+    birthDate: candidate.birthDate || '',
+    nationality: candidate.nationality || '',
+    highestDegree: candidate.highestDegree || '',
+    degree: candidate.degree || '',
+    availabilityFrom: candidate.availability || currentMeta.availabilityFrom || '',
+    languages: normalizeLanguageItems(candidate.languages || currentMeta.languages || []),
+  };
+  candidate.additional = upsertAdditionalValue(candidate.additional, 'cv.meta', 'Stammdaten (CV)', nextMeta);
+  return { ...model, candidate };
+}
+
+function upsertAdditionalValue(additional, key, label, value) {
+  const list = Array.isArray(additional) ? structuredClone(additional) : [];
+  const index = list.findIndex((item) => item?.key === key);
+  const entry = { key, label, type: 'json', value };
+  if (index >= 0) list[index] = { ...list[index], ...entry };
+  else list.push(entry);
+  return list;
+}
+
+function normalizeCvSkillsObject(candidate) {
+  const raw = additionalValue(candidate.additional, 'cv.skills') || candidate.cv?.skills || {};
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return structuredClone(raw);
+  const skills = {};
+  const fach = Array.isArray(candidate.skills) ? candidate.skills : Array.isArray(raw) ? raw : [];
+  if (fach.length) skills.Fachkenntnisse = fach.map(labelOf).filter(Boolean);
+  const languages = normalizeLanguageItems(candidate.languages || []);
+  if (languages.length) {
+    skills.Sprachkenntnisse = languages.map((item) => [item.label || item.code || item.language || item.name, item.level].filter(Boolean).join(' ')).filter(Boolean);
+  }
+  return skills;
+}
+
+function normalizeLanguageItems(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => {
+    if (typeof item === 'string') return { label: item };
+    if (!item || typeof item !== 'object') return null;
+    return { ...item, label: item.label || item.language || item.name || item.code || '' };
+  }).filter((item) => item && String(item.label || item.code || '').trim());
+}
+
+function valueToLines(value) {
+  if (Array.isArray(value)) return value.map(labelOf).map((item) => String(item || '').trim()).filter(Boolean);
+  if (typeof value === 'string') return value.split(/\r?\n|;|•|\u2022/g).map((item) => item.trim()).filter(Boolean);
+  if (value && typeof value === 'object') return Object.values(value).flatMap(valueToLines);
+  return [];
+}
+
+function firstNonEmpty(...values) {
+  for (const value of values) {
+    const text = String(value || '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function formatCvDisplayDate(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) return `${iso[3]}.${iso[2]}.${iso[1]}`;
+  return text;
+}
+
+function yearFromDateText(value) {
+  return String(value || '').match(/\b(19\d{2}|20\d{2}|2100)\b/)?.[1] || '';
 }
 
 function bindEditablePrintFields(state) {
@@ -526,7 +1202,46 @@ function bindEditablePrintFields(state) {
   });
 }
 
-async function importPdf(state, file) {
+async function importPdfs(state, files) {
+  const pdfs = files.filter((file) => /^application\/pdf$/i.test(file.type) || /\.pdf$/i.test(file.name));
+  if (!pdfs.length) throw new Error('Bitte mindestens eine PDF-Datei auswählen.');
+  const failures = [];
+  const imported = [];
+  state.importing = true;
+  setModuleBusy(state, true);
+  try {
+    for (const file of pdfs) {
+      try {
+        imported.push(await importPdf(state, file, { refresh: false, select: false }));
+      } catch (error) {
+        failures.push(`${file.name}: ${error?.message || error}`);
+      }
+    }
+    if (imported.length) {
+      const selectedId = imported[imported.length - 1].documentId;
+      state.selectedId = selectedId;
+      state.lastSelectedId = '';
+      state.lastSelectedPhase = '';
+      state.viewMode = 'original';
+      await refresh(state);
+      if (state.selectedId !== selectedId) {
+        state.selectedId = selectedId;
+        state.lastSelectedId = '';
+        state.lastSelectedPhase = '';
+        await refresh(state);
+      }
+    }
+  } finally {
+    state.importing = false;
+    setModuleBusy(state, !state.ready);
+  }
+  if (failures.length) {
+    throw new Error(failures.join('\n'));
+  }
+  notify(state, 'success', pdfs.length === 1 ? 'PDF importiert' : `${pdfs.length} PDFs importiert`, 'Originalansicht ist bereit. Parsing kann pro Kandidat gestartet werden.');
+}
+
+async function importPdf(state, file, options = {}) {
   if (!/^application\/pdf$/i.test(file.type) && !/\.pdf$/i.test(file.name)) {
     throw new Error('Bitte eine PDF-Datei auswählen.');
   }
@@ -539,7 +1254,8 @@ async function importPdf(state, file) {
   const fileId = `desktop_file_${documentId}`;
   const generationId = `${fileId}_g1`;
   const base64 = uint8ToBase64(bytes);
-  const title = titleFromFilename(file.name);
+  const identity = candidateIdentityFromFilename(file.name);
+  const title = identity.name;
   const model = createInitialModel({
     documentId,
     versionId,
@@ -547,6 +1263,7 @@ async function importPdf(state, file) {
     generationId,
     filename: file.name,
     title,
+    identity,
     sha,
     size: file.size,
     now,
@@ -603,9 +1320,12 @@ async function importPdf(state, file) {
   });
 
   state.originalUrls.set(fileId, URL.createObjectURL(file));
-  state.selectedId = documentId;
-  state.viewMode = 'original';
-  await refresh(state);
+  if (options.select !== false) {
+    state.selectedId = documentId;
+    state.viewMode = 'original';
+  }
+  if (options.refresh !== false) await refresh(state);
+  return { documentId, fileId };
 }
 
 async function saveDesktopFile(ctx, input) {
@@ -627,7 +1347,7 @@ async function saveDesktopFile(ctx, input) {
     content_ref: '',
     content_state: 'available',
     content_hash: input.sha,
-    content_hash_scheme: 'sha256',
+    content_hash_scheme: CONTENT_HASH_SCHEME,
     content_generation_id: input.generationId,
     mtime_ms: input.now,
     content_synced_at_ms: input.now,
@@ -639,18 +1359,19 @@ async function saveDesktopFile(ctx, input) {
   const total = Math.ceil(input.base64.length / CHUNK_SIZE) || 1;
   for (let idx = 0; idx < total; idx += 1) {
     const data = input.base64.slice(idx * CHUNK_SIZE, (idx + 1) * CHUNK_SIZE);
+    const chunkHash = await sha256Hex(new TextEncoder().encode(data));
     await getCollection(ctx, 'desktop_file_chunks').insert({
-      id: `${input.fileId}_${idx}`,
+      id: canonicalDesktopFileChunkId(input.fileId, input.generationId, idx),
       file_id: input.fileId,
       generation_id: input.generationId,
       content_hash: input.sha,
-      content_hash_scheme: 'sha256',
+      content_hash_scheme: CONTENT_HASH_SCHEME,
       idx,
       total,
       encoding: 'base64',
       data,
-      chunk_hash: '',
-      chunk_hash_scheme: '',
+      chunk_hash: chunkHash,
+      chunk_hash_scheme: CHUNK_HASH_SCHEME,
       size_bytes: data.length,
       created_at_ms: Date.now(),
     });
@@ -661,112 +1382,408 @@ async function startParsing(state, item) {
   if (!state.ctx.commandBus?.dispatch) {
     throw new Error('CTOX commandBus ist nicht verfügbar. CV Parsing muss als Business-OS Chat-Task gestartet werden.');
   }
-  requireCollections(state.ctx, ['business_chats', 'documents', 'document_versions']);
+  requireCollections(state.ctx, ['business_chats', 'documents', 'document_versions', 'desktop_files', 'desktop_file_chunks']);
   const now = Date.now();
   const chatId = `chat_cv_${item.record.id}`;
-  const prompt = buildParserPrompt(item);
-  await upsertBusinessChat(state.ctx, {
-    id: chatId,
-    title: `CV Parsing · ${displayCandidateName(item.model)}`,
-    message: prompt,
-    now,
-  });
-  const result = await state.ctx.commandBus.dispatch({
-    module: MODULE_ID,
-    type: 'business_os.chat.task',
-    record_id: item.record.id,
-    inbound_channel: MODULE_ID,
-    payload: {
-      title: `CV strukturieren: ${item.model.source?.filename || item.record.filename}`,
-      instruction: prompt,
-      prompt,
-      chat_id: chatId,
-      message_id: `msg_${crypto.randomUUID()}`,
-      conversation: [],
-      attachments: [
-        {
-          kind: 'desktop_file',
-          file_id: item.model.source?.desktop_file_id,
-          name: item.model.source?.filename || item.record.filename,
-          mime_type: 'application/pdf',
-        },
-      ],
-      outbound_channel: 'business_os_chat',
-      response_channel: 'business_os_chat',
-      inbound_channel: MODULE_ID,
-      source_module: MODULE_ID,
-      skill: 'ctox-cv-print-parser',
-      skill_id: 'ctox-cv-print-parser',
-      source_file_id: item.model.source?.desktop_file_id,
-      document_id: item.record.id,
-      version_id: item.version.id,
-      writeback_contract: {
-        command_type: 'ctox.cv_print.apply_parse',
-        target_collection: 'document_versions',
-        document_id: item.record.id,
-        expected_model_schema: 'ctox.cv_print_profile.v1',
-      },
-    },
-    client_context: {
-      surface: 'business-os-cv-print-builder',
-      action: 'parse_cv_pdf',
-      module: MODULE_ID,
-      document_id: item.record.id,
-      version_id: item.version.id,
-      desktop_file_id: item.model.source?.desktop_file_id,
-      chat_id: chatId,
-    },
-  });
-
-  await patchItemModel(state, item, (model) => ({
+  const commandId = `cmd_${crypto.randomUUID()}`;
+  const taskInstruction = buildParserTaskInstruction(item);
+  const markParsing = (model) => ({
     ...model,
     workflow: {
       ...model.workflow,
       phase: 'parsing',
+      view_mode: 'original',
       chat_id: chatId,
-      command_id: result?.command_id || result?.id || '',
-      task_id: result?.task_id || result?.tracking_id || '',
-      task_status: result?.status || 'pending_sync',
+      command_id: commandId,
+      task_id: '',
+      task_status: 'queued',
+      error: '',
       updated_at_ms: now,
     },
-  }), {
-    documentStatus: 'parsing',
-    displayPhase: 'parsing',
   });
+  item.model = markParsing(structuredClone(item.model));
   state.viewMode = 'original';
-  await refresh(state);
+  state.lastSelectedId = item.record.id;
+  state.lastSelectedPhase = 'parsing';
+  render(state);
+  let parsingPatchApplied = false;
+  try {
+    await patchItemModel(state, item, markParsing, {
+      documentStatus: 'parsing',
+      displayPhase: 'parsing',
+    });
+    parsingPatchApplied = true;
+  } catch (error) {
+    console.warn('[cv-print-builder] optimistic parsing status patch failed; dispatching task anyway', error);
+  }
+  if (parsingPatchApplied) await refresh(state);
+
+  try {
+    await ensureParseSourceReady(state, item);
+    await upsertBusinessChat(state.ctx, {
+      id: chatId,
+      title: `CV Parsing · ${displayCandidateName(item.model)}`,
+      message: taskInstruction,
+      now,
+    });
+    const dispatchResult = await dispatchCvParserCommand(state, {
+      id: commandId,
+      module: MODULE_ID,
+      command_type: 'business_os.chat.task',
+      type: 'business_os.chat.task',
+      record_id: item.record.id,
+      inbound_channel: MODULE_ID,
+      sync_collections: [
+        'desktop_file_chunks',
+        'desktop_files',
+        'documents',
+        'document_versions',
+        'business_chats',
+        'business_commands',
+        'ctox_queue_tasks',
+      ],
+      payload: {
+        title: `CV strukturieren: ${item.model.source?.filename || item.record.filename}`,
+        instruction: taskInstruction,
+        chat_id: chatId,
+        message_id: `msg_${crypto.randomUUID()}`,
+        conversation: [],
+        inbound_channel: MODULE_ID,
+        source_module: MODULE_ID,
+        skill: 'ctox-cv-print-parser',
+        skill_id: 'ctox-cv-print-parser',
+        source_file_id: item.model.source?.desktop_file_id,
+        generation_id: item.model.source?.generation_id,
+        filename: item.model.source?.filename || item.record.filename,
+        mime_type: 'application/pdf',
+        size_bytes: item.model.source?.size_bytes || 0,
+        sha256: item.model.source?.sha256 || '',
+        document_id: item.record.id,
+        version_id: item.version.id,
+        record_snapshot: parserRecordSnapshot(item),
+        writeback_contract: {
+          command_type: 'ctox.cv_print.apply_parse',
+          target_collection: 'document_versions',
+          document_id: item.record.id,
+          expected_model_schema: 'ctox.cv_print_profile.v1',
+        },
+      },
+      client_context: {
+        surface: 'business-os-cv-print-builder',
+        action: 'parse_cv_pdf',
+        module: MODULE_ID,
+        document_id: item.record.id,
+        version_id: item.version.id,
+        desktop_file_id: item.model.source?.desktop_file_id,
+        chat_id: chatId,
+      },
+    });
+    const taskId = String(dispatchResult?.task_id || dispatchResult?.taskId || '').trim();
+    const taskStatus = String(dispatchResult?.task_status || dispatchResult?.status || 'queued').trim();
+    warmRequiredCollectionSync(state.ctx, [
+      'desktop_file_chunks',
+      'desktop_files',
+      'business_chats',
+      'business_commands',
+      'ctox_queue_tasks',
+    ], 30000);
+    await patchItemModel(state, item, (model) => ({
+      ...model,
+      workflow: {
+        ...model.workflow,
+        phase: 'parsing',
+        chat_id: chatId,
+        command_id: commandId,
+        task_id: taskId || model.workflow?.task_id || '',
+        task_status: taskStatus || model.workflow?.task_status || 'queued',
+        updated_at_ms: Date.now(),
+      },
+    }), {
+      documentStatus: 'parsing',
+      displayPhase: 'parsing',
+    });
+  } catch (error) {
+    await patchItemModel(state, item, (model) => ({
+      ...model,
+      workflow: {
+        ...model.workflow,
+        phase: 'error',
+        chat_id: chatId,
+        command_id: model.workflow?.command_id || commandId,
+        task_status: 'dispatch_failed',
+        error: error?.message || String(error),
+        updated_at_ms: Date.now(),
+      },
+    }), {
+      documentStatus: 'error',
+      displayPhase: 'error',
+    });
+    throw error;
+  } finally {
+    state.viewMode = 'original';
+    await refresh(state);
+  }
+}
+
+async function dispatchCvParserCommand(state, command) {
+  try {
+    return await state.ctx.commandBus.dispatch({
+      ...command,
+      wait_timeout_ms: 90000,
+    });
+  } catch (error) {
+    const message = String(error?.message || error || '');
+    const commandId = error?.command_id || command.id || command.command_id || '';
+    if (commandId && message.includes('Queue-Task')) {
+      return {
+        ok: true,
+        command_id: commandId,
+        status: 'pending_sync',
+        task_id: '',
+        task_status: 'syncing',
+        transport: 'rxdb-command-bus-timeout',
+      };
+    }
+    throw error;
+  }
+}
+
+async function ensureParseSourceReady(state, item) {
+  const source = item.model?.source || {};
+  const fileId = source.desktop_file_id || '';
+  const generationId = source.generation_id || '';
+  if (!fileId || !generationId) {
+    throw new Error('CV-Quelle ist unvollständig: PDF-Datei oder Generation fehlt.');
+  }
+  await ensureCanonicalDesktopFileChunks(state.ctx, {
+    fileId,
+    generationId,
+    sizeBytes: Number(source.size_bytes || 0),
+  });
+  await flushFileCollectionsForDispatch(state.ctx, 45000);
+}
+
+function parserRecordSnapshot(item) {
+  const model = item.model || {};
+  const candidate = model.candidate || {};
+  return {
+    document_id: item.record?.id || '',
+    version_id: item.version?.id || '',
+    source: {
+      desktop_file_id: model.source?.desktop_file_id || '',
+      generation_id: model.source?.generation_id || '',
+      filename: model.source?.filename || item.record?.filename || '',
+      mime_type: model.source?.mime_type || 'application/pdf',
+      size_bytes: model.source?.size_bytes || 0,
+      sha256: model.source?.sha256 || '',
+    },
+    candidate: {
+      name: displayCandidateName(model),
+      firstName: candidate.firstName || '',
+      lastName: candidate.lastName || '',
+      currentRole: candidate.currentRole || '',
+      location: candidate.location || '',
+      availability: candidate.availability || '',
+      highestDegree: candidate.highestDegree || '',
+      degree: candidate.degree || '',
+    },
+    workflow: {
+      phase: workflowPhase(model),
+      template: normalizeTemplateId(model.print?.template || 'minimal'),
+    },
+    field_contract: {
+      schema: 'ctox.cv_print_profile.v1',
+      additional_keys: ['cv.experience', 'cv.education', 'cv.skills', 'cv.meta'],
+      reference: 'NinjaWorkflowTool_Extension/find-job-for-candidate qualification profile',
+    },
+  };
+}
+
+async function syncFileCollections(ctx) {
+  if (!ctx.sync?.startCollection) return;
+  const bridges = await Promise.all([
+    ctx.sync.startCollection('desktop_files').catch(() => null),
+    ctx.sync.startCollection('desktop_file_chunks').catch(() => null),
+  ]);
+  await Promise.all(bridges.map((bridge) => waitForSyncBridgeReady(bridge, 15000, { allowPush: true })));
+}
+
+async function flushFileCollectionsForDispatch(ctx, timeoutMs = 30000) {
+  if (!ctx.sync?.startCollection) return;
+  const bridges = await Promise.all([
+    ctx.sync.startCollection('desktop_files').catch(() => null),
+    ctx.sync.startCollection('desktop_file_chunks').catch(() => null),
+  ]);
+  await Promise.all(bridges.map((bridge) => waitForSyncBridgeReady(bridge, timeoutMs, { allowPush: true })));
+}
+
+async function waitForSyncBridgeReady(bridge, timeoutMs = 10000, options = {}) {
+  const bridgeState = bridge?.state;
+  if (!bridgeState) return;
+  const runWithTimeout = (promise) => Promise.race([
+    Promise.resolve(promise).catch(() => {}),
+    delay(timeoutMs),
+  ]);
+  await Promise.race([
+    Promise.resolve()
+      .then(() => bridgeState.awaitInSync?.() || bridgeState.awaitInitialReplication?.())
+      .catch(() => {}),
+    delay(timeoutMs),
+  ]);
+  if (options.allowPush && typeof bridgeState.pushToRemotePeers === 'function') {
+    await runWithTimeout(bridgeState.pushToRemotePeers());
+  } else if (options.allowPush && typeof bridgeState.awaitInSync === 'function') {
+    await runWithTimeout(bridgeState.awaitInSync());
+  }
+}
+
+async function normalizeLegacyDesktopFileHashScheme(ctx, fileId) {
+  if (!fileId) return;
+  const fileDoc = await getCollection(ctx, 'desktop_files').findOne(fileId).exec();
+  if (fileDoc?.incrementalPatch) {
+    const file = fileDoc.toJSON();
+    if (!file.content_hash_scheme || file.content_hash_scheme === 'sha256') {
+      await fileDoc.incrementalPatch({
+        content_hash_scheme: CONTENT_HASH_SCHEME,
+        updated_at_ms: Date.now(),
+      });
+    }
+  }
+
+  let chunkDocs = await getCollection(ctx, 'desktop_file_chunks')
+    .find({ selector: { file_id: fileId } })
+    .exec()
+    .catch(() => []);
+  if (chunkDocs.length === 0) {
+    chunkDocs = await getCollection(ctx, 'desktop_file_chunks')
+      .find()
+      .exec()
+      .then((docs) => docs.filter((doc) => doc?.toJSON?.().file_id === fileId))
+      .catch(() => []);
+  }
+  const expectedTotal = chunkDocs.length;
+  for (const chunkDoc of chunkDocs) {
+    if (!chunkDoc?.incrementalPatch) continue;
+    const chunk = chunkDoc.toJSON();
+    const patch = {};
+    if (expectedTotal > 0 && chunk.total !== expectedTotal) {
+      patch.total = expectedTotal;
+    }
+    if (!chunk.content_hash_scheme || chunk.content_hash_scheme === 'sha256') {
+      patch.content_hash_scheme = CONTENT_HASH_SCHEME;
+    }
+    if (!chunk.chunk_hash_scheme) {
+      patch.chunk_hash_scheme = CHUNK_HASH_SCHEME;
+    }
+    if (Object.keys(patch).length > 0) {
+      await chunkDoc.incrementalPatch(patch);
+    }
+  }
+}
+
+async function ensureCanonicalDesktopFileChunks(ctx, { fileId, generationId, sizeBytes = 0 }) {
+  const chunksCol = getCollection(ctx, 'desktop_file_chunks');
+  let allChunkDocs = await chunksCol.find({ selector: { file_id: fileId } })
+    .exec()
+    .catch(() => []);
+  if (allChunkDocs.length === 0) {
+    allChunkDocs = await chunksCol.find()
+      .exec()
+      .then((docs) => docs.filter((doc) => doc?.toJSON?.().file_id === fileId))
+      .catch(() => []);
+  }
+  const chunks = allChunkDocs.map((doc) => doc.toJSON()).filter((chunk) => !chunk._deleted);
+  const activeChunks = chunks
+    .filter((chunk) => chunk.generation_id === generationId)
+    .sort((a, b) => Number(a.idx || 0) - Number(b.idx || 0));
+  const expectedTotal = activeChunks[0]?.total || expectedDesktopFileChunkTotal(sizeBytes);
+  const canonicalById = new Set(chunks.map((chunk) => chunk.id || ''));
+  const hasCanonicalSet = activeChunks.length > 0
+    && activeChunks.every((chunk) => (
+      chunk.id === canonicalDesktopFileChunkId(fileId, generationId, Number(chunk.idx || 0))
+    ));
+  if (hasCanonicalSet && activeChunks.length >= expectedTotal) return;
+
+  const legacyByIdx = new Map();
+  for (const chunk of chunks) {
+    if (chunk.generation_id === generationId || chunk.generation_id === '' || chunk.generation_id == null) {
+      legacyByIdx.set(Number(chunk.idx || 0), chunk);
+    }
+  }
+  for (const chunk of activeChunks) {
+    legacyByIdx.set(Number(chunk.idx || 0), chunk);
+  }
+  if (!legacyByIdx.size) {
+    throw new Error(`PDF-Daten sind noch nicht lokal verfügbar: ${fileId}`);
+  }
+  for (const [idx, chunk] of [...legacyByIdx.entries()].sort((a, b) => a[0] - b[0])) {
+    const canonicalId = canonicalDesktopFileChunkId(fileId, generationId, idx);
+    if (canonicalById.has(canonicalId)) continue;
+    await chunksCol.insert({
+      ...chunk,
+      id: canonicalId,
+      file_id: fileId,
+      generation_id: generationId,
+      idx,
+      total: chunk.total || expectedTotal,
+      created_at_ms: chunk.created_at_ms || Date.now(),
+    });
+    canonicalById.add(canonicalId);
+  }
+}
+
+function canonicalDesktopFileChunkId(fileId, generationId, idx) {
+  return `${fileId}_${generationId}_${idx}`;
+}
+
+function expectedDesktopFileChunkTotal(sizeBytes) {
+  const base64Length = Math.ceil(Math.max(0, Number(sizeBytes || 0)) / 3) * 4;
+  return Math.max(1, Math.ceil(base64Length / CHUNK_SIZE));
+}
+
+async function shouldNormalizeLegacyDesktopFileHashScheme(ctx, fileId) {
+  if (!fileId) return false;
+  const fileDoc = await getCollection(ctx, 'desktop_files').findOne(fileId).exec().catch(() => null);
+  const file = fileDoc?.toJSON?.();
+  return Boolean(file && (!file.content_hash_scheme || file.content_hash_scheme === 'sha256'));
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function buildParserPrompt(item) {
+  return buildParserTaskInstruction(item);
+}
+
+function buildParserTaskInstruction(item) {
   const source = item.model.source || {};
   return [
-    'Du bist der CTOX Business-OS Skill `ctox-cv-print-parser`.',
-    '',
-    'Ziel: Lies das angehängte CV-PDF über den CTOX PDF Stack und die Business-OS',
-    'RxDB/WebRTC-Datenebene und strukturiere es in ein einheitliches Druckprofil.',
-    '',
-    'Strikte Ausgabe-Regeln:',
-    '- Antworte ausschließlich mit einem einzigen JSON-Objekt (kein Markdown, kein Fließtext).',
-    '- Das JSON ist das vollständige `model_json` mit `schema = "ctox.cv_print_profile.v1"`.',
-    '- Setze `workflow.phase = "review"`.',
-    '- Fülle `candidate` (name, firstName, lastName, currentRole, location, email, …) und',
-    '  `candidate.additional` mit den Keys `cv.education`, `cv.experience`, `cv.skills`, `cv.meta`.',
-    '- Notiere unsichere/fehlende Felder in `workflow.diagnostics` (Liste aus {level, message}).',
-    '- Keine HTTP-Fallbacks, keine externen Services.',
-    '',
-    'Eingaben:',
+    'Skill: `ctox-cv-print-parser`.',
+    'Strukturiere den CTOX-vorextrahierten Abschnitt "CV PDF extracted text" als Ninja-kompatibles Qualifikationsprofil.',
+    'Referenz: /Users/michaelwelsch/Documents/NinjaWorkflowTool/NinjaWorkflowTool_Extension/executions/find-job-for-candidate/view/printView.js und /Users/michaelwelsch/Documents/NinjaWorkflowTool/NinjaWorkflowTool_Extension/data/jobmatchSchema.js.',
+    'Ausfuehrung nur ueber CTOX desktop_files/desktop_file_chunks, RxDB/WebRTC und CTOX PDF-Stack.',
+    'Keine Tools, keine Shell, kein PDF erneut oeffnen, keine HTTP- oder Ninja-Services.',
+    'Antwort exakt als ein minifiziertes JSON-Objekt, kein Markdown, keine Analyse.',
+    'Schema: {"schema":"ctox.cv_print_profile.v1","workflow":{"phase":"review","diagnostics":[]},',
+    '"candidate":{name,firstName,lastName,currentRole,location,availability,email,phone,birthDate,nationality,highestDegree,degree,languages[],skills[],additional[]}}.',
+    'candidate.additional muss exakt diese CV-Keys enthalten:',
+    '- cv.experience: Array mit {job_title,employer,location,start_date,end_date,job_description[]}.',
+    '- cv.education: Array mit {degree,institution,major,specialization,location,start_date,end_date,details[]}.',
+    '- cv.skills: Objekt mit Gruppen, mindestens Fachkenntnisse[], Sprachkenntnisse[], Weitere Fähigkeiten[].',
+    '- cv.meta: Objekt mit birthDate,nationality,highestDegree,degree,availabilityFrom,languages[],source_filename.',
+    'Alle erkennbaren Stationen behalten; nicht künstlich auf wenige Einträge kürzen.',
+    'Fehlende Werte leer lassen, nichts erfinden.',
     `- document_id: ${item.record.id}`,
     `- version_id: ${item.version.id}`,
     `- desktop_file_id: ${source.desktop_file_id || ''}`,
     `- filename: ${source.filename || item.record.filename || ''}`,
-    '',
-    'Die neue `document_versions`-Version und der `documents`-Patch werden vom nativen',
-    'Writeback `ctox.cv_print.apply_parse` aus deinem JSON erzeugt — gib nur das JSON zurück.',
+    'Der CTOX Writeback `ctox.cv_print.apply_parse` persistiert das JSON als neue document_versions-Version.',
   ].join('\n');
 }
 
 async function approvePrint(state, item) {
-  await patchItemModel(state, item, (model) => ({
+  const approveModel = (model) => ({
     ...model,
     workflow: {
       ...model.workflow,
@@ -775,12 +1792,30 @@ async function approvePrint(state, item) {
       approved_at_ms: Date.now(),
       updated_at_ms: Date.now(),
     },
-  }), {
+  });
+  await patchItemModel(state, item, approveModel, {
     documentStatus: 'approved',
     displayPhase: 'approved',
   });
+  const approvedModel = approveModel(structuredClone(item.model));
+  item.model = approvedModel;
+  if (item.version) {
+    item.version.model_json = approvedModel;
+    item.version.diagnostics = approvedModel.workflow?.diagnostics || item.version.diagnostics || [];
+    item.version.updated_at_ms = Date.now();
+  }
+  item.record.status = 'approved';
+  item.record.display_cache = {
+    ...(item.record.display_cache || {}),
+    phase: 'approved',
+    candidate_name: displayCandidateName(approvedModel),
+    template: normalizeTemplateId(approvedModel.print?.template || 'minimal'),
+  };
+  item.record.updated_at_ms = Date.now();
   state.viewMode = 'print';
-  await refresh(state);
+  state.lastSelectedId = item.record.id;
+  state.lastSelectedPhase = 'approved';
+  render(state);
 }
 
 async function upsertBusinessChat(ctx, input) {
@@ -821,9 +1856,16 @@ async function upsertBusinessChat(ctx, input) {
 
 async function ensureOriginalUrl(state, item) {
   const fileId = item.model.source?.desktop_file_id;
+  const generationId = item.model.source?.generation_id || '';
   if (!fileId || state.originalUrls.has(fileId)) return;
   const chunks = await findAll(state.ctx, 'desktop_file_chunks');
-  const fileChunks = chunks
+  const matchingChunks = chunks.filter((chunk) => (
+    chunk.file_id === fileId
+    && (!generationId || chunk.generation_id === generationId)
+  ));
+  const fileChunks = dedupeChunksByIndex(matchingChunks.length
+    ? matchingChunks
+    : chunks.filter((chunk) => chunk.file_id === fileId))
     .filter((chunk) => chunk.file_id === fileId)
     .sort((a, b) => (a.idx || 0) - (b.idx || 0));
   if (!fileChunks.length) return;
@@ -831,6 +1873,18 @@ async function ensureOriginalUrl(state, item) {
   const bytes = base64ToUint8(base64);
   const blob = new Blob([bytes], { type: 'application/pdf' });
   state.originalUrls.set(fileId, URL.createObjectURL(blob));
+}
+
+function dedupeChunksByIndex(chunks) {
+  const byIndex = new Map();
+  for (const chunk of chunks || []) {
+    const idx = Number(chunk.idx || 0);
+    const current = byIndex.get(idx);
+    if (!current || String(chunk.id || '').length > String(current.id || '').length) {
+      byIndex.set(idx, chunk);
+    }
+  }
+  return [...byIndex.values()];
 }
 
 async function patchSelectedModel(state, updater, options = {}) {
@@ -842,17 +1896,18 @@ async function patchSelectedModel(state, updater, options = {}) {
 
 async function patchItemModel(state, item, updater, options = {}) {
   const now = Date.now();
-  const current = structuredClone(item.model);
+  const versionDoc = await getCollection(state.ctx, 'document_versions').findOne(item.version.id).exec();
+  if (!versionDoc?.incrementalPatch) throw new Error('CV Version konnte nicht aktualisiert werden.');
+  const versionJson = versionDoc.toJSON ? versionDoc.toJSON() : {};
+  const current = structuredClone(versionJson.model_json || item.model);
   const next = updater(current);
   next.workflow = {
     ...next.workflow,
     updated_at_ms: now,
   };
-  const versionDoc = await getCollection(state.ctx, 'document_versions').findOne(item.version.id).exec();
-  if (!versionDoc?.incrementalPatch) throw new Error('CV Version konnte nicht aktualisiert werden.');
   await versionDoc.incrementalPatch({
     model_json: next,
-    diagnostics: next.workflow?.diagnostics || item.version.diagnostics || [],
+    diagnostics: next.workflow?.diagnostics || versionJson.diagnostics || item.version.diagnostics || [],
     updated_at_ms: now,
   });
   const documentDoc = await getCollection(state.ctx, 'documents').findOne(item.record.id).exec();
@@ -888,8 +1943,8 @@ function createInitialModel(input) {
     candidate: {
       id: input.documentId,
       name: input.title,
-      firstName: '',
-      lastName: '',
+      firstName: input.identity?.firstName || '',
+      lastName: input.identity?.lastName || '',
       currentRole: '',
       desiredPosition: '',
       location: '',
@@ -993,18 +2048,76 @@ function statusShort(phase) {
     uploaded: 'PDF',
     parsing: 'Parsing',
     review: 'Korrektur',
-    approved: 'Print',
+    approved: 'Freigabe',
     error: 'Fehler',
   })[phase] || 'CV';
 }
 
-function phaseFootnote(model) {
+function phaseFootnoteHtml(model) {
   const phase = workflowPhase(model);
   if (phase === 'uploaded') return 'PDF geladen. Als Nächstes Parsing starten.';
-  if (phase === 'parsing') return `Task läuft${model.workflow?.task_id ? ` · ${model.workflow.task_id}` : ''}`;
-  if (phase === 'review') return `${templateLabel(model.print?.template)} · Korrektur und Template prüfen.`;
-  if (phase === 'approved') return `${templateLabel(model.print?.template)} · Druckansicht freigegeben.`;
+  if (phase === 'parsing') {
+    if (model.workflow?.task_status === 'syncing') return 'PDF wird an CTOX synchronisiert. Flow wird angelegt.';
+    const tracking = taskTracking(model);
+    if (!tracking.taskId && !tracking.commandId) return 'Task läuft. Flow wird angelegt.';
+    const label = tracking.taskId ? shortTaskId(tracking.taskId) : shortTaskId(tracking.commandId);
+    return `Task läuft · <button class="cv-task-link" type="button" data-cv-open-task data-cv-task-id="${escapeAttr(tracking.taskId)}" data-cv-command-id="${escapeAttr(tracking.commandId)}" title="${escapeAttr([tracking.taskId, tracking.commandId].filter(Boolean).join(' · '))}">Flow öffnen <span>${escapeHtml(label)}</span></button>`;
+  }
+  if (phase === 'review') return `${escapeHtml(templateLabel(model.print?.template))} · Korrektur und Template prüfen.`;
+  if (phase === 'approved') return `${escapeHtml(templateLabel(model.print?.template))} · Druckansicht freigegeben.`;
+  if (phase === 'error') {
+    const tracking = taskTracking(model);
+    const error = clipText(model.workflow?.error || 'Parser-Task fehlgeschlagen.', 74);
+    const link = tracking.taskId || tracking.commandId
+      ? ` · <button class="cv-task-link is-error" type="button" data-cv-open-task data-cv-task-id="${escapeAttr(tracking.taskId)}" data-cv-command-id="${escapeAttr(tracking.commandId)}" title="${escapeAttr([tracking.taskId, tracking.commandId].filter(Boolean).join(' · '))}">Flow öffnen</button>`
+      : '';
+    return `Parsing fehlgeschlagen: ${escapeHtml(error)}${link}`;
+  }
   return 'Status prüfen.';
+}
+
+function taskTracking(model) {
+  return {
+    taskId: String(model?.workflow?.task_id || model?.workflow?.tracking_id || '').trim(),
+    commandId: String(model?.workflow?.command_id || '').trim(),
+  };
+}
+
+function shortTaskId(value) {
+  const text = String(value || '').trim();
+  if (!text) return 'Task';
+  const tail = text.includes('::') ? text.split('::').pop() : text;
+  return tail.length > 12 ? tail.slice(0, 6) + '…' + tail.slice(-4) : tail;
+}
+
+function clipText(value, max) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text.length > max ? text.slice(0, Math.max(0, max - 1)) + '…' : text;
+}
+
+function openCtoxTask(taskId, commandId) {
+  if (!taskId && !commandId) return;
+  const focus = {
+    taskId,
+    commandId,
+    sourceModule: MODULE_ID,
+    openedAt: Date.now(),
+  };
+  const params = new URLSearchParams();
+  if (taskId) params.set('task_id', taskId);
+  if (commandId) params.set('command_id', commandId);
+  const hash = params.toString() ? `ctox?${params.toString()}` : 'ctox';
+  try {
+    parent.sessionStorage.setItem('ctox.businessOs.focusTask', JSON.stringify(focus));
+    parent.dispatchEvent(new CustomEvent('ctox-business-os-focus-task', { detail: focus }));
+    parent.location.hash = hash;
+  } catch {
+    try {
+      sessionStorage.setItem('ctox.businessOs.focusTask', JSON.stringify(focus));
+    } catch {}
+    window.dispatchEvent(new CustomEvent('ctox-business-os-focus-task', { detail: focus }));
+    location.hash = hash;
+  }
 }
 
 function templateLabel(id) {
@@ -1024,12 +2137,55 @@ function displayCandidateName(model) {
 }
 
 function titleFromFilename(filename) {
-  return String(filename || 'Neuer CV')
-    .replace(/\.[^.]+$/, '')
+  return candidateIdentityFromFilename(filename).name;
+}
+
+function candidateIdentityFromFilename(filename) {
+  const rawBase = String(filename || 'Neuer CV').replace(/\.[^.]+$/, '');
+  const base = rawBase
+    .replace(/\([^)]*\)/g, ' ')
     .replace(/[_-]+/g, ' ')
+    .replace(/\b(?:lebenslauf|curriculum|vitae|cv|resume|jan|januar|feb|februar|mar|maerz|märz|apr|april|mai|jun|juni|jul|juli|aug|august|sep|sept|september|okt|oktober|nov|november|dez|dezember)\d*\b/gi, ' ')
+    .replace(/\b(?:kein|upload|final|neu|new|copy|kopie|version|stand|profil)\b/gi, ' ')
+    .replace(/\b\d{2,8}\b/g, ' ')
     .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+    .trim();
+  const words = base
+    .split(/\s+/)
+    .map((word) => word.replace(/^[^\p{L}]+|[^\p{L}]+$/gu, ''))
+    .filter((word) => word && /\p{L}/u.test(word));
+  const usable = words.length ? words.slice(0, 4) : ['Neuer', 'CV'];
+  const ordered = maybeFlipLastFirst(usable);
+  const display = ordered.map(formatNameToken).join(' ').trim() || 'Neuer CV';
+  return {
+    name: display,
+    firstName: ordered[0] ? formatNameToken(ordered[0]) : '',
+    lastName: ordered.length > 1 ? ordered.slice(1).map(formatNameToken).join(' ') : '',
+  };
+}
+
+function maybeFlipLastFirst(words) {
+  if (words.length !== 2) return words;
+  const first = normalizeNameToken(words[0]);
+  const second = normalizeNameToken(words[1]);
+  if (COMMON_FIRST_NAMES.has(second) && !COMMON_FIRST_NAMES.has(first)) {
+    return [words[1], words[0]];
+  }
+  return words;
+}
+
+function normalizeNameToken(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLowerCase();
+}
+
+function formatNameToken(value) {
+  return String(value || '')
+    .split(/([^\p{L}]+)/u)
+    .map((part) => /\p{L}/u.test(part) ? part.charAt(0).toUpperCase() + part.slice(1) : part)
+    .join('');
 }
 
 function initials(name) {
@@ -1061,16 +2217,26 @@ function normalizeArray(value) {
 }
 
 function normalizeTimeline(additional, key) {
-  const entry = Array.isArray(additional) ? additional.find((item) => item?.key === key) : null;
-  return Array.isArray(entry?.value) ? entry.value : [];
+  const value = additionalValue(additional, key);
+  return Array.isArray(value) ? value : [];
+}
+
+function additionalValue(additional, key) {
+  if (Array.isArray(additional)) {
+    return additional.find((item) => item?.key === key)?.value;
+  }
+  if (additional && typeof additional === 'object') {
+    return additional[key];
+  }
+  return null;
 }
 
 function renderTimeline(items, fallback) {
   if (!items.length) return `<li>${escapeHtml(fallback)}</li>`;
   return items.map((item) => {
     const title = item.title || item.position || item.degree || item.school || item.company || item.name || labelOf(item);
-    const meta = [item.company, item.institution, item.location, item.start, item.end || item.until].filter(Boolean).join(' · ');
-    const description = item.description || item.summary || '';
+    const meta = [item.company, item.org, item.institution, item.location, item.from || item.start, item.to || item.end || item.until].filter(Boolean).join(' · ');
+    const description = item.details || item.description || item.summary || '';
     return `<li><strong>${escapeHtml(title)}</strong>${meta ? `<span>${escapeHtml(meta)}</span>` : ''}${description ? `<p>${escapeHtml(description)}</p>` : ''}</li>`;
   }).join('');
 }
@@ -1079,9 +2245,9 @@ function renderClassicTimeline(items, fallback) {
   if (!items.length) return `<li>${escapeHtml(fallback)}</li>`;
   return items.map((item) => {
     const title = item.title || item.position || item.degree || item.school || item.company || item.name || labelOf(item);
-    const period = [item.start, item.end || item.until].filter(Boolean).join(' - ');
-    const place = [item.company, item.institution, item.location].filter(Boolean).join(' · ');
-    const description = item.description || item.summary || '';
+    const period = [item.from || item.start, item.to || item.end || item.until].filter(Boolean).join(' - ');
+    const place = [item.company, item.org, item.institution, item.location].filter(Boolean).join(' · ');
+    const description = item.details || item.description || item.summary || '';
     return `
       <li>
         <span class="cv-classic-period">${escapeHtml(period || 'Zeitraum')}</span>
@@ -1193,10 +2359,6 @@ function iconCheck() {
 
 function iconPrinter() {
   return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8V4h10v4"/><path d="M7 17H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2h-2"/><path d="M7 14h10v6H7z"/></svg>';
-}
-
-function iconUpload() {
-  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M5 20h14"/></svg>';
 }
 
 function iconImage() {

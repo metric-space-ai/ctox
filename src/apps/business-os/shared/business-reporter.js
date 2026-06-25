@@ -302,7 +302,10 @@ export function initBusinessReporter({
   fabButton = button;
 
   const handleActivity = (event) => {
-    if (event.target.closest('.ctox-report-fab') || event.target.closest('.ctox-bug-actor')) {
+    const target = event.target && typeof event.target.closest === 'function'
+      ? event.target
+      : null;
+    if (target && (target.closest('.ctox-report-fab') || target.closest('.ctox-bug-actor'))) {
       if (eggState.state !== 'sleeping') {
         stopEasterEggInstantly();
       }

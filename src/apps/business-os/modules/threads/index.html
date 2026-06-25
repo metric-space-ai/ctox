@@ -1,0 +1,87 @@
+<main class="threads-module" data-threads-root>
+  <section class="threads-pane threads-left" aria-label="Threads Navigation">
+    <header class="threads-pane-header">
+      <div>
+        <span class="threads-kicker" data-label="hubKicker">Business OS</span>
+        <h2 data-label="threadsTitle">Threads</h2>
+      </div>
+      <button type="button" class="threads-icon-btn" data-refresh title="Aktualisieren" aria-label="Aktualisieren">
+        <span aria-hidden="true">↻</span>
+      </button>
+    </header>
+    <div class="threads-search-row">
+      <input type="search" data-thread-search placeholder="Threads suchen" aria-label="Threads suchen">
+    </div>
+    <nav class="threads-filter-list" aria-label="Thread Filter">
+      <button type="button" data-filter="inbox" class="is-active">Inbox</button>
+      <button type="button" data-filter="mentions">Mentions</button>
+      <button type="button" data-filter="waiting">Wartet</button>
+      <button type="button" data-filter="approvals">Freigaben</button>
+      <button type="button" data-filter="delegated">Delegiert</button>
+      <button type="button" data-filter="running">CTOX läuft</button>
+      <button type="button" data-filter="failed">Blockiert</button>
+      <button type="button" data-filter="watching">Watching</button>
+      <button type="button" data-filter="snoozed">Snoozed</button>
+      <button type="button" data-filter="all">Alle</button>
+      <button type="button" data-filter="archived">Archiv</button>
+    </nav>
+    <div class="threads-list" data-thread-list></div>
+  </section>
+
+  <section class="threads-pane threads-center" aria-label="Thread Timeline">
+    <header class="threads-pane-header threads-detail-header">
+      <div>
+        <span class="threads-kicker" data-thread-source>Kontext</span>
+        <h2 data-thread-title>Kein Thread ausgewählt</h2>
+      </div>
+      <div class="threads-detail-actions">
+        <button type="button" data-thread-watch title="Watch">Watch</button>
+        <button type="button" data-thread-snooze title="Snooze">Snooze</button>
+        <button type="button" data-thread-archive title="Archivieren">Archiv</button>
+        <div class="threads-status-pill" data-thread-status>bereit</div>
+      </div>
+    </header>
+    <div class="threads-timeline" data-thread-timeline></div>
+    <form class="threads-composer" data-message-form>
+      <textarea data-message-body rows="3" placeholder="Antwort oder Notiz in diesen Thread schreiben"></textarea>
+      <button type="submit" class="threads-primary-btn">Senden</button>
+    </form>
+  </section>
+
+  <aside class="threads-pane threads-right" aria-label="Thread Actions">
+    <section class="threads-panel">
+      <h3>Neue Notiz</h3>
+      <form data-note-form class="threads-form">
+        <label>
+          <span>An User</span>
+          <input type="text" data-note-target placeholder="user-id oder mehrere mit Komma">
+        </label>
+        <label>
+          <span>Notiz</span>
+          <textarea data-note-body rows="4" placeholder="Kontext, Hinweis oder Bitte"></textarea>
+        </label>
+        <button type="submit" class="threads-primary-btn">Notiz hinterlassen</button>
+      </form>
+    </section>
+
+    <section class="threads-panel">
+      <h3>CTOX Freigabe</h3>
+      <form data-approval-form class="threads-form">
+        <label>
+          <span>Reviewer</span>
+          <input type="text" data-approval-reviewer placeholder="erfahrener-user-id">
+        </label>
+        <label>
+          <span>Prompt</span>
+          <textarea data-approval-prompt rows="5" placeholder="Was CTOX nach Freigabe tun soll"></textarea>
+        </label>
+        <button type="submit" class="threads-primary-btn">Freigabe anfragen</button>
+      </form>
+    </section>
+
+    <section class="threads-panel" data-context-panel>
+      <h3>Kontext</h3>
+      <div class="threads-context" data-thread-context></div>
+    </section>
+  </aside>
+</main>

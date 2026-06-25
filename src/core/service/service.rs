@@ -1,6 +1,12 @@
 use anyhow::Context;
 use anyhow::Result;
 #[cfg(unix)]
+use libc::RLIMIT_NOFILE;
+#[cfg(unix)]
+use libc::SIG_IGN;
+#[cfg(unix)]
+use libc::SIGPIPE;
+#[cfg(unix)]
 use libc::geteuid;
 #[cfg(unix)]
 use libc::getrlimit;
@@ -12,16 +18,10 @@ use libc::setpgid;
 use libc::setrlimit;
 #[cfg(unix)]
 use libc::signal;
-#[cfg(unix)]
-use libc::RLIMIT_NOFILE;
-#[cfg(unix)]
-use libc::SIGPIPE;
-#[cfg(unix)]
-use libc::SIG_IGN;
-use rusqlite::params;
 use rusqlite::Connection;
 use rusqlite::OpenFlags;
 use rusqlite::OptionalExtension;
+use rusqlite::params;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -89,8 +89,8 @@ use crate::service::core_state_machine::{
     CoreTransitionRequest, RuntimeLane,
 };
 use crate::service::core_transition_guard::{
-    enforce_core_transition, ensure_core_transition_guard_schema, evaluate_core_spawn,
-    CoreSpawnRequest,
+    CoreSpawnRequest, enforce_core_transition, ensure_core_transition_guard_schema,
+    evaluate_core_spawn,
 };
 use crate::state_invariants;
 use crate::verification;
@@ -114,6 +114,7 @@ const APPROVAL_NAG_IDLE_SAFETY_SECS: u64 = 300;
 const HARNESS_AUDIT_TICK_SECS: u64 = 300;
 const HARNESS_AUDIT_IDLE_SAFETY_SECS: u64 = 3600;
 const BUSINESS_OS_APP_RECOVERY_POLL_SECS: u64 = 60;
+const BUSINESS_OS_APP_RECOVERY_IDLE_SAFETY_SECS: u64 = 3600;
 const IDLE_QUEUE_DISPATCH_POLL_SECS: u64 = 8;
 const WORKER_IDLE_QUEUE_KICK_DELAY_MS: u64 = 250;
 const BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS: u64 = 180;
@@ -141,6 +142,11 @@ const BUSINESS_OS_APP_VALIDATION_CLEANUP_RETRY_DELAYS_MS: &[u64] = &[20, 100, 25
 #[cfg(not(test))]
 const BUSINESS_OS_APP_VALIDATION_CLEANUP_RETRY_DELAYS_MS: &[u64] = &[1_500, 5_000, 15_000];
 const BUSINESS_OS_APP_VALIDATION_MAX_REPAIR_ATTEMPTS: usize = 3;
+const BUSINESS_OS_APP_VALIDATION_REPORT_MAX_CHARS: usize = 6_000;
+const BUSINESS_OS_APP_VALIDATION_REQUEST_MAX_CHARS: usize = 1_600;
+const BUSINESS_OS_APP_VALIDATION_FEEDBACK_MAX_CHARS: usize = 12_000;
+const BUSINESS_OS_APP_VALIDATION_FAILURE_MARKER: &str =
+    "Business OS app artifact validation failed.";
 #[cfg(test)]
 const BUSINESS_OS_APP_REQUIRED_ARTIFACTS: &[&str] = &[
     "module.json",
@@ -182,6 +188,9 @@ static HARNESS_AUDIT_IDLE_GATE: OnceLock<Mutex<Option<HarnessAuditIdleGateState>
 static APPROVAL_NAG_IDLE_GATE: OnceLock<Mutex<Option<ApprovalNagIdleGateState>>> = OnceLock::new();
 static BUSINESS_OS_APP_RECOVERY_PREFLIGHT_GATE: OnceLock<
     Mutex<Option<BusinessOsAppRecoveryPreflightGateState>>,
+> = OnceLock::new();
+static BUSINESS_OS_APP_RECOVERY_IDLE_GATE: OnceLock<
+    Mutex<Option<BusinessOsAppRecoveryIdleGateState>>,
 > = OnceLock::new();
 static IDLE_DURABLE_QUEUE_EMPTY_GATE: OnceLock<Mutex<Option<IdleDurableQueueEmptyGateState>>> =
     OnceLock::new();
@@ -235,6 +244,14 @@ struct ApprovalNagIdleGateState {
 #[derive(Debug, Clone)]
 struct BusinessOsAppRecoveryPreflightGateState {
     root: PathBuf,
+    last_run: Instant,
+}
+
+#[derive(Debug, Clone)]
+struct BusinessOsAppRecoveryIdleGateState {
+    root: PathBuf,
+    core_db_path: PathBuf,
+    core_stamp: CoreDbChangeStamp,
     last_run: Instant,
 }
 
@@ -1539,8 +1556,7 @@ fn release_stale_service_communication_leases_on_boot(
                     conversation_id: None,
                     severity: "info",
                     reason: "crash_recovery_stale_lease_reclaim",
-                    action_taken:
-                        "released stale service communication leases left by a prior crash at boot",
+                    action_taken: "released stale service communication leases left by a prior crash at boot",
                     details: serde_json::json!({ "released_count": count }),
                     idempotence_key: None,
                 },
@@ -1651,26 +1667,28 @@ fn is_non_work_tui_probe(prompt: &str) -> bool {
 }
 
 fn start_work_hours_dispatcher(root: PathBuf, state: Arc<Mutex<SharedState>>) {
-    thread::spawn(move || loop {
-        let tick = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_work_hours_dispatch_tick(&root, &state)
-        }));
-        match tick {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => push_event(
-                &state,
-                format!(
-                    "Working-hours dispatcher failed to lease durable queue task: {}",
-                    clip_text(&err.to_string(), 180)
+    thread::spawn(move || {
+        loop {
+            let tick = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_work_hours_dispatch_tick(&root, &state)
+            }));
+            match tick {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => push_event(
+                    &state,
+                    format!(
+                        "Working-hours dispatcher failed to lease durable queue task: {}",
+                        clip_text(&err.to_string(), 180)
+                    ),
                 ),
-            ),
-            Err(_) => push_event(
-                &state,
-                "Working-hours dispatcher panicked during idle queue dispatch; continuing"
-                    .to_string(),
-            ),
+                Err(_) => push_event(
+                    &state,
+                    "Working-hours dispatcher panicked during idle queue dispatch; continuing"
+                        .to_string(),
+                ),
+            }
+            thread::sleep(Duration::from_secs(IDLE_QUEUE_DISPATCH_POLL_SECS));
         }
-        thread::sleep(Duration::from_secs(IDLE_QUEUE_DISPATCH_POLL_SECS));
     });
 }
 
@@ -4351,7 +4369,9 @@ fn start_prompt_worker(
                     ),
                 }
             }
-            let base_execution_prompt = if is_business_os_chat_queue_job(&root, &job) {
+            let base_execution_prompt = if is_cv_print_parser_queue_job(&job) {
+                business_os_cv_print_execution_prompt(&job)
+            } else if is_business_os_chat_queue_job(&root, &job) {
                 business_os_chat_execution_prompt(&job)
             } else if business_os_app_module_target_from_prompt(&job.prompt).is_some() {
                 business_os_app_module_execution_prompt(&job)
@@ -5548,6 +5568,35 @@ fn start_prompt_worker(
                         } else {
                             None
                         };
+                        let mut cv_print_parser_recovered_after_worker_error = false;
+                        if !job.leased_message_keys.is_empty()
+                            && is_cv_print_parser_queue_job(&job)
+                            && cv_print_parser_error_allows_compact_recovery(&err_text)
+                        {
+                            match complete_cv_print_parser_recovery_to_leased_queue(
+                                &root, &job, &err_text,
+                            ) {
+                                Ok(updated) if updated > 0 => {
+                                    cv_print_parser_recovered_after_worker_error = true;
+                                    push_event_locked(
+                                        &mut shared,
+                                        format!(
+                                            "Recovered CV print parser writeback for {updated} queue task(s) after worker error: {}",
+                                            clip_text(&compact_error, 180)
+                                        ),
+                                    );
+                                }
+                                Ok(_) => {}
+                                Err(update_err) => push_event_locked(
+                                    &mut shared,
+                                    format!(
+                                        "CV print parser recovery failed after worker error for {}: {}",
+                                        job.source_label,
+                                        clip_text(&update_err.to_string(), 180)
+                                    ),
+                                ),
+                            }
+                        }
                         let mut app_validation_worker_failure_reason: Option<String> = None;
                         let mut app_validation_verified_after_worker_error = false;
                         if !job.leased_message_keys.is_empty()
@@ -5655,6 +5704,7 @@ fn start_prompt_worker(
                             }
                         }
                         if !job.leased_message_keys.is_empty()
+                            && !cv_print_parser_recovered_after_worker_error
                             && !app_validation_rework
                             && !app_validation_terminal_failure
                             && !app_validation_verified_after_worker_error
@@ -5749,6 +5799,19 @@ fn start_prompt_worker(
                                     );
                                 }
                             }
+                        }
+                        if cv_print_parser_recovered_after_worker_error
+                            && !job.leased_message_keys.is_empty()
+                        {
+                            record_ack_failure_locked(
+                                &mut shared,
+                                channels::ack_leased_messages(
+                                    &root,
+                                    &job.leased_message_keys,
+                                    "handled",
+                                ),
+                                "handled recovered CV print parser queue lease(s)",
+                            );
                         }
                         if app_validation_verified_after_worker_error
                             && !job.leased_message_keys.is_empty()
@@ -7123,6 +7186,948 @@ fn business_os_chat_execution_prompt(job: &QueuedPrompt) -> String {
     )
 }
 
+fn is_cv_print_parser_queue_job(job: &QueuedPrompt) -> bool {
+    job.suggested_skill.as_deref() == Some("ctox-cv-print-parser")
+        || job.prompt.contains("ctox-cv-print-parser")
+        || job.prompt.contains("ctox.cv_print.apply_parse")
+        || job.prompt.contains("CV PDF extracted text:")
+}
+
+fn business_os_cv_print_execution_prompt(job: &QueuedPrompt) -> String {
+    format!(
+        "{}\n\nCV Print Parser execution rules:\n- This is a machine writeback task, not a user-facing Business OS chat reply.\n- Your final assistant message MUST be exactly one minified JSON object for `ctox.cv_print_profile.v1`.\n- Raw JSON is required here; do not use Markdown, prose, code fences, tool transcripts, file paths, queue IDs, or explanations.\n- Do not call tools. The CTOX daemon already reconstructed the PDF and added the bounded `CV PDF extracted text` section to this prompt.\n- Follow the NinjaWorkflowTool qualification-profile shape from `NinjaWorkflowTool_Extension/executions/find-job-for-candidate/view/printView.js` and `NinjaWorkflowTool_Extension/data/jobmatchSchema.js`.\n- Keep `workflow.phase = \"review\"`.\n- Shape `candidate.additional` as an array of entries with `key`, `label`, `type`, and `value`; include exactly the keys `cv.education`, `cv.experience`, `cv.skills`, and `cv.meta`.\n- `cv.experience` rows use `job_title`, `employer`, `location`, `start_date`, `end_date`, `job_description`.\n- `cv.education` rows use `degree`, `institution`, `major`, `specialization`, `location`, `start_date`, `end_date`, `details`.\n- `cv.skills` is an object with grouped arrays such as `Fachkenntnisse`, `Sprachkenntnisse`, and `Weitere Fähigkeiten`.\n- Preserve all clearly extracted stations; do not artificially truncate to a tiny preview.\n- Do not update Business OS SQLite stores, RxDB projections, queue rows, command rows, chat rows, or runtime status tables yourself. The CTOX service parses this JSON and persists it through `ctox.cv_print.apply_parse`.",
+        job.prompt
+    )
+}
+
+fn cv_print_parser_error_allows_compact_recovery(error_text: &str) -> bool {
+    let lower = error_text.to_ascii_lowercase();
+    lower.contains("max_output_tokens")
+        || lower.contains("incomplete response")
+        || lower.contains("stream disconnected before completion")
+}
+
+fn complete_cv_print_parser_recovery_to_leased_queue(
+    root: &Path,
+    job: &QueuedPrompt,
+    error_text: &str,
+) -> Result<usize> {
+    let reply = cv_print_compact_recovery_reply(&job.prompt, error_text);
+    let command_id = prompt_line_value(&job.prompt, "- command_id:");
+    let mut last_lock_error: Option<anyhow::Error> = None;
+    for attempt in 0..6 {
+        match complete_cv_print_parser_recovery_once(root, job, command_id.as_deref(), &reply) {
+            Ok(updated) => return Ok(updated),
+            Err(err) if cv_print_is_sqlite_locked_error(&err) && attempt < 5 => {
+                eprintln!(
+                    "CV print parser recovery writeback hit SQLite lock on attempt {} for {}: {}",
+                    attempt + 1,
+                    job.source_label,
+                    clip_text(&err.to_string(), 180)
+                );
+                last_lock_error = Some(err);
+                thread::sleep(Duration::from_millis(500 * (attempt + 1) as u64));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Err(last_lock_error
+        .unwrap_or_else(|| anyhow::anyhow!("CV print parser recovery exhausted retry budget")))
+}
+
+fn complete_cv_print_parser_recovery_once(
+    root: &Path,
+    job: &QueuedPrompt,
+    command_id: Option<&str>,
+    reply: &str,
+) -> Result<usize> {
+    let mut updated = 0usize;
+    for message_key in &job.leased_message_keys {
+        if crate::business_os::store::complete_business_command_from_queue_reply(
+            root,
+            message_key,
+            reply,
+        )?
+        .is_some()
+        {
+            eprintln!(
+                "Recovered CV print parser writeback via queue task {}",
+                message_key
+            );
+            updated += 1;
+            continue;
+        }
+        if let Some(command_id) = command_id {
+            if crate::business_os::store::complete_cv_print_command_from_reply(
+                root,
+                command_id,
+                Some(message_key),
+                reply,
+            )?
+            .is_some()
+            {
+                eprintln!(
+                    "Recovered CV print parser writeback via command {} and queue task {}",
+                    command_id, message_key
+                );
+                updated += 1;
+            }
+        }
+    }
+    if updated == 0 {
+        if let Some(command_id) = command_id {
+            if crate::business_os::store::complete_cv_print_command_from_reply(
+                root, command_id, None, reply,
+            )?
+            .is_some()
+            {
+                eprintln!(
+                    "Recovered CV print parser writeback via command {} without leased queue key",
+                    command_id
+                );
+                updated += 1;
+            }
+        }
+    }
+    if updated == 0 {
+        eprintln!(
+            "CV print parser recovery updated 0 task(s) for {} command_id={}",
+            job.source_label,
+            command_id.unwrap_or("")
+        );
+    }
+    Ok(updated)
+}
+
+fn cv_print_is_sqlite_locked_error(error: &anyhow::Error) -> bool {
+    let lower = error.to_string().to_ascii_lowercase();
+    lower.contains("database is locked")
+        || lower.contains("database table is locked")
+        || lower.contains("sqlite busy")
+        || lower.contains("sqlite_locked")
+        || lower.contains("sqlite_busy")
+}
+
+fn cv_print_compact_recovery_reply(prompt: &str, error_text: &str) -> String {
+    let extracted = cv_print_extracted_text_from_prompt(prompt);
+    let filename = prompt_line_value(prompt, "- filename:").unwrap_or_default();
+    let email = cv_print_first_email(&extracted);
+    let phone = cv_print_first_phone(&extracted);
+    let name = cv_print_candidate_name(&extracted, &filename);
+    let (first_name, last_name) = cv_print_split_name(&name);
+    let highest_degree = cv_print_highest_degree(&extracted);
+    let degree = cv_print_degree(&extracted, &highest_degree);
+    let location = cv_print_location(&extracted);
+    let birth_date = cv_print_birth_date(&extracted);
+    let nationality = cv_print_nationality(&extracted);
+    let family_status = cv_print_family_status(&extracted);
+    let skills = cv_print_compact_skills(&extracted);
+    let languages = cv_print_compact_languages(&extracted);
+    let skill_groups = cv_print_skill_groups(&skills, &languages);
+    let education = cv_print_compact_education_entries(&extracted);
+    let experience = cv_print_compact_experience_entries(&extracted);
+    let current_role = experience
+        .first()
+        .and_then(|entry| entry.get("job_title"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| cv_print_first_dated_title_after(&extracted, "Berufserfahrung"))
+        .unwrap_or_else(|| "CV Profil".to_string());
+    let mut diagnostics = Vec::new();
+    diagnostics.push(serde_json::json!({
+        "level": "warn",
+        "message": format!(
+            "Kompakter CTOX-Recovery-Parse nach Runtime-Abbruch: {}",
+            clip_text(error_text, 72)
+        )
+    }));
+    if extracted.trim().is_empty() {
+        diagnostics.push(serde_json::json!({
+            "level": "warn",
+            "message": "Kein extrahierter CV-Text im Queue-Prompt gefunden."
+        }));
+    }
+    let summary = clip_text(
+        &format!(
+            "{}; {}; {}",
+            current_role,
+            highest_degree,
+            skills
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        140,
+    );
+    serde_json::json!({
+        "schema": "ctox.cv_print_profile.v1",
+        "workflow": {
+            "phase": "review",
+            "diagnostics": diagnostics.into_iter().take(2).collect::<Vec<_>>()
+        },
+        "candidate": {
+            "name": name,
+            "firstName": first_name,
+            "lastName": last_name,
+            "currentRole": current_role,
+            "location": location,
+            "availability": "nach Absprache",
+            "email": email,
+            "phone": phone,
+            "birthDate": birth_date,
+            "nationality": nationality,
+            "summary": summary,
+            "highestDegree": highest_degree,
+            "degree": degree,
+            "skills": skills,
+            "languages": languages,
+            "additional": [
+                {"key":"cv.education","label":"Ausbildung (CV)","type":"json","value": education},
+                {"key":"cv.experience","label":"Berufserfahrung (CV)","type":"json","value": experience},
+                {"key":"cv.skills","label":"Skills (CV)","type":"json","value": skill_groups},
+                {"key":"cv.meta","label":"Stammdaten (CV)","type":"json","value": {
+                    "birthDate": birth_date,
+                    "nationality": nationality,
+                    "familyStatus": family_status,
+                    "highestDegree": highest_degree,
+                    "degree": degree,
+                    "availabilityFrom": "",
+                    "languages": cv_print_compact_languages(&extracted),
+                    "source_filename": filename
+                }}
+            ]
+        }
+    })
+    .to_string()
+}
+
+fn cv_print_extracted_text_from_prompt(prompt: &str) -> String {
+    if let Some(start) = prompt.find("```text") {
+        let rest = &prompt[start + "```text".len()..];
+        if let Some(end) = rest.find("```") {
+            return rest[..end].trim().to_string();
+        }
+    }
+    let Some(start) = prompt.find("CV PDF extracted text:") else {
+        return String::new();
+    };
+    let rest = &prompt[start + "CV PDF extracted text:".len()..];
+    let end = rest.find("Business OS command:").unwrap_or(rest.len());
+    rest[..end].trim().to_string()
+}
+
+fn cv_print_candidate_name(text: &str, filename: &str) -> String {
+    let lines = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    for line in lines.iter().take(8) {
+        if cv_print_looks_like_person_name(line) {
+            return (*line).to_string();
+        }
+    }
+    for (idx, line) in lines.iter().enumerate() {
+        let Some((candidate, _rest)) = line.split_once(',') else {
+            continue;
+        };
+        let candidate = candidate.trim();
+        if !cv_print_looks_like_person_name(candidate) {
+            continue;
+        }
+        let nearby = lines
+            .iter()
+            .skip(idx)
+            .take(3)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if nearby.contains('@') || nearby.contains("+49") || nearby.contains('T') {
+            return candidate.to_string();
+        }
+    }
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.contains('@') && trimmed.contains(',') {
+            let candidate = trimmed.split(',').next().unwrap_or("").trim();
+            if cv_print_looks_like_person_name(candidate) {
+                return candidate.to_string();
+            }
+        }
+    }
+    let stem = filename
+        .rsplit('/')
+        .next()
+        .unwrap_or(filename)
+        .trim_end_matches(".pdf")
+        .replace(['_', '-'], " ");
+    let cleaned = stem
+        .split_whitespace()
+        .filter(|part| {
+            !matches!(
+                part.to_ascii_lowercase().as_str(),
+                "lebenslauf" | "cv" | "resume" | "ctox" | "e2e"
+            ) && !part.chars().all(|ch| ch.is_ascii_digit())
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    if cleaned.trim().is_empty() {
+        "Unbenanntes Profil".to_string()
+    } else {
+        clip_text(&cleaned, 80)
+    }
+}
+
+fn cv_print_looks_like_person_name(value: &str) -> bool {
+    let value = value.trim();
+    let lower = value.to_ascii_lowercase();
+    if value.contains('@')
+        || value.contains('|')
+        || value.contains(':')
+        || value.chars().any(|ch| ch.is_ascii_digit())
+        || cv_print_is_major_heading(value)
+        || lower.starts_with("ort")
+        || lower.starts_with("e-mail")
+        || lower.starts_with("mobil")
+        || lower.starts_with("linkedin")
+        || lower == "lebenslauf"
+    {
+        return false;
+    }
+    let parts = value.split_whitespace().collect::<Vec<_>>();
+    parts.len() >= 2
+        && parts.len() <= 4
+        && parts.iter().all(|part| {
+            let cleaned = part.trim_matches(|ch: char| {
+                matches!(ch, ',' | '.' | '(' | ')' | '[' | ']' | '"' | '\'' | '•')
+            });
+            !cleaned.is_empty()
+                && cleaned
+                    .chars()
+                    .all(|ch| ch.is_alphabetic() || ch == '-' || ch == '\'')
+                && cleaned
+                    .chars()
+                    .next()
+                    .map(|ch| ch.is_uppercase())
+                    .unwrap_or(false)
+        })
+}
+
+fn cv_print_split_name(name: &str) -> (String, String) {
+    let parts = name.split_whitespace().collect::<Vec<_>>();
+    match parts.as_slice() {
+        [] => (String::new(), String::new()),
+        [only] => ((*only).to_string(), String::new()),
+        [first, rest @ ..] => ((*first).to_string(), rest.join(" ")),
+    }
+}
+
+fn cv_print_first_email(text: &str) -> String {
+    text.split_whitespace()
+        .map(|part| part.trim_matches(|ch: char| ",;()<>".contains(ch)))
+        .find(|part| part.contains('@') && part.contains('.'))
+        .unwrap_or("")
+        .to_string()
+}
+
+fn cv_print_first_phone(text: &str) -> String {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(idx) = trimmed.find("+49") {
+            let phone = trimmed[idx..]
+                .split('|')
+                .next()
+                .unwrap_or("")
+                .split("LinkedIn")
+                .next()
+                .unwrap_or("")
+                .trim();
+            return clip_text(phone, 32);
+        }
+    }
+    String::new()
+}
+
+fn cv_print_location(text: &str) -> String {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let lower = trimmed.to_ascii_lowercase();
+        for label in ["ort:", "wohnort:", "standort:"] {
+            if lower.starts_with(label) {
+                let value = trimmed[label.len()..]
+                    .split(',')
+                    .next()
+                    .unwrap_or("")
+                    .trim();
+                if !value.is_empty() {
+                    return clip_text(value, 48);
+                }
+            }
+        }
+        if trimmed.contains('@') && trimmed.contains(',') {
+            if let Some(idx) = trimmed.find(|ch: char| ch.is_ascii_digit()) {
+                let rest = trimmed[idx..].trim();
+                if let Some(city) = rest.split(',').next_back() {
+                    let compact = city
+                        .split_whitespace()
+                        .filter(|part| !part.chars().all(|ch| ch.is_ascii_digit()))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    if !compact.is_empty() {
+                        return clip_text(&compact, 48);
+                    }
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+fn cv_print_value_after_label(text: &str, labels: &[&str], max_len: usize) -> String {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let lower = trimmed.to_ascii_lowercase();
+        let Some(label) = labels
+            .iter()
+            .find(|label| lower.contains(&label.to_ascii_lowercase()))
+        else {
+            continue;
+        };
+        let start = lower
+            .find(&label.to_ascii_lowercase())
+            .map(|idx| idx + label.len())
+            .unwrap_or(0);
+        let value = trimmed
+            .get(start..)
+            .unwrap_or("")
+            .trim_matches(|ch: char| ch == ':' || ch == '-' || ch.is_whitespace())
+            .trim();
+        if !value.is_empty() {
+            return clip_text(value, max_len);
+        }
+    }
+    String::new()
+}
+
+fn cv_print_first_date_token(value: &str) -> String {
+    value
+        .split_whitespace()
+        .map(|part| part.trim_matches(|ch: char| ",;()[]".contains(ch)))
+        .find(|part| {
+            let pieces = part.split('.').collect::<Vec<_>>();
+            pieces.len() == 3
+                && pieces[0].len() <= 2
+                && pieces[1].len() <= 2
+                && pieces[2].len() == 4
+                && pieces
+                    .iter()
+                    .all(|piece| piece.chars().all(|ch| ch.is_ascii_digit()))
+        })
+        .unwrap_or("")
+        .to_string()
+}
+
+fn cv_print_birth_date(text: &str) -> String {
+    let value = cv_print_value_after_label(text, &["Geburtstag", "Geburtsdatum", "geboren"], 32);
+    let date = cv_print_first_date_token(&value);
+    if date.is_empty() { value } else { date }
+}
+
+fn cv_print_nationality(text: &str) -> String {
+    cv_print_value_after_label(
+        text,
+        &[
+            "Staatsangehörigkeit",
+            "Staatsangehoerigkeit",
+            "Nationalität",
+            "Nationalitaet",
+        ],
+        48,
+    )
+}
+
+fn cv_print_family_status(text: &str) -> String {
+    cv_print_value_after_label(text, &["Familienstand"], 48)
+}
+
+fn cv_print_highest_degree(text: &str) -> String {
+    for candidate in [
+        "Master of Science",
+        "M.Sc.",
+        "M.Sc",
+        "Bachelor of Science",
+        "B.Sc.",
+        "B.Sc",
+        "Master of Science",
+        "Master",
+        "Bachelor of Engineering",
+        "Bachelor",
+        "Fachhochschulreife",
+        "Ausbildung",
+    ] {
+        if text
+            .to_ascii_lowercase()
+            .contains(&candidate.to_ascii_lowercase())
+        {
+            return candidate.to_string();
+        }
+    }
+    String::new()
+}
+
+fn cv_print_degree(text: &str, highest_degree: &str) -> String {
+    for candidate in [
+        "Computer und Systemtechnik",
+        "Kommunikations und Elektroniktechnik",
+        "Kommunikations- und Elektroniktechnik",
+        "Maschinenbau",
+        "Betriebswirtschaft",
+        "Wirtschaftsingenieurwesen",
+        "Informatik",
+        "Personalmanagement",
+        "Human Resources",
+    ] {
+        if text
+            .to_ascii_lowercase()
+            .contains(&candidate.to_ascii_lowercase())
+        {
+            return candidate.to_string();
+        }
+    }
+    highest_degree.to_string()
+}
+
+fn cv_print_compact_languages(text: &str) -> Vec<Value> {
+    let lower = text.to_ascii_lowercase();
+    let mut languages = Vec::new();
+    if lower.contains("arabisch") {
+        languages.push(serde_json::json!({"label":"Arabisch","level": cv_print_language_level(&lower, "arabisch")}));
+    }
+    if lower.contains("deutsch") {
+        languages.push(serde_json::json!({"label":"Deutsch","level": cv_print_language_level(&lower, "deutsch")}));
+    }
+    if lower.contains("englisch") {
+        languages.push(serde_json::json!({"label":"Englisch","level": cv_print_language_level(&lower, "englisch")}));
+    }
+    languages.truncate(3);
+    languages
+}
+
+fn cv_print_language_level(lower_text: &str, language: &str) -> String {
+    if let Some(idx) = lower_text.find(language) {
+        let window = lower_text[idx..].chars().take(80).collect::<String>();
+        for level in ["c2", "c1", "b2", "b1", "a2", "a1"] {
+            if window.contains(level) {
+                return level.to_uppercase();
+            }
+        }
+        for level in [
+            "muttersprache",
+            "verhandlungssicher",
+            "fließend",
+            "fliessend",
+            "gut",
+        ] {
+            if window.contains(level) {
+                return if level == "fliessend" {
+                    "fließend".to_string()
+                } else {
+                    level.to_string()
+                };
+            }
+        }
+    }
+    String::new()
+}
+
+fn cv_print_compact_skills(text: &str) -> Vec<String> {
+    let lower = text.to_ascii_lowercase();
+    let mut skills = Vec::new();
+    for (needle, label) in [
+        ("automotive spice", "Automotive SPICE"),
+        ("aspice", "ASPICE"),
+        ("iso 26262", "ISO 26262"),
+        ("iso 21434", "ISO 21434"),
+        ("hil", "HIL-Tests"),
+        ("sil", "SIL-Tests"),
+        ("ecu", "ECU-Validierung"),
+        ("polarion", "POLARION"),
+        ("doors", "DOORS"),
+        ("jira", "JIRA"),
+        ("canoe", "CANoe"),
+        ("canalyzer", "CANalyzer"),
+        ("dspace scalexio", "dSPACE SCALEXIO"),
+        ("python", "Python"),
+        ("c/c++", "C/C++"),
+        ("matlab", "MATLAB"),
+        ("capl", "CAPL"),
+        ("tessy", "Tessy"),
+        ("vteststudio", "vTESTstudio"),
+        ("jenkins", "Jenkins"),
+        ("azure devops", "Azure DevOps"),
+        ("autosar", "AUTOSAR"),
+        ("fahrassistenz", "Fahrerassistenzsysteme"),
+        ("typisierung", "Typisierung"),
+        ("abgas", "Abgastechnik"),
+        ("autodesk inventor", "Autodesk Inventor"),
+        ("siemens nx", "Siemens NX"),
+        ("ansys", "ANSYS"),
+        ("hypermesh", "HyperMesh"),
+        ("fem", "FEM"),
+        ("ms word", "MS Word"),
+        ("excel", "Excel"),
+        ("powerpoint", "PowerPoint"),
+    ] {
+        if lower.contains(needle) && !skills.iter().any(|item| item == label) {
+            skills.push(label.to_string());
+        }
+        if skills.len() >= 12 {
+            break;
+        }
+    }
+    skills
+}
+
+fn cv_print_skill_groups(skills: &[String], languages: &[Value]) -> Value {
+    let language_labels = languages
+        .iter()
+        .filter_map(|entry| {
+            let label = entry
+                .get("label")
+                .and_then(Value::as_str)
+                .or_else(|| entry.get("code").and_then(Value::as_str))
+                .unwrap_or("")
+                .trim();
+            let level = entry
+                .get("level")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            if label.is_empty() {
+                None
+            } else if level.is_empty() {
+                Some(label.to_string())
+            } else {
+                Some(format!("{label} {level}"))
+            }
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "Fachkenntnisse": skills,
+        "Sprachkenntnisse": language_labels,
+        "Weitere Fähigkeiten": []
+    })
+}
+
+fn cv_print_compact_experience_entries(text: &str) -> Vec<Value> {
+    cv_print_compact_entries(text, "Berufserfahrung", 40)
+        .into_iter()
+        .map(|entry| {
+            serde_json::json!({
+                "job_title": entry.get("title").and_then(Value::as_str).unwrap_or(""),
+                "employer": entry.get("org").and_then(Value::as_str).unwrap_or(""),
+                "location": "",
+                "start_date": entry.get("from").and_then(Value::as_str).unwrap_or(""),
+                "end_date": entry.get("to").and_then(Value::as_str).unwrap_or(""),
+                "job_description": value_string_array(entry.get("details"))
+            })
+        })
+        .collect()
+}
+
+fn cv_print_compact_education_entries(text: &str) -> Vec<Value> {
+    cv_print_compact_entries(text, "Ausbildungsweg", 30)
+        .into_iter()
+        .map(|entry| {
+            serde_json::json!({
+                "degree": entry.get("title").and_then(Value::as_str).unwrap_or(""),
+                "institution": entry.get("org").and_then(Value::as_str).unwrap_or(""),
+                "major": "",
+                "specialization": "",
+                "location": "",
+                "start_date": entry.get("from").and_then(Value::as_str).unwrap_or(""),
+                "end_date": entry.get("to").and_then(Value::as_str).unwrap_or(""),
+                "details": value_string_array(entry.get("details"))
+            })
+        })
+        .collect()
+}
+
+type CvPrintPendingEntry = (String, String, String, String, Vec<String>);
+
+fn value_string_array(value: Option<&Value>) -> Vec<String> {
+    match value {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(ToOwned::to_owned)
+            .collect(),
+        Some(Value::String(text)) => text
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(ToOwned::to_owned)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn cv_print_compact_entries(text: &str, heading: &str, limit: usize) -> Vec<Value> {
+    let mut entries = Vec::new();
+    let mut in_section = false;
+    let mut pending: Option<CvPrintPendingEntry> = None;
+    for line in text.lines() {
+        let trimmed = cv_print_clean_line(line);
+        if trimmed.is_empty() {
+            continue;
+        }
+        if cv_print_heading_matches(&trimmed, heading) {
+            in_section = true;
+            continue;
+        }
+        if in_section
+            && cv_print_is_major_heading(&trimmed)
+            && !cv_print_heading_matches(&trimmed, heading)
+        {
+            break;
+        }
+        if !in_section {
+            continue;
+        }
+        if let Some((from, to, raw_title)) = cv_print_parse_dated_line(&trimmed) {
+            if cv_print_push_pending_entry(&mut entries, &mut pending, limit) {
+                return entries;
+            }
+            let (title, org) = cv_print_split_inline_title_org(&raw_title);
+            pending = Some((from, to, title, org, Vec::new()));
+            continue;
+        }
+        if let Some((_, _, _, org, details)) = pending.as_mut() {
+            if org.trim().is_empty() && !cv_print_line_is_entry_detail(&trimmed) {
+                *org = trimmed.to_string();
+            } else if details.len() < 6 {
+                let detail = cv_print_clean_detail_line(&trimmed);
+                if !detail.is_empty() && !cv_print_line_is_detail_label(&detail) {
+                    details.push(detail);
+                }
+            }
+        }
+    }
+    cv_print_push_pending_entry(&mut entries, &mut pending, limit);
+    entries
+}
+
+fn cv_print_push_pending_entry(
+    entries: &mut Vec<Value>,
+    pending: &mut Option<CvPrintPendingEntry>,
+    limit: usize,
+) -> bool {
+    let Some((from, to, title, org, details)) = pending.take() else {
+        return entries.len() >= limit;
+    };
+    if !title.trim().is_empty() {
+        entries.push(serde_json::json!({
+            "title": clip_text(&title, 80),
+            "org": clip_text(&org, 80),
+            "from": from,
+            "to": to,
+            "details": details.into_iter().take(6).collect::<Vec<_>>()
+        }));
+    }
+    entries.len() >= limit
+}
+
+fn cv_print_first_dated_title_after(text: &str, heading: &str) -> Option<String> {
+    cv_print_compact_entries(text, heading, 1)
+        .first()
+        .and_then(|entry| entry.get("title"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn cv_print_is_major_heading(value: &str) -> bool {
+    let normalized = cv_print_normalized_heading(value);
+    matches!(
+        normalized.as_str(),
+        "zur person"
+            | "ausbildungsweg"
+            | "ausbildung"
+            | "berufserfahrung"
+            | "berufliche zusammenfassung"
+            | "qualifikationen"
+            | "kenntnisse"
+            | "technische fähigkeiten"
+            | "technische faehigkeiten"
+            | "sprachkenntnisse"
+            | "zertifikate in softwaretechnik"
+            | "fachliche weiterbildung"
+            | "internationale fachpublikationen"
+            | "sonstiges"
+            | "lebenslauf"
+    )
+}
+
+fn cv_print_parse_dated_line(line: &str) -> Option<(String, String, String)> {
+    let cleaned = cv_print_clean_line(line).replace('—', " – ");
+    if !cleaned.contains('–') && !cleaned.contains(" - ") {
+        return None;
+    }
+    let parts = cleaned.split_whitespace().collect::<Vec<_>>();
+    let dash_idx = parts.iter().position(|part| *part == "–" || *part == "-")?;
+    let mut from_start = dash_idx.saturating_sub(2);
+    while from_start > 0 && !cv_print_is_month_token(parts[from_start]) {
+        from_start -= 1;
+    }
+    if !cv_print_is_month_token(parts[from_start]) {
+        return None;
+    }
+    let from = parts[from_start..dash_idx].join(" ");
+    let mut to_end = dash_idx + 1;
+    while to_end < parts.len() {
+        let token = cv_print_clean_token(parts[to_end]);
+        to_end += 1;
+        if token.eq_ignore_ascii_case("heute")
+            || token.eq_ignore_ascii_case("present")
+            || token.eq_ignore_ascii_case("aktuell")
+            || (token.len() == 4 && token.chars().all(|ch| ch.is_ascii_digit()))
+        {
+            break;
+        }
+    }
+    let to = parts[dash_idx + 1..to_end].join(" ");
+    let title = if from_start == 0 {
+        parts[to_end..].join(" ")
+    } else {
+        parts[..from_start].join(" ")
+    };
+    if title.trim().is_empty() {
+        return None;
+    }
+    Some((from, to, cv_print_clean_line(&title)))
+}
+
+fn cv_print_heading_matches(value: &str, heading: &str) -> bool {
+    let value = cv_print_normalized_heading(value);
+    let heading = cv_print_normalized_heading(heading);
+    if value == heading {
+        return true;
+    }
+    heading == "ausbildungsweg" && matches!(value.as_str(), "ausbildung" | "studium")
+}
+
+fn cv_print_normalized_heading(value: &str) -> String {
+    value
+        .trim()
+        .trim_matches(|ch: char| matches!(ch, ':' | ';' | '.'))
+        .to_ascii_lowercase()
+}
+
+fn cv_print_clean_line(value: &str) -> String {
+    value
+        .trim()
+        .trim_start_matches(|ch: char| matches!(ch, '•' | '-' | '–' | '*' | '·'))
+        .trim()
+        .to_string()
+}
+
+fn cv_print_clean_token(value: &str) -> String {
+    value
+        .trim_matches(|ch: char| matches!(ch, ',' | ';' | '.' | '(' | ')' | '[' | ']' | ':' | '|'))
+        .to_string()
+}
+
+fn cv_print_is_month_token(value: &str) -> bool {
+    let lower = cv_print_clean_token(value).to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "januar"
+            | "jan"
+            | "februar"
+            | "feb"
+            | "märz"
+            | "maerz"
+            | "mrz"
+            | "april"
+            | "apr"
+            | "mai"
+            | "juni"
+            | "jun"
+            | "juli"
+            | "jul"
+            | "august"
+            | "aug"
+            | "september"
+            | "sep"
+            | "oktober"
+            | "okt"
+            | "oct"
+            | "november"
+            | "nov"
+            | "dezember"
+            | "dez"
+            | "dec"
+    )
+}
+
+fn cv_print_split_inline_title_org(raw_title: &str) -> (String, String) {
+    let cleaned = cv_print_clean_line(raw_title)
+        .trim_matches('|')
+        .trim()
+        .to_string();
+    if let Some((title, org)) = cleaned.split_once(" | ") {
+        return (
+            clip_text(title.trim(), 100),
+            clip_text(org.trim().trim_matches('.'), 100),
+        );
+    }
+    if let Some((title, org)) = cleaned.split_once(" bei ") {
+        return (
+            clip_text(title.trim(), 100),
+            clip_text(org.trim().trim_matches('.'), 100),
+        );
+    }
+    (clip_text(cleaned.trim(), 100), String::new())
+}
+
+fn cv_print_line_is_entry_detail(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    value.starts_with('•')
+        || lower.starts_with("projekt")
+        || lower.starts_with("projekte")
+        || lower.starts_with("aufgaben")
+        || lower.starts_with("erfolge")
+        || lower.starts_with("thesis")
+        || lower.starts_with("training")
+        || lower.starts_with("aktivitäten")
+        || lower.starts_with("aktivitaeten")
+}
+
+fn cv_print_line_is_detail_label(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    matches!(
+        lower.trim_end_matches(':'),
+        "aufgaben" | "aufgaben / erfolge" | "erfolge" | "projekte" | "projekt"
+    )
+}
+
+fn cv_print_clean_detail_line(value: &str) -> String {
+    let cleaned = cv_print_clean_line(value);
+    if let Some((label, rest)) = cleaned.split_once(':') {
+        let label_lower = label.to_ascii_lowercase();
+        if matches!(
+            label_lower.as_str(),
+            "projekt" | "projekte" | "thesis" | "training" | "aktivitäten" | "aktivitaeten"
+        ) {
+            return rest.trim().to_string();
+        }
+    }
+    cleaned
+}
+
 fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
     let Some(target) = business_os_app_module_target_from_prompt(&job.prompt) else {
         return job.prompt.clone();
@@ -7227,14 +8232,31 @@ fn business_os_app_artifact_dir_has_user_content(path: &Path) -> Result<bool> {
 }
 
 fn business_os_app_validation_repair_attempt_count(prompt: &str) -> usize {
+    if let Some(attempt) = business_os_app_validation_explicit_repair_attempt(prompt) {
+        return attempt.min(BUSINESS_OS_APP_VALIDATION_MAX_REPAIR_ATTEMPTS);
+    }
     prompt
-        .match_indices("Business OS app artifact validation failed.")
+        .match_indices(BUSINESS_OS_APP_VALIDATION_FAILURE_MARKER)
         .count()
+        .min(BUSINESS_OS_APP_VALIDATION_MAX_REPAIR_ATTEMPTS)
 }
 
 fn business_os_app_validation_repair_exhausted(prompt: &str) -> bool {
     business_os_app_validation_repair_attempt_count(prompt)
         >= BUSINESS_OS_APP_VALIDATION_MAX_REPAIR_ATTEMPTS
+}
+
+fn business_os_app_validation_explicit_repair_attempt(prompt: &str) -> Option<usize> {
+    prompt.lines().find_map(|line| {
+        let value = line
+            .trim()
+            .strip_prefix("Validation repair attempt:")?
+            .trim();
+        let first = value
+            .split(|ch: char| !ch.is_ascii_digit())
+            .find(|part| !part.is_empty())?;
+        first.parse::<usize>().ok()
+    })
 }
 
 fn business_os_app_validation_audit_key(
@@ -7566,17 +8588,126 @@ fn render_business_os_app_module_validation_feedback(
     target: &BusinessOsAppModuleTarget,
     report: &str,
 ) -> String {
-    format!(
-        "Business OS app artifact validation failed.\n\nBusiness OS app validation failed.\n\nTask source: {}\n\nBusiness OS app task metadata:\n- module_id: {}\n- install_target: {}\n- app_directory: {}\n- resource.module_contract: src/skills/system/product_engineering/business-os-app-module-development/references/module-contract.md\n- resource.dos_and_donts: src/skills/system/product_engineering/business-os-app-module-development/references/dos-and-donts.md\n- resource.green_checklist: src/skills/system/product_engineering/business-os-app-module-development/references/green-checklist.md\n- validation: ctox business-os app validate {} {}\n\nValidator report:\n{}\n\nOriginal task remains active:\n{}",
+    let next_attempt = business_os_app_validation_repair_attempt_count(&job.prompt)
+        .saturating_add(1)
+        .min(BUSINESS_OS_APP_VALIDATION_MAX_REPAIR_ATTEMPTS);
+    let report = clip_multiline_text(
+        &redact_business_os_app_prompt_secrets(report.trim()),
+        BUSINESS_OS_APP_VALIDATION_REPORT_MAX_CHARS,
+    );
+    let request_summary = business_os_app_original_request_summary(&job.prompt);
+    let feedback = format!(
+        "{BUSINESS_OS_APP_VALIDATION_FAILURE_MARKER}\n\nValidation repair attempt: {} of {}\n\nTask source: {}\n\nBusiness OS app task metadata:\n- module_id: {}\n- install_target: {}\n- app_directory: {}\n- resource.module_contract: src/skills/system/product_engineering/business-os-app-module-development/references/module-contract.md\n- resource.dos_and_donts: src/skills/system/product_engineering/business-os-app-module-development/references/dos-and-donts.md\n- resource.green_checklist: src/skills/system/product_engineering/business-os-app-module-development/references/green-checklist.md\n- resource.architecture_translation: src/skills/system/product_engineering/business-os-app-module-development/references/architecture-translation.md\n- validation: ctox business-os app validate {} {}\n\nWhat to do now:\nCreate or repair the vanilla HTML/CSS/JS app files under the app_directory above, then run the validation command. Keep the same Business OS app request active; do not edit skill/resource files or service lifecycle state.\n\nValidator report:\n{}\n\nOriginal app request summary:\n{}",
+        next_attempt,
+        BUSINESS_OS_APP_VALIDATION_MAX_REPAIR_ATTEMPTS,
         job.source_label,
         target.module_id,
         target.install_target,
         target.artifact_directory,
         target.module_id,
         target.mode_flag,
-        clip_text(report.trim(), 6000),
-        clip_text(&job.prompt, 6000),
-    )
+        report,
+        request_summary,
+    );
+    clip_multiline_text(&feedback, BUSINESS_OS_APP_VALIDATION_FEEDBACK_MAX_CHARS)
+}
+
+fn business_os_app_original_request_summary(prompt: &str) -> String {
+    for marker in [
+        "Original app request summary:",
+        "Business OS app request summary:",
+    ] {
+        if let Some(summary) = prompt_section_after_marker(prompt, marker) {
+            let summary = redact_business_os_app_prompt_secrets(summary.trim());
+            if !summary.trim().is_empty() {
+                return clip_multiline_text(
+                    summary.trim(),
+                    BUSINESS_OS_APP_VALIDATION_REQUEST_MAX_CHARS,
+                );
+            }
+        }
+    }
+
+    let mut lines = Vec::new();
+    for line in prompt.lines() {
+        let trimmed = line.trim_end();
+        if trimmed.starts_with("Business OS task resources:")
+            || trimmed.starts_with("Business OS app task metadata:")
+            || trimmed.starts_with("Business OS command:")
+            || trimmed.starts_with("Payload JSON:")
+            || trimmed.starts_with("Client context JSON:")
+        {
+            break;
+        }
+        if lines.is_empty() && trimmed.trim().is_empty() {
+            continue;
+        }
+        lines.push(trimmed);
+    }
+    let summary = lines.join("\n");
+    let summary = redact_business_os_app_prompt_secrets(summary.trim());
+    if summary.trim().is_empty() {
+        return "Use the app metadata above and the persisted Business OS command record if more request detail is needed.".to_string();
+    }
+    clip_multiline_text(summary.trim(), BUSINESS_OS_APP_VALIDATION_REQUEST_MAX_CHARS)
+}
+
+fn prompt_section_after_marker<'a>(prompt: &'a str, marker: &str) -> Option<&'a str> {
+    let rest = prompt.split_once(marker)?.1;
+    let section = rest
+        .split("\nBusiness OS command:")
+        .next()
+        .unwrap_or(rest)
+        .split("\nBusiness OS app task metadata:")
+        .next()
+        .unwrap_or(rest)
+        .split("\nPayload JSON:")
+        .next()
+        .unwrap_or(rest)
+        .split("\nClient context JSON:")
+        .next()
+        .unwrap_or(rest)
+        .split("\nValidator report:")
+        .next()
+        .unwrap_or(rest)
+        .split("\nWhat to do now:")
+        .next()
+        .unwrap_or(rest)
+        .split(BUSINESS_OS_APP_VALIDATION_FAILURE_MARKER)
+        .next()
+        .unwrap_or(rest);
+    Some(section)
+}
+
+fn redact_business_os_app_prompt_secrets(value: &str) -> String {
+    let mut redacted = Vec::new();
+    for line in value.lines() {
+        let lowered = line.to_ascii_lowercase();
+        if lowered.contains("capability_token")
+            || lowered.contains("authorization")
+            || lowered.contains("cookie")
+            || lowered.contains("set-cookie")
+            || lowered.contains("bearer ")
+        {
+            redacted.push("[redacted sensitive Business OS context line]".to_string());
+        } else {
+            redacted.push(line.to_string());
+        }
+    }
+    redacted.join("\n")
+}
+
+fn clip_multiline_text(value: &str, max_chars: usize) -> String {
+    let value = value.trim();
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let mut clipped = value
+        .chars()
+        .take(max_chars.saturating_sub(56))
+        .collect::<String>();
+    clipped.push_str("\n... truncated; full record is persisted in CTOX ...");
+    clipped
 }
 
 fn is_business_os_chat_queue_job(root: &Path, job: &QueuedPrompt) -> bool {
@@ -10661,13 +11792,17 @@ fn start_channel_router(root: std::path::PathBuf, state: Arc<Mutex<SharedState>>
 }
 
 fn start_business_os_app_recovery_loop(root: std::path::PathBuf, state: Arc<Mutex<SharedState>>) {
-    thread::spawn(move || loop {
-        maybe_spawn_business_os_app_recovery(
-            root.clone(),
-            state.clone(),
-            "dedicated app recovery loop",
-        );
-        thread::sleep(Duration::from_secs(BUSINESS_OS_APP_RECOVERY_POLL_SECS));
+    thread::spawn(move || {
+        loop {
+            if !should_skip_idle_business_os_app_recovery(&root) {
+                maybe_spawn_business_os_app_recovery(
+                    root.clone(),
+                    state.clone(),
+                    "dedicated app recovery loop",
+                );
+            }
+            thread::sleep(Duration::from_secs(BUSINESS_OS_APP_RECOVERY_POLL_SECS));
+        }
     });
 }
 
@@ -10697,6 +11832,7 @@ fn maybe_spawn_business_os_app_recovery(
         }
         match recovered {
             Ok(Ok(updated)) if updated > 0 => {
+                mark_business_os_app_recovery_ran(&root);
                 push_event(
                     &state,
                     format!(
@@ -10707,7 +11843,9 @@ fn maybe_spawn_business_os_app_recovery(
                     maybe_dispatch_after_business_os_app_recovery(root, state, reason);
                 }
             }
-            Ok(Ok(_)) => {}
+            Ok(Ok(_)) => {
+                mark_business_os_app_recovery_ran(&root);
+            }
             Ok(Err(err)) => push_event(
                 &state,
                 format!(
@@ -10750,10 +11888,12 @@ fn maybe_dispatch_after_business_os_app_recovery(
 }
 
 fn start_channel_syncer(root: std::path::PathBuf) {
-    thread::spawn(move || loop {
-        let settings = live_service_settings(&root);
-        sync_configured_channels(&root, &settings);
-        thread::sleep(Duration::from_secs(channel_sync_poll_secs(&settings)));
+    thread::spawn(move || {
+        loop {
+            let settings = live_service_settings(&root);
+            sync_configured_channels(&root, &settings);
+            thread::sleep(Duration::from_secs(channel_sync_poll_secs(&settings)));
+        }
     });
 }
 
@@ -11271,8 +12411,7 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
                 conversation_id: None,
                 severity: "info",
                 reason: "queue_pressure_active",
-                action_taken:
-                    "skipped downstream channel-router stages while queue pressure is active",
+                action_taken: "skipped downstream channel-router stages while queue pressure is active",
                 details: serde_json::json!({}),
                 idempotence_key: Some("queue-pressure-router-skip"),
             },
@@ -11777,8 +12916,7 @@ fn handle_channel_router_guard_block(
             conversation_id: None,
             severity: "warning",
             reason: &reason,
-            action_taken:
-                "kept channel router alive and skipped this guarded background routing stage",
+            action_taken: "kept channel router alive and skipped this guarded background routing stage",
             details: serde_json::json!({
                 "stage": stage,
             }),
@@ -11998,7 +13136,7 @@ fn leased_business_os_rxdb_app_queue_task_exists(root: &Path) -> Result<bool> {
                     "failed to inspect Business OS RxDB queue table {}",
                     db_path.display()
                 )
-            })
+            });
         }
     };
     let rows = stmt.query_map([], |row| row.get::<_, Option<String>>(0))?;
@@ -12027,6 +13165,7 @@ fn maybe_lease_next_durable_queue_prompt(
             BUSINESS_OS_APP_RECOVERY_SCAN_LIMIT,
         ) {
             Ok(updated) if updated > 0 => {
+                mark_business_os_app_recovery_ran(root);
                 push_event(
                     state,
                     format!(
@@ -12034,7 +13173,9 @@ fn maybe_lease_next_durable_queue_prompt(
                     ),
                 );
             }
-            Ok(_) => {}
+            Ok(_) => {
+                mark_business_os_app_recovery_ran(root);
+            }
             Err(err) => push_event(
                 state,
                 format!(
@@ -12123,6 +13264,45 @@ fn mark_business_os_app_recovery_preflight_due(root: &Path) -> bool {
         last_run: Instant::now(),
     });
     true
+}
+
+fn should_skip_idle_business_os_app_recovery(root: &Path) -> bool {
+    let root_path = root.to_path_buf();
+    let core_db_path = crate::paths::core_db(root);
+    let core_stamp = core_db_change_stamp(&core_db_path);
+    let now = Instant::now();
+    let gate = BUSINESS_OS_APP_RECOVERY_IDLE_GATE.get_or_init(|| Mutex::new(None));
+    let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(previous) = guard.as_ref() else {
+        return false;
+    };
+    previous.root == root_path
+        && previous.core_db_path == core_db_path
+        && previous.core_stamp == core_stamp
+        && now.duration_since(previous.last_run)
+            < Duration::from_secs(BUSINESS_OS_APP_RECOVERY_IDLE_SAFETY_SECS)
+}
+
+fn mark_business_os_app_recovery_ran(root: &Path) {
+    let root_path = root.to_path_buf();
+    let core_db_path = crate::paths::core_db(root);
+    let core_stamp = core_db_change_stamp(&core_db_path);
+    let gate = BUSINESS_OS_APP_RECOVERY_IDLE_GATE.get_or_init(|| Mutex::new(None));
+    let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = Some(BusinessOsAppRecoveryIdleGateState {
+        root: root_path,
+        core_db_path,
+        core_stamp,
+        last_run: Instant::now(),
+    });
+}
+
+#[cfg(test)]
+fn clear_business_os_app_recovery_idle_gate_for_tests() {
+    if let Some(gate) = BUSINESS_OS_APP_RECOVERY_IDLE_GATE.get() {
+        let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = None;
+    }
 }
 
 const SYNTHETIC_E2E_QUEUE_BLOCK_NOTE: &str =
@@ -12926,8 +14106,7 @@ fn reconcile_ticket_runtime_state(root: &Path, state: &Arc<Mutex<SharedState>>) 
                 mechanism_id: "ticket_reconciliation",
                 conversation_id: None,
                 severity: "info",
-                reason:
-                    "blocked ticket events became preparable after knowledge/control state changed",
+                reason: "blocked ticket events became preparable after knowledge/control state changed",
                 action_taken: "released blocked ticket events back to pending",
                 details: serde_json::json!({
                     "released_event_keys": released_blocked.clone(),
@@ -13220,10 +14399,8 @@ fn enqueue_prompt(
                             mechanism_id: "runtime_blocker_backoff",
                             conversation_id: Some(turn_loop::CHAT_CONVERSATION_ID),
                             severity: "warning",
-                            reason:
-                                "hard runtime blocker cooldown is deferring new prompt dispatch",
-                            action_taken:
-                                "kept the new prompt queued until the runtime cooldown expires",
+                            reason: "hard runtime blocker cooldown is deferring new prompt dispatch",
+                            action_taken: "kept the new prompt queued until the runtime cooldown expires",
                             details: serde_json::json!({
                                 "remaining_secs": remaining_secs,
                                 "pending": pending,
@@ -17725,8 +18902,7 @@ fn maybe_enqueue_timeout_continuation(
             conversation_id: Some(turn_loop::CHAT_CONVERSATION_ID),
             severity: "error",
             reason: "the agent turn hit the runtime time budget",
-            action_taken:
-                "suppressed timeout continuation spawn; original queue scope must retry or defer",
+            action_taken: "suppressed timeout continuation spawn; original queue scope must retry or defer",
             details: serde_json::json!({
                 "source_label": job.source_label,
                 "thread_key": job.thread_key.clone(),
@@ -18013,9 +19189,15 @@ fn apply_runtime_retry_feedback_to_leased_queue(
     if !runtime_error_is_transient_api_failure(error_text) {
         return Ok(0);
     }
-    let feedback_prompt = render_runtime_retry_prompt(job, error_text);
+    let feedback_prompt =
+        (!is_cv_print_parser_queue_job(job)).then(|| render_runtime_retry_prompt(job, error_text));
     let note = format!(
-        "Harness retry feedback injected after runtime failure: {}",
+        "Harness retry {} after runtime failure: {}",
+        if feedback_prompt.is_some() {
+            "feedback injected"
+        } else {
+            "kept original task prompt"
+        },
         clip_text(error_text.trim(), 180)
     );
     let mut updated = 0usize;
@@ -18027,7 +19209,7 @@ fn apply_runtime_retry_feedback_to_leased_queue(
             root,
             channels::QueueTaskUpdateRequest {
                 message_key: message_key.clone(),
-                prompt: Some(feedback_prompt.clone()),
+                prompt: feedback_prompt.clone(),
                 workspace_root: job.workspace_root.clone(),
                 status_note: Some(note.clone()),
                 ..Default::default()
@@ -18499,8 +19681,8 @@ struct LaunchdUnitStatus {
 /// sub-second refresh ticks; a fresh probe costs three systemctl spawns.
 /// `start_background`/`stop_background` drop the cache on every exit path
 /// so an in-process toggle is visible on the next poll.
-fn systemd_unit_status_cache(
-) -> &'static Mutex<Option<(Instant, PathBuf, Option<SystemdUnitStatus>)>> {
+fn systemd_unit_status_cache()
+-> &'static Mutex<Option<(Instant, PathBuf, Option<SystemdUnitStatus>)>> {
     static CACHE: OnceLock<Mutex<Option<(Instant, PathBuf, Option<SystemdUnitStatus>)>>> =
         OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(None))
@@ -18717,8 +19899,14 @@ fn launchd_bootstrap_and_start(root: &Path) -> Result<()> {
     let domain = launchd_user_domain();
     let target = launchd_target_label();
     let _ = launchd_bootout();
-    let _ = launchctl_user(vec!["enable".to_string(), target.clone()]);
+    launchd_enable().context("failed to enable CTOX launchd service before bootstrap")?;
     launchctl_user(vec!["bootstrap".to_string(), domain.clone(), plist_display])?;
+    launchd_enable().context("failed to enable CTOX launchd service after bootstrap")?;
+    if launchd_unit_disabled().unwrap_or(false) {
+        anyhow::bail!(
+            "CTOX launchd service stayed disabled after bootstrap; run `launchctl enable {target}` or reinstall CTOX"
+        );
+    }
     if let Err(err) = launchctl_user(vec!["kickstart".to_string(), "-k".to_string(), target]) {
         eprintln!("ctox service: launchctl kickstart warning: {err:#}");
     }
@@ -18730,6 +19918,10 @@ fn launchd_bootstrap_and_start(root: &Path) -> Result<()> {
     std::fs::write(&marker, "installed\n")
         .with_context(|| format!("failed to update {}", marker.display()))?;
     Ok(())
+}
+
+fn launchd_enable() -> Result<()> {
+    launchctl_user(vec!["enable".to_string(), launchd_target_label()])
 }
 
 fn launchd_bootout() -> Result<()> {
@@ -19187,6 +20379,53 @@ mod tests {
     }
 
     #[test]
+    fn business_os_app_recovery_idle_gate_reopens_when_core_db_changes() {
+        clear_business_os_app_recovery_idle_gate_for_tests();
+        let root = temp_root("business-os-app-recovery-idle-gate");
+        std::fs::create_dir_all(root.join("runtime")).unwrap();
+        let db_path = crate::paths::core_db(&root);
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE app_recovery_gate_probe (id INTEGER PRIMARY KEY, value TEXT);",
+            )
+            .unwrap();
+        }
+
+        assert!(
+            !should_skip_idle_business_os_app_recovery(&root),
+            "first app recovery tick must run"
+        );
+        mark_business_os_app_recovery_ran(&root);
+        assert!(
+            should_skip_idle_business_os_app_recovery(&root),
+            "unchanged core DB should skip app recovery inside the idle safety window"
+        );
+
+        std::fs::write(root.join("runtime").join("business-os.sqlite3"), b"churn").unwrap();
+        assert!(
+            should_skip_idle_business_os_app_recovery(&root),
+            "Business OS runtime store churn must not reopen the app recovery gate"
+        );
+
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute(
+                "INSERT INTO app_recovery_gate_probe (value) VALUES (?1)",
+                params!["changed"],
+            )
+            .unwrap();
+        }
+        assert!(
+            !should_skip_idle_business_os_app_recovery(&root),
+            "core DB changes must reopen the app recovery gate"
+        );
+
+        clear_business_os_app_recovery_idle_gate_for_tests();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn approval_nag_idle_gate_reopens_when_core_db_changes() {
         clear_approval_nag_idle_gate_for_tests();
         let root = temp_root("approval-nag-idle-gate");
@@ -19257,7 +20496,9 @@ mod tests {
                 "project customer order milestone budget actual fixed price time material automation"
             }
             "contracts" => "contract customer sla renewal cancellation deadline owner automation",
-            "quality" => "quality compliance complaint corrective action audit risk due date automation",
+            "quality" => {
+                "quality compliance complaint corrective action audit risk due date automation"
+            }
             _ => "business os module domain records follow-up automation",
         };
         let artifact_text =
@@ -19652,6 +20893,164 @@ mod tests {
         );
     }
 
+    #[test]
+    fn cv_print_parser_execution_prompt_allows_required_json_writeback() {
+        let job = QueuedPrompt {
+            prompt: "business_os.chat.task\n- command_id: cmd-cv\nCV PDF extracted text:\nJulia Schikore\nPayload JSON:\n{\"writeback_contract\":{\"command_type\":\"ctox.cv_print.apply_parse\"}}".to_string(),
+            goal: "parse cv".to_string(),
+            preview: "cv".to_string(),
+            source_label: "business-os".to_string(),
+            suggested_skill: Some("ctox-cv-print-parser".to_string()),
+            leased_message_keys: vec!["queue:system::cv".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("business-os/cv-print-builder".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        assert!(is_cv_print_parser_queue_job(&job));
+        let prompt = business_os_cv_print_execution_prompt(&job);
+        assert!(prompt.contains("MUST be exactly one minified JSON object"));
+        assert!(prompt.contains("Raw JSON is required here"));
+        assert!(prompt.contains("Do not call tools"));
+        assert!(prompt.contains("Preserve all clearly extracted stations"));
+        assert!(prompt.contains("Weitere Fähigkeiten"));
+        assert!(prompt.contains("candidate.additional"));
+        assert!(
+            !prompt.contains("Do NOT include internal reasoning, chain-of-thought, planning notes, tool transcripts, command output, file paths, diffs, stack traces, raw JSON"),
+            "cv parser prompt must not inherit generic chat rules that forbid raw JSON"
+        );
+    }
+
+    #[test]
+    fn cv_print_compact_recovery_reply_stays_parseable_and_preserves_profile_shape() {
+        let prompt = r#"Skill: `ctox-cv-print-parser`.
+- filename: Lebenslauf_Schikore_Julia.pdf
+
+CV PDF extracted text:
+```text
+Lebenslauf
+Ausbildungsweg
+  Oktober 2015 – September 2019 Studium Maschinenbau
+                                Hochschule Coburg
+                                Abschluss Bachelor of Engineering
+Berufserfahrung
+  April 2023 – heute            Typisierungsingenieurin für Fahrerassistenzsysteme
+                                Porsche AG
+  Oktober 2019 – März 2023      Prüfingenieurin für Abgastechnik
+                                TÜV NORD Mobilität GmbH
+Kenntnisse
+  Sprachen                      Deutsch – Muttersprache
+                                Englisch – verhandlungssicher in Wort und Schrift
+  IT-Kenntnisse                 Autodesk Inventor / Siemens NX – sehr gut
+                                ANSYS / HyperMesh – Grundlagen
+Julia Schikore, Taubenweg 7, 71686 Remseck am Neckar
+T +49 160 2072610 E julia.schikore@t-online.de
+```
+
+Business OS command:
+- command_id: cmd-cv
+"#;
+        let reply = cv_print_compact_recovery_reply(
+            prompt,
+            "direct session error: stream disconnected before completion: max_output_tokens",
+        );
+        let value: Value = serde_json::from_str(&reply).expect("recovery reply is JSON");
+        assert_eq!(value["schema"], "ctox.cv_print_profile.v1");
+        assert_eq!(value["workflow"]["phase"], "review");
+        assert_eq!(value["candidate"]["name"], "Julia Schikore");
+        assert_eq!(
+            value["candidate"]["currentRole"],
+            "Typisierungsingenieurin für Fahrerassistenzsysteme"
+        );
+        assert_eq!(value["candidate"]["email"], "julia.schikore@t-online.de");
+        assert!(
+            value["candidate"]["additional"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["key"] == "cv.experience")
+        );
+        assert!(
+            value["candidate"]["additional"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["key"] == "cv.skills"
+                    && entry["value"].get("Weitere Fähigkeiten").is_some())
+        );
+    }
+
+    #[test]
+    fn cv_print_compact_recovery_reply_handles_title_first_dates_and_colon_headings() {
+        let prompt = r#"Skill: `ctox-cv-print-parser`.
+- filename: Mohamed Aboarais_lebenslauf_JAN2026 (1).pdf
+
+CV PDF extracted text:
+```text
+Mohamed Aboarais
+ Ort: Stuttgart, Deutschland
+ E-Mail: m.aboarais@gmail.com | Mobil: +49 176 27794274 | LinkedIn: https://www.linkedin.com/in/aboarais
+ Arbeitserlaubnis: Niederlassungserlaubnis- Deutschland | Verfügbarkeit: Ab sofort
+Berufliche Zusammenfassung:
+ Angestrebte Position:Software Test Manager/Senior Software Test & Verification Engineer (Embedded&Safety-Critical Systems)
+Berufserfahrung:
+ Senior Software Test & Verification Engineer                                                  April 2023 – Januar 2026
+ BRUSA HyPower GmbH, Stuttgart, Deutschland (Rolle: Software Test Manager)
+ Projekte: OBC7xx: On-Board Charger für 400V & 800V HV-Batterien, ICS - Induktives Laden (11 kW).
+ Software Test Engineer | BorgWarner GmbH (Via: T&S consulting GmbH), Ludwigsburg.                   Juli 2022 – März 2023
+ Projekt: BorgWarner-eTurbo - Elektrische Turbolader für Hochleistungsmotoren.
+ Nov 2015 – März 2019 | Embedded Software Engineer | NARSS, Kairo, Ägypten
+ Projekt: EUS-CubeSat: 1U Cube Satellite-Projekt zu Bildgebungszwecken.
+Technische Fähigkeiten:
+ Tools & Sprachen: C/C++, MATLAB, CAPL, Tessy, vTESTstudio.
+ Standards & Tools: ASPICE (SWE.4-SWE.6), ISO 26262, ISO 21434, AUTOSAR, POLARION, DOORS, JIRA.
+ Sprachkenntnisse:
+ Arabisch: C2, Englisch: C2, Deutsch: B1
+Ausbildung:
+ • Okt 2017 – Mai 2021 | M.Sc. Computer und Systemtechnik
+   Electrical Engineering Department, Faculty of Engineering, Ain Shams University, Ägypten.
+ • Sep 2008 – Jun 2013 | B.Sc. in Kommunikations und Elektroniktechnik
+   Faculty of Engineering, Alexandria University, Ägypten.
+```
+
+Business OS command:
+- command_id: cmd-cv
+"#;
+        let reply = cv_print_compact_recovery_reply(
+            prompt,
+            "direct session error: stream disconnected before completion",
+        );
+        let value: Value = serde_json::from_str(&reply).expect("recovery reply is JSON");
+        let additional = value["candidate"]["additional"].as_array().unwrap();
+        let by_key = |key: &str| {
+            additional
+                .iter()
+                .find(|entry| entry["key"] == key)
+                .expect("additional key exists")
+                .get("value")
+                .unwrap()
+        };
+        assert_eq!(value["candidate"]["name"], "Mohamed Aboarais");
+        assert_eq!(
+            value["candidate"]["currentRole"],
+            "Senior Software Test & Verification Engineer"
+        );
+        assert_eq!(value["candidate"]["location"], "Stuttgart");
+        assert_eq!(value["candidate"]["email"], "m.aboarais@gmail.com");
+        assert_eq!(by_key("cv.experience").as_array().unwrap().len(), 3);
+        assert_eq!(by_key("cv.education").as_array().unwrap().len(), 2);
+        assert!(
+            by_key("cv.skills")["Fachkenntnisse"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|skill| skill == "ISO 26262")
+        );
+    }
+
     fn review_outcome_for_no_send_test(summary: &str) -> review::ReviewOutcome {
         let mut outcome = review::ReviewOutcome::skipped(summary);
         outcome.required = true;
@@ -19699,12 +21098,17 @@ mod tests {
 
         let evidence = review_external_work_backing_evidence_summaries(&root, &job);
         assert!(evidence.iter().any(|line| line.contains("queue_open=1")));
-        assert!(evidence
-            .iter()
-            .any(|line| line.contains("new_task, update_existing, merge_duplicate, extend_scope")));
-        assert!(evidence
-            .iter()
-            .any(|line| line.contains(&format!("message_key={}", queue_task.message_key))));
+        assert!(
+            evidence
+                .iter()
+                .any(|line| line
+                    .contains("new_task, update_existing, merge_duplicate, extend_scope"))
+        );
+        assert!(
+            evidence
+                .iter()
+                .any(|line| line.contains(&format!("message_key={}", queue_task.message_key)))
+        );
         assert!(evidence.iter().any(|line| {
             line.contains("Merge duplicate scraper request into existing Intersolar task")
         }));
@@ -19757,9 +21161,11 @@ mod tests {
         });
         let missing_target = communication_pipeline_resolution_guard_outcome(&request, &outcome)
             .expect("pipeline mutation without target must be rejected");
-        assert!(missing_target
-            .summary
-            .contains("names no durable target item"));
+        assert!(
+            missing_target
+                .summary
+                .contains("names no durable target item")
+        );
 
         outcome.pipeline_resolution = Some(review::PipelineResolution {
             action: review::PipelineResolutionAction::BlockedNeedsClarification,
@@ -19767,8 +21173,10 @@ mod tests {
             rationale: "Asked for the missing account id before changing queued work.".to_string(),
         });
         let approval_summary = communication_review_approval_summary(&outcome);
-        assert!(approval_summary
-            .contains("PIPELINE_RESOLUTION: action=blocked_needs_clarification | target=none"));
+        assert!(
+            approval_summary
+                .contains("PIPELINE_RESOLUTION: action=blocked_needs_clarification | target=none")
+        );
     }
 
     #[test]
@@ -20006,9 +21414,11 @@ mod tests {
         );
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
-        assert!(events
-            .iter()
-            .any(|event| event.mechanism_id == "queue_pressure_guard"));
+        assert!(
+            events
+                .iter()
+                .any(|event| event.mechanism_id == "queue_pressure_guard")
+        );
     }
 
     #[test]
@@ -20046,9 +21456,11 @@ mod tests {
             let shared = lock_shared_state(&state);
             shared.recent_events.iter().cloned().collect::<Vec<_>>()
         };
-        assert!(recent_events
-            .iter()
-            .any(|event| event.contains("State invariants at boot")));
+        assert!(
+            recent_events
+                .iter()
+                .any(|event| event.contains("State invariants at boot"))
+        );
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
         assert!(events.iter().any(|event| {
@@ -20099,9 +21511,11 @@ mod tests {
             let shared = lock_shared_state(&state);
             shared.recent_events.iter().cloned().collect::<Vec<_>>()
         };
-        assert!(recent_events
-            .iter()
-            .any(|event| event.contains("State invariants repaired at boot")));
+        assert!(
+            recent_events
+                .iter()
+                .any(|event| event.contains("State invariants repaired at boot"))
+        );
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
         assert!(events.iter().any(|event| {
@@ -20304,10 +21718,12 @@ mod tests {
             turn_loop::CHAT_CONVERSATION_ID,
         )
         .expect("failed to evaluate initial invariants");
-        assert!(before
-            .violations
-            .iter()
-            .any(|issue| { issue.code == "closed_mission_with_open_runtime_work" }));
+        assert!(
+            before
+                .violations
+                .iter()
+                .any(|issue| { issue.code == "closed_mission_with_open_runtime_work" })
+        );
 
         let state = Arc::new(Mutex::new(SharedState::default()));
         let repaired =
@@ -20333,10 +21749,12 @@ mod tests {
             .expect("failed to reload continuity");
         assert_ne!(continuity.focus.head_commit_id, "contbase_1_focus");
         assert!(continuity.focus.content.contains("- Mission state: active"));
-        assert!(continuity
-            .focus
-            .content
-            .contains("- Continuation mode: continuous"));
+        assert!(
+            continuity
+                .focus
+                .content
+                .contains("- Continuation mode: continuous")
+        );
 
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
@@ -20402,10 +21820,12 @@ mod tests {
             turn_loop::CHAT_CONVERSATION_ID,
         )
         .expect("failed to evaluate sparse-open invariants");
-        assert!(before
-            .violations
-            .iter()
-            .any(|issue| { issue.code == "mission_state_requires_continuity_resync" }));
+        assert!(
+            before
+                .violations
+                .iter()
+                .any(|issue| { issue.code == "mission_state_requires_continuity_resync" })
+        );
 
         let state = Arc::new(Mutex::new(SharedState::default()));
         let repaired =
@@ -20435,14 +21855,18 @@ mod tests {
         let continuity = engine
             .stored_continuity_show_all(turn_loop::CHAT_CONVERSATION_ID)
             .expect("failed to reload continuity");
-        assert!(continuity
-            .focus
-            .content
-            .contains("- Mission: Spill restore: Deferred documentation review"));
-        assert!(continuity
-            .focus
-            .content
-            .contains("- Next slice: Spill restore: Deferred documentation review"));
+        assert!(
+            continuity
+                .focus
+                .content
+                .contains("- Mission: Spill restore: Deferred documentation review")
+        );
+        assert!(
+            continuity
+                .focus
+                .content
+                .contains("- Next slice: Spill restore: Deferred documentation review")
+        );
     }
 
     #[test]
@@ -20539,10 +21963,12 @@ mod tests {
 
         ensure_queue_guard_locked(&root, &mut shared);
 
-        assert!(shared
-            .pending_prompts
-            .iter()
-            .all(|item| item.source_label != QUEUE_GUARD_SOURCE_LABEL));
+        assert!(
+            shared
+                .pending_prompts
+                .iter()
+                .all(|item| item.source_label != QUEUE_GUARD_SOURCE_LABEL)
+        );
     }
 
     #[test]
@@ -20573,10 +21999,12 @@ mod tests {
             shared.pending_prompts.front().unwrap().leased_message_keys,
             vec!["queue:system::next".to_string()]
         );
-        assert!(shared
-            .recent_events
-            .iter()
-            .any(|event| event.contains("outcome-witness recovery")));
+        assert!(
+            shared
+                .recent_events
+                .iter()
+                .any(|event| event.contains("outcome-witness recovery"))
+        );
     }
 
     #[test]
@@ -20687,17 +22115,21 @@ mod tests {
 
         let shared = state.lock().expect("state poisoned");
         assert!(shared.pending_prompts.is_empty());
-        assert!(shared
-            .recent_events
-            .iter()
-            .any(|item| item.contains("Blocked ticket event")));
+        assert!(
+            shared
+                .recent_events
+                .iter()
+                .any(|item| item.contains("Blocked ticket event"))
+        );
         drop(shared);
 
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
-        assert!(events
-            .iter()
-            .any(|event| event.mechanism_id == "ticket_control_gate"));
+        assert!(
+            events
+                .iter()
+                .any(|event| event.mechanism_id == "ticket_control_gate")
+        );
     }
 
     #[test]
@@ -20734,10 +22166,12 @@ mod tests {
             .expect("queued prompt missing");
         assert_eq!(prompt.suggested_skill.as_deref(), Some("system-onboarding"));
         assert_eq!(prompt.source_label, "queue");
-        assert!(shared
-            .recent_events
-            .iter()
-            .any(|event| event.contains("skill system-onboarding")));
+        assert!(
+            shared
+                .recent_events
+                .iter()
+                .any(|event| event.contains("skill system-onboarding"))
+        );
     }
 
     #[test]
@@ -20779,8 +22213,10 @@ mod tests {
         ));
         assert!(prompt.contains("ticket source-skill-review-note --case-id case-1"));
         assert!(prompt.contains("Oeffentliche Ticketantwort:"));
-        assert!(prompt
-            .contains("ticket writeback-comment --case-id case-1 --body \\\"<reply text>\\\""));
+        assert!(
+            prompt
+                .contains("ticket writeback-comment --case-id case-1 --body \\\"<reply text>\\\"")
+        );
         assert!(prompt.contains("--internal"));
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -20896,10 +22332,12 @@ mod tests {
             .expect("queued prompt missing");
         assert_eq!(prompt.source_label, "ticket:local");
         assert_eq!(prompt.suggested_skill.as_deref(), Some("system-onboarding"));
-        assert!(shared
-            .recent_events
-            .iter()
-            .any(|event| event.contains("skill system-onboarding")));
+        assert!(
+            shared
+                .recent_events
+                .iter()
+                .any(|event| event.contains("skill system-onboarding"))
+        );
     }
 
     #[test]
@@ -20959,10 +22397,12 @@ mod tests {
             .expect("queued prompt missing");
         assert_eq!(prompt.source_label, "ticket:local");
         assert_eq!(prompt.suggested_skill.as_deref(), Some("system-onboarding"));
-        assert!(shared
-            .recent_events
-            .iter()
-            .any(|event| event.contains("skill system-onboarding")));
+        assert!(
+            shared
+                .recent_events
+                .iter()
+                .any(|event| event.contains("skill system-onboarding"))
+        );
     }
 
     #[test]
@@ -21017,10 +22457,12 @@ mod tests {
             .expect("self-work missing after routing");
         assert_eq!(routed.state, "queued");
         let shared = state.lock().expect("state poisoned");
-        assert!(shared
-            .recent_events
-            .iter()
-            .any(|event| event.contains("Queued internal work")));
+        assert!(
+            shared
+                .recent_events
+                .iter()
+                .any(|event| event.contains("Queued internal work"))
+        );
     }
 
     #[test]
@@ -21101,10 +22543,12 @@ mod tests {
             prompt.suggested_skill.as_deref(),
             Some("roller-ticket-desk-operator-v4")
         );
-        assert!(shared
-            .recent_events
-            .iter()
-            .any(|event| event.contains("skill roller-ticket-desk-operator-v4")));
+        assert!(
+            shared
+                .recent_events
+                .iter()
+                .any(|event| event.contains("skill roller-ticket-desk-operator-v4"))
+        );
     }
 
     #[test]
@@ -21207,12 +22651,16 @@ mod tests {
 
         let shared = lock_shared_state(&state);
         assert_eq!(shared.pending_prompts.len(), 1);
-        assert!(!shared.pending_prompts[0]
-            .prompt
-            .contains("sk-proj-service-secret-1234567890"));
-        assert!(shared.pending_prompts[0]
-            .prompt
-            .contains("[secret-ref:credentials/OPENAI_API_KEY"));
+        assert!(
+            !shared.pending_prompts[0]
+                .prompt
+                .contains("sk-proj-service-secret-1234567890")
+        );
+        assert!(
+            shared.pending_prompts[0]
+                .prompt
+                .contains("[secret-ref:credentials/OPENAI_API_KEY")
+        );
         assert_eq!(
             shared.pending_prompts[0].suggested_skill.as_deref(),
             Some("secret-hygiene")
@@ -21236,9 +22684,11 @@ mod tests {
 
         assert_eq!(prepared.suggested_skill.as_deref(), Some("secret-hygiene"));
         assert!(prepared.auto_ingested_secrets >= 1);
-        assert!(prepared
-            .prompt
-            .contains("[secret-ref:credentials/OPENAI_API_KEY"));
+        assert!(
+            prepared
+                .prompt
+                .contains("[secret-ref:credentials/OPENAI_API_KEY")
+        );
     }
 
     #[test]
@@ -21294,10 +22744,12 @@ mod tests {
         assert_eq!(status.pending_count, 0);
         assert!(status.pending_previews.is_empty());
         assert_eq!(status.blocked_count, 1);
-        assert!(status
-            .blocked_previews
-            .iter()
-            .any(|preview| preview.contains("queue blocked  HY3 smoke artifact missing")));
+        assert!(
+            status
+                .blocked_previews
+                .iter()
+                .any(|preview| preview.contains("queue blocked  HY3 smoke artifact missing"))
+        );
     }
 
     #[test]
@@ -21419,7 +22871,14 @@ mod tests {
             stream.flush().unwrap();
         });
 
-        let status = service_status_snapshot(&root).unwrap();
+        let status = service_status_snapshot_with(
+            &root,
+            &StatusProbeOptions {
+                status_ipc_timeout: Some(Duration::from_millis(100)),
+                ..StatusProbeOptions::default()
+            },
+        )
+        .unwrap();
         handle.join().unwrap();
 
         assert!(status.running);
@@ -21427,10 +22886,12 @@ mod tests {
         assert_eq!(status.pid, Some(4242));
         assert_eq!(status.pending_count, 1);
         assert!(status.business_os.is_some());
-        assert!(status
-            .recent_events
-            .iter()
-            .any(|event| event.contains("system-onboarding")));
+        assert!(
+            status
+                .recent_events
+                .iter()
+                .any(|event| event.contains("system-onboarding"))
+        );
     }
 
     #[cfg(unix)]
@@ -21718,8 +23179,10 @@ mod tests {
             "Implement the requested slice.",
             Some("/tmp/ctox-workspace-contract"),
         );
-        assert!(prompt
-            .starts_with("Work only inside this workspace:\n/tmp/ctox-workspace-contract\n\n"));
+        assert!(
+            prompt
+                .starts_with("Work only inside this workspace:\n/tmp/ctox-workspace-contract\n\n")
+        );
         assert!(prompt.contains("Implement the requested slice."));
 
         let timeout_prompt = render_timeout_continue_prompt(
@@ -21727,8 +23190,10 @@ mod tests {
             "execution timed out after 180s",
             Some("/tmp/ctox-workspace-contract"),
         );
-        assert!(timeout_prompt
-            .contains("Work only inside this workspace:\n/tmp/ctox-workspace-contract"));
+        assert!(
+            timeout_prompt
+                .contains("Work only inside this workspace:\n/tmp/ctox-workspace-contract")
+        );
         assert!(timeout_prompt.contains("CURRENT TASK\nShip the next implementation slice."));
     }
 
@@ -21846,9 +23311,11 @@ mod tests {
             "CTO_MEETING_AUTO_JOIN_ENABLED".to_string(),
             "false".to_string(),
         );
-        assert!(meeting_auto_join_policy_block(&settings, &message)
-            .expect("disabled block")
-            .contains("auto-join disabled"));
+        assert!(
+            meeting_auto_join_policy_block(&settings, &message)
+                .expect("disabled block")
+                .contains("auto-join disabled")
+        );
 
         settings.insert(
             "CTO_MEETING_AUTO_JOIN_ENABLED".to_string(),
@@ -21858,9 +23325,11 @@ mod tests {
             "CTO_MEETING_ALLOWED_INVITE_SENDERS".to_string(),
             "scheduler@example.com,@trusted.example".to_string(),
         );
-        assert!(meeting_auto_join_policy_block(&settings, &message)
-            .expect("sender block")
-            .contains("not in"));
+        assert!(
+            meeting_auto_join_policy_block(&settings, &message)
+                .expect("sender block")
+                .contains("not in")
+        );
 
         let allowed_exact = routed_email_message("scheduler@example.com");
         assert_eq!(
@@ -21930,10 +23399,12 @@ mod tests {
 
         let shared = state.lock().expect("state poisoned");
         assert!(shared.pending_prompts.is_empty());
-        assert!(shared
-            .recent_events
-            .iter()
-            .any(|event| event.contains("Ignored non-work TUI route")));
+        assert!(
+            shared
+                .recent_events
+                .iter()
+                .any(|event| event.contains("Ignored non-work TUI route"))
+        );
         drop(shared);
         assert_eq!(route_status_for(&root, "tui-probe-1"), "handled");
         let _ = std::fs::remove_dir_all(&root);
@@ -22360,10 +23831,12 @@ mod tests {
             pending.front().map(|item| item.source_label.as_str()),
             Some("tui")
         );
-        assert!(pending
-            .front()
-            .and_then(|item| item.outbound_email.as_ref())
-            .is_some());
+        assert!(
+            pending
+                .front()
+                .and_then(|item| item.outbound_email.as_ref())
+                .is_some()
+        );
         assert_eq!(
             pending.back().map(|item| item.source_label.as_str()),
             Some("email:founder")
@@ -22637,9 +24110,11 @@ mod tests {
         assert!(self_work.is_empty());
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
-        assert!(events
-            .iter()
-            .any(|event| event.mechanism_id == "turn_timeout_continuation"));
+        assert!(
+            events
+                .iter()
+                .any(|event| event.mechanism_id == "turn_timeout_continuation")
+        );
     }
 
     #[test]
@@ -22672,10 +24147,12 @@ mod tests {
             maybe_enqueue_timeout_continuation(&root, &job, "direct session timeout after 900s")
                 .expect("timeout recovery should succeed");
 
-        assert!(created
-            .as_deref()
-            .unwrap_or_default()
-            .starts_with("Recover interrupted Run artifact controller"));
+        assert!(
+            created
+                .as_deref()
+                .unwrap_or_default()
+                .starts_with("Recover interrupted Run artifact controller")
+        );
         let pending = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
             .expect("failed to list pending queue tasks");
         assert_eq!(pending.len(), 1);
@@ -22685,9 +24162,11 @@ mod tests {
             job.workspace_root.as_deref()
         );
         assert_eq!(pending[0].parent_message_key, None);
-        assert!(pending[0]
-            .prompt
-            .contains("DURABLE FILES THAT MUST STAY UPDATED"));
+        assert!(
+            pending[0]
+                .prompt
+                .contains("DURABLE FILES THAT MUST STAY UPDATED")
+        );
         assert!(pending[0].prompt.contains(controller.to_str().unwrap()));
         assert!(pending[0].prompt.contains(logbook.to_str().unwrap()));
         let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
@@ -22875,18 +24354,22 @@ mod tests {
         let shared = state.lock().expect("state poisoned");
         assert!(!shared.busy);
         assert!(shared.active_source_label.is_none());
-        assert!(!shared
-            .leased_message_keys_inflight
-            .contains(&task.message_key));
+        assert!(
+            !shared
+                .leased_message_keys_inflight
+                .contains(&task.message_key)
+        );
         assert!(shared.recent_events.iter().any(|event| {
             event.contains("Suppressed fatal harness continuation before model execution")
         }));
         drop(shared);
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
-        assert!(events
-            .iter()
-            .any(|event| event.mechanism_id == "fatal_harness_loop_guard"));
+        assert!(
+            events
+                .iter()
+                .any(|event| event.mechanism_id == "fatal_harness_loop_guard")
+        );
     }
 
     #[test]
@@ -22955,19 +24438,23 @@ Business OS command:
             "module.json install_scope must be installed",
         );
 
-        assert!(feedback.contains("Business OS app validation failed."));
+        assert!(feedback.contains(BUSINESS_OS_APP_VALIDATION_FAILURE_MARKER));
+        assert!(feedback.contains("Validation repair attempt: 1 of 3"));
         assert!(feedback.contains("- module_id: contracts"));
         assert!(feedback.contains("- install_target: runtime-installed-module"));
         assert!(
             feedback.contains("- app_directory: runtime/business-os/installed-modules/contracts")
         );
         assert!(feedback.contains("module.json install_scope must be installed"));
+        assert!(feedback.contains("Original app request summary:"));
         assert!(feedback.contains("resource.module_contract:"));
         assert!(feedback.contains("resource.dos_and_donts:"));
         assert!(feedback.contains("resource.green_checklist:"));
+        assert!(feedback.contains("resource.architecture_translation:"));
         assert!(
             feedback.contains("validation: ctox business-os app validate contracts --installed")
         );
+        assert!(!feedback.contains("Original task remains active"));
         assert!(!feedback.contains("Edit only the app files under the app_directory"));
         assert!(!feedback.contains("Do not add React, Next.js"));
         assert!(!feedback.contains("index.js` must export `mount(ctx)"));
@@ -23001,7 +24488,9 @@ Business OS command:
         assert!(prompt.contains("Business OS app resource context:"));
         assert!(prompt.contains("- module_id: contracts"));
         assert!(prompt.contains("- install_target: runtime-installed-module"));
-        assert!(prompt.contains("- app_directory: runtime/business-os/installed-modules/contracts"));
+        assert!(
+            prompt.contains("- app_directory: runtime/business-os/installed-modules/contracts")
+        );
         assert!(prompt.contains("- skill: business-os-app-module-development"));
         assert!(prompt.contains("resource.module_contract:"));
         assert!(prompt.contains("resource.dos_and_donts:"));
@@ -23127,9 +24616,69 @@ Business OS command:
 
         assert_eq!(business_os_app_validation_repair_attempt_count(&prompt), 3);
         assert!(business_os_app_validation_repair_exhausted(&prompt));
+        assert_eq!(
+            business_os_app_validation_repair_attempt_count(
+                "Business OS app artifact validation failed.\n\nValidation repair attempt: 2 of 3\n"
+            ),
+            2
+        );
         assert!(!business_os_app_validation_repair_exhausted(
             &prompt.replace("\n\nBusiness OS app artifact validation failed.\nthird", "")
         ));
+    }
+
+    #[test]
+    fn business_os_app_validation_feedback_is_bounded_and_redacts_context() {
+        let marker = "Business OS app artifact validation failed.";
+        let huge_prompt = format!(
+            "Build a Business OS office assets app.\n\nBusiness OS app request summary:\n- app_title: Office Assets\n- description: Track office assets.\n\nClient context JSON:\n{{\"capability_token\":\"SECRET_TOKEN_SHOULD_NOT_LEAK\"}}\n\n{}",
+            std::iter::repeat(marker)
+                .take(20)
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let job = QueuedPrompt {
+            prompt: huge_prompt,
+            goal: "Build office assets app".to_string(),
+            preview: "Build office assets app".to_string(),
+            source_label: "business-os:app-create".to_string(),
+            suggested_skill: Some("business-os-app-module-development".to_string()),
+            leased_message_keys: vec!["queue:system::assets".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("business-os/apps/assets".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let target = BusinessOsAppModuleTarget {
+            module_id: "office-assets".to_string(),
+            install_target: "runtime-installed-module".to_string(),
+            mode_flag: "--installed",
+            artifact_directory: "runtime/business-os/installed-modules/office-assets".to_string(),
+        };
+
+        let feedback = render_business_os_app_module_validation_feedback(
+            &job,
+            &target,
+            &format!(
+                "module.json missing\n{}",
+                "long validator detail\n".repeat(2_000)
+            ),
+        );
+
+        assert!(feedback.chars().count() <= BUSINESS_OS_APP_VALIDATION_FEEDBACK_MAX_CHARS);
+        assert_eq!(
+            feedback
+                .matches(BUSINESS_OS_APP_VALIDATION_FAILURE_MARKER)
+                .count(),
+            1
+        );
+        assert!(feedback.contains("Validation repair attempt: 3 of 3"));
+        assert!(!feedback.contains("SECRET_TOKEN_SHOULD_NOT_LEAK"));
+        assert!(!feedback.contains("capability_token"));
+        assert!(feedback.contains("- app_title: Office Assets"));
+        assert!(feedback.contains("module.json missing"));
     }
 
     #[test]
@@ -23204,13 +24753,17 @@ Business OS command:
         let reloaded = channels::load_queue_task(&root, &task.message_key)
             .expect("load failed")
             .expect("missing queue task");
-        assert!(reloaded
-            .prompt
-            .contains("Business OS app validation failed."));
-        assert!(reloaded
-            .prompt
-            .contains("module.json install_scope must be installed"));
-        assert!(reloaded.prompt.contains("Original task remains active"));
+        assert!(
+            reloaded
+                .prompt
+                .contains(BUSINESS_OS_APP_VALIDATION_FAILURE_MARKER)
+        );
+        assert!(
+            reloaded
+                .prompt
+                .contains("module.json install_scope must be installed")
+        );
+        assert!(reloaded.prompt.contains("Original app request summary"));
         assert_eq!(route_status_for(&root, &task.message_key), "review_rework");
         let conn =
             channels::open_channel_db(&crate::paths::core_db(&root)).expect("open channel db");
@@ -23292,11 +24845,13 @@ Business OS command:
             .expect("load failed")
             .expect("missing queue task");
         assert_eq!(route_status_for(&root, &task.message_key), "review_rework");
-        assert!(reloaded
-            .prompt
-            .contains("Business OS app validation failed."));
+        assert!(
+            reloaded
+                .prompt
+                .contains(BUSINESS_OS_APP_VALIDATION_FAILURE_MARKER)
+        );
         assert!(reloaded.prompt.contains("layout.right is not allowed"));
-        assert!(reloaded.prompt.contains("Original task remains active"));
+        assert!(reloaded.prompt.contains("Original app request summary"));
         let conn =
             channels::open_channel_db(&crate::paths::core_db(&root)).expect("open channel db");
         let proof_count: i64 = conn
@@ -23736,9 +25291,11 @@ Business OS command:
         let reloaded = channels::load_queue_task(&root, &task.message_key)
             .expect("load failed")
             .expect("missing queue task");
-        assert!(reloaded
-            .prompt
-            .contains("Business OS app artifact validation failed."));
+        assert!(
+            reloaded
+                .prompt
+                .contains("Business OS app artifact validation failed.")
+        );
         assert!(reloaded.prompt.contains("missing index.js and tests"));
         let shared = lock_shared_state(&state);
         assert!(
@@ -23885,9 +25442,11 @@ Business OS command:
 
         assert_eq!(updated, 1);
         assert_eq!(route_status_for(&state_root, &task.message_key), "handled");
-        assert!(!state_root
-            .join("runtime/business-os/installed-modules/subscriptions")
-            .exists());
+        assert!(
+            !state_root
+                .join("runtime/business-os/installed-modules/subscriptions")
+                .exists()
+        );
     }
 
     #[test]
@@ -24018,7 +25577,9 @@ Business OS command:
         assert_eq!(blocked.route_status, "blocked");
         assert_eq!(
             blocked.status_note.as_deref(),
-            Some("business-os:blocked-unstarted-app: app target still missing or empty after 1 automatic requeue(s); owner review required before retry")
+            Some(
+                "business-os:blocked-unstarted-app: app target still missing or empty after 1 automatic requeue(s); owner review required before retry"
+            )
         );
         assert_eq!(
             business_os_app_unstarted_requeue_count(&root, &blocked)
@@ -24071,7 +25632,9 @@ Business OS command:
         assert_eq!(blocked.route_status, "blocked");
         assert_eq!(
             blocked.status_note.as_deref(),
-            Some("business-os:blocked-unstarted-app: app target still missing or empty after 1 automatic requeue(s); owner review required before retry")
+            Some(
+                "business-os:blocked-unstarted-app: app target still missing or empty after 1 automatic requeue(s); owner review required before retry"
+            )
         );
         assert_eq!(
             business_os_app_unstarted_requeue_count(&root, &blocked)
@@ -24120,9 +25683,11 @@ Business OS command:
             .expect("load queue task")
             .expect("queue task exists");
         assert_eq!(reloaded.route_status, "review_rework");
-        assert!(reloaded
-            .prompt
-            .contains("Business OS app artifact validation failed."));
+        assert!(
+            reloaded
+                .prompt
+                .contains("Business OS app artifact validation failed.")
+        );
         assert!(reloaded.prompt.contains("missing index.html"));
     }
 
@@ -25346,7 +26911,11 @@ Business OS command:
             route_status_for(&root, &pending_task.message_key),
             "pending"
         );
-        assert!(leased.prompt.contains("Business OS app validation failed."));
+        assert!(
+            leased
+                .prompt
+                .contains(BUSINESS_OS_APP_VALIDATION_FAILURE_MARKER)
+        );
     }
 
     #[test]
@@ -25557,9 +27126,11 @@ Business OS command:
             Some(queued.preview.as_str())
         );
         assert_eq!(shared.active_source_label.as_deref(), Some("queue"));
-        assert!(shared
-            .leased_message_keys_inflight
-            .contains(&next_task.message_key));
+        assert!(
+            shared
+                .leased_message_keys_inflight
+                .contains(&next_task.message_key)
+        );
         assert!(shared.recent_events.iter().any(|event| {
             event.contains("Started durable queue task after worker completion")
                 && !event.contains("released durable queue lease")
@@ -25725,12 +27296,16 @@ Business OS command:
         );
         assert_eq!(route_status_for(&root, &stale_task.message_key), "leased");
         assert_eq!(route_status_for(&root, &fresh_task.message_key), "pending");
-        assert!(leased
-            .prompt
-            .contains("Business OS app artifact validation failed."));
-        assert!(leased
-            .prompt
-            .contains("module tests failed: expected count is inconsistent"));
+        assert!(
+            leased
+                .prompt
+                .contains("Business OS app artifact validation failed.")
+        );
+        assert!(
+            leased
+                .prompt
+                .contains("module tests failed: expected count is inconsistent")
+        );
     }
 
     #[test]
@@ -25879,7 +27454,7 @@ Business OS command:
             reasons: vec!["Runtime mission contract still open".to_string()],
             failed_gates: vec!["Closure readiness".to_string()],
             semantic_findings: vec![
-                "Do the remaining rework instead of closing the queue item.".to_string()
+                "Do the remaining rework instead of closing the queue item.".to_string(),
             ],
             categorized_findings: Vec::new(),
             open_items: vec!["Persist the missing closure evidence.".to_string()],
@@ -26283,11 +27858,13 @@ Business OS command:
             disposition,
             CompletionReviewDisposition::Hold { .. }
         ));
-        assert!(state
-            .lock()
-            .expect("service state poisoned")
-            .pending_prompts
-            .is_empty());
+        assert!(
+            state
+                .lock()
+                .expect("service state poisoned")
+                .pending_prompts
+                .is_empty()
+        );
     }
 
     #[test]
@@ -26677,9 +28254,11 @@ Business OS command:
             .expect("missing self-work");
         assert_eq!(reloaded.state, "published");
         assert_eq!(queued.thread_key, "queue/mission-1");
-        assert!(queued
-            .title
-            .contains("Continue mission Deliver the Kunstmen homepage reset"));
+        assert!(
+            queued
+                .title
+                .contains("Continue mission Deliver the Kunstmen homepage reset")
+        );
 
         let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
@@ -26945,9 +28524,11 @@ Business OS command:
 
         let blocked_tasks = channels::list_queue_tasks(&root, &["blocked".to_string()], 10)
             .expect("failed to list blocked queue tasks");
-        assert!(!blocked_tasks
-            .iter()
-            .any(|task| task.ticket_self_work_id.as_deref() == Some(item.work_id.as_str())));
+        assert!(
+            !blocked_tasks
+                .iter()
+                .any(|task| task.ticket_self_work_id.as_deref() == Some(item.work_id.as_str()))
+        );
     }
 
     #[test]
@@ -27013,9 +28594,11 @@ Business OS command:
 
         let blocked_tasks = channels::list_queue_tasks(&root, &["blocked".to_string()], 10)
             .expect("failed to list blocked queue tasks");
-        assert!(!blocked_tasks
-            .iter()
-            .any(|task| task.ticket_self_work_id.as_deref() == Some(item.work_id.as_str())));
+        assert!(
+            !blocked_tasks
+                .iter()
+                .any(|task| task.ticket_self_work_id.as_deref() == Some(item.work_id.as_str()))
+        );
     }
 
     #[test]
@@ -27556,12 +29139,16 @@ Business OS command:
             items[0].suggested_skill.as_deref(),
             Some("follow-up-orchestrator")
         );
-        assert!(items[0]
-            .body_text
-            .contains("Use `ctox strategy show --conversation-id"));
-        assert!(items[0]
-            .body_text
-            .contains("--thread-key kunstmen-supervisor"));
+        assert!(
+            items[0]
+                .body_text
+                .contains("Use `ctox strategy show --conversation-id")
+        );
+        assert!(
+            items[0]
+                .body_text
+                .contains("--thread-key kunstmen-supervisor")
+        );
     }
 
     #[test]
@@ -27728,9 +29315,11 @@ Keep the work bounded to project preparation."
         let tasks =
             channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
                 .expect("failed to list queue tasks");
-        assert!(tasks
-            .iter()
-            .any(|task| task.title == "prep-priority-plan: choose first work items"));
+        assert!(
+            tasks
+                .iter()
+                .any(|task| task.title == "prep-priority-plan: choose first work items")
+        );
 
         let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
@@ -28191,6 +29780,60 @@ Use shell tools to create or update these files."
     }
 
     #[test]
+    fn cv_print_runtime_retry_keeps_original_parser_prompt() {
+        let root = temp_root("cv-print-runtime-retry-prompt");
+        let original_prompt = "ctox-cv-print-parser\nCV PDF extracted text:\nJulia Schikore\nPayload JSON:\n{\"writeback_contract\":{\"command_type\":\"ctox.cv_print.apply_parse\"}}"
+            .to_string();
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "CV strukturieren".to_string(),
+                prompt: original_prompt.clone(),
+                thread_key: "business-os/cv-print-builder".to_string(),
+                workspace_root: Some("/home/ctox/.local/lib/ctox/current".to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: Some("ctox-cv-print-parser".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create cv parser queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease cv parser queue task");
+        let job = QueuedPrompt {
+            prompt: original_prompt.clone(),
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: task.suggested_skill.clone(),
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: Some("/home/ctox/.local/lib/ctox/current".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let updated =
+            apply_runtime_retry_feedback_to_leased_queue(&root, &job, "database is locked")
+                .expect("runtime retry feedback should update status note");
+        let saved = channels::load_queue_task(&root, &task.message_key)
+            .expect("queue load should succeed")
+            .expect("queue task should exist");
+
+        assert_eq!(updated, 1);
+        assert_eq!(saved.prompt, original_prompt);
+        assert!(
+            saved
+                .status_note
+                .as_deref()
+                .unwrap_or_default()
+                .contains("kept original task prompt")
+        );
+    }
+
+    #[test]
     fn runtime_rate_limit_error_is_retryable_api_failure() {
         let error = "stream disconnected before completion: HTTP status 429 Too Many Requests";
         assert_eq!(
@@ -28238,8 +29881,10 @@ Use shell tools to create or update these files."
         );
         assert!(runtime_error_is_transient_api_failure(error));
         assert_eq!(failed_worker_route_status(false, false, true), "pending");
-        assert!(turn_loop::summarize_runtime_error(error)
-            .contains("managed local backend did not become ready"));
+        assert!(
+            turn_loop::summarize_runtime_error(error)
+                .contains("managed local backend did not become ready")
+        );
     }
 
     #[test]
@@ -28407,12 +30052,16 @@ Use shell tools to create or update these files."
             .expect("load queue task")
             .expect("queue task exists");
         assert!(reloaded.prompt.contains("HARNESS FEEDBACK"));
-        assert!(reloaded
-            .prompt
-            .contains("without producing the required final assistant message"));
-        assert!(reloaded
-            .prompt
-            .contains("Create and verify the smoke artifact."));
+        assert!(
+            reloaded
+                .prompt
+                .contains("without producing the required final assistant message")
+        );
+        assert!(
+            reloaded
+                .prompt
+                .contains("Create and verify the smoke artifact.")
+        );
         assert_eq!(reloaded.workspace_root.as_deref(), Some("/tmp/qwen-smoke"));
         assert_eq!(route_status_for(&root, &task.message_key), "leased");
     }
@@ -28678,11 +30327,9 @@ Use shell tools to create or update these files."
 
         assert_eq!(route_status_for(&state_root, &task.message_key), "handled");
         let shared = lock_shared_state(&state);
-        assert!(shared
-            .recent_events
-            .iter()
-            .any(|event| event
-                .contains("Recovered 1 abandoned Business OS app queue task(s) at boot")));
+        assert!(shared.recent_events.iter().any(|event| {
+            event.contains("Recovered 1 abandoned Business OS app queue task(s) at boot")
+        }));
     }
 
     #[test]
@@ -29967,9 +31614,11 @@ Use shell tools to create or update these files."
         );
         let shared = lock_shared_state(&state);
         assert!(shared.pending_prompts.is_empty());
-        assert!(!shared
-            .leased_message_keys_inflight
-            .contains(&task.message_key));
+        assert!(
+            !shared
+                .leased_message_keys_inflight
+                .contains(&task.message_key)
+        );
         assert!(shared.recent_events.iter().any(|event| {
             event.contains("released durable queue lease") && event.contains("active agent loop")
         }));
@@ -30027,14 +31676,16 @@ Use shell tools to create or update these files."
                 'later reviewed founder reply in same thread',
                 '2026-04-27T15:39:18Z', '2026-04-27T15:39:18Z', '{}'
             )"#,
-            rusqlite::params![serde_json::json!({
-                "thread_key": thread_key,
-                "to": ["michael.welsch@metric-space.ai"],
-                "cc": [],
-                "subject": "Re: Aw: Re: Visuelle Homepage",
-                "attachments": [],
-            })
-            .to_string()],
+            rusqlite::params![
+                serde_json::json!({
+                    "thread_key": thread_key,
+                    "to": ["michael.welsch@metric-space.ai"],
+                    "cc": [],
+                    "subject": "Re: Aw: Re: Visuelle Homepage",
+                    "attachments": [],
+                })
+                .to_string()
+            ],
         )
         .expect("failed to seed later reviewed send");
 
@@ -30267,14 +31918,16 @@ Use shell tools to create or update these files."
                 'later reviewed founder reply copied Michael on a different founder thread',
                 '2026-04-27T23:21:23Z', '2026-04-27T23:21:23Z', '{"ok":true}'
             )"#,
-            rusqlite::params![serde_json::json!({
-                "thread_key": "<current-thread@example.com>",
-                "to": ["o.schaefers@gmx.net"],
-                "cc": ["michael.welsch@metric-space.ai"],
-                "subject": "Re: Aw: Re: Visuelle Homepage",
-                "attachments": [],
-            })
-            .to_string()],
+            rusqlite::params![
+                serde_json::json!({
+                    "thread_key": "<current-thread@example.com>",
+                    "to": ["o.schaefers@gmx.net"],
+                    "cc": ["michael.welsch@metric-space.ai"],
+                    "subject": "Re: Aw: Re: Visuelle Homepage",
+                    "attachments": [],
+                })
+                .to_string()
+            ],
         )
         .expect("failed to seed later reviewed send");
 
@@ -30555,10 +32208,11 @@ Was jetzt zu tun ist:\n\
 
         let note = maybe_continue_platform_expertise_pipeline_after_success(&root, &job)
             .expect("platform pass continuation should succeed");
-        assert!(note
-            .as_deref()
-            .unwrap_or_default()
-            .contains("messaging-wording"));
+        assert!(
+            note.as_deref()
+                .unwrap_or_default()
+                .contains("messaging-wording")
+        );
 
         let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
@@ -30705,17 +32359,21 @@ Was jetzt zu tun ist:\n\
         let shared = state.lock().expect("service state poisoned");
         assert!(!shared.busy);
         assert_eq!(shared.pending_prompts.len(), 1);
-        assert!(shared
-            .recent_events
-            .back()
-            .map(|event| event.contains("runtime blocker cooldown"))
-            .unwrap_or(false));
+        assert!(
+            shared
+                .recent_events
+                .back()
+                .map(|event| event.contains("runtime blocker cooldown"))
+                .unwrap_or(false)
+        );
         drop(shared);
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
-        assert!(events
-            .iter()
-            .any(|event| event.mechanism_id == "runtime_blocker_backoff"));
+        assert!(
+            events
+                .iter()
+                .any(|event| event.mechanism_id == "runtime_blocker_backoff")
+        );
     }
 
     #[test]
@@ -30985,9 +32643,11 @@ Was jetzt zu tun ist:\n\
 
         let alerts = runtime_lifecycle_alerts(&root, None, false).unwrap();
 
-        assert!(alerts
-            .iter()
-            .any(|alert| alert.contains("stale service pid file")));
+        assert!(
+            alerts
+                .iter()
+                .any(|alert| alert.contains("stale service pid file"))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -30999,9 +32659,11 @@ Was jetzt zu tun ist:\n\
 
         let alerts = runtime_lifecycle_alerts(&root, None, false).unwrap();
 
-        assert!(alerts
-            .iter()
-            .any(|alert| alert.contains("backend residue stale pid file")));
+        assert!(
+            alerts
+                .iter()
+                .any(|alert| alert.contains("backend residue stale pid file"))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -31578,9 +33240,10 @@ Was jetzt zu tun ist:\n\
         assert!(paths.contains(&"/tmp/ctox-tb2-run/controller.json"));
         assert!(paths.contains(&"/tmp/ctox-tb2-run/results.jsonl"));
         assert!(paths.contains(&"/tmp/ctox-tb2-run/blogpost-notes.md"));
-        assert!(refs
-            .iter()
-            .all(|artifact| artifact.expected_terminal_state == "present"));
+        assert!(
+            refs.iter()
+                .all(|artifact| artifact.expected_terminal_state == "present")
+        );
     }
 
     #[test]
@@ -32149,16 +33812,18 @@ The controller must update stale files itself."
             delivered.is_empty(),
             "review-feedback must not accept files older than latest outcome rejection"
         );
-        assert!(workspace_file_artifact_diagnostic_for_expected(
-            &root,
-            &job,
-            &ArtifactRef {
-                kind: ArtifactKind::WorkspaceFile,
-                primary_key: controller_text,
-                expected_terminal_state: "fresh".to_string(),
-            },
-        )
-        .contains("stale"));
+        assert!(
+            workspace_file_artifact_diagnostic_for_expected(
+                &root,
+                &job,
+                &ArtifactRef {
+                    kind: ArtifactKind::WorkspaceFile,
+                    primary_key: controller_text,
+                    expected_terminal_state: "fresh".to_string(),
+                },
+            )
+            .contains("stale")
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -33103,9 +34768,11 @@ Those are not durable artifact requirements."
             classify_findings(&outcome.categorized_findings),
             ReviewRoutingClass::RewriteOnly
         );
-        assert!(outcome
-            .summary
-            .contains("internal status or completion report"));
+        assert!(
+            outcome
+                .summary
+                .contains("internal status or completion report")
+        );
     }
 
     #[test]
@@ -33874,9 +35541,11 @@ Those are not durable artifact requirements."
         let tasks =
             channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
                 .expect("failed to list queue tasks");
-        assert!(tasks
-            .iter()
-            .all(|task| !task.title.starts_with("Founder communication rework:")));
+        assert!(
+            tasks
+                .iter()
+                .all(|task| !task.title.starts_with("Founder communication rework:"))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

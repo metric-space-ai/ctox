@@ -7,7 +7,7 @@ use tokio_stream::StreamExt;
 use crate::plugins::replication_webrtc::webrtc_types::{
     WebRTCConnectionHandler, WebRTCMessage, WebRTCResponse, WebRTCWireFrame,
 };
-use crate::rx_error::{new_rx_error, RxError};
+use crate::rx_error::{RxError, new_rx_error};
 use crate::types::SharedHashFunction;
 
 // ref: rxdb/src/plugins/replication-webrtc/webrtc-helper.ts:20-30

@@ -64,7 +64,7 @@ if (
   throw new Error('WebRTC RxDB protocol fixture constants drifted from the Browser runtime contract');
 }
 if (
-  CTOX_BUSINESS_OS_SCHEMA_HASHES.business_commands !== '4c273d32175717566fdc42c6f7b5d32e144f9d2ed1c7f5db15d1b9ef04c89d5e'
+  CTOX_BUSINESS_OS_SCHEMA_HASHES.business_commands !== 'cea41185cea8447fd7ef3684217e5030e7ab25a1fa71d7c1978182d153013357'
   || await schemaHash({ version: 99, primaryKey: 'id', properties: { id: { type: 'string', maxLength: 32 } } }, 'business_commands') !== CTOX_BUSINESS_OS_SCHEMA_HASHES.business_commands
   || schemaHashSource('business_commands') !== 'business-os-schema-hash-registry-v1'
 ) {

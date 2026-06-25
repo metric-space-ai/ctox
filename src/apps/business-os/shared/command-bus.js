@@ -1,5 +1,6 @@
 const COMMAND_ACCEPT_TIMEOUT_MS = 45000;
 const COMMAND_SYNC_READY_TIMEOUT_MS = 15000;
+const COMMAND_SYNC_FLUSH_TIMEOUT_MS = 15000;
 
 export function createCommandBus({ db, sync = null, session = null } = {}) {
   return {
@@ -54,9 +55,10 @@ async function dispatchRxdbCommand({ db, sync, session, command }) {
   const collection = currentDb?.raw?.business_commands;
   if (!collection) throw commandError(commandId, 'business_commands collection is required.');
 
-  const bridges = await prepareCommandSync({ db: currentDb, sync });
+  const syncPlan = await prepareCommandSync({ db: currentDb, sync, command });
+  await flushSyncBridges(syncPlan.beforeCommand);
   await insertOrPatchCommandDocument(collection, commandId, doc);
-  await flushSyncBridges(bridges);
+  await flushSyncBridges(syncPlan.afterCommand);
   return waitForAuthoritativeQueueProjection(currentDb, commandId, commandWaitTimeoutMs(command));
 }
 
@@ -253,15 +255,56 @@ async function resolveCommandSync(sync) {
   return typeof sync === 'function' ? sync() : sync;
 }
 
-async function prepareCommandSync({ db, sync }) {
+async function prepareCommandSync({ db, sync, command = null }) {
   const currentSync = await resolveCommandSync(sync);
+  const dependencyCollections = commandDependencySyncCollections(command);
+  const dependencyBridges = await Promise.all(
+    dependencyCollections.map((collection) => currentSync?.startCollection?.(collection)),
+  );
   const commandBridge = await currentSync?.startCollection?.('business_commands');
   const queueBridge = await currentSync?.startCollection?.('ctox_queue_tasks');
-  await Promise.all([
-    waitForSyncBridgeReady(commandBridge, COMMAND_SYNC_READY_TIMEOUT_MS),
-    waitForSyncBridgeReady(queueBridge, COMMAND_SYNC_READY_TIMEOUT_MS),
-  ]);
-  return [commandBridge, queueBridge];
+  const afterCommand = [commandBridge, queueBridge];
+  await Promise.all(
+    [...dependencyBridges, ...afterCommand].map((bridge) => (
+      waitForSyncBridgeReady(bridge, COMMAND_SYNC_READY_TIMEOUT_MS)
+    )),
+  );
+  return {
+    beforeCommand: dependencyBridges,
+    afterCommand,
+  };
+}
+
+function commandDependencySyncCollections(command) {
+  const collections = new Set();
+  for (const collection of command?.sync_collections || []) {
+    const normalized = cleanContextText(collection);
+    if (normalized && normalized !== 'business_commands' && normalized !== 'ctox_queue_tasks') {
+      collections.add(normalized);
+    }
+  }
+  if (commandUsesDesktopFileAttachments(command)) {
+    collections.add('desktop_files');
+    collections.add('desktop_file_chunks');
+  }
+  return [...collections];
+}
+
+function commandUsesDesktopFileAttachments(command) {
+  const payload = command?.payload && typeof command.payload === 'object' ? command.payload : {};
+  const attachmentRefs = [
+    ...(Array.isArray(payload.attachments) ? payload.attachments : []),
+    ...(Array.isArray(payload.attachment_refs) ? payload.attachment_refs : []),
+  ];
+  if (attachmentRefs.some((item) => (
+    item
+    && typeof item === 'object'
+    && cleanContextText(item.kind || 'desktop_file') === 'desktop_file'
+    && cleanContextText(item.file_id || item.fileId)
+  ))) {
+    return true;
+  }
+  return Boolean(cleanContextText(payload.source_file_id || payload.file_id));
 }
 
 async function insertOrPatchCommandDocument(collection, commandId, doc) {
@@ -380,21 +423,21 @@ async function waitForSyncBridgeReady(bridge, timeoutMs) {
 }
 
 async function flushSyncBridges(bridges) {
-  for (const bridge of bridges || []) {
-    await flushSyncBridge(bridge);
-  }
+  await Promise.all((bridges || []).map((bridge) => flushSyncBridge(bridge)));
 }
 
 async function flushSyncBridge(bridge) {
   const state = bridge?.state;
   if (!state) return;
-  if (typeof state.pushToRemotePeers === 'function') {
-    await state.pushToRemotePeers();
-    return;
-  }
-  await Promise.resolve()
-    .then(() => state.awaitInSync?.())
-    .catch(() => {});
+  await Promise.race([
+    Promise.resolve()
+      .then(() => {
+        if (typeof state.pushToRemotePeers === 'function') return state.pushToRemotePeers();
+        return state.awaitInSync?.();
+      })
+      .catch(() => {}),
+    delay(COMMAND_SYNC_FLUSH_TIMEOUT_MS),
+  ]);
 }
 
 function commandError(commandId, message) {

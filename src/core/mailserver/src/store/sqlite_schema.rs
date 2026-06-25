@@ -93,6 +93,9 @@ CREATE TABLE IF NOT EXISTS stalwart_messages (
     FOREIGN KEY(mailbox_id) REFERENCES stalwart_mailboxes(id) ON DELETE CASCADE
 );
 
+CREATE INDEX IF NOT EXISTS idx_stalwart_messages_mailbox_received
+    ON stalwart_messages(mailbox_id, received_at DESC, id);
+
 CREATE TABLE IF NOT EXISTS stalwart_greylist (
     ip TEXT,
     sender TEXT,

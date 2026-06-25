@@ -33,6 +33,22 @@ pub struct SqliteStore {
     db_path: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageSummary {
+    pub id: String,
+    pub from_addr: String,
+    pub to_addr: String,
+    pub subject: Option<String>,
+    pub is_read: bool,
+    pub received_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageContent {
+    pub body: String,
+    pub headers: Option<String>,
+}
+
 impl SqliteStore {
     pub fn new(db_path: &str) -> Self {
         Self {
@@ -526,6 +542,60 @@ impl SqliteStore {
         Ok(res)
     }
 
+    pub fn count_messages(&self, mailbox_id: &str) -> StalwartResult<usize> {
+        self.with_connection(|conn| {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM stalwart_messages WHERE mailbox_id = ?1",
+                params![mailbox_id],
+                |row| row.get(0),
+            )?;
+            Ok(count.max(0) as usize)
+        })
+    }
+
+    pub fn get_message_summaries(&self, mailbox_id: &str) -> StalwartResult<Vec<MessageSummary>> {
+        self.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, from_addr, to_addr, subject, is_read, received_at
+                 FROM stalwart_messages
+                 WHERE mailbox_id = ?1
+                 ORDER BY received_at DESC, id ASC",
+            )?;
+            let rows = stmt.query_map(params![mailbox_id], |row| {
+                let is_read_int: i32 = row.get(4)?;
+                Ok(MessageSummary {
+                    id: row.get(0)?,
+                    from_addr: row.get(1)?,
+                    to_addr: row.get(2)?,
+                    subject: row.get(3)?,
+                    is_read: is_read_int != 0,
+                    received_at: row.get(5)?,
+                })
+            })?;
+            let mut res = Vec::new();
+            for row in rows {
+                res.push(row?);
+            }
+            Ok(res)
+        })
+    }
+
+    pub fn get_message_content(&self, id: &str) -> StalwartResult<Option<MessageContent>> {
+        self.with_connection(|conn| {
+            let mut stmt =
+                conn.prepare("SELECT body, headers FROM stalwart_messages WHERE id = ?1")?;
+            let mut rows = stmt.query(params![id])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some(MessageContent {
+                    body: row.get(0)?,
+                    headers: row.get(1)?,
+                }))
+            } else {
+                Ok(None)
+            }
+        })
+    }
+
     pub fn update_message_flags(&self, id: &str, is_read: bool) -> StalwartResult<()> {
         let conn = self.connect()?;
         let is_read_int = if is_read { 1 } else { 0 };
@@ -602,4 +672,98 @@ fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
     let mut value = path.as_os_str().to_os_string();
     value.push(suffix);
     PathBuf::from(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn test_store() -> StalwartResult<(tempfile::TempDir, SqliteStore, String)> {
+        let temp = tempdir()?;
+        let db_path = temp.path().join("mail.sqlite3");
+        let store = SqliteStore::new(db_path.to_str().expect("utf8 temp db path"));
+        store.init()?;
+        store.add_user("alice@example.test", "hash")?;
+        let inbox = store
+            .get_mailbox_id("alice@example.test", "INBOX")?
+            .expect("inbox mailbox");
+        Ok((temp, store, inbox))
+    }
+
+    #[test]
+    fn message_summaries_and_counts_do_not_load_message_content() -> StalwartResult<()> {
+        let (_temp, store, inbox) = test_store()?;
+        let message_id = store.put_message(
+            &inbox,
+            "sender@example.test",
+            "alice@example.test",
+            Some("large body"),
+            &"x".repeat(128 * 1024),
+            Some("From: sender@example.test\r\nTo: alice@example.test\r\nSubject: large body"),
+        )?;
+
+        assert_eq!(store.count_messages(&inbox)?, 1);
+        let summaries = store.get_message_summaries(&inbox)?;
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].id, message_id);
+        assert_eq!(summaries[0].subject.as_deref(), Some("large body"));
+        assert!(!summaries[0].is_read);
+
+        let content = store
+            .get_message_content(&message_id)?
+            .expect("message content");
+        assert_eq!(content.body.len(), 128 * 1024);
+        assert!(content.headers.as_deref().unwrap_or("").contains("Subject"));
+        Ok(())
+    }
+
+    #[test]
+    fn message_summary_queries_use_mailbox_received_index() -> StalwartResult<()> {
+        let (_temp, store, inbox) = test_store()?;
+        store.put_message(
+            &inbox,
+            "sender@example.test",
+            "alice@example.test",
+            Some("indexed"),
+            "body",
+            None,
+        )?;
+
+        store.with_connection(|conn| {
+            let mut summary_stmt = conn.prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT id, from_addr, to_addr, subject, is_read, received_at
+                 FROM stalwart_messages
+                 WHERE mailbox_id = ?1
+                 ORDER BY received_at DESC, id ASC",
+            )?;
+            let summary_plan = summary_stmt
+                .query_map(params![inbox.as_str()], |row| row.get::<_, String>(3))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            assert!(
+                summary_plan
+                    .iter()
+                    .any(|detail| { detail.contains("idx_stalwart_messages_mailbox_received") }),
+                "message summary query should use mailbox/received index, got {summary_plan:?}"
+            );
+
+            let mut count_stmt = conn.prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT COUNT(*)
+                 FROM stalwart_messages
+                 WHERE mailbox_id = ?1",
+            )?;
+            let count_plan = count_stmt
+                .query_map(params![inbox.as_str()], |row| row.get::<_, String>(3))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            assert!(
+                count_plan
+                    .iter()
+                    .any(|detail| detail.contains("idx_stalwart_messages_mailbox_received")),
+                "message count query should use mailbox/received index, got {count_plan:?}"
+            );
+            Ok(())
+        })
+    }
 }

@@ -138,6 +138,8 @@ MCP v1 bildet Business OS ueber diese stabilen Objekte ab:
 | `business_os.list_mcp_activity` | read | Audit Events des MCP Channels lesen |
 | `business_os.list_module_actions` | read | Erlaubte Actions fuer Modul/Record/Selection |
 | `business_os.propose_action` | write-prep | Command vorbereiten, noch nicht ausfuehren |
+| `business_os.create_app` | write | Runtime-installierte Business-OS-App erstellen |
+| `business_os.modify_app` | write | Bestehende Business-OS-App aendern |
 | `business_os.execute_action` | write | Validierten Command erzeugen oder starten |
 | `business_os.get_command_status` | read | Command-Status und Ergebnisreferenzen abrufen |
 | `business_os.list_runs` | read | Laufende/abgeschlossene/blockierte Runs listen |

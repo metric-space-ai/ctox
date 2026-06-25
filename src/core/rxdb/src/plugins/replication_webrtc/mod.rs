@@ -38,17 +38,20 @@ pub mod v1_5_status;
 pub mod webrtc_helper;
 pub mod webrtc_types;
 
-pub use connection_handler_rs::{WebRTCRsConfig, WebRTCRsConnectionHandler, WebRTCRsPeer};
+pub use connection_handler_rs::{
+    CollectionAuthzHook, DocumentReadAuthzHook, WebRTCRsConfig, WebRTCRsConnectionHandler,
+    WebRTCRsPeer,
+};
 pub use index_mod::{
+    RxWebRTCReplicationPool, RxWebRTCReplicationState, SyncOptionsWebRTC, SyncOptionsWebRTCRs,
     master_change_stream_id, replicate_web_rtc, replicate_web_rtc_multi, replicate_web_rtc_rs,
     replicate_web_rtc_rs_multi, replicate_web_rtc_rs_multi_with_url_provider,
-    replicate_web_rtc_with_options, RxWebRTCReplicationPool, RxWebRTCReplicationState,
-    SyncOptionsWebRTC, SyncOptionsWebRTCRs,
+    replicate_web_rtc_with_options,
 };
 pub use signaling_client::SignalingClient;
 pub use signaling_protocol::{
-    ClientToServer, PeerId, RoomId, ServerToClient, SignalingPeerDescriptor, PEER_ID_LENGTH,
-    SIMPLE_PEER_PING_INTERVAL_MS,
+    ClientToServer, PEER_ID_LENGTH, PeerId, RoomId, SIMPLE_PEER_PING_INTERVAL_MS, ServerToClient,
+    SignalingPeerDescriptor,
 };
 pub use webrtc::peer_connection::RTCIceServer;
 pub use webrtc_helper::{is_master_in_webrtc_replication, send_message_and_await_answer};

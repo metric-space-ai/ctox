@@ -3,19 +3,19 @@ use anyhow::Result;
 use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
-use qrcode::types::Color as QrColor;
 use qrcode::QrCode;
-use rusqlite::params;
-use rusqlite::params_from_iter;
-use rusqlite::types::Value as SqlValue;
+use qrcode::types::Color as QrColor;
 use rusqlite::Connection;
 use rusqlite::OpenFlags;
 use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
+use rusqlite::params;
+use rusqlite::params_from_iter;
+use rusqlite::types::Value as SqlValue;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::json;
 use serde_json::Value;
+use serde_json::json;
 use sha2::Digest;
 use sha2::Sha256;
 use std::collections::BTreeMap;
@@ -39,11 +39,11 @@ use crate::service::core_state_machine::{
     CoreEntityType, CoreEvent, CoreEvidenceRefs, CoreState, CoreTransitionRequest, RuntimeLane,
 };
 use crate::service::core_transition_guard::{
-    enforce_core_spawn, enforce_core_transition, ensure_core_transition_guard_schema,
-    evaluate_core_spawn, CoreSpawnProof, CoreSpawnRequest,
+    CoreSpawnProof, CoreSpawnRequest, enforce_core_spawn, enforce_core_transition,
+    ensure_core_transition_guard_schema, evaluate_core_spawn,
 };
 use crate::service::harness_flow::{
-    record_harness_flow_event_lossy, RecordHarnessFlowEventRequest,
+    RecordHarnessFlowEventRequest, record_harness_flow_event_lossy,
 };
 
 const DEFAULT_TAKE_LIMIT: usize = 10;
@@ -61,8 +61,12 @@ static CHANNEL_OPEN_ROUTING_READY: OnceLock<
 static QUEUE_TASK_LIST_CACHE: OnceLock<
     Mutex<BTreeMap<QueueTaskListCacheKey, QueueTaskListCacheEntry>>,
 > = OnceLock::new();
+static QUEUE_TASK_COUNT_CACHE: OnceLock<
+    Mutex<BTreeMap<QueueTaskCountCacheKey, QueueTaskCountCacheEntry>>,
+> = OnceLock::new();
 
 const QUEUE_TASK_LIST_CACHE_MAX_ENTRIES: usize = 256;
+const QUEUE_TASK_COUNT_CACHE_MAX_ENTRIES: usize = 256;
 
 type ChannelFileChangeStamp = (u64, u128);
 type ChannelRoutingCacheStamp = (u64, u64, u64);
@@ -85,6 +89,34 @@ struct QueueTaskListCacheEntry {
     tasks: Vec<QueueTaskView>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct QueueTaskCountCacheKey {
+    database: ChannelSchemaCacheKey,
+    statuses: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct QueueTaskCountCacheEntry {
+    stamp: QueueTaskListCacheStamp,
+    count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CommunicationIntakeSourceStamp {
+    database_exists: bool,
+    accounts_table_exists: bool,
+    threads_table_exists: bool,
+    messages_table_exists: bool,
+    routing_table_exists: bool,
+    account_count: usize,
+    latest_account_updated_at_ms: i64,
+    thread_count: usize,
+    latest_thread_updated_at_ms: i64,
+    message_count: usize,
+    latest_message_updated_at_ms: i64,
+    content_hash: String,
+}
+
 #[cfg(test)]
 static CHANNEL_SCHEMA_ENSURE_COUNTS: OnceLock<Mutex<BTreeMap<ChannelSchemaCacheKey, usize>>> =
     OnceLock::new();
@@ -101,6 +133,11 @@ static CHANNEL_OPEN_ROUTING_ENSURE_COUNTS: OnceLock<Mutex<BTreeMap<ChannelSchema
 #[cfg(test)]
 static QUEUE_TASK_LIST_CACHE_MISS_COUNTS: OnceLock<Mutex<BTreeMap<QueueTaskListCacheKey, usize>>> =
     OnceLock::new();
+
+#[cfg(test)]
+static QUEUE_TASK_COUNT_CACHE_MISS_COUNTS: OnceLock<
+    Mutex<BTreeMap<QueueTaskCountCacheKey, usize>>,
+> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize)]
 pub struct QueueTaskView {
@@ -1804,6 +1841,225 @@ pub fn pull_communication_messages_for_business_os(
     }))
 }
 
+pub(crate) fn communication_intake_source_stamp(
+    root: &Path,
+) -> Result<CommunicationIntakeSourceStamp> {
+    let db_path = resolve_db_path(root, None);
+    if !db_path.exists() {
+        return Ok(empty_communication_intake_source_stamp(false));
+    }
+    let Some(conn) = open_channel_db_read_only(&db_path)? else {
+        return Ok(empty_communication_intake_source_stamp(false));
+    };
+
+    let accounts_table_exists =
+        channel_projection_tables_exist(&conn, &["communication_accounts"])?;
+    let threads_table_exists = channel_projection_tables_exist(&conn, &["communication_threads"])?;
+    let messages_table_exists =
+        channel_projection_tables_exist(&conn, &["communication_messages"])?;
+    let routing_table_exists =
+        channel_projection_tables_exist(&conn, &["communication_routing_state"])?;
+
+    let mut hasher = Sha256::new();
+    let mut account_count = 0usize;
+    let mut latest_account_updated_at_ms = 0i64;
+    let mut thread_count = 0usize;
+    let mut latest_thread_updated_at_ms = 0i64;
+    let mut message_count = 0usize;
+    let mut latest_message_updated_at_ms = 0i64;
+
+    hash_bool(&mut hasher, accounts_table_exists);
+    hash_bool(&mut hasher, threads_table_exists);
+    hash_bool(&mut hasher, messages_table_exists);
+    hash_bool(&mut hasher, routing_table_exists);
+
+    if accounts_table_exists {
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT
+                account_key, channel, address, provider, profile_json,
+                COALESCE(CAST(strftime('%s', COALESCE(updated_at, created_at)) AS INTEGER) * 1000, 0)
+                    AS updated_at_ms
+            FROM communication_accounts
+            ORDER BY account_key ASC
+            "#,
+        )?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            account_count += 1;
+            let account_key: String = row.get(0)?;
+            let channel: String = row.get(1)?;
+            let address: String = row.get(2)?;
+            let provider: String = row.get(3)?;
+            let profile_json: String = row.get(4)?;
+            let updated_at_ms: i64 = row.get(5)?;
+            hash_text_values(
+                &mut hasher,
+                &[&account_key, &channel, &address, &provider, &profile_json],
+            );
+            hasher.update(updated_at_ms.to_le_bytes());
+            latest_account_updated_at_ms = latest_account_updated_at_ms.max(updated_at_ms);
+        }
+    }
+
+    if threads_table_exists {
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT
+                thread_key, channel, account_key, subject, participant_keys_json,
+                last_message_key, message_count, unread_count, metadata_json,
+                COALESCE(CAST(strftime('%s', COALESCE(updated_at, last_message_at)) AS INTEGER) * 1000, 0)
+                    AS updated_at_ms
+            FROM communication_threads
+            ORDER BY thread_key ASC
+            "#,
+        )?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            thread_count += 1;
+            let thread_key: String = row.get(0)?;
+            let channel: String = row.get(1)?;
+            let account_key: String = row.get(2)?;
+            let subject: String = row.get(3)?;
+            let participant_keys_json: String = row.get(4)?;
+            let last_message_key: String = row.get(5)?;
+            let message_count_value: i64 = row.get(6)?;
+            let unread_count: i64 = row.get(7)?;
+            let metadata_json: String = row.get(8)?;
+            let updated_at_ms: i64 = row.get(9)?;
+            hash_text_values(
+                &mut hasher,
+                &[
+                    &thread_key,
+                    &channel,
+                    &account_key,
+                    &subject,
+                    &participant_keys_json,
+                    &last_message_key,
+                    &metadata_json,
+                ],
+            );
+            hasher.update(message_count_value.to_le_bytes());
+            hasher.update(unread_count.to_le_bytes());
+            hasher.update(updated_at_ms.to_le_bytes());
+            latest_thread_updated_at_ms = latest_thread_updated_at_ms.max(updated_at_ms);
+        }
+    }
+
+    if messages_table_exists && routing_table_exists {
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT
+                m.message_key, m.channel, m.account_key, m.thread_key, m.remote_id,
+                m.direction, m.folder_hint, m.sender_display, m.sender_address,
+                m.subject, m.preview, m.raw_payload_ref, m.trust_level, m.status,
+                m.seen, m.has_attachments, m.metadata_json, COALESCE(r.route_status, ''),
+                COALESCE(r.updated_at, ''),
+                COALESCE(CAST(strftime('%s', COALESCE(m.observed_at, m.external_created_at)) AS INTEGER) * 1000, 0)
+                    AS updated_at_ms
+            FROM communication_messages m
+            LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
+            ORDER BY m.message_key ASC
+            "#,
+        )?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            message_count += 1;
+            let message_key: String = row.get(0)?;
+            let channel: String = row.get(1)?;
+            let account_key: String = row.get(2)?;
+            let thread_key: String = row.get(3)?;
+            let remote_id: String = row.get(4)?;
+            let direction: String = row.get(5)?;
+            let folder_hint: String = row.get(6)?;
+            let sender_display: String = row.get(7)?;
+            let sender_address: String = row.get(8)?;
+            let subject: String = row.get(9)?;
+            let preview: String = row.get(10)?;
+            let raw_payload_ref: String = row.get(11)?;
+            let trust_level: String = row.get(12)?;
+            let status: String = row.get(13)?;
+            let seen: i64 = row.get(14)?;
+            let has_attachments: i64 = row.get(15)?;
+            let metadata_json: String = row.get(16)?;
+            let route_status: String = row.get(17)?;
+            let routing_updated_at: String = row.get(18)?;
+            let updated_at_ms: i64 = row.get(19)?;
+            hash_text_values(
+                &mut hasher,
+                &[
+                    &message_key,
+                    &channel,
+                    &account_key,
+                    &thread_key,
+                    &remote_id,
+                    &direction,
+                    &folder_hint,
+                    &sender_display,
+                    &sender_address,
+                    &subject,
+                    &preview,
+                    &raw_payload_ref,
+                    &trust_level,
+                    &status,
+                    &metadata_json,
+                    &route_status,
+                    &routing_updated_at,
+                ],
+            );
+            hasher.update(seen.to_le_bytes());
+            hasher.update(has_attachments.to_le_bytes());
+            hasher.update(updated_at_ms.to_le_bytes());
+            latest_message_updated_at_ms = latest_message_updated_at_ms.max(updated_at_ms);
+        }
+    }
+
+    Ok(CommunicationIntakeSourceStamp {
+        database_exists: true,
+        accounts_table_exists,
+        threads_table_exists,
+        messages_table_exists,
+        routing_table_exists,
+        account_count,
+        latest_account_updated_at_ms,
+        thread_count,
+        latest_thread_updated_at_ms,
+        message_count,
+        latest_message_updated_at_ms,
+        content_hash: format!("{:x}", hasher.finalize()),
+    })
+}
+
+fn empty_communication_intake_source_stamp(
+    database_exists: bool,
+) -> CommunicationIntakeSourceStamp {
+    CommunicationIntakeSourceStamp {
+        database_exists,
+        accounts_table_exists: false,
+        threads_table_exists: false,
+        messages_table_exists: false,
+        routing_table_exists: false,
+        account_count: 0,
+        latest_account_updated_at_ms: 0,
+        thread_count: 0,
+        latest_thread_updated_at_ms: 0,
+        message_count: 0,
+        latest_message_updated_at_ms: 0,
+        content_hash: String::new(),
+    }
+}
+
+fn hash_text_values(hasher: &mut Sha256, values: &[&str]) {
+    for value in values {
+        hasher.update(value.len().to_le_bytes());
+        hasher.update(value.as_bytes());
+    }
+}
+
+fn hash_bool(hasher: &mut Sha256, value: bool) {
+    hasher.update([u8::from(value)]);
+}
+
 pub fn handle_channel_command(root: &Path, args: &[String]) -> Result<()> {
     let command = args.first().map(String::as_str).unwrap_or("");
     match command {
@@ -2628,10 +2884,37 @@ pub fn list_queue_tasks(
     Ok(tasks)
 }
 
-pub fn count_queue_tasks(root: &Path, statuses: &[String]) -> Result<usize> {
+pub fn load_queue_task_for_business_os_command(
+    root: &Path,
+    command_id: &str,
+) -> Result<Option<QueueTaskView>> {
+    let command_id = command_id.trim();
+    if command_id.is_empty() {
+        return Ok(None);
+    }
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
-    if statuses.is_empty() {
+    load_queue_task_for_business_os_command_from_conn(&conn, command_id)
+}
+
+pub fn count_queue_tasks(root: &Path, statuses: &[String]) -> Result<usize> {
+    let db_path = resolve_db_path(root, None);
+    let allowed = statuses
+        .iter()
+        .map(|status| status.trim().to_lowercase())
+        .filter(|status| !status.is_empty())
+        .collect::<Vec<_>>();
+    if !statuses.is_empty() && allowed.is_empty() {
+        return Ok(0);
+    }
+    let cache_key = queue_task_count_cache_key(&db_path, &allowed);
+    let stamp = queue_task_list_cache_stamp(&db_path);
+    if let Some(count) = cached_queue_task_count(&cache_key, &stamp) {
+        return Ok(count);
+    }
+
+    let conn = open_channel_db(&db_path)?;
+    let count = if allowed.is_empty() {
         let count: i64 = conn.query_row(
             "SELECT COUNT(*)
              FROM communication_messages
@@ -2640,17 +2923,17 @@ pub fn count_queue_tasks(root: &Path, statuses: &[String]) -> Result<usize> {
             params![QUEUE_CHANNEL_NAME],
             |row| row.get(0),
         )?;
-        return Ok(count.max(0) as usize);
-    }
-    let allowed = statuses
-        .iter()
-        .map(|status| status.trim().to_lowercase())
-        .filter(|status| !status.is_empty())
-        .collect::<Vec<_>>();
-    if allowed.is_empty() {
-        return Ok(0);
-    }
-    count_queue_tasks_from_conn_with_statuses(&conn, &allowed)
+        count.max(0) as usize
+    } else {
+        count_queue_tasks_from_conn_with_statuses(&conn, &allowed)?
+    };
+    drop(conn);
+    let cache_key = queue_task_count_cache_key(&db_path, &allowed);
+    let stamp = queue_task_list_cache_stamp(&db_path);
+    #[cfg(test)]
+    record_queue_task_count_cache_miss_for_tests(&cache_key);
+    store_queue_task_count_cache(cache_key, stamp, count);
+    Ok(count)
 }
 
 pub fn load_queue_task(root: &Path, message_key: &str) -> Result<Option<QueueTaskView>> {
@@ -6706,6 +6989,42 @@ fn store_queue_task_list_cache(
     cache.insert(key, QueueTaskListCacheEntry { stamp, tasks });
 }
 
+fn queue_task_count_cache_key(path: &Path, statuses: &[String]) -> QueueTaskCountCacheKey {
+    QueueTaskCountCacheKey {
+        database: channel_schema_cache_key(path),
+        statuses: statuses.to_vec(),
+    }
+}
+
+fn cached_queue_task_count(
+    key: &QueueTaskCountCacheKey,
+    stamp: &QueueTaskListCacheStamp,
+) -> Option<usize> {
+    let cache = QUEUE_TASK_COUNT_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache
+        .get(key)
+        .filter(|entry| &entry.stamp == stamp)
+        .map(|entry| entry.count)
+}
+
+fn store_queue_task_count_cache(
+    key: QueueTaskCountCacheKey,
+    stamp: QueueTaskListCacheStamp,
+    count: usize,
+) {
+    let cache = QUEUE_TASK_COUNT_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if cache.len() >= QUEUE_TASK_COUNT_CACHE_MAX_ENTRIES && !cache.contains_key(&key) {
+        cache.clear();
+    }
+    cache.insert(key, QueueTaskCountCacheEntry { stamp, count });
+}
+
 fn absolute_channel_db_path(path: &Path) -> PathBuf {
     if path.is_absolute() {
         return path.to_path_buf();
@@ -6823,6 +7142,27 @@ fn queue_task_list_cache_miss_count_for_tests(
     counts.get(&key).copied().unwrap_or(0)
 }
 
+#[cfg(test)]
+fn record_queue_task_count_cache_miss_for_tests(key: &QueueTaskCountCacheKey) {
+    let counts = QUEUE_TASK_COUNT_CACHE_MISS_COUNTS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut counts = counts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *counts.entry(key.clone()).or_insert(0) += 1;
+}
+
+#[cfg(test)]
+fn queue_task_count_cache_miss_count_for_tests(path: &Path, statuses: &[String]) -> usize {
+    let key = queue_task_count_cache_key(path, statuses);
+    let Some(counts) = QUEUE_TASK_COUNT_CACHE_MISS_COUNTS.get() else {
+        return 0;
+    };
+    let counts = counts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    counts.get(&key).copied().unwrap_or(0)
+}
+
 fn open_channel_db_read_only(path: &Path) -> Result<Option<Connection>> {
     if !path.exists() {
         return Ok(None);
@@ -6932,6 +7272,13 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_communication_messages_channel_remote
             ON communication_messages(channel, account_key, remote_id);
+
+        CREATE INDEX IF NOT EXISTS idx_communication_messages_email_folder_remote
+            ON communication_messages(channel, account_key, folder_hint, remote_id);
+
+        CREATE INDEX IF NOT EXISTS idx_communication_messages_queue_business_command_valid
+            ON communication_messages(json_extract(metadata_json, '$.business_os_command_id'), observed_at DESC)
+            WHERE channel = 'queue' AND direction = 'inbound' AND json_valid(metadata_json);
 
         CREATE TABLE IF NOT EXISTS communication_sync_runs (
             run_key TEXT PRIMARY KEY,
@@ -8263,6 +8610,63 @@ fn load_queue_task_from_conn(
     load_queue_message_from_conn(conn, message_key)?
         .map(queue_task_from_message)
         .transpose()
+}
+
+fn load_queue_task_for_business_os_command_from_conn(
+    conn: &Connection,
+    command_id: &str,
+) -> Result<Option<QueueTaskView>> {
+    conn.query_row(
+        r#"
+        SELECT
+            m.message_key,
+            m.channel,
+            m.account_key,
+            m.thread_key,
+            m.remote_id,
+            m.direction,
+            m.folder_hint,
+            m.sender_display,
+            m.sender_address,
+            m.subject,
+            m.preview,
+            m.body_text,
+            m.status,
+            m.seen,
+            m.external_created_at,
+            m.observed_at,
+            m.metadata_json,
+            COALESCE(r.route_status, 'pending'),
+            r.lease_owner,
+            r.leased_at,
+            r.acked_at,
+            COALESCE(r.updated_at, m.observed_at)
+        FROM communication_messages m
+        LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
+        WHERE m.channel = ?1
+          AND m.direction = 'inbound'
+          AND json_valid(m.metadata_json)
+          AND json_extract(m.metadata_json, '$.business_os_command_id') = ?2
+        ORDER BY
+            CASE COALESCE(r.route_status, 'pending')
+                WHEN 'pending' THEN 0
+                WHEN 'leased' THEN 1
+                WHEN 'blocked' THEN 2
+                WHEN 'failed' THEN 3
+                WHEN 'handled' THEN 4
+                WHEN 'cancelled' THEN 5
+                ELSE 9
+            END ASC,
+            m.external_created_at ASC,
+            m.observed_at ASC
+        LIMIT 1
+        "#,
+        params![QUEUE_CHANNEL_NAME, command_id],
+        map_channel_message_row,
+    )
+    .optional()?
+    .map(queue_task_from_message)
+    .transpose()
 }
 
 fn queue_task_from_message(message: ChannelMessageView) -> Result<QueueTaskView> {
@@ -9892,6 +10296,101 @@ mod tests {
     }
 
     #[test]
+    fn queue_task_count_cache_reuses_idle_reads_until_store_changes() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-queue-count-cache-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("failed to create temp test root");
+        let db_path = resolve_db_path(&root, None);
+        let pending = vec!["pending".to_string()];
+        let blocked = vec!["blocked".to_string()];
+
+        let first = count_queue_tasks(&root, &pending).expect("failed to count empty queue");
+        assert_eq!(first, 0);
+        assert_eq!(
+            queue_task_count_cache_miss_count_for_tests(&db_path, &pending),
+            1,
+            "first queue count must hit SQLite"
+        );
+
+        let second = count_queue_tasks(&root, &pending).expect("failed to recount empty queue");
+        assert_eq!(second, 0);
+        assert_eq!(
+            queue_task_count_cache_miss_count_for_tests(&db_path, &pending),
+            1,
+            "unchanged idle queue count must reuse the cached count"
+        );
+
+        let created = create_queue_task(
+            &root,
+            QueueTaskCreateRequest {
+                title: "count cache invalidation".to_string(),
+                prompt: "Make the queue count cache refresh after a store write.".to_string(),
+                thread_key: "queue/count-cache".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+
+        let after_write =
+            count_queue_tasks(&root, &pending).expect("failed to count queue after write");
+        assert_eq!(after_write, 1);
+        assert_eq!(
+            queue_task_count_cache_miss_count_for_tests(&db_path, &pending),
+            2,
+            "store writes must invalidate the cached queue count"
+        );
+
+        let after_idle =
+            count_queue_tasks(&root, &pending).expect("failed to count queue after idle");
+        assert_eq!(after_idle, 1);
+        assert_eq!(
+            queue_task_count_cache_miss_count_for_tests(&db_path, &pending),
+            2,
+            "unchanged post-write queue count must reuse the refreshed count"
+        );
+
+        update_queue_task(
+            &root,
+            QueueTaskUpdateRequest {
+                message_key: created.message_key,
+                route_status: Some("blocked".to_string()),
+                status_note: Some("count cache invalidation after status update".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("failed to update queue task status");
+
+        let pending_after_status_update = count_queue_tasks(&root, &pending)
+            .expect("failed to count pending queue after status update");
+        assert_eq!(pending_after_status_update, 0);
+        assert_eq!(
+            queue_task_count_cache_miss_count_for_tests(&db_path, &pending),
+            3,
+            "status updates must invalidate the cached pending count"
+        );
+
+        let blocked_after_status_update = count_queue_tasks(&root, &blocked)
+            .expect("failed to count blocked queue after status update");
+        assert_eq!(blocked_after_status_update, 1);
+        assert_eq!(
+            queue_task_count_cache_miss_count_for_tests(&db_path, &blocked),
+            1,
+            "a different status set has an independent cache entry"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn routing_backfill_is_idempotent_under_parallel_schema_open() {
         let db_path = unique_test_db_path("ctox-routing-backfill-parallel");
         {
@@ -10200,9 +10699,11 @@ mod tests {
         let policy = classify_email_sender(&settings, "mp@iip-gmbh.de");
         assert!(policy.allowed);
         assert_eq!(policy.role, "founder");
-        assert!(settings
-            .get("CTOX_FOUNDER_EMAIL_ROLES")
-            .is_some_and(|roles| roles.contains("mp@iip-gmbh.de=CFO / Founder")));
+        assert!(
+            settings
+                .get("CTOX_FOUNDER_EMAIL_ROLES")
+                .is_some_and(|roles| roles.contains("mp@iip-gmbh.de=CFO / Founder"))
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -10260,9 +10761,10 @@ mod tests {
 
         let err = ack_leased_messages(&root, &[message_key.to_string()], "handled")
             .expect_err("founder mail must not be handled without reviewed send proof");
-        assert!(err
-            .to_string()
-            .contains("cannot mark founder/owner/admin inbound mail as handled"));
+        assert!(
+            err.to_string()
+                .contains("cannot mark founder/owner/admin inbound mail as handled")
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -10349,9 +10851,10 @@ mod tests {
 
         let err = ack_leased_messages(&root, std::slice::from_ref(&task.message_key), "failed")
             .expect_err("failed ack without reason must be rejected");
-        assert!(err
-            .to_string()
-            .contains("failed queue ack requires a non-empty failure reason"));
+        assert!(
+            err.to_string()
+                .contains("failed queue ack requires a non-empty failure reason")
+        );
 
         ack_leased_messages_with_failure_reason(
             &root,
@@ -10930,9 +11433,11 @@ mod tests {
             &[],
         )
         .expect_err("missing qr code should block founder reply");
-        assert!(error
-            .to_string()
-            .contains("missing required deliverable(s): qr_code"));
+        assert!(
+            error
+                .to_string()
+                .contains("missing required deliverable(s): qr_code")
+        );
 
         let _ = std::fs::remove_file(&db_path);
         let _ = fs::remove_dir_all(&root);
@@ -11082,9 +11587,10 @@ mod tests {
 
         let err = enforce_external_work_ack_has_pipeline_backing(&conn, &request)
             .expect_err("queue-backed acknowledgement must still require review");
-        assert!(err
-            .to_string()
-            .contains("has not passed external chat review"));
+        assert!(
+            err.to_string()
+                .contains("has not passed external chat review")
+        );
 
         let reviewed_request = ChannelSendRequest {
             reviewed_founder_send: true,
@@ -11171,9 +11677,11 @@ mod tests {
         let changed_body =
             require_any_unconsumed_external_chat_review(&conn, &action, "Changed body")
                 .expect_err("changed email body must not inherit approval");
-        assert!(changed_body
-            .to_string()
-            .contains("no matching unconsumed review approval"));
+        assert!(
+            changed_body
+                .to_string()
+                .contains("no matching unconsumed review approval")
+        );
 
         let _ = std::fs::remove_file(&db_path);
         let _ = fs::remove_dir_all(&root);
@@ -11314,9 +11822,11 @@ mod tests {
         let before_approval =
             require_unconsumed_founder_reply_review(&conn, inbound_key, &action, approved_body)
                 .expect_err("send must be blocked before review approval");
-        assert!(before_approval
-            .to_string()
-            .contains("no matching unconsumed review approval"));
+        assert!(
+            before_approval
+                .to_string()
+                .contains("no matching unconsumed review approval")
+        );
 
         record_founder_reply_review_approval(&root, inbound_key, approved_body, "PASS")
             .expect("record approval");
@@ -11326,9 +11836,11 @@ mod tests {
         let changed_body =
             require_unconsumed_founder_reply_review(&conn, inbound_key, &action, "Changed body")
                 .expect_err("changed body must not inherit the approval");
-        assert!(changed_body
-            .to_string()
-            .contains("no matching unconsumed review approval"));
+        assert!(
+            changed_body
+                .to_string()
+                .contains("no matching unconsumed review approval")
+        );
 
         let _ = std::fs::remove_file(&db_path);
         let _ = fs::remove_dir_all(&root);
@@ -11487,9 +11999,10 @@ mod tests {
 
         let err = ack_leased_messages(&root, &[inbound_key.to_string()], "handled")
             .expect_err("founder inbound should not be handleable before reviewed send");
-        assert!(err
-            .to_string()
-            .contains("cannot mark founder/owner/admin inbound mail as handled"));
+        assert!(
+            err.to_string()
+                .contains("cannot mark founder/owner/admin inbound mail as handled")
+        );
 
         let _ = std::fs::remove_file(&db_path);
         let _ = fs::remove_dir_all(&root);
@@ -11870,8 +12383,10 @@ mod tests {
         )
         .expect("failed to upsert jami voice message");
 
-        assert!(thread_prefers_voice_reply(&conn, "jami/thread-voice-1")
-            .expect("failed to resolve jami voice preference"));
+        assert!(
+            thread_prefers_voice_reply(&conn, "jami/thread-voice-1")
+                .expect("failed to resolve jami voice preference")
+        );
 
         let _ = fs::remove_file(&db_path);
     }
@@ -12048,9 +12563,11 @@ mod tests {
         let search = search_messages(&conn, "nextcloud endpoint", Some("email"), None, 10)
             .expect("failed to search");
         assert_eq!(search.len(), 2);
-        assert!(search
-            .iter()
-            .all(|item| item.thread_key == "email/thread-a"));
+        assert!(
+            search
+                .iter()
+                .all(|item| item.thread_key == "email/thread-a")
+        );
 
         let sender_search =
             search_messages(&conn, "redis", Some("email"), Some("owner@example.com"), 10)
@@ -12198,15 +12715,19 @@ mod tests {
             Some("ctx-2")
         );
         assert!(!context.candidate_blockers.is_empty());
-        assert!(context
-            .candidate_blockers
-            .iter()
-            .any(|item| item.message_key == "ctx-2"));
+        assert!(
+            context
+                .candidate_blockers
+                .iter()
+                .any(|item| item.message_key == "ctx-2")
+        );
         assert!(!context.open_owner_questions.is_empty());
-        assert!(context
-            .related_messages
-            .iter()
-            .any(|item| item.message_key == "ctx-4"));
+        assert!(
+            context
+                .related_messages
+                .iter()
+                .any(|item| item.message_key == "ctx-4")
+        );
 
         let _ = fs::remove_file(&db_path);
     }
@@ -12948,11 +13469,13 @@ mod tests {
             metadata.get("transitioned_to").and_then(Value::as_str),
             Some("send_failed")
         );
-        assert!(metadata
-            .get("provider_error")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .contains("smtp authentication failed"));
+        assert!(
+            metadata
+                .get("provider_error")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .contains("smtp authentication failed")
+        );
 
         let _ = std::fs::remove_file(&db_path);
     }

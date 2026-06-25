@@ -24,6 +24,7 @@ const MODULES = [
   'reports',
   'support',
   'tickets',
+  'threads',
   'nachweise',
   'consent',
   'intake',

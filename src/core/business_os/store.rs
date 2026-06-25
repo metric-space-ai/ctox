@@ -12,12 +12,12 @@ use ctox_app_server_protocol::AuthMode as ApiAuthMode;
 use ring::aead;
 use ring::hmac;
 use ring::rand::{SecureRandom, SystemRandom};
-use rusqlite::params;
-use rusqlite::params_from_iter;
-use rusqlite::types::Value as SqlValue;
 use rusqlite::Connection;
 use rusqlite::OpenFlags;
 use rusqlite::OptionalExtension;
+use rusqlite::params;
+use rusqlite::params_from_iter;
+use rusqlite::types::Value as SqlValue;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -60,6 +60,7 @@ const CORE_MODULE_IDS: &[&str] = &[
     "desktop",
     "reports",
     "tickets",
+    "threads",
 ];
 const STARTER_MODULE_IDS: &[&str] = &[
     // Generic productivity apps shipped on every instance.
@@ -107,11 +108,15 @@ const BUSINESS_OS_BACKUP_RAW_RETENTION_DAYS: i64 = 14;
 const BUSINESS_OS_BACKUP_PORTABLE_CHUNK_SIZE: usize = 4 * 1024 * 1024;
 const BUSINESS_OS_BACKUP_PORTABLE_MAGIC: &[u8] = b"CTOX-BOS-PORTABLE-BACKUP-V1\n";
 const BUSINESS_OS_QUEUE_PROMPT_MAX_CHARS: usize = 96_000;
+const BUSINESS_OS_APP_QUEUE_PROMPT_MAX_CHARS: usize = 24_000;
 const BUSINESS_OS_QUEUE_PROMPT_JSON_PREVIEW_CHARS: usize = 18_000;
 const BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS: usize = 8_000;
+const CV_PRINT_PDF_TEXT_MAX_CHARS: usize = 24_000;
+const CV_PRINT_PDF_MAX_BYTES: u64 = 32 * 1024 * 1024;
 const BUSINESS_OS_QUEUE_ORPHAN_REPAIR_AGE_MS: i64 = 10 * 60 * 1_000;
 const BUSINESS_OS_CHAT_ATTACHMENT_CHUNK_SIZE: usize = 16 * 1024;
 const BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME: &str = "sha256-bytes-v1";
+const BUSINESS_OS_LEGACY_SHA256_CONTENT_HASH_SCHEME: &str = "sha256";
 const BUSINESS_OS_CHAT_ATTACHMENT_CHUNK_HASH_SCHEME: &str = "sha256-base64-chunk-v1";
 const DEFAULT_BUSINESS_AUDIT_RETENTION_DAYS: i64 = 90;
 const BUSINESS_AUDIT_EXPORT_DIR: &str = "runtime/business-os/audit-exports";
@@ -123,6 +128,7 @@ const RXDB_TABLE_CACHE_MAX_ENTRIES: usize = 64;
 const RXDB_TABLE_CACHE_TTL_SECS: u64 = 60;
 const RUNTIME_SETTINGS_RXDB_CACHE_TTL_SECS: u64 = 300;
 const SYNC_CONNECTION_CONFIG_CACHE_TTL_SECS: u64 = 300;
+const MODULE_CATALOG_SOURCE_STAMP_FILE_LIMIT: usize = 20_000;
 
 static RXDB_TABLE_NAMES_CACHE: OnceLock<Mutex<BTreeMap<PathBuf, RxdbTableNamesCacheEntry>>> =
     OnceLock::new();
@@ -150,11 +156,79 @@ type BusinessOsStoreDbKey = PathBuf;
 
 type BusinessOsFileChangeStamp = (u64, u128);
 type RxdbStoreStamp = BusinessOsFileChangeStamp;
-type RuntimeSettingsCacheStamp = (
-    BusinessOsFileChangeStamp,
-    BusinessOsFileChangeStamp,
-    BusinessOsFileChangeStamp,
-);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BusinessOsSqliteStoreStamp {
+    db: BusinessOsFileChangeStamp,
+    wal: BusinessOsFileChangeStamp,
+    shm: BusinessOsFileChangeStamp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuntimeSettingsServiceStamp {
+    pid_file: BusinessOsFileChangeStamp,
+    pid: Option<u32>,
+    running: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BusinessUsersProjectionStamp {
+    table_exists: bool,
+    row_count: usize,
+    latest_updated_at_ms: i64,
+    content_hash: String,
+    configured_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BusinessRecordsProjectionStamp {
+    row_count: usize,
+    latest_updated_at_ms: i64,
+    content_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ModuleCatalogProjectionStamp {
+    source_modules: ModuleCatalogFileTreeStamp,
+    installed_modules: ModuleCatalogFileTreeStamp,
+    templates: ModuleCatalogFileTreeStamp,
+    store_hash: String,
+    allowlist_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ModuleCatalogFileTreeStamp {
+    dir_exists: bool,
+    file_count: usize,
+    latest_modified_at_ms: u64,
+    truncated: bool,
+    content_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LocalMarkdownNotesSourceStamp {
+    notes_dir_exists: bool,
+    file_count: usize,
+    latest_file_mtime_ms: u64,
+    file_hash: String,
+    notes_table_exists: bool,
+    note_count: usize,
+    latest_note_updated_at_ms: i64,
+    notes_hash: String,
+    seed_marker: BusinessOsFileChangeStamp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RuntimeSettingsProjectionStamp {
+    cache: RuntimeSettingsCacheStamp,
+    refresh_epoch: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuntimeSettingsCacheStamp {
+    runtime_config: BusinessOsSqliteStoreStamp,
+    secrets: BusinessOsSqliteStoreStamp,
+    service: RuntimeSettingsServiceStamp,
+}
 type SyncConnectionConfigCacheStamp = (
     BusinessOsFileChangeStamp,
     BusinessOsFileChangeStamp,
@@ -1718,7 +1792,7 @@ fn policy_actor_from_session(session: &BusinessOsSession) -> BusinessOsActor {
     )
 }
 
-fn module_policy_decision(
+pub(super) fn module_policy_decision(
     root: &Path,
     session: &BusinessOsSession,
     permission: BusinessOsPermission,
@@ -3290,10 +3364,221 @@ pub fn pull_business_users_for_rxdb(root: &Path) -> anyhow::Result<Value> {
     }))
 }
 
+pub(crate) fn business_users_projection_stamp(
+    root: &Path,
+) -> anyhow::Result<BusinessUsersProjectionStamp> {
+    let configured_hash = configured_business_users_projection_hash();
+    let path = business_os_store_path(root);
+    if !path.exists() {
+        return Ok(empty_business_users_projection_stamp(
+            false,
+            configured_hash,
+        ));
+    }
+    let conn = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| {
+        format!(
+            "open Business OS store for business users stamp {}",
+            path.display()
+        )
+    })?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .context("configure Business OS users stamp busy_timeout")?;
+    let table_exists = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'business_users' LIMIT 1",
+            [],
+            |_| Ok(()),
+        )
+        .optional()
+        .context("check business_users table")?
+        .is_some();
+    if !table_exists {
+        return Ok(empty_business_users_projection_stamp(
+            false,
+            configured_hash,
+        ));
+    }
+
+    let mut hasher = Sha256::new();
+    let mut row_count = 0usize;
+    let mut latest_updated_at_ms = 0i64;
+    let mut stmt = conn
+        .prepare(
+            "SELECT user_id, display_name, role, active, created_at_ms, updated_at_ms
+             FROM business_users
+             ORDER BY user_id ASC",
+        )
+        .context("prepare business users stamp query")?;
+    let mut rows = stmt.query([]).context("query business users stamp")?;
+    while let Some(row) = rows.next().context("read business users stamp row")? {
+        row_count += 1;
+        let user_id: String = row.get(0)?;
+        let display_name: String = row.get(1)?;
+        let role: String = row.get(2)?;
+        let active: i64 = row.get(3)?;
+        let created_at_ms: i64 = row.get(4)?;
+        let updated_at_ms: i64 = row.get(5)?;
+        for value in [&user_id, &display_name, &role] {
+            hasher.update(value.len().to_le_bytes());
+            hasher.update(value.as_bytes());
+        }
+        hasher.update(active.to_le_bytes());
+        hasher.update(created_at_ms.to_le_bytes());
+        hasher.update(updated_at_ms.to_le_bytes());
+        latest_updated_at_ms = latest_updated_at_ms.max(updated_at_ms);
+    }
+
+    Ok(BusinessUsersProjectionStamp {
+        table_exists: true,
+        row_count,
+        latest_updated_at_ms,
+        content_hash: format!("{:x}", hasher.finalize()),
+        configured_hash,
+    })
+}
+
+fn empty_business_users_projection_stamp(
+    table_exists: bool,
+    configured_hash: String,
+) -> BusinessUsersProjectionStamp {
+    BusinessUsersProjectionStamp {
+        table_exists,
+        row_count: 0,
+        latest_updated_at_ms: 0,
+        content_hash: String::new(),
+        configured_hash,
+    }
+}
+
+pub(crate) fn business_records_projection_stamp(
+    root: &Path,
+    collections: &[String],
+) -> anyhow::Result<BusinessRecordsProjectionStamp> {
+    let path = business_os_store_path(root);
+    if !path.exists() {
+        return Ok(empty_business_records_projection_stamp());
+    }
+    let conn = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| {
+        format!(
+            "open Business OS store for business records stamp {}",
+            path.display()
+        )
+    })?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .context("configure Business OS records stamp busy_timeout")?;
+    if !sqlite_table_exists(&conn, "business_records")? {
+        return Ok(empty_business_records_projection_stamp());
+    }
+
+    let mut collections = collections
+        .iter()
+        .map(|collection| collection.trim())
+        .filter(|collection| !collection.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    collections.sort();
+
+    let mut hasher = Sha256::new();
+    for collection in &collections {
+        hasher.update(collection.len().to_le_bytes());
+        hasher.update(collection.as_bytes());
+    }
+
+    let mut row_count = 0usize;
+    let mut latest_updated_at_ms = 0i64;
+    if let Some(sql) = business_records_projection_stamp_query(collections.len()) {
+        let mut statement = conn
+            .prepare(&sql)
+            .context("prepare business records projection stamp query")?;
+        let mut rows = statement
+            .query(params_from_iter(collections.iter().map(String::as_str)))
+            .context("query business records projection stamp")?;
+        while let Some(row) = rows
+            .next()
+            .context("read business records projection stamp row")?
+        {
+            row_count += 1;
+            let collection: String = row.get(0)?;
+            let record_id: String = row.get(1)?;
+            let rev: String = row.get(2)?;
+            let deleted: i64 = row.get(3)?;
+            let updated_at_ms: i64 = row.get(4)?;
+            for value in [&collection, &record_id, &rev] {
+                hasher.update(value.len().to_le_bytes());
+                hasher.update(value.as_bytes());
+            }
+            hasher.update(deleted.to_le_bytes());
+            hasher.update(updated_at_ms.to_le_bytes());
+            latest_updated_at_ms = latest_updated_at_ms.max(updated_at_ms);
+        }
+    }
+
+    Ok(BusinessRecordsProjectionStamp {
+        row_count,
+        latest_updated_at_ms,
+        content_hash: format!("{:x}", hasher.finalize()),
+    })
+}
+
+fn business_records_projection_stamp_query(collection_count: usize) -> Option<String> {
+    if collection_count == 0 {
+        return None;
+    }
+    let placeholders = std::iter::repeat("?")
+        .take(collection_count)
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "SELECT collection, record_id, rev, deleted, updated_at_ms
+         FROM business_records
+         WHERE collection IN ({placeholders})
+         ORDER BY collection ASC, record_id ASC"
+    ))
+}
+
+fn empty_business_records_projection_stamp() -> BusinessRecordsProjectionStamp {
+    BusinessRecordsProjectionStamp {
+        row_count: 0,
+        latest_updated_at_ms: 0,
+        content_hash: String::new(),
+    }
+}
+
+fn configured_business_users_projection_hash() -> String {
+    let mut users = configured_business_users();
+    users.sort_by(|left, right| left.id.cmp(&right.id));
+    let mut hasher = Sha256::new();
+    for user in users {
+        let id = user.id.trim();
+        let role = normalize_business_role(&user.role);
+        for value in [id, role.as_str()] {
+            hasher.update(value.len().to_le_bytes());
+            hasher.update(value.as_bytes());
+        }
+    }
+    format!("{:x}", hasher.finalize())
+}
+
 pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
     let key = business_os_root_cache_key(root);
     let stamp = runtime_settings_cache_stamp(root);
     let cache = RUNTIME_SETTINGS_RXDB_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let previous_value = {
+        let cache = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache.get(&key).map(|entry| entry.value.clone())
+    };
     {
         let cache = cache
             .lock()
@@ -3307,7 +3592,10 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         }
     }
 
-    let value = build_runtime_settings_for_rxdb(root)?;
+    let value = stabilize_runtime_settings_timestamp(
+        build_runtime_settings_for_rxdb(root)?,
+        previous_value.as_ref(),
+    );
     let mut cache = cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -3320,6 +3608,54 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         },
     );
     Ok(value)
+}
+
+pub(crate) fn runtime_settings_projection_stamp(root: &Path) -> RuntimeSettingsProjectionStamp {
+    RuntimeSettingsProjectionStamp {
+        cache: runtime_settings_cache_stamp(root),
+        refresh_epoch: runtime_settings_refresh_epoch(),
+    }
+}
+
+fn runtime_settings_refresh_epoch() -> u64 {
+    let ttl_ms = RUNTIME_SETTINGS_RXDB_CACHE_TTL_SECS
+        .saturating_mul(1_000)
+        .max(1);
+    (now_ms() as u64) / ttl_ms
+}
+
+fn stabilize_runtime_settings_timestamp(value: Value, previous: Option<&Value>) -> Value {
+    let Some(previous) = previous else {
+        return value;
+    };
+    if runtime_settings_without_timestamp(&value) != runtime_settings_without_timestamp(previous) {
+        return value;
+    }
+    previous.clone()
+}
+
+fn runtime_settings_without_timestamp(value: &Value) -> Value {
+    let mut value = value.clone();
+    remove_runtime_settings_volatile_metadata(&mut value);
+    value
+}
+
+fn remove_runtime_settings_volatile_metadata(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            object.remove("updated_at_ms");
+            object.remove("generated_at_ms");
+            for value in object.values_mut() {
+                remove_runtime_settings_volatile_metadata(value);
+            }
+        }
+        Value::Array(items) => {
+            for value in items {
+                remove_runtime_settings_volatile_metadata(value);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn build_runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
@@ -3497,11 +3833,30 @@ fn business_os_root_cache_key(root: &Path) -> PathBuf {
 
 fn runtime_settings_cache_stamp(root: &Path) -> RuntimeSettingsCacheStamp {
     let runtime = root.join("runtime");
-    (
-        business_os_file_change_stamp(&runtime.join("ctox.sqlite3")),
-        business_os_file_change_stamp(&runtime.join("ctox-runtime.sqlite3")),
-        business_os_file_change_stamp(&runtime.join("ctox-secrets.sqlite3")),
-    )
+    RuntimeSettingsCacheStamp {
+        runtime_config: business_os_sqlite_store_stamp(&runtime.join("ctox-runtime.sqlite3")),
+        secrets: business_os_sqlite_store_stamp(&runtime.join("ctox-secrets.sqlite3")),
+        service: runtime_settings_service_stamp(&runtime.join("ctox_service.pid")),
+    }
+}
+
+fn business_os_sqlite_store_stamp(path: &Path) -> BusinessOsSqliteStoreStamp {
+    BusinessOsSqliteStoreStamp {
+        db: business_os_file_change_stamp(path),
+        wal: business_os_file_change_stamp(&sqlite_sidecar_path(path, "-wal")),
+        shm: business_os_file_change_stamp(&sqlite_sidecar_path(path, "-shm")),
+    }
+}
+
+fn runtime_settings_service_stamp(pid_path: &Path) -> RuntimeSettingsServiceStamp {
+    let pid = std::fs::read_to_string(pid_path)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u32>().ok());
+    RuntimeSettingsServiceStamp {
+        pid_file: business_os_file_change_stamp(pid_path),
+        pid,
+        running: pid.map(process_is_running).unwrap_or(false),
+    }
 }
 
 fn sync_connection_config_cache_stamp(root: &Path) -> SyncConnectionConfigCacheStamp {
@@ -3669,6 +4024,254 @@ fn web_stack_secret_configured(
         || crate::secrets::get_credential(root, secret_name)
             .is_some_and(|value| !value.trim().is_empty())
         || env::var(secret_name).is_ok_and(|value| !value.trim().is_empty())
+}
+
+pub(crate) fn module_catalog_projection_stamp(
+    root: &Path,
+) -> anyhow::Result<ModuleCatalogProjectionStamp> {
+    let app_root = resolve_business_os_app_root(root)?;
+    let installed_app_root = resolve_business_os_installed_app_root(root);
+    Ok(ModuleCatalogProjectionStamp {
+        source_modules: module_catalog_file_tree_stamp(&app_root.join("modules"))?,
+        installed_modules: module_catalog_file_tree_stamp(
+            &installed_app_root.join("installed-modules"),
+        )?,
+        templates: module_catalog_file_tree_stamp(&app_root.join("template-store"))?,
+        store_hash: module_catalog_store_hash(root)?,
+        allowlist_hash: module_catalog_allowlist_hash(root),
+    })
+}
+
+fn module_catalog_file_tree_stamp(root: &Path) -> anyhow::Result<ModuleCatalogFileTreeStamp> {
+    let dir_exists = root.is_dir();
+    if !dir_exists {
+        return Ok(ModuleCatalogFileTreeStamp {
+            dir_exists: false,
+            file_count: 0,
+            latest_modified_at_ms: 0,
+            truncated: false,
+            content_hash: String::new(),
+        });
+    }
+
+    let mut hasher = Sha256::new();
+    let mut file_count = 0usize;
+    let mut latest_modified_at_ms = 0u64;
+    let mut truncated = false;
+    collect_module_catalog_file_tree_stamp(
+        root,
+        root,
+        &mut hasher,
+        &mut file_count,
+        &mut latest_modified_at_ms,
+        &mut truncated,
+    )?;
+    Ok(ModuleCatalogFileTreeStamp {
+        dir_exists: true,
+        file_count,
+        latest_modified_at_ms,
+        truncated,
+        content_hash: format!("{:x}", hasher.finalize()),
+    })
+}
+
+fn collect_module_catalog_file_tree_stamp(
+    root: &Path,
+    current: &Path,
+    hasher: &mut Sha256,
+    file_count: &mut usize,
+    latest_modified_at_ms: &mut u64,
+    truncated: &mut bool,
+) -> anyhow::Result<()> {
+    if *truncated {
+        return Ok(());
+    }
+    let mut entries = fs::read_dir(current)
+        .with_context(|| format!("read module catalog stamp dir {}", current.display()))?
+        .collect::<Result<Vec<_>, _>>()
+        .with_context(|| format!("list module catalog stamp dir {}", current.display()))?;
+    entries.sort_by(|left, right| left.path().cmp(&right.path()));
+    for entry in entries {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.')
+            || matches!(name.as_ref(), "node_modules" | "dist" | "build" | "target")
+        {
+            continue;
+        }
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            collect_module_catalog_file_tree_stamp(
+                root,
+                &path,
+                hasher,
+                file_count,
+                latest_modified_at_ms,
+                truncated,
+            )?;
+            if *truncated {
+                return Ok(());
+            }
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+        if *file_count >= MODULE_CATALOG_SOURCE_STAMP_FILE_LIMIT {
+            *truncated = true;
+            return Ok(());
+        }
+        let metadata = fs::metadata(&path)?;
+        let modified_at_ms = modified_at_ms(&metadata);
+        let rel = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        *file_count += 1;
+        *latest_modified_at_ms = (*latest_modified_at_ms).max(modified_at_ms);
+        update_module_catalog_stamp_hash(hasher, &rel);
+        hasher.update(metadata.len().to_le_bytes());
+        hasher.update(modified_at_ms.to_le_bytes());
+    }
+    Ok(())
+}
+
+fn module_catalog_store_hash(root: &Path) -> anyhow::Result<String> {
+    let path = business_os_store_path(root);
+    let mut hasher = Sha256::new();
+    hasher.update(u8::from(path.exists()).to_le_bytes());
+    update_module_catalog_stamp_hash(&mut hasher, &configured_business_users_projection_hash());
+    if !path.exists() {
+        return Ok(format!("{:x}", hasher.finalize()));
+    }
+
+    let conn = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| {
+        format!(
+            "open Business OS store for module catalog stamp {}",
+            path.display()
+        )
+    })?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .context("configure module catalog stamp busy_timeout")?;
+
+    for (table, query) in [
+        (
+            "business_users",
+            "SELECT user_id, display_name, role, active, created_at_ms, updated_at_ms
+             FROM business_users
+             ORDER BY user_id ASC",
+        ),
+        (
+            "business_module_acl",
+            "SELECT module_id, user_id, role, active, created_at_ms, updated_at_ms
+             FROM business_module_acl
+             ORDER BY module_id ASC, user_id ASC, role ASC",
+        ),
+        (
+            "business_permission_grants",
+            "SELECT grant_id, subject_type, subject_id, permission, scope_type, scope_id,
+                    active, reason, created_by, created_at_ms, updated_at_ms
+             FROM business_permission_grants
+             ORDER BY grant_id ASC",
+        ),
+        (
+            "business_module_versions",
+            "SELECT version_id, module_id, seq, origin, label, bundle_sha256, files_json,
+                    sealed, created_by, created_at_ms, updated_at_ms
+             FROM business_module_versions
+             ORDER BY module_id ASC, seq ASC, version_id ASC",
+        ),
+        (
+            "business_module_releases",
+            "SELECT version_id, module_id, version, status, manifest_json, snapshot_json,
+                    created_by, created_at_ms, notes
+             FROM business_module_releases
+             ORDER BY module_id ASC, version DESC, version_id ASC",
+        ),
+    ] {
+        hash_module_catalog_query(&conn, &mut hasher, table, query)?;
+    }
+
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn hash_module_catalog_query(
+    conn: &Connection,
+    hasher: &mut Sha256,
+    table: &str,
+    query: &str,
+) -> anyhow::Result<()> {
+    update_module_catalog_stamp_hash(hasher, table);
+    if !sqlite_table_exists(conn, table)? {
+        hasher.update(0u8.to_le_bytes());
+        return Ok(());
+    }
+    hasher.update(1u8.to_le_bytes());
+    let mut stmt = conn
+        .prepare(query)
+        .with_context(|| format!("prepare module catalog stamp query for {table}"))?;
+    let column_count = stmt.column_count();
+    let mut rows = stmt
+        .query([])
+        .with_context(|| format!("query module catalog stamp table {table}"))?;
+    let mut row_count = 0usize;
+    while let Some(row) = rows
+        .next()
+        .with_context(|| format!("read module catalog stamp table {table}"))?
+    {
+        row_count += 1;
+        hasher.update(row_count.to_le_bytes());
+        for column in 0..column_count {
+            let value: SqlValue = row.get(column)?;
+            update_module_catalog_sql_value_hash(hasher, value);
+        }
+    }
+    hasher.update(row_count.to_le_bytes());
+    Ok(())
+}
+
+fn update_module_catalog_sql_value_hash(hasher: &mut Sha256, value: SqlValue) {
+    match value {
+        SqlValue::Null => {
+            hasher.update([0]);
+        }
+        SqlValue::Integer(value) => {
+            hasher.update([1]);
+            hasher.update(value.to_le_bytes());
+        }
+        SqlValue::Real(value) => {
+            hasher.update([2]);
+            hasher.update(value.to_le_bytes());
+        }
+        SqlValue::Text(value) => {
+            hasher.update([3]);
+            update_module_catalog_stamp_hash(hasher, &value);
+        }
+        SqlValue::Blob(value) => {
+            hasher.update([4]);
+            hasher.update(value.len().to_le_bytes());
+            hasher.update(value);
+        }
+    }
+}
+
+fn module_catalog_allowlist_hash(root: &Path) -> String {
+    let mut hasher = Sha256::new();
+    for id in business_os_module_allowlist(root) {
+        update_module_catalog_stamp_hash(&mut hasher, &id);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+fn update_module_catalog_stamp_hash(hasher: &mut Sha256, value: &str) {
+    hasher.update(value.len().to_le_bytes());
+    hasher.update(value.as_bytes());
 }
 
 pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
@@ -8805,7 +9408,7 @@ fn record_business_policy_decision_event(
     )
 }
 
-fn insert_business_event(
+pub(super) fn insert_business_event(
     conn: &Connection,
     collection: &str,
     record_id: &str,
@@ -12369,6 +12972,38 @@ pub fn complete_business_command_from_queue_reply(
     Ok(Some(serde_json::to_value(accepted)?))
 }
 
+pub fn complete_cv_print_command_from_reply(
+    root: &Path,
+    command_id: &str,
+    task_id: Option<&str>,
+    reply_text: &str,
+) -> anyhow::Result<Option<Value>> {
+    let conn = open_store(root)?;
+    let command_id = command_id.trim();
+    if command_id.is_empty() {
+        return Ok(None);
+    }
+    let command = load_business_command(&conn, command_id)?;
+    if !is_cv_print_parse_command(&command) {
+        return Ok(None);
+    }
+    let queue_task = if let Some(task_id) = task_id {
+        channels::load_queue_task(root, task_id)?
+    } else {
+        find_queue_task_for_command(root, command_id)
+            .and_then(|found| channels::load_queue_task(root, &found).ok().flatten())
+    };
+    let accepted = process_cv_print_parse_command(
+        root,
+        &conn,
+        command_id,
+        &command,
+        queue_task.as_ref(),
+        Some(reply_text),
+    )?;
+    Ok(Some(serde_json::to_value(accepted)?))
+}
+
 pub fn complete_business_command_from_app_validation_success(
     root: &Path,
     task_id: &str,
@@ -13743,6 +14378,116 @@ fn delete_note_markdown_file(root: &Path, record_id: &str) -> anyhow::Result<()>
     Ok(())
 }
 
+pub(crate) fn local_markdown_notes_source_stamp(
+    root: &Path,
+) -> anyhow::Result<LocalMarkdownNotesSourceStamp> {
+    let notes_dir = root.join("runtime/business-os/notes");
+    let seed_marker =
+        business_os_file_change_stamp(&root.join("runtime/business-os/readme-note-seeded"));
+    let mut file_hash = Sha256::new();
+    let mut file_count = 0usize;
+    let mut latest_file_mtime_ms = 0u64;
+    let notes_dir_exists = notes_dir.is_dir();
+    if notes_dir_exists {
+        let mut file_entries = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&notes_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let Some(filename) = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .filter(|filename| filename.ends_with(".md"))
+                    .map(str::to_string)
+                else {
+                    continue;
+                };
+                let Ok(metadata) = std::fs::metadata(&path) else {
+                    continue;
+                };
+                let mtime_ms = modified_at_ms(&metadata);
+                file_entries.push((filename, metadata.len(), mtime_ms));
+            }
+        }
+        file_entries.sort_by(|left, right| left.0.cmp(&right.0));
+        file_count = file_entries.len();
+        for (filename, len, mtime_ms) in file_entries {
+            latest_file_mtime_ms = latest_file_mtime_ms.max(mtime_ms);
+            update_notes_stamp_hash(&mut file_hash, &filename);
+            file_hash.update(len.to_le_bytes());
+            file_hash.update(mtime_ms.to_le_bytes());
+        }
+    }
+
+    let (notes_table_exists, note_count, latest_note_updated_at_ms, notes_hash) =
+        local_markdown_notes_db_stamp(root)?;
+
+    Ok(LocalMarkdownNotesSourceStamp {
+        notes_dir_exists,
+        file_count,
+        latest_file_mtime_ms,
+        file_hash: format!("{:x}", file_hash.finalize()),
+        notes_table_exists,
+        note_count,
+        latest_note_updated_at_ms,
+        notes_hash,
+        seed_marker,
+    })
+}
+
+const LOCAL_MARKDOWN_NOTES_DB_STAMP_SQL: &str = "
+    SELECT record_id, updated_at_ms, deleted
+    FROM business_records
+    WHERE collection = 'notes'
+    ORDER BY record_id ASC
+";
+
+fn local_markdown_notes_db_stamp(root: &Path) -> anyhow::Result<(bool, usize, i64, String)> {
+    let path = business_os_store_path(root);
+    if !path.exists() {
+        return Ok((false, 0, 0, String::new()));
+    }
+    let conn = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("open Business OS store for notes stamp {}", path.display()))?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .context("configure notes stamp busy_timeout")?;
+    if !sqlite_table_exists(&conn, "business_records")? {
+        return Ok((false, 0, 0, String::new()));
+    }
+
+    let mut hasher = Sha256::new();
+    let mut note_count = 0usize;
+    let mut latest_updated_at_ms = 0i64;
+    let mut stmt = conn.prepare(LOCAL_MARKDOWN_NOTES_DB_STAMP_SQL)?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        note_count += 1;
+        let record_id: String = row.get(0)?;
+        let updated_at_ms: i64 = row.get(1)?;
+        let deleted: i64 = row.get(2)?;
+        latest_updated_at_ms = latest_updated_at_ms.max(updated_at_ms);
+        update_notes_stamp_hash(&mut hasher, &record_id);
+        hasher.update(updated_at_ms.to_le_bytes());
+        hasher.update(deleted.to_le_bytes());
+    }
+    Ok((
+        true,
+        note_count,
+        latest_updated_at_ms,
+        format!("{:x}", hasher.finalize()),
+    ))
+}
+
+fn update_notes_stamp_hash(hasher: &mut Sha256, value: &str) {
+    hasher.update(value.len().to_le_bytes());
+    hasher.update(value.as_bytes());
+}
+
 pub fn sync_local_markdown_notes(root: &Path) -> anyhow::Result<()> {
     let notes_dir = root.join("runtime/business-os/notes");
     if !notes_dir.is_dir() {
@@ -14872,7 +15617,7 @@ pub fn accept_rxdb_business_command_with_origin(
                         root,
                         &command,
                         "completed",
-                        command.record_id.as_deref(),
+                        None,
                         Some("completed"),
                         outcome,
                     );
@@ -14882,7 +15627,7 @@ pub fn accept_rxdb_business_command_with_origin(
                         root,
                         &command,
                         "failed",
-                        command.record_id.as_deref(),
+                        None,
                         Some("failed"),
                         serde_json::json!({
                             "ok": false,
@@ -15094,6 +15839,74 @@ pub fn accept_rxdb_business_command_with_origin(
                         &command,
                         "failed",
                         command.record_id.as_deref(),
+                        Some("failed"),
+                        serde_json::json!({
+                            "ok": false,
+                            "error": error.to_string(),
+                        }),
+                    );
+                    return Err(error);
+                }
+            }
+        }
+        command_type if super::threads::is_threads_command(command_type) => {
+            let session = rxdb_authenticated_session(root, &command)?;
+            if super::threads::requires_external_approval(command_type) {
+                let approval_id = command
+                    .payload
+                    .get("approval_request_id")
+                    .or_else(|| command.payload.get("id"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .or(command.record_id.as_deref())
+                    .unwrap_or_default()
+                    .to_owned();
+                let assigned_to_actor = if approval_id.is_empty() {
+                    false
+                } else {
+                    let actor_id = session_user_id(&session).unwrap_or_default();
+                    pull_collection_record(root, "ctox_task_approval_requests", &approval_id)?
+                        .and_then(|approval| first_string_field(&approval, &["reviewer_user_id"]))
+                        .map(|reviewer| reviewer == actor_id)
+                        .unwrap_or(false)
+                };
+                let decision = scoped_policy_decision(
+                    root,
+                    &session,
+                    BusinessOsPermission::ExternalApprove,
+                    BusinessOsScope {
+                        scope_type: BusinessOsScopeType::Approval,
+                        scope_id: if approval_id.is_empty() {
+                            None
+                        } else {
+                            Some(approval_id)
+                        },
+                        assigned_to_actor,
+                        owned_by_actor: false,
+                    },
+                )?;
+                if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                    return Ok(outcome);
+                }
+            }
+            match super::threads::handle_business_command(root, &session, &command) {
+                Ok(outcome) => {
+                    return write_rxdb_control_command_outcome(
+                        root,
+                        &command,
+                        "completed",
+                        None,
+                        Some("completed"),
+                        outcome,
+                    );
+                }
+                Err(error) => {
+                    let _ = write_rxdb_control_command_outcome(
+                        root,
+                        &command,
+                        "failed",
+                        None,
                         Some("failed"),
                         serde_json::json!({
                             "ok": false,
@@ -20117,6 +20930,16 @@ pub fn verify_capability_role(root: &Path, token: &str) -> Option<String> {
         .map(|claims| claims.role)
 }
 
+pub fn verify_capability_actor(root: &Path, token: &str) -> Option<(String, String)> {
+    let token = token.trim();
+    if token.is_empty() {
+        return None;
+    }
+    let secret = capability_signing_secret(root).ok()?;
+    super::capability::verify_capability_token(&secret, token, now_ms() as i64)
+        .map(|claims| (claims.user_id, claims.role))
+}
+
 /// Whether server-authoritative per-collection sync authorization is enforced.
 /// Default OFF (config-gated via the runtime store, not a new ambient toggle):
 /// enforcement is a deliberate operator-enabled rollout so the browser
@@ -22884,13 +23707,27 @@ fn is_documents_report_command(command: &BusinessCommand) -> bool {
 /// apply the parsed profile as a new `document_versions` version. Generic shape:
 /// any module can request a versioned-document writeback the same way.
 fn is_cv_print_parse_command(command: &BusinessCommand) -> bool {
-    command.module == "cv-print-builder"
-        && command
-            .payload
-            .get("writeback_contract")
-            .and_then(|value| value.get("command_type"))
-            .and_then(Value::as_str)
-            == Some("ctox.cv_print.apply_parse")
+    let writeback_is_cv = command
+        .payload
+        .get("writeback_contract")
+        .and_then(|value| value.get("command_type"))
+        .and_then(Value::as_str)
+        == Some("ctox.cv_print.apply_parse");
+    let skill_is_cv = first_string_field(&command.payload, &["skill", "skill_id"])
+        .or_else(|| first_string_field(&command.client_context, &["skill", "skill_id"]))
+        .as_deref()
+        == Some("ctox-cv-print-parser");
+    let module_is_cv = command.module == "cv-print-builder"
+        || first_string_field(&command.payload, &["source_module", "module", "module_id"])
+            .or_else(|| {
+                first_string_field(
+                    &command.client_context,
+                    &["source_module", "module", "module_id"],
+                )
+            })
+            .as_deref()
+            == Some("cv-print-builder");
+    writeback_is_cv || (module_is_cv && skill_is_cv)
 }
 
 /// Extract the first complete JSON object from a skill reply. The skill is
@@ -22964,6 +23801,7 @@ struct CvPrintWritebackResult {
 /// the `documents` record. Writes the generic `business_records` store; the
 /// `rxdb_peer` projection loop replicates both collections to the browser.
 fn writeback_cv_print_parse(
+    root: &Path,
     conn: &Connection,
     command_id: &str,
     command: &BusinessCommand,
@@ -22992,6 +23830,17 @@ fn writeback_cv_print_parse(
         first_string_field(&command.payload, &["source_file_id"]).unwrap_or_default();
 
     // Normalize the envelope so downstream UI invariants always hold.
+    let filename = first_string_field(&command.payload, &["filename"]).unwrap_or_default();
+    let generation_id =
+        first_string_field(&command.payload, &["generation_id"]).unwrap_or_default();
+    let mime_type = first_string_field(&command.payload, &["mime_type"])
+        .unwrap_or_else(|| "application/pdf".to_string());
+    let sha256 = first_string_field(&command.payload, &["sha256"]).unwrap_or_default();
+    let size_bytes = command
+        .payload
+        .get("size_bytes")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
     if let Some(obj) = model_json.as_object_mut() {
         obj.insert("schema".to_string(), Value::String(expected_schema));
         let workflow = obj
@@ -22999,6 +23848,61 @@ fn writeback_cv_print_parse(
             .or_insert_with(|| Value::Object(Default::default()));
         if let Some(workflow_obj) = workflow.as_object_mut() {
             workflow_obj.insert("phase".to_string(), Value::String("review".to_string()));
+            workflow_obj.insert("view_mode".to_string(), Value::String("split".to_string()));
+            workflow_obj.insert(
+                "command_id".to_string(),
+                Value::String(command_id.to_string()),
+            );
+        }
+        let source = obj
+            .entry("source".to_string())
+            .or_insert_with(|| Value::Object(Default::default()));
+        if let Some(source_obj) = source.as_object_mut() {
+            if !source_file_id.is_empty() {
+                source_obj.insert(
+                    "desktop_file_id".to_string(),
+                    Value::String(source_file_id.clone()),
+                );
+            }
+            if !generation_id.is_empty() {
+                source_obj.insert("generation_id".to_string(), Value::String(generation_id));
+            }
+            if !filename.is_empty() {
+                source_obj.insert("filename".to_string(), Value::String(filename.clone()));
+            }
+            source_obj.insert("mime_type".to_string(), Value::String(mime_type));
+            if size_bytes > 0 {
+                source_obj.insert(
+                    "size_bytes".to_string(),
+                    Value::Number(serde_json::Number::from(size_bytes)),
+                );
+            }
+            if !sha256.is_empty() {
+                source_obj.insert("sha256".to_string(), Value::String(sha256));
+            }
+        }
+        let print = obj
+            .entry("print".to_string())
+            .or_insert_with(|| Value::Object(Default::default()));
+        if let Some(print_obj) = print.as_object_mut() {
+            print_obj
+                .entry("template".to_string())
+                .or_insert_with(|| Value::String("minimal".to_string()));
+            print_obj
+                .entry("anonymize".to_string())
+                .or_insert(Value::Bool(false));
+            print_obj
+                .entry("showLogo".to_string())
+                .or_insert(Value::Bool(true));
+            print_obj
+                .entry("logoDataUrl".to_string())
+                .or_insert_with(|| Value::String(String::new()));
+            print_obj
+                .entry("preset".to_string())
+                .or_insert_with(|| Value::String("standard".to_string()));
+            print_obj
+                .entry("overrides".to_string())
+                .or_insert_with(|| Value::Object(Default::default()));
         }
     }
 
@@ -23051,7 +23955,14 @@ fn writeback_cv_print_parse(
         "created_at_ms": now,
         "updated_at_ms": now
     });
-    upsert_business_record(conn, "document_versions", &version_id, now, version_payload)?;
+    upsert_business_record(
+        conn,
+        "document_versions",
+        &version_id,
+        now,
+        version_payload.clone(),
+    )?;
+    upsert_rxdb_collection_record(root, "document_versions", &version_id, now, version_payload)?;
 
     // Patch the existing document, preserving fields the browser already set.
     let mut document_payload = conn
@@ -23083,7 +23994,14 @@ fn writeback_cv_print_parse(
             );
         }
     }
-    upsert_business_record(conn, "documents", &document_id, now, document_payload)?;
+    upsert_business_record(
+        conn,
+        "documents",
+        &document_id,
+        now,
+        document_payload.clone(),
+    )?;
+    upsert_rxdb_collection_record(root, "documents", &document_id, now, document_payload)?;
 
     Ok(CvPrintWritebackResult {
         document_id,
@@ -23101,7 +24019,7 @@ fn process_cv_print_parse_command(
     queue_task: Option<&channels::QueueTaskView>,
     reply_text: Option<&str>,
 ) -> anyhow::Result<CommandAccepted> {
-    match writeback_cv_print_parse(conn, command_id, command, reply_text) {
+    match writeback_cv_print_parse(root, conn, command_id, command, reply_text) {
         Ok(result) => {
             let completed_at_ms = now_ms() as i64;
             conn.execute(
@@ -25621,6 +26539,10 @@ fn materialize_business_chat_attachments(
 }
 
 fn business_chat_attachment_refs(command: &BusinessCommand) -> Vec<Value> {
+    if is_cv_print_parse_command(command) {
+        return Vec::new();
+    }
+
     let mut refs = Vec::new();
     for container in [&command.payload, &command.client_context] {
         for key in ["attachment_refs", "attachments"] {
@@ -25723,7 +26645,7 @@ fn materialize_business_chat_attachment(
         })
         .unwrap_or(BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME);
     anyhow::ensure!(
-        content_hash_scheme == BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME,
+        is_supported_business_os_attachment_content_hash_scheme(content_hash_scheme),
         "Business OS attachment `{file_id}` uses unsupported content hash scheme `{content_hash_scheme}`"
     );
     let size_bytes = file_doc
@@ -25803,6 +26725,14 @@ fn materialize_business_chat_attachment(
         virtual_path,
         local_path: local_path.to_string_lossy().into_owned(),
     })
+}
+
+fn is_supported_business_os_attachment_content_hash_scheme(scheme: &str) -> bool {
+    matches!(
+        scheme,
+        BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME
+            | BUSINESS_OS_LEGACY_SHA256_CONTENT_HASH_SCHEME
+    )
 }
 
 fn attachment_ref_string(value: &Value, keys: &[&str]) -> Option<String> {
@@ -25983,6 +26913,172 @@ fn materialized_attachment_filename(file_id: &str, name: &str) -> String {
     )
 }
 
+fn cv_print_pdf_text_prompt_enrichment(
+    root: &Path,
+    command_id: &str,
+    command: &BusinessCommand,
+) -> anyhow::Result<Option<String>> {
+    if !is_cv_print_parse_command(command) {
+        return Ok(None);
+    }
+
+    let source_file = command.payload.get("source_file").unwrap_or(&Value::Null);
+    let file_id = first_string_field(&command.payload, &["source_file_id", "file_id"])
+        .or_else(|| first_string_field(source_file, &["file_id", "fileId"]))
+        .context("cv-print parse command is missing source_file_id")?;
+    let generation_id = first_string_field(&command.payload, &["generation_id", "generationId"])
+        .or_else(|| first_string_field(source_file, &["generation_id", "generationId"]));
+    let declared_size = rxdb_desktop_file_document(root, &file_id)
+        .ok()
+        .and_then(|doc| doc.get("size_bytes").and_then(Value::as_u64))
+        .unwrap_or(0);
+    anyhow::ensure!(
+        declared_size <= CV_PRINT_PDF_MAX_BYTES,
+        "cv-print source PDF {file_id} is too large ({declared_size} bytes, max {CV_PRINT_PDF_MAX_BYTES})"
+    );
+
+    let materialized = materialize_business_chat_attachment(
+        root,
+        command_id,
+        &serde_json::json!({
+            "kind": "desktop_file",
+            "file_id": file_id,
+            "generation_id": generation_id.clone(),
+        }),
+        &file_id,
+        generation_id.as_deref(),
+    )?;
+    let extracted = extract_cv_pdf_text(Path::new(&materialized.local_path))
+        .with_context(|| format!("failed to extract CV PDF text for `{}`", materialized.name))?;
+    let extracted =
+        truncate_text_preserve(&extracted, CV_PRINT_PDF_TEXT_MAX_CHARS).replace("```", "'''");
+
+    Ok(Some(format!(
+        r#"
+
+CV PDF extracted text:
+The CTOX daemon reconstructed this PDF from Business OS desktop_files/desktop_file_chunks and extracted bounded text before queueing the skill. Use this text as the source of truth for the structured CV profile. Do not reopen or inline the PDF unless the extracted text is obviously corrupt.
+- source_file_id: {file_id}
+- filename: {}
+- mime_type: {}
+- size_bytes: {}
+- sha256: {}
+
+```text
+{extracted}
+```
+"#,
+        materialized.name,
+        materialized.mime_type,
+        materialized.size_bytes,
+        materialized.content_hash
+    )))
+}
+
+fn extract_cv_pdf_text(path: &Path) -> anyhow::Result<String> {
+    let mut extraction_errors = Vec::new();
+    match std::process::Command::new("pdftotext")
+        .args(["-layout", "-nopgbrk", "-enc", "UTF-8"])
+        .arg(path)
+        .arg("-")
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            let text = normalize_extracted_pdf_text(&String::from_utf8_lossy(&output.stdout));
+            if !text.trim().is_empty() {
+                return Ok(text);
+            }
+            extraction_errors.push("pdftotext returned empty text".to_string());
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            extraction_errors.push(format!(
+                "pdftotext exited with {}: {}",
+                output.status,
+                stderr.trim()
+            ));
+        }
+        Err(err) => {
+            extraction_errors.push(format!("pdftotext unavailable: {err}"));
+        }
+    }
+
+    let bytes = fs::read(path)
+        .with_context(|| format!("failed to read materialized PDF {}", path.display()))?;
+    let fallback = normalize_extracted_pdf_text(&extract_pdf_literal_text(&bytes));
+    if !fallback.trim().is_empty() {
+        return Ok(fallback);
+    }
+    anyhow::bail!(
+        "PDF text extraction produced no usable text ({})",
+        extraction_errors.join("; ")
+    )
+}
+
+fn normalize_extracted_pdf_text(value: &str) -> String {
+    let mut lines = Vec::new();
+    let mut previous_blank = false;
+    for raw_line in value.lines() {
+        let line = raw_line
+            .chars()
+            .filter_map(|ch| {
+                if ch == '\t' || ch == ' ' || !ch.is_control() {
+                    Some(ch)
+                } else {
+                    None
+                }
+            })
+            .collect::<String>();
+        let line = line.trim_end().to_string();
+        if line.trim().is_empty() {
+            if !previous_blank {
+                lines.push(String::new());
+            }
+            previous_blank = true;
+        } else {
+            lines.push(line);
+            previous_blank = false;
+        }
+    }
+    lines.join("\n").trim().to_string()
+}
+
+fn extract_pdf_literal_text(bytes: &[u8]) -> String {
+    let raw = String::from_utf8_lossy(bytes);
+    let mut output = Vec::new();
+    let mut chars = raw.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '(' {
+            continue;
+        }
+        let mut value = String::new();
+        let mut escaped = false;
+        for inner in chars.by_ref() {
+            if escaped {
+                match inner {
+                    'n' => value.push('\n'),
+                    'r' => value.push('\n'),
+                    't' => value.push('\t'),
+                    '(' | ')' | '\\' => value.push(inner),
+                    _ => value.push(inner),
+                }
+                escaped = false;
+                continue;
+            }
+            match inner {
+                '\\' => escaped = true,
+                ')' => break,
+                _ => value.push(inner),
+            }
+        }
+        let value = value.trim();
+        if value.chars().any(char::is_alphabetic) && value.chars().count() > 1 {
+            output.push(value.to_string());
+        }
+    }
+    output.join("\n")
+}
+
 fn create_ctox_queue_task(
     root: &Path,
     command_id: &str,
@@ -25994,8 +27090,14 @@ fn create_ctox_queue_task(
         }
     }
     let attachments = materialize_business_chat_attachments(root, command_id, command)?;
+    let prompt_enrichment = cv_print_pdf_text_prompt_enrichment(root, command_id, command)?;
     let title = command_title(command);
-    let prompt = command_prompt(command_id, command, &attachments);
+    let prompt = command_prompt(
+        command_id,
+        command,
+        &attachments,
+        prompt_enrichment.as_deref(),
+    );
     let priority = command
         .payload
         .get("priority")
@@ -26027,7 +27129,7 @@ fn create_ctox_queue_task(
                 "business_os_command_type": command.command_type,
                 "business_os_record_id": command.record_id,
                 "business_os_attachments": attachments,
-                "client_context": command.client_context
+                "client_context": policy_audit_client_context(command)
             })),
         },
     )?;
@@ -26117,7 +27219,12 @@ fn command_prompt(
     command_id: &str,
     command: &BusinessCommand,
     attachments: &[MaterializedBusinessChatAttachment],
+    prompt_enrichment: Option<&str>,
 ) -> String {
+    if is_cv_print_parse_command(command) {
+        return cv_print_command_prompt(command_id, command, prompt_enrichment);
+    }
+
     let instruction = command
         .payload
         .get("instruction")
@@ -26129,12 +27236,18 @@ fn command_prompt(
     let instruction =
         truncate_text_preserve(instruction, BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS);
     let required_skill_names = required_skill_names(command);
-    let mut payload_preview_value = command.payload.clone();
-    let mut context_preview_value = command.client_context.clone();
     if is_business_os_app_module_command(command) {
-        rewrite_required_skills_preview(&mut payload_preview_value, &required_skill_names);
-        rewrite_required_skills_preview(&mut context_preview_value, &required_skill_names);
+        return business_os_app_command_prompt(
+            command_id,
+            command,
+            attachments,
+            prompt_enrichment,
+            &instruction,
+            &required_skill_names,
+        );
     }
+    let payload_preview_value = command.payload.clone();
+    let context_preview_value = command.client_context.clone();
     let payload = prompt_json_preview(
         &payload_preview_value,
         BUSINESS_OS_QUEUE_PROMPT_JSON_PREVIEW_CHARS,
@@ -26154,13 +27267,78 @@ fn command_prompt(
     };
     let app_target = business_os_app_command_target_prompt_block(command);
     let attachment_manifest = business_chat_attachment_prompt_manifest(attachments);
+    let prompt_enrichment = prompt_enrichment.unwrap_or_default();
     let prompt = format!(
-        "{instruction}{required_skills}{app_target}\nBusiness OS command:\n- command_id: {command_id}\n- module: {}\n- type: {}\n- record_id: {}{attachment_manifest}\n\nFull payload and client context are stored on the Business OS command record. The JSON below is a bounded execution preview to keep the queue worker under its input limit.\n\nPayload JSON:\n{payload}\n\nClient context JSON:\n{context}",
+        "{instruction}{required_skills}{app_target}{prompt_enrichment}\nBusiness OS command:\n- command_id: {command_id}\n- module: {}\n- type: {}\n- record_id: {}{attachment_manifest}\n\nFull payload and client context are stored on the Business OS command record. The JSON below is a bounded execution preview to keep the queue worker under its input limit.\n\nPayload JSON:\n{payload}\n\nClient context JSON:\n{context}",
         command.module,
         command.command_type,
         command.record_id.as_deref().unwrap_or("")
     );
     truncate_text_preserve(&prompt, BUSINESS_OS_QUEUE_PROMPT_MAX_CHARS)
+}
+
+fn business_os_app_command_prompt(
+    command_id: &str,
+    command: &BusinessCommand,
+    attachments: &[MaterializedBusinessChatAttachment],
+    prompt_enrichment: Option<&str>,
+    instruction: &str,
+    required_skill_names: &[String],
+) -> String {
+    let required_skills = if required_skill_names.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nBusiness OS task resources:\n- required_skills: {}\n- skill_context: {}\n",
+            required_skill_names.join(", "),
+            business_os_required_skill_prompt_contract()
+        )
+    };
+    let app_target = business_os_app_command_target_prompt_block(command);
+    let request_summary = business_os_app_command_request_summary(command);
+    let attachment_manifest = business_chat_attachment_prompt_manifest(attachments);
+    let prompt_enrichment = prompt_enrichment.unwrap_or_default();
+    let prompt = format!(
+        "{instruction}{required_skills}{app_target}{prompt_enrichment}\nBusiness OS app request summary:\n{request_summary}\nBusiness OS command:\n- command_id: {command_id}\n- module: {}\n- type: {}\n- record_id: {}{attachment_manifest}\n\nThe full command payload and client context remain persisted on the Business OS command record. Do not copy raw client context into app code or prompts.",
+        command.module,
+        command.command_type,
+        command.record_id.as_deref().unwrap_or("")
+    );
+    truncate_text_preserve(&prompt, BUSINESS_OS_APP_QUEUE_PROMPT_MAX_CHARS)
+}
+
+fn cv_print_command_prompt(
+    command_id: &str,
+    command: &BusinessCommand,
+    prompt_enrichment: Option<&str>,
+) -> String {
+    let instruction = command
+        .payload
+        .get("instruction")
+        .and_then(Value::as_str)
+        .or_else(|| command.payload.get("prompt").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Parse the extracted CV PDF text into a CTOX CV print profile JSON.");
+    let instruction = truncate_text_preserve(instruction, 2_400);
+    let document_id = first_string_field(&command.payload, &["document_id"])
+        .or_else(|| command.record_id.clone())
+        .unwrap_or_default();
+    let version_id = first_string_field(&command.payload, &["version_id"]).unwrap_or_default();
+    let source_file_id = first_string_field(&command.payload, &["source_file_id"])
+        .or_else(|| {
+            command
+                .payload
+                .get("source_file")
+                .and_then(|value| first_string_field(value, &["file_id", "fileId"]))
+        })
+        .unwrap_or_default();
+    let prompt_enrichment = prompt_enrichment.unwrap_or_default();
+    let prompt = format!(
+        "{instruction}{prompt_enrichment}\nBusiness OS command:\n- command_id: {command_id}\n- module: {}\n- type: {}\n- document_id: {document_id}\n- version_id: {version_id}\n- source_file_id: {source_file_id}\n\nReturn only the minified `ctox.cv_print_profile.v1` JSON. The CTOX service will persist it through `ctox.cv_print.apply_parse`.",
+        command.module, command.command_type
+    );
+    truncate_text_preserve(&prompt, 32_000)
 }
 
 const BUSINESS_OS_APP_MODULE_SKILL_NAME: &str = "business-os-app-module-development";
@@ -26298,27 +27476,82 @@ fn business_os_app_command_target_metadata(
     Some((module_id, install_target, module_dir))
 }
 
-fn rewrite_required_skills_preview(value: &mut Value, required_skills: &[String]) {
-    if required_skills.is_empty() {
+fn business_os_app_command_request_summary(command: &BusinessCommand) -> String {
+    let mut lines = Vec::new();
+    push_business_os_app_summary_string(
+        &mut lines,
+        "app_title",
+        first_non_empty_json_string(&[
+            command.payload.get("app_title"),
+            command.payload.get("title"),
+        ]),
+    );
+    push_business_os_app_summary_string(
+        &mut lines,
+        "description",
+        first_non_empty_json_string(&[command.payload.get("description")]),
+    );
+    push_business_os_app_summary_string(
+        &mut lines,
+        "category",
+        first_non_empty_json_string(&[command.payload.get("category")]),
+    );
+    push_business_os_app_summary_string(
+        &mut lines,
+        "layout_hint",
+        first_non_empty_json_string(&[command.payload.get("layout_hint")]),
+    );
+    push_business_os_app_summary_string(
+        &mut lines,
+        "desired_version",
+        first_non_empty_json_string(&[command.payload.get("desired_version")]),
+    );
+    push_business_os_app_summary_string(
+        &mut lines,
+        "source",
+        first_non_empty_json_string(&[command.client_context.get("source")]),
+    );
+    let collections = business_os_app_summary_string_array(command.payload.get("collections_hint"));
+    if !collections.is_empty() {
+        lines.push(format!("- collections_hint: {}", collections.join(", ")));
+    }
+    push_business_os_app_summary_string(
+        &mut lines,
+        "collection_hint",
+        first_non_empty_json_string(&[
+            command.payload.get("collection"),
+            command.payload.get("collection_id"),
+            command.payload.get("primary_collection"),
+        ]),
+    );
+    if lines.is_empty() {
+        "- no extra summary fields".to_string()
+    } else {
+        lines.join("\n")
+    }
+}
+
+fn push_business_os_app_summary_string(lines: &mut Vec<String>, key: &str, value: Option<&str>) {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
         return;
-    }
-    if let Some(object) = value.as_object_mut() {
-        object.insert(
-            "required_skills".to_owned(),
-            Value::Array(
-                required_skills
-                    .iter()
-                    .map(|skill| Value::String(skill.clone()))
-                    .collect(),
-            ),
-        );
-        if object.contains_key("suggested_skill") {
-            object.insert(
-                "suggested_skill".to_owned(),
-                Value::String(BUSINESS_OS_APP_MODULE_SKILL_NAME.to_owned()),
-            );
-        }
-    }
+    };
+    lines.push(format!("- {key}: {}", clip_text(value, 240)));
+}
+
+fn business_os_app_summary_string_array(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .take(12)
+                .map(|item| clip_text(item, 80))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn first_non_empty_json_string<'a>(values: &[Option<&'a Value>]) -> Option<&'a str> {
@@ -26701,6 +27934,16 @@ fn read_core_db_business_record(
 }
 
 fn find_queue_task_for_command(root: &Path, command_id: &str) -> Option<String> {
+    let command_id = command_id.trim();
+    if command_id.is_empty() {
+        return None;
+    }
+    if let Some(task) = channels::load_queue_task_for_business_os_command(root, command_id)
+        .ok()
+        .flatten()
+    {
+        return Some(task.message_key);
+    }
     let tasks = channels::list_queue_tasks(root, &[], 256).ok()?;
     tasks
         .into_iter()
@@ -26722,6 +27965,10 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_business_records_collection_updated
             ON business_records(collection, updated_at_ms, record_id);
+        CREATE INDEX IF NOT EXISTS idx_business_records_notes_stamp
+            ON business_records(collection, record_id, updated_at_ms, deleted);
+        CREATE INDEX IF NOT EXISTS idx_business_records_projection_stamp
+            ON business_records(collection, record_id, rev, deleted, updated_at_ms);
 
         CREATE TABLE IF NOT EXISTS business_documents (
             document_id TEXT PRIMARY KEY,
@@ -26806,6 +28053,11 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             client_context_json TEXT NOT NULL,
             observed_at_ms INTEGER NOT NULL
         );
+        CREATE INDEX IF NOT EXISTS idx_business_commands_documents_report_open
+            ON business_commands(observed_at_ms, command_id)
+            WHERE module = 'documents'
+              AND command_type = 'research.systematic.report.create'
+              AND status NOT IN ('completed', 'failed', 'cancelled');
 
         CREATE TABLE IF NOT EXISTS business_users (
             user_id TEXT PRIMARY KEY,
@@ -27161,6 +28413,205 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn local_markdown_notes_source_stamp_ignores_unrelated_store_churn() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        sync_local_markdown_notes(temp.path())?;
+
+        let first = local_markdown_notes_source_stamp(temp.path())?;
+        let second = local_markdown_notes_source_stamp(temp.path())?;
+        assert_eq!(first, second);
+
+        let conn = open_store(temp.path())?;
+        upsert_business_record(
+            &conn,
+            "unrelated_notes_churn",
+            "row-1",
+            now_ms() as i64,
+            serde_json::json!({ "id": "row-1", "value": "not a note" }),
+        )?;
+        drop(conn);
+        assert_eq!(
+            local_markdown_notes_source_stamp(temp.path())?,
+            first,
+            "unrelated business_records rows must not wake the notes sync body"
+        );
+
+        let notes_dir = temp.path().join("runtime/business-os/notes");
+        let note_path = notes_dir.join("scratch.md");
+        std::fs::write(&note_path, "# Scratch\n\nchanged\n")?;
+        assert_ne!(
+            local_markdown_notes_source_stamp(temp.path())?,
+            first,
+            "markdown file metadata changes must wake the notes sync body"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn local_markdown_notes_source_stamp_uses_covering_metadata_index() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let conn = open_store(temp.path())?;
+        for idx in 0..20 {
+            let record_id = format!("note-{idx:03}");
+            upsert_business_record(
+                &conn,
+                "notes",
+                &record_id,
+                1_000 + idx,
+                serde_json::json!({
+                    "id": record_id,
+                    "title": format!("Note {idx}"),
+                    "content": "x".repeat(32_000),
+                    "updated_at_ms": 1_000 + idx
+                }),
+            )?;
+        }
+
+        let explain_sql = format!("EXPLAIN QUERY PLAN {LOCAL_MARKDOWN_NOTES_DB_STAMP_SQL}");
+        let mut stmt = conn.prepare(&explain_sql)?;
+        let details = stmt
+            .query_map([], |row| row.get::<_, String>(3))?
+            .collect::<Result<Vec<_>, _>>()?;
+        assert!(
+            details.iter().any(|detail| {
+                detail.contains("USING COVERING INDEX idx_business_records_notes_stamp")
+            }),
+            "notes idle stamp must stay on the covering metadata index, got {details:#?}"
+        );
+        drop(stmt);
+        drop(conn);
+
+        let first = local_markdown_notes_source_stamp(temp.path())?;
+        assert_eq!(first.note_count, 20);
+        assert_eq!(first.latest_note_updated_at_ms, 1_019);
+
+        let conn = open_store(temp.path())?;
+        upsert_business_record(
+            &conn,
+            "notes",
+            "note-010",
+            30_000,
+            serde_json::json!({
+                "id": "note-010",
+                "title": "Note 10",
+                "content": "changed",
+                "updated_at_ms": 30_000
+            }),
+        )?;
+        drop(conn);
+        let second = local_markdown_notes_source_stamp(temp.path())?;
+        assert_ne!(
+            first, second,
+            "metadata-only stamp must still wake notes sync on real note updates"
+        );
+        assert_eq!(second.note_count, 20);
+        assert_eq!(second.latest_note_updated_at_ms, 30_000);
+        Ok(())
+    }
+
+    #[test]
+    fn business_records_projection_stamp_uses_covering_metadata_index() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let collections = vec![
+            "support_notes".to_string(),
+            "business_commands".to_string(),
+            "notes".to_string(),
+        ];
+        let conn = open_store(temp.path())?;
+        for collection in &collections {
+            for idx in 0..3 {
+                let record_id = format!("{collection}-{idx}");
+                let updated_at_ms = 5_000 + idx;
+                upsert_business_record(
+                    &conn,
+                    collection,
+                    &record_id,
+                    updated_at_ms,
+                    serde_json::json!({
+                        "id": record_id,
+                        "updated_at_ms": updated_at_ms,
+                        "payload": "x".repeat(64_000)
+                    }),
+                )?;
+            }
+        }
+        upsert_business_record(
+            &conn,
+            "unrelated_projection_stamp_noise",
+            "noise-1",
+            99_000,
+            serde_json::json!({
+                "id": "noise-1",
+                "updated_at_ms": 99_000,
+                "payload": "x".repeat(64_000)
+            }),
+        )?;
+
+        let sql = business_records_projection_stamp_query(collections.len())
+            .context("projection stamp query sql")?;
+        let explain_sql = format!("EXPLAIN QUERY PLAN {sql}");
+        let mut stmt = conn.prepare(&explain_sql)?;
+        let details = stmt
+            .query_map(
+                params_from_iter(collections.iter().map(String::as_str)),
+                |row| row.get::<_, String>(3),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        assert!(
+            details.iter().any(|detail| {
+                detail.contains("USING COVERING INDEX idx_business_records_projection_stamp")
+            }),
+            "business-record idle stamp must stay on the covering metadata index, got {details:#?}"
+        );
+        drop(stmt);
+        drop(conn);
+
+        let first = business_records_projection_stamp(temp.path(), &collections)?;
+        assert_eq!(first.row_count, 9);
+        assert_eq!(first.latest_updated_at_ms, 5_002);
+
+        let conn = open_store(temp.path())?;
+        upsert_business_record(
+            &conn,
+            "unrelated_projection_stamp_noise",
+            "noise-2",
+            100_000,
+            serde_json::json!({
+                "id": "noise-2",
+                "updated_at_ms": 100_000
+            }),
+        )?;
+        drop(conn);
+        assert_eq!(
+            business_records_projection_stamp(temp.path(), &collections)?,
+            first,
+            "unrelated collections must not wake the generic projection"
+        );
+
+        let conn = open_store(temp.path())?;
+        upsert_business_record(
+            &conn,
+            "notes",
+            "notes-1",
+            30_000,
+            serde_json::json!({
+                "id": "notes-1",
+                "updated_at_ms": 30_000,
+                "payload": "changed"
+            }),
+        )?;
+        drop(conn);
+        let second = business_records_projection_stamp(temp.path(), &collections)?;
+        assert_ne!(
+            first, second,
+            "tracked collection changes must still wake the generic projection"
+        );
+        assert_eq!(second.row_count, 9);
+        assert_eq!(second.latest_updated_at_ms, 30_000);
+        Ok(())
     }
 
     #[test]
@@ -27634,7 +29085,10 @@ mod tests {
         )?;
 
         assert!(expires_at_ms > now);
-        assert_eq!(verify_capability_role(root.path(), &token).as_deref(), Some("chef"));
+        assert_eq!(
+            verify_capability_role(root.path(), &token).as_deref(),
+            Some("chef")
+        );
 
         let conn = open_store(root.path())?;
         let (display_name, role, active): (String, String, i64) = conn.query_row(
@@ -28237,11 +29691,13 @@ mod tests {
             granted.get("status").and_then(Value::as_str),
             Some("completed")
         );
-        assert!(granted
-            .pointer("/result/source_file_ids")
-            .and_then(Value::as_array)
-            .map(|ids| !ids.is_empty())
-            .unwrap_or(false));
+        assert!(
+            granted
+                .pointer("/result/source_file_ids")
+                .and_then(Value::as_array)
+                .map(|ids| !ids.is_empty())
+                .unwrap_or(false)
+        );
         let granted_snapshots = accept_rxdb_business_command(
             root,
             serde_json::json!({
@@ -28268,10 +29724,12 @@ mod tests {
             granted_snapshots.get("status").and_then(Value::as_str),
             Some("completed")
         );
-        assert!(granted_snapshots
-            .get("result")
-            .and_then(Value::as_array)
-            .is_some());
+        assert!(
+            granted_snapshots
+                .get("result")
+                .and_then(Value::as_array)
+                .is_some()
+        );
         Ok(())
     }
 
@@ -28409,6 +29867,60 @@ mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(stored_role, "chef");
+        Ok(())
+    }
+
+    #[test]
+    fn find_queue_task_for_command_uses_business_os_command_metadata() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let command_id = "cmd_metadata_lookup";
+        let task = channels::create_queue_task(
+            root,
+            channels::QueueTaskCreateRequest {
+                title: "Metadata lookup task".to_string(),
+                prompt: "Prompt intentionally omits the command identifier".to_string(),
+                thread_key: "business-os/test".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: Some(serde_json::json!({
+                    "business_os_command_id": command_id,
+                })),
+            },
+        )?;
+        assert!(!task.prompt.contains(command_id));
+        assert_eq!(
+            find_queue_task_for_command(root, command_id).as_deref(),
+            Some(task.message_key.as_str())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn documents_report_completion_query_uses_partial_command_index() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let conn = open_store(temp.path())?;
+        let mut stmt = conn.prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT command_id
+             FROM business_commands
+             WHERE module = 'documents'
+               AND command_type = 'research.systematic.report.create'
+               AND status NOT IN ('completed', 'failed', 'cancelled')
+             ORDER BY observed_at_ms ASC, command_id ASC
+             LIMIT 10",
+        )?;
+        let details = stmt
+            .query_map([], |row| row.get::<_, String>(3))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        assert!(
+            details
+                .iter()
+                .any(|detail| detail.contains("idx_business_commands_documents_report_open")),
+            "documents report completion query should use partial command index, got {details:?}"
+        );
         Ok(())
     }
 
@@ -28609,6 +30121,92 @@ mod tests {
     }
 
     #[test]
+    fn runtime_settings_cache_ignores_unrelated_core_db_churn() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let _ = runtime_settings_for_rxdb(temp.path())?;
+        let cached = runtime_settings_for_rxdb(temp.path())?;
+
+        let runtime_dir = temp.path().join("runtime");
+        fs::create_dir_all(&runtime_dir)?;
+        let core_db = runtime_dir.join("ctox.sqlite3");
+        let conn = Connection::open(&core_db)?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS unrelated_runtime_settings_churn (id INTEGER PRIMARY KEY);
+             INSERT INTO unrelated_runtime_settings_churn DEFAULT VALUES;",
+        )?;
+        drop(conn);
+
+        let second = runtime_settings_for_rxdb(temp.path())?;
+        assert_eq!(
+            cached, second,
+            "unrelated core DB writes must not invalidate runtime settings"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_settings_projection_stamp_ignores_core_db_but_tracks_runtime_config()
+    -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let _ = runtime_settings_for_rxdb(temp.path())?;
+        let first = runtime_settings_projection_stamp(temp.path());
+
+        let runtime_dir = temp.path().join("runtime");
+        fs::create_dir_all(&runtime_dir)?;
+        let core_db = runtime_dir.join("ctox.sqlite3");
+        let conn = Connection::open(&core_db)?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS unrelated_runtime_settings_stamp_churn (id INTEGER PRIMARY KEY);
+             INSERT INTO unrelated_runtime_settings_stamp_churn DEFAULT VALUES;",
+        )?;
+        drop(conn);
+        assert_eq!(
+            first,
+            runtime_settings_projection_stamp(temp.path()),
+            "unrelated core DB writes must not change the runtime settings projection stamp"
+        );
+
+        crate::inference::runtime_env::set_runtime_env_value(
+            temp.path(),
+            "CTOX_CHAT_TURN_TIMEOUT_SECS",
+            "777",
+        )?;
+        assert_ne!(
+            first,
+            runtime_settings_projection_stamp(temp.path()),
+            "runtime config writes must change the runtime settings projection stamp"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_settings_preserves_timestamp_for_semantically_identical_rebuild()
+    -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let first = runtime_settings_for_rxdb(temp.path())?;
+        let first_updated_at = first.get("updated_at_ms").cloned();
+
+        crate::inference::runtime_env::set_runtime_env_value(
+            temp.path(),
+            "CTOX_PERF_UNUSED_RUNTIME_SETTINGS_KEY",
+            "1",
+        )?;
+
+        let second = runtime_settings_for_rxdb(temp.path())?;
+        assert_eq!(
+            runtime_settings_without_timestamp(&first),
+            runtime_settings_without_timestamp(&second),
+            "test setup should only change cache stamps, not projected settings"
+        );
+        assert_eq!(
+            first_updated_at,
+            second.get("updated_at_ms").cloned(),
+            "semantically identical rebuilds must not churn runtime settings timestamp"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn runtime_settings_normalizes_retired_context_values_to_256k() {
         assert_eq!(runtime_settings_context(Some("128k".to_owned())), "256k");
         assert_eq!(runtime_settings_context(Some("131072".to_owned())), "256k");
@@ -28640,7 +30238,7 @@ mod tests {
             }),
         };
 
-        let prompt = command_prompt("cmd_app_bench", &command, &[]);
+        let prompt = command_prompt("cmd_app_bench", &command, &[], None);
         assert!(prompt.contains("Business OS task resources:"));
         assert!(prompt.contains("- required_skills: business-os-app-module-development"));
         assert!(prompt.contains("Business OS app task metadata:"));
@@ -28655,8 +30253,10 @@ mod tests {
         assert!(prompt.contains("resource.green_checklist:"));
         assert!(prompt.contains("resource.architecture_translation:"));
         assert!(prompt.contains("- reference_catalog: ctox business-os app references --json"));
-        assert!(prompt
-            .contains("- validation: ctox business-os app validate subscriptions --installed"));
+        assert!(
+            prompt
+                .contains("- validation: ctox business-os app validate subscriptions --installed")
+        );
         assert!(!prompt.contains("business-basic-module-development"));
         assert!(!prompt.contains("product_engineering/business-basic-module-development"));
         assert_eq!(
@@ -28676,27 +30276,44 @@ mod tests {
             payload: serde_json::json!({
                 "title": "Build Inventory",
                 "instruction": "Build a Business OS inventory app.",
+                "app_title": "Inventory",
+                "description": "Track stock levels and reorder dates.",
+                "category": "operations",
+                "layout_hint": "full-workspace",
+                "collections_hint": ["inventory_items"],
+                "desired_version": "0.1.0",
                 "module_id": "inventory",
                 "install_target": "runtime-installed-module"
             }),
             client_context: serde_json::json!({
-                "source": "business-os-app-creator"
+                "source": "business-os-app-creator",
+                "capability_token": "SECRET_CAPABILITY_TOKEN_SHOULD_NOT_LEAK"
             }),
         };
 
-        let prompt = command_prompt("cmd_app_create", &command, &[]);
+        let prompt = command_prompt("cmd_app_create", &command, &[], None);
         assert!(prompt.contains("Business OS task resources:"));
         assert!(prompt.contains("- required_skills: business-os-app-module-development"));
         assert!(prompt.contains("Business OS app task metadata:"));
         assert!(prompt.contains("- module_id: inventory"));
         assert!(prompt.contains("- install_target: runtime-installed-module"));
-        assert!(prompt.contains("- app_directory: runtime/business-os/installed-modules/inventory"));
+        assert!(
+            prompt.contains("- app_directory: runtime/business-os/installed-modules/inventory")
+        );
         assert!(prompt.contains("- skill: business-os-app-module-development"));
         assert!(prompt.contains("resource.module_contract:"));
         assert!(prompt.contains("- reference_catalog: ctox business-os app references --json"));
         assert!(
             prompt.contains("- validation: ctox business-os app validate inventory --installed")
         );
+        assert!(prompt.contains("Business OS app request summary:"));
+        assert!(prompt.contains("- app_title: Inventory"));
+        assert!(prompt.contains("- collections_hint: inventory_items"));
+        assert!(prompt.contains("- desired_version: 0.1.0"));
+        assert!(!prompt.contains("Payload JSON"));
+        assert!(!prompt.contains("Client context JSON"));
+        assert!(!prompt.contains("SECRET_CAPABILITY_TOKEN_SHOULD_NOT_LEAK"));
+        assert!(!prompt.contains("capability_token"));
         assert!(!prompt.contains("business-basic-module-development"));
     }
 
@@ -28720,7 +30337,8 @@ mod tests {
                 },
                 "client_context": {
                     "source": "business-os-app-creator-native-test",
-                    "target": "app"
+                    "target": "app",
+                    "capability_token": "SECRET_QUEUE_METADATA_TOKEN"
                 }
             }),
         )?;
@@ -28752,6 +30370,23 @@ mod tests {
             task.thread_key
         );
         assert!(task.prompt.contains("- type: ctox.business_os.app.create"));
+        assert!(!task.prompt.contains("SECRET_QUEUE_METADATA_TOKEN"));
+        assert!(!task.prompt.contains("capability_token"));
+        let channel_conn = channels::open_channel_db(&crate::paths::core_db(root))?;
+        let metadata_raw: String = channel_conn.query_row(
+            "SELECT metadata_json FROM communication_messages WHERE message_key = ?1",
+            params![task_id],
+            |row| row.get(0),
+        )?;
+        assert!(!metadata_raw.contains("SECRET_QUEUE_METADATA_TOKEN"));
+        assert!(!metadata_raw.contains("capability_token"));
+        let metadata: Value = serde_json::from_str(&metadata_raw)?;
+        assert_eq!(
+            metadata
+                .pointer("/client_context/source")
+                .and_then(Value::as_str),
+            Some("business-os-app-creator-native-test")
+        );
         Ok(())
     }
 
@@ -29011,12 +30646,14 @@ mod tests {
         let catalog =
             load_rxdb_collection_record(root, "business_module_catalog", "module-catalog")?
                 .context("expected module catalog projection")?;
-        assert!(catalog
-            .get("modules")
-            .and_then(Value::as_array)
-            .is_some_and(|modules| modules
-                .iter()
-                .any(|module| module.get("id").and_then(Value::as_str) == Some(module_id))));
+        assert!(
+            catalog
+                .get("modules")
+                .and_then(Value::as_array)
+                .is_some_and(|modules| modules
+                    .iter()
+                    .any(|module| module.get("id").and_then(Value::as_str) == Some(module_id)))
+        );
         Ok(())
     }
 
@@ -29167,11 +30804,13 @@ mod tests {
                 .and_then(Value::as_str),
             Some("role_or_scope_denied")
         );
-        assert!(denied
-            .pointer("/result/policy_decision/display_reason")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("not allowed"));
+        assert!(
+            denied
+                .pointer("/result/policy_decision/display_reason")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("not allowed")
+        );
         drop(conn);
 
         let founder_unassigned = accept_rxdb_business_command(
@@ -29819,13 +31458,15 @@ mod tests {
                 && event.pointer("/payload/command_id").and_then(Value::as_str)
                     == Some("cmd_audit_policy_allowed")
         }));
-        assert!(business_event_payloads(
-            &conn,
-            "business_commands",
-            "cmd_activity_allowed_list",
-            "business_os.policy.allowed",
-        )?
-        .is_empty());
+        assert!(
+            business_event_payloads(
+                &conn,
+                "business_commands",
+                "cmd_activity_allowed_list",
+                "business_os.policy.allowed",
+            )?
+            .is_empty()
+        );
 
         Ok(())
     }
@@ -29901,11 +31542,13 @@ mod tests {
             role_change.pointer("/current/role").and_then(Value::as_str),
             Some("founder")
         );
-        assert!(role_change
-            .pointer("/changed_fields")
-            .and_then(Value::as_array)
-            .context("expected changed_fields")?
-            .contains(&Value::String("role".to_owned())));
+        assert!(
+            role_change
+                .pointer("/changed_fields")
+                .and_then(Value::as_array)
+                .context("expected changed_fields")?
+                .contains(&Value::String("role".to_owned()))
+        );
 
         Ok(())
     }
@@ -29979,11 +31622,13 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(false)
         );
-        assert!(deactivation
-            .pointer("/changed_fields")
-            .and_then(Value::as_array)
-            .context("expected changed_fields")?
-            .contains(&Value::String("active".to_owned())));
+        assert!(
+            deactivation
+                .pointer("/changed_fields")
+                .and_then(Value::as_array)
+                .context("expected changed_fields")?
+                .contains(&Value::String("active".to_owned()))
+        );
 
         Ok(())
     }
@@ -30085,12 +31730,16 @@ mod tests {
             .get("business_module_acl_ids")
             .and_then(Value::as_array)
             .context("expected changed ACL ids")?;
-        assert!(changed_ids
-            .iter()
-            .any(|id| id.as_str() == Some("private-app:founder:ops_admin")));
-        assert!(changed_ids
-            .iter()
-            .any(|id| id.as_str() == Some("private-app:founder:module_owner")));
+        assert!(
+            changed_ids
+                .iter()
+                .any(|id| id.as_str() == Some("private-app:founder:ops_admin"))
+        );
+        assert!(
+            changed_ids
+                .iter()
+                .any(|id| id.as_str() == Some("private-app:founder:module_owner"))
+        );
 
         let conn = open_store(root)?;
         let owner_active: i64 = conn.query_row(
@@ -30137,8 +31786,8 @@ mod tests {
     }
 
     #[test]
-    fn user_deactivation_requires_recovery_for_sole_private_app_responsibility(
-    ) -> anyhow::Result<()> {
+    fn user_deactivation_requires_recovery_for_sole_private_app_responsibility()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -30215,12 +31864,16 @@ mod tests {
             .pointer("/lifecycle/responsible_user_ids")
             .and_then(Value::as_array)
             .context("expected responsible ids")?;
-        assert!(responsible
-            .iter()
-            .any(|user| user.as_str() == Some("ops_admin")));
-        assert!(!responsible
-            .iter()
-            .any(|user| user.as_str() == Some("module_owner")));
+        assert!(
+            responsible
+                .iter()
+                .any(|user| user.as_str() == Some("ops_admin"))
+        );
+        assert!(
+            !responsible
+                .iter()
+                .any(|user| user.as_str() == Some("module_owner"))
+        );
 
         Ok(())
     }
@@ -30266,11 +31919,13 @@ mod tests {
             outcome.pointer("/result/operation").and_then(Value::as_str),
             Some("assign_founder")
         );
-        assert!(outcome
-            .pointer("/result/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("App responsibility"));
+        assert!(
+            outcome
+                .pointer("/result/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("App responsibility")
+        );
 
         let conn = open_store(root)?;
         let stored = outbound_load_required(
@@ -30337,11 +31992,13 @@ mod tests {
             outcome.pointer("/result/operation").and_then(Value::as_str),
             Some("user_upsert")
         );
-        assert!(outcome
-            .pointer("/result/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("App responsibility"));
+        assert!(
+            outcome
+                .pointer("/result/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("App responsibility")
+        );
 
         let conn = open_store(root)?;
         let stored = outbound_load_required(
@@ -31499,8 +33156,8 @@ mod tests {
     }
 
     #[test]
-    fn backup_manifest_version_compatibility_blocks_cross_version_and_downgrade(
-    ) -> anyhow::Result<()> {
+    fn backup_manifest_version_compatibility_blocks_cross_version_and_downgrade()
+    -> anyhow::Result<()> {
         let current = env!("CARGO_PKG_VERSION");
         let same = business_os_backup_restore_version_compatibility(
             Some(BUSINESS_OS_BACKUP_MANIFEST_SCHEMA_VERSION),
@@ -32004,8 +33661,8 @@ mod tests {
     }
 
     #[test]
-    fn module_release_rollback_command_uses_apps_rollback_without_modify_permission(
-    ) -> anyhow::Result<()> {
+    fn module_release_rollback_command_uses_apps_rollback_without_modify_permission()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -32231,8 +33888,8 @@ mod tests {
     }
 
     #[test]
-    fn module_source_rollback_version_uses_apps_rollback_without_modify_permission(
-    ) -> anyhow::Result<()> {
+    fn module_source_rollback_version_uses_apps_rollback_without_modify_permission()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let app_root = root.join("src").join("apps").join("business-os");
@@ -32464,11 +34121,13 @@ mod tests {
                 .and_then(Value::as_str),
             Some("failed")
         );
-        assert!(outcome
-            .pointer("/result/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("read_collections"));
+        assert!(
+            outcome
+                .pointer("/result/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("read_collections")
+        );
         Ok(())
     }
 
@@ -33404,8 +35063,8 @@ mod tests {
     }
 
     #[test]
-    fn module_lifecycle_projection_repair_assigns_orphan_private_app_responsibility(
-    ) -> anyhow::Result<()> {
+    fn module_lifecycle_projection_repair_assigns_orphan_private_app_responsibility()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -33556,18 +35215,20 @@ mod tests {
                 })
             })
             .context("expected private orphan app in catalog")?;
-        assert!(private_app
-            .pointer("/lifecycle/responsible_user_ids")
-            .and_then(Value::as_array)
-            .context("expected responsible ids")?
-            .iter()
-            .any(|id| id.as_str() == Some("ops-admin")));
+        assert!(
+            private_app
+                .pointer("/lifecycle/responsible_user_ids")
+                .and_then(Value::as_array)
+                .context("expected responsible ids")?
+                .iter()
+                .any(|id| id.as_str() == Some("ops-admin"))
+        );
         Ok(())
     }
 
     #[test]
-    fn module_release_rejects_stale_source_and_rollback_version_refs_before_manifest_write(
-    ) -> anyhow::Result<()> {
+    fn module_release_rejects_stale_source_and_rollback_version_refs_before_manifest_write()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -33627,11 +35288,13 @@ mod tests {
                 outcome.get("status").and_then(Value::as_str),
                 Some("failed")
             );
-            assert!(outcome
-                .pointer("/result/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains(field_name));
+            assert!(
+                outcome
+                    .pointer("/result/error")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .contains(field_name)
+            );
             assert_eq!(fs::read_to_string(&manifest_path)?, original_manifest);
         }
 
@@ -33703,11 +35366,13 @@ mod tests {
             outcome.get("status").and_then(Value::as_str),
             Some("failed")
         );
-        assert!(outcome
-            .pointer("/result/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("injected release insert failure"));
+        assert!(
+            outcome
+                .pointer("/result/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("injected release insert failure")
+        );
         assert_eq!(fs::read_to_string(&manifest_path)?, original_manifest);
 
         let conn = open_store(root)?;
@@ -33805,11 +35470,13 @@ mod tests {
             outcome.get("status").and_then(Value::as_str),
             Some("failed")
         );
-        assert!(outcome
-            .pointer("/result/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("injected release status failure"));
+        assert!(
+            outcome
+                .pointer("/result/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("injected release status failure")
+        );
         assert_eq!(fs::read_to_string(&manifest_path)?, original_manifest);
 
         let conn = open_store(root)?;
@@ -34092,11 +35759,13 @@ mod tests {
                 .and_then(Value::as_str),
             Some("failed")
         );
-        assert!(payload
-            .pointer("/summary/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("explicit Team grant or locked-state behavior"));
+        assert!(
+            payload
+                .pointer("/summary/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("explicit Team grant or locked-state behavior")
+        );
         assert_eq!(
             payload
                 .pointer("/summary/data_access_review/read_collections/0")
@@ -34180,11 +35849,13 @@ mod tests {
                 .and_then(Value::as_str),
             Some("missing-release")
         );
-        assert!(payload
-            .pointer("/summary/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("Query returned no rows"));
+        assert!(
+            payload
+                .pointer("/summary/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("Query returned no rows")
+        );
         Ok(())
     }
 
@@ -34235,11 +35906,13 @@ mod tests {
 
         // A brand new source file added after the baseline.
         save_widget_source(root, "extra.js", "export const extra = true;\n")?;
-        assert!(app_root
-            .join("modules")
-            .join("widget")
-            .join("extra.js")
-            .is_file());
+        assert!(
+            app_root
+                .join("modules")
+                .join("widget")
+                .join("extra.js")
+                .is_file()
+        );
         save_widget_source(
             root,
             "module.json",
@@ -34269,11 +35942,13 @@ mod tests {
             restored_manifest, baseline_manifest,
             "module.json must be restored together with source files"
         );
-        assert!(!app_root
-            .join("modules")
-            .join("widget")
-            .join("extra.js")
-            .is_file());
+        assert!(
+            !app_root
+                .join("modules")
+                .join("widget")
+                .join("extra.js")
+                .is_file()
+        );
         assert_eq!(
             baseline_sha,
             compute_module_bundle(&app_root, "widget")?.sha256
@@ -34518,9 +36193,10 @@ mod tests {
         assert!(materialized_path.is_file());
         assert_eq!(fs::read(&materialized_path)?, bytes);
         assert!(task.prompt.contains("Business OS attachments"));
-        assert!(task
-            .prompt
-            .contains(materialized_path.to_string_lossy().as_ref()));
+        assert!(
+            task.prompt
+                .contains(materialized_path.to_string_lossy().as_ref())
+        );
         assert!(task.prompt.contains("desktop_files/chatfile_verified"));
         assert!(task.prompt.contains(&content_hash));
         assert!(
@@ -34528,6 +36204,167 @@ mod tests {
                 .prompt
                 .contains(&base64::engine::general_purpose::STANDARD.encode(bytes)),
             "prompt must not inline attachment bytes"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn business_chat_queue_materializes_legacy_sha256_desktop_file_attachment() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let bytes = b"%PDF-1.4\nctox-cv-pdf";
+        let (content_hash, generation_id) = seed_rxdb_chat_attachment_with_hash_scheme(
+            root,
+            "chatfile_legacy_sha256",
+            "legacy.pdf",
+            "application/pdf",
+            bytes,
+            false,
+            BUSINESS_OS_LEGACY_SHA256_CONTENT_HASH_SCHEME,
+        )?;
+
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_chat_legacy_attachment",
+                "command_id": "cmd_chat_legacy_attachment",
+                "module": "cv-print-builder",
+                "command_type": "business_os.chat.task",
+                "record_id": "cv-print-builder",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Legacy PDF pruefen",
+                    "instruction": "Pruefe den legacy PDF Upload.",
+                    "prompt": "Pruefe den legacy PDF Upload.",
+                    "attachment_refs": [{
+                        "kind": "desktop_file",
+                        "attachment_id": "chatatt_legacy",
+                        "file_id": "chatfile_legacy_sha256",
+                        "generation_id": generation_id.clone(),
+                        "name": "legacy.pdf",
+                        "mime_type": "application/pdf",
+                        "size_bytes": bytes.len(),
+                        "content_hash": content_hash.clone(),
+                        "content_hash_scheme": BUSINESS_OS_LEGACY_SHA256_CONTENT_HASH_SCHEME
+                    }]
+                },
+                "client_context": {
+                    "source": "business-os-chat",
+                    "module": "cv-print-builder"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?;
+        let task = channels::load_queue_task(root, task_id)?.context("queue task exists")?;
+        let materialized_path = root
+            .join("runtime")
+            .join("business-os")
+            .join("chat-attachments")
+            .join("cmd_chat_legacy_attachment")
+            .join("chatfile_legacy_sha256_legacy.pdf");
+
+        assert!(materialized_path.is_file());
+        assert_eq!(fs::read(&materialized_path)?, bytes);
+        assert!(task.prompt.contains("Business OS attachments"));
+        assert!(task.prompt.contains(&content_hash));
+        Ok(())
+    }
+
+    #[test]
+    fn cv_print_queue_prompt_includes_extracted_pdf_text_without_attachment_payload()
+    -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let bytes = simple_text_pdf_bytes(&[
+            "Julia Schikore",
+            "Senior HR Operations Manager",
+            "Koeln remote ab 01.09.2026",
+        ]);
+        let (content_hash, generation_id) = seed_rxdb_chat_attachment(
+            root,
+            "cv_pdf_source",
+            "Lebenslauf_Schikore_Julia.pdf",
+            "application/pdf",
+            &bytes,
+            false,
+        )?;
+
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_cv_pdf_text",
+                "command_id": "cmd_cv_pdf_text",
+                "module": "cv-print-builder",
+                "command_type": "business_os.chat.task",
+                "record_id": "doc_cv_julia",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "CV strukturieren: Lebenslauf_Schikore_Julia.pdf",
+                    "instruction": "Strukturiere den vor-extrahierten PDF-Text.",
+                    "prompt": "Strukturiere den vor-extrahierten PDF-Text.",
+                    "source_file_id": "cv_pdf_source",
+                    "source_file": {
+                        "file_id": "cv_pdf_source",
+                        "generation_id": generation_id,
+                        "filename": "Lebenslauf_Schikore_Julia.pdf",
+                        "mime_type": "application/pdf",
+                        "size_bytes": bytes.len(),
+                        "sha256": content_hash.clone()
+                    },
+                    "attachments": [{
+                        "kind": "desktop_file",
+                        "file_id": "cv_pdf_source",
+                        "generation_id": generation_id,
+                        "name": "Lebenslauf_Schikore_Julia.pdf",
+                        "mime_type": "application/pdf",
+                        "size_bytes": bytes.len(),
+                        "content_hash": content_hash,
+                        "content_hash_scheme": BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME
+                    }],
+                    "document_id": "doc_cv_julia",
+                    "version_id": "doc_cv_julia_v1",
+                    "writeback_contract": {
+                        "command_type": "ctox.cv_print.apply_parse",
+                        "target_collection": "document_versions",
+                        "document_id": "doc_cv_julia",
+                        "expected_model_schema": "ctox.cv_print_profile.v1"
+                    }
+                },
+                "client_context": {
+                    "source": "business-os-cv-print-builder",
+                    "module": "cv-print-builder"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?;
+        let task = channels::load_queue_task(root, task_id)?.context("queue task exists")?;
+
+        assert!(task.prompt.contains("CV PDF extracted text"));
+        assert!(task.prompt.contains("Julia Schikore"));
+        assert!(task.prompt.contains("Senior HR Operations Manager"));
+        assert!(task.prompt.contains("source_file_id: cv_pdf_source"));
+        assert!(
+            !task.prompt.contains("Business OS attachments"),
+            "cv parser should use bounded text extraction instead of chat attachments"
+        );
+        assert!(
+            !task.prompt.contains("Payload JSON"),
+            "cv parser prompt should not duplicate the command payload preview"
+        );
+        assert!(
+            !task.prompt.contains("Client context JSON"),
+            "cv parser prompt should not include the generic client-context preview"
+        );
+        assert!(
+            task.prompt.chars().count() <= 32_000,
+            "cv parser prompt must stay tightly bounded"
         );
         Ok(())
     }
@@ -34584,6 +36421,49 @@ mod tests {
         Ok(())
     }
 
+    fn simple_text_pdf_bytes(lines: &[&str]) -> Vec<u8> {
+        let mut content = String::from("BT /F1 12 Tf 72 720 Td ");
+        for (idx, line) in lines.iter().enumerate() {
+            if idx > 0 {
+                content.push_str("0 -18 Td ");
+            }
+            content.push('(');
+            content.push_str(
+                &line
+                    .replace('\\', "\\\\")
+                    .replace('(', "\\(")
+                    .replace(')', "\\)"),
+            );
+            content.push_str(") Tj ");
+        }
+        content.push_str("ET");
+        let objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_string(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+            format!("<< /Length {} >>\nstream\n{}\nendstream", content.len(), content),
+        ];
+        let mut pdf = String::from("%PDF-1.4\n");
+        let mut offsets = vec![0usize];
+        for (idx, object) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.push_str(&format!("{} 0 obj\n{}\nendobj\n", idx + 1, object));
+        }
+        let xref_start = pdf.len();
+        pdf.push_str(&format!("xref\n0 {}\n", offsets.len()));
+        pdf.push_str("0000000000 65535 f \n");
+        for offset in offsets.iter().skip(1) {
+            pdf.push_str(&format!("{offset:010} 00000 n \n"));
+        }
+        pdf.push_str(&format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n",
+            offsets.len(),
+            xref_start
+        ));
+        pdf.into_bytes()
+    }
+
     fn seed_rxdb_chat_attachment(
         root: &Path,
         file_id: &str,
@@ -34591,6 +36471,26 @@ mod tests {
         mime_type: &str,
         bytes: &[u8],
         corrupt_chunk_hash: bool,
+    ) -> anyhow::Result<(String, String)> {
+        seed_rxdb_chat_attachment_with_hash_scheme(
+            root,
+            file_id,
+            name,
+            mime_type,
+            bytes,
+            corrupt_chunk_hash,
+            BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME,
+        )
+    }
+
+    fn seed_rxdb_chat_attachment_with_hash_scheme(
+        root: &Path,
+        file_id: &str,
+        name: &str,
+        mime_type: &str,
+        bytes: &[u8],
+        corrupt_chunk_hash: bool,
+        content_hash_scheme: &str,
     ) -> anyhow::Result<(String, String)> {
         fs::create_dir_all(root.join("runtime"))?;
         let conn = Connection::open(rxdb_store_path(root))?;
@@ -34628,7 +36528,7 @@ mod tests {
                     "content_ref": file_id,
                     "content_state": "available",
                     "content_hash": content_hash.clone(),
-                    "content_hash_scheme": BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME,
+                    "content_hash_scheme": content_hash_scheme,
                     "content_generation_id": generation_id.clone(),
                     "content_synced_at_ms": now,
                     "is_deleted": false,
@@ -34659,7 +36559,7 @@ mod tests {
                         "file_id": file_id,
                         "generation_id": generation_id.clone(),
                         "content_hash": content_hash.clone(),
-                        "content_hash_scheme": BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME,
+                        "content_hash_scheme": content_hash_scheme,
                         "idx": idx,
                         "total": total,
                         "encoding": "base64",
@@ -35407,8 +37307,8 @@ mod tests {
     }
 
     #[test]
-    fn repair_queue_projections_redacts_inline_report_artifacts_and_counts_legacy_records(
-    ) -> anyhow::Result<()> {
+    fn repair_queue_projections_redacts_inline_report_artifacts_and_counts_legacy_records()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let conn = open_store(root)?;
@@ -35746,8 +37646,8 @@ mod tests {
     }
 
     #[test]
-    fn customers_invalid_command_writes_failed_projection_without_partial_record(
-    ) -> anyhow::Result<()> {
+    fn customers_invalid_command_writes_failed_projection_without_partial_record()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let actor = serde_json::json!({
@@ -35786,11 +37686,13 @@ mod tests {
             outbound_string(&command, &["status"]).as_deref(),
             Some("failed")
         );
-        assert!(command
-            .pointer("/result/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("health_status"));
+        assert!(
+            command
+                .pointer("/result/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("health_status")
+        );
         Ok(())
     }
 
@@ -37841,9 +39743,11 @@ mod tests {
             !backbone.is_empty(),
             "message drafting skillbook must have a real workflow backbone"
         );
-        assert!(backbone
-            .iter()
-            .any(|step| { outbound_string(step, &["step"]).as_deref() == Some("writeback") }));
+        assert!(
+            backbone
+                .iter()
+                .any(|step| { outbound_string(step, &["step"]).as_deref() == Some("writeback") })
+        );
         let routing = drafting
             .get("routing_taxonomy")
             .and_then(Value::as_array)
@@ -38593,8 +40497,8 @@ mod tests {
     }
 
     #[test]
-    fn outbound_active_engagement_keeps_sequence_version_until_explicit_reapply(
-    ) -> anyhow::Result<()> {
+    fn outbound_active_engagement_keeps_sequence_version_until_explicit_reapply()
+    -> anyhow::Result<()> {
         // Welle 4 (367): a live campaign sequence change must not silently
         // re-version active engagements. Each engagement stays pinned to the
         // sequence snapshot it captured until an explicit reapply flow runs.
@@ -38931,10 +40835,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("manual_physical_letter_marked_sent")
         );
-        assert!(send
-            .pointer("/result/physical_sent_at_ms")
-            .and_then(Value::as_i64)
-            .is_some());
+        assert!(
+            send.pointer("/result/physical_sent_at_ms")
+                .and_then(Value::as_i64)
+                .is_some()
+        );
         // Idempotency: replaying send_approved must not re-mark.
         let send_again = accept_rxdb_business_command(
             root,
@@ -40673,9 +42578,11 @@ mod tests {
             .pointer("/result/projections")
             .and_then(Value::as_array)
             .expect("asset upsert reports projections");
-        assert!(projections
-            .iter()
-            .any(|p| p["collection"] == "iot_assets" && p["id"] == "asset-iot-bc-1"));
+        assert!(
+            projections
+                .iter()
+                .any(|p| p["collection"] == "iot_assets" && p["id"] == "asset-iot-bc-1")
+        );
 
         let write = accept_rxdb_business_command(
             root,
@@ -41054,9 +42961,11 @@ mod tests {
             .get("modules")
             .and_then(Value::as_array)
             .context("catalog modules")?;
-        assert!(modules
-            .iter()
-            .any(|module| module.get("id").and_then(Value::as_str) == Some("research")));
+        assert!(
+            modules
+                .iter()
+                .any(|module| module.get("id").and_then(Value::as_str) == Some("research"))
+        );
         Ok(())
     }
 
@@ -41210,24 +43119,30 @@ mod tests {
                 .and_then(Value::as_str),
             Some("creator-user")
         );
-        assert!(module("private-zero")
-            .pointer("/lifecycle/responsible_user_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .any(|user| user.as_str() == Some("app-owner")));
-        assert!(module("private-zero")
-            .pointer("/lifecycle/preview_grant_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .any(|grant| grant.as_str() == Some("grant_preview_private_zero")));
-        assert!(module("private-zero")
-            .pointer("/lifecycle/preview_user_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .any(|user| user.as_str() == Some("preview-user")));
+        assert!(
+            module("private-zero")
+                .pointer("/lifecycle/responsible_user_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|user| user.as_str() == Some("app-owner"))
+        );
+        assert!(
+            module("private-zero")
+                .pointer("/lifecycle/preview_grant_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|grant| grant.as_str() == Some("grant_preview_private_zero"))
+        );
+        assert!(
+            module("private-zero")
+                .pointer("/lifecycle/preview_user_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|user| user.as_str() == Some("preview-user"))
+        );
         let legacy_preview_grant_id =
             legacy_preview_audience_grant_id("legacy-preview-zero", "legacy-preview-user");
         assert_eq!(
@@ -41236,12 +43151,14 @@ mod tests {
                 .and_then(Value::as_str),
             Some("preview")
         );
-        assert!(module("legacy-preview-zero")
-            .pointer("/lifecycle/preview_grant_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .any(|grant| grant.as_str() == Some(legacy_preview_grant_id.as_str())));
+        assert!(
+            module("legacy-preview-zero")
+                .pointer("/lifecycle/preview_grant_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|grant| grant.as_str() == Some(legacy_preview_grant_id.as_str()))
+        );
         assert_eq!(
             module("legacy-preview-zero")
                 .pointer("/lifecycle/preview_user_ids")
@@ -41252,34 +43169,42 @@ mod tests {
                 .count(),
             1
         );
-        assert!(module("legacy-preview-zero")
-            .pointer("/lifecycle/preview_user_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .any(|user| user.as_str() == Some("legacy-pregranted-user")));
-        assert!(module("legacy-preview-zero")
-            .pointer("/lifecycle/preview_grant_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .any(|grant| grant.as_str() == Some("grant_existing_legacy_preview")));
+        assert!(
+            module("legacy-preview-zero")
+                .pointer("/lifecycle/preview_user_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|user| user.as_str() == Some("legacy-pregranted-user"))
+        );
+        assert!(
+            module("legacy-preview-zero")
+                .pointer("/lifecycle/preview_grant_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|grant| grant.as_str() == Some("grant_existing_legacy_preview"))
+        );
         assert_eq!(
             module("modify-only-zero")
                 .pointer("/lifecycle/visibility_state")
                 .and_then(Value::as_str),
             Some("private")
         );
-        assert!(module("modify-only-zero")
-            .pointer("/lifecycle/preview_grant_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .is_empty());
-        assert!(module("modify-only-zero")
-            .pointer("/lifecycle/preview_user_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .is_empty());
+        assert!(
+            module("modify-only-zero")
+                .pointer("/lifecycle/preview_grant_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            module("modify-only-zero")
+                .pointer("/lifecycle/preview_user_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             module("team-one")
                 .pointer("/lifecycle/visibility_state")
@@ -41310,11 +43235,13 @@ mod tests {
                 .and_then(Value::as_str),
             Some("invalid_semver")
         );
-        assert!(module("missing-version")
-            .pointer("/lifecycle/preview_grant_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .is_empty());
+        assert!(
+            module("missing-version")
+                .pointer("/lifecycle/preview_grant_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             module("invalid-semver")
                 .pointer("/lifecycle/visibility_state")
@@ -41331,11 +43258,13 @@ mod tests {
                 .and_then(Value::as_str),
             Some("invalid_semver")
         );
-        assert!(module("invalid-semver")
-            .pointer("/lifecycle/preview_grant_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .is_empty());
+        assert!(
+            module("invalid-semver")
+                .pointer("/lifecycle/preview_grant_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             module("restricted-team")
                 .pointer("/lifecycle/visibility_state")
@@ -41350,12 +43279,14 @@ mod tests {
         );
         let restricted_preview_grant_id =
             legacy_preview_audience_grant_id("restricted-team", "restricted-preview-user");
-        assert!(module("restricted-team")
-            .pointer("/lifecycle/preview_grant_ids")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .any(|grant| grant.as_str() == Some(restricted_preview_grant_id.as_str())));
+        assert!(
+            module("restricted-team")
+                .pointer("/lifecycle/preview_grant_ids")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .any(|grant| grant.as_str() == Some(restricted_preview_grant_id.as_str()))
+        );
         assert_eq!(
             catalog
                 .pointer("/governance/lifecycle/team-one/visibility_state")
