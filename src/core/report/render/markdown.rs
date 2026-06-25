@@ -363,7 +363,7 @@ fn write_block(out: &mut String, block: &ManuscriptBlock) {
     let _ = writeln!(out, "{prefix} {}", ascii_dashes(&block.title));
     out.push('\n');
 
-    let body = ascii_dashes(&block.markdown);
+    let body = ascii_dashes_prose(&block.markdown);
     let body_trimmed = body.trim();
     if !body_trimmed.is_empty() {
         out.push_str(body_trimmed);
@@ -497,6 +497,50 @@ fn ascii_dashes(value: &str) -> String {
     out
 }
 
+/// Apply [`ascii_dashes`] to prose only, leaving Markdown code verbatim: fenced
+/// blocks (```` ``` ````/`~~~`) and inline `` `code` `` spans keep their original
+/// dash/prime characters, so identifiers, command lines, and the like are not
+/// corrupted by the ASCII-hyphen normalization.
+fn ascii_dashes_prose(markdown: &str) -> String {
+    let mut out = String::with_capacity(markdown.len());
+    let mut in_fence = false;
+    for line in markdown.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+            out.push_str(line);
+            continue;
+        }
+        if in_fence {
+            out.push_str(line);
+            continue;
+        }
+        // Prose line: convert only the segments outside inline `code` spans.
+        let mut in_code = false;
+        let mut segment = String::new();
+        for ch in line.chars() {
+            if ch == '`' {
+                if in_code {
+                    out.push_str(&segment);
+                } else {
+                    out.push_str(&ascii_dashes(&segment));
+                }
+                segment.clear();
+                out.push('`');
+                in_code = !in_code;
+            } else {
+                segment.push(ch);
+            }
+        }
+        if in_code {
+            out.push_str(&segment);
+        } else {
+            out.push_str(&ascii_dashes(&segment));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -590,5 +634,29 @@ mod tests {
         assert_eq!(ascii_dashes("5\u{2032}30\u{2033}"), "5'30\"");
         // Unrelated Unicode is preserved.
         assert_eq!(ascii_dashes("Größe \u{2728}"), "Größe \u{2728}");
+    }
+
+    #[test]
+    fn ascii_dashes_prose_preserves_dashes_inside_code() {
+        // Prose dashes are normalized; dashes inside inline code and fenced
+        // blocks are left verbatim.
+        let input = "Range 2020\u{2013}2024 and `flag\u{2013}value`.\n```\nx = a\u{2013}b\n```\ntail \u{2014} end\n";
+        let out = ascii_dashes_prose(input);
+        assert!(
+            out.contains("Range 2020-2024"),
+            "prose dash must be ASCII: {out}"
+        );
+        assert!(
+            out.contains("`flag\u{2013}value`"),
+            "inline-code dash must be verbatim: {out}"
+        );
+        assert!(
+            out.contains("x = a\u{2013}b"),
+            "fenced-code dash must be verbatim: {out}"
+        );
+        assert!(
+            out.contains("tail - end"),
+            "prose em-dash must be ASCII: {out}"
+        );
     }
 }
