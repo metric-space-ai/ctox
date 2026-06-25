@@ -1375,7 +1375,15 @@ async fn run_native_peer(
             signaling_url_with_native_metadata(&base_url, &sync_room, &password, &peer_session_id)
         })
     };
-    let ice_servers = ice_servers_from_sync_config(&store::sync_config(&root)?.ice_servers);
+    let ice_servers = {
+        let mut sync = store::sync_config(&root)?;
+        // Mint an ephemeral TURN credential for the native peer too (no-op unless
+        // a TURN URL + secret are configured). Re-derived on each peer bring-up.
+        if let Some(turn) = store::ephemeral_turn_server(&root, &peer_session_id) {
+            sync.ice_servers.push(turn);
+        }
+        ice_servers_from_sync_config(&sync.ice_servers)
+    };
     let database_path = store::rxdb_store_path(&root);
     match repair_stale_rxdb_collection_schema_versions(&root) {
         Ok(result) => {
@@ -1480,6 +1488,14 @@ async fn run_native_peer(
         let multi_signaling_url_provider = std::sync::Arc::clone(&signaling_url_provider);
         let multi_peer_session_id = peer_session_id.clone();
         let multi_ice_servers = ice_servers.clone();
+        // Server-authoritative per-device revocation: deny any signaling peer id
+        // present in the revocation registry at connect time. The browser cannot
+        // override this — the gate runs on the native (master-authoritative) peer.
+        let revocation_root = root.clone();
+        let is_peer_valid: std::sync::Arc<dyn Fn(&String) -> bool + Send + Sync> =
+            std::sync::Arc::new(move |peer_id: &String| {
+                !store::is_business_peer_revoked(&revocation_root, peer_id)
+            });
         let mut bringup = tokio::spawn(async move {
             rxdb::plugins::replication_webrtc::replicate_web_rtc_rs_multi_with_url_provider(
                 collection_list,
@@ -1487,7 +1503,7 @@ async fn run_native_peer(
                 topic,
                 multi_peer_session_id,
                 multi_ice_servers,
-                None,
+                Some(is_peer_valid),
                 20,
                 20,
                 5_000,

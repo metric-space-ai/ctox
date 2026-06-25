@@ -96,6 +96,9 @@ const CHATGPT_AUTH_SECRET_SCOPE: &str = "ctox-auth";
 const CHATGPT_AUTH_SECRET_NAME: &str = "chatgpt_subscription_auth_json";
 const BUSINESS_OS_SECRET_SCOPE: &str = "business-os";
 const BUSINESS_OS_ROOM_PASSWORD_SECRET_NAME: &str = "webrtc_room_password";
+const BUSINESS_OS_TURN_SECRET_NAME: &str = "webrtc_turn_secret";
+/// Lifetime of a minted ephemeral TURN credential (coturn use-auth-secret).
+const BUSINESS_OS_TURN_TTL_SECS: i64 = 3600;
 const BUSINESS_OS_BACKUP_MANIFEST_SIGNING_SECRET_NAME: &str = "backup_manifest_signing_key_v1";
 const BUSINESS_OS_BACKUP_PORTABLE_ENCRYPTION_SECRET_NAME: &str =
     "portable_backup_encryption_key_v1";
@@ -1371,6 +1374,70 @@ fn normalize_ice_server(value: Value) -> Option<Value> {
         );
     }
     Some(Value::Object(server))
+}
+
+/// Optional TURN server URL (e.g. `turn:turn.example.com:3478`). TURN is opt-in:
+/// when unset, sync uses STUN only and no ephemeral credentials are minted.
+fn business_os_turn_url() -> Option<String> {
+    env::var("CTOX_BUSINESS_OS_TURN_URL")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+/// Shared secret used to derive coturn `use-auth-secret` ephemeral credentials.
+/// Read-only (env override -> secret store); never auto-generated, because TURN
+/// is opt-in and a secret without a matching coturn deployment is meaningless.
+fn business_os_turn_secret(root: &Path) -> Option<String> {
+    if let Ok(value) = env::var("CTOX_BUSINESS_OS_TURN_SECRET") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_owned());
+        }
+    }
+    crate::secrets::read_secret_value(root, BUSINESS_OS_SECRET_SCOPE, BUSINESS_OS_TURN_SECRET_NAME)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+/// Mint a short-lived TURN credential pair using the coturn REST API scheme
+/// (draft-uberti-behave-turn-rest): `username = "<expiry-unix>:<session>"` and
+/// `password = base64(HMAC-SHA1(secret, username))`. The credential is valid
+/// only until `expiry`, so a leaked credential cannot be replayed indefinitely.
+/// HMAC-SHA1 is the credential-derivation scheme coturn implements; the secret,
+/// not the hash, is the security boundary.
+fn mint_ephemeral_turn_credentials(
+    turn_secret: &str,
+    session_id: &str,
+    now_ms: i64,
+) -> (String, String) {
+    let expiry = now_ms / 1000 + BUSINESS_OS_TURN_TTL_SECS;
+    let session = session_id.trim();
+    let session = if session.is_empty() { "anon" } else { session };
+    let username = format!("{expiry}:{session}");
+    let key = ring::hmac::Key::new(
+        ring::hmac::HMAC_SHA1_FOR_LEGACY_USE_ONLY,
+        turn_secret.as_bytes(),
+    );
+    let signature = ring::hmac::sign(&key, username.as_bytes());
+    let password = base64::engine::general_purpose::STANDARD.encode(signature.as_ref());
+    (username, password)
+}
+
+/// Build an ICE server entry for the configured TURN server with freshly minted
+/// ephemeral credentials bound to `session_id`. Returns `None` when TURN is not
+/// configured (no URL or no secret) — callers then fall back to STUN only.
+pub fn ephemeral_turn_server(root: &Path, session_id: &str) -> Option<Value> {
+    let url = business_os_turn_url()?;
+    let secret = business_os_turn_secret(root)?;
+    let (username, credential) =
+        mint_ephemeral_turn_credentials(&secret, session_id, now_ms() as i64);
+    Some(serde_json::json!({
+        "urls": url,
+        "username": username,
+        "credential": credential,
+    }))
 }
 
 fn business_os_room_password(root: &Path) -> anyhow::Result<String> {
@@ -8377,6 +8444,82 @@ fn generate_session_token() -> anyhow::Result<String> {
 fn hash_session_token(token: &str) -> String {
     let digest = Sha256::digest(token.as_bytes());
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
+}
+
+/// Revoke a sync-mesh peer by its signaling peer id. The native peer's
+/// `is_peer_valid` gate denies any revoked id at connect, so a revoked device is
+/// dropped from the mesh server-side regardless of what the browser claims.
+pub fn revoke_business_peer(
+    root: &Path,
+    peer_id: &str,
+    revoked_by: &str,
+    reason: &str,
+) -> anyhow::Result<()> {
+    let peer_id = peer_id.trim();
+    anyhow::ensure!(!peer_id.is_empty(), "peer_id is required");
+    let conn = open_store(root)?;
+    conn.execute(
+        "INSERT INTO business_peer_revocations (peer_id, revoked_at_ms, revoked_by, reason)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(peer_id) DO UPDATE SET
+            revoked_at_ms = excluded.revoked_at_ms,
+            revoked_by = excluded.revoked_by,
+            reason = excluded.reason",
+        params![peer_id, now_ms() as i64, revoked_by.trim(), reason.trim()],
+    )?;
+    Ok(())
+}
+
+/// Lift a peer revocation so the device may rejoin the mesh.
+pub fn clear_business_peer_revocation(root: &Path, peer_id: &str) -> anyhow::Result<()> {
+    let conn = open_store(root)?;
+    conn.execute(
+        "DELETE FROM business_peer_revocations WHERE peer_id = ?1",
+        params![peer_id.trim()],
+    )?;
+    Ok(())
+}
+
+/// Hot-path revocation check used by the native peer's `is_peer_valid` gate.
+/// Fails open (returns `false`) on a store error so a transient DB hiccup cannot
+/// sever every peer; a genuine revocation persists and is re-checked per connect.
+pub fn is_business_peer_revoked(root: &Path, peer_id: &str) -> bool {
+    let peer_id = peer_id.trim();
+    if peer_id.is_empty() {
+        return false;
+    }
+    let Ok(conn) = open_store(root) else {
+        return false;
+    };
+    conn.query_row(
+        "SELECT 1 FROM business_peer_revocations WHERE peer_id = ?1",
+        params![peer_id],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|row| row.is_some())
+    .unwrap_or(false)
+}
+
+/// List currently-revoked peers (for an admin/control surface).
+pub fn list_revoked_business_peers(root: &Path) -> anyhow::Result<Vec<Value>> {
+    let conn = open_store(root)?;
+    let mut stmt = conn.prepare(
+        "SELECT peer_id, revoked_at_ms, revoked_by, reason
+         FROM business_peer_revocations
+         ORDER BY revoked_at_ms DESC",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(serde_json::json!({
+                "peer_id": row.get::<_, String>(0)?,
+                "revoked_at_ms": row.get::<_, i64>(1)?,
+                "revoked_by": row.get::<_, String>(2)?,
+                "reason": row.get::<_, String>(3)?,
+            }))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
 }
 
 pub fn record_command(
@@ -26593,6 +26736,16 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_business_sessions_user
             ON business_sessions(user_id, revoked, expires_at_ms);
 
+        -- Per-device/peer revocation list for the WebRTC sync mesh. A revoked
+        -- signaling peer id is denied at connect time by the native peer's
+        -- is_peer_valid gate (server-authoritative; the browser cannot override).
+        CREATE TABLE IF NOT EXISTS business_peer_revocations (
+            peer_id TEXT PRIMARY KEY,
+            revoked_at_ms INTEGER NOT NULL,
+            revoked_by TEXT NOT NULL DEFAULT '',
+            reason TEXT NOT NULL DEFAULT ''
+        );
+
         CREATE TABLE IF NOT EXISTS business_module_acl (
             module_id TEXT NOT NULL,
             user_id TEXT NOT NULL,
@@ -26957,6 +27110,45 @@ mod tests {
         assert_eq!(revoked, 2);
         assert!(session_from_cookie_token(root, &token_a)?.is_none());
         assert!(session_from_cookie_token(root, &token_b)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn ephemeral_turn_credentials_follow_coturn_scheme() {
+        let now_ms = 1_000_000_000_000_i64; // 1_000_000_000 s
+        let (username, password) = mint_ephemeral_turn_credentials("s3cr3t", "user-1", now_ms);
+        // username = "<expiry>:<session>", expiry = now_s + ttl.
+        assert_eq!(
+            username,
+            format!("{}:user-1", 1_000_000_000 + BUSINESS_OS_TURN_TTL_SECS)
+        );
+        // password is base64 of a 20-byte HMAC-SHA1 digest.
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(&password)
+            .expect("password is base64");
+        assert_eq!(decoded.len(), 20);
+        // Deterministic for identical inputs; secret is the security boundary.
+        let (u2, p2) = mint_ephemeral_turn_credentials("s3cr3t", "user-1", now_ms);
+        assert_eq!((username, password.clone()), (u2, p2));
+        let (_, p3) = mint_ephemeral_turn_credentials("different", "user-1", now_ms);
+        assert_ne!(p3, password);
+    }
+
+    #[test]
+    fn peer_revocation_registry_round_trips() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        assert!(!is_business_peer_revoked(root, "peer-abc"));
+        revoke_business_peer(root, "peer-abc", "admin-1", "stolen device")?;
+        assert!(is_business_peer_revoked(root, "peer-abc"));
+        assert!(!is_business_peer_revoked(root, "peer-xyz"));
+        let listed = list_revoked_business_peers(root)?;
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0]["peer_id"], "peer-abc");
+        assert_eq!(listed[0]["revoked_by"], "admin-1");
+        clear_business_peer_revocation(root, "peer-abc")?;
+        assert!(!is_business_peer_revoked(root, "peer-abc"));
+        assert!(list_revoked_business_peers(root)?.is_empty());
         Ok(())
     }
 

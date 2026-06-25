@@ -574,6 +574,33 @@ fn handle_business_os_peer(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 "running": crate::business_os::store::sync_config(root)?.native_rxdb_peer_available,
             }))
         }
+        // Per-device revocation control surface (server-authoritative): a revoked
+        // signaling peer id is denied at connect time by the native peer's
+        // is_peer_valid gate. Operator/harness surface; the app equivalent would
+        // ride the policy-gated command channel.
+        Some("revoke") => {
+            let peer_id = args
+                .get(1)
+                .filter(|value| !value.starts_with("--"))
+                .map(String::as_str)
+                .context("usage: ctox business-os peer revoke <peer-id> [--reason <text>]")?;
+            let reason = flag_value(args, "--reason").unwrap_or("");
+            crate::business_os::store::revoke_business_peer(root, peer_id, "cli", reason)?;
+            print_json(&serde_json::json!({ "ok": true, "revoked": peer_id }))
+        }
+        Some("unrevoke") => {
+            let peer_id = args
+                .get(1)
+                .filter(|value| !value.starts_with("--"))
+                .map(String::as_str)
+                .context("usage: ctox business-os peer unrevoke <peer-id>")?;
+            crate::business_os::store::clear_business_peer_revocation(root, peer_id)?;
+            print_json(&serde_json::json!({ "ok": true, "cleared": peer_id }))
+        }
+        Some("revocations") | Some("list-revocations") => print_json(&serde_json::json!({
+            "ok": true,
+            "revocations": crate::business_os::store::list_revoked_business_peers(root)?,
+        })),
         Some("--help") | Some("-h") => {
             println!("{}", business_os_usage());
             Ok(())

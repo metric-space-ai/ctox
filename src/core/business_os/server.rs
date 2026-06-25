@@ -2585,7 +2585,19 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
         let session = request_session(root, &request);
         store::remember_authenticated_session_user(root, &session)?;
         let sync_config = if session.authenticated {
-            Some(store::sync_config(root)?)
+            let mut config = store::sync_config(root)?;
+            // Append an ephemeral TURN ICE server (coturn use-auth-secret) bound
+            // to the authenticated actor, minted fresh per shell load. No-op
+            // (STUN only) unless an operator configures a TURN URL + secret.
+            let turn_session = session
+                .user
+                .as_ref()
+                .map(|user| user.id.clone())
+                .unwrap_or_default();
+            if let Some(turn) = store::ephemeral_turn_server(root, &turn_session) {
+                config.ice_servers.push(turn);
+            }
+            Some(config)
         } else {
             None
         };
