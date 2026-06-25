@@ -80,3 +80,21 @@ test('malformed spreadsheet models normalize to a renderable grid', () => {
   assert.deepEqual(model.data, [['A', 'B']]);
   assert.equal(model.columns.length, 2);
 });
+
+test('evaluateGridData replaces formulas with computed values for persistence/export', () => {
+  const raw = [[10, 20], ['=A1+B1', 'text']];
+  const evaluated = hooks.evaluateGridData(raw);
+
+  assert.equal(evaluated[1][0], 30, 'formula cell evaluates to its computed value');
+  assert.equal(evaluated[0][0], 10, 'literal numbers pass through');
+  assert.equal(evaluated[1][1], 'text', 'literal text passes through');
+  // The live editor model must keep the formula for round-trip editing.
+  assert.equal(raw[1][0], '=A1+B1', 'input grid is not mutated');
+});
+
+test('evaluateGridData falls back to raw cells when the engine cannot build', () => {
+  const raw = [['=A1+B1']];
+  const brokenEngine = { buildFromArray() { throw new Error('no license'); } };
+  const out = hooks.evaluateGridData(raw, brokenEngine);
+  assert.deepEqual(out, [['=A1+B1']]);
+});
