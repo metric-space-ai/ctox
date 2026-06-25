@@ -1900,17 +1900,22 @@ fn configure_background_service_process(command: &mut Command) {
 #[cfg(not(unix))]
 fn configure_background_service_process(_command: &mut Command) {}
 
+pub fn ensure_background_stop_allowed(root: &Path) -> Result<()> {
+    match leased_business_os_app_queue_task_exists_for_stop_guard(root) {
+        Ok(true) => anyhow::bail!(
+            "refusing to stop CTOX while a Business OS app creation/modification task is leased; wait for the app task to finish or run `ctox stop --force`"
+        ),
+        Ok(false) => Ok(()),
+        Err(err) => {
+            eprintln!("ctox stop guard could not inspect Business OS app queue tasks: {err}");
+            Ok(())
+        }
+    }
+}
+
 pub fn stop_background_guarded(root: &Path, force: bool) -> Result<String> {
     if !force {
-        match leased_business_os_app_queue_task_exists_for_stop_guard(root) {
-            Ok(true) => anyhow::bail!(
-                "refusing to stop CTOX while a Business OS app creation/modification task is leased; wait for the app task to finish or run `ctox stop --force`"
-            ),
-            Ok(false) => {}
-            Err(err) => eprintln!(
-                "ctox stop guard could not inspect Business OS app queue tasks: {err}"
-            ),
-        }
+        ensure_background_stop_allowed(root)?;
     }
     stop_background(root)
 }
@@ -12203,6 +12208,7 @@ fn recover_stale_business_os_app_queue_task_summary(
         if !queue_task_lease_is_stale_enough(&task, minimum_lease_age_secs) {
             continue;
         }
+        clear_idle_pending_prompt_shadow_for_recovery(state, &task.message_key);
         let Some(target) = business_os_app_module_target_from_prompt(&task.prompt) else {
             continue;
         };
@@ -12229,6 +12235,29 @@ fn recover_stale_business_os_app_queue_task_summary(
         }
     }
     Ok(summary)
+}
+
+fn clear_idle_pending_prompt_shadow_for_recovery(
+    state: &Arc<Mutex<SharedState>>,
+    message_key: &str,
+) {
+    let mut shared = lock_shared_state(state);
+    if shared.busy || shared.worker_active_count > 0 || shared.durable_queue_lease_in_progress {
+        return;
+    }
+    let before = shared.pending_prompts.len();
+    shared.pending_prompts.retain(|prompt| {
+        !prompt
+            .leased_message_keys
+            .iter()
+            .any(|key| key == message_key)
+    });
+    if shared.pending_prompts.len() != before {
+        push_event_locked(
+            &mut shared,
+            format!("Cleared idle pending prompt shadow for abandoned queue task {message_key}"),
+        );
+    }
 }
 
 fn queue_task_lease_is_stale_enough(
@@ -17448,14 +17477,16 @@ fn active_or_pending_leased_message_key(
 }
 
 fn leased_message_key_has_live_owner_locked(shared: &SharedState, message_key: &str) -> bool {
-    ((shared.busy || shared.worker_active_count > 0)
-        && shared.leased_message_keys_inflight.contains(message_key))
-        || shared.pending_prompts.iter().any(|prompt| {
-            prompt
-                .leased_message_keys
-                .iter()
-                .any(|key| key == message_key)
-        })
+    let execution_live =
+        shared.busy || shared.worker_active_count > 0 || shared.durable_queue_lease_in_progress;
+    execution_live
+        && (shared.leased_message_keys_inflight.contains(message_key)
+            || shared.pending_prompts.iter().any(|prompt| {
+                prompt
+                    .leased_message_keys
+                    .iter()
+                    .any(|key| key == message_key)
+            }))
 }
 
 fn lock_shared_state<'a>(
@@ -24533,6 +24564,52 @@ Business OS command:
         assert_eq!(route_status_for(&root, &task.message_key), "review_rework");
         let shared = lock_shared_state(&state);
         assert!(shared.pending_prompts.is_empty());
+    }
+
+    #[test]
+    fn status_snapshot_recovery_reworks_fresh_red_app_lease_with_idle_pending_shadow() {
+        let root = temp_root("status-snapshot-red-app-idle-shadow");
+        let script_dir = root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "console.error('missing index.js'); process.exit(1);\n",
+        )
+        .expect("write red validator script fixture");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create contracts app".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/contracts".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        seed_business_os_app_artifacts(&root, "contracts");
+        let leased = channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            shared
+                .pending_prompts
+                .push_back(queued_prompt_from_queue_task(leased));
+        }
+
+        status_from_shared_state(&root, &state).expect("status snapshot failed");
+
+        assert_eq!(route_status_for(&root, &task.message_key), "review_rework");
+        let shared = lock_shared_state(&state);
+        assert!(shared.pending_prompts.is_empty());
+        assert!(shared.recent_events.iter().any(|event| {
+            event.contains("Cleared idle pending prompt shadow")
+                && event.contains(task.message_key.as_str())
+        }));
     }
 
     #[test]

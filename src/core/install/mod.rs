@@ -1047,6 +1047,9 @@ fn apply_update(
     let release_root = releases_dir.join(release);
     ensure_dir(&releases_dir)?;
     ensure_release_slot(&release_root, force)?;
+    service::ensure_background_stop_allowed(&layout.active_root).with_context(|| {
+        "ctox upgrade cannot prepare a release while a Business OS app creation/modification task is leased"
+    })?;
     let mut manifest = load_install_manifest(&layout.install_manifest_path())?
         .context("managed install manifest missing; run `ctox update adopt` first")?;
     let previous_release = manifest.current_release.clone();
@@ -1125,7 +1128,15 @@ fn apply_update(
         .unwrap_or(true);
     persist_update_phase(&layout.update_state_path(), "switching", None)?;
     progress_step("switching current symlink and restarting service if required");
-    let _ = service::stop_background(&layout.active_root);
+    if let Err(err) = stop_background_for_release_switch(&layout.active_root) {
+        let error_message = err.to_string();
+        persist_update_phase(
+            &layout.update_state_path(),
+            "failed",
+            Some(error_message.as_str()),
+        )?;
+        return Err(err);
+    }
     if let Err(err) = switch_current_release(&current_link, &release_root) {
         maybe_restart_service(previous_release_root.as_deref())?;
         persist_update_phase(
@@ -1248,7 +1259,7 @@ fn rollback_update(root: &Path) -> Result<RollbackResult> {
     let should_restart = service::service_status_snapshot(&layout.active_root)
         .map(|status| status.running || status.autostart_enabled || has_runnable_queue_work)
         .unwrap_or(false);
-    let _ = service::stop_background(&layout.active_root);
+    stop_background_for_release_switch(&layout.active_root)?;
     if let Some(backup_path) = update_state.and_then(|entry| entry.state_backup_path) {
         restore_state_backup(&backup_path, &layout.state_root)?;
     }
@@ -1447,7 +1458,7 @@ fn rollback_to_previous_release(
     backup_path: &Path,
     should_restart: bool,
 ) -> Result<()> {
-    let _ = service::stop_background(current_link);
+    stop_background_for_release_switch(current_link)?;
     restore_state_backup(backup_path, state_root)?;
     if let Some(previous_release_root) = previous_release_root {
         switch_current_release(current_link, previous_release_root)?;
@@ -1457,6 +1468,14 @@ fn rollback_to_previous_release(
         }
     }
     Ok(())
+}
+
+fn stop_background_for_release_switch(root: &Path) -> Result<()> {
+    service::stop_background_guarded(root, false)
+        .map(|_| ())
+        .map_err(|err| {
+            anyhow::anyhow!("refusing to switch CTOX release while service stop is not safe: {err}")
+        })
 }
 
 fn maybe_restart_service(previous_release_root: Option<&Path>) -> Result<()> {
@@ -3244,6 +3263,35 @@ mod tests {
 
         assert!(help.contains("ctox update apply --latest"));
         assert!(help.contains("without starting an update"));
+    }
+
+    #[test]
+    fn release_switch_stop_is_guarded_for_business_os_app_tasks() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        let task = channels::create_queue_task(
+            root,
+            channels::QueueTaskCreateRequest {
+                title: "Create contracts app".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/app-creator/contracts".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(root, &task.message_key, "ctox-service")
+            .expect("failed to lease app queue task");
+
+        let err = stop_background_for_release_switch(root)
+            .expect_err("release switch stop must be blocked while an app task is leased")
+            .to_string();
+
+        assert!(err.contains("refusing to switch CTOX release"));
+        assert!(err.contains("Business OS app creation/modification task is leased"));
     }
 
     #[test]

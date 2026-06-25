@@ -3922,6 +3922,19 @@ fn upsert_default_core_transition_rules(conn: &Connection) -> Result<()> {
             json!({"core_transition": false, "records_runtime_strategy": true}),
         ),
         (
+            "api-model-cost-event-telemetry",
+            21,
+            Some("=api_model_cost_events"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "ApiModelCostEvent",
+            "P3Housekeeping",
+            "telemetry.api_model.cost_event",
+            json!({"core_transition": false, "records_model_cost": true}),
+        ),
+        (
             "communication-founder",
             10,
             Some("communication_founder"),
@@ -5242,6 +5255,15 @@ fn infer_queue_transition(
     if founder_text(haystack) {
         metadata.insert("protected_party".to_string(), "founder".to_string());
     }
+    if to_state == csm::CoreState::Completed {
+        if let Some(reason) = business_os_terminal_success_reason(after) {
+            metadata.insert(
+                "terminal_policy_proof".to_string(),
+                "policy:business-os-queued-command-terminal-success".to_string(),
+            );
+            metadata.insert("terminal_success_reason".to_string(), reason);
+        }
+    }
     let mut evidence = evidence_from_row(after);
     if to_state == csm::CoreState::ReworkRequired {
         if let Some((review_audit_key, proof_metadata)) =
@@ -5283,6 +5305,21 @@ fn infer_queue_transition(
         evidence,
         metadata,
     })
+}
+
+fn business_os_terminal_success_reason(row: &Value) -> Option<String> {
+    json_string(
+        row,
+        &[
+            "status_note",
+            "last_error",
+            "completion_reason",
+            "reason",
+            "note",
+        ],
+    )
+    .map(|value| value.trim().to_string())
+    .filter(|value| value.starts_with("business-os:terminal-success:"))
 }
 
 fn queue_entity_id(event: &ProcessEventForStateMachine, row: &Value) -> String {
@@ -6895,6 +6932,82 @@ mod tests {
     }
 
     #[test]
+    fn business_os_terminal_success_queue_completion_has_policy_proof() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("ctox.sqlite3");
+        let conn = Connection::open(&db_path)?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE communication_routing_state (
+                message_key TEXT PRIMARY KEY,
+                route_status TEXT NOT NULL,
+                lease_owner TEXT,
+                leased_at TEXT,
+                acked_at TEXT,
+                status_note TEXT,
+                updated_at TEXT NOT NULL
+            );
+            "#,
+        )?;
+        ensure_process_mining_schema(&conn, &db_path)?;
+        conn.execute(
+            r#"
+            INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, updated_at
+            )
+            VALUES (
+                'queue:system::app-success', 'leased', 'ctox-service',
+                '2026-06-25T05:00:00Z', '2026-06-25T05:00:00Z'
+            )
+            "#,
+            [],
+        )?;
+        conn.execute(
+            r#"
+            UPDATE communication_routing_state
+            SET route_status = 'handled',
+                lease_owner = NULL,
+                leased_at = NULL,
+                acked_at = '2026-06-25T05:10:00Z',
+                status_note = 'business-os:terminal-success: app validation passed',
+                updated_at = '2026-06-25T05:10:00Z'
+            WHERE message_key = 'queue:system::app-success'
+            "#,
+            [],
+        )?;
+
+        let summary = scan_core_state_machine_violations(&conn, 100)?;
+        let rejected = summary
+            .get("rejected")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        let completed_request_json: String = conn.query_row(
+            r#"
+            SELECT request_json
+            FROM ctox_pm_core_transition_audit
+            WHERE rule_id = 'communication-routing-state'
+              AND entity_id = 'queue:system::app-success'
+              AND to_state = 'Completed'
+              AND accepted = 1
+            LIMIT 1
+            "#,
+            [],
+            |row| row.get(0),
+        )?;
+
+        assert_eq!(rejected, 0, "{summary}");
+        assert!(
+            completed_request_json.contains("\"terminal_policy_proof\""),
+            "{completed_request_json}"
+        );
+        assert!(
+            completed_request_json.contains("policy:business-os-queued-command-terminal-success"),
+            "{completed_request_json}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn queue_lease_owner_key_does_not_mark_founder_lane() -> Result<()> {
         let dir = tempdir()?;
         let db_path = dir.path().join("ctox.sqlite3");
@@ -7051,6 +7164,55 @@ mod tests {
 
         assert_eq!(unmapped, 0, "{summary}");
         assert_eq!(strategy_telemetry, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn api_model_cost_events_are_explicit_runtime_telemetry() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("ctox.sqlite3");
+        let conn = Connection::open(&db_path)?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE api_model_cost_events (
+                id INTEGER PRIMARY KEY,
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                input_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            "#,
+        )?;
+        ensure_process_mining_schema(&conn, &db_path)?;
+        conn.execute(
+            r#"
+            INSERT INTO api_model_cost_events (
+                provider, model, input_tokens, output_tokens, created_at
+            )
+            VALUES ('minimax', 'minimax-m3', 1000, 250, '2026-06-25T06:00:00Z')
+            "#,
+            [],
+        )?;
+
+        let summary = scan_core_state_machine_violations(&conn, 100)?;
+        let unmapped = summary
+            .get("unmapped")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        let cost_telemetry: i64 = conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM ctox_pm_event_transition_coverage
+            WHERE rule_id = 'api-model-cost-event-telemetry'
+              AND mapping_kind = 'telemetry'
+            "#,
+            [],
+            |row| row.get(0),
+        )?;
+
+        assert_eq!(unmapped, 0, "{summary}");
+        assert_eq!(cost_telemetry, 1);
         Ok(())
     }
 
