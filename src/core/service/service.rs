@@ -120,6 +120,7 @@ const BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS: u64 = 180;
 const BUSINESS_OS_APP_RECOVERY_STALE_SECS: u64 = 180;
 const BUSINESS_OS_APP_RECOVERY_PREFLIGHT_IDLE_SAFETY_SECS: u64 = 60;
 const BUSINESS_OS_APP_RECOVERY_SCAN_LIMIT: usize = 128;
+const IDLE_DURABLE_QUEUE_EMPTY_BACKOFF_MAX_SECS: u64 = 60;
 const BUSINESS_OS_APP_UNSTARTED_REQUEUE_BLOCK_THRESHOLD: usize = 1;
 const BUSINESS_OS_APP_UNSTARTED_REQUEUE_COUNT_KEY: &str = "business_os_app_unstarted_requeue_count";
 const BUSINESS_OS_APP_UNSTARTED_REQUEUED_AT_KEY: &str = "business_os_app_unstarted_requeued_at";
@@ -180,6 +181,8 @@ static APPROVAL_NAG_IDLE_GATE: OnceLock<Mutex<Option<ApprovalNagIdleGateState>>>
 static BUSINESS_OS_APP_RECOVERY_PREFLIGHT_GATE: OnceLock<
     Mutex<Option<BusinessOsAppRecoveryPreflightGateState>>,
 > = OnceLock::new();
+static IDLE_DURABLE_QUEUE_EMPTY_GATE: OnceLock<Mutex<Option<IdleDurableQueueEmptyGateState>>> =
+    OnceLock::new();
 static LIVE_SERVICE_SETTINGS_CACHE: OnceLock<Mutex<Option<LiveServiceSettingsCacheState>>> =
     OnceLock::new();
 
@@ -231,6 +234,13 @@ struct ApprovalNagIdleGateState {
 struct BusinessOsAppRecoveryPreflightGateState {
     root: PathBuf,
     last_run: Instant,
+}
+
+#[derive(Debug, Clone)]
+struct IdleDurableQueueEmptyGateState {
+    root: PathBuf,
+    last_empty_probe: Instant,
+    consecutive_empty_probes: u32,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -11702,10 +11712,24 @@ fn maybe_next_idle_dispatch_prompt(
     state: &Arc<Mutex<SharedState>>,
 ) -> Result<Option<IdleDispatchPrompt>> {
     if let Some(prompt) = maybe_take_next_queued_prompt_for_idle_dispatch(root, state) {
+        clear_idle_durable_queue_empty_gate(root);
         return Ok(Some(IdleDispatchPrompt::InMemory(prompt)));
     }
-    maybe_lease_next_durable_queue_prompt_for_idle_dispatch(root, state)
-        .map(|prompt| prompt.map(IdleDispatchPrompt::Durable))
+    if !idle_durable_queue_probe_available(state)
+        || should_skip_idle_durable_queue_empty_probe(root)
+    {
+        return Ok(None);
+    }
+    match maybe_lease_next_durable_queue_prompt_for_idle_dispatch(root, state)? {
+        Some(prompt) => {
+            clear_idle_durable_queue_empty_gate(root);
+            Ok(Some(IdleDispatchPrompt::Durable(prompt)))
+        }
+        None => {
+            mark_idle_durable_queue_empty_probe(root);
+            Ok(None)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -11752,6 +11776,63 @@ fn begin_durable_queue_lease_attempt(
     Some(DurableQueueLeaseAttemptGuard {
         state: state.clone(),
     })
+}
+
+fn idle_durable_queue_probe_available(state: &Arc<Mutex<SharedState>>) -> bool {
+    let shared = lock_shared_state(state);
+    !durable_queue_dispatch_blocked_locked(&shared, DurableQueueDispatchGuard::StrictIdle)
+}
+
+fn should_skip_idle_durable_queue_empty_probe(root: &Path) -> bool {
+    let root = root.to_path_buf();
+    let gate = IDLE_DURABLE_QUEUE_EMPTY_GATE.get_or_init(|| Mutex::new(None));
+    let gate = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(previous) = gate.as_ref() else {
+        return false;
+    };
+    if previous.root != root {
+        return false;
+    }
+    previous.last_empty_probe.elapsed()
+        < idle_durable_queue_empty_backoff(previous.consecutive_empty_probes)
+}
+
+fn mark_idle_durable_queue_empty_probe(root: &Path) {
+    let root = root.to_path_buf();
+    let gate = IDLE_DURABLE_QUEUE_EMPTY_GATE.get_or_init(|| Mutex::new(None));
+    let mut gate = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let consecutive_empty_probes = gate
+        .as_ref()
+        .filter(|previous| previous.root == root)
+        .map(|previous| previous.consecutive_empty_probes.saturating_add(1))
+        .unwrap_or(1);
+    *gate = Some(IdleDurableQueueEmptyGateState {
+        root,
+        last_empty_probe: Instant::now(),
+        consecutive_empty_probes,
+    });
+}
+
+fn clear_idle_durable_queue_empty_gate(root: &Path) {
+    let root = root.to_path_buf();
+    let gate = IDLE_DURABLE_QUEUE_EMPTY_GATE.get_or_init(|| Mutex::new(None));
+    let mut gate = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if gate
+        .as_ref()
+        .map(|previous| previous.root == root)
+        .unwrap_or(false)
+    {
+        *gate = None;
+    }
+}
+
+fn idle_durable_queue_empty_backoff(consecutive_empty_probes: u32) -> Duration {
+    let multiplier = 1u64 << consecutive_empty_probes.min(3);
+    Duration::from_secs(
+        IDLE_QUEUE_DISPATCH_POLL_SECS
+            .saturating_mul(multiplier)
+            .min(IDLE_DURABLE_QUEUE_EMPTY_BACKOFF_MAX_SECS),
+    )
 }
 
 fn business_os_queue_task_is_app_module(task: &channels::QueueTaskView) -> bool {
@@ -11876,6 +11957,7 @@ fn maybe_lease_next_durable_queue_prompt(
     let app_queue_lease_active = leased_business_os_app_queue_task_exists(root)?;
     if !app_queue_lease_active {
         if let Some(prompt) = maybe_lease_business_os_app_validation_rework(root, state)? {
+            clear_idle_durable_queue_empty_gate(root);
             return Ok(Some(prompt));
         }
     }
@@ -11899,6 +11981,7 @@ fn maybe_lease_next_durable_queue_prompt(
         }
         let leased =
             channels::lease_queue_task(root, &task.message_key, CHANNEL_ROUTER_LEASE_OWNER)?;
+        clear_idle_durable_queue_empty_gate(root);
         return Ok(Some(QueuedPrompt {
             preview: preview_text(&leased.prompt),
             source_label: "queue".to_string(),
@@ -28579,6 +28662,53 @@ Use shell tools to create or update these files."
             !shared.busy,
             "leasing durable queue work should let enqueue_prompt/start_prompt_worker own busy state"
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn idle_dispatcher_backoffs_after_empty_durable_queue_probe() {
+        let root = temp_root("ctox-idle-dispatch-empty-queue-backoff");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        let empty = maybe_next_idle_dispatch_prompt(&root, &state)
+            .expect("empty idle dispatch should not fail");
+        assert!(empty.is_none());
+        assert!(
+            should_skip_idle_durable_queue_empty_probe(&root),
+            "an empty durable queue probe should suppress the immediate next standby SQLite scan"
+        );
+
+        let queue_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Delayed durable queue work".to_string(),
+                prompt: "Run after the standby empty-probe backoff clears.".to_string(),
+                thread_key: "durable-empty-backoff".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed durable queue task");
+
+        let skipped = maybe_next_idle_dispatch_prompt(&root, &state)
+            .expect("backoff idle dispatch should not fail");
+        assert!(skipped.is_none());
+        assert_eq!(route_status_for(&root, &queue_task.message_key), "pending");
+
+        clear_idle_durable_queue_empty_gate(&root);
+        let next = maybe_next_idle_dispatch_prompt(&root, &state)
+            .expect("idle dispatch should not fail after clearing backoff")
+            .expect("expected durable queue prompt after clearing backoff");
+        match next {
+            IdleDispatchPrompt::Durable(prompt) => {
+                assert_eq!(prompt.leased_message_keys, vec![queue_task.message_key]);
+            }
+            IdleDispatchPrompt::InMemory(_) => panic!("expected durable queue prompt"),
+        }
 
         let _ = std::fs::remove_dir_all(&root);
     }
