@@ -4623,8 +4623,15 @@ var SharedRoomPeer = class {
     return first.done ? null : this.collections.get(first.value);
   }
   register(collection, registration) {
+    const isNewCollection = !this.collections.has(collection);
     this.collections.set(collection, registration);
     this.refCount += 1;
+    if (isNewCollection) {
+      this.schemaMismatchCollections.delete(collection);
+      if (this.negotiated) {
+        this.negotiated = null;
+      }
+    }
     this.scheduleCollectionCatchUp(collection, registration);
   }
   scheduleAllCollectionCatchUps() {

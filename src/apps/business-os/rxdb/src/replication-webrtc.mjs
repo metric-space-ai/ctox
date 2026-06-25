@@ -191,8 +191,21 @@ class SharedRoomPeer {
   }
 
   register(collection, registration) {
+    const isNewCollection = !this.collections.has(collection);
     this.collections.set(collection, registration);
     this.refCount += 1;
+    if (isNewCollection) {
+      this.schemaMismatchCollections.delete(collection);
+      if (this.negotiated) {
+        // The room handshake carries a point-in-time collectionSchemas map.
+        // Runtime-installed app modules register their collections after the
+        // shell-critical room is already open, so a cached handshake cannot be
+        // reused for the new collection without producing a false schema hash
+        // mismatch. Drop it and let the catch-up path renegotiate this room
+        // with the complete collection set.
+        this.negotiated = null;
+      }
+    }
     this.scheduleCollectionCatchUp(collection, registration);
   }
 
