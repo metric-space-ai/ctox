@@ -153,10 +153,11 @@ Billige, klar falsifizierbare Bugs — alle mit Fixture/Test abschließen.
 - **Akzeptanz:** Baseline-Probe lädt das Seed-Skript in-tree erfolgreich.
 - **Umgesetzt (2026-06-25):** Alle 5 `script_path`-Einträge auf `src/skills/...` (resolver macht `root.join(script_path)`, unlock.rs:293; Dateien verifiziert vorhanden). Kein Test pinnte den alten String; Seed-JSON gültig.
 
-### WS4-04 ☐ Scrape-Target-/Rust-Doppel-Extraktion
+### WS4-04 ☑ Scrape-Target-/Rust-Doppel-Extraktion
 - **Datei:** [person_research.rs:162](../src/tools/web-stack/src/person_research.rs)
 - **Change:** Bei erfolgreicher Scrape-Target-Extraktion **nicht** zusätzlich in Rust-`extract_fields` durchfallen (Evidence-Duplikat vermeiden).
 - **Akzeptanz:** Test, dass pro Quelle bei Target-Erfolg keine doppelte Evidence entsteht.
+- **Umgesetzt (2026-06-25):** Per-`(source,field)`-Dedup statt komplettem Skip — der Fall-through ist laut Code-Kommentar **gewollt** (Cascade ergänzt Felder, die das Scrape-Target nicht lieferte). Pro Loop-Iteration sammelt `scrape_covered_fields: BTreeSet<FieldKey>` die vom Target gelieferten Felder; Snippet- und Read-Cascade überspringen genau diese → keine Doppel-Evidence für dasselbe Feld, Supplement-Verhalten bleibt. 315 Tests grün (volle Extraktions-Schleife nur via Netz-Mocks unit-testbar → kein Einzeltest).
 
 ### WS4-05 ◐ Unpaywall-Kontakt-E-Mail
 - **Datei:** [scholarly_search.rs:805](../src/tools/web-stack/src/scholarly_search.rs)
