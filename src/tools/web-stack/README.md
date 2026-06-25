@@ -86,6 +86,47 @@ cookie-bootstrap profile flow — Playwright owns the entire Google path.
 | `CTOX_WEB_SEARCH_TIMEOUT_MS` | Per-request timeout for HTTP and Playwright paths (default 7000). |
 | `CTOX_WEB_AUTO_PROVIDER_BUDGET` | Max providers tried per query in `auto` mode (default 4). |
 | `CTOX_WEB_BROWSER_REFERENCE_DIR` | Directory containing `node_modules/playwright`. Defaults to `runtime/browser/interactive-reference`. |
+| `CTOX_WEB_EGRESS_ALLOW` | Comma-separated host allow-list that bypasses the SSRF egress guard (for deliberately-internal endpoints, e.g. a self-hosted SearXNG). Empty by default. |
 
 These keys are read from CTOX's local SQLite runtime config store, not from
 global process environment variables.
+
+## Egress (SSRF) guard
+
+Every fetch of an untrusted URL — the model-facing `ctox_web_read` tool,
+evidence pages discovered in a SERP, open-access PDF URLs resolved from external
+APIs, and deep-research snapshots — goes through `egress::SsrfResolver`, which
+filters DNS results to publicly-routable addresses at connect time. Because
+`ureq` re-resolves every redirect hop through the agent's resolver, this also
+blocks redirect-to-internal and DNS-rebinding attempts. Loopback, RFC1918,
+link-local (incl. the `169.254.169.254` cloud-metadata address), shared/CGNAT,
+ULA and the IPv4-mapped forms of all of these are rejected. Operator-configured
+internal endpoints are exempted via `CTOX_WEB_EGRESS_ALLOW` (and the configured
+SearXNG host is auto-allowed). Scraped page content handed back to the model is
+fenced with explicit untrusted-content markers so a hostile page cannot smuggle
+instructions.
+
+## Legal & ToS posture
+
+This stack performs automated retrieval from third-party sites and must be used
+within the operator's legal basis. Key points:
+
+- **Stealth Google search.** The `google` provider drives a real Chromium with
+  fingerprint-evasion (`assets/stealth_init.js`) and dismisses the EU consent /
+  `/sorry` CAPTCHA. Automated, evasive scraping of Google is contrary to
+  Google's Terms of Service; it is suitable for personal/operator use but is not
+  a sanctioned API. Prefer an official SERP/grounding API or a self-hosted
+  SearXNG (`CTOX_WEB_SEARCH_PROVIDER=searxng`) where ToS compliance matters.
+- **People data (GDPR).** `person-research` and the people sources collect
+  personal data of identifiable individuals. People scraping is opt-in only
+  (`--include-private`, incl. the credential-free `person-discovery` source) and
+  must have a recorded lawful basis and retention/erasure handling before
+  personal records are persisted (see the hardening plan W2). Inferred gender
+  (`person_geschlecht`) is intentionally never emitted.
+- **LinkedIn / Xing.** The automatic path is API-only and never scrapes HTML. A
+  separate operator-initiated, consent-based browser-assist capture exists
+  behind the same Tier-C opt-in; it carries ToS/legal exposure and requires the
+  operator's own credentials and a valid lawful basis.
+- **Anna's Archive is metadata-only.** No full-text download or reproduction;
+  open-access full text is sourced only via legal Unpaywall OA resolution.
+- No `robots.txt` handling exists yet; respect target sites' crawl policies.

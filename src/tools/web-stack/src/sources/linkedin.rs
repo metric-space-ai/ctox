@@ -5,11 +5,23 @@
 //!
 //! ## TOS / Scraping
 //!
-//! LinkedIn ist Tier C **und** Scrape-verboten. Diese Quelle nutzt
-//! ausschliesslich den authentifizierten REST-Pfad. Wenn kein Token im
-//! CTOX-Runtime-Store hinterlegt ist, gibt `fetch_direct` ein
-//! `SourceError::CredentialMissing` zurück — es wird **niemals** auf
-//! `https://www.linkedin.com/...` HTML zurückgefallen.
+//! LinkedIn ist Tier C **und** automatisiertes Scraping ist laut LinkedIn-ToS
+//! untersagt. Der **automatische** Pfad (`fetch_direct`) nutzt deshalb
+//! ausschliesslich die authentifizierte REST-API: ohne Token im
+//! CTOX-Runtime-Store liefert er `SourceError::CredentialMissing` und fällt
+//! **niemals** selbsttätig auf `https://www.linkedin.com/...`-HTML zurück.
+//!
+//! Es existiert **zusätzlich** ein operator-initiierter, einwilligungs-
+//! basierter Browser-Assist-Pfad: [`browser_recipe`](LinkedIn::browser_recipe)
+//! liefert dem Business-OS-Browser-Runtime ein Rezept
+//! (`login_url`/`credential_selector`/`capture_script =
+//! linkedin.profile_capture.v1`), mit dem der Operator sich mit **eigenen**
+//! Zugangsdaten einloggt und ein Profil erfasst. Dieser Pfad ist kein
+//! automatisches Scraping, läuft nur auf ausdrückliche Operator-Aktion und ist
+//! über denselben Tier-C-Opt-in (`--include-private`) wie die API gegated.
+//! Er trägt dennoch ToS-/Rechts-Exposition (authentifizierte Profilerfassung)
+//! und sollte nur mit gültiger Rechtsgrundlage genutzt werden. Siehe
+//! Hardening-Plan WS2-04.
 //!
 //! ## Endpoints
 //!

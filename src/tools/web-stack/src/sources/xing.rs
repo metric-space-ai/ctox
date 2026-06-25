@@ -26,6 +26,18 @@
 //!   `Confidence::High` (strukturiertes API-Feld; vom XING-User selbst gepflegt).
 //! * `person_xing`     = `permalink`,
 //!   `Confidence::High` (kanonische Profil-URL; OAuth-stabil).
+//!
+//! ## TOS / Browser-Assist
+//!
+//! Der automatische Pfad (`fetch_direct`) nutzt ausschliesslich die
+//! authentifizierte XING-API und scrapt `xing.com` nie selbsttätig. Zusätzlich
+//! existiert ein operator-initiierter, einwilligungsbasierter Browser-Assist-
+//! Pfad ([`browser_recipe`](Xing::browser_recipe), `capture_script =
+//! xing.profile_capture.v1`): der Operator loggt sich mit **eigenen**
+//! Zugangsdaten ein. Dieser Pfad ist über denselben Tier-C-Opt-in
+//! (`--include-private`) gegated, ist kein automatisches Scraping, trägt aber
+//! ToS-/Rechts-Exposition und braucht eine gültige Rechtsgrundlage. Siehe
+//! Hardening-Plan WS2-04.
 
 use std::time::Duration;
 

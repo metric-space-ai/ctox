@@ -81,14 +81,16 @@ Empfohlene Milestones: **M1 = W1+W4** (Sicherheit + billige Korrektheit-Bugs), *
 - **Akzeptanz:** Grep nach `PersonGeschlecht`-Push zeigt keinen ungegateten Emitter; betroffene Fixture-Tests angepasst.
 - **Umgesetzt (2026-06-25):** Entfernt statt gegated (extract_fields hat keinen Config-Zugriff). **linkedin:** Namens-Heuristik `guess_gender_from_firstname` + `push_low` + Emission + `authoritative_for`-Eintrag + Tests gelöscht. **firmenabc:** Emission + `PersonLabel.gender` + `authoritative_for`-Eintrag entfernt; Herr/Frau wird weiter als Token gestrippt (Namens-Parsing), aber nicht gespeichert. Beide Modul-Docs aktualisiert. Tests asserten jetzt **Abwesenheit** von `PersonGeschlecht`. `FieldKey::PersonGeschlecht`-Variante bleibt in der Taxonomie (kein Emitter mehr). 315 Tests grün.
 
-### WS2-04 ☐ LinkedIn/Xing-Browser-Capture-Widerspruch auflösen
+### WS2-04 ◐ LinkedIn/Xing-Browser-Capture-Widerspruch auflösen
 - **Dateien:** [linkedin.rs:97](../src/tools/web-stack/src/sources/linkedin.rs) (`BrowserSourceRecipe` / `linkedin.profile_capture.v1`)
 - **Change:** Entscheidung treffen und **im Code dokumentieren**: entweder den authentifizierten Browser-Capture-Pfad entfernen (passt zur „never scrape"-Doku) oder die Doku korrigieren und den Pfad hinter expliziten Opt-in + Rechtsgrundlage stellen.
 - **Akzeptanz:** Code und Modul-Doku sind konsistent; kein widersprüchlicher Kommentar mehr.
+- **Umgesetzt (2026-06-25):** Doku-Korrektur (nicht-destruktiv) statt Feature-Entfernung: linkedin.rs/xing.rs-Modul-Docs beschreiben jetzt **beide** Pfade präzise — automatischer API-Pfad (scrapt nie HTML) **und** den separaten operator-initiierten, einwilligungsbasierten Browser-Assist-Capture, der über denselben Tier-C-`--include-private`-Opt-in gegated ist und ToS-/Rechts-Exposition trägt. Der frühere absolute „niemals HTML"-Anspruch ist damit nicht mehr irreführend. **Produktentscheidung offen (an Operator):** Browser-Capture-Pfad ganz entfernen? — bewusst nicht unilateral gemacht.
 
-### WS2-05 ☐ Stealth-/Anti-Bot-Posture dokumentieren
+### WS2-05 ☑ Stealth-/Anti-Bot-Posture dokumentieren
 - **Dateien:** [assets/stealth_init.js:15](../src/tools/web-stack/assets/stealth_init.js), [assets/google_browser_runner.mjs:204](../src/tools/web-stack/assets/google_browser_runner.mjs), README
 - **Change:** Bewusste Policy-Notiz zur ToS-/Legal-Exposition des Stealth-Google-Scrapings + CAPTCHA/Consent-Umgehung in README/AGENTS-naher Doku festhalten (Operator-Transparenz). Optional: `robots.txt`-Handling als Folge-Ticket.
+- **Umgesetzt (2026-06-25):** README um Abschnitte **„Egress (SSRF) guard"** und **„Legal & ToS posture"** ergänzt (Stealth-Google-ToS, GDPR/People-Opt-in, LinkedIn/Xing-Capture, Anna's-Archive-metadata-only, fehlendes robots.txt) + neuer Key `CTOX_WEB_EGRESS_ALLOW` in der Config-Tabelle. `robots.txt`-Handling bleibt offenes Folge-Ticket (W5/Coverage).
 
 ---
 
