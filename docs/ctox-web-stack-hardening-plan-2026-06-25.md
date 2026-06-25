@@ -172,9 +172,10 @@ Billige, klar falsifizierbare Bugs — alle mit Fixture/Test abschließen.
 ### WS5-01 ☐ `web_search.rs` (8 931 LOC) entflechten
 - Provider-Cascade, Read/Fetch, OpenAI-Passthrough, Cache in Submodule extrahieren; Cascade-Unit-Tests auf Modulebene.
 
-### WS5-02 ☐ Such-Cache-Key korrigieren
+### WS5-02 ☑ Such-Cache-Key korrigieren
 - **Datei:** `web_search.rs` (Cache-Key ~5729)
 - Provider + `context_size`/`count` in den Key aufnehmen; leere/blockierte Ergebnisse **nicht** 24 h cachen (kurze Negativ-TTL).
+- **Umgesetzt (2026-06-25):** `build_cache_key` nimmt jetzt `count` (Context-Size) **und** `provider` (`ProviderKind::as_str`) auf → Low-Context-Treffer werden nicht mehr für High-Context-Anfragen ausgeliefert, kein Cross-Provider-Leak. `write_cached_search` wird nur noch bei **nicht-leeren** Hits aufgerufen (leere/blockierte Ergebnisse werden nicht 24 h gecacht → Retry beim nächsten Call). Guard-Test `cache_key_varies_by_count_and_provider`.
 
 ### WS5-03 ☐ Provider-Cooldown persistieren
 - Per-call-`BTreeMap` (web_search.rs:1140) durch persistenten Cooldown (runtime/ JSON oder Runtime-Store, key=Provider) ersetzen, damit ein 429 über Tool-Calls hinweg respektiert wird.

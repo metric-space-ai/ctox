@@ -999,7 +999,7 @@ fn execute_search(
     let tool_request = &effective;
 
     let planned_queries = plan_search_queries(original_query, &tool_request.allowed_domains);
-    let cache_key = build_cache_key(query, tool_request);
+    let cache_key = build_cache_key(query, tool_request, config.provider);
     if tool_request.external_web_access == Some(false) {
         let cached = load_cached_search(root, config, &cache_key)?
             .context("cached web search was requested but no unexpired cached result exists")?;
@@ -1027,7 +1027,12 @@ fn execute_search(
             .unwrap_or(ContextSize::Medium),
     );
     session.persist_page_cache()?;
-    write_cached_search(root, &cache_key, &response)?;
+    // Do not cache empty/blocked result sets: caching them would serve an empty
+    // result for the full TTL and suppress retries after a transient block or
+    // CAPTCHA, instead of letting the next call re-run the provider cascade.
+    if !response.hits.is_empty() {
+        write_cached_search(root, &cache_key, &response)?;
+    }
     Ok(response)
 }
 
@@ -5779,12 +5784,21 @@ fn write_cached_search(root: &Path, cache_key: &str, response: &SearchResponse) 
         .with_context(|| format!("failed to write web-search cache {}", path.display()))
 }
 
-fn build_cache_key(query: &SearchQuery, tool_request: &SearchToolRequest) -> String {
+fn build_cache_key(
+    query: &SearchQuery,
+    tool_request: &SearchToolRequest,
+    provider: ProviderKind,
+) -> String {
     serde_json::to_string(&json!({
         "query": query.text,
         "language": query.language,
         "region": query.region,
         "safe_search": query.safe_search,
+        // `count` (context size) and `provider` are part of the identity: a
+        // low-context result must not be served to a high-context request, and
+        // a result from one provider must not be served when another is pinned.
+        "count": query.count,
+        "provider": provider.as_str(),
         "allowed_domains": tool_request.allowed_domains,
     }))
     .unwrap_or_else(|_| query.text.clone())
@@ -7122,6 +7136,30 @@ mod tests {
             .iter()
             .flat_map(|result| result.matches.iter())
             .any(|matched| matched.contains("CTOX_REMOTE_WEB_OK")));
+    }
+
+    #[test]
+    fn cache_key_varies_by_count_and_provider() {
+        let q3 = SearchQuery {
+            text: "rust async".to_string(),
+            count: 3,
+            offset: 0,
+            language: None,
+            region: None,
+            safe_search: 1,
+        };
+        let q8 = SearchQuery {
+            count: 8,
+            ..q3.clone()
+        };
+        let req = SearchToolRequest::default();
+
+        let k3 = build_cache_key(&q3, &req, ProviderKind::Brave);
+        let k8 = build_cache_key(&q8, &req, ProviderKind::Brave);
+        assert_ne!(k3, k8, "context size (count) must change the cache key");
+
+        let k_bing = build_cache_key(&q3, &req, ProviderKind::Bing);
+        assert_ne!(k3, k_bing, "provider must change the cache key");
     }
 
     #[test]
