@@ -28,6 +28,18 @@ pub struct PdfiumBackend {
     next_id: AtomicU64,
 }
 
+/// Convert a 1-based page number to pdfium's 0-based `u16` page index, erroring
+/// instead of silently saturating to `u16::MAX` (which would fetch the wrong
+/// page) for documents with more than `u16::MAX` pages.
+fn page_index_u16(page_num: usize) -> Result<u16, PdfEngineError> {
+    u16::try_from(page_num.saturating_sub(1)).map_err(|_| {
+        PdfEngineError::Backend(format!(
+            "page {page_num} exceeds the maximum supported page count ({})",
+            u16::MAX as usize + 1
+        ))
+    })
+}
+
 impl PdfiumBackend {
     pub fn new() -> Result<Self, PdfEngineError> {
         let pdfium =
@@ -166,7 +178,7 @@ impl PdfEngine for PdfiumBackend {
         let document = self.reopen_document(doc)?;
         let page = document
             .pages()
-            .get(page_num.saturating_sub(1).try_into().unwrap_or(u16::MAX))
+            .get(page_index_u16(page_num)?)
             .map_err(|err| PdfEngineError::Backend(err.to_string()))?;
         self.page_to_parsed_page(&page, page_num)
     }
@@ -215,7 +227,7 @@ impl PdfEngine for PdfiumBackend {
         let document = self.reopen_document(doc)?;
         let page = document
             .pages()
-            .get(page_num.saturating_sub(1).try_into().unwrap_or(u16::MAX))
+            .get(page_index_u16(page_num)?)
             .map_err(|err| PdfEngineError::Backend(err.to_string()))?;
         let scale_factor = (dpi as f32 / 72.0).max(1.0);
         let render = page
