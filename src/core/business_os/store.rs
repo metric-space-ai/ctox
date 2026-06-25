@@ -26291,7 +26291,7 @@ Business OS app task metadata:
 - resource.dos_and_donts: src/skills/system/product_engineering/business-os-app-module-development/references/dos-and-donts.md
 - resource.green_checklist: src/skills/system/product_engineering/business-os-app-module-development/references/green-checklist.md
 - resource.architecture_translation: src/skills/system/product_engineering/business-os-app-module-development/references/architecture-translation.md
-- reference_catalog: ctox business-os app references --json
+- reference_catalog: ctox business-os app references --query "<workflow data keywords>" --json --limit 8
 - validation: ctox business-os app validate {module_id} {mode_flag}
 - tool_boundary: do not run ctox stop/start/upgrade, launchctl, systemctl, or service lifecycle commands during app creation; the running CTOX service is the required app runtime.
 "#
@@ -28741,7 +28741,9 @@ mod tests {
         assert!(prompt.contains("resource.dos_and_donts:"));
         assert!(prompt.contains("resource.green_checklist:"));
         assert!(prompt.contains("resource.architecture_translation:"));
-        assert!(prompt.contains("- reference_catalog: ctox business-os app references --json"));
+        assert!(prompt.contains(
+            "- reference_catalog: ctox business-os app references --query \"<workflow data keywords>\" --json --limit 8"
+        ));
         assert!(prompt
             .contains("- validation: ctox business-os app validate subscriptions --installed"));
         assert!(!prompt.contains("nextjs-postgres-port"));
@@ -28787,7 +28789,9 @@ mod tests {
         assert!(prompt.contains("- app_directory: runtime/business-os/installed-modules/inventory"));
         assert!(prompt.contains("- skill: business-os-app-module-development"));
         assert!(prompt.contains("resource.module_contract:"));
-        assert!(prompt.contains("- reference_catalog: ctox business-os app references --json"));
+        assert!(prompt.contains(
+            "- reference_catalog: ctox business-os app references --query \"<workflow data keywords>\" --json --limit 8"
+        ));
         assert!(
             prompt.contains("- validation: ctox business-os app validate inventory --installed")
         );

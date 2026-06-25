@@ -53,7 +53,7 @@ records so the agent knows what was clicked.
 ## Required Context
 
 - Inspect three existing shipped Business OS apps selected for similar workflow, data model, and UI shape.
-- Use `ctox business-os app references --json` when a local reference catalog is needed.
+- Use `ctox business-os app references --query "<workflow data keywords>" --json --limit 8` when a local reference catalog is needed.
 - Runtime-created apps live in `runtime/business-os/installed-modules/<module-id>/`.
 - Source apps live in `src/apps/business-os/modules/<module-id>/` only when the task explicitly targets checked-in source.
 

@@ -7150,7 +7150,7 @@ fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
         return job.prompt.clone();
     };
     format!(
-        "{}\n\nBusiness OS app resource context:\n- module_id: {}\n- install_target: {}\n- app_directory: {}\n- skill: business-os-app-module-development\n- resource.module_contract: src/skills/system/product_engineering/business-os-app-module-development/references/module-contract.md\n- resource.dos_and_donts: src/skills/system/product_engineering/business-os-app-module-development/references/dos-and-donts.md\n- resource.green_checklist: src/skills/system/product_engineering/business-os-app-module-development/references/green-checklist.md\n- resource.architecture_translation: src/skills/system/product_engineering/business-os-app-module-development/references/architecture-translation.md\n- reference_catalog: ctox business-os app references --json\n- validation: ctox business-os app validate {} {}\n- tool_boundary: do not run ctox stop/start/upgrade, launchctl, systemctl, or service lifecycle commands during app creation; the running CTOX service is the required app runtime.",
+        "{}\n\nBusiness OS app resource context:\n- module_id: {}\n- install_target: {}\n- app_directory: {}\n- skill: business-os-app-module-development\n- resource.module_contract: src/skills/system/product_engineering/business-os-app-module-development/references/module-contract.md\n- resource.dos_and_donts: src/skills/system/product_engineering/business-os-app-module-development/references/dos-and-donts.md\n- resource.green_checklist: src/skills/system/product_engineering/business-os-app-module-development/references/green-checklist.md\n- resource.architecture_translation: src/skills/system/product_engineering/business-os-app-module-development/references/architecture-translation.md\n- reference_catalog: ctox business-os app references --query \"<workflow data keywords>\" --json --limit 8\n- validation: ctox business-os app validate {} {}\n- tool_boundary: do not run ctox stop/start/upgrade, launchctl, systemctl, or service lifecycle commands during app creation; the running CTOX service is the required app runtime.",
         job.prompt,
         target.module_id,
         target.install_target,
@@ -23159,7 +23159,9 @@ Business OS command:
         assert!(prompt.contains("resource.dos_and_donts:"));
         assert!(prompt.contains("resource.green_checklist:"));
         assert!(prompt.contains("resource.architecture_translation:"));
-        assert!(prompt.contains("reference_catalog: ctox business-os app references --json"));
+        assert!(prompt.contains(
+            "reference_catalog: ctox business-os app references --query \"<workflow data keywords>\" --json --limit 8"
+        ));
         assert!(prompt.contains("validation: ctox business-os app validate contracts --installed"));
         assert!(prompt.contains("tool_boundary: do not run ctox stop/start/upgrade"));
     }
