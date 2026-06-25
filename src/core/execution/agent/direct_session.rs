@@ -379,11 +379,20 @@ impl PersistentSession {
     ///
     /// The shell and apply_patch tools remain available; this only prevents
     /// unrelated MCP tool schemas from bloating narrow queue-job requests.
-    pub(crate) fn start_without_mcp_servers(
+    pub(crate) fn start_without_mcp_servers_with_instructions(
         root: &Path,
         settings: &BTreeMap<String, String>,
+        base_instructions: Option<&str>,
     ) -> Result<Self> {
-        Self::start_with_instructions_and_tool_mode(root, settings, None, false, false, true, false)
+        Self::start_with_instructions_and_tool_mode(
+            root,
+            settings,
+            base_instructions,
+            false,
+            false,
+            true,
+            false,
+        )
     }
 
     /// The composed base instructions this session sends with every thread.

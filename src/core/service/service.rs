@@ -146,6 +146,7 @@ const BUSINESS_OS_APP_VALIDATION_REQUEST_MAX_CHARS: usize = 1_600;
 const BUSINESS_OS_APP_VALIDATION_FEEDBACK_MAX_CHARS: usize = 12_000;
 const BUSINESS_OS_APP_VALIDATION_FAILURE_MARKER: &str =
     "Business OS app artifact validation failed.";
+const BUSINESS_OS_APP_AUTHORING_BASE_INSTRUCTIONS: &str = "You are a CTOX Business OS app module authoring agent. Build or edit the requested app as plain installed-module files: vanilla HTML, CSS, and JavaScript only, with ESM imports only for CTOX-provided browser bundles or explicit special-purpose modules. Use the provided Business OS app skill and resource paths as the implementation contract, inspect at least three existing Business OS apps with the reference command, create files only under the provided app_directory unless validation requires reading references, run the provided validation command before finalizing, and do not run CTOX service lifecycle commands.";
 #[cfg(test)]
 const BUSINESS_OS_APP_REQUIRED_ARTIFACTS: &[&str] = &[
     "module.json",
@@ -7134,9 +7135,14 @@ fn business_os_chat_execution_prompt(job: &QueuedPrompt) -> String {
 fn chat_turn_session_options_for_queue_job(
     job: &QueuedPrompt,
 ) -> turn_loop::ChatTurnSessionOptions {
-    turn_loop::ChatTurnSessionOptions {
-        disable_mcp_servers: business_os_app_module_target_from_prompt(&job.prompt).is_some(),
+    if business_os_app_module_target_from_prompt(&job.prompt).is_some() {
+        return turn_loop::ChatTurnSessionOptions {
+            disable_mcp_servers: true,
+            base_instructions: Some(BUSINESS_OS_APP_AUTHORING_BASE_INSTRUCTIONS.to_string()),
+            plain_prompt: true,
+        };
     }
+    turn_loop::ChatTurnSessionOptions::default()
 }
 
 fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
@@ -23175,10 +23181,21 @@ Business OS command:
             outbound_anchor: None,
         };
 
-        assert!(chat_turn_session_options_for_queue_job(&job).disable_mcp_servers);
+        let options = chat_turn_session_options_for_queue_job(&job);
+        assert!(options.disable_mcp_servers);
+        assert!(options.plain_prompt);
+        let base_instructions = options
+            .base_instructions
+            .expect("app queue job should use short app authoring instructions");
+        assert!(base_instructions.contains("CTOX Business OS app module authoring agent"));
+        assert!(base_instructions.contains("vanilla HTML, CSS, and JavaScript only"));
+        assert!(!base_instructions.contains("personal CTO agent"));
 
         job.prompt = "Write a short implementation note.".to_string();
-        assert!(!chat_turn_session_options_for_queue_job(&job).disable_mcp_servers);
+        let options = chat_turn_session_options_for_queue_job(&job);
+        assert!(!options.disable_mcp_servers);
+        assert!(!options.plain_prompt);
+        assert!(options.base_instructions.is_none());
     }
 
     #[test]

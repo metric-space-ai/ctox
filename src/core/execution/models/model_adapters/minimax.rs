@@ -72,6 +72,14 @@ pub fn rewrite_request(raw: &[u8]) -> anyhow::Result<Vec<u8>> {
         instructions.as_deref(),
     );
     let (messages, tools) = build_request_parts(&payload, messages);
+    let messages_count = messages.len();
+    let messages_bytes = serde_json::to_vec(&messages)
+        .map(|bytes| bytes.len())
+        .unwrap_or(0);
+    let tools_count = tools.len();
+    let tools_bytes = serde_json::to_vec(&tools)
+        .map(|bytes| bytes.len())
+        .unwrap_or(0);
 
     let mut request = serde_json::Map::new();
     request.insert("model".to_string(), Value::String(model));
@@ -133,8 +141,17 @@ pub fn rewrite_request(raw: &[u8]) -> anyhow::Result<Vec<u8>> {
         request.insert("parallel_tool_calls".to_string(), value.clone());
     }
 
-    serde_json::to_vec(&Value::Object(request))
-        .context("failed to encode MiniMax chat-completions payload")
+    let encoded = serde_json::to_vec(&Value::Object(request))
+        .context("failed to encode MiniMax chat-completions payload")?;
+    eprintln!(
+        "[ctox minimax] chat request payload metrics body_bytes={} messages_count={} messages_bytes={} tools_count={} tools_bytes={}",
+        encoded.len(),
+        messages_count,
+        messages_bytes,
+        tools_count,
+        tools_bytes
+    );
+    Ok(encoded)
 }
 
 pub fn rewrite_success_response(

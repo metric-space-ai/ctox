@@ -41,9 +41,11 @@ fn turn_counters() -> &'static Mutex<HashMap<i64, RefreshState>> {
     COUNTERS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct ChatTurnSessionOptions {
     pub(crate) disable_mcp_servers: bool,
+    pub(crate) base_instructions: Option<String>,
+    pub(crate) plain_prompt: bool,
 }
 
 /// Decide whether the current turn should run a continuity refresh.
@@ -479,12 +481,15 @@ where
     let operator_settings = runtime_env::effective_operator_env_map(root).unwrap_or_default();
     emit("session-start");
     let mut owned_session = if session.is_none() {
-        if options.disable_mcp_servers {
+        if options.disable_mcp_servers || options.base_instructions.is_some() {
             emit("session-mcp-servers-disabled");
-            Some(PersistentSession::start_without_mcp_servers(
-                root,
-                &operator_settings,
-            )?)
+            Some(
+                PersistentSession::start_without_mcp_servers_with_instructions(
+                    root,
+                    &operator_settings,
+                    options.base_instructions.as_deref(),
+                )?,
+            )
         } else {
             Some(PersistentSession::start(root, &operator_settings)?)
         }
@@ -511,6 +516,55 @@ where
     emit("persist-user-turn");
     persist_lcm_message_with_retry(db_path, conversation_id, "user", prompt, &mut emit)
         .context("failed to persist user message into LCM")?;
+    if options.plain_prompt {
+        emit("plain-prompt-context");
+        let preflight_base_instructions = session
+            .as_deref()
+            .or(owned_session.as_ref())
+            .map(|sess| sess.base_instructions().to_string())
+            .unwrap_or_default();
+        if !runtime.state.source.is_local() {
+            let heuristic_text = format!("{preflight_base_instructions}\n\n{prompt}");
+            let estimated_tokens = lcm::estimate_tokens(&heuristic_text) as i64;
+            let context_limit = config.max_context_tokens.max(1);
+            let heuristic_budget = context_limit
+                .saturating_mul(95)
+                .checked_div(100)
+                .unwrap_or(1)
+                .max(1);
+            emit(&format!(
+                "heuristic-token-preflight tokens={} budget={} context={} source=plain-heuristic-api",
+                estimated_tokens, heuristic_budget, context_limit
+            ));
+            if estimated_tokens > heuristic_budget {
+                anyhow::bail!(
+                    "context_preflight_heuristic_overflow: estimated plain prompt tokens {} exceed heuristic input budget {} for context window {} via plain-heuristic-api",
+                    estimated_tokens,
+                    heuristic_budget,
+                    context_limit
+                );
+            }
+        }
+        emit("invoke-model");
+        let reply = match session.as_deref_mut() {
+            Some(sess) => {
+                sess.run_turn_inner(prompt, Some(Duration::from_secs(config.turn_timeout_secs)))?
+            }
+            None => owned_session
+                .as_mut()
+                .expect("owned persistent session should exist when no session was supplied")
+                .run_turn_inner(prompt, Some(Duration::from_secs(config.turn_timeout_secs)))?,
+        };
+        emit("persist-assistant-turn");
+        persist_lcm_message_with_retry(db_path, conversation_id, "assistant", &reply, &mut emit)?;
+        emit("continuity-refresh-skipped");
+        emit(&format!(
+            "turn-outcome stage=complete health=plain score=100 reply_chars={} continuity_updates=0 continuity_skips=1 omitted=0",
+            reply.chars().count()
+        ));
+        emit("turn-complete");
+        return Ok(reply);
+    }
     emit("turn-plan");
     let plan = turn_engine::build_turn_plan(&engine, conversation_id, config.clone())?;
     emit(&format!(
