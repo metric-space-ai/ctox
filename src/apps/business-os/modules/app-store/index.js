@@ -208,11 +208,12 @@ async function triggerCardAction(appId, actionType) {
     await installMarketplaceItem(item);
   } else if (actionType === 'update') {
     if (!canInstallAppStoreItem(state, item)) return;
-    if (item.modification_status === 'modified'
+    const customized = item.modification_status === 'modified' || item.modification_status === 'customized';
+    if (customized
       && !confirm(`${item.title} hat lokale Änderungen. Ein Update überschreibt sie. Vor dem Update wird automatisch eine Wiederherstellungs-Version angelegt – fortfahren?`)) {
       return;
     }
-    await installMarketplaceItem(item, { update: true });
+    await updateInstalledItem(item, { mode: customized ? 'discard' : 'vanilla' });
   } else if (actionType === 'versions') {
     await openVersionsDialog(item);
   } else if (actionType === 'open') {
@@ -882,6 +883,28 @@ async function installMarketplaceItem(item, { update = false } = {}) {
   });
 }
 
+async function updateInstalledItem(item, { mode = 'vanilla' } = {}) {
+  if (!canInstallAppStoreItem(state, item)) {
+    state.status = { kind: 'error', text: 'Du darfst diese App nicht aktualisieren.' };
+    render();
+    return;
+  }
+  const baseline = item.version_state?.installed_from_bundle_sha256
+    || item.version_state?.baseline_bundle_sha256
+    || '';
+  await runStoreCommand({
+    label: `Updating ${item.title}...`,
+    success: `${item.title} updated.`,
+    commandType: 'ctox.module.update',
+    moduleId: item.id,
+    payload: {
+      module_id: item.id,
+      mode,
+      expected_baseline_sha256: baseline,
+    },
+  });
+}
+
 async function installTemplateItem(item) {
   await runStoreCommand({
     label: `Creating ${item.title}...`,
@@ -1351,20 +1374,39 @@ function availableVersionLabel(remote, item, kind) {
 }
 
 function updateStateFor(item, remote, kind, moduleClass) {
+  // Primary signal: the server-projected catalog/update diff. The native peer
+  // sets lifecycle.update_available when an installed module's upstream catalog
+  // bundle (modules/<source>) diverges from the bundle this instance installed.
+  // This is the in-repo data path — no out-of-band GitHub fetch.
+  const lifecycle = item?.lifecycle || {};
+  if (lifecycle.update_available === true || item?.update_available === true) {
+    const catalogVersion = String(lifecycle.catalog_version || '').trim();
+    const installedVersion = String(lifecycle.installed_version || item?.version || '').trim();
+    return {
+      available: true,
+      reason: catalogVersion
+        ? `Katalog ${catalogVersion} verfügbar (installiert ${installedVersion || 'unversioniert'}).`
+        : 'Eine neuere Katalog-Version ist verfügbar.',
+    };
+  }
   if (!['installed', 'local', 'starter'].includes(kind)) {
     return { available: false, reason: kind === 'system' ? 'System-Module werden über CTOX selbst aktualisiert.' : '' };
   }
+  // Fork-class apps are developed locally; never offer a destructive
+  // download_url overwrite. (A genuine catalog update is handled by the diff
+  // branch above and is guarded for customized apps.)
   if (moduleClass === 'fork') {
     return { available: false, reason: 'Fork-Apps werden lokal weiterentwickelt. Für Upstream-Patches einen Agent beauftragen oder neu forken.' };
   }
-  if (!remote?.download_url) {
-    return { available: false, reason: 'Keine Marketplace-Quelle für Updates verknüpft.' };
+  // Fallback: an explicitly linked external marketplace remote (non-catalog).
+  if (remote?.download_url) {
+    const comparison = compareVersions(remote.version || '', item.version || '');
+    if (comparison > 0) {
+      return { available: true, reason: `${remote.version} ist verfügbar, lokal ist ${item.version || 'unversioniert'}.` };
+    }
+    return { available: false, reason: 'Kein neueres Marketplace-Release sichtbar.' };
   }
-  const comparison = compareVersions(remote.version || '', item.version || '');
-  if (comparison > 0) {
-    return { available: true, reason: `${remote.version} ist verfügbar, lokal ist ${item.version || 'unversioniert'}.` };
-  }
-  return { available: false, reason: 'Kein neueres Marketplace-Release sichtbar.' };
+  return { available: false, reason: 'Keine Marketplace-Quelle für Updates verknüpft.' };
 }
 
 function modificationStateFor(item, release, kind, resolvedId) {
@@ -1385,7 +1427,7 @@ function modificationStateFor(item, release, kind, resolvedId) {
 
 function actionButtonsForManagedItem(item, permissionState = state) {
   let html = '';
-  if (item.update_available && item.download_url) {
+  if (item.update_available) {
     html += canInstallAppStoreItem(permissionState, item)
       ? `<button type="button" class="card-btn warn" data-card-action="update" aria-label="${escapeHtml(item.title)} aktualisieren">${escapeHtml(state.t('actionUpdate', 'Aktualisieren'))}</button>`
       : disabledActionButtonHtml(
