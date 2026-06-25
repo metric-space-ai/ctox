@@ -177,8 +177,9 @@ Billige, klar falsifizierbare Bugs — alle mit Fixture/Test abschließen.
 - Provider + `context_size`/`count` in den Key aufnehmen; leere/blockierte Ergebnisse **nicht** 24 h cachen (kurze Negativ-TTL).
 - **Umgesetzt (2026-06-25):** `build_cache_key` nimmt jetzt `count` (Context-Size) **und** `provider` (`ProviderKind::as_str`) auf → Low-Context-Treffer werden nicht mehr für High-Context-Anfragen ausgeliefert, kein Cross-Provider-Leak. `write_cached_search` wird nur noch bei **nicht-leeren** Hits aufgerufen (leere/blockierte Ergebnisse werden nicht 24 h gecacht → Retry beim nächsten Call). Guard-Test `cache_key_varies_by_count_and_provider`.
 
-### WS5-03 ☐ Provider-Cooldown persistieren
+### WS5-03 ☑ Provider-Cooldown persistieren
 - Per-call-`BTreeMap` (web_search.rs:1140) durch persistenten Cooldown (runtime/ JSON oder Runtime-Store, key=Provider) ersetzen, damit ein 429 über Tool-Calls hinweg respektiert wird.
+- **Umgesetzt (2026-06-25):** `runtime/web_search_provider_cooldown.json` (Provider-Label → Expiry-Epoch). `search_with_query_plan` seedet die lokale Map jetzt aus `load_provider_cooldowns(root)`; bei 429 schreibt `persist_provider_cooldown` den 60s-Cooldown auf Platte. Abgelaufene Einträge werden beim Laden/Schreiben geprunt; `provider_from_label` round-trip-validiert gegen korrupte Dateien. Guard-Test `provider_cooldown_persists_across_calls_and_expires`.
 
 ### WS5-04 ☐ Brave-Parser absichern
 - Positions-Regex (web_search.rs:1568) durch serde-Parse der JSON-Insel ersetzen; Fixture + Unit-Test ergänzen.

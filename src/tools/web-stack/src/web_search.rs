@@ -1167,7 +1167,7 @@ fn search_with_query_plan(
     let auto_provider = config.provider == ProviderKind::Auto;
     let provider_candidates = search_provider_candidates(root, config.provider);
     let provider_budget = auto_provider_budget(root, config.provider);
-    let mut provider_cooldown_until: BTreeMap<ProviderKind, SystemTime> = BTreeMap::new();
+    let mut provider_cooldown_until = load_provider_cooldowns(root);
     let mut failures = Vec::new();
 
     for query_text in planned_queries {
@@ -1193,8 +1193,13 @@ fn search_with_query_plan(
                 Ok(response) => response,
                 Err(err) if auto_provider => {
                     if is_rate_limit_error(&err) {
+                        // Persist the cooldown so a 429'd provider is not retried
+                        // (and re-throttled) on the next search, not only within
+                        // this multi-query call.
+                        let until_epoch = unix_ts() + 60;
                         provider_cooldown_until
-                            .insert(*provider, SystemTime::now() + Duration::from_secs(60));
+                            .insert(*provider, UNIX_EPOCH + Duration::from_secs(until_epoch));
+                        persist_provider_cooldown(root, *provider, until_epoch);
                     }
                     failures.push(format!("{}: {err:#}", provider.as_str()));
                     continue;
@@ -5812,6 +5817,51 @@ fn cache_path(root: &Path) -> PathBuf {
     root.join("runtime/web_search_cache.json")
 }
 
+fn provider_cooldown_path(root: &Path) -> PathBuf {
+    root.join("runtime/web_search_provider_cooldown.json")
+}
+
+/// Map a persisted provider label back to a `ProviderKind`, rejecting unknown
+/// labels (round-trip check) so a corrupt file cannot resurrect as `Auto`.
+fn provider_from_label(label: &str) -> Option<ProviderKind> {
+    let provider = ProviderKind::from_config_value(Some(label.to_string()));
+    (provider.as_str() == label).then_some(provider)
+}
+
+/// Load persisted provider cooldowns, dropping any already expired. Persisting
+/// these means a provider that returned 429 stays on cooldown across separate
+/// searches instead of being retried (and re-throttled) on every call.
+fn load_provider_cooldowns(root: &Path) -> BTreeMap<ProviderKind, SystemTime> {
+    let Ok(raw) = fs::read_to_string(provider_cooldown_path(root)) else {
+        return BTreeMap::new();
+    };
+    let map: BTreeMap<String, u64> = serde_json::from_str(&raw).unwrap_or_default();
+    let now = unix_ts();
+    map.into_iter()
+        .filter(|(_, until)| *until > now)
+        .filter_map(|(label, until)| {
+            provider_from_label(&label).map(|p| (p, UNIX_EPOCH + Duration::from_secs(until)))
+        })
+        .collect()
+}
+
+fn persist_provider_cooldown(root: &Path, provider: ProviderKind, until_epoch: u64) {
+    let path = provider_cooldown_path(root);
+    let mut map: BTreeMap<String, u64> = fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default();
+    let now = unix_ts();
+    map.retain(|_, until| *until > now);
+    map.insert(provider.as_str().to_string(), until_epoch);
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(encoded) = serde_json::to_string_pretty(&map) {
+        let _ = fs::write(&path, encoded);
+    }
+}
+
 fn load_page_cache(root: &Path) -> Result<PageCacheFile> {
     let path = page_cache_path(root);
     if !path.exists() {
@@ -7164,6 +7214,30 @@ mod tests {
 
         let k_bing = build_cache_key(&q3, &req, ProviderKind::Bing);
         assert_ne!(k3, k_bing, "provider must change the cache key");
+    }
+
+    #[test]
+    fn provider_cooldown_persists_across_calls_and_expires() {
+        let root = unique_test_root("provider-cooldown");
+        assert!(
+            load_provider_cooldowns(&root).is_empty(),
+            "fresh root has no cooldowns"
+        );
+
+        let now = unix_ts();
+        persist_provider_cooldown(&root, ProviderKind::Brave, now + 120);
+        persist_provider_cooldown(&root, ProviderKind::Bing, now.saturating_sub(10));
+
+        let loaded = load_provider_cooldowns(&root);
+        assert!(
+            loaded.contains_key(&ProviderKind::Brave),
+            "a future cooldown survives a reload (cross-call)"
+        );
+        assert!(
+            !loaded.contains_key(&ProviderKind::Bing),
+            "an expired cooldown is dropped on reload"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
