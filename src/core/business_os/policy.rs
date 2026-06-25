@@ -278,6 +278,32 @@ pub fn role_can_manage(role: &str) -> bool {
     )
 }
 
+/// Collections that hold administrative / sensitive control data and must not
+/// replicate to non-admin peers. This is a CONSERVATIVE deny-set: every
+/// collection NOT listed here is workspace app data and stays readable by all
+/// roles, so enabling enforcement does not change access to ordinary data.
+/// Refine this matrix as the per-collection sensitivity model is finalized.
+pub const ADMIN_ONLY_COLLECTIONS: &[&str] = &[
+    "business_users",
+    "business_module_acl",
+    "business_credentials",
+    "business_module_source_files",
+    "ctox_runtime_settings",
+];
+
+/// Server-authoritative per-collection READ gate for the sync mesh. Chef/Admin
+/// may read every collection; Founder/User are denied the admin-only set above.
+/// Deny-by-exception (not deny-by-default) so it is safe to enable without
+/// breaking access to ordinary business data.
+pub fn role_may_read_collection(role: BusinessOsRole, collection: &str) -> bool {
+    match role {
+        BusinessOsRole::Chef | BusinessOsRole::Admin => true,
+        BusinessOsRole::Founder | BusinessOsRole::User => {
+            !ADMIN_ONLY_COLLECTIONS.contains(&collection)
+        }
+    }
+}
+
 pub fn evaluate(
     actor: &BusinessOsActor,
     permission: BusinessOsPermission,
@@ -352,6 +378,28 @@ pub fn evaluate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn per_collection_read_authz_denies_admin_only_to_non_admins() {
+        // Admins/chefs read everything, including the admin-only set.
+        for collection in ADMIN_ONLY_COLLECTIONS {
+            assert!(role_may_read_collection(BusinessOsRole::Chef, collection));
+            assert!(role_may_read_collection(BusinessOsRole::Admin, collection));
+            assert!(!role_may_read_collection(BusinessOsRole::Founder, collection));
+            assert!(!role_may_read_collection(BusinessOsRole::User, collection));
+        }
+        // Ordinary business data is readable by every role (deny-by-exception).
+        for collection in ["customer_accounts", "calendar_events", "business_chats"] {
+            for role in [
+                BusinessOsRole::Chef,
+                BusinessOsRole::Admin,
+                BusinessOsRole::Founder,
+                BusinessOsRole::User,
+            ] {
+                assert!(role_may_read_collection(role, collection));
+            }
+        }
+    }
 
     #[test]
     fn business_os_policy_normalizes_current_role_aliases() {

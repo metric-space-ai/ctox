@@ -20071,6 +20071,29 @@ fn capability_signing_secret(root: &Path) -> anyhow::Result<Vec<u8>> {
     Ok(value.into_bytes())
 }
 
+/// Verify a Business OS capability token and return its actor role, or `None`
+/// if the token is missing, malformed or expired. Binds a sync-mesh browser
+/// peer to its server-authenticated role for the per-collection authz gate.
+pub fn verify_capability_role(root: &Path, token: &str) -> Option<String> {
+    let token = token.trim();
+    if token.is_empty() {
+        return None;
+    }
+    let secret = capability_signing_secret(root).ok()?;
+    super::capability::verify_capability_token(&secret, token, now_ms() as i64)
+        .map(|claims| claims.role)
+}
+
+/// Whether server-authoritative per-collection sync authorization is enforced.
+/// Default OFF (config-gated via the runtime store, not a new ambient toggle):
+/// enforcement is a deliberate operator-enabled rollout so the browser
+/// token-binding can be verified in a live mesh before it gates any reads.
+pub fn collection_authz_enabled(root: &Path) -> bool {
+    crate::inference::runtime_env::env_or_config(root, "CTOX_BUSINESS_OS_COLLECTION_AUTHZ")
+        .as_deref()
+        == Some("1")
+}
+
 /// Issue a capability token for an active Business OS user, binding their id to
 /// their CURRENT server-side role. This is the native-authoritative step: a
 /// browser obtains one of these after authenticating and then carries it on

@@ -601,6 +601,32 @@ fn handle_business_os_peer(root: &Path, args: &[String]) -> anyhow::Result<()> {
             "ok": true,
             "revocations": crate::business_os::store::list_revoked_business_peers(root)?,
         })),
+        // Audit surface for the per-collection sync read-authz matrix (#12c).
+        // `--role <r>` shows which collections that role is denied; `--token <t>`
+        // resolves a capability token to its role first. `enforced` reflects the
+        // default-off runtime flag; enforcement at the WebRTC handshake is the
+        // tracked integration step (needs a live two-peer mesh test).
+        Some("collection-access") => {
+            let role_str = flag_value(args, "--token")
+                .and_then(|token| crate::business_os::store::verify_capability_role(root, token))
+                .or_else(|| flag_value(args, "--role").map(str::to_owned))
+                .unwrap_or_else(|| "user".to_owned());
+            let role = crate::business_os::policy::parse_role(&role_str);
+            let denied: Vec<&str> = crate::business_os::policy::ADMIN_ONLY_COLLECTIONS
+                .iter()
+                .filter(|collection| {
+                    !crate::business_os::policy::role_may_read_collection(role, collection)
+                })
+                .copied()
+                .collect();
+            print_json(&serde_json::json!({
+                "ok": true,
+                "role": role.as_str(),
+                "enforced": crate::business_os::store::collection_authz_enabled(root),
+                "denied_collections": denied,
+                "note": "deny-by-exception: every collection not listed is readable by all roles",
+            }))
+        }
         Some("--help") | Some("-h") => {
             println!("{}", business_os_usage());
             Ok(())
