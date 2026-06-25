@@ -1496,6 +1496,25 @@ async fn run_native_peer(
             std::sync::Arc::new(move |peer_id: &String| {
                 !store::is_business_peer_revoked(&revocation_root, peer_id)
             });
+        // #12c: server-authoritative per-collection read authz. Built only when
+        // the operator-gated runtime flag is on (default OFF => None => no
+        // enforcement). The closure verifies the peer's capability token to its
+        // role and applies the policy deny-set; an empty/invalid token maps to
+        // least privilege (User) so ordinary collections still replicate.
+        let collection_authz: Option<std::sync::Arc<dyn Fn(&str, &str) -> bool + Send + Sync>> =
+            if store::collection_authz_enabled(&root) {
+                let authz_root = root.clone();
+                Some(std::sync::Arc::new(move |token: &str, collection: &str| {
+                    let role = store::verify_capability_role(&authz_root, token)
+                        .unwrap_or_else(|| "user".to_owned());
+                    crate::business_os::policy::role_may_read_collection(
+                        crate::business_os::policy::parse_role(&role),
+                        collection,
+                    )
+                }))
+            } else {
+                None
+            };
         let mut bringup = tokio::spawn(async move {
             rxdb::plugins::replication_webrtc::replicate_web_rtc_rs_multi_with_url_provider(
                 collection_list,
@@ -1504,6 +1523,7 @@ async fn run_native_peer(
                 multi_peer_session_id,
                 multi_ice_servers,
                 Some(is_peer_valid),
+                collection_authz,
                 20,
                 20,
                 5_000,

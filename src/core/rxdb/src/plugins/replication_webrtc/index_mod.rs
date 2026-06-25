@@ -514,6 +514,7 @@ pub async fn replicate_web_rtc_rs_multi(
         peer_session_id,
         ice_servers,
         is_peer_valid,
+        None,
         pull_batch_size,
         push_batch_size,
         retry_time,
@@ -534,6 +535,7 @@ pub async fn replicate_web_rtc_rs_multi_with_url_provider(
     peer_session_id: String,
     ice_servers: Vec<RTCIceServer>,
     is_peer_valid: Option<Arc<dyn Fn(&WebRTCRsPeer) -> bool + Send + Sync>>,
+    collection_authz: Option<Arc<dyn Fn(&str, &str) -> bool + Send + Sync>>,
     pull_batch_size: u64,
     push_batch_size: u64,
     retry_time: u64,
@@ -545,6 +547,8 @@ pub async fn replicate_web_rtc_rs_multi_with_url_provider(
         config.ice_servers = ice_servers;
     }
     let handler = WebRTCRsConnectionHandler::new_with_signaling(config).await?;
+    // #12c: install the per-collection authz hook before peers connect.
+    handler.set_collection_authz(collection_authz);
     replicate_web_rtc_inner(
         collections,
         handler,
@@ -748,25 +752,42 @@ where
                             let target_name = frame_collection
                                 .clone()
                                 .unwrap_or_else(|| representative_task.name.clone());
-                            match pool_task.master_handler_for(&target_name) {
-                                Some(master) => {
-                                    call_master_method(
-                                        master.as_ref(),
-                                        method,
-                                        item.message.params.clone(),
-                                    )
-                                    .await
-                                }
-                                None => replication_error_result(
+                            if !handler_task
+                                .is_collection_authorized_for_peer(&item.peer, &target_name)
+                            {
+                                // #12c: deny pull/write of a collection this peer's
+                                // role may not read (server-authoritative).
+                                replication_error_result(
                                     "RC_WEBRTC_PEER",
                                     "replication-io",
                                     "unknown",
                                     serde_json::json!({
                                         "collection": target_name,
-                                        "message": "no master handler registered for collection",
+                                        "message": "peer is not authorized for collection",
                                     }),
                                     Vec::new(),
-                                ),
+                                )
+                            } else {
+                                match pool_task.master_handler_for(&target_name) {
+                                    Some(master) => {
+                                        call_master_method(
+                                            master.as_ref(),
+                                            method,
+                                            item.message.params.clone(),
+                                        )
+                                        .await
+                                    }
+                                    None => replication_error_result(
+                                        "RC_WEBRTC_PEER",
+                                        "replication-io",
+                                        "unknown",
+                                        serde_json::json!({
+                                            "collection": target_name,
+                                            "message": "no master handler registered for collection",
+                                        }),
+                                        Vec::new(),
+                                    ),
+                                }
                             }
                         }
                     };
@@ -935,6 +956,18 @@ where
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_string();
+                    // #12c: capture the peer's capability token from its handshake
+                    // peerSession so the master can authorize per-collection reads
+                    // for this peer. Absent/empty => the authz hook (if installed)
+                    // treats it as least privilege.
+                    if let Some(token) = protocol_response
+                        .result
+                        .pointer("/peerSession/capabilityToken")
+                        .and_then(Value::as_str)
+                        .filter(|token| !token.is_empty())
+                    {
+                        handler.set_peer_capability_token(&peer, token.to_string());
+                    }
 
                     // 2. Token handshake.
                     let req_id = {
@@ -1020,6 +1053,14 @@ where
                                 let mut master_stream = master.master_change_stream();
                                 while let Some(ev) = master_stream.next().await {
                                     if !handler_for_stream.is_collection_active_for_peer(
+                                        &peer_for_stream,
+                                        &collection_name,
+                                    ) {
+                                        continue;
+                                    }
+                                    // #12c: do not push live changes of a collection
+                                    // this peer's role may not read.
+                                    if !handler_for_stream.is_collection_authorized_for_peer(
                                         &peer_for_stream,
                                         &collection_name,
                                     ) {

@@ -148,6 +148,18 @@ pub trait WebRTCConnectionHandler: Send + Sync {
     fn is_collection_active_for_peer(&self, _peer: &Self::Peer, _collection: &str) -> bool {
         true
     }
+
+    /// #12c: record the capability token a peer presented in its handshake
+    /// `peerSession`. Generic handlers no-op; the CTOX handler stores it for the
+    /// per-collection authz gate below.
+    fn set_peer_capability_token(&self, _peer: &Self::Peer, _token: String) {}
+
+    /// #12c: whether `peer` may replicate `collection`. Generic handlers default
+    /// to true (no enforcement); the CTOX handler consults the role bound to the
+    /// peer's captured capability token when authz is enabled.
+    fn is_collection_authorized_for_peer(&self, _peer: &Self::Peer, _collection: &str) -> bool {
+        true
+    }
 }
 
 /// Soft threshold above which the V1.5 dispatcher yields and waits before

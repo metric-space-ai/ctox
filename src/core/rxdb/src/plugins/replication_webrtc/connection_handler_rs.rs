@@ -381,6 +381,12 @@ pub struct WebRTCRsConnectionHandler {
     frame_counter: AtomicU64,
     /// Phase 1: per-peer send-buffer backpressure (see `PeerBackpressure`).
     backpressure: Arc<Mutex<HashMap<WebRTCRsPeer, Arc<PeerBackpressure>>>>,
+    /// #12c per-collection sync read-authz. When `collection_authz` is set,
+    /// `is_collection_authorized_for_peer` consults it with the capability token
+    /// the peer presented at handshake (captured into `peer_capability_tokens`).
+    /// `None` => no enforcement (default), so replication behavior is unchanged.
+    collection_authz: Arc<Mutex<Option<Arc<dyn Fn(&str, &str) -> bool + Send + Sync>>>>,
+    peer_capability_tokens: Arc<Mutex<HashMap<WebRTCRsPeer, String>>>,
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
@@ -429,8 +435,19 @@ impl WebRTCRsConnectionHandler {
             transport_status: Arc::new(Mutex::new(WebRtcFrameTransportStatus::default())),
             frame_counter: AtomicU64::new(0),
             backpressure: Arc::new(Mutex::new(HashMap::new())),
+            collection_authz: Arc::new(Mutex::new(None)),
+            peer_capability_tokens: Arc::new(Mutex::new(HashMap::new())),
             tasks: Mutex::new(Vec::new()),
         }
+    }
+
+    /// #12c: install the per-collection read-authz hook. Set once right after
+    /// construction, before any peer connects. `None` disables enforcement.
+    pub fn set_collection_authz(
+        &self,
+        hook: Option<Arc<dyn Fn(&str, &str) -> bool + Send + Sync>>,
+    ) {
+        *self.collection_authz.lock() = hook;
     }
 
     /// Phase 1: fetch (or lazily create) the backpressure signal for a peer.
@@ -886,6 +903,31 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
             .get(peer)
             .map(|active| active.contains(collection))
             .unwrap_or(true)
+    }
+
+    fn set_peer_capability_token(&self, peer: &Self::Peer, token: String) {
+        self.peer_capability_tokens
+            .lock()
+            .insert(peer.clone(), token);
+    }
+
+    /// #12c: fail-open when no authz hook is installed (the default — behavior
+    /// unchanged). When installed, an unknown peer maps to an empty token so the
+    /// hook still decides (it treats an empty/invalid token as least privilege).
+    fn is_collection_authorized_for_peer(&self, peer: &Self::Peer, collection: &str) -> bool {
+        let hook = self.collection_authz.lock().clone();
+        match hook {
+            None => true,
+            Some(check) => {
+                let token = self
+                    .peer_capability_tokens
+                    .lock()
+                    .get(peer)
+                    .cloned()
+                    .unwrap_or_default();
+                check(&token, collection)
+            }
+        }
     }
 
     /// Tear down ONE peer's transport. Emits the disconnect event, so the
@@ -1979,6 +2021,9 @@ fn remove_peer(handler: &WebRTCRsConnectionHandler, peer: &str) {
         // Phase 2: drop the per-peer active-collection set so it cannot leak
         // across reconnects (a new connection re-reports its active set).
         handler.active_collections.lock().remove(peer);
+        // #12c: drop the captured capability token so a reconnect re-presents
+        // (and re-verifies) its identity rather than inheriting a stale one.
+        handler.peer_capability_tokens.lock().remove(peer);
         // Release anyone parked on backpressure and drop the per-peer signal.
         // The poll task normally does this, but when WE abort the poll task
         // (the abort above) its cleanup tail never runs.
@@ -2256,6 +2301,31 @@ mod tests {
     // (used by `apply_active_collections` + the send path) and reach the tests
     // through this glob.
     use super::*;
+
+    /// #12c: per-collection authz is fail-open until a hook is installed, then
+    /// enforces using the peer's captured capability token.
+    #[test]
+    fn collection_authz_is_fail_open_then_enforces_with_token() {
+        let handler = WebRTCRsConnectionHandler::new();
+        let peer = "peer-1".to_string();
+        // Default (no hook): authorized for anything.
+        assert!(handler.is_collection_authorized_for_peer(&peer, "business_credentials"));
+        // Hook that only allows a peer presenting token "tok-abc".
+        handler.set_collection_authz(Some(Arc::new(|token: &str, _collection: &str| {
+            token == "tok-abc"
+        })));
+        // No token captured yet => empty token => denied.
+        assert!(!handler.is_collection_authorized_for_peer(&peer, "anything"));
+        // Capture the peer's handshake token => authorized.
+        handler.set_peer_capability_token(&peer, "tok-abc".to_string());
+        assert!(handler.is_collection_authorized_for_peer(&peer, "anything"));
+        // A different peer without the token stays denied.
+        let other = "peer-2".to_string();
+        assert!(!handler.is_collection_authorized_for_peer(&other, "anything"));
+        // Removing enforcement returns to fail-open.
+        handler.set_collection_authz(None);
+        assert!(handler.is_collection_authorized_for_peer(&other, "anything"));
+    }
 
     /// REGRESSION (52a1bf45): when the task draining a peer's send queue is
     /// aborted mid-send, the guard's Drop must re-open the drain slot.
