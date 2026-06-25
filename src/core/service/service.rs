@@ -1902,7 +1902,7 @@ fn configure_background_service_process(_command: &mut Command) {}
 
 pub fn stop_background_guarded(root: &Path, force: bool) -> Result<String> {
     if !force {
-        match leased_business_os_app_queue_task_exists(root) {
+        match leased_business_os_app_queue_task_exists_for_stop_guard(root) {
             Ok(true) => anyhow::bail!(
                 "refusing to stop CTOX while a Business OS app creation/modification task is leased; wait for the app task to finish or run `ctox stop --force`"
             ),
@@ -11841,7 +11841,11 @@ fn business_os_queue_task_is_app_module(task: &channels::QueueTaskView) -> bool 
 
 fn leased_business_os_app_queue_task_exists(root: &Path) -> Result<bool> {
     let tasks = channels::list_queue_tasks(root, &["leased".to_string()], 32)?;
-    if tasks.iter().any(business_os_queue_task_is_app_module) {
+    Ok(tasks.iter().any(business_os_queue_task_is_app_module))
+}
+
+fn leased_business_os_app_queue_task_exists_for_stop_guard(root: &Path) -> Result<bool> {
+    if leased_business_os_app_queue_task_exists(root)? {
         return Ok(true);
     }
     leased_business_os_rxdb_app_queue_task_exists(root)
@@ -11864,11 +11868,16 @@ fn leased_business_os_rxdb_app_queue_task_exists(root: &Path) -> Result<bool> {
     })?;
     let mut stmt = match conn.prepare(
         r#"
-        SELECT data
+        SELECT json_extract(data, '$.prompt')
         FROM ctox_business_os__ctox_queue_tasks__v0
         WHERE deleted = 0
-        ORDER BY lastWriteTime DESC
-        LIMIT 512
+          AND json_valid(data)
+          AND COALESCE(json_extract(data, '$.route_status'), '') = 'leased'
+          AND (
+              COALESCE(json_extract(data, '$.prompt'), '') LIKE '%Business OS app task metadata:%'
+              OR COALESCE(json_extract(data, '$.prompt'), '') LIKE '%ctox.business_os.app.%'
+          )
+        LIMIT 32
         "#,
     ) {
         Ok(stmt) => stmt,
@@ -11882,24 +11891,10 @@ fn leased_business_os_rxdb_app_queue_task_exists(root: &Path) -> Result<bool> {
             })
         }
     };
-    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let rows = stmt.query_map([], |row| row.get::<_, Option<String>>(0))?;
     for row in rows {
-        let data = row?;
-        let Ok(json) = serde_json::from_str::<Value>(&data) else {
-            continue;
-        };
-        let route_status = json
-            .get("route_status")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if route_status != "leased" {
-            continue;
-        }
-        let prompt = json
-            .get("prompt")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if business_os_app_module_target_from_prompt(prompt).is_some() {
+        let prompt = row?.unwrap_or_default();
+        if business_os_app_module_target_from_prompt(&prompt).is_some() {
             return Ok(true);
         }
     }
@@ -11914,7 +11909,8 @@ fn maybe_lease_next_durable_queue_prompt(
     let Some(_lease_attempt) = begin_durable_queue_lease_attempt(state, guard) else {
         return Ok(None);
     };
-    if mark_business_os_app_recovery_preflight_due(root) {
+    let mut app_queue_lease_active = leased_business_os_app_queue_task_exists(root)?;
+    if !app_queue_lease_active && mark_business_os_app_recovery_preflight_due(root) {
         match recover_abandoned_business_os_app_queue_tasks(
             root,
             state,
@@ -11937,6 +11933,7 @@ fn maybe_lease_next_durable_queue_prompt(
                 ),
             ),
         }
+        app_queue_lease_active = leased_business_os_app_queue_task_exists(root)?;
     }
     match quarantine_synthetic_e2e_queue_tasks_before_dispatch(root) {
         Ok(blocked) if blocked > 0 => push_event(
@@ -11954,7 +11951,6 @@ fn maybe_lease_next_durable_queue_prompt(
             ),
         ),
     }
-    let app_queue_lease_active = leased_business_os_app_queue_task_exists(root)?;
     if !app_queue_lease_active {
         if let Some(prompt) = maybe_lease_business_os_app_validation_rework(root, state)? {
             clear_idle_durable_queue_empty_gate(root);
@@ -22900,9 +22896,7 @@ Business OS command:
         assert!(err.contains("refusing to stop CTOX while a Business OS app"));
     }
 
-    #[test]
-    fn stop_guard_blocks_leased_business_os_rxdb_app_queue_task() {
-        let root = temp_root("business-os-app-rxdb-stop-guard");
+    fn seed_leased_rxdb_app_queue_projection(root: &Path, module_id: &str) {
         let runtime = root.join("runtime");
         std::fs::create_dir_all(&runtime).expect("failed to create runtime dir");
         let conn =
@@ -22920,9 +22914,11 @@ Business OS command:
         )
         .expect("create rxdb queue table");
         let data = serde_json::json!({
-            "id": "queue:system::contracts",
+            "id": format!("queue:system::{module_id}"),
             "route_status": "leased",
-            "prompt": "Build the contracts app.\n\nBusiness OS app task metadata:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\n\nBusiness OS command:\n- type: ctox.business_os.app.create\n"
+            "prompt": format!(
+                "Build the {module_id} app.\n\nBusiness OS app task metadata:\n- module_id: {module_id}\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/{module_id}\n\nBusiness OS command:\n- type: ctox.business_os.app.create\n"
+            )
         });
         conn.execute(
             r#"
@@ -22930,15 +22926,53 @@ Business OS command:
                 (id, revision, deleted, lastWriteTime, data)
             VALUES (?1, ?2, 0, 1, ?3)
             "#,
-            params!["queue:system::contracts", "1-test", data.to_string()],
+            params![
+                format!("queue:system::{module_id}"),
+                "1-test",
+                data.to_string()
+            ],
         )
         .expect("insert rxdb queue task");
+    }
+
+    #[test]
+    fn stop_guard_blocks_leased_business_os_rxdb_app_queue_task() {
+        let root = temp_root("business-os-app-rxdb-stop-guard");
+        seed_leased_rxdb_app_queue_projection(&root, "contracts");
 
         let err = stop_background_guarded(&root, false)
             .expect_err("plain stop must be blocked while RxDB app task is leased")
             .to_string();
 
         assert!(err.contains("refusing to stop CTOX while a Business OS app"));
+    }
+
+    #[test]
+    fn idle_dispatch_ignores_rxdb_projection_only_app_lease() {
+        let root = temp_root("business-os-app-rxdb-projection-not-dispatch-lease");
+        seed_leased_rxdb_app_queue_projection(&root, "contracts");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create inventory app".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/inventory".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create canonical app queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        let leased = maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state)
+            .expect("idle dispatch should not fail")
+            .expect("RxDB projection-only lease must not block canonical queue dispatch");
+
+        assert_eq!(leased.leased_message_keys, vec![task.message_key.clone()]);
+        assert_eq!(route_status_for(&root, &task.message_key), "leased");
     }
 
     #[test]

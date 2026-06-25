@@ -117,7 +117,7 @@ fn load_config_cached(root: &Path) -> WorkHoursConfig {
         }
     }
 
-    let config = runtime_env::load_persisted_runtime_env_map(root)
+    let config = runtime_env::load_persisted_runtime_env_map_cached(root)
         .map(|env_map| config_from_map(&env_map))
         .unwrap_or_default();
     config_cache()
