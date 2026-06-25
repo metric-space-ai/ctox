@@ -6,6 +6,7 @@
 
 pub mod browser;
 pub mod deep_research;
+pub(crate) mod egress;
 pub mod person_research;
 pub(crate) mod runtime_config;
 pub mod scholarly_search;

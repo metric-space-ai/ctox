@@ -220,6 +220,9 @@ struct SearchConfig {
     max_page_bytes: usize,
     max_page_chars: usize,
     max_pdf_pages: usize,
+    /// Hosts that bypass the SSRF egress guard (operator-configured SearXNG plus
+    /// any `CTOX_WEB_EGRESS_ALLOW` entries). See [`crate::egress`].
+    egress_allow_hosts: Vec<String>,
 }
 
 impl SearchConfig {
@@ -246,6 +249,17 @@ impl SearchConfig {
             max_page_bytes: read_usize(root, "CTOX_WEB_SEARCH_MAX_PAGE_BYTES", 2_000_000),
             max_page_chars: read_usize(root, "CTOX_WEB_SEARCH_MAX_PAGE_CHARS", 16_000),
             max_pdf_pages: read_usize(root, "CTOX_WEB_SEARCH_MAX_PDF_PAGES", 12),
+            egress_allow_hosts: {
+                let mut hosts = crate::egress::allow_hosts_from_config(root);
+                // A self-hosted SearXNG instance is a deliberate operator choice
+                // and may legitimately live on a private/loopback address.
+                if let Some(base) = runtime_config::get(root, "CTOX_WEB_SEARCH_SEARXNG_BASE_URL") {
+                    if let Some(host) = crate::egress::host_of(&base) {
+                        hosts.push(host);
+                    }
+                }
+                hosts
+            },
         }
     }
 }
@@ -679,6 +693,7 @@ pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Re
     }
 
     let url = normalize_text(&request.url).context("ctox_web_read requires a non-empty url")?;
+    crate::egress::assert_fetchable_url(&url)?;
     let read_query = request
         .query
         .as_deref()
@@ -5813,6 +5828,12 @@ fn build_agent(config: &SearchConfig) -> Result<ureq::Agent> {
     Ok(ureq::AgentBuilder::new()
         .user_agent(&config.user_agent)
         .timeout(Duration::from_millis(config.timeout_ms))
+        // SSRF guard: every fetch (evidence pages from a SERP, the model-chosen
+        // `ctox_web_read` URL, redirect hops) only connects to public addresses,
+        // unless the operator allow-listed the host.
+        .resolver(crate::egress::SsrfResolver::new(
+            config.egress_allow_hosts.clone(),
+        ))
         .build())
 }
 
@@ -8854,6 +8875,7 @@ mod tests {
             max_page_bytes: 128_000,
             max_page_chars: 8_000,
             max_pdf_pages: 12,
+            egress_allow_hosts: Vec::new(),
         }
     }
 
