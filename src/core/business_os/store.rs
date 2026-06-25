@@ -630,6 +630,12 @@ struct ModuleManifest {
     collections: Vec<String>,
     #[serde(default)]
     layout: Value,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    icon: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    icon_path: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    icon_svg: String,
     #[serde(default, skip_serializing_if = "Value::is_null")]
     lifecycle: Value,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -6593,6 +6599,7 @@ fn load_module_manifests(
                 .with_context(|| format!("failed to parse module manifest {}", path.display()))?;
             manifest.manifest_sha256 = hex_sha256(text.as_bytes());
             manifest.local_manifest_path = path.display().to_string();
+            backfill_local_module_icon(&mut manifest, &entry.path());
             if manifest.entry.is_empty() {
                 manifest.entry = format!("modules/{}/index.html", manifest.id);
             }
@@ -6653,6 +6660,7 @@ fn load_installed_module_manifests(app_root: &Path) -> anyhow::Result<Vec<Module
             .with_context(|| format!("failed to parse module manifest {}", path.display()))?;
         manifest.manifest_sha256 = hex_sha256(text.as_bytes());
         manifest.local_manifest_path = path.display().to_string();
+        backfill_local_module_icon(&mut manifest, &entry.path());
         if manifest.install_scope.trim().eq_ignore_ascii_case("sample") {
             continue;
         }
@@ -6671,6 +6679,26 @@ fn load_installed_module_manifests(app_root: &Path) -> anyhow::Result<Vec<Module
         manifests.push(manifest);
     }
     Ok(manifests)
+}
+
+fn backfill_local_module_icon(manifest: &mut ModuleManifest, module_dir: &Path) {
+    if manifest.icon.trim().is_empty()
+        && manifest.icon_path.trim().is_empty()
+        && module_dir.join("icon.svg").is_file()
+    {
+        manifest.icon = "icon.svg".to_owned();
+    }
+}
+
+fn ensure_local_icon_manifest_value(manifest: &mut Value, module_dir: &Path) {
+    let existing_icon = manifest
+        .get("icon")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim();
+    if existing_icon.is_empty() && module_dir.join("icon.svg").is_file() {
+        manifest["icon"] = Value::String("icon.svg".to_owned());
+    }
 }
 
 fn load_marketplace_module_manifests(app_root: &Path) -> anyhow::Result<Vec<Value>> {
@@ -6833,6 +6861,7 @@ fn install_template_module(
     manifest_value["install_scope"] = Value::String("installed".to_owned());
     manifest_value["default_installed"] = Value::Bool(false);
     manifest_value["template_id"] = Value::String(template.id);
+    ensure_local_icon_manifest_value(&mut manifest_value, &target);
     fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest_value)?)
         .with_context(|| format!("failed to write {}", manifest_path.display()))?;
 
@@ -6907,6 +6936,9 @@ fn upsert_module_manifest(
     );
     if !request.layout.is_null() {
         manifest_value["layout"] = request.layout;
+    }
+    if !is_core {
+        ensure_local_icon_manifest_value(&mut manifest_value, &target);
     }
     fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest_value)?)
         .with_context(|| format!("failed to write {}", manifest_path.display()))?;
@@ -8030,6 +8062,7 @@ pub fn install_app_module(
     manifest["entry"] = Value::String(format!("installed-modules/{module_id}/index.html"));
     manifest["install_scope"] = Value::String("installed".to_owned());
     manifest["default_installed"] = Value::Bool(false);
+    ensure_local_icon_manifest_value(&mut manifest, &dest_dir);
     fs::write(
         dest_dir.join("module.json"),
         serde_json::to_vec_pretty(&manifest)?,
@@ -27437,6 +27470,7 @@ mod tests {
                 "version": "0.1.0",
                 "entry": format!("installed-modules/{module_id}/index.html"),
                 "install_scope": "installed",
+                "icon": "icon.svg",
                 "collections": ["business_commands", collection],
                 "layout": {
                     "shell": "full-workspace",
@@ -40744,6 +40778,10 @@ mod tests {
             installed_app_root.join("installed-modules/research/module.json"),
             r#"{"id":"research","title":"Web Research","entry":"installed-modules/research/index.html","install_scope":"installed"}"#,
         )?;
+        fs::write(
+            installed_app_root.join("installed-modules/research/icon.svg"),
+            r#"<svg xmlns="http://www.w3.org/2000/svg"></svg>"#,
+        )?;
 
         write_module_catalog_projection_to_rxdb(root)?;
 
@@ -40766,6 +40804,19 @@ mod tests {
         assert!(
             ids.contains(&"research".to_owned()),
             "missing installed research: {ids:?}"
+        );
+        let research = catalog
+            .get("modules")
+            .and_then(Value::as_array)
+            .and_then(|modules| {
+                modules
+                    .iter()
+                    .find(|module| module.get("id").and_then(Value::as_str) == Some("research"))
+            })
+            .expect("installed research module missing from projected catalog");
+        assert_eq!(
+            research.get("icon").and_then(Value::as_str),
+            Some("icon.svg")
         );
         Ok(())
     }

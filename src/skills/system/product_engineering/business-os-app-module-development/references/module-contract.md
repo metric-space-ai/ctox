@@ -32,6 +32,9 @@ Keep extra files rare. Use extra local ESM helpers only when the app would other
 - `index.html` is the app's local HTML fragment. It must not contain `<!doctype>`, `<html>`, `<head>`, `<body>`, `<link>`, `<script>`, `<meta>`, `<title>`, or inline `<style>`.
 - `index.css` is plain CSS scoped under a module root class.
 - `index.js` is browser ESM and exports `mount(ctx)`.
+- Runtime apps must include `icon.svg` and set `"icon": "icon.svg"` in
+  `module.json`. Do not use remote icons, `icon_url`, `icon_path`, or inline SVG
+  fields in runtime manifests.
 - `mount(ctx)` renders into `ctx.host`, wires handlers, subscribes to data, and returns optional cleanup.
 - For runtime-installed apps, `mount(ctx)` must load `index.html` itself, or
   render an equivalent primary UI into `ctx.host` itself. Do not assume the
@@ -112,6 +115,7 @@ For a runtime-installed app, `module.json` normally uses:
   "id": "<module-id>",
   "entry": "installed-modules/<module-id>/index.html",
   "install_scope": "installed",
+  "icon": "icon.svg",
   "version": "0.1.0",
   "collections": ["<module_collection>"]
 }
@@ -122,6 +126,8 @@ Use existing shipped apps as concrete examples, but adapt them to the requested 
 Do not copy these source-module manifest fields into runtime-installed apps:
 
 - `layout.icon_svg` or any inline SVG markup. Put SVG markup in `icon.svg`.
+- `icon_url`, `icon_path`, or remote icon references. Runtime apps use local
+  `"icon": "icon.svg"`.
 - `store.installable`, `store.editable_after_install`, or source-store distribution flags.
 - `entry: modules/<id>/index.html`. Runtime apps use `installed-modules/<module-id>/index.html`.
 - `layout.right` unless the app truly needs a persistent third pane and `layout.third_pane_justification` explains the workflow need.

@@ -729,6 +729,15 @@ if (manifest) {
     if (manifest.store?.installable === true) {
       fail('module.json store.installable must not be true for runtime-installed modules');
     }
+    if (manifest.icon !== 'icon.svg') {
+      fail('module.json icon must be icon.svg for runtime-installed modules');
+    }
+    if (Object.prototype.hasOwnProperty.call(manifest, 'icon_path') || Object.prototype.hasOwnProperty.call(manifest, 'iconPath')) {
+      fail('module.json icon_path is forbidden for runtime-installed modules; use icon: "icon.svg"');
+    }
+    if (Object.prototype.hasOwnProperty.call(manifest, 'icon_url') || Object.prototype.hasOwnProperty.call(manifest, 'iconUrl')) {
+      fail('module.json icon_url is forbidden for runtime-installed modules; use local icon.svg');
+    }
   }
   if (!sourceShellModuleMode && manifest.layout?.right && !manifest.layout?.third_pane_justification) {
     fail('module.json layout.right requires layout.third_pane_justification');

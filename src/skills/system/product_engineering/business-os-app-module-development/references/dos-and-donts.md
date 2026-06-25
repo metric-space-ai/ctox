@@ -5,6 +5,8 @@
 - Build a real app for the user's request.
 - Choose three relevant shipped Business OS apps as references before coding.
 - Use plain HTML fragments, CSS, and browser ESM.
+- Include `icon.svg` and set `"icon": "icon.svg"` in the runtime
+  `module.json`.
 - Export `mount(ctx)` from `index.js`.
 - Render into `ctx.host`.
 - In runtime-installed apps, load `index.html` into `ctx.host` from `mount(ctx)`
@@ -64,6 +66,8 @@
   in the real Business OS shell.
 - Do not copy `layout.icon_svg`, inline SVG, `store.installable`, or
   `entry: modules/...` from a source manifest into a runtime-installed app.
+- Do not use `icon_url`, `icon_path`, remote icons, or inline SVG icon fields in
+  a runtime-installed app manifest.
 - Do not stop, start, restart, upgrade, bootout, disable, or otherwise manage
   the CTOX service while building an app. The service must stay running for the
   app creator, RxDB/WebRTC, validation, smoke, and E2E proof.

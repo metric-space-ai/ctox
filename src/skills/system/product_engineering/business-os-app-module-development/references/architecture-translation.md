@@ -57,8 +57,9 @@ The reference catalog is not a copy-paste manifest template. Many shipped
 source apps are packaged shell modules and may contain source-only fields such
 as `layout.icon_svg`, `store.installable`, `entry: modules/...`, or a persistent
 third pane. For runtime-created apps, follow the module contract and validator:
-use `icon.svg`, `installed-modules/<module-id>/index.html`, no store install
-flags, and no third pane unless the workflow truly needs it.
+use `"icon": "icon.svg"` plus a local `icon.svg`,
+`installed-modules/<module-id>/index.html`, no store install flags, and no third
+pane unless the workflow truly needs it.
 
 Avoid internal shell/developer tools as default references for business apps.
 App Creator, App Store, Browser, CTOX, Credentials, and Coding Agents are useful
