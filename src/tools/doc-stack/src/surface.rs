@@ -521,14 +521,11 @@ fn resolve_roots(store: &DocStore, explicit_roots: &[PathBuf]) -> Result<Vec<Pat
     if !configured.is_empty() {
         return Ok(configured);
     }
-    Ok(default_documents_root().into_iter().collect())
-}
-
-fn default_documents_root() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|path| path.join("Documents"))
-        .filter(|path| path.is_dir())
+    // No implicit fallback: without an explicit `--root` or a registered corpus
+    // root, return nothing so the caller fails loudly (see handle_index_command)
+    // instead of silently walking and indexing the operator's entire
+    // $HOME/Documents tree.
+    Ok(Vec::new())
 }
 
 fn walk_supported_files(root: &Path) -> Result<Vec<PathBuf>> {
@@ -911,12 +908,12 @@ fn print_json<T: Serialize>(value: &T) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{embed_inputs_batched, execute_search, score_chunks, SearchMode};
+    use super::{embed_inputs_batched, execute_search, resolve_roots, score_chunks, SearchMode};
     use crate::parse::ParsedChunk;
     use crate::store::DocStore;
     use crate::EmbeddingExecutor;
     use anyhow::{anyhow, Result};
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
     use tempfile::tempdir;
 
@@ -1009,6 +1006,18 @@ mod tests {
             store.upsert_document(Some(corpus.as_path()), &parsed, None, None)?;
         }
         Ok(store)
+    }
+
+    #[test]
+    fn resolve_roots_requires_explicit_or_configured_root() {
+        let root = tempdir().unwrap();
+        let store = DocStore::open(root.path()).unwrap();
+        // No explicit roots and an empty store -> no implicit $HOME/Documents
+        // scan; the index command turns this into a loud "configure a root" error.
+        assert!(resolve_roots(&store, &[]).unwrap().is_empty());
+        // Explicit roots are returned verbatim.
+        let explicit = vec![PathBuf::from("/tmp/some-corpus")];
+        assert_eq!(resolve_roots(&store, &explicit).unwrap(), explicit);
     }
 
     #[test]
