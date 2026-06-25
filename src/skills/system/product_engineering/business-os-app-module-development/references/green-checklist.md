@@ -5,6 +5,8 @@ Use this before claiming a Business OS app is done.
 - The target directory is correct for runtime or source mode.
 - Three relevant shipped Business OS apps were chosen and inspected.
 - The app is vanilla HTML/CSS/browser ESM with no build step.
+- Runtime `module.json` sets `"icon": "icon.svg"` and the module directory
+  contains a local `icon.svg`.
 - `index.js` exports `mount(ctx)`.
 - `mount(ctx)` loads `index.html` into `ctx.host` or renders an equivalent
   primary UI into `ctx.host`; it does not assume the shell preloaded the

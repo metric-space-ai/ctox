@@ -71,6 +71,7 @@ function writeInstalledModule(root, moduleId, overrides = {}) {
     version: '0.1.0',
     entry: `installed-modules/${moduleId}/index.html`,
     install_scope: 'installed',
+    icon: 'icon.svg',
     collections: ['business_commands', collectionName],
     layout: { shell: 'full-workspace', left: 'List', center: 'Details' },
     tags: ['business-os', moduleId, 'workflow'],
@@ -563,6 +564,26 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /module\.json inline icon fields are forbidden/);
   assert.match(run.stderr, /module\.json must not embed inline SVG markup/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'missingicon', {
+    manifest: { icon: '' },
+  });
+  const run = runValidator(root, 'missingicon', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /module\.json icon must be icon\.svg/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'remoteicon', {
+    manifest: { icon: 'icon.svg', icon_url: 'https://example.test/icon.svg' },
+  });
+  const run = runValidator(root, 'remoteicon', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /module\.json icon_url is forbidden/);
 }
 
 {
