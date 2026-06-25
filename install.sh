@@ -1575,6 +1575,10 @@ build_ctox() {
       "CTOX_QWEN3_EMBEDDING_BUILD_CUDA=0"
       "CTOX_VOXTRAL_TTS_BUILD_CUDA=0"
     )
+    if [[ "$managed_release_build" -eq 1 && -z "${CARGO_BUILD_JOBS:-}" ]]; then
+      cargo_env+=("CARGO_BUILD_JOBS=2")
+      printf '[build] limiting managed source upgrade cargo jobs to 2 (CARGO_BUILD_JOBS unset)\n'
+    fi
   fi
   local -a workspace_cargo_env=()
   if [[ "${#cargo_env[@]}" -gt 0 ]]; then

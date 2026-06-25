@@ -2166,6 +2166,9 @@ fn run_release_installer(
     if skip_optional_runtime_builds && env::var_os("CTOX_VOXTRAL_TTS_BUILD_CUDA").is_none() {
         cmd.env("CTOX_VOXTRAL_TTS_BUILD_CUDA", "0");
     }
+    if skip_optional_runtime_builds && env::var_os("CARGO_BUILD_JOBS").is_none() {
+        cmd.env("CARGO_BUILD_JOBS", "2");
+    }
     if let Some(bwrap_source_dir) = resolve_bwrap_source_dir_for_installer(release_root) {
         cmd.env("CODEX_BWRAP_SOURCE_DIR", bwrap_source_dir);
     }
