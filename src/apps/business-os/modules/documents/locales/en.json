@@ -34,7 +34,7 @@
   "noSavedVersionFound": "No saved version found for this document. Please import again or manage the record.",
   "loadVersionFailed": "Could not load document version:",
   "deleteConfirmTitle": "Delete document",
-  "deleteConfirmMessage": "Delete document \"{title}\"?",
+  "deleteConfirmMessage": "Delete document \"{0}\"?",
   "deleteLabel": "Delete",
   "manageDocumentTitle": "Manage Document",
   "newDocumentTitle": "New Document",
