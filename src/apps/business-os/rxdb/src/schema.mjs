@@ -217,8 +217,100 @@ export function normalizeSchema(schema) {
   }
   const normalized = structuredCloneSafe(schema);
   delete normalized.hash;
-  delete normalized.encrypted;
+  normalized.version = Number.isFinite(normalized.version) ? normalized.version : 0;
+  normalized.type = typeof normalized.type === 'string' && normalized.type ? normalized.type : 'object';
+  normalized.properties = normalized.properties && typeof normalized.properties === 'object'
+    ? normalized.properties
+    : {};
+  normalized.required = Array.isArray(normalized.required)
+    ? normalized.required.map(String)
+    : [];
+  normalized.indexes = Array.isArray(normalized.indexes)
+    ? normalized.indexes.map(normalizeSchemaIndex)
+    : [];
+  normalized.encrypted = Array.isArray(normalized.encrypted)
+    ? normalized.encrypted.map(String)
+    : [];
+  normalized.keyCompression = normalized.keyCompression === true;
+  normalized.additionalProperties = false;
+
+  normalized.properties._rev = { type: 'string', minLength: 1 };
+  normalized.properties._attachments = { type: 'object' };
+  normalized.properties._deleted = { type: 'boolean' };
+  normalized.properties._meta = rxMetaSchema();
+
+  for (const field of ['_deleted', '_rev', '_meta', '_attachments']) {
+    if (!normalized.required.includes(field)) normalized.required.push(field);
+  }
+  normalized.required.push(...finalSchemaFields(normalized));
+  const requiredSeen = new Set();
+  normalized.required = normalized.required.filter((field) => {
+    if (field.includes('.') || requiredSeen.has(field)) return false;
+    requiredSeen.add(field);
+    return true;
+  });
+
+  const primaryPath = primaryFieldOfPrimaryKey(normalized.primaryKey);
+  const indexes = normalized.indexes.map((index) => {
+    const next = index.slice();
+    if (!next.includes(primaryPath)) next.push(primaryPath);
+    if (next[0] !== '_deleted') next.unshift('_deleted');
+    return next;
+  });
+  if (indexes.length === 0) indexes.push(['_deleted', primaryPath]);
+  indexes.push(['_meta.lwt', primaryPath]);
+  if (Array.isArray(normalized.internalIndexes)) {
+    for (const index of normalized.internalIndexes) indexes.push(normalizeSchemaIndex(index));
+  }
+  const indexSeen = new Set();
+  normalized.indexes = indexes.filter((index) => {
+    const key = index.join(',');
+    if (indexSeen.has(key)) return false;
+    indexSeen.add(key);
+    return true;
+  });
   return normalized;
+}
+
+function primaryFieldOfPrimaryKey(primaryKey) {
+  if (typeof primaryKey === 'string' && primaryKey) return primaryKey;
+  if (primaryKey && typeof primaryKey === 'object' && typeof primaryKey.key === 'string' && primaryKey.key) {
+    return primaryKey.key;
+  }
+  return 'id';
+}
+
+function normalizeSchemaIndex(index) {
+  if (Array.isArray(index)) return index.map(String);
+  return [String(index)];
+}
+
+function finalSchemaFields(schema) {
+  const fields = [];
+  for (const [name, property] of Object.entries(schema.properties || {})) {
+    if (property && typeof property === 'object' && property.final === true) fields.push(name);
+  }
+  fields.push(primaryFieldOfPrimaryKey(schema.primaryKey));
+  if (schema.primaryKey && typeof schema.primaryKey === 'object' && Array.isArray(schema.primaryKey.fields)) {
+    for (const field of schema.primaryKey.fields) fields.push(String(field));
+  }
+  return fields;
+}
+
+function rxMetaSchema() {
+  return {
+    type: 'object',
+    properties: {
+      lwt: {
+        type: 'number',
+        minimum: 1,
+        maximum: 1000000000000000,
+        multipleOf: 0.01,
+      },
+    },
+    required: ['lwt'],
+    additionalProperties: true,
+  };
 }
 
 export function buildProtocolPayload({
