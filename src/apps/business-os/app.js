@@ -8321,15 +8321,19 @@ function renderStartMenuLifecycleBadge(target) {
   });
   if (!lifecycle?.runtimeInstalled) return '';
   const title = target.title || target.id;
+  const updateDot = lifecycle.updateAvailable
+    ? `<i class="start-menu-update-dot" aria-hidden="true"></i>`
+    : '';
   return `
     <button
-      class="start-menu-lifecycle-badge"
+      class="start-menu-lifecycle-badge${lifecycle.updateAvailable ? ' has-update' : ''}"
       type="button"
       data-module-lifecycle="${escapeHtml(target.id)}"
       data-state="${escapeHtml(lifecycle.state)}"
       title="${escapeHtml(lifecycle.title)}"
       aria-label="${escapeHtml(lifecycleBadgeAriaLabel(title, lifecycle))}"
     >
+      ${updateDot}
       ${lifecycle.version ? `<b>${escapeHtml(lifecycle.version)}</b>` : ''}
       <span>${escapeHtml(lifecycle.text || lifecycle.label || '')}</span>
     </button>

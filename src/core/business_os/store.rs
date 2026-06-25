@@ -444,6 +444,26 @@ pub struct AppStoreUninstallRequest {
     pub module_id: String,
 }
 
+/// Update a runtime-installed module to the current catalog (`modules/<source>`)
+/// bundle. `mode = "vanilla"` (default) refuses to overwrite local edits;
+/// `mode = "discard"` overwrites them after taking an auto-recovery snapshot.
+/// `expected_baseline_sha256`, when set, is an optimistic-concurrency guard
+/// against the install/update baseline having moved since the UI computed it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModuleUpdateRequest {
+    pub module_id: String,
+    #[serde(default = "default_update_mode")]
+    pub mode: String,
+    #[serde(default)]
+    pub expected_baseline_sha256: String,
+    #[serde(default)]
+    pub target_catalog_version: String,
+}
+
+fn default_update_mode() -> String {
+    "vanilla".to_owned()
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct DesktopFileMaterializeRequest {
     pub file_id: String,
@@ -659,6 +679,14 @@ struct ModuleManifest {
     manifest_sha256: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     local_manifest_path: String,
+    /// Template id this runtime module was installed from (stamped at install).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    template_id: String,
+    /// Catalog module (`modules/<id>`) this runtime module was copied from.
+    /// Load-bearing for the catalog/update diff: it links an installed instance
+    /// back to its upstream source so `update_available` can be computed.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    source_module_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3697,7 +3725,8 @@ pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         },
     )?;
     let version_states = module_version_states(root, &app_root).unwrap_or(Value::Null);
-    let (modules, lifecycle) = modules_with_projected_lifecycle(root, modules, &version_states)?;
+    let (mut modules, lifecycle) = modules_with_projected_lifecycle(root, modules, &version_states)?;
+    augment_modules_with_catalog_update_state(&app_root, &mut modules, &version_states);
     if let Some(object) = governance.as_object_mut() {
         object.insert("lifecycle".to_owned(), lifecycle);
     }
@@ -6862,6 +6891,9 @@ fn install_template_module(
     manifest_value["install_scope"] = Value::String("installed".to_owned());
     manifest_value["default_installed"] = Value::Bool(false);
     manifest_value["template_id"] = Value::String(template.id);
+    // Link the installed instance back to the catalog module it was copied from
+    // so the catalog/update diff can detect a newer upstream bundle later.
+    manifest_value["source_module_id"] = Value::String(source_module.clone());
     ensure_local_icon_manifest_value(&mut manifest_value, &target);
     fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest_value)?)
         .with_context(|| format!("failed to write {}", manifest_path.display()))?;
@@ -7691,17 +7723,24 @@ pub fn list_module_versions(
 
 /// Per-module bundle modification state for the app-store badge.
 ///
-/// For every module that has a recorded version timeline, reports the install
-/// baseline bundle hash (lowest seq), the live current bundle hash, and whether
-/// the working tree diverges from that baseline. This replaces the old
-/// module.json-only manifest hash compare with a whole-bundle signal.
+/// For every module that has a recorded version timeline, reports the baseline
+/// bundle hash (the latest upstream sync point — the most recent
+/// install/update/app_create row, falling back to the earliest row), the live
+/// current bundle hash, and whether the working tree diverges from that
+/// baseline. Keying off the latest sync point (not the original install) is
+/// what lets a freshly updated vanilla app read as unmodified again instead of
+/// staying "modified" forever after an upstream update.
 fn module_version_states(root: &Path, app_root: &Path) -> anyhow::Result<Value> {
     let conn = open_store(root)?;
     let mut stmt = conn.prepare(
         "SELECT module_id, bundle_sha256, origin, seq
          FROM business_module_versions v1
-         WHERE seq = (SELECT MIN(seq) FROM business_module_versions v2
-                      WHERE v2.module_id = v1.module_id)",
+         WHERE seq = COALESCE(
+             (SELECT MAX(seq) FROM business_module_versions v2
+              WHERE v2.module_id = v1.module_id
+                AND v2.origin IN ('install', 'update', 'app_create')),
+             (SELECT MIN(seq) FROM business_module_versions v3
+              WHERE v3.module_id = v1.module_id))",
     )?;
     let baselines = stmt
         .query_map([], |row| {
@@ -7735,6 +7774,9 @@ fn module_version_states(root: &Path, app_root: &Path) -> anyhow::Result<Value> 
             module_id.clone(),
             serde_json::json!({
                 "baseline_bundle_sha256": baseline_sha,
+                // Explicit alias: the bundle this instance last installed/updated
+                // from (the catalog/update diff and the vanilla check use this).
+                "installed_from_bundle_sha256": baseline_sha,
                 "baseline_origin": baseline_origin,
                 "current_bundle_sha256": current_sha,
                 "modified": modified,
@@ -7744,6 +7786,158 @@ fn module_version_states(root: &Path, app_root: &Path) -> anyhow::Result<Value> 
         );
     }
     Ok(Value::Object(states))
+}
+
+/// Resolve the catalog module (`modules/<id>`) a projected module was installed
+/// from. Prefers the stamped `source_module_id`; falls back to resolving a
+/// legacy `template_id` through the template manifest. Returns `None` for
+/// bespoke app-created modules with no catalog upstream.
+fn module_catalog_source_id(app_root: &Path, module: &Value) -> Option<String> {
+    if let Some(direct) = module
+        .get("source_module_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(direct.to_owned());
+    }
+    let template_id = module
+        .get("template_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let template_path = app_root
+        .join("template-store")
+        .join(template_id)
+        .join("template.json");
+    let text = fs::read_to_string(&template_path).ok()?;
+    let template: TemplateManifest = serde_json::from_str(&text).ok()?;
+    let source = if template.source_module.trim().is_empty() {
+        template.id
+    } else {
+        template.source_module
+    };
+    let source = source.trim();
+    if source.is_empty() {
+        None
+    } else {
+        Some(source.to_owned())
+    }
+}
+
+/// Read the declared version string of a catalog (`modules/<id>`) module.
+fn catalog_module_version(app_root: &Path, module_id: &str) -> String {
+    let path = app_root.join("modules").join(module_id).join("module.json");
+    fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|value| {
+            value
+                .get("version")
+                .and_then(Value::as_str)
+                .map(|version| version.trim().to_owned())
+        })
+        .unwrap_or_default()
+}
+
+/// Folds the install/catalog update signal into each projected module's
+/// `lifecycle`. For a runtime-installed module copied from a catalog source,
+/// `update_available` is true when the source bundle on disk diverges from the
+/// bundle this instance last installed/updated (the `installed_from` baseline in
+/// `version_states`). Packaged modules never surface an app-store update — they
+/// refresh through `ctox upgrade` — so they always report `update_available =
+/// false`. `modification_state` is the vanilla/customized/unknown signal derived
+/// from the same baseline.
+fn augment_modules_with_catalog_update_state(
+    app_root: &Path,
+    modules: &mut [Value],
+    version_states: &Value,
+) {
+    // Memoize per source module so several instances of the same template only
+    // hash the catalog bundle once per projection.
+    let mut catalog_cache: HashMap<String, (String, String)> = HashMap::new();
+    for module in modules.iter_mut() {
+        let module_id = module
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let runtime_installed = module
+            .get("lifecycle")
+            .and_then(|lifecycle| lifecycle.get("runtime_installed"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let version_state = version_states.get(&module_id);
+        let installed_from = version_state
+            .and_then(|state| state.get("baseline_bundle_sha256"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let current = version_state
+            .and_then(|state| state.get("current_bundle_sha256"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let modification_state = if installed_from.is_empty() {
+            "unknown"
+        } else if current == installed_from {
+            "vanilla"
+        } else {
+            "customized"
+        };
+
+        let mut catalog_bundle_sha256 = String::new();
+        let mut catalog_version = String::new();
+        let mut update_available = false;
+        if runtime_installed {
+            if let Some(source) = module_catalog_source_id(app_root, module) {
+                let (sha, version) = catalog_cache
+                    .entry(source.clone())
+                    .or_insert_with(|| {
+                        let sha = compute_module_bundle(app_root, &source)
+                            .map(|bundle| bundle.sha256)
+                            .unwrap_or_default();
+                        (sha, catalog_module_version(app_root, &source))
+                    })
+                    .clone();
+                catalog_bundle_sha256 = sha;
+                catalog_version = version;
+                update_available = !installed_from.is_empty()
+                    && !catalog_bundle_sha256.is_empty()
+                    && installed_from != catalog_bundle_sha256;
+            }
+        }
+
+        let installed_version = module
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+
+        if let Some(lifecycle) = module.get_mut("lifecycle").and_then(Value::as_object_mut) {
+            lifecycle.insert(
+                "modification_state".to_owned(),
+                Value::String(modification_state.to_owned()),
+            );
+            lifecycle.insert("update_available".to_owned(), Value::Bool(update_available));
+            lifecycle.insert("catalog_version".to_owned(), Value::String(catalog_version));
+            lifecycle.insert(
+                "installed_version".to_owned(),
+                Value::String(installed_version),
+            );
+            lifecycle.insert(
+                "catalog_bundle_sha256".to_owned(),
+                Value::String(catalog_bundle_sha256),
+            );
+            lifecycle.insert(
+                "installed_from_bundle_sha256".to_owned(),
+                Value::String(installed_from),
+            );
+        }
+        if let Some(object) = module.as_object_mut() {
+            object.insert("update_available".to_owned(), Value::Bool(update_available));
+        }
+    }
 }
 
 pub fn rollback_module_to_version(
