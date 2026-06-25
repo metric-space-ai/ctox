@@ -161,6 +161,21 @@ function assertBusinessOsServerHttpDataApisAreGated() {
       offenders.push(`src/core/business_os/server.rs: legacy module HTTP handler marker must not exist: ${marker}`);
     }
   }
+  // The control-plane allowlist must never re-admit a Business OS data path. The
+  // knowledge / dataframe / document HTTP handlers still exist behind the 410
+  // gate, so a single allowlist entry like "/api/business-os/knowledge/document"
+  // would silently re-open them as a data bridge. Pin the allowlist to non-data
+  // control-plane routes only; data windows must be served over RxDB/WebRTC.
+  const controlPlane = server.match(/fn is_business_os_control_plane_path[\s\S]*?\n\}/);
+  if (!controlPlane) {
+    offenders.push('src/core/business_os/server.rs: is_business_os_control_plane_path must exist so its allowlist can be audited');
+  } else {
+    for (const dataPath of ['knowledge', 'dataframe', '/document', '/records', '/users', '/channels', '/reports']) {
+      if (controlPlane[0].includes(dataPath)) {
+        offenders.push(`src/core/business_os/server.rs: control-plane allowlist must not admit data path "${dataPath}" (would re-open an HTTP data bridge; serve it over RxDB/WebRTC instead)`);
+      }
+    }
+  }
 }
 
 function assertSubscriptionAuthStartsThroughRxdbCommand() {
