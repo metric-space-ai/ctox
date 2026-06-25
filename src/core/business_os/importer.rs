@@ -900,18 +900,27 @@ fn import_matching_objects(
             .unwrap_or("application/pdf");
         let bytes =
             decode_file_payload(&file).with_context(|| format!("failed to decode {name}"))?;
-        let raw_text = parse_pdf_text(&bytes).unwrap_or_else(|err| {
+        let mut raw_text = parse_pdf_text(&bytes).unwrap_or_else(|err| {
             eprintln!("[business-os-import] PDF parse failed for {name}: {err:#}");
             String::new()
         });
         if raw_text.trim().is_empty() {
-            // The native parser succeeded but extracted no text — almost always a
-            // scanned/image-only PDF. There is no OCR path, so surface this
-            // instead of silently importing an empty candidate (the emitted
-            // record also carries raw_text_length: 0 as a machine-readable signal).
-            eprintln!(
-                "[business-os-import] no extractable text from {name} (likely a scanned/image PDF; OCR is not available)"
-            );
+            // The native parser extracted no text — almost always a scanned /
+            // image-only PDF. Try a vision-model OCR pass; it degrades to None
+            // when vision is unavailable, in which case we import with empty text
+            // (the record still carries raw_text_length: 0 as a signal).
+            match ocr_pdf_via_vision(root, &bytes) {
+                Some(text) => {
+                    eprintln!(
+                        "[business-os-import] recovered {} chars from {name} via vision OCR",
+                        text.len()
+                    );
+                    raw_text = text;
+                }
+                None => eprintln!(
+                    "[business-os-import] no extractable text from {name} (scanned/image PDF; vision OCR unavailable)"
+                ),
+            }
         }
         let candidate = parse_candidate_text(name, &raw_text);
         let now_iso = now_iso();
@@ -1450,18 +1459,27 @@ fn import_candidate_documents(
         let bytes = BASE64_STANDARD
             .decode(compact_base64)
             .with_context(|| format!("failed to decode {name}"))?;
-        let raw_text = parse_pdf_text(&bytes).unwrap_or_else(|err| {
+        let mut raw_text = parse_pdf_text(&bytes).unwrap_or_else(|err| {
             eprintln!("[business-os-import] PDF parse failed for {name}: {err:#}");
             String::new()
         });
         if raw_text.trim().is_empty() {
-            // The native parser succeeded but extracted no text — almost always a
-            // scanned/image-only PDF. There is no OCR path, so surface this
-            // instead of silently importing an empty candidate (the emitted
-            // record also carries raw_text_length: 0 as a machine-readable signal).
-            eprintln!(
-                "[business-os-import] no extractable text from {name} (likely a scanned/image PDF; OCR is not available)"
-            );
+            // The native parser extracted no text — almost always a scanned /
+            // image-only PDF. Try a vision-model OCR pass; it degrades to None
+            // when vision is unavailable, in which case we import with empty text
+            // (the record still carries raw_text_length: 0 as a signal).
+            match ocr_pdf_via_vision(root, &bytes) {
+                Some(text) => {
+                    eprintln!(
+                        "[business-os-import] recovered {} chars from {name} via vision OCR",
+                        text.len()
+                    );
+                    raw_text = text;
+                }
+                None => eprintln!(
+                    "[business-os-import] no extractable text from {name} (scanned/image PDF; vision OCR unavailable)"
+                ),
+            }
         }
         let candidate = parse_candidate_text(name, &raw_text);
         let now_iso = now_iso();
@@ -2401,6 +2419,100 @@ fn parse_pdf_text(bytes: &[u8]) -> anyhow::Result<String> {
     )
     .context("native PDF parser failed")?;
     Ok(result.text)
+}
+
+/// Maximum number of PDF pages sent to the vision model for OCR (bounds token /
+/// latency cost on long scans).
+const OCR_MAX_PAGES: usize = 8;
+/// Render DPI for OCR page images — legible glyphs without oversized payloads.
+const OCR_RENDER_DPI: u16 = 150;
+const OCR_INSTRUCTIONS: &str = "You are an OCR engine. Transcribe ALL visible text from the \
+    provided PDF page images verbatim, preserving reading order and line breaks. Output only the \
+    transcribed text with no commentary. Separate pages with a blank line.";
+
+/// OCR a (likely scanned / image-only) PDF by rendering its pages and asking a
+/// vision-capable model to transcribe them through the internal Responses
+/// gateway. Returns `Some(text)` on success and `None` whenever vision OCR is
+/// unavailable — no vision-capable model configured, managed local inference
+/// (private-IPC only; no loopback HTTP and no local vision backend wired), or
+/// the gateway is unreachable. It never panics and never fails the import.
+fn ocr_pdf_via_vision(root: &Path, pdf_bytes: &[u8]) -> Option<String> {
+    use base64::Engine as _;
+
+    let resolved =
+        crate::execution::models::runtime_kernel::InferenceRuntimeKernel::resolve(root).ok()?;
+    let model = resolved.active_model()?.to_string();
+    if !crate::execution::models::engine::model_supports_vision(&model) {
+        return None;
+    }
+    if resolved.state.source.is_local() {
+        return None;
+    }
+
+    let pages =
+        ctox_pdf_parse::render_pdf_pages_png(pdf_bytes, OCR_MAX_PAGES, OCR_RENDER_DPI, None)
+            .ok()?;
+    if pages.is_empty() {
+        return None;
+    }
+
+    let mut content: Vec<serde_json::Value> = Vec::with_capacity(pages.len() + 1);
+    content.push(serde_json::json!({"type": "input_text", "text": "Transcribe these PDF pages:"}));
+    for png in &pages {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(png);
+        content.push(serde_json::json!({
+            "type": "input_image",
+            "mime_type": "image/png",
+            "image_data": encoded,
+        }));
+    }
+
+    let request = serde_json::json!({
+        "model": model,
+        "instructions": OCR_INSTRUCTIONS,
+        "input": [{"type": "message", "role": "user", "content": content}],
+    });
+
+    let base_url = resolved.internal_responses_base_url();
+    let response = ureq::post(&format!("{}/v1/responses", base_url.trim_end_matches('/')))
+        .set("content-type", "application/json")
+        .timeout(Duration::from_secs(120))
+        .send_string(&serde_json::to_string(&request).ok()?)
+        .ok()?;
+    let body = response.into_string().ok()?;
+    let payload: serde_json::Value = serde_json::from_str(&body).ok()?;
+    extract_responses_output_text(&payload).filter(|text| !text.trim().is_empty())
+}
+
+/// Extract assistant text from a Responses-API payload, supporting both the flat
+/// `output_text` field and the structured `output[].content[]` array.
+fn extract_responses_output_text(payload: &serde_json::Value) -> Option<String> {
+    use serde_json::Value;
+    if let Some(text) = payload.get("output_text").and_then(Value::as_str) {
+        if !text.trim().is_empty() {
+            return Some(text.to_string());
+        }
+    }
+    payload
+        .get("output")
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items.iter().find_map(|item| {
+                item.get("content")
+                    .and_then(Value::as_array)
+                    .and_then(|content| {
+                        content.iter().find_map(|part| {
+                            if part.get("type").and_then(Value::as_str) == Some("output_text") {
+                                part.get("text")
+                                    .and_then(Value::as_str)
+                                    .map(ToOwned::to_owned)
+                            } else {
+                                None
+                            }
+                        })
+                    })
+            })
+        })
 }
 
 fn extract_candidate_name(filename: &str, text: &str) -> String {
@@ -3966,6 +4078,38 @@ mod outbound_provenance_tests {
             outbound_contact_subject_key(&no_email, "Beta GmbH")
         );
         assert!(outbound_contact_subject_key(&a, "ACME GmbH").starts_with("subj_"));
+    }
+}
+
+#[cfg(test)]
+mod ocr_response_tests {
+    use super::extract_responses_output_text;
+    use serde_json::json;
+
+    #[test]
+    fn extracts_flat_output_text() {
+        let payload = json!({ "output_text": "hello world" });
+        assert_eq!(
+            extract_responses_output_text(&payload).as_deref(),
+            Some("hello world")
+        );
+    }
+
+    #[test]
+    fn extracts_structured_output_text() {
+        let payload = json!({
+            "output": [{ "content": [{ "type": "output_text", "text": "page text" }] }]
+        });
+        assert_eq!(
+            extract_responses_output_text(&payload).as_deref(),
+            Some("page text")
+        );
+    }
+
+    #[test]
+    fn returns_none_when_no_text_present() {
+        assert!(extract_responses_output_text(&json!({ "foo": 1 })).is_none());
+        assert!(extract_responses_output_text(&json!({ "output_text": "   " })).is_none());
     }
 }
 

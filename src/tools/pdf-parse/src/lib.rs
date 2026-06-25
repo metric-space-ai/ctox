@@ -51,3 +51,38 @@ pub fn page_count_for_pdf_path(
     let doc = backend.load_document_path(path, password)?;
     Ok(doc.num_pages)
 }
+
+/// Render up to `max_pages` pages of a PDF to PNG image bytes at the given
+/// `dpi`, returning one PNG byte vector per rendered page. Used to feed
+/// scanned / image-only PDFs (which yield no extractable text) to a vision
+/// model for OCR.
+#[cfg(feature = "pdfium")]
+pub fn render_pdf_pages_png(
+    bytes: &[u8],
+    max_pages: usize,
+    dpi: u16,
+    password: Option<&str>,
+) -> Result<Vec<Vec<u8>>, LiteParseError> {
+    use image::{DynamicImage, ImageFormat, RgbaImage};
+    use std::io::Cursor;
+
+    let backend = PdfiumBackend::new()?;
+    let doc = backend.load_document_bytes(bytes, password)?;
+    let page_count = doc.num_pages.min(max_pages.max(1));
+    let mut pages = Vec::with_capacity(page_count);
+    for page_num in 1..=page_count {
+        let shot = backend.render_page_image(&doc, page_num, dpi)?;
+        let rgba = RgbaImage::from_raw(shot.width as u32, shot.height as u32, shot.image_buffer)
+            .ok_or_else(|| {
+                PdfEngineError::Backend(format!("failed to build image buffer for page {page_num}"))
+            })?;
+        let mut png = Vec::new();
+        DynamicImage::ImageRgba8(rgba)
+            .write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+            .map_err(|err| {
+                PdfEngineError::Backend(format!("failed to PNG-encode page {page_num}: {err}"))
+            })?;
+        pages.push(png);
+    }
+    Ok(pages)
+}
