@@ -323,6 +323,10 @@ export function buildProtocolPayload({
   checkpoint,
   role = 'browser',
   capabilities = [],
+  // #12c: the browser's CTOX capability token, so the native (master) peer can
+  // bind this peer to its server-authenticated role and authorize per-collection
+  // reads. Omitted when absent so the legacy handshake stays byte-identical.
+  capabilityToken = null,
   // Phase 3 schema-validation hardening: the per-collection schema-hash map
   // for EVERY collection multiplexed on this one connection. Keyed by
   // collection name. The room handshake runs once off a single representative
@@ -357,6 +361,9 @@ export function buildProtocolPayload({
       role,
       sessionId: peerSessionId || null,
       generation: Number.isFinite(peerGeneration) ? peerGeneration : null,
+      // #12c: only present when the shell supplied a token, so a tokenless
+      // handshake serializes byte-identically to the legacy payload.
+      ...(capabilityToken ? { capabilityToken } : {}),
     },
     capabilities: Array.from(new Set([
       ...CTOX_REQUIRED_PROTOCOL_CAPABILITIES,

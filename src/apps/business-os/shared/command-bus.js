@@ -16,7 +16,7 @@ export function createCommandBus({ db, sync = null, session = null } = {}) {
 // we dispatch without it (legacy claimed-actor path) so the UI keeps working.
 let capabilityTokenCache = { token: null, expiresAtMs: 0 };
 
-async function getCapabilityToken() {
+export async function getCapabilityToken() {
   const now = Date.now();
   if (capabilityTokenCache.token && now < capabilityTokenCache.expiresAtMs - 60_000) {
     return capabilityTokenCache.token;

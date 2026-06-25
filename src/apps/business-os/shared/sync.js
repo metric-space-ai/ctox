@@ -18,6 +18,7 @@
 // shared native peer self-heals its transport; this layer only classifies
 // errors and schedules bounded restarts.
 import { batchSizeFor, collectionTopic, nativeRxdbPeerReady } from './sync-contract.js';
+import { getCapabilityToken } from './command-bus.js';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
 const CTOX_BROWSER_CAPABILITIES = [
@@ -547,7 +548,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     recordCollection?.(collection, { status: 'pending', reason: 'collection-not-registered' });
     return { mode: 'pending', collection, reason: 'collection-not-registered' };
   }
-  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260625-webrtc-status-throttle');
+  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260625-collection-authz');
   if (typeof rxdb?.replicateWebRTC !== 'function' || typeof rxdb?.getConnectionHandlerSimplePeer !== 'function') {
     throw new Error('RxDB WebRTC bundle is missing replicateWebRTC/getConnectionHandlerSimplePeer');
   }
@@ -606,6 +607,12 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     push: isReadOnlyProjectionCollection(collection) ? null : { batchSize },
     retryTime: 5000,
     ctox: {
+      // #12c: supply the browser's CTOX capability token to the handshake so the
+      // native (master) peer can bind this peer to its server-authenticated role
+      // for per-collection read authz. No-op unless the operator enables the
+      // CTOX_BUSINESS_OS_COLLECTION_AUTHZ flag; resolves to null when the control
+      // plane is unreachable (native then treats the peer as least privilege).
+      capabilityToken: () => getCapabilityToken(),
       onPeerProtocol(info) {
         const remoteCapabilities = Array.isArray(info?.capabilities) ? info.capabilities : [];
         const remoteCheckpoint = sanitizeRemoteCheckpoint(info?.checkpoint || null);
