@@ -1057,6 +1057,9 @@ function renderWorkspaces() {
     const el = document.createElement('div');
     el.className = `workspace-item ${state.activeWorkspace === path ? 'active' : ''}`;
     el.dataset.workspace = path;
+    el.dataset.contextRecordId = path;
+    el.dataset.contextRecordType = 'workspace';
+    el.dataset.contextLabel = shortName;
 
     // Load active mapped engine or default
     const mappedApp = localStorage.getItem('workspace_agent_' + path) || 'antigravity';
@@ -1254,6 +1257,9 @@ function renderSessions() {
     state.sessions.forEach(sess => {
       const el = document.createElement('div');
       el.className = 'session-item-card';
+      el.dataset.contextRecordId = sess.id;
+      el.dataset.contextRecordType = 'session';
+      el.dataset.contextLabel = sess.prompt && sess.prompt.length > 60 ? sess.prompt.substring(0, 60) + '…' : (sess.prompt || sess.id);
       el.innerHTML = `<div class="session-item-prompt">${escapeHtml(sess.prompt)}</div>`;
       el.addEventListener('click', () => {
         state.activeSession = sess.id;

@@ -273,7 +273,12 @@ function credentialRow(r, now) {
   const checkBtn = r.subject_id
     ? '<button type="button" class="ats-action" data-deploy-check="' + esc(r.subject_id) + '">Einsatz prüfen</button>'
     : '';
-  return '<div class="ats-item ats-item--rich">'
+  const recordId = r.id || '';
+  const contextLabel = typeLabel(r.credential_type) + ' · ' + subject;
+  return '<div class="ats-item ats-item--rich"'
+    + ' data-context-record-id="' + esc(recordId) + '"'
+    + ' data-context-record-type="nachweis"'
+    + ' data-context-label="' + esc(contextLabel || recordId) + '">'
     + '<div class="ats-item-main">' + esc(typeLabel(r.credential_type))
     + '<span class="ats-item-sub"> · ' + esc(subject) + '</span></div>'
     + '<div class="ats-item-side">'

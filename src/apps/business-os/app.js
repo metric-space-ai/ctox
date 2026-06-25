@@ -35,7 +35,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260625-sync-toast2';
+const APP_BUILD = '20260625-rightclick-agent-context-v19';
 
 ensureShellStylesheets();
 
@@ -8525,40 +8525,55 @@ function detectRecordFromElement(moduleId, element) {
   if (!element) return null;
   let current = element.nodeType === Node.ELEMENT_NODE ? element : element.parentElement;
 
-  const idAttributePatterns = [
-    'data-id', 'data-note-id', 'data-report-id', 'data-account-id', 'data-booking-id',
-    'data-document-id', 'data-folder-id', 'data-record-id', 'data-conversation-id',
-    'data-node-id', 'data-sheet-id', 'data-task-id', 'data-event-id', 'data-project-id',
-    'data-item-id', 'data-entity-id'
-  ];
+  // `data-*-id` attributes that are layout/UI hooks, never a record handle.
+  const NON_RECORD_ID_ATTRS = new Set([
+    'data-context-id', 'data-context-record-id', 'data-tab-id', 'data-grad-id',
+    'data-gradient-id', 'data-loading-id', 'data-drawer-id',
+  ]);
+  // Trailing tokens that describe an interaction (`data-account-click-id`), not the type.
+  const ACTION_SUFFIXES = new Set(['click', 'select', 'open', 'toggle', 'manage', 'expand', 'edit', 'view']);
+  const deriveTypeFromAttr = (attrName) => {
+    const parts = attrName.slice(5, -3).split('-').filter(Boolean); // strip 'data-' + '-id'
+    if (parts.length > 1 && ACTION_SUFFIXES.has(parts[parts.length - 1])) parts.pop();
+    return parts[0] || '';
+  };
 
   while (current && current !== document.body) {
-    // 1. Check ID attributes
-    for (const attr of idAttributePatterns) {
-      if (current.hasAttribute(attr)) {
-        const val = current.getAttribute(attr);
-        if (val) {
-          let type = 'item';
-          if (attr.startsWith('data-') && attr.endsWith('-id')) {
-            const potentialType = attr.slice(5, -3);
-            if (potentialType && potentialType !== 'id' && potentialType !== 'record') {
-              type = potentialType;
-            }
-          }
-          if (type === 'item') {
-            const recordTypeAttr = current.closest('[data-record-type]');
-            if (recordTypeAttr) {
-              type = recordTypeAttr.getAttribute('data-record-type');
-            } else {
-              type = moduleId || 'item';
-            }
-          }
-          return {
-            type,
-            id: val,
-            label: deriveLabelFromElement(current)
-          };
+    const contextRecordId = current.getAttribute('data-context-record-id') || current.getAttribute('data-context-id');
+    if (contextRecordId) {
+      return {
+        type: current.getAttribute('data-context-record-type') || current.getAttribute('data-record-type') || moduleId || 'item',
+        id: contextRecordId,
+        label: current.getAttribute('data-context-label') || deriveLabelFromElement(current)
+      };
+    }
+
+    // 1. Any `data-*-id` attribute is treated as a record handle, so a module can
+    //    expose a record to the agent without registering its attribute name here.
+    //    Canonical generic ids (data-id / data-record-id) win when several are present;
+    //    otherwise the first domain-specific data-<thing>-id (e.g. data-customer-id) wins.
+    if (current.attributes && current.attributes.length) {
+      let chosen = null;
+      for (const attr of Array.from(current.attributes)) {
+        const name = attr.name;
+        const isIdAttr = name === 'data-id' || /^data-[a-z][\w-]*-id$/.test(name);
+        if (!isIdAttr || NON_RECORD_ID_ATTRS.has(name) || !attr.value) continue;
+        if (name === 'data-id' || name === 'data-record-id') { chosen = attr; break; }
+        if (!chosen) chosen = attr;
+      }
+      if (chosen) {
+        let type = (chosen.name === 'data-id' || chosen.name === 'data-record-id')
+          ? ''
+          : deriveTypeFromAttr(chosen.name);
+        if (!type || type === 'record') {
+          const recordTypeAttr = current.closest('[data-record-type]');
+          type = recordTypeAttr ? recordTypeAttr.getAttribute('data-record-type') : (moduleId || 'item');
         }
+        return {
+          type: type || moduleId || 'item',
+          id: chosen.value,
+          label: deriveLabelFromElement(current),
+        };
       }
     }
 

@@ -260,6 +260,7 @@ function render() {
 function renderList() {
   const pane = document.createElement('aside');
   pane.className = 'invoices-pane invoices-list';
+  pane.dataset.leftContent = '';
   pane.dataset.contextModule = MODULE_ID;
   pane.dataset.contextSubmodule = 'list';
   pane.dataset.contextRecordType = 'accounting_invoices';
@@ -811,6 +812,7 @@ function renderDunningTab(inv) {
 function renderInspector() {
   const pane = document.createElement('aside');
   pane.className = 'invoices-pane invoices-inspector';
+  pane.dataset.rightContent = '';
   const inv = STATE.invoices.find((i) => i.id === STATE.selectedInvoiceId);
   if (!inv) {
     pane.textContent = 'Inspector: keine Rechnung ausgewählt.';

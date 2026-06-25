@@ -174,7 +174,12 @@ function signatureRow(r) {
     .map((s) => '<button type="button" class="ats-action" data-sign="' + esc(r.id || '') + '" data-signer="' + esc(s.id) + '">Signieren: ' + esc(s.id) + '</button>')
     .join('');
 
-  return '<div class="ats-item ats-item--rich">'
+  const recordId = r.id || r.document_id || '';
+  const recordLabel = r.document_id || r.id || '—';
+  return '<div class="ats-item ats-item--rich"'
+    + ' data-context-record-id="' + esc(recordId) + '"'
+    + ' data-context-record-type="esign_document"'
+    + ' data-context-label="' + esc(recordLabel) + '">'
     + '<div class="ats-item-main">'
     + '<div><span class="ats-badge ats-badge--' + esc(status) + '">' + esc(status) + '</span> ' + main + '</div>'
     + '<div class="ats-item-meta">' + meta + '</div>'

@@ -158,7 +158,12 @@ function applicationRow(r) {
   if (docs) metaParts.push(docs + ' Dok.');
   if (ts) metaParts.push(esc(fmtDate(ts)));
 
-  return '<div class="ats-item ats-item--rich">'
+  const label = candidate.name || r.name || id;
+
+  return '<div class="ats-item ats-item--rich"'
+    + ' data-context-record-id="' + esc(id) + '"'
+    + ' data-context-record-type="application"'
+    + ' data-context-label="' + esc(label) + '">'
     + '<div class="ats-item-body">'
     + '<div class="ats-item-main">'
     + '<span class="ats-badge ats-badge--' + esc(status) + '">' + esc(status) + '</span>'

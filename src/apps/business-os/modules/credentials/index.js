@@ -234,7 +234,7 @@ function rowHtml(entry, isExtra) {
   const deleteButton = isSet
     ? `<button type="button" class="danger" data-action="delete" data-key="${esc(name)}">${esc(state.t('btn_delete'))}</button>`
     : '';
-  return `<div class="cred-row" data-key="${esc(name)}">
+  return `<div class="cred-row" data-key="${esc(name)}" data-context-record-id="${esc(name)}" data-context-record-type="credential" data-context-label="${esc(name)}">
     <div class="cred-meta">
       <span class="cred-name">${esc(name)}</span>
       ${description ? `<span class="cred-desc">${esc(description)}</span>` : ''}

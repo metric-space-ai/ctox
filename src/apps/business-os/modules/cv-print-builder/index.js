@@ -256,7 +256,7 @@ function renderCandidateCard(state, item) {
     `<option value="${escapeHtml(entry.id)}"${entry.id === template ? ' selected' : ''}>${escapeHtml(entry.label)}</option>`
   )).join('');
   return `
-    <article class="cv-card${selected ? ' is-selected' : ''}" data-cv-select="${escapeHtml(item.record.id)}">
+    <article class="cv-card${selected ? ' is-selected' : ''}" data-cv-select="${escapeHtml(item.record.id)}" data-context-record-id="${escapeHtml(item.record.id)}" data-context-record-type="cv_profile" data-context-label="${escapeHtml(item.record.title || item.record.name || item.record.id)}">
       <div class="cv-card-main">
         <div class="cv-avatar">${escapeHtml(initials(candidate.name || item.record.title))}</div>
         <div class="cv-card-info">

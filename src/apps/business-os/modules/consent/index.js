@@ -200,7 +200,11 @@ function consentRow(r) {
   ];
   if (status === 'withdrawn') metaBits.push('widerrufen ' + esc(fmtDate(r.withdrawn_at_ms)));
   if (r.id) metaBits.push('#' + esc(r.id));
-  return '<div class="ats-item ats-item--rich">'
+  const ctxLabel = subjectId || r.id || '';
+  return '<div class="ats-item ats-item--rich"'
+    + ' data-context-record-id="' + esc(r.id || '') + '"'
+    + ' data-context-record-type="consent"'
+    + ' data-context-label="' + esc(ctxLabel) + '">'
     + '<div class="ats-item-main">'
     + '<span class="ats-badge ats-badge--' + esc(status) + '">' + esc(STATUS_LABEL[status] || status) + '</span>'
     + '<span class="ats-item-title">' + esc(purpose) + '</span>'

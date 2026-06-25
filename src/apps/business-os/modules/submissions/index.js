@@ -169,8 +169,12 @@ function submissionRow(r) {
   const action = r?.id
     ? '<div class="ats-actions"><button type="button" class="ats-action" data-copy-id="' + esc(r.id) + '">ID kopieren</button></div>'
     : '';
+  const ctxLabel = r?.candidate_id || r?.id || '';
   return ''
-    + '<div class="ats-item ats-item--rich">'
+    + '<div class="ats-item ats-item--rich"'
+    + ' data-context-record-id="' + esc(r?.id || '') + '"'
+    + ' data-context-record-type="submission"'
+    + ' data-context-label="' + esc(ctxLabel) + '">'
     + '<div class="ats-item-main">'
     + '<span class="ats-badge ats-badge--' + esc(status) + '">' + esc(status) + '</span>'
     + '<span class="ats-item-title">' + main + '</span>'

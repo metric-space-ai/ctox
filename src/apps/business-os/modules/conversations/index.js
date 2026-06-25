@@ -878,6 +878,9 @@ export async function mount(ctx) {
     btn.type = 'button';
     btn.className = 'conv-thread-item';
     btn.dataset.bucketKey = bucket.key;
+    btn.dataset.contextRecordId = bucket.key;
+    btn.dataset.contextRecordType = 'conversation';
+    btn.dataset.contextLabel = bucket.displayName || bucket.key;
     btn.setAttribute('role', 'option');
     if (view.selectedBucketKey === bucket.key) btn.classList.add('is-active');
 
