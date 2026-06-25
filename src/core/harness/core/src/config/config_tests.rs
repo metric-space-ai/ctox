@@ -4239,6 +4239,7 @@ model_verbosity = "high"
         socket_transport_required: false,
         env_key: Some("OPENAI_API_KEY".to_string()),
         wire_api: crate::WireApi::Responses,
+        requires_full_responses_history: false,
         env_key_instructions: None,
         experimental_bearer_token: None,
         query_params: None,

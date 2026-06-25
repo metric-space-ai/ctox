@@ -2765,16 +2765,22 @@ fn provider_requires_full_responses_history(provider: &ModelProviderInfo) -> boo
     if provider.wire_api != WireApi::Responses {
         return false;
     }
+    if provider.requires_full_responses_history {
+        return true;
+    }
     provider
         .base_url
         .as_deref()
-        .map(is_minimax_responses_base_url)
+        .map(is_stateless_chat_adapter_responses_base_url)
         .unwrap_or(false)
 }
 
-fn is_minimax_responses_base_url(base_url: &str) -> bool {
+fn is_stateless_chat_adapter_responses_base_url(base_url: &str) -> bool {
     let normalized = base_url.trim().to_ascii_lowercase();
-    normalized.contains("api.minimax.io") || normalized.contains("api.minimaxi.com")
+    normalized.contains("api.minimax.io")
+        || normalized.contains("api.minimaxi.com")
+        || normalized.contains("llm.ctox.dev")
+        || normalized.contains("/api/fallback-llm")
 }
 
 /// Handles a 401 response by optionally refreshing ChatGPT tokens once.

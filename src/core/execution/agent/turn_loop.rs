@@ -329,6 +329,7 @@ pub(crate) struct ApiModelProviderSpec {
     /// CTOX itself remains canonical Responses internally; adapters normalize
     /// into provider-native forms only at this outer boundary.
     pub(crate) wire_api: &'static str,
+    pub(crate) requires_full_responses_history: bool,
 }
 
 impl ApiModelProviderSpec {
@@ -349,6 +350,13 @@ impl ApiModelProviderSpec {
             (
                 format!("model_providers.{}.requires_openai_auth", self.provider_id),
                 TomlValue::Boolean(false),
+            ),
+            (
+                format!(
+                    "model_providers.{}.requires_full_responses_history",
+                    self.provider_id
+                ),
+                TomlValue::Boolean(self.requires_full_responses_history),
             ),
         ]
     }
@@ -1271,18 +1279,25 @@ pub(crate) fn resolve_api_model_provider_spec(
     // mode, `ctox_core_api`, which still speaks Responses internally and only
     // differs at the outer provider edge.
     let normalized = provider.to_ascii_lowercase();
-    // (env_key, default_provider_for_url, wire_api)
-    let (env_key, default_provider, wire_api) = match normalized.as_str() {
-        "anthropic" => ("ANTHROPIC_API_KEY", "anthropic", "anthropic_messages"),
-        "openrouter" => ("OPENROUTER_API_KEY", "openrouter", "responses"),
-        "minimax" => (
-            runtime_state::api_key_env_var_for_provider_with_env_map("minimax", settings),
-            "minimax",
-            "responses",
-        ),
-        "azure_foundry" => ("AZURE_FOUNDRY_API_KEY", "azure_foundry", "responses"),
-        _ => return None,
-    };
+    // (env_key, default_provider_for_url, wire_api, requires_full_responses_history)
+    let (env_key, default_provider, wire_api, requires_full_responses_history) =
+        match normalized.as_str() {
+            "anthropic" => (
+                "ANTHROPIC_API_KEY",
+                "anthropic",
+                "anthropic_messages",
+                false,
+            ),
+            "openrouter" => ("OPENROUTER_API_KEY", "openrouter", "responses", false),
+            "minimax" => (
+                runtime_state::api_key_env_var_for_provider_with_env_map("minimax", settings),
+                "minimax",
+                "responses",
+                true,
+            ),
+            "azure_foundry" => ("AZURE_FOUNDRY_API_KEY", "azure_foundry", "responses", false),
+            _ => return None,
+        };
     let base_url = resolved_runtime
         .map(|runtime| runtime.internal_responses_base_url())
         .or_else(|| {
@@ -1301,6 +1316,7 @@ pub(crate) fn resolve_api_model_provider_spec(
         base_url,
         env_key,
         wire_api,
+        requires_full_responses_history,
     })
 }
 
@@ -1563,6 +1579,7 @@ mod tests {
             base_url: "https://contoso.cognitiveservices.azure.com/openai/v1".to_string(),
             env_key: "AZURE_FOUNDRY_API_KEY",
             wire_api: "responses",
+            requires_full_responses_history: false,
         };
 
         let overrides = spec
@@ -1588,6 +1605,10 @@ mod tests {
             overrides.get("model_providers.ctox_core_api.requires_openai_auth"),
             Some(&TomlValue::Boolean(false))
         );
+        assert_eq!(
+            overrides.get("model_providers.ctox_core_api.requires_full_responses_history"),
+            Some(&TomlValue::Boolean(false))
+        );
         assert!(!overrides.contains_key("model_providers.ctox_core_api.env_key"));
     }
 
@@ -1607,6 +1628,7 @@ mod tests {
         assert_eq!(spec.base_url, "https://llm.ctox.dev/v1");
         assert_eq!(spec.env_key, runtime_state::CTOX_LLM_PROXY_API_KEY_ENV);
         assert_eq!(spec.wire_api, "responses");
+        assert!(spec.requires_full_responses_history);
     }
 
     #[test]
