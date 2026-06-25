@@ -551,4 +551,44 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn write_table_pads_short_rows_and_escapes_pipes() {
+        let table = ManuscriptTable {
+            headers: vec!["A".into(), "B".into(), "C".into()],
+            rows: vec![
+                vec!["x|y".into(), "z".into()], // short row + pipe to escape
+                vec!["1".into(), "2".into(), "3".into()],
+            ],
+        };
+        let mut out = String::new();
+        write_table(&mut out, &table);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[0], "| A | B | C |");
+        assert_eq!(lines[1], "| --- | --- | --- |");
+        // Pipe inside a cell is escaped; the short row is padded to 3 columns.
+        assert_eq!(lines[2], r"| x\|y | z |  |");
+        assert_eq!(lines[3], "| 1 | 2 | 3 |");
+    }
+
+    #[test]
+    fn write_table_with_empty_headers_emits_nothing() {
+        let table = ManuscriptTable {
+            headers: vec![],
+            rows: vec![vec!["x".into()]],
+        };
+        let mut out = String::new();
+        write_table(&mut out, &table);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn ascii_dashes_normalizes_unicode_dashes_and_primes() {
+        // en/em/figure dashes -> ASCII hyphen; prime/double-prime -> ASCII quotes.
+        assert_eq!(ascii_dashes("2020\u{2013}2024"), "2020-2024");
+        assert_eq!(ascii_dashes("low\u{2014}high"), "low-high");
+        assert_eq!(ascii_dashes("5\u{2032}30\u{2033}"), "5'30\"");
+        // Unrelated Unicode is preserved.
+        assert_eq!(ascii_dashes("Größe \u{2728}"), "Größe \u{2728}");
+    }
 }
