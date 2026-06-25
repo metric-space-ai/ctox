@@ -321,6 +321,11 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             handle_login_request(root, request)?;
         }
         (Method::Get, "/logout") => {
+            // Revoke the server-side session so the opaque token is dead even if
+            // the cookie is replayed; then clear the cookie in the browser.
+            if let Some(token) = business_os_session_cookie_value(&request) {
+                let _ = store::revoke_business_session(root, &token);
+            }
             respond_redirect_with_cookie(request, "/", "", 0)?;
         }
         (Method::Get, "/api/business-os/users") => {
@@ -688,8 +693,19 @@ fn is_business_os_control_plane_path(path: &str) -> bool {
 }
 
 fn request_session(root: &Path, request: &Request) -> store::BusinessOsSession {
-    let auth_header =
-        header_value(request, "Authorization").or_else(|| login_cookie_auth_header(request));
+    // 1. Browser shell session: an opaque cookie token resolved against the
+    //    server-side session store. The cookie never carries credentials, so a
+    //    successful lookup IS the authentication; the live actor role/active
+    //    state is then refreshed by session_with_persisted_user.
+    if let Some(token) = business_os_session_cookie_value(request) {
+        if let Ok(Some(session)) = store::session_from_cookie_token(root, &token) {
+            return store::session_with_persisted_user(root, session.clone()).unwrap_or(session);
+        }
+    }
+    // 2. Header-based auth for API/MCP clients (Authorization Bearer/Basic,
+    //    X-CTOX-Business-OS-Session). The reversible cookie credential-replay
+    //    path is gone — cookies are opaque tokens only.
+    let auth_header = header_value(request, "Authorization");
     let session_header = header_value(request, "X-CTOX-Business-OS-Session");
     let session = store::session_for_request(
         auth_header.as_deref(),
@@ -1383,8 +1399,19 @@ fn handle_login_request(root: &Path, mut request: Request) -> anyhow::Result<()>
     let session = store::session_with_persisted_user(root, session)?;
     if session.authenticated {
         store::remember_authenticated_session_user(root, &session)?;
-        let cookie =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(credentials.as_bytes());
+        // Opaque server-side session: the cookie is a random token mapped to a
+        // server-side record (actor/role/expiry/revoked), never the user's
+        // credentials. This makes it non-reversible and revocable at logout.
+        let cookie = match session.user.as_ref() {
+            Some(user) => store::create_business_session(
+                root,
+                &user.id,
+                &user.role,
+                &user.display_name,
+                store::BUSINESS_SESSION_TTL_SECS,
+            )?,
+            None => String::new(),
+        };
         if wants_json {
             respond_login_json(request, true, &cookie, 60 * 60 * 24 * 30)
         } else {
@@ -1407,11 +1434,16 @@ fn respond_login_json(
     let status = if authenticated { 200 } else { 401 };
     let mut response = Response::from_string(body).with_status_code(status);
     response.add_header(Header::from_bytes("Content-Type", "application/json").unwrap());
+    let secure = if cookie_should_be_secure(&request) {
+        "; Secure"
+    } else {
+        ""
+    };
     let cookie = if cookie_value.is_empty() {
-        "ctox_business_os_auth=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0".to_owned()
+        format!("ctox_business_os_auth=; Path=/; HttpOnly; SameSite=Lax{secure}; Max-Age=0")
     } else {
         format!(
-            "ctox_business_os_auth={cookie_value}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age_secs}"
+            "ctox_business_os_auth={cookie_value}; Path=/; HttpOnly; SameSite=Lax{secure}; Max-Age={max_age_secs}"
         )
     };
     response.add_header(Header::from_bytes("Set-Cookie", cookie.as_bytes()).unwrap());
@@ -1421,17 +1453,39 @@ fn respond_login_json(
     Ok(())
 }
 
-fn login_cookie_auth_header(request: &Request) -> Option<String> {
+/// Extract the raw opaque session token from the `ctox_business_os_auth` cookie.
+/// The value is an opaque server-side token (resolved by
+/// `store::session_from_cookie_token`), not credentials.
+fn business_os_session_cookie_value(request: &Request) -> Option<String> {
     let cookie_header = header_value(request, "Cookie")?;
-    let cookie_value = cookie_header.split(';').find_map(|part| {
+    cookie_header.split(';').find_map(|part| {
         let (name, value) = part.trim().split_once('=')?;
-        (name == "ctox_business_os_auth").then_some(value.trim())
-    })?;
-    let credentials = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(cookie_value)
-        .ok()?;
-    let encoded = base64::engine::general_purpose::STANDARD.encode(credentials);
-    Some(format!("Basic {encoded}"))
+        (name == "ctox_business_os_auth").then(|| value.trim().to_owned())
+    })
+}
+
+/// Decide whether the session cookie must carry the `Secure` attribute. It is
+/// set whenever the request is not plain loopback HTTP — i.e. it arrived over
+/// HTTPS (directly or via a terminating proxy that sets `X-Forwarded-Proto`) or
+/// from a non-loopback peer (a public bind, which must be fronted by TLS). Plain
+/// loopback HTTP dev keeps it off so the cookie is still delivered.
+fn cookie_should_be_secure(request: &Request) -> bool {
+    let forwarded_https = header_value(request, "X-Forwarded-Proto")
+        .map(|proto| {
+            proto
+                .split(',')
+                .next()
+                .map(|first| first.trim().eq_ignore_ascii_case("https"))
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+    if forwarded_https {
+        return true;
+    }
+    request
+        .remote_addr()
+        .map(|addr| !addr.ip().is_loopback())
+        .unwrap_or(false)
 }
 
 fn respond_redirect_with_cookie(
@@ -1442,11 +1496,16 @@ fn respond_redirect_with_cookie(
 ) -> anyhow::Result<()> {
     let mut response = Response::empty(303);
     response.add_header(Header::from_bytes("Location", location.as_bytes()).unwrap());
+    let secure = if cookie_should_be_secure(&request) {
+        "; Secure"
+    } else {
+        ""
+    };
     let cookie = if cookie_value.is_empty() {
-        "ctox_business_os_auth=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0".to_owned()
+        format!("ctox_business_os_auth=; Path=/; HttpOnly; SameSite=Lax{secure}; Max-Age=0")
     } else {
         format!(
-            "ctox_business_os_auth={cookie_value}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age_secs}"
+            "ctox_business_os_auth={cookie_value}; Path=/; HttpOnly; SameSite=Lax{secure}; Max-Age={max_age_secs}"
         )
     };
     response.add_header(Header::from_bytes("Set-Cookie", cookie.as_bytes()).unwrap());

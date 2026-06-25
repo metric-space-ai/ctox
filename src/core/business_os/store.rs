@@ -4409,6 +4409,11 @@ pub fn upsert_user(
             now
         ],
     )?;
+    if !mutation.active {
+        // Deactivating a user immediately revokes their live HTTP shell sessions
+        // (session_with_persisted_user also denies them on the next request).
+        let _ = revoke_business_sessions_for_user(root, &user_id);
+    }
     let current_user = serde_json::json!({
         "id": user_id,
         "display_name": display_name,
@@ -8236,6 +8241,142 @@ fn business_user_by_id(
 
 fn default_true() -> bool {
     true
+}
+
+/// Default lifetime of an HTTP shell session cookie (30 days).
+pub const BUSINESS_SESSION_TTL_SECS: i64 = 60 * 60 * 24 * 30;
+
+/// Mint an opaque server-side session and return the raw cookie token.
+///
+/// Only the SHA-256 hash of the token is stored, so a database read cannot
+/// reconstruct a live cookie. The returned token is the only copy and must be
+/// handed straight to the Set-Cookie header.
+pub fn create_business_session(
+    root: &Path,
+    user_id: &str,
+    role: &str,
+    display_name: &str,
+    ttl_secs: i64,
+) -> anyhow::Result<String> {
+    let user_id = user_id.trim();
+    if user_id.is_empty() {
+        anyhow::bail!("cannot create a session for an empty user id");
+    }
+    let token = generate_session_token()?;
+    let token_hash = hash_session_token(&token);
+    let conn = open_store(root)?;
+    let now = now_ms() as i64;
+    let expires_at = now + ttl_secs.max(60).saturating_mul(1000);
+    conn.execute(
+        "INSERT INTO business_sessions
+            (token_hash, user_id, role, display_name, created_at_ms, expires_at_ms, revoked, last_seen_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?5)",
+        params![
+            token_hash,
+            user_id,
+            normalize_business_role(role),
+            display_name,
+            now,
+            expires_at
+        ],
+    )?;
+    // Opportunistic GC so the table cannot grow without bound.
+    let _ = conn.execute(
+        "DELETE FROM business_sessions WHERE expires_at_ms < ?1 OR revoked = 1",
+        params![now],
+    );
+    Ok(token)
+}
+
+/// Resolve an opaque cookie token to an authenticated session, or `None` if the
+/// token is unknown, expired or revoked. The live actor role is later refreshed
+/// (and deactivation enforced) by `session_with_persisted_user`.
+pub fn session_from_cookie_token(
+    root: &Path,
+    token: &str,
+) -> anyhow::Result<Option<BusinessOsSession>> {
+    let token = token.trim();
+    if token.is_empty() {
+        return Ok(None);
+    }
+    let token_hash = hash_session_token(token);
+    let conn = open_store(root)?;
+    let now = now_ms() as i64;
+    let row = conn
+        .query_row(
+            "SELECT user_id, role, display_name FROM business_sessions
+             WHERE token_hash = ?1 AND revoked = 0 AND expires_at_ms > ?2",
+            params![token_hash, now],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((user_id, role, display_name)) = row else {
+        return Ok(None);
+    };
+    let _ = conn.execute(
+        "UPDATE business_sessions SET last_seen_ms = ?2 WHERE token_hash = ?1",
+        params![token_hash, now],
+    );
+    let role = normalize_business_role(&role);
+    Ok(Some(BusinessOsSession {
+        ok: true,
+        authenticated: true,
+        auth_required: false,
+        user: Some(BusinessOsSessionUser {
+            id: user_id,
+            display_name,
+            role: role.clone(),
+            is_admin: role_can_manage(&role),
+        }),
+        login_url: None,
+        reason: None,
+    }))
+}
+
+/// Revoke a single session by its cookie token (logout).
+pub fn revoke_business_session(root: &Path, token: &str) -> anyhow::Result<()> {
+    let token = token.trim();
+    if token.is_empty() {
+        return Ok(());
+    }
+    let token_hash = hash_session_token(token);
+    let conn = open_store(root)?;
+    conn.execute(
+        "UPDATE business_sessions SET revoked = 1 WHERE token_hash = ?1",
+        params![token_hash],
+    )?;
+    Ok(())
+}
+
+/// Revoke every active session for an actor (e.g. on deactivation or a forced
+/// global logout). Returns the number of sessions revoked.
+pub fn revoke_business_sessions_for_user(root: &Path, user_id: &str) -> anyhow::Result<u64> {
+    let conn = open_store(root)?;
+    let revoked = conn.execute(
+        "UPDATE business_sessions SET revoked = 1 WHERE user_id = ?1 AND revoked = 0",
+        params![user_id.trim()],
+    )?;
+    Ok(revoked as u64)
+}
+
+/// 256-bit URL-safe random session token (the value placed in the cookie).
+fn generate_session_token() -> anyhow::Result<String> {
+    let mut bytes = [0u8; 32];
+    SystemRandom::new()
+        .fill(&mut bytes)
+        .map_err(|_| anyhow::anyhow!("failed to generate session token"))?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+}
+
+fn hash_session_token(token: &str) -> String {
+    let digest = Sha256::digest(token.as_bytes());
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
 }
 
 pub fn record_command(
@@ -26434,6 +26575,24 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             updated_at_ms INTEGER NOT NULL
         );
 
+        -- Opaque server-side HTTP shell sessions. The browser cookie carries a
+        -- random token whose SHA-256 hash is the primary key here; the token
+        -- itself is never persisted. A row maps the token to an actor/role with
+        -- an expiry and a revoked flag, so a cookie is non-reversible (it is not
+        -- the user's credentials) and can be revoked server-side.
+        CREATE TABLE IF NOT EXISTS business_sessions (
+            token_hash TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            display_name TEXT NOT NULL DEFAULT '',
+            created_at_ms INTEGER NOT NULL,
+            expires_at_ms INTEGER NOT NULL,
+            revoked INTEGER NOT NULL DEFAULT 0,
+            last_seen_ms INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_business_sessions_user
+            ON business_sessions(user_id, revoked, expires_at_ms);
+
         CREATE TABLE IF NOT EXISTS business_module_acl (
             module_id TEXT NOT NULL,
             user_id TEXT NOT NULL,
@@ -26751,6 +26910,54 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn opaque_session_round_trips_and_revokes() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        // Mint an opaque cookie token for a chef actor.
+        let token =
+            create_business_session(root, "alice", "chef", "Alice", BUSINESS_SESSION_TTL_SECS)?;
+        assert!(!token.is_empty());
+        // The token never appears in the table; only its hash is stored.
+        let conn = open_store(root)?;
+        let stored_hashes: Vec<String> = conn
+            .prepare("SELECT token_hash FROM business_sessions")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<_, _>>()?;
+        assert_eq!(stored_hashes.len(), 1);
+        assert_ne!(stored_hashes[0], token, "raw token must not be persisted");
+        // The token resolves to an authenticated chef session.
+        let resolved = session_from_cookie_token(root, &token)?.expect("session resolves");
+        assert!(resolved.authenticated);
+        let user = resolved.user.expect("user present");
+        assert_eq!(user.id, "alice");
+        assert_eq!(user.role, "chef");
+        assert!(user.is_admin);
+        // An unknown token is rejected.
+        assert!(session_from_cookie_token(root, "not-a-real-token")?.is_none());
+        // Revoking the token kills the session.
+        revoke_business_session(root, &token)?;
+        assert!(session_from_cookie_token(root, &token)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn opaque_session_revoke_for_user_kills_all_sessions() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let token_a =
+            create_business_session(root, "bob", "user", "Bob", BUSINESS_SESSION_TTL_SECS)?;
+        let token_b =
+            create_business_session(root, "bob", "user", "Bob", BUSINESS_SESSION_TTL_SECS)?;
+        assert!(session_from_cookie_token(root, &token_a)?.is_some());
+        assert!(session_from_cookie_token(root, &token_b)?.is_some());
+        let revoked = revoke_business_sessions_for_user(root, "bob")?;
+        assert_eq!(revoked, 2);
+        assert!(session_from_cookie_token(root, &token_a)?.is_none());
+        assert!(session_from_cookie_token(root, &token_b)?.is_none());
+        Ok(())
     }
 
     #[test]
