@@ -16610,6 +16610,33 @@ pub fn accept_rxdb_business_command_with_origin(
         }
         _ => {}
     }
+    // CHOKEPOINT (DS-0.2 / H5+H9): every command type without a dedicated,
+    // already-gated arm above falls through here into record_command, which
+    // records it AND enqueues server work (create_ctox_queue_task) — previously
+    // with no authorization. The exposure is the untrusted RxDB/WebRTC data
+    // plane, so gate only ReplicatedPeer commands (TrustedLocal is the operator
+    // CLI / in-process callers, already trusted, matching rxdb_session_from_
+    // command). App-build commands carry their own AppsInstall/AppsModify gate
+    // inside record_command; every other fall-through is a record-mutating data
+    // command (source.parse, matching.*, business_os.chat.task / cv-print,
+    // documents.*), so require module-scoped DataWrite. The session is the
+    // capability-token actor, so an unprivileged / unauthenticated replicated
+    // peer (inert "user", no grant) is denied and never reaches record_command
+    // or create_ctox_queue_task.
+    if matches!(command.origin, CommandOrigin::ReplicatedPeer)
+        && app_build_command_policy_target(&command).is_none()
+    {
+        let session = rxdb_authenticated_session(root, &command)?;
+        let decision = module_policy_decision(
+            root,
+            &session,
+            BusinessOsPermission::DataWrite,
+            &command.module,
+        )?;
+        if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+            return Ok(outcome);
+        }
+    }
     let accepted = record_command(root, command)?;
     Ok(serde_json::to_value(accepted)?)
 }
@@ -29174,6 +29201,99 @@ mod tests {
             trusted.get("status").and_then(Value::as_str),
             Some("completed"),
             "trusted-local CLI command must not be downgraded"
+        );
+        Ok(())
+    }
+
+    // DS-0.2 / H5+H9: command types without a dedicated, already-gated arm
+    // (source.parse, matching.*, business_os.chat.task, documents.*) fall
+    // through to record_command, which records them AND enqueues server work.
+    // The chokepoint requires module-scoped DataWrite, so an unprivileged /
+    // unauthenticated replicated peer cannot create records or queue work.
+    #[test]
+    fn data_write_chokepoint_gates_fallthrough_data_commands() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        seed_business_user(root.path(), "chef1", "chef")?;
+        seed_business_user(root.path(), "user1", "user")?;
+        let now = now_ms() as i64;
+
+        let cmd = |cid: &str, ctx: Value| {
+            serde_json::json!({
+                "id": cid,
+                "command_id": cid,
+                "module": "matching",
+                "command_type": "source.parse",
+                "payload": {},
+                "client_context": ctx,
+            })
+        };
+        let is_failed =
+            |outcome: &Value| outcome.get("status").and_then(Value::as_str) == Some("failed");
+        // A denied command is recorded as "failed" for audit/idempotency but is
+        // never processed ("accepted"); an allowed one reaches record_command and
+        // is stored "accepted". Asserting the stored status proves the data
+        // mutation / queue work was (not) performed.
+        let command_status = |root: &Path, cid: &str| -> anyhow::Result<Option<String>> {
+            let conn = open_store(root)?;
+            let status: Option<String> = conn
+                .query_row(
+                    "SELECT status FROM business_commands WHERE command_id = ?1",
+                    params![cid],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            Ok(status)
+        };
+
+        // Replicated peer, no token, claiming chef → inert "user", no DataWrite
+        // → policy-denied, never processed.
+        let denied = accept_rxdb_business_command_with_origin(
+            root.path(),
+            cmd("d1", serde_json::json!({ "actor": { "id": "chef1" } })),
+            CommandOrigin::ReplicatedPeer,
+        )?;
+        assert!(
+            is_failed(&denied),
+            "no-token fall-through data command must be policy-denied: {denied:?}"
+        );
+        assert_ne!(
+            command_status(root.path(), "d1")?.as_deref(),
+            Some("accepted"),
+            "denied command must not be processed/accepted"
+        );
+
+        // A user-role token still lacks DataWrite → denied.
+        let (user_token, _) = issue_business_os_capability_token(root.path(), "user1", now)?;
+        let user_denied = accept_rxdb_business_command_with_origin(
+            root.path(),
+            cmd("d2", serde_json::json!({ "capability_token": user_token })),
+            CommandOrigin::ReplicatedPeer,
+        )?;
+        assert!(
+            is_failed(&user_denied),
+            "user-role token lacks DataWrite: {user_denied:?}"
+        );
+        assert_ne!(
+            command_status(root.path(), "d2")?.as_deref(),
+            Some("accepted"),
+            "user-denied command must not be processed/accepted"
+        );
+
+        // A chef token grants DataWrite → passes the chokepoint and is accepted.
+        let (chef_token, _) = issue_business_os_capability_token(root.path(), "chef1", now)?;
+        let allowed = accept_rxdb_business_command_with_origin(
+            root.path(),
+            cmd("a1", serde_json::json!({ "capability_token": chef_token })),
+            CommandOrigin::ReplicatedPeer,
+        )?;
+        assert!(
+            !is_failed(&allowed),
+            "chef DataWrite command must pass the chokepoint: {allowed:?}"
+        );
+        assert_eq!(
+            command_status(root.path(), "a1")?.as_deref(),
+            Some("accepted"),
+            "allowed command must be accepted/processed"
         );
         Ok(())
     }
