@@ -3650,21 +3650,67 @@ fn dimension_score(dimension: &str, job_text: &str, cv_text: &str) -> f64 {
         .filter(|keyword| job_lower.contains(&keyword.to_lowercase()))
         .copied()
         .collect::<Vec<_>>();
-    let basis = if required.is_empty() {
-        keywords.to_vec()
-    } else {
-        required
-    };
-    let hits = basis
+    if required.is_empty() {
+        // None of this dimension's curated keywords appear in the posting, so the
+        // hardcoded vocabulary is irrelevant here (e.g. an off-domain role).
+        // Scoring the CV against those irrelevant terms previously pinned every
+        // such candidate to a constant ~0.28 floor; fall back to direct
+        // requirement<->CV salient-term overlap so off-domain roles get a real
+        // signal instead.
+        return content_overlap_score(job_text, cv_text);
+    }
+    let hits = required
         .iter()
         .filter(|keyword| cv_lower.contains(&keyword.to_lowercase()))
         .count();
-    let ratio = if basis.is_empty() {
-        0.0
-    } else {
-        hits as f64 / basis.len() as f64
-    };
+    let ratio = hits as f64 / required.len() as f64;
     (0.28 + ratio * 0.68).clamp(0.0, 0.96)
+}
+
+/// Domain-agnostic salient-term overlap: the fraction of the requirement (job)
+/// text's salient terms that also occur in the CV text. Used as the fallback in
+/// [`dimension_score`] when a dimension's curated keyword vocabulary does not
+/// apply to the posting, so off-domain roles are scored on real content overlap
+/// rather than against an irrelevant hardcoded list.
+fn content_overlap_score(job_text: &str, cv_text: &str) -> f64 {
+    let job_terms = salient_terms(job_text);
+    if job_terms.is_empty() {
+        return 0.1;
+    }
+    let cv_terms = salient_terms(cv_text);
+    let overlap = job_terms
+        .iter()
+        .filter(|term| cv_terms.contains(*term))
+        .count();
+    let ratio = overlap as f64 / job_terms.len() as f64;
+    (0.10 + ratio * 0.80).clamp(0.0, 0.96)
+}
+
+/// Lower-cased word tokens of length >= 4 that are not common German/English
+/// stopwords. Deliberately simple and dependency-free.
+fn salient_terms(text: &str) -> std::collections::HashSet<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter_map(|word| {
+            let lowered = word.to_lowercase();
+            if lowered.chars().count() >= 4 && !is_match_stopword(&lowered) {
+                Some(lowered)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn is_match_stopword(word: &str) -> bool {
+    const STOPWORDS: &[&str] = &[
+        "und", "oder", "der", "die", "das", "den", "dem", "des", "ein", "eine", "einen", "einem",
+        "einer", "eines", "mit", "für", "von", "vom", "zur", "zum", "auf", "aus", "bei", "nach",
+        "über", "unter", "sowie", "sind", "wird", "werden", "haben", "sich", "auch", "nicht",
+        "dass", "ihre", "ihrer", "unsere", "unser", "diese", "dieser", "dieses", "sowohl", "and",
+        "the", "for", "with", "from", "that", "this", "your", "you", "our", "are", "will", "have",
+        "should", "must", "they", "their", "into", "such", "able", "well",
+    ];
+    STOPWORDS.contains(&word)
 }
 
 fn snippet_for_dimension(text: &str, dimension: &str) -> String {
@@ -3829,4 +3875,56 @@ fn short_hash(value: &str) -> String {
     let digest = sha2::Sha256::digest(value.as_bytes());
     base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, &digest)[..10]
         .to_string()
+}
+
+#[cfg(test)]
+mod matching_score_tests {
+    use super::{content_overlap_score, dimension_score};
+
+    #[test]
+    fn in_domain_posting_keeps_keyword_path() {
+        // The posting mentions curated skill keywords and the CV matches them,
+        // so the unchanged keyword path yields a high score.
+        let job = "Wir suchen Erfahrung mit Python und SQL sowie CAD.";
+        let cv = "Python, SQL und CAD im Projekt eingesetzt.";
+        let score = dimension_score("skill", job, cv);
+        assert!(score > 0.9, "expected high in-domain score, got {score}");
+    }
+
+    #[test]
+    fn off_domain_posting_uses_real_content_overlap_not_a_constant_floor() {
+        // A nursing posting matches none of the engineering keywords, so the
+        // score must reflect actual requirement<->CV overlap rather than the old
+        // constant ~0.28 floor.
+        let job =
+            "Pflegefachkraft für die geriatrische Station, Wundversorgung und Medikamentengabe.";
+        let cv_match = "Examinierte Pflegefachkraft, Wundversorgung und Medikamentengabe auf der geriatrischen Station.";
+        let cv_unrelated = "Softwareentwickler mit Schwerpunkt verteilte Systeme und Datenbanken.";
+
+        let matched = dimension_score("skill", job, cv_match);
+        let unrelated = dimension_score("skill", job, cv_unrelated);
+
+        assert!(
+            matched > unrelated,
+            "matching CV ({matched}) must outscore unrelated CV ({unrelated})"
+        );
+        assert!(
+            matched > 0.5,
+            "strong overlap should score well, got {matched}"
+        );
+        assert!(
+            unrelated < 0.28,
+            "unrelated off-domain CV must not collapse onto the old 0.28 floor, got {unrelated}"
+        );
+    }
+
+    #[test]
+    fn content_overlap_score_is_bounded_and_handles_empty_input() {
+        assert!((content_overlap_score("", "anything") - 0.1).abs() < 1e-9);
+        let full = content_overlap_score("alpha bravo charlie", "alpha bravo charlie delta");
+        assert!(
+            full > 0.8 && full <= 0.96,
+            "full overlap should be high, got {full}"
+        );
+    }
 }
