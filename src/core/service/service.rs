@@ -11881,6 +11881,16 @@ fn maybe_lease_next_durable_queue_prompt(
     }
     let tasks = channels::list_queue_tasks(root, &["pending".to_string()], 16)?;
     for task in tasks {
+        if block_repeated_unstarted_business_os_app_queue_task_before_dispatch(root, &task)? {
+            push_event(
+                state,
+                format!(
+                    "Blocked repeated unstarted Business OS app queue task {} before durable dispatch",
+                    task.message_key
+                ),
+            );
+            continue;
+        }
         if app_queue_lease_active && business_os_queue_task_is_app_module(&task) {
             continue;
         }
@@ -12186,21 +12196,7 @@ fn requeue_unstarted_business_os_app_queue_task(
         Value::String(now_iso_string()),
     )?;
     if previous_requeues >= BUSINESS_OS_APP_UNSTARTED_REQUEUE_BLOCK_THRESHOLD {
-        let _updated = channels::update_queue_task(
-            root,
-            channels::QueueTaskUpdateRequest {
-                message_key: task.message_key.clone(),
-                route_status: Some("blocked".to_string()),
-                status_note: Some(format!(
-                    "business-os:blocked-unstarted-app: app target still missing or empty after {previous_requeues} automatic requeue(s); owner review required before retry"
-                )),
-                ..Default::default()
-            },
-        )?;
-        let _ = crate::business_os::store::refresh_business_command_queue_task_projection(
-            root,
-            &task.message_key,
-        );
+        block_unstarted_business_os_app_queue_task(root, task, previous_requeues)?;
         return Ok(true);
     }
     let _updated = channels::update_queue_task(
@@ -12219,6 +12215,55 @@ fn requeue_unstarted_business_os_app_queue_task(
         &task.message_key,
     );
     Ok(true)
+}
+
+fn block_repeated_unstarted_business_os_app_queue_task_before_dispatch(
+    root: &Path,
+    task: &channels::QueueTaskView,
+) -> Result<bool> {
+    let Some(target) = business_os_app_module_target_from_prompt(&task.prompt) else {
+        return Ok(false);
+    };
+    let previous_requeues = business_os_app_unstarted_requeue_count(root, task)?;
+    if previous_requeues < BUSINESS_OS_APP_UNSTARTED_REQUEUE_BLOCK_THRESHOLD {
+        return Ok(false);
+    }
+    let app_workspace_root = business_os_app_task_workspace_root(root, task);
+    let artifact_dir = app_workspace_root.join(&target.artifact_directory);
+    if business_os_app_artifact_dir_has_user_content(&artifact_dir)? {
+        return Ok(false);
+    }
+    channels::set_queue_task_metadata_value(
+        root,
+        &task.message_key,
+        BUSINESS_OS_APP_UNSTARTED_REQUEUE_COUNT_KEY,
+        Value::from(previous_requeues as u64),
+    )?;
+    block_unstarted_business_os_app_queue_task(root, task, previous_requeues)?;
+    Ok(true)
+}
+
+fn block_unstarted_business_os_app_queue_task(
+    root: &Path,
+    task: &channels::QueueTaskView,
+    previous_requeues: usize,
+) -> Result<()> {
+    let _updated = channels::update_queue_task(
+        root,
+        channels::QueueTaskUpdateRequest {
+            message_key: task.message_key.clone(),
+            route_status: Some("blocked".to_string()),
+            status_note: Some(format!(
+                "business-os:blocked-unstarted-app: app target still missing or empty after {previous_requeues} automatic requeue(s); owner review required before retry"
+            )),
+            ..Default::default()
+        },
+    )?;
+    let _ = crate::business_os::store::refresh_business_command_queue_task_projection(
+        root,
+        &task.message_key,
+    );
+    Ok(())
 }
 
 fn business_os_app_unstarted_requeue_count(
@@ -23719,6 +23764,59 @@ Business OS command:
             business_os_app_unstarted_requeue_count(&root, &blocked)
                 .expect("read blocked requeue count"),
             2
+        );
+    }
+
+    #[test]
+    fn durable_dispatch_blocks_requeued_unstarted_app_before_lease() {
+        let root = temp_root("durable-dispatch-blocks-requeued-unstarted-app");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create quality app".to_string(),
+                prompt: "Business OS app task metadata:\n- module_id: quality\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/quality\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/quality".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::update_queue_task(
+            &root,
+            channels::QueueTaskUpdateRequest {
+                message_key: task.message_key.clone(),
+                status_note: Some(
+                    "business-os:requeued-unstarted-app: app target missing or empty".to_string(),
+                ),
+                ..Default::default()
+            },
+        )
+        .expect("failed to seed legacy unstarted requeue note");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        let leased = maybe_lease_next_durable_queue_prompt(
+            &root,
+            &state,
+            DurableQueueDispatchGuard::StrictIdle,
+        )
+        .expect("durable queue dispatch should succeed");
+
+        assert!(leased.is_none());
+        let blocked = channels::load_queue_task(&root, &task.message_key)
+            .expect("load blocked task")
+            .expect("queue task exists");
+        assert_eq!(blocked.route_status, "blocked");
+        assert_eq!(
+            blocked.status_note.as_deref(),
+            Some("business-os:blocked-unstarted-app: app target still missing or empty after 1 automatic requeue(s); owner review required before retry")
+        );
+        assert_eq!(
+            business_os_app_unstarted_requeue_count(&root, &blocked)
+                .expect("read blocked requeue count"),
+            1
         );
     }
 
