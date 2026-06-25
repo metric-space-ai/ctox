@@ -1,8 +1,7 @@
 //! `linkedin.com` — Tier C, DACH (DE / AT / CH).
 //!
 //! LinkedIn Sales Navigator (Marketing Developer Platform) API. Liefert
-//! `person_funktion` und `person_linkedin` mit hoher Konfidenz, plus eine
-//! schwache Heuristik für `person_geschlecht` aus dem Vornamen.
+//! `person_funktion` und `person_linkedin` mit hoher Konfidenz.
 //!
 //! ## TOS / Scraping
 //!
@@ -29,9 +28,10 @@
 //! * `person_funktion` — [`Confidence::High`], aus `currentPositions[0].title`
 //!   (Fallback: `headline`).
 //! * `person_linkedin` — [`Confidence::High`], `https://www.linkedin.com/in/<publicIdentifier>/`.
-//! * `person_geschlecht` — [`Confidence::Low`], heuristisch aus dem Vornamen
-//!   (LinkedIn liefert kein Geschlechtsfeld). Nur wenn die Heuristik
-//!   eindeutig anschlägt — sonst weggelassen.
+//!
+//! `person_geschlecht` wird bewusst **nicht** abgeleitet: eine Geschlechts-
+//! Inferenz aus dem Vornamen ist Profiling eines sensiblen Attributs ohne
+//! Rechtsgrundlage (DSGVO). Siehe Hardening-Plan WS2-03.
 
 use std::time::Duration;
 
@@ -83,11 +83,7 @@ impl SourceModule for LinkedIn {
     }
 
     fn authoritative_for(&self) -> &'static [FieldKey] {
-        &[
-            FieldKey::PersonFunktion,
-            FieldKey::PersonGeschlecht,
-            FieldKey::PersonLinkedin,
-        ]
+        &[FieldKey::PersonFunktion, FieldKey::PersonLinkedin]
     }
 
     fn requires_credential(&self) -> Option<&'static str> {
@@ -387,12 +383,9 @@ fn extract_from_person(person: &Value, source_url: &str) -> Vec<(FieldKey, Field
         push_high(&mut out, FieldKey::PersonFunktion, &f, source_url);
     }
 
-    // `person_geschlecht` (Low) — Heuristik aus dem deutschen Vornamen.
-    if let Some(first) = read_localized(person.get("firstName")) {
-        if let Some(g) = guess_gender_from_firstname(&first) {
-            push_low(&mut out, FieldKey::PersonGeschlecht, g, source_url);
-        }
-    }
+    // Gender is deliberately NOT inferred here: guessing `person_geschlecht`
+    // from a first name is profiling of a sensitive attribute with no consent
+    // basis (GDPR). See the web-stack hardening plan WS2-03.
 
     out
 }
@@ -452,174 +445,12 @@ fn extract_role_from_headline(headline: &str) -> Option<String> {
     }
 }
 
-/// Sehr enge Geschlechtsheuristik aus deutschen Vornamen — bewusst nur die
-/// gröbste Endungs-Regel + harte Whitelist. Treffer ist `Confidence::Low`.
-/// Wenn das Wörterbuch ambig ist, geben wir `None` zurück; `person_geschlecht`
-/// kommt dann aus anderen Quellen (oder bleibt leer).
-fn guess_gender_from_firstname(name: &str) -> Option<&'static str> {
-    let first_token = name
-        .split_whitespace()
-        .next()?
-        .trim_matches(|c: char| c.is_ascii_punctuation() && c != '-' && c != '\'');
-    if first_token.is_empty() {
-        return None;
-    }
-    let lower = first_token.to_lowercase();
-    const FEMALE: &[&str] = &[
-        "anna",
-        "anne",
-        "andrea",
-        "barbara",
-        "birgit",
-        "brigitte",
-        "christa",
-        "christina",
-        "christine",
-        "claudia",
-        "claire",
-        "daniela",
-        "diana",
-        "elisabeth",
-        "elke",
-        "eva",
-        "franziska",
-        "gabriele",
-        "hannah",
-        "heike",
-        "helga",
-        "ingrid",
-        "irene",
-        "jana",
-        "jasmin",
-        "johanna",
-        "julia",
-        "karin",
-        "katharina",
-        "katja",
-        "kerstin",
-        "klara",
-        "laura",
-        "lena",
-        "linda",
-        "lisa",
-        "lubomira",
-        "marie",
-        "maria",
-        "marion",
-        "martina",
-        "melanie",
-        "michaela",
-        "monika",
-        "nadine",
-        "nicole",
-        "petra",
-        "regina",
-        "renate",
-        "sabine",
-        "sandra",
-        "silke",
-        "simone",
-        "stefanie",
-        "susanne",
-        "tanja",
-        "ute",
-        "verena",
-    ];
-    const MALE: &[&str] = &[
-        "alexander",
-        "andreas",
-        "armin",
-        "bernd",
-        "bernhard",
-        "bruno",
-        "christian",
-        "christoph",
-        "daniel",
-        "david",
-        "dieter",
-        "dirk",
-        "felix",
-        "florian",
-        "frank",
-        "georg",
-        "gerhard",
-        "guido",
-        "günther",
-        "hans",
-        "harald",
-        "heinz",
-        "helmut",
-        "holger",
-        "jakob",
-        "jan",
-        "jens",
-        "johannes",
-        "jonas",
-        "jörg",
-        "josef",
-        "julian",
-        "jürgen",
-        "karl",
-        "klaus",
-        "kurt",
-        "lars",
-        "lukas",
-        "manfred",
-        "marcel",
-        "marco",
-        "markus",
-        "martin",
-        "matthias",
-        "max",
-        "michael",
-        "norbert",
-        "oliver",
-        "patrick",
-        "paul",
-        "peter",
-        "philipp",
-        "ralf",
-        "reiner",
-        "robert",
-        "rolf",
-        "rudolf",
-        "sebastian",
-        "simon",
-        "stefan",
-        "stephan",
-        "thomas",
-        "tobias",
-        "ulrich",
-        "uwe",
-        "volker",
-        "walter",
-        "werner",
-        "wolfgang",
-    ];
-    if FEMALE.iter().any(|n| *n == lower) {
-        return Some("weiblich");
-    }
-    if MALE.iter().any(|n| *n == lower) {
-        return Some("männlich");
-    }
-    // Endungs-Heuristik nur als letzter Anker — viele ambige Fälle
-    // (Andrea, Sascha) werden bewusst weggelassen.
-    if lower.ends_with('a') && lower.len() >= 3 {
-        return Some("weiblich");
-    }
-    None
-}
-
 // ---------------------------------------------------------------------------
 // Field-evidence helpers
 // ---------------------------------------------------------------------------
 
 fn push_high(out: &mut Vec<(FieldKey, FieldEvidence)>, key: FieldKey, value: &str, url: &str) {
     push(out, key, value, url, Confidence::High);
-}
-
-fn push_low(out: &mut Vec<(FieldKey, FieldEvidence)>, key: FieldKey, value: &str, url: &str) {
-    push(out, key, value, url, Confidence::Low);
 }
 
 fn push(
@@ -698,10 +529,6 @@ mod tests {
             .authoritative_for()
             .iter()
             .any(|k| matches!(k, FieldKey::PersonFunktion)));
-        assert!(m
-            .authoritative_for()
-            .iter()
-            .any(|k| matches!(k, FieldKey::PersonGeschlecht)));
     }
 
     #[test]
@@ -857,13 +684,10 @@ mod tests {
             "https://www.linkedin.com/in/anna-mueller-wittenstein/"
         );
 
-        // person_geschlecht heuristic: Anna → weiblich (Confidence::Low).
-        let geschlecht = fields
+        // person_geschlecht is intentionally never emitted (GDPR; WS2-03).
+        assert!(!fields
             .iter()
-            .find(|(k, _)| matches!(k, FieldKey::PersonGeschlecht));
-        let geschlecht = geschlecht.expect("person_geschlecht heuristic for 'Anna'");
-        assert_eq!(geschlecht.1.value, "weiblich");
-        assert!(matches!(geschlecht.1.confidence, Confidence::Low));
+            .any(|(k, _)| matches!(k, FieldKey::PersonGeschlecht)));
     }
 
     #[test]
@@ -887,18 +711,6 @@ mod tests {
             Some("CFO".to_string())
         );
         assert!(extract_role_from_headline("   bei Firma").is_none());
-    }
-
-    #[test]
-    fn gender_heuristic_only_fires_for_clear_cases() {
-        assert_eq!(guess_gender_from_firstname("Anna"), Some("weiblich"));
-        assert_eq!(guess_gender_from_firstname("Bernd"), Some("männlich"));
-        // Endungs-Heuristik: dreibuchstabig + endet auf 'a'
-        assert_eq!(guess_gender_from_firstname("Eva"), Some("weiblich"));
-        // Klar ambig: keine Aussage
-        assert_eq!(guess_gender_from_firstname("Kim"), None);
-        // Leerer Input
-        assert_eq!(guess_gender_from_firstname(""), None);
     }
 
     #[test]

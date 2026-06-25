@@ -69,15 +69,17 @@ Empfohlene Milestones: **M1 = W1+W4** (Sicherheit + billige Korrektheit-Bugs), *
 - **Change:** Vor dem Persistieren jeder Zeile mit `person_*`-PII einen Stamp verlangen/setzen: `legal_basis`, `purpose`, `retention_until`, `subject_key` (Modell aus CONSENT-1 / ATS wiederverwenden). Personen-Collections in den bestehenden `ats.subject.export/erase`-Sweep aufnehmen.
 - **Akzeptanz:** Persistenz ohne Stamp schlägt fehl (Guard-Test); ein `erase`-Sweep entfernt persistierte Personen-Zeilen.
 
-### WS2-02 ☐ `person_discovery` hinter expliziten Opt-in (default off)
+### WS2-02 ☑ `person_discovery` hinter expliziten Opt-in (default off)
 - **Datei:** [sources/person_discovery.rs:65](../src/tools/web-stack/src/sources/person_discovery.rs)
 - **Change:** Gleicher Gate wie Tier-C (`--include-private`) **oder** dedizierter `--allow-people-discovery` / `runtime_config`-Flag, **default off**. Per-Run-Rechtsgrundlage in die Evidence-Provenance schreiben.
 - **Akzeptanz:** Ohne Flag liefert ein Company-Lookup **keine** discovery-Treffer; Test pinnt das Default-off-Verhalten.
+- **Umgesetzt (2026-06-25):** Neue Trait-Methode `SourceModule::privacy_opt_in_required()` (Default = Tier C), in `person_discovery` auf `true` überschrieben; Plan-Gate nutzt sie (`is_source_opted_in`, vormals `is_tier_c_opt_in`). Opt-in via `--include-private person-discovery`. Guard-Test `plan_excludes_person_discovery_without_opt_in`. **Offen:** Per-Run-Rechtsgrundlage in Provenance → Teil von WS2-01.
 
-### WS2-03 ☐ Geschlechts-Inferenz entfernen oder gaten (beide Emitter)
+### WS2-03 ☑ Geschlechts-Inferenz entfernen oder gaten (beide Emitter)
 - **Dateien:** [linkedin.rs:459](../src/tools/web-stack/src/sources/linkedin.rs), [firmenabc.rs:264](../src/tools/web-stack/src/sources/firmenabc.rs) (+ zentraler `FieldKey::PersonGeschlecht` prüfen)
 - **Change:** `person_geschlecht`-Emission standardmäßig deaktivieren (Profiling ohne Consent). Falls fachlich nötig, nur unter WS2-01-Stamp + Opt-in.
 - **Akzeptanz:** Grep nach `PersonGeschlecht`-Push zeigt keinen ungegateten Emitter; betroffene Fixture-Tests angepasst.
+- **Umgesetzt (2026-06-25):** Entfernt statt gegated (extract_fields hat keinen Config-Zugriff). **linkedin:** Namens-Heuristik `guess_gender_from_firstname` + `push_low` + Emission + `authoritative_for`-Eintrag + Tests gelöscht. **firmenabc:** Emission + `PersonLabel.gender` + `authoritative_for`-Eintrag entfernt; Herr/Frau wird weiter als Token gestrippt (Namens-Parsing), aber nicht gespeichert. Beide Modul-Docs aktualisiert. Tests asserten jetzt **Abwesenheit** von `PersonGeschlecht`. `FieldKey::PersonGeschlecht`-Variante bleibt in der Taxonomie (kein Emitter mehr). 315 Tests grün.
 
 ### WS2-04 ☐ LinkedIn/Xing-Browser-Capture-Widerspruch auflösen
 - **Dateien:** [linkedin.rs:97](../src/tools/web-stack/src/sources/linkedin.rs) (`BrowserSourceRecipe` / `linkedin.profile_capture.v1`)
@@ -121,10 +123,12 @@ Billige, klar falsifizierbare Bugs — alle mit Fixture/Test abschließen.
 - **Akzeptanz:** Fixture mit zwei numerischen Spalten — nur die erste wird gecaptured.
 - **Umgesetzt (2026-06-25):** Fix in `normalise_amount` (statt Regex), da das Whitespace-Collapse dort die Vorjahresspalte einsammelte: `first_column_break` schneidet beim ersten 2+-Whitespace-Lauf (Spaltenlücke) ab, erhält aber Einzelspace-Splits (`485 .732 .145`). Deckt Dezimal- **und** Integer-Spalten ab. Guard-Test `umsatz_keeps_current_year_when_prior_year_column_is_adjacent`.
 
-### WS4-02 ☐ D&B-Detail-Token durchreichen
+### WS4-02 ☐ D&B-Detail-Token durchreichen — **größer als gedacht, Framework-Fix**
 - **Datei:** [sources/dnbhoovers.rs:380](../src/tools/web-stack/src/sources/dnbhoovers.rs)
 - **Change:** Detail-Record in `fetch_direct` einbetten oder Modul-Token im Read-Pfad injizieren.
 - **Akzeptanz:** E2E/Mock-Test, der den credentialed Detail-Pfad ohne Fixture-Spezialfall durchläuft.
+- **Befund verfeinert (2026-06-25):** Betrifft **alle 4 API-Quellen** (dnbhoovers, leadfeeder, xing, linkedin) gleich: `fetch_direct` liefert nur `SourceHit{title,url,snippet}`; die reichen JSON-Daten (D&B `searchCandidates[].organization`) werden verworfen, und `extract_fields` läuft erst beim späteren **unauthentifizierten** Web-Read der Profil-URL → JSON-Check schlägt fehl → keine Felder. `extract_fields` wird im Pinned-Pfad (`run_pinned_sources_for_search`, web_search.rs:1076) gar nicht aufgerufen.
+- **Sauberer Fix (deferred):** (1) `SourceHit` um `content: Option<String>` erweitern (mod.rs:277). (2) API-`fetch_direct` bettet das Detail-JSON ein (z. B. `{"organization": …}`). (3) Orchestrator: wenn ein Pinned-Hit `content` trägt, daraus eine `SourceReadResult` bauen, `extract_fields` aufrufen und die typed Fields als Evidence emittieren (statt zweitem Fetch). (4) Mock-Tests pro Quelle. **Zurückgestellt:** Framework-Änderung über 4 Module + Pipeline; geringere Priorität (nur bei konfigurierten Bezahl-Credentials wirksam). Nach W2/W3 angehen.
 
 ### WS4-03 ☑ Web-Unlock-Seed `script_path`-Präfix
 - **Datei:** [assets/web_unlock_seed.json:8](../src/tools/web-stack/assets/web_unlock_seed.json) (alle Einträge)

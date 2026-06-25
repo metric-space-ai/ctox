@@ -454,7 +454,9 @@ fn build_person_research_plan(request: &PersonResearchRequest) -> Vec<PersonRese
             if !module.authoritative_for().contains(field) {
                 continue;
             }
-            if module.tier() == Tier::C && !is_tier_c_opt_in(module, &request.include_private) {
+            if module.privacy_opt_in_required()
+                && !is_source_opted_in(module, &request.include_private)
+            {
                 continue;
             }
             let entry = per_source
@@ -479,7 +481,7 @@ fn build_person_research_plan(request: &PersonResearchRequest) -> Vec<PersonRese
     plans
 }
 
-fn is_tier_c_opt_in(module: &'static dyn SourceModule, include_private: &[String]) -> bool {
+fn is_source_opted_in(module: &'static dyn SourceModule, include_private: &[String]) -> bool {
     let id = module.id().to_ascii_lowercase();
     for raw in include_private {
         let needle = raw.trim().to_ascii_lowercase();
@@ -1296,6 +1298,37 @@ mod tests {
                 plan.source_id
             );
         }
+    }
+
+    #[test]
+    fn plan_excludes_person_discovery_without_opt_in() {
+        // person-discovery (Tier S, people-scraping) must NOT run implicitly on
+        // a plain company lookup — it harvests GDPR personal data.
+        let request = PersonResearchRequest {
+            company: "ACME".into(),
+            country: Country::De,
+            mode: ResearchMode::NewRecord,
+            fields: vec![FieldKey::PersonVorname],
+            include_private: Vec::new(),
+            workspace: None,
+            persist_workspace: false,
+        };
+        let plans = build_person_research_plan(&request);
+        assert!(
+            !plans.iter().any(|p| p.source_id == "person-discovery"),
+            "person-discovery must be gated behind an explicit opt-in"
+        );
+
+        // With an explicit opt-in it appears again.
+        let opted = PersonResearchRequest {
+            include_private: vec!["person-discovery".into()],
+            ..request
+        };
+        let plans = build_person_research_plan(&opted);
+        assert!(
+            plans.iter().any(|p| p.source_id == "person-discovery"),
+            "person-discovery must run when explicitly opted in"
+        );
     }
 
     #[test]

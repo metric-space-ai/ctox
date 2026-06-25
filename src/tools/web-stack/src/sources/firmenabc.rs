@@ -1,6 +1,6 @@
 //! `firmenabc.at` — Tier S, AT only.
 //!
-//! Strukturierte Profilseiten mit Firma + Anschrift + Person + Geschlecht.
+//! Strukturierte Profilseiten mit Firma + Anschrift + Person.
 //! Crawl-Template-Quelle (Phase 1) und Struktur-Vorlage für weitere
 //! Crawl-Adapter (Northdata, Bundesanzeiger, Companyhouse, Handelsregister).
 //!
@@ -13,7 +13,7 @@
 //!   * `firma_email` / `firma_domain` werden aus den ausgezeichneten
 //!     `<a class="company-profile-email|company-profile-website">`-Links
 //!     gelesen → `Confidence::High`.
-//!   * Person-Felder (`person_geschlecht`, `person_titel`, `person_vorname`,
+//!   * Person-Felder (`person_titel`, `person_vorname`,
 //!     `person_nachname`) werden aus dem „Geschäftsführer“-Block neben dem
 //!     Firmenbuch-Auszug extrahiert. firmenabc.at druckt Personen als
 //!     `Herr|Frau [Titel] Nachname Vorname` (Nachname zuerst); die Heuristik
@@ -61,7 +61,6 @@ impl SourceModule for Firmenabc {
             FieldKey::FirmaOrt,
             FieldKey::FirmaEmail,
             FieldKey::FirmaDomain,
-            FieldKey::PersonGeschlecht,
             FieldKey::PersonTitel,
             FieldKey::PersonVorname,
             FieldKey::PersonNachname,
@@ -258,16 +257,10 @@ fn extract_from_html(html: &str, source_url: &str) -> Vec<(FieldKey, FieldEviden
     //         redundant und Sache von person-research-Phase 4.
     if let Some(person_anchor) = first_management_person(&document) {
         let parsed = parse_management_label(&person_anchor);
-        if let Some(gender) = parsed.gender {
-            push(
-                &mut out,
-                FieldKey::PersonGeschlecht,
-                gender.to_string(),
-                Confidence::Medium,
-                source_url,
-                Some("Geschäftsführer-Prefix (Herr/Frau)"),
-            );
-        }
+        // `person_geschlecht` is deliberately not emitted: recording an
+        // inferred/sex-from-salutation attribute is GDPR profiling with no
+        // consent basis. The Herr/Frau token is still parsed off so the name
+        // fields extract correctly. See hardening plan WS2-03.
         if let Some(title) = parsed.title {
             push(
                 &mut out,
@@ -468,7 +461,6 @@ fn is_management_heading(node: &ElementRef<'_>) -> bool {
 
 #[derive(Debug, Default)]
 struct PersonLabel {
-    gender: Option<&'static str>,
     title: Option<String>,
     first_name: Option<String>,
     last_name: Option<String>,
@@ -485,17 +477,12 @@ fn parse_management_label(node: &ElementRef<'_>) -> PersonLabel {
     let mut tokens: Vec<&str> = text.split_whitespace().collect();
     let mut label = PersonLabel::default();
 
+    // Strip the leading Herr/Frau salutation so the name fields parse
+    // correctly. We intentionally do not record it as person_geschlecht
+    // (GDPR profiling without consent — see hardening plan WS2-03).
     if let Some(first) = tokens.first().copied() {
-        match first {
-            "Herr" => {
-                label.gender = Some("m");
-                tokens.remove(0);
-            }
-            "Frau" => {
-                label.gender = Some("w");
-                tokens.remove(0);
-            }
-            _ => {}
+        if first == "Herr" || first == "Frau" {
+            tokens.remove(0);
         }
     }
 
@@ -599,10 +586,6 @@ mod tests {
             .authoritative_for()
             .iter()
             .any(|f| *f == FieldKey::FirmaName));
-        assert!(m
-            .authoritative_for()
-            .iter()
-            .any(|f| *f == FieldKey::PersonGeschlecht));
     }
 
     #[test]
@@ -693,11 +676,8 @@ mod tests {
         assert_eq!(domain.confidence, Confidence::High);
 
         // Geschäftsführer: erster Eintrag im Profil ist „Herr Watzlawick Franz“.
-        let gender = by_key
-            .get(&FieldKey::PersonGeschlecht)
-            .expect("person_geschlecht extracted");
-        assert_eq!(gender.value, "m");
-        assert_eq!(gender.confidence, Confidence::Medium);
+        // person_geschlecht is intentionally never emitted (GDPR; WS2-03).
+        assert!(by_key.get(&FieldKey::PersonGeschlecht).is_none());
 
         let last = by_key
             .get(&FieldKey::PersonNachname)
@@ -725,7 +705,6 @@ mod tests {
             .next()
             .expect("anchor");
         let parsed = parse_management_label(&anchor);
-        assert_eq!(parsed.gender, Some("w"));
         assert_eq!(parsed.title.as_deref(), Some("Dr."));
         assert_eq!(parsed.last_name.as_deref(), Some("Maier"));
         assert_eq!(parsed.first_name.as_deref(), Some("Anna-Maria"));
