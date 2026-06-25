@@ -739,11 +739,16 @@ pub(crate) fn command_output_with_timeout(
     mut command: Command,
     timeout: Duration,
 ) -> Result<Output> {
-    let mut child = command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("failed to launch command")?;
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    // Run the node runner in its own process group so a timeout can kill the
+    // whole tree (node + the Playwright/Chromium children it spawns), not just
+    // the node parent — which would otherwise leave an orphaned browser.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command.spawn().context("failed to launch command")?;
     let deadline = Instant::now() + timeout;
     loop {
         if child.try_wait()?.is_some() {
@@ -752,11 +757,29 @@ pub(crate) fn command_output_with_timeout(
                 .context("failed to collect command output");
         }
         if Instant::now() >= deadline {
-            let _ = child.kill();
+            kill_process_tree(&mut child);
             let _ = child.wait();
             anyhow::bail!("timed out after {}ms", timeout.as_millis());
         }
         thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Kill a spawned child and (on unix) its whole process group, so descendant
+/// processes such as Chromium are not orphaned when a runner times out.
+fn kill_process_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        // `process_group(0)` made the child a group leader (pgid == child pid),
+        // so a negative pid signals every process in that group.
+        let pid = child.id() as libc::pid_t;
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
     }
 }
 

@@ -98,20 +98,22 @@ Empfohlene Milestones: **M1 = W1+W4** (Sicherheit + billige Korrektheit-Bugs), *
 
 **Problem:** Drift → Repair-Skill (`universal-scraping`) → LLM schreibt `runtime/scraping/targets/<key>/scripts/v1.js` → `register_script` persistiert ohne Validierung (nur SHA-256) → nächster Run führt `node {script}` **ohne `env_clear()`** mit vollem Daemon-Env + `CTOX_BIN` aus. Wer die gescrapte Seite beeinflusst, kann das Rewrite formen → lokale Code-Ausführung mit Daemon-Rechten.
 
-### WS3-01 ☐ Minimal-Env beim Ausführen gescripteter Runner
+### WS3-01 ◐ Minimal-Env beim Ausführen gescripteter Runner
 - **Datei:** [capabilities/scrape.rs:2620–2668](../src/core/capabilities/scrape.rs) (`default_entry_command` @4384)
 - **Change:** Child-Prozess mit `Command::env_clear()` starten und nur die explizit benötigten `CTOX_SCRAPE_*`-Variablen + minimales `PATH` setzen. `CTOX_BIN` nur wenn zwingend nötig.
 - **Akzeptanz:** Test, dass der Child kein Daemon-Secret-Env erbt.
+- **Umgesetzt (2026-06-25):** `execute_registered_script` ruft jetzt `child.env_clear()` und re-addet nur eine Allowlist (`SCRAPE_RUNNER_ENV_ALLOWLIST`: PATH/HOME/TMPDIR/LANG/LC_*/Playwright/Windows-Essentials) + die expliziten `CTOX_SCRAPE_*`/`CTOX_BIN`. Predikat `is_preserved_runner_env_key` + Unit-Test `scrape_runner_env_allowlist_keeps_runtime_drops_secrets` (PATH ok; OPENAI/DNB/AWS/CTOX_SECRET/GITHUB_TOKEN raus). **Verifikation: Core-`cargo check` läuft (schwerer Build).**
 
 ### WS3-02 ☐ Body-Validierung/Sandbox beim Register
 - **Datei:** [capabilities/scrape.rs:1722 `register_script`](../src/core/capabilities/scrape.rs)
 - **Change:** Vor Persistenz: statische Validierung (Größe, kein `child_process`/`require('fs')`-Ausbruch jenseits der definierten Schnittstelle, optional AST-Allowlist) oder Ausführung in einer engeren Node-Sandbox. Mindestens: Trust-Boundary in `capabilities/scrape.rs` als Kommentar dokumentieren.
 - **Akzeptanz:** Ein Skript-Body mit verbotenem Pattern wird beim Register abgelehnt (Test).
 
-### WS3-03 ☐ Chromium-Orphan an beiden Kill-Stellen beheben
+### WS3-03 ◐ Chromium-Orphan an beiden Kill-Stellen beheben
 - **Dateien:** [browser.rs:221](../src/tools/web-stack/src/browser.rs), [capabilities/scrape.rs:2705](../src/core/capabilities/scrape.rs)
 - **Change:** Beim Timeout die **Prozessgruppe** killen (setsid/process-group) statt nur den Node-Parent, damit Playwright/Chromium-Kinder mitsterben.
 - **Akzeptanz:** Nach simuliertem Timeout keine verwaisten Browser-Prozesse (manueller Smoke + ggf. Test-Harness).
+- **Umgesetzt (2026-06-25):** Beide Spawns nutzen auf Unix `Command::process_group(0)` (Child = Gruppenleader); beim Timeout killt `kill_process_tree`/`kill_runner_process_tree` via `libc::kill(-pid, SIGKILL)` die **ganze Gruppe** (node + Chromium). Non-Unix-Fallback = `child.kill()`. web-stack-Seite verifiziert (315 Tests grün); Core-Seite mit dem laufenden `cargo check`.
 
 ---
 
