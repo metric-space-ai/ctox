@@ -26,6 +26,37 @@ close the role-enforcement gap** (the part the user actually flagged), **(C)
 tests + i18n**, **(D) verify the SQLite table is created**, **(E) deploy +
 browser-test**, then **(F) the 6 release follow-ups**.
 
+## 0. Status & progress log (living — keep updated)
+
+Legend: [x] done · [~] in progress · [ ] pending · [blocked] waiting on a dependency
+
+Workstream:
+
+- [x] Cross-layer review of existing vs missing blocks (5-agent audit) — §1/§2.
+- [x] Plan + role-enforcement implementation spec — §6/§7.
+- [x] Clean worktree (checkpoint commit of the in-flight stack) — `6217a9c2`.
+- [x] **Role-enforcement / delegation steering (browser)** — `f1545144`:
+  `canSelfExecuteBusinessData` (data.write gate); `buildGlobalCtoxContextModes`
+  hides data/app + pre-selects "Freigabe anfragen" when restricted; app.js wiring,
+  steering hint, defensive submit backstop; unit test (12/12 green).
+- [x] Verified native authority matches the UI gate: `policy.rs:336` (data.write =
+  Chef/Admin/assigned only), `threads.rs:672` (self-review blocked),
+  `threads.rs:879` (`ensure_reviewer_or_admin` on approve/reject).
+- [ ] Threads i18n — ~20 approval strings (de/en). (In the parallel agent's active
+  module; not touched yet to avoid collision.)
+- [ ] Integration tests (native): restricted→execute DENIED + request ALLOWED;
+  non-reviewer approve DENIED; approve→`business_commands` enqueued; reject→none.
+- [blocked] Live browser e2e of the full flow — needs the native foundation
+  (`threads.rs`) on `origin/main` + a deploy. Gated on the coordinated landing.
+- [blocked] Land on `origin/main` — coordinate decision: parallel agent pushes its
+  foundation stack; this session's commits (`6217a9c2`, `f1545144`) land with/after it.
+- [ ] 6 release follow-ups (from the remediation plan).
+
+Progress log:
+
+- 2026-06-26: review done; plan written; checkpoint `6217a9c2`; delegation steering
+  implemented + tested + committed `f1545144`; native authority verified.
+
 ## 1. Existing building blocks (implemented, in-flight-local)
 
 | Layer | Blocks (all in-flight-local, look complete) |
