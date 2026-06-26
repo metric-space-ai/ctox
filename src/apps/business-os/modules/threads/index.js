@@ -128,6 +128,29 @@ function applyLabels() {
     els.search.placeholder = state.t('search', 'Threads suchen');
     els.search.setAttribute('aria-label', state.t('search', 'Threads suchen'));
   }
+  // Approval / delegation labels (the static index.html copy ships German;
+  // translate the approval-flow strings through the module message catalog).
+  const setFilterText = (filter, key, fb) => {
+    const btn = els.filters?.find((b) => b.dataset.filter === filter);
+    if (btn) btn.textContent = state.t(key, fb);
+  };
+  setFilterText('approvals', 'filterApprovals', 'Freigaben');
+  setFilterText('delegated', 'filterDelegated', 'Delegiert');
+  if (els.approvalForm) {
+    const heading = els.approvalForm.closest('.threads-panel')?.querySelector('h3');
+    if (heading) heading.textContent = state.t('approvalPanelTitle', 'CTOX Freigabe');
+    const labelSpans = els.approvalForm.querySelectorAll('label > span');
+    if (labelSpans[0]) labelSpans[0].textContent = state.t('approvalReviewerLabel', 'Reviewer');
+    if (labelSpans[1]) labelSpans[1].textContent = state.t('approvalPromptLabel', 'Prompt');
+    if (els.approvalReviewer) {
+      els.approvalReviewer.placeholder = state.t('approvalReviewerPlaceholder', 'erfahrener-user-id');
+    }
+    if (els.approvalPrompt) {
+      els.approvalPrompt.placeholder = state.t('approvalPromptPlaceholder', 'Was CTOX nach Freigabe tun soll');
+    }
+    const submitBtn = els.approvalForm.querySelector('button[type="submit"]');
+    if (submitBtn) submitBtn.textContent = state.t('approvalRequestSubmit', 'Freigabe anfragen');
+  }
 }
 
 function wireUi() {
@@ -396,16 +419,16 @@ function renderApproval(approval) {
     && (approval.reviewer_user_id === me || currentUserRole() === 'admin' || currentUserRole() === 'chef');
   return `
     <article class="threads-approval-card" data-approval-id="${escapeAttr(approval.id)}">
-      <div class="threads-message-meta">CTOX Freigabe · ${escapeHtml(approval.status || 'pending')} · ${escapeHtml(formatTime(approval.requested_at_ms || approval.created_at_ms))}</div>
+      <div class="threads-message-meta">${escapeHtml(state.t('approvalHeadingPrefix', 'CTOX Freigabe'))} · ${escapeHtml(approval.status || 'pending')} · ${escapeHtml(formatTime(approval.requested_at_ms || approval.created_at_ms))}</div>
       <div class="threads-message-body">${escapeHtml(approval.prompt || '')}</div>
-      <div class="threads-message-meta">Requester: ${escapeHtml(approval.requester_display_name || approval.requester_user_id || '')} · Reviewer: ${escapeHtml(approval.reviewer_display_name || approval.reviewer_user_id || '')}</div>
-      ${command ? `<div class="threads-message-meta">Command: ${escapeHtml(command.command_type || '')} · ${escapeHtml(command.status || '')}</div>` : ''}
-      ${task ? `<div class="threads-message-meta">Task: ${escapeHtml(task.title || task.id)} · ${escapeHtml(task.status || '')}</div>` : ''}
+      <div class="threads-message-meta">${escapeHtml(state.t('approvalRequester', 'Requester'))}: ${escapeHtml(approval.requester_display_name || approval.requester_user_id || '')} · ${escapeHtml(state.t('approvalReviewerShort', 'Reviewer'))}: ${escapeHtml(approval.reviewer_display_name || approval.reviewer_user_id || '')}</div>
+      ${command ? `<div class="threads-message-meta">${escapeHtml(state.t('approvalCommand', 'Command'))}: ${escapeHtml(command.command_type || '')} · ${escapeHtml(command.status || '')}</div>` : ''}
+      ${task ? `<div class="threads-message-meta">${escapeHtml(state.t('approvalTask', 'Task'))}: ${escapeHtml(task.title || task.id)} · ${escapeHtml(task.status || '')}</div>` : ''}
       ${canDecide ? `
         <div class="threads-approval-actions">
-          <button type="button" data-edit-approval="${escapeAttr(approval.id)}">Bearbeiten</button>
-          <button type="button" data-approve-approval="${escapeAttr(approval.id)}">Freigeben</button>
-          <button type="button" data-reject-approval="${escapeAttr(approval.id)}">Ablehnen</button>
+          <button type="button" data-edit-approval="${escapeAttr(approval.id)}">${escapeHtml(state.t('approvalEdit', 'Bearbeiten'))}</button>
+          <button type="button" data-approve-approval="${escapeAttr(approval.id)}">${escapeHtml(state.t('approvalApprove', 'Freigeben'))}</button>
+          <button type="button" data-reject-approval="${escapeAttr(approval.id)}">${escapeHtml(state.t('approvalReject', 'Ablehnen'))}</button>
         </div>
       ` : ''}
     </article>
