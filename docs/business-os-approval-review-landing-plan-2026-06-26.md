@@ -74,8 +74,11 @@ Workstream:
 - [~] Full-flow live e2e (request → reviewer-in-Threads → approve → `business_commands`):
   the native half is proven by the `cargo test` suite (26/0); a live click-through needs
   the native foundation deployed — runs at the coordinated deploy below.
-- [blocked] Land on `origin/main` — coordinate decision stands: parallel agent pushes its
-  foundation stack; this session's commits land with/after it. Green build de-risks it.
+- [~] Land on `origin/main` — pushed branch `codex/business-os-approval-delegation` and
+  opened **PR #24** (base `main`). Status: **CONFLICTING / DIRTY** (279 files, +57k/-7k) —
+  it carries the whole foundation + in-flight stack and collides with `main`'s 38 diverged
+  commits. The merge requires resolving those conflicts = the parallel agent reconciling its
+  stack against `main` (coordinated). Not a unilateral 53-commit force-rebase from this session.
 
 Progress log:
 
