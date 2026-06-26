@@ -5,6 +5,8 @@
 - Build a real app for the user's request.
 - Choose three relevant shipped Business OS apps as references before coding.
 - Use plain HTML fragments, CSS, and browser ESM.
+- Use structured file-edit tools for app files. In CTOX Codex runs, use
+  `apply_patch`; use shell commands for inspection, validation, and tests.
 - Include `icon.svg` and set `"icon": "icon.svg"` in the runtime
   `module.json`.
 - Export `mount(ctx)` from `index.js`.
@@ -55,6 +57,9 @@
 - Do not use shared/domain collection names such as `inventory_items`,
   `contracts`, or `quality_complaints` for runtime-generated apps.
 - Do not write generated runtime apps under `src/` unless the task explicitly targets a source module.
+- Do not create or edit app source files through shell heredocs, `cat >`, `tee`,
+  Python file writers, or Node file writers when a structured file-edit tool is
+  available.
 - Do not write directly to `business_commands`; use `ctx.commandBus.dispatch(...)`.
 - Do not write directly to `ctox_ticket_*` projection collections.
 - Do not render queue, command, or task ids as inert text when the user needs

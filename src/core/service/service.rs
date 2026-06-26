@@ -146,7 +146,8 @@ const BUSINESS_OS_APP_VALIDATION_REQUEST_MAX_CHARS: usize = 1_600;
 const BUSINESS_OS_APP_VALIDATION_FEEDBACK_MAX_CHARS: usize = 12_000;
 const BUSINESS_OS_APP_VALIDATION_FAILURE_MARKER: &str =
     "Business OS app artifact validation failed.";
-const BUSINESS_OS_APP_AUTHORING_BASE_INSTRUCTIONS: &str = "You are a CTOX Business OS app module authoring agent. Build or edit the requested app as plain installed-module files: vanilla HTML, CSS, and JavaScript only, with ESM imports only for CTOX-provided browser bundles or explicit special-purpose modules. Use the provided Business OS app skill and resource paths as the implementation contract, inspect at least three existing Business OS apps with the reference command, create files only under the provided app_directory unless validation requires reading references, run the provided validation command before finalizing, and do not run CTOX service lifecycle commands.";
+const BUSINESS_OS_APP_AUTHORING_TURN_TIMEOUT_SECS: u64 = 900;
+const BUSINESS_OS_APP_AUTHORING_BASE_INSTRUCTIONS: &str = "You are a CTOX Business OS app module authoring agent. Build or edit the requested app as plain installed-module files: vanilla HTML, CSS, and JavaScript only, with ESM imports only for CTOX-provided browser bundles or explicit special-purpose modules. Use the provided Business OS app skill and resource paths as the implementation contract, inspect at least three existing Business OS apps with the reference command, create files only under the provided app_directory unless validation requires reading references, edit files with apply_patch, use exec_command only for inspection, validation, and tests, run the provided validation command before finalizing, and do not run CTOX service lifecycle commands.";
 #[cfg(test)]
 const BUSINESS_OS_APP_REQUIRED_ARTIFACTS: &[&str] = &[
     "module.json",
@@ -7140,6 +7141,7 @@ fn chat_turn_session_options_for_queue_job(
             disable_mcp_servers: true,
             base_instructions: Some(BUSINESS_OS_APP_AUTHORING_BASE_INSTRUCTIONS.to_string()),
             plain_prompt: true,
+            turn_timeout_secs_override: Some(BUSINESS_OS_APP_AUTHORING_TURN_TIMEOUT_SECS),
         };
     }
     turn_loop::ChatTurnSessionOptions::default()
@@ -23191,13 +23193,19 @@ Business OS command:
             .expect("app queue job should use short app authoring instructions");
         assert!(base_instructions.contains("CTOX Business OS app module authoring agent"));
         assert!(base_instructions.contains("vanilla HTML, CSS, and JavaScript only"));
+        assert!(base_instructions.contains("edit files with apply_patch"));
         assert!(!base_instructions.contains("personal CTO agent"));
+        assert_eq!(
+            options.turn_timeout_secs_override,
+            Some(BUSINESS_OS_APP_AUTHORING_TURN_TIMEOUT_SECS)
+        );
 
         job.prompt = "Write a short implementation note.".to_string();
         let options = chat_turn_session_options_for_queue_job(&job);
         assert!(!options.disable_mcp_servers);
         assert!(!options.plain_prompt);
         assert!(options.base_instructions.is_none());
+        assert_eq!(options.turn_timeout_secs_override, None);
     }
 
     #[test]

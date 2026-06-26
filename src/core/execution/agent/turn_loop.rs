@@ -46,6 +46,7 @@ pub(crate) struct ChatTurnSessionOptions {
     pub(crate) disable_mcp_servers: bool,
     pub(crate) base_instructions: Option<String>,
     pub(crate) plain_prompt: bool,
+    pub(crate) turn_timeout_secs_override: Option<u64>,
 }
 
 /// Decide whether the current turn should run a continuity refresh.
@@ -502,13 +503,16 @@ where
     } else {
         DEFAULT_REMOTE_CHAT_TURN_TIMEOUT_SECS
     };
+    let configured_turn_timeout_secs = read_usize_setting(
+        &operator_settings,
+        "CTOX_CHAT_TURN_TIMEOUT_SECS",
+        default_turn_timeout_secs as usize,
+    ) as u64;
     let config = turn_engine::ChatTurnConfig {
         max_context_tokens: runtime.turn_context_tokens(),
-        turn_timeout_secs: read_usize_setting(
-            &operator_settings,
-            "CTOX_CHAT_TURN_TIMEOUT_SECS",
-            default_turn_timeout_secs as usize,
-        ) as u64,
+        turn_timeout_secs: options
+            .turn_timeout_secs_override
+            .unwrap_or(configured_turn_timeout_secs),
     };
     emit("lcm-open");
     let engine = lcm::LcmEngine::open(db_path, lcm::LcmConfig::default())?;

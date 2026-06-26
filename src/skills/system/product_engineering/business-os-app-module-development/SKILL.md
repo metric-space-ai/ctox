@@ -19,6 +19,9 @@ This file is a resource index. Use the linked contracts and checklists as the wo
   templates.
 - App workers build or modify the app themselves, using the resources below and
   the three chosen reference apps.
+- Use the agent's structured file-edit tool for app files. In CTOX Codex runs
+  this is `apply_patch`; keep shell commands for inspection, validation, and
+  tests.
 - During app creation or modification, do not run `ctox stop`, `ctox start`,
   `ctox upgrade`, `launchctl`, `systemctl`, or service lifecycle commands. The
   running CTOX service is the required runtime for validation and browser proof.
