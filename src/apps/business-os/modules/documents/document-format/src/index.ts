@@ -7,7 +7,7 @@ import {
   type WordPortParagraph,
   type WordPortTable,
   type WordPortTableCell,
-} from "../../../../../templates/business-basic/apps/web/lib/word-port";
+} from "@ctox-word-port-archive";
 
 export const DOCUMENT_FORMAT_ESM_VERSION = "0.2.0-wordport-format";
 

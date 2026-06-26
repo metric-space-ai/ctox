@@ -60,6 +60,7 @@ const CORE_MODULE_IDS: &[&str] = &[
     "desktop",
     "reports",
     "tickets",
+    "threads",
 ];
 const STARTER_MODULE_IDS: &[&str] = &[
     // Generic productivity apps shipped on every instance.
@@ -110,9 +111,12 @@ const BUSINESS_OS_QUEUE_PROMPT_MAX_CHARS: usize = 96_000;
 const BUSINESS_OS_APP_QUEUE_PROMPT_MAX_CHARS: usize = 24_000;
 const BUSINESS_OS_QUEUE_PROMPT_JSON_PREVIEW_CHARS: usize = 18_000;
 const BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS: usize = 8_000;
+const CV_PRINT_PDF_TEXT_MAX_CHARS: usize = 24_000;
+const CV_PRINT_PDF_MAX_BYTES: u64 = 32 * 1024 * 1024;
 const BUSINESS_OS_QUEUE_ORPHAN_REPAIR_AGE_MS: i64 = 10 * 60 * 1_000;
 const BUSINESS_OS_CHAT_ATTACHMENT_CHUNK_SIZE: usize = 16 * 1024;
 const BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME: &str = "sha256-bytes-v1";
+const BUSINESS_OS_LEGACY_SHA256_CONTENT_HASH_SCHEME: &str = "sha256";
 const BUSINESS_OS_CHAT_ATTACHMENT_CHUNK_HASH_SCHEME: &str = "sha256-base64-chunk-v1";
 const DEFAULT_BUSINESS_AUDIT_RETENTION_DAYS: i64 = 90;
 const BUSINESS_AUDIT_EXPORT_DIR: &str = "runtime/business-os/audit-exports";
@@ -124,6 +128,7 @@ const RXDB_TABLE_CACHE_MAX_ENTRIES: usize = 64;
 const RXDB_TABLE_CACHE_TTL_SECS: u64 = 60;
 const RUNTIME_SETTINGS_RXDB_CACHE_TTL_SECS: u64 = 300;
 const SYNC_CONNECTION_CONFIG_CACHE_TTL_SECS: u64 = 300;
+const MODULE_CATALOG_SOURCE_STAMP_FILE_LIMIT: usize = 20_000;
 
 static RXDB_TABLE_NAMES_CACHE: OnceLock<Mutex<BTreeMap<PathBuf, RxdbTableNamesCacheEntry>>> =
     OnceLock::new();
@@ -134,6 +139,98 @@ static SYNC_CONNECTION_CONFIG_CACHE: OnceLock<
 > = OnceLock::new();
 static BUSINESS_OS_STORE_SCHEMA_READY: OnceLock<Mutex<HashSet<BusinessOsStoreDbKey>>> =
     OnceLock::new();
+#[cfg(test)]
+static RXDB_TABLE_COLUMN_LOADS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+#[cfg(test)]
+static RXDB_COLLECTION_WRITER_OPENS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+#[cfg(test)]
+static PUSH_COLLECTION_RECORDS_STORE_TRANSACTIONS: OnceLock<Mutex<HashMap<String, usize>>> =
+    OnceLock::new();
+
+#[cfg(test)]
+fn rxdb_table_column_counter_key(db_path: &Path, table: &str) -> String {
+    format!("{}::{table}", db_path.display())
+}
+
+#[cfg(test)]
+fn rxdb_collection_writer_counter_key(root: &Path, collection: &str) -> String {
+    format!("{}::{collection}", rxdb_store_path(root).display())
+}
+
+#[cfg(test)]
+fn reset_rxdb_table_column_load_count(root: &Path, table: &str) {
+    let key = rxdb_table_column_counter_key(&rxdb_store_path(root), table);
+    let mut counts = RXDB_TABLE_COLUMN_LOADS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    counts.insert(key, 0);
+}
+
+#[cfg(test)]
+fn rxdb_table_column_load_count(root: &Path, table: &str) -> usize {
+    let key = rxdb_table_column_counter_key(&rxdb_store_path(root), table);
+    let counts = RXDB_TABLE_COLUMN_LOADS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    counts.get(&key).copied().unwrap_or(0)
+}
+
+#[cfg(test)]
+fn reset_rxdb_collection_writer_open_count(root: &Path, collection: &str) {
+    let key = rxdb_collection_writer_counter_key(root, collection);
+    let mut counts = RXDB_COLLECTION_WRITER_OPENS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    counts.insert(key, 0);
+}
+
+#[cfg(test)]
+fn rxdb_collection_writer_open_count(root: &Path, collection: &str) -> usize {
+    let key = rxdb_collection_writer_counter_key(root, collection);
+    let counts = RXDB_COLLECTION_WRITER_OPENS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    counts.get(&key).copied().unwrap_or(0)
+}
+
+#[cfg(test)]
+fn push_collection_records_transaction_counter_key(root: &Path, collection: &str) -> String {
+    format!("{}::{collection}", business_os_store_path(root).display())
+}
+
+#[cfg(test)]
+fn reset_push_collection_records_store_transaction_count(root: &Path, collection: &str) {
+    let key = push_collection_records_transaction_counter_key(root, collection);
+    let mut counts = PUSH_COLLECTION_RECORDS_STORE_TRANSACTIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    counts.insert(key, 0);
+}
+
+#[cfg(test)]
+fn push_collection_records_store_transaction_count(root: &Path, collection: &str) -> usize {
+    let key = push_collection_records_transaction_counter_key(root, collection);
+    let counts = PUSH_COLLECTION_RECORDS_STORE_TRANSACTIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    counts.get(&key).copied().unwrap_or(0)
+}
+
+#[cfg(test)]
+fn record_push_collection_records_store_transaction(root: &Path, collection: &str) {
+    let key = push_collection_records_transaction_counter_key(root, collection);
+    let mut counts = PUSH_COLLECTION_RECORDS_STORE_TRANSACTIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *counts.entry(key).or_insert(0) += 1;
+}
 
 thread_local! {
     static BUSINESS_OS_STORE_DB: RefCell<Option<CachedBusinessOsStoreConnection>> = RefCell::new(None);
@@ -151,11 +248,79 @@ type BusinessOsStoreDbKey = PathBuf;
 
 type BusinessOsFileChangeStamp = (u64, u128);
 type RxdbStoreStamp = BusinessOsFileChangeStamp;
-type RuntimeSettingsCacheStamp = (
-    BusinessOsFileChangeStamp,
-    BusinessOsFileChangeStamp,
-    BusinessOsFileChangeStamp,
-);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BusinessOsSqliteStoreStamp {
+    db: BusinessOsFileChangeStamp,
+    wal: BusinessOsFileChangeStamp,
+    shm: BusinessOsFileChangeStamp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuntimeSettingsServiceStamp {
+    pid_file: BusinessOsFileChangeStamp,
+    pid: Option<u32>,
+    running: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BusinessUsersProjectionStamp {
+    table_exists: bool,
+    row_count: usize,
+    latest_updated_at_ms: i64,
+    content_hash: String,
+    configured_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BusinessRecordsProjectionStamp {
+    row_count: usize,
+    latest_updated_at_ms: i64,
+    content_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ModuleCatalogProjectionStamp {
+    source_modules: ModuleCatalogFileTreeStamp,
+    installed_modules: ModuleCatalogFileTreeStamp,
+    templates: ModuleCatalogFileTreeStamp,
+    store_hash: String,
+    allowlist_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ModuleCatalogFileTreeStamp {
+    dir_exists: bool,
+    file_count: usize,
+    latest_modified_at_ms: u64,
+    truncated: bool,
+    content_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LocalMarkdownNotesSourceStamp {
+    notes_dir_exists: bool,
+    file_count: usize,
+    latest_file_mtime_ms: u64,
+    file_hash: String,
+    notes_table_exists: bool,
+    note_count: usize,
+    latest_note_updated_at_ms: i64,
+    notes_hash: String,
+    seed_marker: BusinessOsFileChangeStamp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RuntimeSettingsProjectionStamp {
+    cache: RuntimeSettingsCacheStamp,
+    refresh_epoch: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuntimeSettingsCacheStamp {
+    runtime_config: BusinessOsSqliteStoreStamp,
+    secrets: BusinessOsSqliteStoreStamp,
+    service: RuntimeSettingsServiceStamp,
+}
 type SyncConnectionConfigCacheStamp = (
     BusinessOsFileChangeStamp,
     BusinessOsFileChangeStamp,
@@ -1935,7 +2100,7 @@ fn policy_actor_from_session(session: &BusinessOsSession) -> BusinessOsActor {
     )
 }
 
-fn module_policy_decision(
+pub(super) fn module_policy_decision(
     root: &Path,
     session: &BusinessOsSession,
     permission: BusinessOsPermission,
@@ -3507,10 +3672,221 @@ pub fn pull_business_users_for_rxdb(root: &Path) -> anyhow::Result<Value> {
     }))
 }
 
+pub(crate) fn business_users_projection_stamp(
+    root: &Path,
+) -> anyhow::Result<BusinessUsersProjectionStamp> {
+    let configured_hash = configured_business_users_projection_hash();
+    let path = business_os_store_path(root);
+    if !path.exists() {
+        return Ok(empty_business_users_projection_stamp(
+            false,
+            configured_hash,
+        ));
+    }
+    let conn = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| {
+        format!(
+            "open Business OS store for business users stamp {}",
+            path.display()
+        )
+    })?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .context("configure Business OS users stamp busy_timeout")?;
+    let table_exists = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'business_users' LIMIT 1",
+            [],
+            |_| Ok(()),
+        )
+        .optional()
+        .context("check business_users table")?
+        .is_some();
+    if !table_exists {
+        return Ok(empty_business_users_projection_stamp(
+            false,
+            configured_hash,
+        ));
+    }
+
+    let mut hasher = Sha256::new();
+    let mut row_count = 0usize;
+    let mut latest_updated_at_ms = 0i64;
+    let mut stmt = conn
+        .prepare(
+            "SELECT user_id, display_name, role, active, created_at_ms, updated_at_ms
+             FROM business_users
+             ORDER BY user_id ASC",
+        )
+        .context("prepare business users stamp query")?;
+    let mut rows = stmt.query([]).context("query business users stamp")?;
+    while let Some(row) = rows.next().context("read business users stamp row")? {
+        row_count += 1;
+        let user_id: String = row.get(0)?;
+        let display_name: String = row.get(1)?;
+        let role: String = row.get(2)?;
+        let active: i64 = row.get(3)?;
+        let created_at_ms: i64 = row.get(4)?;
+        let updated_at_ms: i64 = row.get(5)?;
+        for value in [&user_id, &display_name, &role] {
+            hasher.update(value.len().to_le_bytes());
+            hasher.update(value.as_bytes());
+        }
+        hasher.update(active.to_le_bytes());
+        hasher.update(created_at_ms.to_le_bytes());
+        hasher.update(updated_at_ms.to_le_bytes());
+        latest_updated_at_ms = latest_updated_at_ms.max(updated_at_ms);
+    }
+
+    Ok(BusinessUsersProjectionStamp {
+        table_exists: true,
+        row_count,
+        latest_updated_at_ms,
+        content_hash: format!("{:x}", hasher.finalize()),
+        configured_hash,
+    })
+}
+
+fn empty_business_users_projection_stamp(
+    table_exists: bool,
+    configured_hash: String,
+) -> BusinessUsersProjectionStamp {
+    BusinessUsersProjectionStamp {
+        table_exists,
+        row_count: 0,
+        latest_updated_at_ms: 0,
+        content_hash: String::new(),
+        configured_hash,
+    }
+}
+
+pub(crate) fn business_records_projection_stamp(
+    root: &Path,
+    collections: &[String],
+) -> anyhow::Result<BusinessRecordsProjectionStamp> {
+    let path = business_os_store_path(root);
+    if !path.exists() {
+        return Ok(empty_business_records_projection_stamp());
+    }
+    let conn = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| {
+        format!(
+            "open Business OS store for business records stamp {}",
+            path.display()
+        )
+    })?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .context("configure Business OS records stamp busy_timeout")?;
+    if !sqlite_table_exists(&conn, "business_records")? {
+        return Ok(empty_business_records_projection_stamp());
+    }
+
+    let mut collections = collections
+        .iter()
+        .map(|collection| collection.trim())
+        .filter(|collection| !collection.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    collections.sort();
+
+    let mut hasher = Sha256::new();
+    for collection in &collections {
+        hasher.update(collection.len().to_le_bytes());
+        hasher.update(collection.as_bytes());
+    }
+
+    let mut row_count = 0usize;
+    let mut latest_updated_at_ms = 0i64;
+    if let Some(sql) = business_records_projection_stamp_query(collections.len()) {
+        let mut statement = conn
+            .prepare(&sql)
+            .context("prepare business records projection stamp query")?;
+        let mut rows = statement
+            .query(params_from_iter(collections.iter().map(String::as_str)))
+            .context("query business records projection stamp")?;
+        while let Some(row) = rows
+            .next()
+            .context("read business records projection stamp row")?
+        {
+            row_count += 1;
+            let collection: String = row.get(0)?;
+            let record_id: String = row.get(1)?;
+            let rev: String = row.get(2)?;
+            let deleted: i64 = row.get(3)?;
+            let updated_at_ms: i64 = row.get(4)?;
+            for value in [&collection, &record_id, &rev] {
+                hasher.update(value.len().to_le_bytes());
+                hasher.update(value.as_bytes());
+            }
+            hasher.update(deleted.to_le_bytes());
+            hasher.update(updated_at_ms.to_le_bytes());
+            latest_updated_at_ms = latest_updated_at_ms.max(updated_at_ms);
+        }
+    }
+
+    Ok(BusinessRecordsProjectionStamp {
+        row_count,
+        latest_updated_at_ms,
+        content_hash: format!("{:x}", hasher.finalize()),
+    })
+}
+
+fn business_records_projection_stamp_query(collection_count: usize) -> Option<String> {
+    if collection_count == 0 {
+        return None;
+    }
+    let placeholders = std::iter::repeat("?")
+        .take(collection_count)
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "SELECT collection, record_id, rev, deleted, updated_at_ms
+         FROM business_records
+         WHERE collection IN ({placeholders})
+         ORDER BY collection ASC, record_id ASC"
+    ))
+}
+
+fn empty_business_records_projection_stamp() -> BusinessRecordsProjectionStamp {
+    BusinessRecordsProjectionStamp {
+        row_count: 0,
+        latest_updated_at_ms: 0,
+        content_hash: String::new(),
+    }
+}
+
+fn configured_business_users_projection_hash() -> String {
+    let mut users = configured_business_users();
+    users.sort_by(|left, right| left.id.cmp(&right.id));
+    let mut hasher = Sha256::new();
+    for user in users {
+        let id = user.id.trim();
+        let role = normalize_business_role(&user.role);
+        for value in [id, role.as_str()] {
+            hasher.update(value.len().to_le_bytes());
+            hasher.update(value.as_bytes());
+        }
+    }
+    format!("{:x}", hasher.finalize())
+}
+
 pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
     let key = business_os_root_cache_key(root);
     let stamp = runtime_settings_cache_stamp(root);
     let cache = RUNTIME_SETTINGS_RXDB_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let previous_value = {
+        let cache = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache.get(&key).map(|entry| entry.value.clone())
+    };
     {
         let cache = cache
             .lock()
@@ -3524,7 +3900,10 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         }
     }
 
-    let value = build_runtime_settings_for_rxdb(root)?;
+    let value = stabilize_runtime_settings_timestamp(
+        build_runtime_settings_for_rxdb(root)?,
+        previous_value.as_ref(),
+    );
     let mut cache = cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -3537,6 +3916,54 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         },
     );
     Ok(value)
+}
+
+pub(crate) fn runtime_settings_projection_stamp(root: &Path) -> RuntimeSettingsProjectionStamp {
+    RuntimeSettingsProjectionStamp {
+        cache: runtime_settings_cache_stamp(root),
+        refresh_epoch: runtime_settings_refresh_epoch(),
+    }
+}
+
+fn runtime_settings_refresh_epoch() -> u64 {
+    let ttl_ms = RUNTIME_SETTINGS_RXDB_CACHE_TTL_SECS
+        .saturating_mul(1_000)
+        .max(1);
+    (now_ms() as u64) / ttl_ms
+}
+
+fn stabilize_runtime_settings_timestamp(value: Value, previous: Option<&Value>) -> Value {
+    let Some(previous) = previous else {
+        return value;
+    };
+    if runtime_settings_without_timestamp(&value) != runtime_settings_without_timestamp(previous) {
+        return value;
+    }
+    previous.clone()
+}
+
+fn runtime_settings_without_timestamp(value: &Value) -> Value {
+    let mut value = value.clone();
+    remove_runtime_settings_volatile_metadata(&mut value);
+    value
+}
+
+fn remove_runtime_settings_volatile_metadata(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            object.remove("updated_at_ms");
+            object.remove("generated_at_ms");
+            for value in object.values_mut() {
+                remove_runtime_settings_volatile_metadata(value);
+            }
+        }
+        Value::Array(items) => {
+            for value in items {
+                remove_runtime_settings_volatile_metadata(value);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn build_runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
@@ -3651,6 +4078,7 @@ fn build_runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
     };
     let harness_flow = harness_flow_projection(root);
     let queue_health = harness_queue_health(root);
+    let communication_channels = communication_channel_health(root);
     let web_stack = web_stack_projection(root, &env_map);
     let updated_at_ms = now_ms() as u64;
     Ok(serde_json::json!({
@@ -3660,6 +4088,7 @@ fn build_runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         "updated_at_ms": updated_at_ms,
         "harness_flow": harness_flow,
         "queue_health": queue_health,
+        "communication_channels": communication_channels,
         "web_stack": web_stack,
         "runtime": {
             "source": source,
@@ -3714,11 +4143,30 @@ fn business_os_root_cache_key(root: &Path) -> PathBuf {
 
 fn runtime_settings_cache_stamp(root: &Path) -> RuntimeSettingsCacheStamp {
     let runtime = root.join("runtime");
-    (
-        business_os_file_change_stamp(&runtime.join("ctox.sqlite3")),
-        business_os_file_change_stamp(&runtime.join("ctox-runtime.sqlite3")),
-        business_os_file_change_stamp(&runtime.join("ctox-secrets.sqlite3")),
-    )
+    RuntimeSettingsCacheStamp {
+        runtime_config: business_os_sqlite_store_stamp(&runtime.join("ctox-runtime.sqlite3")),
+        secrets: business_os_sqlite_store_stamp(&runtime.join("ctox-secrets.sqlite3")),
+        service: runtime_settings_service_stamp(&runtime.join("ctox_service.pid")),
+    }
+}
+
+fn business_os_sqlite_store_stamp(path: &Path) -> BusinessOsSqliteStoreStamp {
+    BusinessOsSqliteStoreStamp {
+        db: business_os_file_change_stamp(path),
+        wal: business_os_file_change_stamp(&sqlite_sidecar_path(path, "-wal")),
+        shm: business_os_file_change_stamp(&sqlite_sidecar_path(path, "-shm")),
+    }
+}
+
+fn runtime_settings_service_stamp(pid_path: &Path) -> RuntimeSettingsServiceStamp {
+    let pid = std::fs::read_to_string(pid_path)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u32>().ok());
+    RuntimeSettingsServiceStamp {
+        pid_file: business_os_file_change_stamp(pid_path),
+        pid,
+        running: pid.map(process_is_running).unwrap_or(false),
+    }
 }
 
 fn sync_connection_config_cache_stamp(root: &Path) -> SyncConnectionConfigCacheStamp {
@@ -3791,6 +4239,181 @@ fn harness_queue_health(root: &Path) -> Value {
             "error": err.to_string()
         }),
     }
+}
+
+#[derive(Default)]
+struct CommunicationChannelHealthSummary {
+    accounts: usize,
+    ok: usize,
+    warn: usize,
+    bad: usize,
+}
+
+fn communication_channel_health(root: &Path) -> Value {
+    match channels::pull_communication_accounts_for_business_os(root, Some(0), Some(2_000)) {
+        Ok(pulled) => {
+            let documents = pulled
+                .get("documents")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let mut by_channel = BTreeMap::<String, CommunicationChannelHealthSummary>::new();
+            let mut issue_rows = Vec::new();
+            let mut rate_limited = 0usize;
+            let mut deauthorized = 0usize;
+            let mut missing_scope = 0usize;
+            let mut missing_permission = 0usize;
+            let mut missing_intent = 0usize;
+            let mut realtime_not_implemented = 0usize;
+            let mut realtime_not_configured = 0usize;
+            let now = now_ms();
+
+            for document in &documents {
+                let channel = document
+                    .get("channel")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string();
+                let account_key = document
+                    .get("account_key")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let adapter_status = communication_account_adapter_status(document);
+                let state = communication_account_health_state(&adapter_status, now);
+                let kind = adapter_status
+                    .get("provider_error_kind")
+                    .and_then(Value::as_str)
+                    .unwrap_or("none");
+                let realtime_supervision_state = adapter_status
+                    .get("realtime_supervision_state")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let summary = by_channel.entry(channel.clone()).or_default();
+                summary.accounts += 1;
+                match state {
+                    "ok" => summary.ok += 1,
+                    "warn" => summary.warn += 1,
+                    _ => summary.bad += 1,
+                }
+                match kind {
+                    "rate_limited" => rate_limited += 1,
+                    "deauthorized" => deauthorized += 1,
+                    "missing_scope" => missing_scope += 1,
+                    "missing_permission" => missing_permission += 1,
+                    "missing_intent" => missing_intent += 1,
+                    _ => {}
+                }
+                match realtime_supervision_state {
+                    "not_implemented" => realtime_not_implemented += 1,
+                    "not_configured" => realtime_not_configured += 1,
+                    _ => {}
+                }
+                if state != "ok" && issue_rows.len() < 20 {
+                    issue_rows.push(serde_json::json!({
+                        "account_key": account_key,
+                        "channel": channel,
+                        "state": state,
+                        "provider_error_kind": kind,
+                        "auth_state": adapter_status.get("auth_state").and_then(Value::as_str).unwrap_or_default(),
+                        "sync_state": adapter_status.get("sync_state").and_then(Value::as_str).unwrap_or_default(),
+                        "realtime_supervision_state": realtime_supervision_state,
+                        "remediation": adapter_status.get("provider_remediation").and_then(Value::as_str).unwrap_or_default(),
+                    }));
+                }
+            }
+
+            let channel_rows: serde_json::Map<String, Value> = by_channel
+                .into_iter()
+                .map(|(channel, summary)| {
+                    (
+                        channel,
+                        serde_json::json!({
+                            "accounts": summary.accounts,
+                            "ok": summary.ok,
+                            "warn": summary.warn,
+                            "bad": summary.bad,
+                        }),
+                    )
+                })
+                .collect();
+            let total = documents.len();
+            let bad = channel_rows
+                .values()
+                .filter_map(|row| row.get("bad").and_then(Value::as_u64))
+                .sum::<u64>();
+            let warn = channel_rows
+                .values()
+                .filter_map(|row| row.get("warn").and_then(Value::as_u64))
+                .sum::<u64>();
+
+            serde_json::json!({
+                "ok": bad == 0,
+                "total_accounts": total,
+                "warn_accounts": warn,
+                "bad_accounts": bad,
+                "rate_limited_accounts": rate_limited,
+                "deauthorized_accounts": deauthorized,
+                "missing_scope_accounts": missing_scope,
+                "missing_permission_accounts": missing_permission,
+                "missing_intent_accounts": missing_intent,
+                "realtime_not_implemented_accounts": realtime_not_implemented,
+                "realtime_not_configured_accounts": realtime_not_configured,
+                "by_channel": channel_rows,
+                "issues": issue_rows,
+            })
+        }
+        Err(err) => serde_json::json!({
+            "ok": false,
+            "error": err.to_string(),
+        }),
+    }
+}
+
+fn communication_account_adapter_status(account: &Value) -> Value {
+    let profile = account
+        .get("profile_json")
+        .or_else(|| account.get("profile"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    match profile {
+        Value::Object(mut object) => object
+            .remove("adapterStatus")
+            .or_else(|| object.remove("adapter_status"))
+            .unwrap_or(Value::Null),
+        Value::String(raw) => serde_json::from_str::<Value>(&raw)
+            .ok()
+            .and_then(|value| match value {
+                Value::Object(mut object) => object
+                    .remove("adapterStatus")
+                    .or_else(|| object.remove("adapter_status")),
+                _ => None,
+            })
+            .unwrap_or(Value::Null),
+        _ => Value::Null,
+    }
+}
+
+fn communication_account_health_state(adapter_status: &Value, now_ms: u128) -> &'static str {
+    let auth_state = adapter_status
+        .get("auth_state")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let sync_state = adapter_status
+        .get("sync_state")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if matches!(auth_state, "failed" | "deauthorized") || sync_state == "failed" {
+        return "bad";
+    }
+    if adapter_status
+        .get("rate_limited_until_ms")
+        .and_then(Value::as_i64)
+        .is_some_and(|until| until > 0 && (until as u128) > now_ms)
+    {
+        return "warn";
+    }
+    "ok"
 }
 
 fn web_stack_projection(root: &Path, env_map: &BTreeMap<String, String>) -> Value {
@@ -3886,6 +4509,254 @@ fn web_stack_secret_configured(
         || crate::secrets::get_credential(root, secret_name)
             .is_some_and(|value| !value.trim().is_empty())
         || env::var(secret_name).is_ok_and(|value| !value.trim().is_empty())
+}
+
+pub(crate) fn module_catalog_projection_stamp(
+    root: &Path,
+) -> anyhow::Result<ModuleCatalogProjectionStamp> {
+    let app_root = resolve_business_os_app_root(root)?;
+    let installed_app_root = resolve_business_os_installed_app_root(root);
+    Ok(ModuleCatalogProjectionStamp {
+        source_modules: module_catalog_file_tree_stamp(&app_root.join("modules"))?,
+        installed_modules: module_catalog_file_tree_stamp(
+            &installed_app_root.join("installed-modules"),
+        )?,
+        templates: module_catalog_file_tree_stamp(&app_root.join("template-store"))?,
+        store_hash: module_catalog_store_hash(root)?,
+        allowlist_hash: module_catalog_allowlist_hash(root),
+    })
+}
+
+fn module_catalog_file_tree_stamp(root: &Path) -> anyhow::Result<ModuleCatalogFileTreeStamp> {
+    let dir_exists = root.is_dir();
+    if !dir_exists {
+        return Ok(ModuleCatalogFileTreeStamp {
+            dir_exists: false,
+            file_count: 0,
+            latest_modified_at_ms: 0,
+            truncated: false,
+            content_hash: String::new(),
+        });
+    }
+
+    let mut hasher = Sha256::new();
+    let mut file_count = 0usize;
+    let mut latest_modified_at_ms = 0u64;
+    let mut truncated = false;
+    collect_module_catalog_file_tree_stamp(
+        root,
+        root,
+        &mut hasher,
+        &mut file_count,
+        &mut latest_modified_at_ms,
+        &mut truncated,
+    )?;
+    Ok(ModuleCatalogFileTreeStamp {
+        dir_exists: true,
+        file_count,
+        latest_modified_at_ms,
+        truncated,
+        content_hash: format!("{:x}", hasher.finalize()),
+    })
+}
+
+fn collect_module_catalog_file_tree_stamp(
+    root: &Path,
+    current: &Path,
+    hasher: &mut Sha256,
+    file_count: &mut usize,
+    latest_modified_at_ms: &mut u64,
+    truncated: &mut bool,
+) -> anyhow::Result<()> {
+    if *truncated {
+        return Ok(());
+    }
+    let mut entries = fs::read_dir(current)
+        .with_context(|| format!("read module catalog stamp dir {}", current.display()))?
+        .collect::<Result<Vec<_>, _>>()
+        .with_context(|| format!("list module catalog stamp dir {}", current.display()))?;
+    entries.sort_by(|left, right| left.path().cmp(&right.path()));
+    for entry in entries {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.')
+            || matches!(name.as_ref(), "node_modules" | "dist" | "build" | "target")
+        {
+            continue;
+        }
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            collect_module_catalog_file_tree_stamp(
+                root,
+                &path,
+                hasher,
+                file_count,
+                latest_modified_at_ms,
+                truncated,
+            )?;
+            if *truncated {
+                return Ok(());
+            }
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+        if *file_count >= MODULE_CATALOG_SOURCE_STAMP_FILE_LIMIT {
+            *truncated = true;
+            return Ok(());
+        }
+        let metadata = fs::metadata(&path)?;
+        let modified_at_ms = modified_at_ms(&metadata);
+        let rel = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        *file_count += 1;
+        *latest_modified_at_ms = (*latest_modified_at_ms).max(modified_at_ms);
+        update_module_catalog_stamp_hash(hasher, &rel);
+        hasher.update(metadata.len().to_le_bytes());
+        hasher.update(modified_at_ms.to_le_bytes());
+    }
+    Ok(())
+}
+
+fn module_catalog_store_hash(root: &Path) -> anyhow::Result<String> {
+    let path = business_os_store_path(root);
+    let mut hasher = Sha256::new();
+    hasher.update(u8::from(path.exists()).to_le_bytes());
+    update_module_catalog_stamp_hash(&mut hasher, &configured_business_users_projection_hash());
+    if !path.exists() {
+        return Ok(format!("{:x}", hasher.finalize()));
+    }
+
+    let conn = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| {
+        format!(
+            "open Business OS store for module catalog stamp {}",
+            path.display()
+        )
+    })?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .context("configure module catalog stamp busy_timeout")?;
+
+    for (table, query) in [
+        (
+            "business_users",
+            "SELECT user_id, display_name, role, active, created_at_ms, updated_at_ms
+             FROM business_users
+             ORDER BY user_id ASC",
+        ),
+        (
+            "business_module_acl",
+            "SELECT module_id, user_id, role, active, created_at_ms, updated_at_ms
+             FROM business_module_acl
+             ORDER BY module_id ASC, user_id ASC, role ASC",
+        ),
+        (
+            "business_permission_grants",
+            "SELECT grant_id, subject_type, subject_id, permission, scope_type, scope_id,
+                    active, reason, created_by, created_at_ms, updated_at_ms
+             FROM business_permission_grants
+             ORDER BY grant_id ASC",
+        ),
+        (
+            "business_module_versions",
+            "SELECT version_id, module_id, seq, origin, label, bundle_sha256, files_json,
+                    sealed, created_by, created_at_ms, updated_at_ms
+             FROM business_module_versions
+             ORDER BY module_id ASC, seq ASC, version_id ASC",
+        ),
+        (
+            "business_module_releases",
+            "SELECT version_id, module_id, version, status, manifest_json, snapshot_json,
+                    created_by, created_at_ms, notes
+             FROM business_module_releases
+             ORDER BY module_id ASC, version DESC, version_id ASC",
+        ),
+    ] {
+        hash_module_catalog_query(&conn, &mut hasher, table, query)?;
+    }
+
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn hash_module_catalog_query(
+    conn: &Connection,
+    hasher: &mut Sha256,
+    table: &str,
+    query: &str,
+) -> anyhow::Result<()> {
+    update_module_catalog_stamp_hash(hasher, table);
+    if !sqlite_table_exists(conn, table)? {
+        hasher.update(0u8.to_le_bytes());
+        return Ok(());
+    }
+    hasher.update(1u8.to_le_bytes());
+    let mut stmt = conn
+        .prepare(query)
+        .with_context(|| format!("prepare module catalog stamp query for {table}"))?;
+    let column_count = stmt.column_count();
+    let mut rows = stmt
+        .query([])
+        .with_context(|| format!("query module catalog stamp table {table}"))?;
+    let mut row_count = 0usize;
+    while let Some(row) = rows
+        .next()
+        .with_context(|| format!("read module catalog stamp table {table}"))?
+    {
+        row_count += 1;
+        hasher.update(row_count.to_le_bytes());
+        for column in 0..column_count {
+            let value: SqlValue = row.get(column)?;
+            update_module_catalog_sql_value_hash(hasher, value);
+        }
+    }
+    hasher.update(row_count.to_le_bytes());
+    Ok(())
+}
+
+fn update_module_catalog_sql_value_hash(hasher: &mut Sha256, value: SqlValue) {
+    match value {
+        SqlValue::Null => {
+            hasher.update([0]);
+        }
+        SqlValue::Integer(value) => {
+            hasher.update([1]);
+            hasher.update(value.to_le_bytes());
+        }
+        SqlValue::Real(value) => {
+            hasher.update([2]);
+            hasher.update(value.to_le_bytes());
+        }
+        SqlValue::Text(value) => {
+            hasher.update([3]);
+            update_module_catalog_stamp_hash(hasher, &value);
+        }
+        SqlValue::Blob(value) => {
+            hasher.update([4]);
+            hasher.update(value.len().to_le_bytes());
+            hasher.update(value);
+        }
+    }
+}
+
+fn module_catalog_allowlist_hash(root: &Path) -> String {
+    let mut hasher = Sha256::new();
+    for id in business_os_module_allowlist(root) {
+        update_module_catalog_stamp_hash(&mut hasher, &id);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+fn update_module_catalog_stamp_hash(hasher: &mut Sha256, value: &str) {
+    hasher.update(value.len().to_le_bytes());
+    hasher.update(value.as_bytes());
 }
 
 pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
@@ -6451,6 +7322,7 @@ pub fn repair_module_lifecycle_projections(
         }
     }
     let mut actions = Vec::new();
+    let mut rxdb_writers = RxdbProjectionWriterCache::new(root);
     for release_id in &release_ids {
         actions.push(serde_json::json!({
             "kind": "business_module_release_projection",
@@ -6461,13 +7333,7 @@ pub fn repair_module_lifecycle_projections(
             if let Some(payload) =
                 outbound_load_record(&conn, "business_module_releases", release_id)?
             {
-                upsert_rxdb_collection_record(
-                    root,
-                    "business_module_releases",
-                    release_id,
-                    now,
-                    payload,
-                )?;
+                rxdb_writers.upsert("business_module_releases", release_id, now, payload)?;
             }
         }
     }
@@ -9601,7 +10467,7 @@ fn record_business_policy_decision_event(
     )
 }
 
-fn insert_business_event(
+pub(super) fn insert_business_event(
     conn: &Connection,
     collection: &str,
     record_id: &str,
@@ -13141,6 +14007,15 @@ pub fn complete_business_command_from_queue_reply(
             queue_task.as_ref(),
             Some(reply_text),
         )?
+    } else if is_systematic_research_command(&command) {
+        process_systematic_research_command(
+            root,
+            &conn,
+            &command_id,
+            &command,
+            queue_task.as_ref(),
+            reply_text,
+        )?
     } else if is_cv_print_parse_command(&command) {
         process_cv_print_parse_command(
             root,
@@ -13162,6 +14037,38 @@ pub fn complete_business_command_from_queue_reply(
     } else {
         return Ok(None);
     };
+    Ok(Some(serde_json::to_value(accepted)?))
+}
+
+pub fn complete_cv_print_command_from_reply(
+    root: &Path,
+    command_id: &str,
+    task_id: Option<&str>,
+    reply_text: &str,
+) -> anyhow::Result<Option<Value>> {
+    let conn = open_store(root)?;
+    let command_id = command_id.trim();
+    if command_id.is_empty() {
+        return Ok(None);
+    }
+    let command = load_business_command(&conn, command_id)?;
+    if !is_cv_print_parse_command(&command) {
+        return Ok(None);
+    }
+    let queue_task = if let Some(task_id) = task_id {
+        channels::load_queue_task(root, task_id)?
+    } else {
+        find_queue_task_for_command(root, command_id)
+            .and_then(|found| channels::load_queue_task(root, &found).ok().flatten())
+    };
+    let accepted = process_cv_print_parse_command(
+        root,
+        &conn,
+        command_id,
+        &command,
+        queue_task.as_ref(),
+        Some(reply_text),
+    )?;
     Ok(Some(serde_json::to_value(accepted)?))
 }
 
@@ -13668,17 +14575,9 @@ pub fn pull_collection_record(
             return Ok(Some(runtime_settings_for_rxdb(root)?));
         }
         "communication_accounts" | "communication_threads" | "communication_messages" => {
-            let pulled = pull_collection_records(root, collection, None, Some(2_000))?;
-            return Ok(pulled
-                .get("documents")
-                .and_then(Value::as_array)
-                .and_then(|items| {
-                    items.iter().find(|item| {
-                        item.get("id").and_then(Value::as_str) == Some(record_id)
-                            || item.get("record_id").and_then(Value::as_str) == Some(record_id)
-                    })
-                })
-                .cloned());
+            return channels::pull_communication_record_for_business_os(
+                root, collection, record_id,
+            );
         }
         _ => {}
     }
@@ -13702,19 +14601,7 @@ pub fn pull_collection_record(
         }
         return Ok(Some(payload));
     }
-    if let Some(rxdb_projection) = pull_rxdb_collection_table_records(root, collection, 0, 2_000)? {
-        return Ok(rxdb_projection
-            .get("documents")
-            .and_then(Value::as_array)
-            .and_then(|items| {
-                items.iter().find(|item| {
-                    item.get("id").and_then(Value::as_str) == Some(record_id)
-                        || item.get("record_id").and_then(Value::as_str) == Some(record_id)
-                })
-            })
-            .cloned());
-    }
-    Ok(None)
+    load_rxdb_collection_record(root, collection, record_id)
 }
 
 fn pull_runtime_settings_records(
@@ -13902,6 +14789,7 @@ pub fn repair_queue_projections(
     let mut counters: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut actions: Vec<Value> = Vec::new();
     let mut touched_commands = HashSet::new();
+    let mut rxdb_writers = RxdbProjectionWriterCache::new(root);
 
     for (task_id, payload_json, projection_updated_at_ms) in projection_rows {
         let mut payload = serde_json::from_str::<Value>(&payload_json).unwrap_or_else(|_| {
@@ -14061,13 +14949,7 @@ pub fn repair_queue_projections(
                             now,
                             payload.clone(),
                         )?;
-                        upsert_rxdb_collection_record(
-                            root,
-                            "ctox_queue_tasks",
-                            &task_id,
-                            now,
-                            payload,
-                        )?;
+                        rxdb_writers.upsert("ctox_queue_tasks", &task_id, now, payload)?;
                     }
                 }
 
@@ -14079,6 +14961,7 @@ pub fn repair_queue_projections(
                             upsert_command_projection_from_queue_status(
                                 root,
                                 &conn,
+                                Some(&mut rxdb_writers),
                                 command_id,
                                 Some(&task),
                                 &desired_route_status,
@@ -14152,13 +15035,7 @@ pub fn repair_queue_projections(
                                 now,
                                 payload.clone(),
                             )?;
-                            upsert_rxdb_collection_record(
-                                root,
-                                "ctox_queue_tasks",
-                                &task_id,
-                                now,
-                                payload,
-                            )?;
+                            rxdb_writers.upsert("ctox_queue_tasks", &task_id, now, payload)?;
                         }
                     }
                 } else if projection_status_is_active(&projection_status)
@@ -14204,18 +15081,13 @@ pub fn repair_queue_projections(
                             now,
                             payload.clone(),
                         )?;
-                        upsert_rxdb_collection_record(
-                            root,
-                            "ctox_queue_tasks",
-                            &task_id,
-                            now,
-                            payload,
-                        )?;
+                        rxdb_writers.upsert("ctox_queue_tasks", &task_id, now, payload)?;
                         if let Some(command_id) = command_id.as_deref() {
                             touched_commands.insert(command_id.to_string());
                             upsert_command_projection_from_queue_status(
                                 root,
                                 &conn,
+                                Some(&mut rxdb_writers),
                                 command_id,
                                 None,
                                 "failed",
@@ -14337,24 +15209,161 @@ fn load_rxdb_collection_record(
     Ok(Some(record))
 }
 
+fn find_rxdb_collection_record_by_string_field(
+    root: &Path,
+    collection: &str,
+    field: &str,
+    expected: &str,
+) -> anyhow::Result<Option<(String, Value)>> {
+    if !is_safe_rxdb_collection_name(collection) {
+        anyhow::bail!("invalid collection name `{collection}`");
+    }
+    if !field
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        anyhow::bail!("invalid RxDB JSON field `{field}`");
+    }
+    let path = rxdb_store_path(root);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let conn = Connection::open(&path)?;
+    let Some(table) = rxdb_collection_table_name(&path, &conn, collection) else {
+        return Ok(None);
+    };
+    let json_path = format!("$.{field}");
+    let row = conn
+        .query_row(
+            &format!(
+                "SELECT id, data
+                 FROM {table}
+                 WHERE json_extract(data, ?1) = ?2
+                 ORDER BY CAST(COALESCE(json_extract(data, '$.updated_at_ms'), 0) AS INTEGER) DESC, id DESC
+                 LIMIT 1"
+            ),
+            params![json_path, expected],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    let Some((id, raw)) = row else {
+        return Ok(None);
+    };
+    let mut record: Value = serde_json::from_str(&raw)?;
+    if let Some(object) = record.as_object_mut() {
+        object
+            .entry("id".to_string())
+            .or_insert_with(|| Value::String(id.clone()));
+    }
+    Ok(Some((id, record)))
+}
+
 fn upsert_rxdb_collection_record(
     root: &Path,
     collection: &str,
     record_id: &str,
     updated_at_ms: i64,
+    payload: Value,
+) -> anyhow::Result<()> {
+    if let Some(mut writer) = RxdbCollectionWriter::open(root, collection)? {
+        writer.upsert(record_id, updated_at_ms, payload)?;
+    }
+    Ok(())
+}
+
+struct RxdbProjectionWriterCache {
+    root: PathBuf,
+    writers: HashMap<String, Option<RxdbCollectionWriter>>,
+}
+
+impl RxdbProjectionWriterCache {
+    fn new(root: &Path) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            writers: HashMap::new(),
+        }
+    }
+
+    fn upsert(
+        &mut self,
+        collection: &str,
+        record_id: &str,
+        updated_at_ms: i64,
+        payload: Value,
+    ) -> anyhow::Result<()> {
+        if !self.writers.contains_key(collection) {
+            let writer = RxdbCollectionWriter::open(&self.root, collection)?;
+            self.writers.insert(collection.to_string(), writer);
+        }
+        if let Some(Some(writer)) = self.writers.get_mut(collection) {
+            writer.upsert(record_id, updated_at_ms, payload)?;
+        }
+        Ok(())
+    }
+}
+
+struct RxdbCollectionWriter {
+    conn: Connection,
+    table: String,
+    columns: HashSet<String>,
+}
+
+impl RxdbCollectionWriter {
+    fn open(root: &Path, collection: &str) -> anyhow::Result<Option<Self>> {
+        if !is_safe_rxdb_collection_name(collection) {
+            anyhow::bail!("invalid collection name `{collection}`");
+        }
+        let path = rxdb_store_path(root);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        #[cfg(test)]
+        {
+            let key = rxdb_collection_writer_counter_key(root, collection);
+            let mut counts = RXDB_COLLECTION_WRITER_OPENS
+                .get_or_init(|| Mutex::new(HashMap::new()))
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            *counts.entry(key).or_insert(0) += 1;
+        }
+        let conn = Connection::open(&path)?;
+        conn.busy_timeout(Duration::from_secs(10))?;
+        let Some(table) = rxdb_collection_table_name(&path, &conn, collection) else {
+            return Ok(None);
+        };
+        let columns = rxdb_table_columns_for_path(&conn, &path, &table)?;
+        Ok(Some(Self {
+            conn,
+            table,
+            columns,
+        }))
+    }
+
+    fn upsert(
+        &mut self,
+        record_id: &str,
+        updated_at_ms: i64,
+        payload: Value,
+    ) -> anyhow::Result<()> {
+        upsert_rxdb_collection_record_with_writer(
+            &self.conn,
+            &self.table,
+            &self.columns,
+            record_id,
+            updated_at_ms,
+            payload,
+        )
+    }
+}
+
+fn upsert_rxdb_collection_record_with_writer(
+    conn: &Connection,
+    table: &str,
+    table_columns: &HashSet<String>,
+    record_id: &str,
+    updated_at_ms: i64,
     mut payload: Value,
 ) -> anyhow::Result<()> {
-    if !is_safe_rxdb_collection_name(collection) {
-        anyhow::bail!("invalid collection name `{collection}`");
-    }
-    let path = rxdb_store_path(root);
-    if !path.is_file() {
-        return Ok(());
-    }
-    let conn = Connection::open(&path)?;
-    let Some(table) = rxdb_collection_table_name(&path, &conn, collection) else {
-        return Ok(());
-    };
     if let Some(existing_json) = conn
         .query_row(
             &format!("SELECT data FROM {table} WHERE id = ?1"),
@@ -14382,27 +15391,23 @@ fn upsert_rxdb_collection_record(
         SqlValue::Text(serde_json::to_string(&payload)?),
     ];
     let mut updates = vec!["data = excluded.data".to_string()];
-    if let Some(deleted_column) = ["deleted", "_deleted"].into_iter().find_map(|column| {
-        rxdb_table_has_column(&conn, &table, column)
-            .ok()
-            .filter(|exists| *exists)
-            .map(|_| column)
-    }) {
+    if let Some(deleted_column) = ["deleted", "_deleted"]
+        .into_iter()
+        .find_map(|column| table_columns.contains(column).then_some(column))
+    {
         columns.push(deleted_column.to_string());
         values.push(SqlValue::Integer(0));
         updates.push(format!("{deleted_column} = 0"));
     }
-    if let Some(revision_column) = ["revision", "_rev"].into_iter().find_map(|column| {
-        rxdb_table_has_column(&conn, &table, column)
-            .ok()
-            .filter(|exists| *exists)
-            .map(|_| column)
-    }) {
+    if let Some(revision_column) = ["revision", "_rev"]
+        .into_iter()
+        .find_map(|column| table_columns.contains(column).then_some(column))
+    {
         columns.push(revision_column.to_string());
         values.push(SqlValue::Text(rev));
         updates.push(format!("{revision_column} = excluded.{revision_column}"));
     }
-    if rxdb_table_has_column(&conn, &table, "lastWriteTime")? {
+    if table_columns.contains("lastWriteTime") {
         columns.push("lastWriteTime".to_string());
         values.push(SqlValue::Real(updated_at_ms as f64));
         updates.push("lastWriteTime = excluded.lastWriteTime".to_string());
@@ -14423,6 +15428,48 @@ fn upsert_rxdb_collection_record(
     Ok(())
 }
 
+fn rxdb_table_columns(conn: &Connection, table: &str) -> anyhow::Result<HashSet<String>> {
+    rxdb_table_columns_with_counter_key(conn, table, table.to_string())
+}
+
+fn rxdb_table_columns_for_path(
+    conn: &Connection,
+    db_path: &Path,
+    table: &str,
+) -> anyhow::Result<HashSet<String>> {
+    #[cfg(not(test))]
+    let _ = db_path;
+    #[cfg(test)]
+    let counter_key = rxdb_table_column_counter_key(db_path, table);
+    #[cfg(not(test))]
+    let counter_key = table.to_string();
+    rxdb_table_columns_with_counter_key(conn, table, counter_key)
+}
+
+fn rxdb_table_columns_with_counter_key(
+    conn: &Connection,
+    table: &str,
+    counter_key: String,
+) -> anyhow::Result<HashSet<String>> {
+    let _ = &counter_key;
+    #[cfg(test)]
+    {
+        let mut counts = RXDB_TABLE_COLUMN_LOADS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *counts.entry(counter_key).or_insert(0) += 1;
+    }
+
+    let mut statement = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+    let mut columns = HashSet::new();
+    for row in rows {
+        columns.insert(row?);
+    }
+    Ok(columns)
+}
+
 pub fn upsert_projection_record(
     root: &Path,
     collection: &str,
@@ -14436,14 +15483,7 @@ pub fn upsert_projection_record(
 }
 
 fn rxdb_table_has_column(conn: &Connection, table: &str, column: &str) -> anyhow::Result<bool> {
-    let mut statement = conn.prepare(&format!("PRAGMA table_info({table})"))?;
-    let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
-    for row in rows {
-        if row? == column {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    Ok(rxdb_table_columns(conn, table)?.contains(column))
 }
 
 fn merge_json_object_values(target: &mut Value, patch: &Value) {
@@ -14537,6 +15577,116 @@ fn delete_note_markdown_file(root: &Path, record_id: &str) -> anyhow::Result<()>
         }
     }
     Ok(())
+}
+
+pub(crate) fn local_markdown_notes_source_stamp(
+    root: &Path,
+) -> anyhow::Result<LocalMarkdownNotesSourceStamp> {
+    let notes_dir = root.join("runtime/business-os/notes");
+    let seed_marker =
+        business_os_file_change_stamp(&root.join("runtime/business-os/readme-note-seeded"));
+    let mut file_hash = Sha256::new();
+    let mut file_count = 0usize;
+    let mut latest_file_mtime_ms = 0u64;
+    let notes_dir_exists = notes_dir.is_dir();
+    if notes_dir_exists {
+        let mut file_entries = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&notes_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let Some(filename) = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .filter(|filename| filename.ends_with(".md"))
+                    .map(str::to_string)
+                else {
+                    continue;
+                };
+                let Ok(metadata) = std::fs::metadata(&path) else {
+                    continue;
+                };
+                let mtime_ms = modified_at_ms(&metadata);
+                file_entries.push((filename, metadata.len(), mtime_ms));
+            }
+        }
+        file_entries.sort_by(|left, right| left.0.cmp(&right.0));
+        file_count = file_entries.len();
+        for (filename, len, mtime_ms) in file_entries {
+            latest_file_mtime_ms = latest_file_mtime_ms.max(mtime_ms);
+            update_notes_stamp_hash(&mut file_hash, &filename);
+            file_hash.update(len.to_le_bytes());
+            file_hash.update(mtime_ms.to_le_bytes());
+        }
+    }
+
+    let (notes_table_exists, note_count, latest_note_updated_at_ms, notes_hash) =
+        local_markdown_notes_db_stamp(root)?;
+
+    Ok(LocalMarkdownNotesSourceStamp {
+        notes_dir_exists,
+        file_count,
+        latest_file_mtime_ms,
+        file_hash: format!("{:x}", file_hash.finalize()),
+        notes_table_exists,
+        note_count,
+        latest_note_updated_at_ms,
+        notes_hash,
+        seed_marker,
+    })
+}
+
+const LOCAL_MARKDOWN_NOTES_DB_STAMP_SQL: &str = "
+    SELECT record_id, updated_at_ms, deleted
+    FROM business_records
+    WHERE collection = 'notes'
+    ORDER BY record_id ASC
+";
+
+fn local_markdown_notes_db_stamp(root: &Path) -> anyhow::Result<(bool, usize, i64, String)> {
+    let path = business_os_store_path(root);
+    if !path.exists() {
+        return Ok((false, 0, 0, String::new()));
+    }
+    let conn = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("open Business OS store for notes stamp {}", path.display()))?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .context("configure notes stamp busy_timeout")?;
+    if !sqlite_table_exists(&conn, "business_records")? {
+        return Ok((false, 0, 0, String::new()));
+    }
+
+    let mut hasher = Sha256::new();
+    let mut note_count = 0usize;
+    let mut latest_updated_at_ms = 0i64;
+    let mut stmt = conn.prepare(LOCAL_MARKDOWN_NOTES_DB_STAMP_SQL)?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        note_count += 1;
+        let record_id: String = row.get(0)?;
+        let updated_at_ms: i64 = row.get(1)?;
+        let deleted: i64 = row.get(2)?;
+        latest_updated_at_ms = latest_updated_at_ms.max(updated_at_ms);
+        update_notes_stamp_hash(&mut hasher, &record_id);
+        hasher.update(updated_at_ms.to_le_bytes());
+        hasher.update(deleted.to_le_bytes());
+    }
+    Ok((
+        true,
+        note_count,
+        latest_updated_at_ms,
+        format!("{:x}", hasher.finalize()),
+    ))
+}
+
+fn update_notes_stamp_hash(hasher: &mut Sha256, value: &str) {
+    hasher.update(value.len().to_le_bytes());
+    hasher.update(value.as_bytes());
 }
 
 pub fn sync_local_markdown_notes(root: &Path) -> anyhow::Result<()> {
@@ -14765,34 +15915,25 @@ pub fn push_collection_records(root: &Path, body: Value) -> anyhow::Result<Value
         .context("documents array is required")?;
     let mut accepted = Vec::new();
     let mut ignored = Vec::new();
-    for document in documents {
-        let record_id = document
-            .get("id")
-            .or_else(|| document.get("command_id"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("unknown")
-            .to_string();
-        if document
-            .get("_deleted")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            let conn = open_store(root)?;
-            mark_business_record_deleted(&conn, collection, &record_id, now_ms() as i64)?;
-            if collection == "notes" {
-                if let Err(e) = delete_note_markdown_file(root, &record_id) {
-                    eprintln!(
-                        "[business-os] failed to delete note file for {}: {}",
-                        record_id, e
-                    );
-                }
-            }
-            accepted.push(serde_json::json!({ "id": record_id, "status": "deleted" }));
-            continue;
-        }
-        if collection == "business_commands" {
+    if documents.is_empty() {
+        return Ok(serde_json::json!({
+            "ok": true,
+            "collection": collection,
+            "accepted": accepted,
+            "ignored": ignored,
+            "count": 0
+        }));
+    }
+    if collection == "business_commands" {
+        for document in documents {
+            let record_id = document
+                .get("id")
+                .or_else(|| document.get("command_id"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("unknown")
+                .to_string();
             match accept_rxdb_business_command(root, document.clone()) {
                 Ok(value) => accepted.push(value),
                 Err(error) => ignored.push(serde_json::json!({
@@ -14800,28 +15941,78 @@ pub fn push_collection_records(root: &Path, body: Value) -> anyhow::Result<Value
                     "error": error.to_string()
                 })),
             }
-        } else {
-            let conn = open_store(root)?;
-            let updated_at_ms = document
-                .get("updated_at_ms")
-                .and_then(Value::as_i64)
-                .unwrap_or_else(|| now_ms() as i64);
-            upsert_business_record(
-                &conn,
-                collection,
-                &record_id,
-                updated_at_ms,
-                document.clone(),
-            )?;
-            if collection == "notes" {
-                if let Err(e) = write_note_markdown_file(root, &record_id, document) {
-                    eprintln!(
-                        "[business-os] failed to write note file for {}: {}",
-                        record_id, e
-                    );
+        }
+    } else {
+        enum NoteFileAction {
+            Delete(String),
+            Write(String, Value),
+        }
+
+        let mut conn = open_store(root)?;
+        let mut note_file_actions = Vec::new();
+        #[cfg(test)]
+        record_push_collection_records_store_transaction(root, collection);
+        {
+            let tx = conn.transaction()?;
+            for document in documents {
+                let record_id = document
+                    .get("id")
+                    .or_else(|| document.get("command_id"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("unknown")
+                    .to_string();
+                if document
+                    .get("_deleted")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    mark_business_record_deleted(&tx, collection, &record_id, now_ms() as i64)?;
+                    if collection == "notes" {
+                        note_file_actions.push(NoteFileAction::Delete(record_id.clone()));
+                    }
+                    accepted.push(serde_json::json!({ "id": record_id, "status": "deleted" }));
+                    continue;
+                }
+                let updated_at_ms = document
+                    .get("updated_at_ms")
+                    .and_then(Value::as_i64)
+                    .unwrap_or_else(|| now_ms() as i64);
+                upsert_business_record(
+                    &tx,
+                    collection,
+                    &record_id,
+                    updated_at_ms,
+                    document.clone(),
+                )?;
+                if collection == "notes" {
+                    note_file_actions
+                        .push(NoteFileAction::Write(record_id.clone(), document.clone()));
+                }
+                accepted.push(serde_json::json!({ "id": record_id, "status": "stored" }));
+            }
+            tx.commit()?;
+        }
+        for action in note_file_actions {
+            match action {
+                NoteFileAction::Delete(record_id) => {
+                    if let Err(e) = delete_note_markdown_file(root, &record_id) {
+                        eprintln!(
+                            "[business-os] failed to delete note file for {}: {}",
+                            record_id, e
+                        );
+                    }
+                }
+                NoteFileAction::Write(record_id, document) => {
+                    if let Err(e) = write_note_markdown_file(root, &record_id, &document) {
+                        eprintln!(
+                            "[business-os] failed to write note file for {}: {}",
+                            record_id, e
+                        );
+                    }
                 }
             }
-            accepted.push(serde_json::json!({ "id": record_id, "status": "stored" }));
         }
     }
     Ok(serde_json::json!({
@@ -15179,6 +16370,54 @@ fn secret_command_safe_command(
             }
         }),
     }
+}
+
+fn mailserver_command_safe_command(
+    command: &BusinessCommand,
+    session: &BusinessOsSession,
+    safe_payload: Value,
+) -> BusinessCommand {
+    BusinessCommand {
+        origin: command.origin,
+        id: command.id.clone(),
+        module: command.module.clone(),
+        command_type: command.command_type.clone(),
+        record_id: command.record_id.clone(),
+        payload: safe_payload,
+        client_context: serde_json::json!({
+            "actor": {
+                "id": session_user_id(session).unwrap_or("rxdb-command"),
+                "display_name": session
+                    .user
+                    .as_ref()
+                    .map(|user| user.display_name.as_str())
+                    .unwrap_or("rxdb-command"),
+                "role": session_role(session),
+            }
+        }),
+    }
+}
+
+fn open_mailserver_store_connection(root: &Path) -> anyhow::Result<Connection> {
+    let db_path = crate::paths::core_db(root);
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create runtime dir {}", parent.display()))?;
+    }
+    let db_path_string = db_path.to_string_lossy().into_owned();
+    ctox_mailserver::store::sqlite::SqliteStore::new(&db_path_string)
+        .init()
+        .context("failed to initialize mailserver SQLite store")?;
+    let conn = Connection::open(&db_path)
+        .with_context(|| format!("failed to open mailserver store {}", db_path.display()))?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .context("failed to configure mailserver SQLite busy_timeout")?;
+    let busy_timeout_ms = crate::persistence::sqlite_busy_timeout_millis();
+    conn.execute_batch(&format!(
+        "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout={busy_timeout_ms};"
+    ))
+    .context("failed to configure mailserver SQLite pragmas")?;
+    Ok(conn)
 }
 
 /// Accept a command that originated in trusted, in-process code (operator CLI,
@@ -15662,13 +16901,22 @@ pub fn accept_rxdb_business_command_with_origin(
         }
         command_type if is_customers_active_command(command_type) => {
             let session = rxdb_authenticated_session(root, &command)?;
+            let decision = module_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::DataWrite,
+                "customers",
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
             match handle_customers_active_command(root, &session, &command) {
                 Ok(outcome) => {
                     return write_rxdb_control_command_outcome(
                         root,
                         &command,
                         "completed",
-                        command.record_id.as_deref(),
+                        None,
                         Some("completed"),
                         outcome,
                     );
@@ -15678,7 +16926,7 @@ pub fn accept_rxdb_business_command_with_origin(
                         root,
                         &command,
                         "failed",
-                        command.record_id.as_deref(),
+                        None,
                         Some("failed"),
                         serde_json::json!({
                             "ok": false,
@@ -15691,6 +16939,15 @@ pub fn accept_rxdb_business_command_with_origin(
         }
         command_type if is_outbound_active_command(command_type) => {
             let session = rxdb_authenticated_session(root, &command)?;
+            let decision = module_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::DataWrite,
+                "outbound",
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
             let outcome = handle_outbound_active_command(root, &session, &command_id, &command)?;
             return write_rxdb_control_command_outcome(
                 root,
@@ -15846,7 +17103,16 @@ pub fn accept_rxdb_business_command_with_origin(
             );
         }
         command_type if command_type.starts_with("ctox.ticket.") => {
-            let _session = rxdb_authenticated_session(root, &command)?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let decision = module_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::SupportTriage,
+                "support",
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
             let outcome = crate::mission::tickets::run_business_os_ticket_command(
                 root,
                 command_type,
@@ -15890,6 +17156,74 @@ pub fn accept_rxdb_business_command_with_origin(
                         &command,
                         "failed",
                         command.record_id.as_deref(),
+                        Some("failed"),
+                        serde_json::json!({
+                            "ok": false,
+                            "error": error.to_string(),
+                        }),
+                    );
+                    return Err(error);
+                }
+            }
+        }
+        command_type if super::threads::is_threads_command(command_type) => {
+            let session = rxdb_authenticated_session(root, &command)?;
+            if super::threads::requires_external_approval(command_type) {
+                let approval_id = command
+                    .payload
+                    .get("approval_request_id")
+                    .or_else(|| command.payload.get("id"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .or(command.record_id.as_deref())
+                    .unwrap_or_default()
+                    .to_owned();
+                let assigned_to_actor = if approval_id.is_empty() {
+                    false
+                } else {
+                    let actor_id = session_user_id(&session).unwrap_or_default();
+                    pull_collection_record(root, "ctox_task_approval_requests", &approval_id)?
+                        .and_then(|approval| first_string_field(&approval, &["reviewer_user_id"]))
+                        .map(|reviewer| reviewer == actor_id)
+                        .unwrap_or(false)
+                };
+                let decision = scoped_policy_decision(
+                    root,
+                    &session,
+                    BusinessOsPermission::ExternalApprove,
+                    BusinessOsScope {
+                        scope_type: BusinessOsScopeType::Approval,
+                        scope_id: if approval_id.is_empty() {
+                            None
+                        } else {
+                            Some(approval_id)
+                        },
+                        assigned_to_actor,
+                        owned_by_actor: false,
+                    },
+                )?;
+                if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                    return Ok(outcome);
+                }
+            }
+            match super::threads::handle_business_command(root, &session, &command) {
+                Ok(outcome) => {
+                    return write_rxdb_control_command_outcome(
+                        root,
+                        &command,
+                        "completed",
+                        None,
+                        Some("completed"),
+                        outcome,
+                    );
+                }
+                Err(error) => {
+                    let _ = write_rxdb_control_command_outcome(
+                        root,
+                        &command,
+                        "failed",
+                        None,
                         Some("failed"),
                         serde_json::json!({
                             "ok": false,
@@ -16457,7 +17791,13 @@ pub fn accept_rxdb_business_command_with_origin(
             );
         }
         "ctox.mailserver.get_config" => {
-            let conn = open_store(root)?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let decision =
+                workspace_policy_decision(root, &session, BusinessOsPermission::SecretsManage)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            let conn = open_mailserver_store_connection(root)?;
 
             // Get domains
             let mut stmt = conn.prepare("SELECT domain_name, dkim_selector, dkim_private_key, COALESCE(spf_record, ''), COALESCE(dmarc_record, '') FROM stalwart_domains")?;
@@ -16467,7 +17807,8 @@ pub fn accept_rxdb_business_command_with_origin(
                 Ok(serde_json::json!({
                     "domain_name": row.get::<_, String>(0)?,
                     "dkim_selector": row.get::<_, String>(1)?,
-                    "dkim_private_key": dkim_private_key,
+                    "dkim_private_key_set": !dkim_private_key.trim().is_empty(),
+                    "secret_value_revealed": false,
                     "dkim_public_key": dkim_public_key,
                     "spf_record": row.get::<_, String>(3)?,
                     "dmarc_record": row.get::<_, String>(4)?,
@@ -16532,6 +17873,23 @@ pub fn accept_rxdb_business_command_with_origin(
                 .to_string();
 
             anyhow::ensure!(!domain_name.is_empty(), "domain_name is required");
+            let session = rxdb_authenticated_session(root, &command)?;
+            let safe_command = mailserver_command_safe_command(
+                &command,
+                &session,
+                serde_json::json!({
+                    "domain_name": domain_name,
+                    "dkim_selector": dkim_selector,
+                    "dkim_private_key_provided": !dkim_private_key_opt.is_empty(),
+                    "secret_value_in_payload": false
+                }),
+            );
+            let decision =
+                workspace_policy_decision(root, &session, BusinessOsPermission::SecretsManage)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &safe_command, &decision)?
+            {
+                return Ok(outcome);
+            }
 
             // Generate private key if not provided
             let dkim_private_key = if dkim_private_key_opt.is_empty() {
@@ -16563,7 +17921,7 @@ pub fn accept_rxdb_business_command_with_origin(
             let spf_record = format!("v=spf1 mx a ip4:51.210.246.120 ~all");
             let dmarc_record = format!("v=DMARC1; p=none; rua=mailto:dmarc@{}", domain_name);
 
-            let conn = open_store(root)?;
+            let conn = open_mailserver_store_connection(root)?;
             conn.execute(
                 "INSERT OR REPLACE INTO stalwart_domains (domain_name, dkim_selector, dkim_private_key, spf_record, dmarc_record)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -16577,13 +17935,14 @@ pub fn accept_rxdb_business_command_with_origin(
                 "dkim_selector": dkim_selector,
                 "spf_record": spf_record,
                 "dmarc_record": dmarc_record,
-                "dkim_private_key": dkim_private_key,
+                "dkim_private_key_set": true,
+                "secret_value_revealed": false,
                 "dkim_public_key": dkim_public_key
             });
 
             return write_rxdb_control_command_outcome(
                 root,
-                &command,
+                &safe_command,
                 "completed",
                 None,
                 Some("completed"),
@@ -16599,8 +17958,14 @@ pub fn accept_rxdb_business_command_with_origin(
                 .trim()
                 .to_string();
             anyhow::ensure!(!domain_name.is_empty(), "domain_name is required");
+            let session = rxdb_authenticated_session(root, &command)?;
+            let decision =
+                workspace_policy_decision(root, &session, BusinessOsPermission::SecretsManage)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
 
-            let conn = open_store(root)?;
+            let conn = open_mailserver_store_connection(root)?;
             conn.execute(
                 "DELETE FROM stalwart_domains WHERE domain_name = ?1",
                 params![domain_name],
@@ -16638,12 +18003,26 @@ pub fn accept_rxdb_business_command_with_origin(
 
             anyhow::ensure!(!username.is_empty(), "username is required");
             anyhow::ensure!(!password.is_empty(), "password is required");
+            let session = rxdb_authenticated_session(root, &command)?;
+            let safe_command = mailserver_command_safe_command(
+                &command,
+                &session,
+                serde_json::json!({
+                    "username": username,
+                    "password_set": true,
+                    "secret_value_in_payload": false
+                }),
+            );
+            let decision =
+                workspace_policy_decision(root, &session, BusinessOsPermission::SecretsManage)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &safe_command, &decision)?
+            {
+                return Ok(outcome);
+            }
 
-            let db_path = root
-                .join("runtime/ctox.sqlite3")
-                .to_string_lossy()
-                .into_owned();
+            let db_path = crate::paths::core_db(root).to_string_lossy().into_owned();
             let store = ctox_mailserver::store::sqlite::SqliteStore::new(&db_path);
+            store.init()?;
             store.add_user(&username, &password)?;
 
             let outcome = serde_json::json!({
@@ -16653,7 +18032,7 @@ pub fn accept_rxdb_business_command_with_origin(
 
             return write_rxdb_control_command_outcome(
                 root,
-                &command,
+                &safe_command,
                 "completed",
                 None,
                 Some("completed"),
@@ -16669,8 +18048,14 @@ pub fn accept_rxdb_business_command_with_origin(
                 .trim()
                 .to_string();
             anyhow::ensure!(!username.is_empty(), "username is required");
+            let session = rxdb_authenticated_session(root, &command)?;
+            let decision =
+                workspace_policy_decision(root, &session, BusinessOsPermission::SecretsManage)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
 
-            let conn = open_store(root)?;
+            let conn = open_mailserver_store_connection(root)?;
             conn.execute(
                 "DELETE FROM stalwart_users WHERE username = ?1",
                 params![username],
@@ -16695,6 +18080,33 @@ pub fn accept_rxdb_business_command_with_origin(
             );
         }
         _ => {}
+    }
+    // CHOKEPOINT (DS-0.2 / H5+H9): every command type without a dedicated,
+    // already-gated arm above falls through here into record_command, which
+    // records it AND enqueues server work (create_ctox_queue_task) — previously
+    // with no authorization. The exposure is the untrusted RxDB/WebRTC data
+    // plane, so gate only ReplicatedPeer commands (TrustedLocal is the operator
+    // CLI / in-process callers, already trusted, matching rxdb_session_from_
+    // command). App-build commands carry their own AppsInstall/AppsModify gate
+    // inside record_command; every other fall-through is a record-mutating data
+    // command (source.parse, matching.*, business_os.chat.task / cv-print,
+    // documents.*), so require module-scoped DataWrite. The session is the
+    // capability-token actor, so an unprivileged / unauthenticated replicated
+    // peer (inert "user", no grant) is denied and never reaches record_command
+    // or create_ctox_queue_task.
+    if matches!(command.origin, CommandOrigin::ReplicatedPeer)
+        && app_build_command_policy_target(&command).is_none()
+    {
+        let session = rxdb_authenticated_session(root, &command)?;
+        let decision = module_policy_decision(
+            root,
+            &session,
+            BusinessOsPermission::DataWrite,
+            &command.module,
+        )?;
+        if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+            return Ok(outcome);
+        }
     }
     let accepted = record_command(root, command)?;
     Ok(serde_json::to_value(accepted)?)
@@ -21016,14 +22428,30 @@ pub fn verify_capability_role(root: &Path, token: &str) -> Option<String> {
         .map(|claims| claims.role)
 }
 
+pub fn verify_capability_actor(root: &Path, token: &str) -> Option<(String, String)> {
+    let token = token.trim();
+    if token.is_empty() {
+        return None;
+    }
+    let secret = capability_signing_secret(root).ok()?;
+    super::capability::verify_capability_token(&secret, token, now_ms() as i64)
+        .map(|claims| (claims.user_id, claims.role))
+}
+
 /// Whether server-authoritative per-collection sync authorization is enforced.
-/// Default OFF (config-gated via the runtime store, not a new ambient toggle):
-/// enforcement is a deliberate operator-enabled rollout so the browser
-/// token-binding can be verified in a live mesh before it gates any reads.
+/// Default ON: the policy matrix is deny-by-exception for admin-only
+/// collections, and browsers now carry native-signed capability tokens in the
+/// WebRTC handshake. Operators can still opt out through typed runtime config
+/// during legacy rollout, but absence of config must not leave sync fail-open.
 pub fn collection_authz_enabled(root: &Path) -> bool {
-    crate::inference::runtime_env::env_or_config(root, "CTOX_BUSINESS_OS_COLLECTION_AUTHZ")
-        .as_deref()
-        == Some("1")
+    !matches!(
+        crate::inference::runtime_env::env_or_config(root, "CTOX_BUSINESS_OS_COLLECTION_AUTHZ")
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("0" | "false" | "off" | "no")
+    )
 }
 
 /// Issue a capability token for an active Business OS user, binding their id to
@@ -23134,6 +24562,208 @@ fn process_documents_report_command(
     }
 }
 
+fn process_systematic_research_command(
+    root: &Path,
+    conn: &Connection,
+    command_id: &str,
+    command: &BusinessCommand,
+    queue_task: Option<&channels::QueueTaskView>,
+    reply_text: &str,
+) -> anyhow::Result<CommandAccepted> {
+    let completed_at_ms = now_ms() as i64;
+    conn.execute(
+        "UPDATE business_commands SET status = 'completed', observed_at_ms = ?2 WHERE command_id = ?1",
+        params![command_id, completed_at_ms],
+    )?;
+
+    let mut terminal_queue_task = queue_task.cloned();
+    if let Some(task) = queue_task {
+        let status_note = "business-os:terminal-success: systematic research run completed";
+        let _ = channels::update_queue_task(
+            root,
+            channels::QueueTaskUpdateRequest {
+                message_key: task.message_key.clone(),
+                route_status: Some("handled".to_string()),
+                status_note: Some(status_note.to_string()),
+                ..Default::default()
+            },
+        );
+        terminal_queue_task = channels::load_queue_task(root, &task.message_key)
+            .ok()
+            .flatten()
+            .or_else(|| Some(task.clone()));
+    }
+
+    let task_id = command
+        .record_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| first_string_field(&command.payload, &["task_id", "research_task_id"]))
+        .unwrap_or_default();
+    let task_queue_id = terminal_queue_task
+        .as_ref()
+        .map(|task| task.message_key.clone())
+        .or_else(|| find_queue_task_for_command(root, command_id));
+    let knowledge_domain = first_string_field(&command.payload, &["knowledge_domain", "domain"])
+        .or_else(|| first_string_field(&command.client_context, &["knowledge_domain", "domain"]))
+        .unwrap_or_default();
+    let reply_summary = clip_text(reply_text, 1200);
+    let result = serde_json::json!({
+        "summary": reply_summary,
+        "knowledge_domain": knowledge_domain.clone(),
+        "task_id": task_id.clone(),
+        "task_queue_id": task_queue_id.clone(),
+        "completed_at_ms": completed_at_ms
+    });
+
+    if !task_id.is_empty() {
+        let mut task_payload = load_rxdb_collection_record(root, "research_tasks", &task_id)?
+            .unwrap_or_else(|| {
+                serde_json::json!({
+                    "id": task_id,
+                    "title": first_string_field(&command.payload, &["task_title", "title"]).unwrap_or_else(|| command_title(command)),
+                    "status": "ready",
+                    "knowledge_domain": knowledge_domain,
+                    "payload": {},
+                    "created_at_ms": completed_at_ms,
+                    "updated_at_ms": completed_at_ms
+                })
+            });
+        if let Some(object) = task_payload.as_object_mut() {
+            object.insert("status".to_string(), Value::String("ready".to_string()));
+            object.insert("updated_at_ms".to_string(), Value::from(completed_at_ms));
+            object
+                .entry("knowledge_domain".to_string())
+                .or_insert_with(|| Value::String(knowledge_domain.clone()));
+            let payload = object
+                .entry("payload".to_string())
+                .or_insert_with(|| serde_json::json!({}));
+            if let Some(payload_object) = payload.as_object_mut() {
+                payload_object.insert("last_run".to_string(), result.clone());
+            }
+        }
+        upsert_business_record(
+            conn,
+            "research_tasks",
+            &task_id,
+            completed_at_ms,
+            task_payload.clone(),
+        )?;
+        upsert_rxdb_collection_record(
+            root,
+            "research_tasks",
+            &task_id,
+            completed_at_ms,
+            task_payload,
+        )?;
+    }
+
+    let (run_id, mut run_payload) = find_rxdb_collection_record_by_string_field(
+        root,
+        "research_runs",
+        "command_id",
+        command_id,
+    )?
+    .unwrap_or_else(|| {
+        (
+            format!("research_run_{completed_at_ms}"),
+            serde_json::json!({
+                "task_id": task_id.clone(),
+                "status": "queued",
+                "command_id": command_id,
+                "task_queue_id": task_queue_id.clone(),
+                "identified_count": 0,
+                "accepted_count": 0,
+                "used_count": 0,
+                "payload": {},
+                "created_at_ms": completed_at_ms,
+                "updated_at_ms": completed_at_ms
+            }),
+        )
+    });
+    if let Some(object) = run_payload.as_object_mut() {
+        object.insert("id".to_string(), Value::String(run_id.clone()));
+        object.insert("task_id".to_string(), Value::String(task_id.clone()));
+        object.insert("status".to_string(), Value::String("completed".to_string()));
+        object.insert("command_id".to_string(), Value::String(command_id.to_string()));
+        if let Some(task_queue_id) = task_queue_id.as_deref() {
+            object.insert(
+                "task_queue_id".to_string(),
+                Value::String(task_queue_id.to_string()),
+            );
+        }
+        object.insert("updated_at_ms".to_string(), Value::from(completed_at_ms));
+        let payload = object
+            .entry("payload".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        if let Some(payload_object) = payload.as_object_mut() {
+            payload_object.insert("result".to_string(), result.clone());
+        }
+    }
+    upsert_business_record(
+        conn,
+        "research_runs",
+        &run_id,
+        completed_at_ms,
+        run_payload.clone(),
+    )?;
+    upsert_rxdb_collection_record(
+        root,
+        "research_runs",
+        &run_id,
+        completed_at_ms,
+        run_payload,
+    )?;
+
+    let command_payload = serde_json::json!({
+        "id": command_id,
+        "command_id": command_id,
+        "module": command.module.clone(),
+        "command_type": command.command_type.clone(),
+        "record_id": command.record_id.clone().unwrap_or_default(),
+        "status": "completed",
+        "inbound_channel": command_inbound_channel(command),
+        "task_id": task_queue_id,
+        "task_status": "completed",
+        "payload": command.payload.clone(),
+        "client_context": command.client_context.clone(),
+        "result": result,
+        "updated_at_ms": completed_at_ms
+    });
+    upsert_business_record(
+        conn,
+        "business_commands",
+        command_id,
+        completed_at_ms,
+        command_payload.clone(),
+    )?;
+    upsert_rxdb_collection_record(
+        root,
+        "business_commands",
+        command_id,
+        completed_at_ms,
+        command_payload,
+    )?;
+    refresh_queue_task_projection(
+        root,
+        conn,
+        command_id,
+        command,
+        terminal_queue_task.as_ref().or(queue_task),
+        completed_at_ms,
+    )?;
+
+    Ok(CommandAccepted {
+        ok: true,
+        command_id: command_id.to_string(),
+        status: "completed",
+        task_id: task_queue_id,
+        task_status: Some("completed".to_string()),
+    })
+}
+
 pub fn update_ctox_task(
     root: &Path,
     session: &BusinessOsSession,
@@ -23779,17 +25409,35 @@ fn is_documents_report_command(command: &BusinessCommand) -> bool {
             .unwrap_or(false)
 }
 
+fn is_systematic_research_command(command: &BusinessCommand) -> bool {
+    command.module == "research" && command.command_type == "research.systematic.run"
+}
+
 /// A `cv-print-builder` chat task whose `writeback_contract` asks the daemon to
 /// apply the parsed profile as a new `document_versions` version. Generic shape:
 /// any module can request a versioned-document writeback the same way.
 fn is_cv_print_parse_command(command: &BusinessCommand) -> bool {
-    command.module == "cv-print-builder"
-        && command
-            .payload
-            .get("writeback_contract")
-            .and_then(|value| value.get("command_type"))
-            .and_then(Value::as_str)
-            == Some("ctox.cv_print.apply_parse")
+    let writeback_is_cv = command
+        .payload
+        .get("writeback_contract")
+        .and_then(|value| value.get("command_type"))
+        .and_then(Value::as_str)
+        == Some("ctox.cv_print.apply_parse");
+    let skill_is_cv = first_string_field(&command.payload, &["skill", "skill_id"])
+        .or_else(|| first_string_field(&command.client_context, &["skill", "skill_id"]))
+        .as_deref()
+        == Some("ctox-cv-print-parser");
+    let module_is_cv = command.module == "cv-print-builder"
+        || first_string_field(&command.payload, &["source_module", "module", "module_id"])
+            .or_else(|| {
+                first_string_field(
+                    &command.client_context,
+                    &["source_module", "module", "module_id"],
+                )
+            })
+            .as_deref()
+            == Some("cv-print-builder");
+    writeback_is_cv || (module_is_cv && skill_is_cv)
 }
 
 /// Extract the first complete JSON object from a skill reply. The skill is
@@ -23863,6 +25511,7 @@ struct CvPrintWritebackResult {
 /// the `documents` record. Writes the generic `business_records` store; the
 /// `rxdb_peer` projection loop replicates both collections to the browser.
 fn writeback_cv_print_parse(
+    root: &Path,
     conn: &Connection,
     command_id: &str,
     command: &BusinessCommand,
@@ -23891,6 +25540,17 @@ fn writeback_cv_print_parse(
         first_string_field(&command.payload, &["source_file_id"]).unwrap_or_default();
 
     // Normalize the envelope so downstream UI invariants always hold.
+    let filename = first_string_field(&command.payload, &["filename"]).unwrap_or_default();
+    let generation_id =
+        first_string_field(&command.payload, &["generation_id"]).unwrap_or_default();
+    let mime_type = first_string_field(&command.payload, &["mime_type"])
+        .unwrap_or_else(|| "application/pdf".to_string());
+    let sha256 = first_string_field(&command.payload, &["sha256"]).unwrap_or_default();
+    let size_bytes = command
+        .payload
+        .get("size_bytes")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
     if let Some(obj) = model_json.as_object_mut() {
         obj.insert("schema".to_string(), Value::String(expected_schema));
         let workflow = obj
@@ -23898,6 +25558,61 @@ fn writeback_cv_print_parse(
             .or_insert_with(|| Value::Object(Default::default()));
         if let Some(workflow_obj) = workflow.as_object_mut() {
             workflow_obj.insert("phase".to_string(), Value::String("review".to_string()));
+            workflow_obj.insert("view_mode".to_string(), Value::String("split".to_string()));
+            workflow_obj.insert(
+                "command_id".to_string(),
+                Value::String(command_id.to_string()),
+            );
+        }
+        let source = obj
+            .entry("source".to_string())
+            .or_insert_with(|| Value::Object(Default::default()));
+        if let Some(source_obj) = source.as_object_mut() {
+            if !source_file_id.is_empty() {
+                source_obj.insert(
+                    "desktop_file_id".to_string(),
+                    Value::String(source_file_id.clone()),
+                );
+            }
+            if !generation_id.is_empty() {
+                source_obj.insert("generation_id".to_string(), Value::String(generation_id));
+            }
+            if !filename.is_empty() {
+                source_obj.insert("filename".to_string(), Value::String(filename.clone()));
+            }
+            source_obj.insert("mime_type".to_string(), Value::String(mime_type));
+            if size_bytes > 0 {
+                source_obj.insert(
+                    "size_bytes".to_string(),
+                    Value::Number(serde_json::Number::from(size_bytes)),
+                );
+            }
+            if !sha256.is_empty() {
+                source_obj.insert("sha256".to_string(), Value::String(sha256));
+            }
+        }
+        let print = obj
+            .entry("print".to_string())
+            .or_insert_with(|| Value::Object(Default::default()));
+        if let Some(print_obj) = print.as_object_mut() {
+            print_obj
+                .entry("template".to_string())
+                .or_insert_with(|| Value::String("minimal".to_string()));
+            print_obj
+                .entry("anonymize".to_string())
+                .or_insert(Value::Bool(false));
+            print_obj
+                .entry("showLogo".to_string())
+                .or_insert(Value::Bool(true));
+            print_obj
+                .entry("logoDataUrl".to_string())
+                .or_insert_with(|| Value::String(String::new()));
+            print_obj
+                .entry("preset".to_string())
+                .or_insert_with(|| Value::String("standard".to_string()));
+            print_obj
+                .entry("overrides".to_string())
+                .or_insert_with(|| Value::Object(Default::default()));
         }
     }
 
@@ -23950,7 +25665,14 @@ fn writeback_cv_print_parse(
         "created_at_ms": now,
         "updated_at_ms": now
     });
-    upsert_business_record(conn, "document_versions", &version_id, now, version_payload)?;
+    upsert_business_record(
+        conn,
+        "document_versions",
+        &version_id,
+        now,
+        version_payload.clone(),
+    )?;
+    upsert_rxdb_collection_record(root, "document_versions", &version_id, now, version_payload)?;
 
     // Patch the existing document, preserving fields the browser already set.
     let mut document_payload = conn
@@ -23982,7 +25704,14 @@ fn writeback_cv_print_parse(
             );
         }
     }
-    upsert_business_record(conn, "documents", &document_id, now, document_payload)?;
+    upsert_business_record(
+        conn,
+        "documents",
+        &document_id,
+        now,
+        document_payload.clone(),
+    )?;
+    upsert_rxdb_collection_record(root, "documents", &document_id, now, document_payload)?;
 
     Ok(CvPrintWritebackResult {
         document_id,
@@ -24000,7 +25729,7 @@ fn process_cv_print_parse_command(
     queue_task: Option<&channels::QueueTaskView>,
     reply_text: Option<&str>,
 ) -> anyhow::Result<CommandAccepted> {
-    match writeback_cv_print_parse(conn, command_id, command, reply_text) {
+    match writeback_cv_print_parse(root, conn, command_id, command, reply_text) {
         Ok(result) => {
             let completed_at_ms = now_ms() as i64;
             conn.execute(
@@ -24276,6 +26005,7 @@ pub fn is_ats_mutating_command(command_type: &str) -> bool {
             | "ats.leistungsnachweis.signoff"
             | "ats.signature.request"
             | "ats.signature.sign"
+            | "ats.credential.verify"
             | "ats.interview.transcribe"
             | "ats.subject.export"
             | "ats.subject.erase"
@@ -25038,6 +26768,20 @@ fn handle_ats_mutating_command(
                 .context("ats.signature.sign requires request_id")?;
             let signer_id = first_string_field(p, &["signer_id"])
                 .context("ats.signature.sign requires signer_id")?;
+            // H11: signing must be performed by an authenticated actor; the event
+            // is recorded as attributable (signed_by_actor_id) and integrity-
+            // stamped (signed_artifact_id). NOTE: this still records an operator
+            // acting on a signer's behalf — true signer self-authentication needs
+            // a server-side signer identity model and is a separate change.
+            let actor_id = session
+                .user
+                .as_ref()
+                .map(|user| user.id.clone())
+                .unwrap_or_default();
+            anyhow::ensure!(
+                !actor_id.is_empty() && actor_id != "rxdb-command",
+                "ats.signature.sign requires an authenticated actor"
+            );
             let existing = conn
                 .query_row(
                     "SELECT payload_json FROM business_records WHERE collection = 'signature_requests' AND record_id = ?1 AND deleted = 0",
@@ -25047,15 +26791,26 @@ fn handle_ats_mutating_command(
                 .optional()?
                 .context("signature request not found")?;
             let mut payload: Value = serde_json::from_str(&existing)?;
+            let mut signed_any = false;
             if let Some(signers) = payload.get_mut("signers").and_then(Value::as_array_mut) {
                 for signer in signers.iter_mut() {
                     if signer.get("id").and_then(Value::as_str) == Some(signer_id.as_str()) {
                         if let Some(obj) = signer.as_object_mut() {
                             obj.insert("state".to_string(), Value::String("signed".to_string()));
+                            obj.insert(
+                                "signed_by_actor_id".to_string(),
+                                Value::String(actor_id.clone()),
+                            );
+                            obj.insert("signed_at_ms".to_string(), serde_json::json!(now));
                         }
+                        signed_any = true;
                     }
                 }
             }
+            anyhow::ensure!(
+                signed_any,
+                "signer_id does not match any signer on this request"
+            );
             let signers = payload
                 .get("signers")
                 .and_then(Value::as_array)
@@ -25067,8 +26822,27 @@ fn handle_ats_mutating_command(
                 payload.get("sent_at_ms").and_then(Value::as_i64),
                 now,
             );
+            // Immutable signed artifact (content hash) for non-repudiation; the
+            // signoff / AÜG path can require this on a completed request.
+            let artifact_id = format!(
+                "sig_{}",
+                hex_sha256(
+                    format!(
+                        "{request_id}|{actor_id}|{now}|{}",
+                        serde_json::to_string(&signers).unwrap_or_default()
+                    )
+                    .as_bytes()
+                )
+            );
+            let completed = status == "completed";
             if let Some(obj) = payload.as_object_mut() {
                 obj.insert("status".to_string(), Value::String(status.to_string()));
+                if completed {
+                    obj.insert(
+                        "signed_artifact_id".to_string(),
+                        Value::String(artifact_id.clone()),
+                    );
+                }
             }
             upsert_business_record(&conn, "signature_requests", &request_id, now, payload)?;
             record_ats_governance_event(
@@ -25076,10 +26850,72 @@ fn handle_ats_mutating_command(
                 command,
                 &actor,
                 "business_os.ats.signature_signed",
-                serde_json::json!({ "request_id": request_id, "signer_id": signer_id, "status": status }),
+                serde_json::json!({
+                    "request_id": request_id,
+                    "signer_id": signer_id,
+                    "status": status,
+                    "signed_by_actor_id": actor_id,
+                    "signed_artifact_id": completed.then(|| artifact_id.clone()),
+                }),
                 now,
             )?;
-            Ok(serde_json::json!({ "ok": true, "request_id": request_id, "status": status }))
+            Ok(serde_json::json!({
+                "ok": true,
+                "request_id": request_id,
+                "status": status,
+                "signed_artifact_id": completed.then_some(artifact_id),
+            }))
+        }
+        "ats.credential.verify" => {
+            // H12: the deployment / AÜG gate trusts the credential `verified`
+            // flag, but no native command ever set it (the browser inserted
+            // verified:false and there was no server-gated verification path).
+            // This is the native verify — routed through is_ats_mutating_command
+            // -> rxdb_command_session, so it is chef/admin + capability-token
+            // gated — that stamps verified=true and the authenticated verifier.
+            let credential_id = first_string_field(p, &["credential_id", "record_id", "id"])
+                .context("ats.credential.verify requires credential_id")?;
+            let verified_by = session
+                .user
+                .as_ref()
+                .map(|user| user.id.clone())
+                .unwrap_or_default();
+            anyhow::ensure!(
+                !verified_by.is_empty() && verified_by != "rxdb-command",
+                "ats.credential.verify requires an authenticated verifier"
+            );
+            let existing = conn
+                .query_row(
+                    "SELECT payload_json FROM business_records WHERE collection = 'business_credentials' AND record_id = ?1 AND deleted = 0",
+                    params![credential_id.as_str()],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+                .context("credential not found")?;
+            let mut payload: Value = serde_json::from_str(&existing)?;
+            if let Some(obj) = payload.as_object_mut() {
+                obj.insert("verified".to_string(), Value::Bool(true));
+                obj.insert(
+                    "verified_by".to_string(),
+                    Value::String(verified_by.clone()),
+                );
+                obj.insert("verified_at_ms".to_string(), serde_json::json!(now));
+            }
+            upsert_business_record(&conn, "business_credentials", &credential_id, now, payload)?;
+            record_ats_governance_event(
+                &conn,
+                command,
+                &actor,
+                "business_os.ats.credential_verified",
+                serde_json::json!({ "credential_id": credential_id, "verified_by": verified_by }),
+                now,
+            )?;
+            Ok(serde_json::json!({
+                "ok": true,
+                "credential_id": credential_id,
+                "verified": true,
+                "verified_by": verified_by,
+            }))
         }
         "ats.placement.early_leave" => {
             // Guarantee/replacement: if the candidate leaves within the guarantee
@@ -25549,7 +27385,122 @@ fn business_chat_payload(
         messages.drain(0..keep_from);
     }
 
+    update_business_chat_tracking_fields(obj);
     Ok(chat)
+}
+
+fn update_business_chat_tracking_fields(obj: &mut serde_json::Map<String, Value>) {
+    let summary = business_chat_tracking_summary(
+        obj.get("messages")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]),
+    );
+    obj.insert("tracking_active".to_string(), Value::Bool(summary.active));
+    obj.insert("tracking_status".to_string(), Value::String(summary.status));
+    obj.insert(
+        "tracking_id".to_string(),
+        Value::String(summary.tracking_id),
+    );
+    obj.insert(
+        "tracking_command_id".to_string(),
+        Value::String(summary.command_id),
+    );
+    obj.insert(
+        "tracking_task_id".to_string(),
+        Value::String(summary.task_id),
+    );
+    obj.insert(
+        "tracking_message_id".to_string(),
+        Value::String(summary.message_id),
+    );
+}
+
+struct BusinessChatTrackingSummary {
+    active: bool,
+    status: String,
+    tracking_id: String,
+    command_id: String,
+    task_id: String,
+    message_id: String,
+}
+
+fn business_chat_tracking_summary(messages: &[Value]) -> BusinessChatTrackingSummary {
+    for message in messages.iter().rev() {
+        let Some(object) = message.as_object() else {
+            continue;
+        };
+        let trackable = object
+            .get("trackable")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let command_id = object
+            .get("commandId")
+            .or_else(|| object.get("command_id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_default()
+            .to_string();
+        let task_id = object
+            .get("taskId")
+            .or_else(|| object.get("task_id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_default()
+            .to_string();
+        if command_id.is_empty() && task_id.is_empty() {
+            continue;
+        }
+        let status = object
+            .get("status")
+            .and_then(Value::as_str)
+            .map(normalize_business_chat_tracking_status)
+            .unwrap_or_else(|| "queued".to_string());
+        let message_id = object
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_default()
+            .to_string();
+        return BusinessChatTrackingSummary {
+            active: trackable && business_chat_tracking_status_is_active(&status),
+            status,
+            tracking_id: if task_id.is_empty() {
+                command_id.clone()
+            } else {
+                task_id.clone()
+            },
+            command_id,
+            task_id,
+            message_id,
+        };
+    }
+    BusinessChatTrackingSummary {
+        active: false,
+        status: String::new(),
+        tracking_id: String::new(),
+        command_id: String::new(),
+        task_id: String::new(),
+        message_id: String::new(),
+    }
+}
+
+fn normalize_business_chat_tracking_status(status: &str) -> String {
+    match status.trim().to_lowercase().as_str() {
+        "accepted" | "pending" | "pending_sync" | "waiting" => "queued".to_string(),
+        "processing" | "executing" | "active" | "working" | "leased" => "running".to_string(),
+        "success" | "done" | "erledigt" => "completed".to_string(),
+        "error" => "failed".to_string(),
+        value if value.is_empty() => "queued".to_string(),
+        value => value.to_string(),
+    }
+}
+
+fn business_chat_tracking_status_is_active(status: &str) -> bool {
+    matches!(status, "queued" | "running")
 }
 
 fn expected_docx_filename(command: &BusinessCommand) -> Option<String> {
@@ -26152,6 +28103,7 @@ fn apply_queue_projection_status_fields(
 fn upsert_command_projection_from_queue_status(
     root: &Path,
     conn: &Connection,
+    mut rxdb_writers: Option<&mut RxdbProjectionWriterCache>,
     command_id: &str,
     task: Option<&channels::QueueTaskView>,
     route_status: &str,
@@ -26237,13 +28189,17 @@ fn upsert_command_projection_from_queue_status(
         updated_at_ms,
         payload.clone(),
     )?;
-    upsert_rxdb_collection_record(
-        root,
-        "business_commands",
-        command_id,
-        updated_at_ms,
-        payload,
-    )?;
+    if let Some(writers) = rxdb_writers.as_deref_mut() {
+        writers.upsert("business_commands", command_id, updated_at_ms, payload)?;
+    } else {
+        upsert_rxdb_collection_record(
+            root,
+            "business_commands",
+            command_id,
+            updated_at_ms,
+            payload,
+        )?;
+    }
     Ok(())
 }
 
@@ -26300,6 +28256,7 @@ fn repair_inline_payload_artifacts(
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
     let mut changed_count = 0usize;
+    let mut rxdb_writers = RxdbProjectionWriterCache::new(root);
     for (collection, record_id, payload_json) in rows {
         let mut payload = match serde_json::from_str::<Value>(&payload_json) {
             Ok(payload) => payload,
@@ -26327,7 +28284,7 @@ fn repair_inline_payload_artifacts(
                 updated_at_ms,
                 payload.clone(),
             )?;
-            upsert_rxdb_collection_record(root, &collection, &record_id, updated_at_ms, payload)?;
+            rxdb_writers.upsert(&collection, &record_id, updated_at_ms, payload)?;
         }
     }
     Ok(changed_count)
@@ -26520,6 +28477,10 @@ fn materialize_business_chat_attachments(
 }
 
 fn business_chat_attachment_refs(command: &BusinessCommand) -> Vec<Value> {
+    if is_cv_print_parse_command(command) {
+        return Vec::new();
+    }
+
     let mut refs = Vec::new();
     for container in [&command.payload, &command.client_context] {
         for key in ["attachment_refs", "attachments"] {
@@ -26622,7 +28583,7 @@ fn materialize_business_chat_attachment(
         })
         .unwrap_or(BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME);
     anyhow::ensure!(
-        content_hash_scheme == BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME,
+        is_supported_business_os_attachment_content_hash_scheme(content_hash_scheme),
         "Business OS attachment `{file_id}` uses unsupported content hash scheme `{content_hash_scheme}`"
     );
     let size_bytes = file_doc
@@ -26702,6 +28663,14 @@ fn materialize_business_chat_attachment(
         virtual_path,
         local_path: local_path.to_string_lossy().into_owned(),
     })
+}
+
+fn is_supported_business_os_attachment_content_hash_scheme(scheme: &str) -> bool {
+    matches!(
+        scheme,
+        BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME
+            | BUSINESS_OS_LEGACY_SHA256_CONTENT_HASH_SCHEME
+    )
 }
 
 fn attachment_ref_string(value: &Value, keys: &[&str]) -> Option<String> {
@@ -26882,6 +28851,172 @@ fn materialized_attachment_filename(file_id: &str, name: &str) -> String {
     )
 }
 
+fn cv_print_pdf_text_prompt_enrichment(
+    root: &Path,
+    command_id: &str,
+    command: &BusinessCommand,
+) -> anyhow::Result<Option<String>> {
+    if !is_cv_print_parse_command(command) {
+        return Ok(None);
+    }
+
+    let source_file = command.payload.get("source_file").unwrap_or(&Value::Null);
+    let file_id = first_string_field(&command.payload, &["source_file_id", "file_id"])
+        .or_else(|| first_string_field(source_file, &["file_id", "fileId"]))
+        .context("cv-print parse command is missing source_file_id")?;
+    let generation_id = first_string_field(&command.payload, &["generation_id", "generationId"])
+        .or_else(|| first_string_field(source_file, &["generation_id", "generationId"]));
+    let declared_size = rxdb_desktop_file_document(root, &file_id)
+        .ok()
+        .and_then(|doc| doc.get("size_bytes").and_then(Value::as_u64))
+        .unwrap_or(0);
+    anyhow::ensure!(
+        declared_size <= CV_PRINT_PDF_MAX_BYTES,
+        "cv-print source PDF {file_id} is too large ({declared_size} bytes, max {CV_PRINT_PDF_MAX_BYTES})"
+    );
+
+    let materialized = materialize_business_chat_attachment(
+        root,
+        command_id,
+        &serde_json::json!({
+            "kind": "desktop_file",
+            "file_id": file_id,
+            "generation_id": generation_id.clone(),
+        }),
+        &file_id,
+        generation_id.as_deref(),
+    )?;
+    let extracted = extract_cv_pdf_text(Path::new(&materialized.local_path))
+        .with_context(|| format!("failed to extract CV PDF text for `{}`", materialized.name))?;
+    let extracted =
+        truncate_text_preserve(&extracted, CV_PRINT_PDF_TEXT_MAX_CHARS).replace("```", "'''");
+
+    Ok(Some(format!(
+        r#"
+
+CV PDF extracted text:
+The CTOX daemon reconstructed this PDF from Business OS desktop_files/desktop_file_chunks and extracted bounded text before queueing the skill. Use this text as the source of truth for the structured CV profile. Do not reopen or inline the PDF unless the extracted text is obviously corrupt.
+- source_file_id: {file_id}
+- filename: {}
+- mime_type: {}
+- size_bytes: {}
+- sha256: {}
+
+```text
+{extracted}
+```
+"#,
+        materialized.name,
+        materialized.mime_type,
+        materialized.size_bytes,
+        materialized.content_hash
+    )))
+}
+
+fn extract_cv_pdf_text(path: &Path) -> anyhow::Result<String> {
+    let mut extraction_errors = Vec::new();
+    match std::process::Command::new("pdftotext")
+        .args(["-layout", "-nopgbrk", "-enc", "UTF-8"])
+        .arg(path)
+        .arg("-")
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            let text = normalize_extracted_pdf_text(&String::from_utf8_lossy(&output.stdout));
+            if !text.trim().is_empty() {
+                return Ok(text);
+            }
+            extraction_errors.push("pdftotext returned empty text".to_string());
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            extraction_errors.push(format!(
+                "pdftotext exited with {}: {}",
+                output.status,
+                stderr.trim()
+            ));
+        }
+        Err(err) => {
+            extraction_errors.push(format!("pdftotext unavailable: {err}"));
+        }
+    }
+
+    let bytes = fs::read(path)
+        .with_context(|| format!("failed to read materialized PDF {}", path.display()))?;
+    let fallback = normalize_extracted_pdf_text(&extract_pdf_literal_text(&bytes));
+    if !fallback.trim().is_empty() {
+        return Ok(fallback);
+    }
+    anyhow::bail!(
+        "PDF text extraction produced no usable text ({})",
+        extraction_errors.join("; ")
+    )
+}
+
+fn normalize_extracted_pdf_text(value: &str) -> String {
+    let mut lines = Vec::new();
+    let mut previous_blank = false;
+    for raw_line in value.lines() {
+        let line = raw_line
+            .chars()
+            .filter_map(|ch| {
+                if ch == '\t' || ch == ' ' || !ch.is_control() {
+                    Some(ch)
+                } else {
+                    None
+                }
+            })
+            .collect::<String>();
+        let line = line.trim_end().to_string();
+        if line.trim().is_empty() {
+            if !previous_blank {
+                lines.push(String::new());
+            }
+            previous_blank = true;
+        } else {
+            lines.push(line);
+            previous_blank = false;
+        }
+    }
+    lines.join("\n").trim().to_string()
+}
+
+fn extract_pdf_literal_text(bytes: &[u8]) -> String {
+    let raw = String::from_utf8_lossy(bytes);
+    let mut output = Vec::new();
+    let mut chars = raw.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '(' {
+            continue;
+        }
+        let mut value = String::new();
+        let mut escaped = false;
+        for inner in chars.by_ref() {
+            if escaped {
+                match inner {
+                    'n' => value.push('\n'),
+                    'r' => value.push('\n'),
+                    't' => value.push('\t'),
+                    '(' | ')' | '\\' => value.push(inner),
+                    _ => value.push(inner),
+                }
+                escaped = false;
+                continue;
+            }
+            match inner {
+                '\\' => escaped = true,
+                ')' => break,
+                _ => value.push(inner),
+            }
+        }
+        let value = value.trim();
+        if value.chars().any(char::is_alphabetic) && value.chars().count() > 1 {
+            output.push(value.to_string());
+        }
+    }
+    output.join("\n")
+}
+
 fn create_ctox_queue_task(
     root: &Path,
     command_id: &str,
@@ -26893,8 +29028,14 @@ fn create_ctox_queue_task(
         }
     }
     let attachments = materialize_business_chat_attachments(root, command_id, command)?;
+    let prompt_enrichment = cv_print_pdf_text_prompt_enrichment(root, command_id, command)?;
     let title = command_title(command);
-    let prompt = command_prompt(command_id, command, &attachments);
+    let prompt = command_prompt(
+        command_id,
+        command,
+        &attachments,
+        prompt_enrichment.as_deref(),
+    );
     let priority = command
         .payload
         .get("priority")
@@ -27016,7 +29157,12 @@ fn command_prompt(
     command_id: &str,
     command: &BusinessCommand,
     attachments: &[MaterializedBusinessChatAttachment],
+    prompt_enrichment: Option<&str>,
 ) -> String {
+    if is_cv_print_parse_command(command) {
+        return cv_print_command_prompt(command_id, command, prompt_enrichment);
+    }
+
     let instruction = command
         .payload
         .get("instruction")
@@ -27033,6 +29179,7 @@ fn command_prompt(
             command_id,
             command,
             attachments,
+            prompt_enrichment,
             &instruction,
             &required_skill_names,
         );
@@ -27058,8 +29205,9 @@ fn command_prompt(
     };
     let app_target = business_os_app_command_target_prompt_block(command);
     let attachment_manifest = business_chat_attachment_prompt_manifest(attachments);
+    let prompt_enrichment = prompt_enrichment.unwrap_or_default();
     let prompt = format!(
-        "{instruction}{required_skills}{app_target}\nBusiness OS command:\n- command_id: {command_id}\n- module: {}\n- type: {}\n- record_id: {}{attachment_manifest}\n\nFull payload and client context are stored on the Business OS command record. The JSON below is a bounded execution preview to keep the queue worker under its input limit.\n\nPayload JSON:\n{payload}\n\nClient context JSON:\n{context}",
+        "{instruction}{required_skills}{app_target}{prompt_enrichment}\nBusiness OS command:\n- command_id: {command_id}\n- module: {}\n- type: {}\n- record_id: {}{attachment_manifest}\n\nFull payload and client context are stored on the Business OS command record. The JSON below is a bounded execution preview to keep the queue worker under its input limit.\n\nPayload JSON:\n{payload}\n\nClient context JSON:\n{context}",
         command.module,
         command.command_type,
         command.record_id.as_deref().unwrap_or("")
@@ -27071,6 +29219,7 @@ fn business_os_app_command_prompt(
     command_id: &str,
     command: &BusinessCommand,
     attachments: &[MaterializedBusinessChatAttachment],
+    prompt_enrichment: Option<&str>,
     instruction: &str,
     required_skill_names: &[String],
 ) -> String {
@@ -27086,13 +29235,48 @@ fn business_os_app_command_prompt(
     let app_target = business_os_app_command_target_prompt_block(command);
     let request_summary = business_os_app_command_request_summary(command);
     let attachment_manifest = business_chat_attachment_prompt_manifest(attachments);
+    let prompt_enrichment = prompt_enrichment.unwrap_or_default();
     let prompt = format!(
-        "{instruction}{required_skills}{app_target}\nBusiness OS app request summary:\n{request_summary}\nBusiness OS command:\n- command_id: {command_id}\n- module: {}\n- type: {}\n- record_id: {}{attachment_manifest}\n\nThe full command payload and client context remain persisted on the Business OS command record. Do not copy raw client context into app code or prompts.",
+        "{instruction}{required_skills}{app_target}{prompt_enrichment}\nBusiness OS app request summary:\n{request_summary}\nBusiness OS command:\n- command_id: {command_id}\n- module: {}\n- type: {}\n- record_id: {}{attachment_manifest}\n\nThe full command payload and client context remain persisted on the Business OS command record. Do not copy raw client context into app code or prompts.",
         command.module,
         command.command_type,
         command.record_id.as_deref().unwrap_or("")
     );
     truncate_text_preserve(&prompt, BUSINESS_OS_APP_QUEUE_PROMPT_MAX_CHARS)
+}
+
+fn cv_print_command_prompt(
+    command_id: &str,
+    command: &BusinessCommand,
+    prompt_enrichment: Option<&str>,
+) -> String {
+    let instruction = command
+        .payload
+        .get("instruction")
+        .and_then(Value::as_str)
+        .or_else(|| command.payload.get("prompt").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Parse the extracted CV PDF text into a CTOX CV print profile JSON.");
+    let instruction = truncate_text_preserve(instruction, 2_400);
+    let document_id = first_string_field(&command.payload, &["document_id"])
+        .or_else(|| command.record_id.clone())
+        .unwrap_or_default();
+    let version_id = first_string_field(&command.payload, &["version_id"]).unwrap_or_default();
+    let source_file_id = first_string_field(&command.payload, &["source_file_id"])
+        .or_else(|| {
+            command
+                .payload
+                .get("source_file")
+                .and_then(|value| first_string_field(value, &["file_id", "fileId"]))
+        })
+        .unwrap_or_default();
+    let prompt_enrichment = prompt_enrichment.unwrap_or_default();
+    let prompt = format!(
+        "{instruction}{prompt_enrichment}\nBusiness OS command:\n- command_id: {command_id}\n- module: {}\n- type: {}\n- document_id: {document_id}\n- version_id: {version_id}\n- source_file_id: {source_file_id}\n\nReturn only the minified `ctox.cv_print_profile.v1` JSON. The CTOX service will persist it through `ctox.cv_print.apply_parse`.",
+        command.module, command.command_type
+    );
+    truncate_text_preserve(&prompt, 32_000)
 }
 
 const BUSINESS_OS_APP_MODULE_SKILL_NAME: &str = "business-os-app-module-development";
@@ -27683,6 +29867,16 @@ fn read_core_db_business_record(
 }
 
 fn find_queue_task_for_command(root: &Path, command_id: &str) -> Option<String> {
+    let command_id = command_id.trim();
+    if command_id.is_empty() {
+        return None;
+    }
+    if let Some(task) = channels::load_queue_task_for_business_os_command(root, command_id)
+        .ok()
+        .flatten()
+    {
+        return Some(task.message_key);
+    }
     let tasks = channels::list_queue_tasks(root, &[], 256).ok()?;
     tasks
         .into_iter()
@@ -27704,6 +29898,18 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_business_records_collection_updated
             ON business_records(collection, updated_at_ms, record_id);
+        CREATE INDEX IF NOT EXISTS idx_business_records_notes_stamp
+            ON business_records(collection, record_id, updated_at_ms, deleted);
+        CREATE INDEX IF NOT EXISTS idx_business_records_projection_stamp
+            ON business_records(collection, record_id, rev, deleted, updated_at_ms);
+        CREATE INDEX IF NOT EXISTS idx_business_records_accounting_invoices_due
+            ON business_records(
+                json_extract(payload_json, '$.state'),
+                CAST(COALESCE(json_extract(payload_json, '$.due_date_ms'), 9223372036854775807) AS INTEGER),
+                CAST(COALESCE(json_extract(payload_json, '$.open_cents'), 0) AS INTEGER),
+                record_id
+            )
+            WHERE collection = 'accounting_invoices' AND deleted = 0;
 
         CREATE TABLE IF NOT EXISTS business_documents (
             document_id TEXT PRIMARY KEY,
@@ -27788,6 +29994,11 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             client_context_json TEXT NOT NULL,
             observed_at_ms INTEGER NOT NULL
         );
+        CREATE INDEX IF NOT EXISTS idx_business_commands_documents_report_open
+            ON business_commands(observed_at_ms, command_id)
+            WHERE module = 'documents'
+              AND command_type = 'research.systematic.report.create'
+              AND status NOT IN ('completed', 'failed', 'cancelled');
 
         CREATE TABLE IF NOT EXISTS business_users (
             user_id TEXT PRIMARY KEY,
@@ -28143,6 +30354,205 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn local_markdown_notes_source_stamp_ignores_unrelated_store_churn() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        sync_local_markdown_notes(temp.path())?;
+
+        let first = local_markdown_notes_source_stamp(temp.path())?;
+        let second = local_markdown_notes_source_stamp(temp.path())?;
+        assert_eq!(first, second);
+
+        let conn = open_store(temp.path())?;
+        upsert_business_record(
+            &conn,
+            "unrelated_notes_churn",
+            "row-1",
+            now_ms() as i64,
+            serde_json::json!({ "id": "row-1", "value": "not a note" }),
+        )?;
+        drop(conn);
+        assert_eq!(
+            local_markdown_notes_source_stamp(temp.path())?,
+            first,
+            "unrelated business_records rows must not wake the notes sync body"
+        );
+
+        let notes_dir = temp.path().join("runtime/business-os/notes");
+        let note_path = notes_dir.join("scratch.md");
+        std::fs::write(&note_path, "# Scratch\n\nchanged\n")?;
+        assert_ne!(
+            local_markdown_notes_source_stamp(temp.path())?,
+            first,
+            "markdown file metadata changes must wake the notes sync body"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn local_markdown_notes_source_stamp_uses_covering_metadata_index() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let conn = open_store(temp.path())?;
+        for idx in 0..20 {
+            let record_id = format!("note-{idx:03}");
+            upsert_business_record(
+                &conn,
+                "notes",
+                &record_id,
+                1_000 + idx,
+                serde_json::json!({
+                    "id": record_id,
+                    "title": format!("Note {idx}"),
+                    "content": "x".repeat(32_000),
+                    "updated_at_ms": 1_000 + idx
+                }),
+            )?;
+        }
+
+        let explain_sql = format!("EXPLAIN QUERY PLAN {LOCAL_MARKDOWN_NOTES_DB_STAMP_SQL}");
+        let mut stmt = conn.prepare(&explain_sql)?;
+        let details = stmt
+            .query_map([], |row| row.get::<_, String>(3))?
+            .collect::<Result<Vec<_>, _>>()?;
+        assert!(
+            details.iter().any(|detail| {
+                detail.contains("USING COVERING INDEX idx_business_records_notes_stamp")
+            }),
+            "notes idle stamp must stay on the covering metadata index, got {details:#?}"
+        );
+        drop(stmt);
+        drop(conn);
+
+        let first = local_markdown_notes_source_stamp(temp.path())?;
+        assert_eq!(first.note_count, 20);
+        assert_eq!(first.latest_note_updated_at_ms, 1_019);
+
+        let conn = open_store(temp.path())?;
+        upsert_business_record(
+            &conn,
+            "notes",
+            "note-010",
+            30_000,
+            serde_json::json!({
+                "id": "note-010",
+                "title": "Note 10",
+                "content": "changed",
+                "updated_at_ms": 30_000
+            }),
+        )?;
+        drop(conn);
+        let second = local_markdown_notes_source_stamp(temp.path())?;
+        assert_ne!(
+            first, second,
+            "metadata-only stamp must still wake notes sync on real note updates"
+        );
+        assert_eq!(second.note_count, 20);
+        assert_eq!(second.latest_note_updated_at_ms, 30_000);
+        Ok(())
+    }
+
+    #[test]
+    fn business_records_projection_stamp_uses_covering_metadata_index() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let collections = vec![
+            "support_notes".to_string(),
+            "business_commands".to_string(),
+            "notes".to_string(),
+        ];
+        let conn = open_store(temp.path())?;
+        for collection in &collections {
+            for idx in 0..3 {
+                let record_id = format!("{collection}-{idx}");
+                let updated_at_ms = 5_000 + idx;
+                upsert_business_record(
+                    &conn,
+                    collection,
+                    &record_id,
+                    updated_at_ms,
+                    serde_json::json!({
+                        "id": record_id,
+                        "updated_at_ms": updated_at_ms,
+                        "payload": "x".repeat(64_000)
+                    }),
+                )?;
+            }
+        }
+        upsert_business_record(
+            &conn,
+            "unrelated_projection_stamp_noise",
+            "noise-1",
+            99_000,
+            serde_json::json!({
+                "id": "noise-1",
+                "updated_at_ms": 99_000,
+                "payload": "x".repeat(64_000)
+            }),
+        )?;
+
+        let sql = business_records_projection_stamp_query(collections.len())
+            .context("projection stamp query sql")?;
+        let explain_sql = format!("EXPLAIN QUERY PLAN {sql}");
+        let mut stmt = conn.prepare(&explain_sql)?;
+        let details = stmt
+            .query_map(
+                params_from_iter(collections.iter().map(String::as_str)),
+                |row| row.get::<_, String>(3),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        assert!(
+            details.iter().any(|detail| {
+                detail.contains("USING COVERING INDEX idx_business_records_projection_stamp")
+            }),
+            "business-record idle stamp must stay on the covering metadata index, got {details:#?}"
+        );
+        drop(stmt);
+        drop(conn);
+
+        let first = business_records_projection_stamp(temp.path(), &collections)?;
+        assert_eq!(first.row_count, 9);
+        assert_eq!(first.latest_updated_at_ms, 5_002);
+
+        let conn = open_store(temp.path())?;
+        upsert_business_record(
+            &conn,
+            "unrelated_projection_stamp_noise",
+            "noise-2",
+            100_000,
+            serde_json::json!({
+                "id": "noise-2",
+                "updated_at_ms": 100_000
+            }),
+        )?;
+        drop(conn);
+        assert_eq!(
+            business_records_projection_stamp(temp.path(), &collections)?,
+            first,
+            "unrelated collections must not wake the generic projection"
+        );
+
+        let conn = open_store(temp.path())?;
+        upsert_business_record(
+            &conn,
+            "notes",
+            "notes-1",
+            30_000,
+            serde_json::json!({
+                "id": "notes-1",
+                "updated_at_ms": 30_000,
+                "payload": "changed"
+            }),
+        )?;
+        drop(conn);
+        let second = business_records_projection_stamp(temp.path(), &collections)?;
+        assert_ne!(
+            first, second,
+            "tracked collection changes must still wake the generic projection"
+        );
+        assert_eq!(second.row_count, 9);
+        assert_eq!(second.latest_updated_at_ms, 30_000);
+        Ok(())
     }
 
     #[test]
@@ -28709,6 +31119,439 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn collection_authz_is_enabled_by_default_with_explicit_runtime_opt_out() -> anyhow::Result<()>
+    {
+        let root = tempfile::tempdir()?;
+        assert!(
+            collection_authz_enabled(root.path()),
+            "collection authz must be default-on when runtime config is absent"
+        );
+
+        let mut env = std::collections::BTreeMap::new();
+        env.insert(
+            "CTOX_BUSINESS_OS_COLLECTION_AUTHZ".to_string(),
+            "0".to_string(),
+        );
+        crate::inference::runtime_env::save_runtime_env_map(root.path(), &env)?;
+        assert!(
+            !collection_authz_enabled(root.path()),
+            "explicit typed runtime opt-out must disable collection authz"
+        );
+        Ok(())
+    }
+
+    // DS-0.2 / H5+H9: command types without a dedicated, already-gated arm
+    // (source.parse, matching.*, business_os.chat.task, documents.*) fall
+    // through to record_command, which records them AND enqueues server work.
+    // The chokepoint requires module-scoped DataWrite, so an unprivileged /
+    // unauthenticated replicated peer cannot create records or queue work.
+    #[test]
+    fn data_write_chokepoint_gates_fallthrough_data_commands() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        seed_business_user(root.path(), "chef1", "chef")?;
+        seed_business_user(root.path(), "user1", "user")?;
+        let now = now_ms() as i64;
+
+        let cmd = |cid: &str, ctx: Value| {
+            serde_json::json!({
+                "id": cid,
+                "command_id": cid,
+                "module": "matching",
+                "command_type": "source.parse",
+                "payload": {},
+                "client_context": ctx,
+            })
+        };
+        let is_failed =
+            |outcome: &Value| outcome.get("status").and_then(Value::as_str) == Some("failed");
+        // A denied command is recorded as "failed" for audit/idempotency but is
+        // never processed ("accepted"); an allowed one reaches record_command and
+        // is stored "accepted". Asserting the stored status proves the data
+        // mutation / queue work was (not) performed.
+        let command_status = |root: &Path, cid: &str| -> anyhow::Result<Option<String>> {
+            let conn = open_store(root)?;
+            let status: Option<String> = conn
+                .query_row(
+                    "SELECT status FROM business_commands WHERE command_id = ?1",
+                    params![cid],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            Ok(status)
+        };
+
+        // Replicated peer, no token, claiming chef → inert "user", no DataWrite
+        // → policy-denied, never processed.
+        let denied = accept_rxdb_business_command_with_origin(
+            root.path(),
+            cmd("d1", serde_json::json!({ "actor": { "id": "chef1" } })),
+            CommandOrigin::ReplicatedPeer,
+        )?;
+        assert!(
+            is_failed(&denied),
+            "no-token fall-through data command must be policy-denied: {denied:?}"
+        );
+        assert_ne!(
+            command_status(root.path(), "d1")?.as_deref(),
+            Some("accepted"),
+            "denied command must not be processed/accepted"
+        );
+
+        // A user-role token still lacks DataWrite → denied.
+        let (user_token, _) = issue_business_os_capability_token(root.path(), "user1", now)?;
+        let user_denied = accept_rxdb_business_command_with_origin(
+            root.path(),
+            cmd("d2", serde_json::json!({ "capability_token": user_token })),
+            CommandOrigin::ReplicatedPeer,
+        )?;
+        assert!(
+            is_failed(&user_denied),
+            "user-role token lacks DataWrite: {user_denied:?}"
+        );
+        assert_ne!(
+            command_status(root.path(), "d2")?.as_deref(),
+            Some("accepted"),
+            "user-denied command must not be processed/accepted"
+        );
+
+        // A chef token grants DataWrite → passes the chokepoint and is accepted.
+        let (chef_token, _) = issue_business_os_capability_token(root.path(), "chef1", now)?;
+        let allowed = accept_rxdb_business_command_with_origin(
+            root.path(),
+            cmd("a1", serde_json::json!({ "capability_token": chef_token })),
+            CommandOrigin::ReplicatedPeer,
+        )?;
+        assert!(
+            !is_failed(&allowed),
+            "chef DataWrite command must pass the chokepoint: {allowed:?}"
+        );
+        assert_eq!(
+            command_status(root.path(), "a1")?.as_deref(),
+            Some("accepted"),
+            "allowed command must be accepted/processed"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn active_app_command_families_require_native_policy_gates() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        seed_business_user(root.path(), "low", "user")?;
+        seed_business_user(root.path(), "customer_writer", "user")?;
+        seed_business_user(root.path(), "outbound_writer", "user")?;
+        seed_business_user(root.path(), "support_writer", "user")?;
+
+        let actor = |id: &str| {
+            serde_json::json!({
+                "actor": {
+                    "id": id,
+                    "display_name": id,
+                    "role": "user"
+                }
+            })
+        };
+        let assert_policy_denied =
+            |outcome: &Value, permission: BusinessOsPermission, scope_id: &str| {
+                assert_eq!(outcome.get("ok").and_then(Value::as_bool), Some(false));
+                assert_eq!(
+                    outcome.get("status").and_then(Value::as_str),
+                    Some("failed")
+                );
+                assert_eq!(
+                    outcome
+                        .pointer("/result/policy_decision/permission")
+                        .and_then(Value::as_str),
+                    Some(permission.as_str())
+                );
+                assert_eq!(
+                    outcome
+                        .pointer("/result/policy_decision/scope_id")
+                        .and_then(Value::as_str),
+                    Some(scope_id)
+                );
+            };
+
+        let denied_customer = accept_rxdb_business_command(
+            root.path(),
+            serde_json::json!({
+                "id": "cmd_customer_policy_denied",
+                "command_id": "cmd_customer_policy_denied",
+                "module": "customers",
+                "command_type": "customers.account.create",
+                "record_id": "acct_policy_denied",
+                "status": "pending_sync",
+                "payload": {
+                    "account_id": "acct_policy_denied",
+                    "name": "Denied GmbH"
+                },
+                "client_context": actor("low")
+            }),
+        )?;
+        assert_policy_denied(
+            &denied_customer,
+            BusinessOsPermission::DataWrite,
+            "customers",
+        );
+        let conn = open_store(root.path())?;
+        assert!(outbound_load_record(&conn, "customer_accounts", "acct_policy_denied")?.is_none());
+        drop(conn);
+
+        seed_permission_grant(
+            root.path(),
+            "grant_customer_writer",
+            "user",
+            "customer_writer",
+            BusinessOsPermission::DataWrite,
+            "module",
+            "customers",
+        )?;
+        let allowed_customer = accept_rxdb_business_command(
+            root.path(),
+            serde_json::json!({
+                "id": "cmd_customer_policy_allowed",
+                "command_id": "cmd_customer_policy_allowed",
+                "module": "customers",
+                "command_type": "customers.account.create",
+                "record_id": "acct_policy_allowed",
+                "status": "pending_sync",
+                "payload": {
+                    "account_id": "acct_policy_allowed",
+                    "name": "Allowed GmbH"
+                },
+                "client_context": actor("customer_writer")
+            }),
+        )?;
+        assert_eq!(
+            allowed_customer.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+
+        let denied_outbound = accept_rxdb_business_command(
+            root.path(),
+            serde_json::json!({
+                "id": "cmd_outbound_policy_denied",
+                "command_id": "cmd_outbound_policy_denied",
+                "module": "outbound",
+                "command_type": "outbound.engagement.create",
+                "record_id": "eng_policy_denied",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_policy_denied",
+                    "campaign_id": "camp_policy"
+                },
+                "client_context": actor("low")
+            }),
+        )?;
+        assert_policy_denied(
+            &denied_outbound,
+            BusinessOsPermission::DataWrite,
+            "outbound",
+        );
+        let conn = open_store(root.path())?;
+        assert!(
+            outbound_load_record(&conn, "outbound_engagements", "eng_policy_denied")?.is_none()
+        );
+        drop(conn);
+
+        seed_permission_grant(
+            root.path(),
+            "grant_outbound_writer",
+            "user",
+            "outbound_writer",
+            BusinessOsPermission::DataWrite,
+            "module",
+            "outbound",
+        )?;
+        let allowed_outbound = accept_rxdb_business_command(
+            root.path(),
+            serde_json::json!({
+                "id": "cmd_outbound_policy_allowed",
+                "command_id": "cmd_outbound_policy_allowed",
+                "module": "outbound",
+                "command_type": "outbound.engagement.create",
+                "record_id": "eng_policy_allowed",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_policy_allowed",
+                    "campaign_id": "camp_policy"
+                },
+                "client_context": actor("outbound_writer")
+            }),
+        )?;
+        assert_eq!(
+            allowed_outbound.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+
+        let denied_ticket = accept_rxdb_business_command(
+            root.path(),
+            serde_json::json!({
+                "id": "cmd_ticket_policy_denied",
+                "command_id": "cmd_ticket_policy_denied",
+                "module": "tickets",
+                "command_type": "ctox.ticket.local.create",
+                "record_id": "ticket_policy_denied",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Denied ticket"
+                },
+                "client_context": actor("low")
+            }),
+        )?;
+        assert_policy_denied(
+            &denied_ticket,
+            BusinessOsPermission::SupportTriage,
+            "support",
+        );
+
+        seed_permission_grant(
+            root.path(),
+            "grant_support_writer",
+            "user",
+            "support_writer",
+            BusinessOsPermission::SupportTriage,
+            "module",
+            "support",
+        )?;
+        let allowed_ticket = accept_rxdb_business_command(
+            root.path(),
+            serde_json::json!({
+                "id": "cmd_ticket_policy_allowed",
+                "command_id": "cmd_ticket_policy_allowed",
+                "module": "tickets",
+                "command_type": "ctox.ticket.local.create",
+                "record_id": "ticket_policy_allowed",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Allowed ticket"
+                },
+                "client_context": actor("support_writer")
+            }),
+        )?;
+        assert_eq!(
+            allowed_ticket.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert!(allowed_ticket
+            .pointer("/result/ticket_key")
+            .and_then(Value::as_str)
+            .is_some());
+        Ok(())
+    }
+
+    // H12: the native ats.credential.verify command stamps verified=true and the
+    // authenticated verifier — the deployment/AÜG gate no longer trusts a flag
+    // that only the browser could set.
+    #[test]
+    fn ats_credential_verify_stamps_verified_and_verifier() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let now = now_ms() as i64;
+        {
+            let conn = open_store(root.path())?;
+            upsert_business_record(
+                &conn,
+                "business_credentials",
+                "cred-1",
+                now,
+                serde_json::json!({
+                    "id": "cred-1", "subject_id": "cand-1",
+                    "credential_type": "license", "verified": false
+                }),
+            )?;
+        }
+        let session = test_session("chef1", "chef");
+        let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("vc1".into()),
+            module: "ats".into(),
+            command_type: "ats.credential.verify".into(),
+            record_id: None,
+            payload: serde_json::json!({ "credential_id": "cred-1" }),
+            client_context: Value::Null,
+        };
+        let outcome = handle_ats_mutating_command(root.path(), &session, &command)?;
+        assert_eq!(outcome.get("verified").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            outcome.get("verified_by").and_then(Value::as_str),
+            Some("chef1")
+        );
+
+        let conn = open_store(root.path())?;
+        let stored: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'business_credentials' AND record_id = 'cred-1'",
+            [],
+            |row| row.get(0),
+        )?;
+        let v: Value = serde_json::from_str(&stored)?;
+        assert_eq!(v.get("verified").and_then(Value::as_bool), Some(true));
+        assert_eq!(v.get("verified_by").and_then(Value::as_str), Some("chef1"));
+        Ok(())
+    }
+
+    // H11: ats.signature.sign requires an authenticated actor and stamps an
+    // attributable signed_by_actor_id on the signer.
+    #[test]
+    fn ats_signature_sign_requires_actor_and_stamps_attribution() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let now = now_ms() as i64;
+        {
+            let conn = open_store(root.path())?;
+            upsert_business_record(
+                &conn,
+                "signature_requests",
+                "req-1",
+                now,
+                serde_json::json!({
+                    "id": "req-1", "document_id": "doc-1", "sent_at_ms": now,
+                    "signers": [{ "id": "s1", "state": "pending" }]
+                }),
+            )?;
+        }
+        let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("sg1".into()),
+            module: "ats".into(),
+            command_type: "ats.signature.sign".into(),
+            record_id: None,
+            payload: serde_json::json!({ "request_id": "req-1", "signer_id": "s1" }),
+            client_context: Value::Null,
+        };
+
+        // An unauthenticated actor (no session user) is rejected.
+        let anon = BusinessOsSession {
+            ok: true,
+            authenticated: true,
+            auth_required: false,
+            user: None,
+            login_url: None,
+            reason: None,
+        };
+        assert!(
+            handle_ats_mutating_command(root.path(), &anon, &command).is_err(),
+            "unauthenticated signing must be rejected"
+        );
+
+        // An authenticated actor signs and is recorded on the signer.
+        let session = test_session("chef1", "chef");
+        handle_ats_mutating_command(root.path(), &session, &command)?;
+        let conn = open_store(root.path())?;
+        let stored: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'signature_requests' AND record_id = 'req-1'",
+            [],
+            |row| row.get(0),
+        )?;
+        let v: Value = serde_json::from_str(&stored)?;
+        let signer = &v["signers"][0];
+        assert_eq!(signer.get("state").and_then(Value::as_str), Some("signed"));
+        assert_eq!(
+            signer.get("signed_by_actor_id").and_then(Value::as_str),
+            Some("chef1"),
+            "signer must record the authenticated signing actor: {v:?}"
+        );
+        Ok(())
+    }
+
     // §9.1 regression for the NON-manage-all path (finding: enforcement must also
     // cover policy-gated commands dispatched via rxdb_authenticated_session, not
     // only require_manage_all ones). A replicated peer claiming a chef id without
@@ -28988,6 +31831,49 @@ mod tests {
             Some("customer_opportunities/opp_1")
         );
         assert_eq!(decision.reason_code, "role_or_scope_denied");
+        Ok(())
+    }
+
+    #[test]
+    fn push_collection_records_batches_non_command_store_writes_in_one_transaction(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        reset_push_collection_records_store_transaction_count(root, "customer_opportunities");
+
+        let documents = (0..5)
+            .map(|idx| {
+                serde_json::json!({
+                    "id": format!("opp_{idx}"),
+                    "name": format!("Opportunity {idx}"),
+                    "updated_at_ms": 1_000 + idx,
+                })
+            })
+            .collect::<Vec<_>>();
+        let response = push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": "customer_opportunities",
+                "documents": documents,
+            }),
+        )?;
+
+        assert_eq!(response.get("count").and_then(Value::as_u64), Some(5));
+        assert_eq!(
+            push_collection_records_store_transaction_count(root, "customer_opportunities"),
+            1,
+            "non-command push batches must not autocommit once per document"
+        );
+        let conn = open_store(root)?;
+        let rows: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM business_records
+             WHERE collection = 'customer_opportunities'
+               AND deleted = 0",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(rows, 5);
         Ok(())
     }
 
@@ -29398,6 +32284,60 @@ mod tests {
     }
 
     #[test]
+    fn find_queue_task_for_command_uses_business_os_command_metadata() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let command_id = "cmd_metadata_lookup";
+        let task = channels::create_queue_task(
+            root,
+            channels::QueueTaskCreateRequest {
+                title: "Metadata lookup task".to_string(),
+                prompt: "Prompt intentionally omits the command identifier".to_string(),
+                thread_key: "business-os/test".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: Some(serde_json::json!({
+                    "business_os_command_id": command_id,
+                })),
+            },
+        )?;
+        assert!(!task.prompt.contains(command_id));
+        assert_eq!(
+            find_queue_task_for_command(root, command_id).as_deref(),
+            Some(task.message_key.as_str())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn documents_report_completion_query_uses_partial_command_index() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let conn = open_store(temp.path())?;
+        let mut stmt = conn.prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT command_id
+             FROM business_commands
+             WHERE module = 'documents'
+               AND command_type = 'research.systematic.report.create'
+               AND status NOT IN ('completed', 'failed', 'cancelled')
+             ORDER BY observed_at_ms ASC, command_id ASC
+             LIMIT 10",
+        )?;
+        let details = stmt
+            .query_map([], |row| row.get::<_, String>(3))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        assert!(
+            details
+                .iter()
+                .any(|detail| detail.contains("idx_business_commands_documents_report_open")),
+            "documents report completion query should use partial command index, got {details:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn task_permission_grant_allows_ctox_task_update_without_admin_role() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
@@ -29594,6 +32534,92 @@ mod tests {
     }
 
     #[test]
+    fn runtime_settings_cache_ignores_unrelated_core_db_churn() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let _ = runtime_settings_for_rxdb(temp.path())?;
+        let cached = runtime_settings_for_rxdb(temp.path())?;
+
+        let runtime_dir = temp.path().join("runtime");
+        fs::create_dir_all(&runtime_dir)?;
+        let core_db = runtime_dir.join("ctox.sqlite3");
+        let conn = Connection::open(&core_db)?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS unrelated_runtime_settings_churn (id INTEGER PRIMARY KEY);
+             INSERT INTO unrelated_runtime_settings_churn DEFAULT VALUES;",
+        )?;
+        drop(conn);
+
+        let second = runtime_settings_for_rxdb(temp.path())?;
+        assert_eq!(
+            cached, second,
+            "unrelated core DB writes must not invalidate runtime settings"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_settings_projection_stamp_ignores_core_db_but_tracks_runtime_config(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let _ = runtime_settings_for_rxdb(temp.path())?;
+        let first = runtime_settings_projection_stamp(temp.path());
+
+        let runtime_dir = temp.path().join("runtime");
+        fs::create_dir_all(&runtime_dir)?;
+        let core_db = runtime_dir.join("ctox.sqlite3");
+        let conn = Connection::open(&core_db)?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS unrelated_runtime_settings_stamp_churn (id INTEGER PRIMARY KEY);
+             INSERT INTO unrelated_runtime_settings_stamp_churn DEFAULT VALUES;",
+        )?;
+        drop(conn);
+        assert_eq!(
+            first,
+            runtime_settings_projection_stamp(temp.path()),
+            "unrelated core DB writes must not change the runtime settings projection stamp"
+        );
+
+        crate::inference::runtime_env::set_runtime_env_value(
+            temp.path(),
+            "CTOX_CHAT_TURN_TIMEOUT_SECS",
+            "777",
+        )?;
+        assert_ne!(
+            first,
+            runtime_settings_projection_stamp(temp.path()),
+            "runtime config writes must change the runtime settings projection stamp"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_settings_preserves_timestamp_for_semantically_identical_rebuild(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let first = runtime_settings_for_rxdb(temp.path())?;
+        let first_updated_at = first.get("updated_at_ms").cloned();
+
+        crate::inference::runtime_env::set_runtime_env_value(
+            temp.path(),
+            "CTOX_PERF_UNUSED_RUNTIME_SETTINGS_KEY",
+            "1",
+        )?;
+
+        let second = runtime_settings_for_rxdb(temp.path())?;
+        assert_eq!(
+            runtime_settings_without_timestamp(&first),
+            runtime_settings_without_timestamp(&second),
+            "test setup should only change cache stamps, not projected settings"
+        );
+        assert_eq!(
+            first_updated_at,
+            second.get("updated_at_ms").cloned(),
+            "semantically identical rebuilds must not churn runtime settings timestamp"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn runtime_settings_normalizes_retired_context_values_to_256k() {
         assert_eq!(runtime_settings_context(Some("128k".to_owned())), "256k");
         assert_eq!(runtime_settings_context(Some("131072".to_owned())), "256k");
@@ -29625,7 +32651,7 @@ mod tests {
             }),
         };
 
-        let prompt = command_prompt("cmd_app_bench", &command, &[]);
+        let prompt = command_prompt("cmd_app_bench", &command, &[], None);
         assert!(prompt.contains("Business OS task resources:"));
         assert!(prompt.contains("- required_skills: business-os-app-module-development"));
         assert!(prompt.contains("Business OS app task metadata:"));
@@ -29678,7 +32704,7 @@ mod tests {
             }),
         };
 
-        let prompt = command_prompt("cmd_app_create", &command, &[]);
+        let prompt = command_prompt("cmd_app_create", &command, &[], None);
         assert!(prompt.contains("Business OS task resources:"));
         assert!(prompt.contains("- required_skills: business-os-app-module-development"));
         assert!(prompt.contains("Business OS app task metadata:"));
@@ -35682,6 +38708,167 @@ mod tests {
     }
 
     #[test]
+    fn business_chat_queue_materializes_legacy_sha256_desktop_file_attachment() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let bytes = b"%PDF-1.4\nctox-cv-pdf";
+        let (content_hash, generation_id) = seed_rxdb_chat_attachment_with_hash_scheme(
+            root,
+            "chatfile_legacy_sha256",
+            "legacy.pdf",
+            "application/pdf",
+            bytes,
+            false,
+            BUSINESS_OS_LEGACY_SHA256_CONTENT_HASH_SCHEME,
+        )?;
+
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_chat_legacy_attachment",
+                "command_id": "cmd_chat_legacy_attachment",
+                "module": "cv-print-builder",
+                "command_type": "business_os.chat.task",
+                "record_id": "cv-print-builder",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Legacy PDF pruefen",
+                    "instruction": "Pruefe den legacy PDF Upload.",
+                    "prompt": "Pruefe den legacy PDF Upload.",
+                    "attachment_refs": [{
+                        "kind": "desktop_file",
+                        "attachment_id": "chatatt_legacy",
+                        "file_id": "chatfile_legacy_sha256",
+                        "generation_id": generation_id.clone(),
+                        "name": "legacy.pdf",
+                        "mime_type": "application/pdf",
+                        "size_bytes": bytes.len(),
+                        "content_hash": content_hash.clone(),
+                        "content_hash_scheme": BUSINESS_OS_LEGACY_SHA256_CONTENT_HASH_SCHEME
+                    }]
+                },
+                "client_context": {
+                    "source": "business-os-chat",
+                    "module": "cv-print-builder"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?;
+        let task = channels::load_queue_task(root, task_id)?.context("queue task exists")?;
+        let materialized_path = root
+            .join("runtime")
+            .join("business-os")
+            .join("chat-attachments")
+            .join("cmd_chat_legacy_attachment")
+            .join("chatfile_legacy_sha256_legacy.pdf");
+
+        assert!(materialized_path.is_file());
+        assert_eq!(fs::read(&materialized_path)?, bytes);
+        assert!(task.prompt.contains("Business OS attachments"));
+        assert!(task.prompt.contains(&content_hash));
+        Ok(())
+    }
+
+    #[test]
+    fn cv_print_queue_prompt_includes_extracted_pdf_text_without_attachment_payload(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let bytes = simple_text_pdf_bytes(&[
+            "Julia Schikore",
+            "Senior HR Operations Manager",
+            "Koeln remote ab 01.09.2026",
+        ]);
+        let (content_hash, generation_id) = seed_rxdb_chat_attachment(
+            root,
+            "cv_pdf_source",
+            "Lebenslauf_Schikore_Julia.pdf",
+            "application/pdf",
+            &bytes,
+            false,
+        )?;
+
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_cv_pdf_text",
+                "command_id": "cmd_cv_pdf_text",
+                "module": "cv-print-builder",
+                "command_type": "business_os.chat.task",
+                "record_id": "doc_cv_julia",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "CV strukturieren: Lebenslauf_Schikore_Julia.pdf",
+                    "instruction": "Strukturiere den vor-extrahierten PDF-Text.",
+                    "prompt": "Strukturiere den vor-extrahierten PDF-Text.",
+                    "source_file_id": "cv_pdf_source",
+                    "source_file": {
+                        "file_id": "cv_pdf_source",
+                        "generation_id": generation_id,
+                        "filename": "Lebenslauf_Schikore_Julia.pdf",
+                        "mime_type": "application/pdf",
+                        "size_bytes": bytes.len(),
+                        "sha256": content_hash.clone()
+                    },
+                    "attachments": [{
+                        "kind": "desktop_file",
+                        "file_id": "cv_pdf_source",
+                        "generation_id": generation_id,
+                        "name": "Lebenslauf_Schikore_Julia.pdf",
+                        "mime_type": "application/pdf",
+                        "size_bytes": bytes.len(),
+                        "content_hash": content_hash,
+                        "content_hash_scheme": BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME
+                    }],
+                    "document_id": "doc_cv_julia",
+                    "version_id": "doc_cv_julia_v1",
+                    "writeback_contract": {
+                        "command_type": "ctox.cv_print.apply_parse",
+                        "target_collection": "document_versions",
+                        "document_id": "doc_cv_julia",
+                        "expected_model_schema": "ctox.cv_print_profile.v1"
+                    }
+                },
+                "client_context": {
+                    "source": "business-os-cv-print-builder",
+                    "module": "cv-print-builder"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?;
+        let task = channels::load_queue_task(root, task_id)?.context("queue task exists")?;
+
+        assert!(task.prompt.contains("CV PDF extracted text"));
+        assert!(task.prompt.contains("Julia Schikore"));
+        assert!(task.prompt.contains("Senior HR Operations Manager"));
+        assert!(task.prompt.contains("source_file_id: cv_pdf_source"));
+        assert!(
+            !task.prompt.contains("Business OS attachments"),
+            "cv parser should use bounded text extraction instead of chat attachments"
+        );
+        assert!(
+            !task.prompt.contains("Payload JSON"),
+            "cv parser prompt should not duplicate the command payload preview"
+        );
+        assert!(
+            !task.prompt.contains("Client context JSON"),
+            "cv parser prompt should not include the generic client-context preview"
+        );
+        assert!(
+            task.prompt.chars().count() <= 32_000,
+            "cv parser prompt must stay tightly bounded"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn business_chat_queue_rejects_corrupt_desktop_file_attachment_chunk() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
@@ -35733,6 +38920,49 @@ mod tests {
         Ok(())
     }
 
+    fn simple_text_pdf_bytes(lines: &[&str]) -> Vec<u8> {
+        let mut content = String::from("BT /F1 12 Tf 72 720 Td ");
+        for (idx, line) in lines.iter().enumerate() {
+            if idx > 0 {
+                content.push_str("0 -18 Td ");
+            }
+            content.push('(');
+            content.push_str(
+                &line
+                    .replace('\\', "\\\\")
+                    .replace('(', "\\(")
+                    .replace(')', "\\)"),
+            );
+            content.push_str(") Tj ");
+        }
+        content.push_str("ET");
+        let objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_string(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+            format!("<< /Length {} >>\nstream\n{}\nendstream", content.len(), content),
+        ];
+        let mut pdf = String::from("%PDF-1.4\n");
+        let mut offsets = vec![0usize];
+        for (idx, object) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.push_str(&format!("{} 0 obj\n{}\nendobj\n", idx + 1, object));
+        }
+        let xref_start = pdf.len();
+        pdf.push_str(&format!("xref\n0 {}\n", offsets.len()));
+        pdf.push_str("0000000000 65535 f \n");
+        for offset in offsets.iter().skip(1) {
+            pdf.push_str(&format!("{offset:010} 00000 n \n"));
+        }
+        pdf.push_str(&format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n",
+            offsets.len(),
+            xref_start
+        ));
+        pdf.into_bytes()
+    }
+
     fn seed_rxdb_chat_attachment(
         root: &Path,
         file_id: &str,
@@ -35740,6 +38970,26 @@ mod tests {
         mime_type: &str,
         bytes: &[u8],
         corrupt_chunk_hash: bool,
+    ) -> anyhow::Result<(String, String)> {
+        seed_rxdb_chat_attachment_with_hash_scheme(
+            root,
+            file_id,
+            name,
+            mime_type,
+            bytes,
+            corrupt_chunk_hash,
+            BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME,
+        )
+    }
+
+    fn seed_rxdb_chat_attachment_with_hash_scheme(
+        root: &Path,
+        file_id: &str,
+        name: &str,
+        mime_type: &str,
+        bytes: &[u8],
+        corrupt_chunk_hash: bool,
+        content_hash_scheme: &str,
     ) -> anyhow::Result<(String, String)> {
         fs::create_dir_all(root.join("runtime"))?;
         let conn = Connection::open(rxdb_store_path(root))?;
@@ -35777,7 +39027,7 @@ mod tests {
                     "content_ref": file_id,
                     "content_state": "available",
                     "content_hash": content_hash.clone(),
-                    "content_hash_scheme": BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME,
+                    "content_hash_scheme": content_hash_scheme,
                     "content_generation_id": generation_id.clone(),
                     "content_synced_at_ms": now,
                     "is_deleted": false,
@@ -35808,7 +39058,7 @@ mod tests {
                         "file_id": file_id,
                         "generation_id": generation_id.clone(),
                         "content_hash": content_hash.clone(),
-                        "content_hash_scheme": BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME,
+                        "content_hash_scheme": content_hash_scheme,
                         "idx": idx,
                         "total": total,
                         "encoding": "base64",
@@ -36111,6 +39361,162 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn queue_worker_success_completes_systematic_research_run() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_research_completed",
+                "command_id": "cmd_research_completed",
+                "module": "research",
+                "command_type": "research.systematic.run",
+                "record_id": "research_task_1",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Research - Drone bearings",
+                    "instruction": "Continue systematic research.",
+                    "prompt": "Continue systematic research.",
+                    "knowledge_domain": "drone_bearing_design"
+                },
+                "client_context": {
+                    "source": "business-os-research",
+                    "module": "research",
+                    "knowledge_domain": "drone_bearing_design"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?
+            .to_string();
+
+        channels::lease_queue_task(root, &task_id, "ctox-service")?;
+        let rxdb_conn = create_repair_rxdb_tables(root)?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__ctox_queue_tasks__v0",
+            &task_id,
+            serde_json::json!({
+                "id": task_id,
+                "command_id": "cmd_research_completed",
+                "status": "running",
+                "route_status": "leased",
+                "task_status": "running",
+                "updated_at_ms": 1
+            }),
+        )?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__business_commands__v1",
+            "cmd_research_completed",
+            serde_json::json!({
+                "id": "cmd_research_completed",
+                "command_id": "cmd_research_completed",
+                "status": "accepted",
+                "task_id": task_id,
+                "task_status": "queued",
+                "updated_at_ms": 1
+            }),
+        )?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__research_tasks__v0",
+            "research_task_1",
+            serde_json::json!({
+                "id": "research_task_1",
+                "title": "Drone bearings",
+                "status": "collecting",
+                "knowledge_domain": "drone_bearing_design",
+                "payload": {},
+                "created_at_ms": 1,
+                "updated_at_ms": 1
+            }),
+        )?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__research_runs__v0",
+            "research_run_1",
+            serde_json::json!({
+                "id": "research_run_1",
+                "task_id": "research_task_1",
+                "status": "queued",
+                "command_id": "cmd_research_completed",
+                "task_queue_id": task_id,
+                "identified_count": 0,
+                "accepted_count": 0,
+                "used_count": 0,
+                "payload": {},
+                "created_at_ms": 1,
+                "updated_at_ms": 1
+            }),
+        )?;
+        drop(rxdb_conn);
+
+        let projected = complete_business_command_from_queue_reply(
+            root,
+            &task_id,
+            "Research wrote source_catalog, evidence_points, and evaluation_matrix.",
+        )?
+        .context("expected systematic research command writeback")?;
+        assert_eq!(
+            projected.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+
+        let rxdb_command =
+            load_rxdb_collection_record(root, "business_commands", "cmd_research_completed")?
+                .context("expected active rxdb command row")?;
+        assert_eq!(
+            rxdb_command.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            rxdb_command.get("task_status").and_then(Value::as_str),
+            Some("completed")
+        );
+
+        let rxdb_run = load_rxdb_collection_record(root, "research_runs", "research_run_1")?
+            .context("expected research run row")?;
+        assert_eq!(
+            rxdb_run.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            rxdb_run.get("task_queue_id").and_then(Value::as_str),
+            Some(task_id.as_str())
+        );
+        assert_eq!(
+            rxdb_run.pointer("/payload/result/knowledge_domain").and_then(Value::as_str),
+            Some("drone_bearing_design")
+        );
+
+        let rxdb_task = load_rxdb_collection_record(root, "research_tasks", "research_task_1")?
+            .context("expected research task row")?;
+        assert_eq!(
+            rxdb_task.get("status").and_then(Value::as_str),
+            Some("ready")
+        );
+        assert_eq!(
+            rxdb_task.pointer("/payload/last_run/task_queue_id"),
+            Some(&Value::String(task_id.clone()))
+        );
+
+        let rxdb_queue = load_rxdb_collection_record(root, "ctox_queue_tasks", &task_id)?
+            .context("expected queue projection row")?;
+        assert_eq!(
+            rxdb_queue.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            rxdb_queue.get("route_status").and_then(Value::as_str),
+            Some("handled")
+        );
+        Ok(())
+    }
+
     fn create_repair_rxdb_tables(root: &Path) -> anyhow::Result<Connection> {
         fs::create_dir_all(root.join("runtime"))?;
         let conn = Connection::open(rxdb_store_path(root))?;
@@ -36126,6 +39532,26 @@ mod tests {
         )?;
         conn.execute(
             "CREATE TABLE ctox_business_os__business_commands__v1 (
+                id TEXT PRIMARY KEY NOT NULL,
+                revision TEXT,
+                deleted INTEGER NOT NULL DEFAULT 0,
+                lastWriteTime REAL NOT NULL DEFAULT 0,
+                data TEXT NOT NULL
+            )",
+            [],
+        )?;
+        conn.execute(
+            "CREATE TABLE ctox_business_os__research_tasks__v0 (
+                id TEXT PRIMARY KEY NOT NULL,
+                revision TEXT,
+                deleted INTEGER NOT NULL DEFAULT 0,
+                lastWriteTime REAL NOT NULL DEFAULT 0,
+                data TEXT NOT NULL
+            )",
+            [],
+        )?;
+        conn.execute(
+            "CREATE TABLE ctox_business_os__research_runs__v0 (
                 id TEXT PRIMARY KEY NOT NULL,
                 revision TEXT,
                 deleted INTEGER NOT NULL DEFAULT 0,
@@ -36254,6 +39680,10 @@ mod tests {
             "dry-run must not mutate active RxDB projection"
         );
 
+        reset_rxdb_table_column_load_count(root, "ctox_business_os__ctox_queue_tasks__v0");
+        reset_rxdb_table_column_load_count(root, "ctox_business_os__business_commands__v1");
+        reset_rxdb_collection_writer_open_count(root, "ctox_queue_tasks");
+        reset_rxdb_collection_writer_open_count(root, "business_commands");
         let applied = repair_queue_projections(root, QueueProjectionRepairOptions { apply: true })?;
         assert_eq!(
             applied
@@ -36326,6 +39756,26 @@ mod tests {
         assert_eq!(
             rxdb_command.get("task_status").and_then(Value::as_str),
             Some("failed")
+        );
+        assert_eq!(
+            rxdb_table_column_load_count(root, "ctox_business_os__ctox_queue_tasks__v0"),
+            1,
+            "queue repair must cache ctox_queue_tasks table metadata"
+        );
+        assert_eq!(
+            rxdb_table_column_load_count(root, "ctox_business_os__business_commands__v1"),
+            1,
+            "queue repair must cache business_commands table metadata"
+        );
+        assert_eq!(
+            rxdb_collection_writer_open_count(root, "ctox_queue_tasks"),
+            1,
+            "queue repair must reuse one ctox_queue_tasks writer"
+        );
+        assert_eq!(
+            rxdb_collection_writer_open_count(root, "business_commands"),
+            1,
+            "queue repair must reuse one business_commands writer"
         );
         Ok(())
     }
@@ -37169,6 +40619,67 @@ mod tests {
     }
 
     #[test]
+    fn rxdb_projection_writer_cache_reuses_table_metadata_for_batch() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        let table = "ctox_business_os__writer_probe__v0";
+        let sqlite_path = rxdb_store_path(root);
+        let conn = Connection::open(sqlite_path)?;
+        conn.execute(
+            &format!(
+                "CREATE TABLE {table} (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    revision TEXT,
+                    deleted INTEGER NOT NULL DEFAULT 0,
+                    lastWriteTime REAL NOT NULL DEFAULT 0,
+                    data TEXT NOT NULL
+                )"
+            ),
+            [],
+        )?;
+        drop(conn);
+
+        reset_rxdb_table_column_load_count(root, table);
+        reset_rxdb_collection_writer_open_count(root, "writer_probe");
+        let mut writers = RxdbProjectionWriterCache::new(root);
+        for idx in 0..5 {
+            writers.upsert(
+                "writer_probe",
+                &format!("probe-{idx}"),
+                1_000 + idx,
+                serde_json::json!({
+                    "id": format!("probe-{idx}"),
+                    "name": format!("Probe {idx}")
+                }),
+            )?;
+        }
+
+        assert_eq!(
+            rxdb_table_column_load_count(root, table),
+            1,
+            "projection writer cache must not run PRAGMA table_info per upsert"
+        );
+        assert_eq!(
+            rxdb_collection_writer_open_count(root, "writer_probe"),
+            1,
+            "projection writer cache must not reopen SQLite per upsert"
+        );
+        let conn = Connection::open(rxdb_store_path(root))?;
+        let count: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })?;
+        assert_eq!(count, 5);
+        let last_write_time: f64 = conn.query_row(
+            &format!("SELECT lastWriteTime FROM {table} WHERE id = 'probe-4'"),
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(last_write_time, 1_004.0);
+        Ok(())
+    }
+
+    #[test]
     fn pull_collection_records_falls_back_to_versioned_rxdb_table() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
@@ -37209,6 +40720,51 @@ mod tests {
                 .pointer("/documents/0/status")
                 .and_then(Value::as_str),
             Some("completed")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pull_collection_record_uses_keyed_rxdb_fallback_without_scan_window() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        let sqlite_path = rxdb_store_path(root);
+        let mut conn = Connection::open(sqlite_path)?;
+        conn.execute(
+            "CREATE TABLE ctox_business_os__business_commands__v1 (id TEXT PRIMARY KEY, data TEXT NOT NULL)",
+            [],
+        )?;
+        let tx = conn.transaction()?;
+        for idx in 0..2_100 {
+            let id = format!("cmd-{idx:04}");
+            tx.execute(
+                "INSERT INTO ctox_business_os__business_commands__v1 (id, data) VALUES (?1, ?2)",
+                params![
+                    id,
+                    serde_json::json!({
+                        "id": id,
+                        "command_type": "ctox.source.list_snapshots",
+                        "status": "completed",
+                        "updated_at_ms": idx,
+                    })
+                    .to_string()
+                ],
+            )?;
+        }
+        tx.commit()?;
+        drop(conn);
+
+        let pulled = pull_collection_record(root, "business_commands", "cmd-2050")?
+            .context("expected keyed RxDB fallback record beyond the old scan window")?;
+        assert_eq!(pulled.get("id").and_then(Value::as_str), Some("cmd-2050"));
+        assert_eq!(
+            pulled.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert!(
+            pull_collection_record(root, "business_commands", "cmd-missing")?.is_none(),
+            "missing records must stay missing without a broad fallback scan"
         );
         Ok(())
     }
@@ -42888,6 +46444,196 @@ mod tests {
             crate::secrets::credential_scope(),
             "OPENAI_API_KEY"
         )?);
+        Ok(())
+    }
+
+    #[test]
+    fn mailserver_commands_require_secrets_manage_and_redact_payload_secrets() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        fs::create_dir_all(root.join("runtime"))?;
+        let db_path = root
+            .join("runtime/ctox.sqlite3")
+            .to_string_lossy()
+            .into_owned();
+        ctox_mailserver::store::sqlite::SqliteStore::new(&db_path).init()?;
+        seed_business_user(root, "global_admin", "admin")?;
+        seed_business_user(root, "qa", "user")?;
+
+        let denied_password = "DO_NOT_LEAK_MAIL_PASSWORD_DENIED";
+        let denied_user = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_mailserver_user_denied",
+                "module": "mailserver",
+                "type": "ctox.mailserver.save_user",
+                "payload": {
+                    "username": "denied@example.test",
+                    "password": denied_password
+                },
+                "client_context": {
+                    "actor": { "id": "qa", "display_name": "QA" }
+                }
+            }),
+        )?;
+        assert_policy_denied(&denied_user, "secrets.manage", "workspace", None);
+        assert!(
+            !serde_json::to_string(&denied_user)?.contains(denied_password),
+            "denied mailserver user command leaked the password into the outcome"
+        );
+        let conn = open_store(root)?;
+        let denied_stored = outbound_load_required(
+            &conn,
+            "business_commands",
+            "cmd_mailserver_user_denied",
+            "command",
+        )?;
+        drop(conn);
+        assert!(
+            !serde_json::to_string(&denied_stored)?.contains(denied_password),
+            "denied mailserver user command leaked the password into business_commands"
+        );
+
+        let admin_password = "DO_NOT_LEAK_MAIL_PASSWORD_ADMIN";
+        let saved_user = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_mailserver_user_admin",
+                "module": "mailserver",
+                "type": "ctox.mailserver.save_user",
+                "payload": {
+                    "username": "admin@example.test",
+                    "password": admin_password
+                },
+                "client_context": {
+                    "actor": { "id": "global_admin", "display_name": "Global Admin" }
+                }
+            }),
+        )?;
+        assert_eq!(
+            saved_user.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert!(
+            !serde_json::to_string(&saved_user)?.contains(admin_password),
+            "completed mailserver user command leaked the password into the outcome"
+        );
+        let conn = open_store(root)?;
+        let stored_user = outbound_load_required(
+            &conn,
+            "business_commands",
+            "cmd_mailserver_user_admin",
+            "command",
+        )?;
+        drop(conn);
+        assert!(
+            !serde_json::to_string(&stored_user)?.contains(admin_password),
+            "completed mailserver user command leaked the password into business_commands"
+        );
+
+        let private_key = "DO_NOT_LEAK_DKIM_PRIVATE_KEY";
+        let saved_domain = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_mailserver_domain_admin",
+                "module": "mailserver",
+                "type": "ctox.mailserver.save_domain",
+                "payload": {
+                    "domain_name": "example.test",
+                    "dkim_selector": "default",
+                    "dkim_private_key": private_key
+                },
+                "client_context": {
+                    "actor": { "id": "global_admin", "display_name": "Global Admin" }
+                }
+            }),
+        )?;
+        assert_eq!(
+            saved_domain.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            saved_domain
+                .pointer("/result/dkim_private_key_set")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            saved_domain
+                .pointer("/result/secret_value_revealed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(saved_domain.pointer("/result/dkim_private_key").is_none());
+        assert!(
+            !serde_json::to_string(&saved_domain)?.contains(private_key),
+            "completed mailserver domain command leaked the DKIM private key into the outcome"
+        );
+        let conn = open_store(root)?;
+        let stored_domain = outbound_load_required(
+            &conn,
+            "business_commands",
+            "cmd_mailserver_domain_admin",
+            "command",
+        )?;
+        drop(conn);
+        assert!(
+            !serde_json::to_string(&stored_domain)?.contains(private_key),
+            "completed mailserver domain command leaked the DKIM private key into business_commands"
+        );
+
+        let config = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_mailserver_get_config_admin",
+                "module": "mailserver",
+                "type": "ctox.mailserver.get_config",
+                "payload": {},
+                "client_context": {
+                    "actor": { "id": "global_admin", "display_name": "Global Admin" }
+                }
+            }),
+        )?;
+        assert_eq!(
+            config.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        let config_text = serde_json::to_string(&config)?;
+        assert!(
+            !config_text.contains(private_key) && !config_text.contains(admin_password),
+            "mailserver config leaked persisted secrets"
+        );
+        assert_eq!(
+            config
+                .pointer("/result/domains/0/dkim_private_key_set")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            config
+                .pointer("/result/domains/0/secret_value_revealed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(config
+            .pointer("/result/domains/0/dkim_private_key")
+            .is_none());
+
+        let denied_config = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_mailserver_get_config_denied",
+                "module": "mailserver",
+                "type": "ctox.mailserver.get_config",
+                "payload": {},
+                "client_context": {
+                    "actor": { "id": "qa", "display_name": "QA" }
+                }
+            }),
+        )?;
+        assert_policy_denied(&denied_config, "secrets.manage", "workspace", None);
         Ok(())
     }
 

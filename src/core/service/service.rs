@@ -109,11 +109,13 @@ const CHANNEL_ROUTER_POLL_SECS: u64 = 8;
 const TICKET_RECONCILE_IDLE_SAFETY_SECS: u64 = 3600;
 const CHANNEL_ROUTER_IDLE_SAFETY_SECS: u64 = 3600;
 const CHANNEL_SYNC_POLL_SECS: u64 = 60;
+const CHANNEL_SYNC_BACKOFF_MAX_SECS: u64 = 900;
 const MISSION_MAINTENANCE_POLL_SECS: u64 = 15;
 const APPROVAL_NAG_IDLE_SAFETY_SECS: u64 = 300;
 const HARNESS_AUDIT_TICK_SECS: u64 = 300;
 const HARNESS_AUDIT_IDLE_SAFETY_SECS: u64 = 3600;
 const BUSINESS_OS_APP_RECOVERY_POLL_SECS: u64 = 60;
+const BUSINESS_OS_APP_RECOVERY_IDLE_SAFETY_SECS: u64 = 3600;
 const IDLE_QUEUE_DISPATCH_POLL_SECS: u64 = 8;
 const WORKER_IDLE_QUEUE_KICK_DELAY_MS: u64 = 250;
 const BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS: u64 = 180;
@@ -121,6 +123,7 @@ const BUSINESS_OS_APP_RECOVERY_STALE_SECS: u64 = 180;
 const BUSINESS_OS_APP_RECOVERY_PREFLIGHT_IDLE_SAFETY_SECS: u64 = 60;
 const BUSINESS_OS_APP_RECOVERY_SCAN_LIMIT: usize = 128;
 const IDLE_DURABLE_QUEUE_EMPTY_BACKOFF_MAX_SECS: u64 = 60;
+const IDLE_DURABLE_QUEUE_EMPTY_IDLE_SAFETY_SECS: u64 = 3600;
 const SERVICE_PROCESS_SCAN_STATUS_CACHE_TTL_SECS: u64 = 5;
 const SERVICE_STATUS_DURABLE_CACHE_TTL_SECS: u64 = 2;
 const BUSINESS_OS_APP_UNSTARTED_REQUEUE_BLOCK_THRESHOLD: usize = 1;
@@ -190,10 +193,14 @@ static APPROVAL_NAG_IDLE_GATE: OnceLock<Mutex<Option<ApprovalNagIdleGateState>>>
 static BUSINESS_OS_APP_RECOVERY_PREFLIGHT_GATE: OnceLock<
     Mutex<Option<BusinessOsAppRecoveryPreflightGateState>>,
 > = OnceLock::new();
+static BUSINESS_OS_APP_RECOVERY_IDLE_GATE: OnceLock<
+    Mutex<Option<BusinessOsAppRecoveryIdleGateState>>,
+> = OnceLock::new();
 static IDLE_DURABLE_QUEUE_EMPTY_GATE: OnceLock<Mutex<Option<IdleDurableQueueEmptyGateState>>> =
     OnceLock::new();
 static LIVE_SERVICE_SETTINGS_CACHE: OnceLock<Mutex<Option<LiveServiceSettingsCacheState>>> =
     OnceLock::new();
+static CHANNEL_SYNC_DUE_GATE: OnceLock<Mutex<Option<ChannelSyncDueGateState>>> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 struct TicketReconcileGateState {
@@ -246,10 +253,33 @@ struct BusinessOsAppRecoveryPreflightGateState {
 }
 
 #[derive(Debug, Clone)]
+struct BusinessOsAppRecoveryIdleGateState {
+    root: PathBuf,
+    core_db_path: PathBuf,
+    core_stamp: CoreDbChangeStamp,
+    last_run: Instant,
+}
+
+#[derive(Debug, Clone)]
 struct IdleDurableQueueEmptyGateState {
     root: PathBuf,
+    core_db_path: PathBuf,
+    core_stamp: CoreDbChangeStamp,
     last_empty_probe: Instant,
     consecutive_empty_probes: u32,
+}
+
+#[derive(Debug, Clone)]
+struct ChannelSyncDueGateState {
+    root: PathBuf,
+    settings: BTreeMap<String, String>,
+    adapters: BTreeMap<String, ChannelSyncAdapterDueState>,
+}
+
+#[derive(Debug, Clone)]
+struct ChannelSyncAdapterDueState {
+    next_due: Instant,
+    unchanged_runs: u32,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -273,6 +303,16 @@ struct LiveServiceSettingsCacheState {
     stamp: CoreDbChangeStamp,
     env_overlay: BTreeMap<String, String>,
     settings: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone)]
+struct DurableServiceStatusCacheEntry {
+    loaded_at: Instant,
+    root: PathBuf,
+    core_db_path: PathBuf,
+    core_stamp: CoreDbChangeStamp,
+    ticket_stamp: tickets::TicketStoreChangeStamp,
+    snapshot: DurableServiceStatusSnapshot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3014,7 +3054,13 @@ struct DurableServiceStatusSnapshot {
     last_agent_outcome: Option<String>,
 }
 
-type DurableServiceStatusCache = Mutex<Option<(Instant, PathBuf, DurableServiceStatusSnapshot)>>;
+type DurableServiceStatusCache = Mutex<Option<DurableServiceStatusCacheEntry>>;
+
+#[cfg(test)]
+static DURABLE_STATUS_LOAD_COUNTS: OnceLock<Mutex<BTreeMap<PathBuf, usize>>> = OnceLock::new();
+#[cfg(test)]
+static DURABLE_STATUS_LCM_OUTCOME_OPEN_COUNTS: OnceLock<Mutex<BTreeMap<PathBuf, usize>>> =
+    OnceLock::new();
 
 fn durable_status_snapshot_cache() -> &'static DurableServiceStatusCache {
     static CACHE: OnceLock<DurableServiceStatusCache> = OnceLock::new();
@@ -3022,22 +3068,39 @@ fn durable_status_snapshot_cache() -> &'static DurableServiceStatusCache {
 }
 
 fn durable_status_snapshot_cached(root: &Path, ttl: Duration) -> DurableServiceStatusSnapshot {
+    let root_path = root.to_path_buf();
+    let core_db_path = crate::paths::core_db(root);
+    let core_stamp = core_db_change_stamp(&core_db_path);
+    let ticket_stamp = tickets::ticket_store_change_stamp(root);
     let cache = durable_status_snapshot_cache();
-    if let Some((loaded_at, cached_root, snapshot)) =
-        cache.lock().unwrap_or_else(|err| err.into_inner()).as_ref()
     {
-        if cached_root.as_path() == root && loaded_at.elapsed() < ttl {
-            return snapshot.clone();
+        let guard = cache.lock().unwrap_or_else(|err| err.into_inner());
+        if let Some(cached) = guard.as_ref() {
+            if cached.root == root_path
+                && (cached.loaded_at.elapsed() < ttl
+                    || (cached.core_db_path == core_db_path
+                        && cached.core_stamp == core_stamp
+                        && cached.ticket_stamp == ticket_stamp))
+            {
+                return cached.snapshot.clone();
+            }
         }
     }
 
     let snapshot = load_durable_status_snapshot(root);
-    *cache.lock().unwrap_or_else(|err| err.into_inner()) =
-        Some((Instant::now(), root.to_path_buf(), snapshot.clone()));
+    *cache.lock().unwrap_or_else(|err| err.into_inner()) = Some(DurableServiceStatusCacheEntry {
+        loaded_at: Instant::now(),
+        root: root_path,
+        core_db_path: core_db_path.clone(),
+        core_stamp: core_db_change_stamp(&core_db_path),
+        ticket_stamp: tickets::ticket_store_change_stamp(root),
+        snapshot: snapshot.clone(),
+    });
     snapshot
 }
 
 fn load_durable_status_snapshot(root: &Path) -> DurableServiceStatusSnapshot {
+    record_durable_status_load_for_test(root);
     let runnable_statuses = ["pending".to_string(), "leased".to_string()];
     let mut pending_previews = Vec::new();
     let runnable_durable_tasks = match channels::list_queue_tasks(root, &runnable_statuses, 6) {
@@ -3104,6 +3167,7 @@ fn load_durable_status_snapshot(root: &Path) -> DurableServiceStatusSnapshot {
 
     let last_agent_outcome = {
         let db_path = crate::paths::core_db(&root);
+        record_durable_status_lcm_outcome_open_for_test(&db_path);
         lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())
             .ok()
             .and_then(|engine| {
@@ -3122,6 +3186,68 @@ fn load_durable_status_snapshot(root: &Path) -> DurableServiceStatusSnapshot {
         blocked_previews,
         last_agent_outcome,
     }
+}
+
+#[cfg(test)]
+fn record_durable_status_load_for_test(root: &Path) {
+    let counts = DURABLE_STATUS_LOAD_COUNTS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut counts = counts.lock().unwrap_or_else(|err| err.into_inner());
+    *counts.entry(root.to_path_buf()).or_insert(0) += 1;
+}
+
+#[cfg(not(test))]
+fn record_durable_status_load_for_test(_root: &Path) {}
+
+#[cfg(test)]
+fn record_durable_status_lcm_outcome_open_for_test(db_path: &Path) {
+    let counts = DURABLE_STATUS_LCM_OUTCOME_OPEN_COUNTS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut counts = counts.lock().unwrap_or_else(|err| err.into_inner());
+    *counts.entry(db_path.to_path_buf()).or_insert(0) += 1;
+}
+
+#[cfg(not(test))]
+fn record_durable_status_lcm_outcome_open_for_test(_db_path: &Path) {}
+
+#[cfg(test)]
+fn clear_durable_status_snapshot_cache_for_tests() {
+    *durable_status_snapshot_cache()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner()) = None;
+    if let Some(counts) = DURABLE_STATUS_LOAD_COUNTS.get() {
+        counts.lock().unwrap_or_else(|err| err.into_inner()).clear();
+    }
+    if let Some(counts) = DURABLE_STATUS_LCM_OUTCOME_OPEN_COUNTS.get() {
+        counts.lock().unwrap_or_else(|err| err.into_inner()).clear();
+    }
+}
+
+#[cfg(test)]
+fn durable_status_load_count_for_test(root: &Path) -> usize {
+    DURABLE_STATUS_LOAD_COUNTS
+        .get()
+        .and_then(|counts| {
+            counts
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .get(root)
+                .copied()
+        })
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+fn durable_status_lcm_outcome_open_count_for_test(root: &Path) -> usize {
+    let db_path = crate::paths::core_db(root);
+    DURABLE_STATUS_LCM_OUTCOME_OPEN_COUNTS
+        .get()
+        .and_then(|counts| {
+            counts
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .get(&db_path)
+                .copied()
+        })
+        .unwrap_or(0)
 }
 
 fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<ServiceStatus> {
@@ -4359,7 +4485,9 @@ fn start_prompt_worker(
                 }
             }
             let app_module_job = business_os_app_module_target_from_prompt(&job.prompt).is_some();
-            let base_execution_prompt = if is_business_os_chat_queue_job(&root, &job) {
+            let base_execution_prompt = if is_cv_print_parser_queue_job(&job) {
+                business_os_cv_print_execution_prompt(&job)
+            } else if is_business_os_chat_queue_job(&root, &job) {
                 business_os_chat_execution_prompt(&job)
             } else if app_module_job {
                 business_os_app_module_execution_prompt(&job)
@@ -5558,6 +5686,35 @@ fn start_prompt_worker(
                         } else {
                             None
                         };
+                        let mut cv_print_parser_recovered_after_worker_error = false;
+                        if !job.leased_message_keys.is_empty()
+                            && is_cv_print_parser_queue_job(&job)
+                            && cv_print_parser_error_allows_compact_recovery(&err_text)
+                        {
+                            match complete_cv_print_parser_recovery_to_leased_queue(
+                                &root, &job, &err_text,
+                            ) {
+                                Ok(updated) if updated > 0 => {
+                                    cv_print_parser_recovered_after_worker_error = true;
+                                    push_event_locked(
+                                        &mut shared,
+                                        format!(
+                                            "Recovered CV print parser writeback for {updated} queue task(s) after worker error: {}",
+                                            clip_text(&compact_error, 180)
+                                        ),
+                                    );
+                                }
+                                Ok(_) => {}
+                                Err(update_err) => push_event_locked(
+                                    &mut shared,
+                                    format!(
+                                        "CV print parser recovery failed after worker error for {}: {}",
+                                        job.source_label,
+                                        clip_text(&update_err.to_string(), 180)
+                                    ),
+                                ),
+                            }
+                        }
                         let mut app_validation_worker_failure_reason: Option<String> = None;
                         let mut app_validation_verified_after_worker_error = false;
                         if !job.leased_message_keys.is_empty()
@@ -5665,6 +5822,7 @@ fn start_prompt_worker(
                             }
                         }
                         if !job.leased_message_keys.is_empty()
+                            && !cv_print_parser_recovered_after_worker_error
                             && !app_validation_rework
                             && !app_validation_terminal_failure
                             && !app_validation_verified_after_worker_error
@@ -5759,6 +5917,19 @@ fn start_prompt_worker(
                                     );
                                 }
                             }
+                        }
+                        if cv_print_parser_recovered_after_worker_error
+                            && !job.leased_message_keys.is_empty()
+                        {
+                            record_ack_failure_locked(
+                                &mut shared,
+                                channels::ack_leased_messages(
+                                    &root,
+                                    &job.leased_message_keys,
+                                    "handled",
+                                ),
+                                "handled recovered CV print parser queue lease(s)",
+                            );
                         }
                         if app_validation_verified_after_worker_error
                             && !job.leased_message_keys.is_empty()
@@ -7131,6 +7302,952 @@ fn business_os_chat_execution_prompt(job: &QueuedPrompt) -> String {
         "{}\n\nBusiness OS chat execution rules:\n- Your final assistant message is shown verbatim to a non-technical business user inside a small chat bubble. Write it as a direct, concise answer addressed to that user.\n- Answer in the user's language (German unless the request is clearly in another language).\n- Do NOT include internal reasoning, chain-of-thought, planning notes, tool transcripts, command output, file paths, diffs, stack traces, raw JSON, or queue/command/task IDs. Do NOT paste source code or large data dumps unless the user explicitly asked for code — summarize the result in plain words instead.\n- Light Markdown is allowed (short paragraphs, **bold**, bullet lists, and fenced code blocks only when the user actually asked for code). Keep it brief.\n- Do not update Business OS SQLite stores, RxDB projections, queue rows, command rows, chat rows, or runtime status tables yourself.\n- Do not call `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or equivalent direct SQL for this Business OS command.\n- You may inspect referenced files or readonly state when needed to answer accurately.\n- The CTOX service will persist your final answer back into the Business OS chat and acknowledge the queue item.",
         job.prompt
     )
+}
+
+fn is_cv_print_parser_queue_job(job: &QueuedPrompt) -> bool {
+    job.suggested_skill.as_deref() == Some("ctox-cv-print-parser")
+        || job.prompt.contains("ctox-cv-print-parser")
+        || job.prompt.contains("ctox.cv_print.apply_parse")
+        || job.prompt.contains("CV PDF extracted text:")
+}
+
+fn business_os_cv_print_execution_prompt(job: &QueuedPrompt) -> String {
+    format!(
+        "{}\n\nCV Print Parser execution rules:\n- This is a machine writeback task, not a user-facing Business OS chat reply.\n- Your final assistant message MUST be exactly one minified JSON object for `ctox.cv_print_profile.v1`.\n- Raw JSON is required here; do not use Markdown, prose, code fences, tool transcripts, file paths, queue IDs, or explanations.\n- Do not call tools. The CTOX daemon already reconstructed the PDF and added the bounded `CV PDF extracted text` section to this prompt.\n- Follow the NinjaWorkflowTool qualification-profile shape from `NinjaWorkflowTool_Extension/executions/find-job-for-candidate/view/printView.js` and `NinjaWorkflowTool_Extension/data/jobmatchSchema.js`.\n- Keep `workflow.phase = \"review\"`.\n- Shape `candidate.additional` as an array of entries with `key`, `label`, `type`, and `value`; include exactly the keys `cv.education`, `cv.experience`, `cv.skills`, and `cv.meta`.\n- `cv.experience` rows use `job_title`, `employer`, `location`, `start_date`, `end_date`, `job_description`.\n- `cv.education` rows use `degree`, `institution`, `major`, `specialization`, `location`, `start_date`, `end_date`, `details`.\n- `cv.skills` is an object with grouped arrays such as `Fachkenntnisse`, `Sprachkenntnisse`, and `Weitere Fähigkeiten`.\n- Preserve all clearly extracted stations; do not artificially truncate to a tiny preview.\n- Do not update Business OS SQLite stores, RxDB projections, queue rows, command rows, chat rows, or runtime status tables yourself. The CTOX service parses this JSON and persists it through `ctox.cv_print.apply_parse`.",
+        job.prompt
+    )
+}
+
+fn cv_print_parser_error_allows_compact_recovery(error_text: &str) -> bool {
+    let lower = error_text.to_ascii_lowercase();
+    lower.contains("max_output_tokens")
+        || lower.contains("incomplete response")
+        || lower.contains("stream disconnected before completion")
+}
+
+fn complete_cv_print_parser_recovery_to_leased_queue(
+    root: &Path,
+    job: &QueuedPrompt,
+    error_text: &str,
+) -> Result<usize> {
+    let reply = cv_print_compact_recovery_reply(&job.prompt, error_text);
+    let command_id = prompt_line_value(&job.prompt, "- command_id:");
+    let mut last_lock_error: Option<anyhow::Error> = None;
+    for attempt in 0..6 {
+        match complete_cv_print_parser_recovery_once(root, job, command_id.as_deref(), &reply) {
+            Ok(updated) => return Ok(updated),
+            Err(err) if cv_print_is_sqlite_locked_error(&err) && attempt < 5 => {
+                eprintln!(
+                    "CV print parser recovery writeback hit SQLite lock on attempt {} for {}: {}",
+                    attempt + 1,
+                    job.source_label,
+                    clip_text(&err.to_string(), 180)
+                );
+                last_lock_error = Some(err);
+                thread::sleep(Duration::from_millis(500 * (attempt + 1) as u64));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Err(last_lock_error
+        .unwrap_or_else(|| anyhow::anyhow!("CV print parser recovery exhausted retry budget")))
+}
+
+fn complete_cv_print_parser_recovery_once(
+    root: &Path,
+    job: &QueuedPrompt,
+    command_id: Option<&str>,
+    reply: &str,
+) -> Result<usize> {
+    let mut updated = 0usize;
+    for message_key in &job.leased_message_keys {
+        if crate::business_os::store::complete_business_command_from_queue_reply(
+            root,
+            message_key,
+            reply,
+        )?
+        .is_some()
+        {
+            eprintln!(
+                "Recovered CV print parser writeback via queue task {}",
+                message_key
+            );
+            updated += 1;
+            continue;
+        }
+        if let Some(command_id) = command_id {
+            if crate::business_os::store::complete_cv_print_command_from_reply(
+                root,
+                command_id,
+                Some(message_key),
+                reply,
+            )?
+            .is_some()
+            {
+                eprintln!(
+                    "Recovered CV print parser writeback via command {} and queue task {}",
+                    command_id, message_key
+                );
+                updated += 1;
+            }
+        }
+    }
+    if updated == 0 {
+        if let Some(command_id) = command_id {
+            if crate::business_os::store::complete_cv_print_command_from_reply(
+                root, command_id, None, reply,
+            )?
+            .is_some()
+            {
+                eprintln!(
+                    "Recovered CV print parser writeback via command {} without leased queue key",
+                    command_id
+                );
+                updated += 1;
+            }
+        }
+    }
+    if updated == 0 {
+        eprintln!(
+            "CV print parser recovery updated 0 task(s) for {} command_id={}",
+            job.source_label,
+            command_id.unwrap_or("")
+        );
+    }
+    Ok(updated)
+}
+
+fn cv_print_is_sqlite_locked_error(error: &anyhow::Error) -> bool {
+    let lower = error.to_string().to_ascii_lowercase();
+    lower.contains("database is locked")
+        || lower.contains("database table is locked")
+        || lower.contains("sqlite busy")
+        || lower.contains("sqlite_locked")
+        || lower.contains("sqlite_busy")
+}
+
+fn cv_print_compact_recovery_reply(prompt: &str, error_text: &str) -> String {
+    let extracted = cv_print_extracted_text_from_prompt(prompt);
+    let filename = prompt_line_value(prompt, "- filename:").unwrap_or_default();
+    let email = cv_print_first_email(&extracted);
+    let phone = cv_print_first_phone(&extracted);
+    let name = cv_print_candidate_name(&extracted, &filename);
+    let (first_name, last_name) = cv_print_split_name(&name);
+    let highest_degree = cv_print_highest_degree(&extracted);
+    let degree = cv_print_degree(&extracted, &highest_degree);
+    let location = cv_print_location(&extracted);
+    let birth_date = cv_print_birth_date(&extracted);
+    let nationality = cv_print_nationality(&extracted);
+    let family_status = cv_print_family_status(&extracted);
+    let skills = cv_print_compact_skills(&extracted);
+    let languages = cv_print_compact_languages(&extracted);
+    let skill_groups = cv_print_skill_groups(&skills, &languages);
+    let education = cv_print_compact_education_entries(&extracted);
+    let experience = cv_print_compact_experience_entries(&extracted);
+    let current_role = experience
+        .first()
+        .and_then(|entry| entry.get("job_title"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| cv_print_first_dated_title_after(&extracted, "Berufserfahrung"))
+        .unwrap_or_else(|| "CV Profil".to_string());
+    let mut diagnostics = Vec::new();
+    diagnostics.push(serde_json::json!({
+        "level": "warn",
+        "message": format!(
+            "Kompakter CTOX-Recovery-Parse nach Runtime-Abbruch: {}",
+            clip_text(error_text, 72)
+        )
+    }));
+    if extracted.trim().is_empty() {
+        diagnostics.push(serde_json::json!({
+            "level": "warn",
+            "message": "Kein extrahierter CV-Text im Queue-Prompt gefunden."
+        }));
+    }
+    let summary = clip_text(
+        &format!(
+            "{}; {}; {}",
+            current_role,
+            highest_degree,
+            skills
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        140,
+    );
+    serde_json::json!({
+        "schema": "ctox.cv_print_profile.v1",
+        "workflow": {
+            "phase": "review",
+            "diagnostics": diagnostics.into_iter().take(2).collect::<Vec<_>>()
+        },
+        "candidate": {
+            "name": name,
+            "firstName": first_name,
+            "lastName": last_name,
+            "currentRole": current_role,
+            "location": location,
+            "availability": "nach Absprache",
+            "email": email,
+            "phone": phone,
+            "birthDate": birth_date,
+            "nationality": nationality,
+            "summary": summary,
+            "highestDegree": highest_degree,
+            "degree": degree,
+            "skills": skills,
+            "languages": languages,
+            "additional": [
+                {"key":"cv.education","label":"Ausbildung (CV)","type":"json","value": education},
+                {"key":"cv.experience","label":"Berufserfahrung (CV)","type":"json","value": experience},
+                {"key":"cv.skills","label":"Skills (CV)","type":"json","value": skill_groups},
+                {"key":"cv.meta","label":"Stammdaten (CV)","type":"json","value": {
+                    "birthDate": birth_date,
+                    "nationality": nationality,
+                    "familyStatus": family_status,
+                    "highestDegree": highest_degree,
+                    "degree": degree,
+                    "availabilityFrom": "",
+                    "languages": cv_print_compact_languages(&extracted),
+                    "source_filename": filename
+                }}
+            ]
+        }
+    })
+    .to_string()
+}
+
+fn cv_print_extracted_text_from_prompt(prompt: &str) -> String {
+    if let Some(start) = prompt.find("```text") {
+        let rest = &prompt[start + "```text".len()..];
+        if let Some(end) = rest.find("```") {
+            return rest[..end].trim().to_string();
+        }
+    }
+    let Some(start) = prompt.find("CV PDF extracted text:") else {
+        return String::new();
+    };
+    let rest = &prompt[start + "CV PDF extracted text:".len()..];
+    let end = rest.find("Business OS command:").unwrap_or(rest.len());
+    rest[..end].trim().to_string()
+}
+
+fn cv_print_candidate_name(text: &str, filename: &str) -> String {
+    let lines = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    for line in lines.iter().take(8) {
+        if cv_print_looks_like_person_name(line) {
+            return (*line).to_string();
+        }
+    }
+    for (idx, line) in lines.iter().enumerate() {
+        let Some((candidate, _rest)) = line.split_once(',') else {
+            continue;
+        };
+        let candidate = candidate.trim();
+        if !cv_print_looks_like_person_name(candidate) {
+            continue;
+        }
+        let nearby = lines
+            .iter()
+            .skip(idx)
+            .take(3)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if nearby.contains('@') || nearby.contains("+49") || nearby.contains('T') {
+            return candidate.to_string();
+        }
+    }
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.contains('@') && trimmed.contains(',') {
+            let candidate = trimmed.split(',').next().unwrap_or("").trim();
+            if cv_print_looks_like_person_name(candidate) {
+                return candidate.to_string();
+            }
+        }
+    }
+    let stem = filename
+        .rsplit('/')
+        .next()
+        .unwrap_or(filename)
+        .trim_end_matches(".pdf")
+        .replace(['_', '-'], " ");
+    let cleaned = stem
+        .split_whitespace()
+        .filter(|part| {
+            !matches!(
+                part.to_ascii_lowercase().as_str(),
+                "lebenslauf" | "cv" | "resume" | "ctox" | "e2e"
+            ) && !part.chars().all(|ch| ch.is_ascii_digit())
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    if cleaned.trim().is_empty() {
+        "Unbenanntes Profil".to_string()
+    } else {
+        clip_text(&cleaned, 80)
+    }
+}
+
+fn cv_print_looks_like_person_name(value: &str) -> bool {
+    let value = value.trim();
+    let lower = value.to_ascii_lowercase();
+    if value.contains('@')
+        || value.contains('|')
+        || value.contains(':')
+        || value.chars().any(|ch| ch.is_ascii_digit())
+        || cv_print_is_major_heading(value)
+        || lower.starts_with("ort")
+        || lower.starts_with("e-mail")
+        || lower.starts_with("mobil")
+        || lower.starts_with("linkedin")
+        || lower == "lebenslauf"
+    {
+        return false;
+    }
+    let parts = value.split_whitespace().collect::<Vec<_>>();
+    parts.len() >= 2
+        && parts.len() <= 4
+        && parts.iter().all(|part| {
+            let cleaned = part.trim_matches(|ch: char| {
+                matches!(ch, ',' | '.' | '(' | ')' | '[' | ']' | '"' | '\'' | '•')
+            });
+            !cleaned.is_empty()
+                && cleaned
+                    .chars()
+                    .all(|ch| ch.is_alphabetic() || ch == '-' || ch == '\'')
+                && cleaned
+                    .chars()
+                    .next()
+                    .map(|ch| ch.is_uppercase())
+                    .unwrap_or(false)
+        })
+}
+
+fn cv_print_split_name(name: &str) -> (String, String) {
+    let parts = name.split_whitespace().collect::<Vec<_>>();
+    match parts.as_slice() {
+        [] => (String::new(), String::new()),
+        [only] => ((*only).to_string(), String::new()),
+        [first, rest @ ..] => ((*first).to_string(), rest.join(" ")),
+    }
+}
+
+fn cv_print_first_email(text: &str) -> String {
+    text.split_whitespace()
+        .map(|part| part.trim_matches(|ch: char| ",;()<>".contains(ch)))
+        .find(|part| part.contains('@') && part.contains('.'))
+        .unwrap_or("")
+        .to_string()
+}
+
+fn cv_print_first_phone(text: &str) -> String {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(idx) = trimmed.find("+49") {
+            let phone = trimmed[idx..]
+                .split('|')
+                .next()
+                .unwrap_or("")
+                .split("LinkedIn")
+                .next()
+                .unwrap_or("")
+                .trim();
+            return clip_text(phone, 32);
+        }
+    }
+    String::new()
+}
+
+fn cv_print_location(text: &str) -> String {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let lower = trimmed.to_ascii_lowercase();
+        for label in ["ort:", "wohnort:", "standort:"] {
+            if lower.starts_with(label) {
+                let value = trimmed[label.len()..]
+                    .split(',')
+                    .next()
+                    .unwrap_or("")
+                    .trim();
+                if !value.is_empty() {
+                    return clip_text(value, 48);
+                }
+            }
+        }
+        if trimmed.contains('@') && trimmed.contains(',') {
+            if let Some(idx) = trimmed.find(|ch: char| ch.is_ascii_digit()) {
+                let rest = trimmed[idx..].trim();
+                if let Some(city) = rest.split(',').next_back() {
+                    let compact = city
+                        .split_whitespace()
+                        .filter(|part| !part.chars().all(|ch| ch.is_ascii_digit()))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    if !compact.is_empty() {
+                        return clip_text(&compact, 48);
+                    }
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+fn cv_print_value_after_label(text: &str, labels: &[&str], max_len: usize) -> String {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let lower = trimmed.to_ascii_lowercase();
+        let Some(label) = labels
+            .iter()
+            .find(|label| lower.contains(&label.to_ascii_lowercase()))
+        else {
+            continue;
+        };
+        let start = lower
+            .find(&label.to_ascii_lowercase())
+            .map(|idx| idx + label.len())
+            .unwrap_or(0);
+        let value = trimmed
+            .get(start..)
+            .unwrap_or("")
+            .trim_matches(|ch: char| ch == ':' || ch == '-' || ch.is_whitespace())
+            .trim();
+        if !value.is_empty() {
+            return clip_text(value, max_len);
+        }
+    }
+    String::new()
+}
+
+fn cv_print_first_date_token(value: &str) -> String {
+    value
+        .split_whitespace()
+        .map(|part| part.trim_matches(|ch: char| ",;()[]".contains(ch)))
+        .find(|part| {
+            let pieces = part.split('.').collect::<Vec<_>>();
+            pieces.len() == 3
+                && pieces[0].len() <= 2
+                && pieces[1].len() <= 2
+                && pieces[2].len() == 4
+                && pieces
+                    .iter()
+                    .all(|piece| piece.chars().all(|ch| ch.is_ascii_digit()))
+        })
+        .unwrap_or("")
+        .to_string()
+}
+
+fn cv_print_birth_date(text: &str) -> String {
+    let value = cv_print_value_after_label(text, &["Geburtstag", "Geburtsdatum", "geboren"], 32);
+    let date = cv_print_first_date_token(&value);
+    if date.is_empty() {
+        value
+    } else {
+        date
+    }
+}
+
+fn cv_print_nationality(text: &str) -> String {
+    cv_print_value_after_label(
+        text,
+        &[
+            "Staatsangehörigkeit",
+            "Staatsangehoerigkeit",
+            "Nationalität",
+            "Nationalitaet",
+        ],
+        48,
+    )
+}
+
+fn cv_print_family_status(text: &str) -> String {
+    cv_print_value_after_label(text, &["Familienstand"], 48)
+}
+
+fn cv_print_highest_degree(text: &str) -> String {
+    for candidate in [
+        "Master of Science",
+        "M.Sc.",
+        "M.Sc",
+        "Bachelor of Science",
+        "B.Sc.",
+        "B.Sc",
+        "Master of Science",
+        "Master",
+        "Bachelor of Engineering",
+        "Bachelor",
+        "Fachhochschulreife",
+        "Ausbildung",
+    ] {
+        if text
+            .to_ascii_lowercase()
+            .contains(&candidate.to_ascii_lowercase())
+        {
+            return candidate.to_string();
+        }
+    }
+    String::new()
+}
+
+fn cv_print_degree(text: &str, highest_degree: &str) -> String {
+    for candidate in [
+        "Computer und Systemtechnik",
+        "Kommunikations und Elektroniktechnik",
+        "Kommunikations- und Elektroniktechnik",
+        "Maschinenbau",
+        "Betriebswirtschaft",
+        "Wirtschaftsingenieurwesen",
+        "Informatik",
+        "Personalmanagement",
+        "Human Resources",
+    ] {
+        if text
+            .to_ascii_lowercase()
+            .contains(&candidate.to_ascii_lowercase())
+        {
+            return candidate.to_string();
+        }
+    }
+    highest_degree.to_string()
+}
+
+fn cv_print_compact_languages(text: &str) -> Vec<Value> {
+    let lower = text.to_ascii_lowercase();
+    let mut languages = Vec::new();
+    if lower.contains("arabisch") {
+        languages.push(serde_json::json!({"label":"Arabisch","level": cv_print_language_level(&lower, "arabisch")}));
+    }
+    if lower.contains("deutsch") {
+        languages.push(serde_json::json!({"label":"Deutsch","level": cv_print_language_level(&lower, "deutsch")}));
+    }
+    if lower.contains("englisch") {
+        languages.push(serde_json::json!({"label":"Englisch","level": cv_print_language_level(&lower, "englisch")}));
+    }
+    languages.truncate(3);
+    languages
+}
+
+fn cv_print_language_level(lower_text: &str, language: &str) -> String {
+    if let Some(idx) = lower_text.find(language) {
+        let window = lower_text[idx..].chars().take(80).collect::<String>();
+        for level in ["c2", "c1", "b2", "b1", "a2", "a1"] {
+            if window.contains(level) {
+                return level.to_uppercase();
+            }
+        }
+        for level in [
+            "muttersprache",
+            "verhandlungssicher",
+            "fließend",
+            "fliessend",
+            "gut",
+        ] {
+            if window.contains(level) {
+                return if level == "fliessend" {
+                    "fließend".to_string()
+                } else {
+                    level.to_string()
+                };
+            }
+        }
+    }
+    String::new()
+}
+
+fn cv_print_compact_skills(text: &str) -> Vec<String> {
+    let lower = text.to_ascii_lowercase();
+    let mut skills = Vec::new();
+    for (needle, label) in [
+        ("automotive spice", "Automotive SPICE"),
+        ("aspice", "ASPICE"),
+        ("iso 26262", "ISO 26262"),
+        ("iso 21434", "ISO 21434"),
+        ("hil", "HIL-Tests"),
+        ("sil", "SIL-Tests"),
+        ("ecu", "ECU-Validierung"),
+        ("polarion", "POLARION"),
+        ("doors", "DOORS"),
+        ("jira", "JIRA"),
+        ("canoe", "CANoe"),
+        ("canalyzer", "CANalyzer"),
+        ("dspace scalexio", "dSPACE SCALEXIO"),
+        ("python", "Python"),
+        ("c/c++", "C/C++"),
+        ("matlab", "MATLAB"),
+        ("capl", "CAPL"),
+        ("tessy", "Tessy"),
+        ("vteststudio", "vTESTstudio"),
+        ("jenkins", "Jenkins"),
+        ("azure devops", "Azure DevOps"),
+        ("autosar", "AUTOSAR"),
+        ("fahrassistenz", "Fahrerassistenzsysteme"),
+        ("typisierung", "Typisierung"),
+        ("abgas", "Abgastechnik"),
+        ("autodesk inventor", "Autodesk Inventor"),
+        ("siemens nx", "Siemens NX"),
+        ("ansys", "ANSYS"),
+        ("hypermesh", "HyperMesh"),
+        ("fem", "FEM"),
+        ("ms word", "MS Word"),
+        ("excel", "Excel"),
+        ("powerpoint", "PowerPoint"),
+    ] {
+        if lower.contains(needle) && !skills.iter().any(|item| item == label) {
+            skills.push(label.to_string());
+        }
+        if skills.len() >= 12 {
+            break;
+        }
+    }
+    skills
+}
+
+fn cv_print_skill_groups(skills: &[String], languages: &[Value]) -> Value {
+    let language_labels = languages
+        .iter()
+        .filter_map(|entry| {
+            let label = entry
+                .get("label")
+                .and_then(Value::as_str)
+                .or_else(|| entry.get("code").and_then(Value::as_str))
+                .unwrap_or("")
+                .trim();
+            let level = entry
+                .get("level")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            if label.is_empty() {
+                None
+            } else if level.is_empty() {
+                Some(label.to_string())
+            } else {
+                Some(format!("{label} {level}"))
+            }
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "Fachkenntnisse": skills,
+        "Sprachkenntnisse": language_labels,
+        "Weitere Fähigkeiten": []
+    })
+}
+
+fn cv_print_compact_experience_entries(text: &str) -> Vec<Value> {
+    cv_print_compact_entries(text, "Berufserfahrung", 40)
+        .into_iter()
+        .map(|entry| {
+            serde_json::json!({
+                "job_title": entry.get("title").and_then(Value::as_str).unwrap_or(""),
+                "employer": entry.get("org").and_then(Value::as_str).unwrap_or(""),
+                "location": "",
+                "start_date": entry.get("from").and_then(Value::as_str).unwrap_or(""),
+                "end_date": entry.get("to").and_then(Value::as_str).unwrap_or(""),
+                "job_description": value_string_array(entry.get("details"))
+            })
+        })
+        .collect()
+}
+
+fn cv_print_compact_education_entries(text: &str) -> Vec<Value> {
+    cv_print_compact_entries(text, "Ausbildungsweg", 30)
+        .into_iter()
+        .map(|entry| {
+            serde_json::json!({
+                "degree": entry.get("title").and_then(Value::as_str).unwrap_or(""),
+                "institution": entry.get("org").and_then(Value::as_str).unwrap_or(""),
+                "major": "",
+                "specialization": "",
+                "location": "",
+                "start_date": entry.get("from").and_then(Value::as_str).unwrap_or(""),
+                "end_date": entry.get("to").and_then(Value::as_str).unwrap_or(""),
+                "details": value_string_array(entry.get("details"))
+            })
+        })
+        .collect()
+}
+
+type CvPrintPendingEntry = (String, String, String, String, Vec<String>);
+
+fn value_string_array(value: Option<&Value>) -> Vec<String> {
+    match value {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(ToOwned::to_owned)
+            .collect(),
+        Some(Value::String(text)) => text
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(ToOwned::to_owned)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn cv_print_compact_entries(text: &str, heading: &str, limit: usize) -> Vec<Value> {
+    let mut entries = Vec::new();
+    let mut in_section = false;
+    let mut pending: Option<CvPrintPendingEntry> = None;
+    for line in text.lines() {
+        let trimmed = cv_print_clean_line(line);
+        if trimmed.is_empty() {
+            continue;
+        }
+        if cv_print_heading_matches(&trimmed, heading) {
+            in_section = true;
+            continue;
+        }
+        if in_section
+            && cv_print_is_major_heading(&trimmed)
+            && !cv_print_heading_matches(&trimmed, heading)
+        {
+            break;
+        }
+        if !in_section {
+            continue;
+        }
+        if let Some((from, to, raw_title)) = cv_print_parse_dated_line(&trimmed) {
+            if cv_print_push_pending_entry(&mut entries, &mut pending, limit) {
+                return entries;
+            }
+            let (title, org) = cv_print_split_inline_title_org(&raw_title);
+            pending = Some((from, to, title, org, Vec::new()));
+            continue;
+        }
+        if let Some((_, _, _, org, details)) = pending.as_mut() {
+            if org.trim().is_empty() && !cv_print_line_is_entry_detail(&trimmed) {
+                *org = trimmed.to_string();
+            } else if details.len() < 6 {
+                let detail = cv_print_clean_detail_line(&trimmed);
+                if !detail.is_empty() && !cv_print_line_is_detail_label(&detail) {
+                    details.push(detail);
+                }
+            }
+        }
+    }
+    cv_print_push_pending_entry(&mut entries, &mut pending, limit);
+    entries
+}
+
+fn cv_print_push_pending_entry(
+    entries: &mut Vec<Value>,
+    pending: &mut Option<CvPrintPendingEntry>,
+    limit: usize,
+) -> bool {
+    let Some((from, to, title, org, details)) = pending.take() else {
+        return entries.len() >= limit;
+    };
+    if !title.trim().is_empty() {
+        entries.push(serde_json::json!({
+            "title": clip_text(&title, 80),
+            "org": clip_text(&org, 80),
+            "from": from,
+            "to": to,
+            "details": details.into_iter().take(6).collect::<Vec<_>>()
+        }));
+    }
+    entries.len() >= limit
+}
+
+fn cv_print_first_dated_title_after(text: &str, heading: &str) -> Option<String> {
+    cv_print_compact_entries(text, heading, 1)
+        .first()
+        .and_then(|entry| entry.get("title"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn cv_print_is_major_heading(value: &str) -> bool {
+    let normalized = cv_print_normalized_heading(value);
+    matches!(
+        normalized.as_str(),
+        "zur person"
+            | "ausbildungsweg"
+            | "ausbildung"
+            | "berufserfahrung"
+            | "berufliche zusammenfassung"
+            | "qualifikationen"
+            | "kenntnisse"
+            | "technische fähigkeiten"
+            | "technische faehigkeiten"
+            | "sprachkenntnisse"
+            | "zertifikate in softwaretechnik"
+            | "fachliche weiterbildung"
+            | "internationale fachpublikationen"
+            | "sonstiges"
+            | "lebenslauf"
+    )
+}
+
+fn cv_print_parse_dated_line(line: &str) -> Option<(String, String, String)> {
+    let cleaned = cv_print_clean_line(line).replace('—', " – ");
+    if !cleaned.contains('–') && !cleaned.contains(" - ") {
+        return None;
+    }
+    let parts = cleaned.split_whitespace().collect::<Vec<_>>();
+    let dash_idx = parts.iter().position(|part| *part == "–" || *part == "-")?;
+    let mut from_start = dash_idx.saturating_sub(2);
+    while from_start > 0 && !cv_print_is_month_token(parts[from_start]) {
+        from_start -= 1;
+    }
+    if !cv_print_is_month_token(parts[from_start]) {
+        return None;
+    }
+    let from = parts[from_start..dash_idx].join(" ");
+    let mut to_end = dash_idx + 1;
+    while to_end < parts.len() {
+        let token = cv_print_clean_token(parts[to_end]);
+        to_end += 1;
+        if token.eq_ignore_ascii_case("heute")
+            || token.eq_ignore_ascii_case("present")
+            || token.eq_ignore_ascii_case("aktuell")
+            || (token.len() == 4 && token.chars().all(|ch| ch.is_ascii_digit()))
+        {
+            break;
+        }
+    }
+    let to = parts[dash_idx + 1..to_end].join(" ");
+    let title = if from_start == 0 {
+        parts[to_end..].join(" ")
+    } else {
+        parts[..from_start].join(" ")
+    };
+    if title.trim().is_empty() {
+        return None;
+    }
+    Some((from, to, cv_print_clean_line(&title)))
+}
+
+fn cv_print_heading_matches(value: &str, heading: &str) -> bool {
+    let value = cv_print_normalized_heading(value);
+    let heading = cv_print_normalized_heading(heading);
+    if value == heading {
+        return true;
+    }
+    heading == "ausbildungsweg" && matches!(value.as_str(), "ausbildung" | "studium")
+}
+
+fn cv_print_normalized_heading(value: &str) -> String {
+    value
+        .trim()
+        .trim_matches(|ch: char| matches!(ch, ':' | ';' | '.'))
+        .to_ascii_lowercase()
+}
+
+fn cv_print_clean_line(value: &str) -> String {
+    value
+        .trim()
+        .trim_start_matches(|ch: char| matches!(ch, '•' | '-' | '–' | '*' | '·'))
+        .trim()
+        .to_string()
+}
+
+fn cv_print_clean_token(value: &str) -> String {
+    value
+        .trim_matches(|ch: char| matches!(ch, ',' | ';' | '.' | '(' | ')' | '[' | ']' | ':' | '|'))
+        .to_string()
+}
+
+fn cv_print_is_month_token(value: &str) -> bool {
+    let lower = cv_print_clean_token(value).to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "januar"
+            | "jan"
+            | "februar"
+            | "feb"
+            | "märz"
+            | "maerz"
+            | "mrz"
+            | "april"
+            | "apr"
+            | "mai"
+            | "juni"
+            | "jun"
+            | "juli"
+            | "jul"
+            | "august"
+            | "aug"
+            | "september"
+            | "sep"
+            | "oktober"
+            | "okt"
+            | "oct"
+            | "november"
+            | "nov"
+            | "dezember"
+            | "dez"
+            | "dec"
+    )
+}
+
+fn cv_print_split_inline_title_org(raw_title: &str) -> (String, String) {
+    let cleaned = cv_print_clean_line(raw_title)
+        .trim_matches('|')
+        .trim()
+        .to_string();
+    if let Some((title, org)) = cleaned.split_once(" | ") {
+        return (
+            clip_text(title.trim(), 100),
+            clip_text(org.trim().trim_matches('.'), 100),
+        );
+    }
+    if let Some((title, org)) = cleaned.split_once(" bei ") {
+        return (
+            clip_text(title.trim(), 100),
+            clip_text(org.trim().trim_matches('.'), 100),
+        );
+    }
+    (clip_text(cleaned.trim(), 100), String::new())
+}
+
+fn cv_print_line_is_entry_detail(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    value.starts_with('•')
+        || lower.starts_with("projekt")
+        || lower.starts_with("projekte")
+        || lower.starts_with("aufgaben")
+        || lower.starts_with("erfolge")
+        || lower.starts_with("thesis")
+        || lower.starts_with("training")
+        || lower.starts_with("aktivitäten")
+        || lower.starts_with("aktivitaeten")
+}
+
+fn cv_print_line_is_detail_label(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    matches!(
+        lower.trim_end_matches(':'),
+        "aufgaben" | "aufgaben / erfolge" | "erfolge" | "projekte" | "projekt"
+    )
+}
+
+fn cv_print_clean_detail_line(value: &str) -> String {
+    let cleaned = cv_print_clean_line(value);
+    if let Some((label, rest)) = cleaned.split_once(':') {
+        let label_lower = label.to_ascii_lowercase();
+        if matches!(
+            label_lower.as_str(),
+            "projekt" | "projekte" | "thesis" | "training" | "aktivitäten" | "aktivitaeten"
+        ) {
+            return rest.trim().to_string();
+        }
+    }
+    cleaned
 }
 
 fn chat_turn_session_options_for_queue_job(
@@ -10812,11 +11929,13 @@ fn start_channel_router(root: std::path::PathBuf, state: Arc<Mutex<SharedState>>
 
 fn start_business_os_app_recovery_loop(root: std::path::PathBuf, state: Arc<Mutex<SharedState>>) {
     thread::spawn(move || loop {
-        maybe_spawn_business_os_app_recovery(
-            root.clone(),
-            state.clone(),
-            "dedicated app recovery loop",
-        );
+        if !should_skip_idle_business_os_app_recovery(&root) {
+            maybe_spawn_business_os_app_recovery(
+                root.clone(),
+                state.clone(),
+                "dedicated app recovery loop",
+            );
+        }
         thread::sleep(Duration::from_secs(BUSINESS_OS_APP_RECOVERY_POLL_SECS));
     });
 }
@@ -10847,6 +11966,7 @@ fn maybe_spawn_business_os_app_recovery(
         }
         match recovered {
             Ok(Ok(updated)) if updated > 0 => {
+                mark_business_os_app_recovery_ran(&root);
                 push_event(
                     &state,
                     format!(
@@ -10857,7 +11977,9 @@ fn maybe_spawn_business_os_app_recovery(
                     maybe_dispatch_after_business_os_app_recovery(root, state, reason);
                 }
             }
-            Ok(Ok(_)) => {}
+            Ok(Ok(_)) => {
+                mark_business_os_app_recovery_ran(&root);
+            }
             Ok(Err(err)) => push_event(
                 &state,
                 format!(
@@ -12044,30 +13166,49 @@ fn idle_durable_queue_probe_available(state: &Arc<Mutex<SharedState>>) -> bool {
 }
 
 fn should_skip_idle_durable_queue_empty_probe(root: &Path) -> bool {
-    let root = root.to_path_buf();
+    let root_path = root.to_path_buf();
+    let core_db_path = crate::paths::core_db(root);
+    let core_stamp = core_db_change_stamp(&core_db_path);
     let gate = IDLE_DURABLE_QUEUE_EMPTY_GATE.get_or_init(|| Mutex::new(None));
     let gate = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let Some(previous) = gate.as_ref() else {
         return false;
     };
-    if previous.root != root {
+    if previous.root != root_path
+        || previous.core_db_path != core_db_path
+        || previous.core_stamp != core_stamp
+    {
         return false;
     }
-    previous.last_empty_probe.elapsed()
-        < idle_durable_queue_empty_backoff(previous.consecutive_empty_probes)
+    let timer_backoff = idle_durable_queue_empty_backoff(previous.consecutive_empty_probes);
+    let unchanged_source_backoff = Duration::from_secs(IDLE_DURABLE_QUEUE_EMPTY_IDLE_SAFETY_SECS);
+    let backoff = if timer_backoff > unchanged_source_backoff {
+        timer_backoff
+    } else {
+        unchanged_source_backoff
+    };
+    previous.last_empty_probe.elapsed() < backoff
 }
 
 fn mark_idle_durable_queue_empty_probe(root: &Path) {
-    let root = root.to_path_buf();
+    let root_path = root.to_path_buf();
+    let core_db_path = crate::paths::core_db(root);
+    let core_stamp = core_db_change_stamp(&core_db_path);
     let gate = IDLE_DURABLE_QUEUE_EMPTY_GATE.get_or_init(|| Mutex::new(None));
     let mut gate = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let consecutive_empty_probes = gate
         .as_ref()
-        .filter(|previous| previous.root == root)
+        .filter(|previous| {
+            previous.root == root_path
+                && previous.core_db_path == core_db_path
+                && previous.core_stamp == core_stamp
+        })
         .map(|previous| previous.consecutive_empty_probes.saturating_add(1))
         .unwrap_or(1);
     *gate = Some(IdleDurableQueueEmptyGateState {
-        root,
+        root: root_path,
+        core_db_path,
+        core_stamp,
         last_empty_probe: Instant::now(),
         consecutive_empty_probes,
     });
@@ -12148,7 +13289,7 @@ fn leased_business_os_rxdb_app_queue_task_exists(root: &Path) -> Result<bool> {
                     "failed to inspect Business OS RxDB queue table {}",
                     db_path.display()
                 )
-            })
+            });
         }
     };
     let rows = stmt.query_map([], |row| row.get::<_, Option<String>>(0))?;
@@ -12177,6 +13318,7 @@ fn maybe_lease_next_durable_queue_prompt(
             BUSINESS_OS_APP_RECOVERY_SCAN_LIMIT,
         ) {
             Ok(updated) if updated > 0 => {
+                mark_business_os_app_recovery_ran(root);
                 push_event(
                     state,
                     format!(
@@ -12184,7 +13326,9 @@ fn maybe_lease_next_durable_queue_prompt(
                     ),
                 );
             }
-            Ok(_) => {}
+            Ok(_) => {
+                mark_business_os_app_recovery_ran(root);
+            }
             Err(err) => push_event(
                 state,
                 format!(
@@ -12273,6 +13417,45 @@ fn mark_business_os_app_recovery_preflight_due(root: &Path) -> bool {
         last_run: Instant::now(),
     });
     true
+}
+
+fn should_skip_idle_business_os_app_recovery(root: &Path) -> bool {
+    let root_path = root.to_path_buf();
+    let core_db_path = crate::paths::core_db(root);
+    let core_stamp = core_db_change_stamp(&core_db_path);
+    let now = Instant::now();
+    let gate = BUSINESS_OS_APP_RECOVERY_IDLE_GATE.get_or_init(|| Mutex::new(None));
+    let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(previous) = guard.as_ref() else {
+        return false;
+    };
+    previous.root == root_path
+        && previous.core_db_path == core_db_path
+        && previous.core_stamp == core_stamp
+        && now.duration_since(previous.last_run)
+            < Duration::from_secs(BUSINESS_OS_APP_RECOVERY_IDLE_SAFETY_SECS)
+}
+
+fn mark_business_os_app_recovery_ran(root: &Path) {
+    let root_path = root.to_path_buf();
+    let core_db_path = crate::paths::core_db(root);
+    let core_stamp = core_db_change_stamp(&core_db_path);
+    let gate = BUSINESS_OS_APP_RECOVERY_IDLE_GATE.get_or_init(|| Mutex::new(None));
+    let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = Some(BusinessOsAppRecoveryIdleGateState {
+        root: root_path,
+        core_db_path,
+        core_stamp,
+        last_run: Instant::now(),
+    });
+}
+
+#[cfg(test)]
+fn clear_business_os_app_recovery_idle_gate_for_tests() {
+    if let Some(gate) = BUSINESS_OS_APP_RECOVERY_IDLE_GATE.get() {
+        let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = None;
+    }
 }
 
 const SYNTHETIC_E2E_QUEUE_BLOCK_NOTE: &str =
@@ -17491,11 +18674,207 @@ fn render_email_context_contract(root: &Path, message: &channels::RoutedInboundM
 }
 
 fn sync_configured_channels(root: &Path, settings: &BTreeMap<String, String>) {
-    let _ = communication_adapters::email().service_sync(root, settings);
-    let _ = communication_adapters::jami().service_sync(root, settings);
-    let _ = communication_adapters::meeting().service_sync(root, settings);
-    let _ = communication_adapters::teams().service_sync(root, settings);
-    let _ = communication_adapters::whatsapp().service_sync(root, settings);
+    let base_delay_secs = channel_sync_poll_secs(settings);
+    run_due_channel_sync_adapter(root, settings, "email", base_delay_secs, || {
+        communication_adapters::email().service_sync(root, settings)
+    });
+    run_due_channel_sync_adapter(root, settings, "discord", base_delay_secs, || {
+        communication_adapters::discord().service_sync(root, settings)
+    });
+    run_due_channel_sync_adapter(root, settings, "google_chat", base_delay_secs, || {
+        communication_adapters::google_chat().service_sync(root, settings)
+    });
+    run_due_channel_sync_adapter(root, settings, "jami", base_delay_secs, || {
+        communication_adapters::jami().service_sync(root, settings)
+    });
+    run_due_channel_sync_adapter(root, settings, "matrix", base_delay_secs, || {
+        communication_adapters::matrix().service_sync(root, settings)
+    });
+    run_due_channel_sync_adapter(root, settings, "mattermost", base_delay_secs, || {
+        communication_adapters::mattermost().service_sync(root, settings)
+    });
+    run_due_channel_sync_adapter(root, settings, "meeting", base_delay_secs, || {
+        communication_adapters::meeting().service_sync(root, settings)
+    });
+    run_due_channel_sync_adapter(root, settings, "slack", base_delay_secs, || {
+        communication_adapters::slack().service_sync(root, settings)
+    });
+    run_due_channel_sync_adapter(root, settings, "teams", base_delay_secs, || {
+        communication_adapters::teams().service_sync(root, settings)
+    });
+    run_due_channel_sync_adapter(root, settings, "telegram", base_delay_secs, || {
+        communication_adapters::telegram().service_sync(root, settings)
+    });
+    run_due_channel_sync_adapter(root, settings, "whatsapp", base_delay_secs, || {
+        communication_adapters::whatsapp().service_sync(root, settings)
+    });
+    run_due_channel_sync_adapter(root, settings, "zulip", base_delay_secs, || {
+        communication_adapters::zulip().service_sync(root, settings)
+    });
+}
+
+fn run_due_channel_sync_adapter<F>(
+    root: &Path,
+    settings: &BTreeMap<String, String>,
+    adapter: &'static str,
+    base_delay_secs: u64,
+    sync: F,
+) where
+    F: FnOnce() -> Result<Option<Value>>,
+{
+    let now = Instant::now();
+    if !channel_sync_adapter_due(root, settings, adapter, now) {
+        return;
+    }
+    match sync() {
+        Ok(result) => {
+            let activity = result
+                .as_ref()
+                .map(channel_sync_result_has_activity)
+                .unwrap_or(false);
+            mark_channel_sync_adapter_result(
+                root,
+                settings,
+                adapter,
+                base_delay_secs,
+                true,
+                activity,
+                now,
+            );
+        }
+        Err(_) => {
+            mark_channel_sync_adapter_result(
+                root,
+                settings,
+                adapter,
+                base_delay_secs,
+                false,
+                false,
+                now,
+            );
+        }
+    }
+}
+
+fn channel_sync_adapter_due(
+    root: &Path,
+    settings: &BTreeMap<String, String>,
+    adapter: &str,
+    now: Instant,
+) -> bool {
+    let root = root.to_path_buf();
+    let gate = CHANNEL_SYNC_DUE_GATE.get_or_init(|| Mutex::new(None));
+    let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let state = channel_sync_due_state_for(&mut guard, root, settings);
+    state
+        .adapters
+        .get(adapter)
+        .map(|entry| now >= entry.next_due)
+        .unwrap_or(true)
+}
+
+fn mark_channel_sync_adapter_result(
+    root: &Path,
+    settings: &BTreeMap<String, String>,
+    adapter: &str,
+    base_delay_secs: u64,
+    ok: bool,
+    activity: bool,
+    now: Instant,
+) {
+    let root = root.to_path_buf();
+    let gate = CHANNEL_SYNC_DUE_GATE.get_or_init(|| Mutex::new(None));
+    let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let state = channel_sync_due_state_for(&mut guard, root, settings);
+    let previous = state
+        .adapters
+        .get(adapter)
+        .map(|entry| entry.unchanged_runs)
+        .unwrap_or(0);
+    let unchanged_runs = if ok && !activity {
+        previous.saturating_add(1)
+    } else {
+        0
+    };
+    let delay_secs = channel_sync_next_delay_secs(base_delay_secs, unchanged_runs);
+    state.adapters.insert(
+        adapter.to_string(),
+        ChannelSyncAdapterDueState {
+            next_due: now + Duration::from_secs(delay_secs),
+            unchanged_runs,
+        },
+    );
+}
+
+fn channel_sync_due_state_for<'a>(
+    guard: &'a mut Option<ChannelSyncDueGateState>,
+    root: PathBuf,
+    settings: &BTreeMap<String, String>,
+) -> &'a mut ChannelSyncDueGateState {
+    let reset = guard
+        .as_ref()
+        .map(|state| state.root != root || state.settings != *settings)
+        .unwrap_or(true);
+    if reset {
+        *guard = Some(ChannelSyncDueGateState {
+            root,
+            settings: settings.clone(),
+            adapters: BTreeMap::new(),
+        });
+    }
+    guard.as_mut().expect("channel sync due gate state")
+}
+
+fn channel_sync_next_delay_secs(base_delay_secs: u64, unchanged_runs: u32) -> u64 {
+    let base = base_delay_secs.max(1);
+    if unchanged_runs == 0 {
+        return base.min(CHANNEL_SYNC_BACKOFF_MAX_SECS);
+    }
+    let shift = unchanged_runs.saturating_sub(1).min(4);
+    base.saturating_mul(1_u64 << shift)
+        .min(CHANNEL_SYNC_BACKOFF_MAX_SECS)
+}
+
+fn channel_sync_result_has_activity(value: &Value) -> bool {
+    let has_ingested_or_stored_activity = [
+        "storedCount",
+        "fetchedCount",
+        "messages_stored",
+        "messages_fetched",
+        "messages_synced",
+        "ingested",
+        "history_syncs_seen",
+    ]
+    .iter()
+    .any(|key| value.get(*key).and_then(Value::as_u64).unwrap_or(0) > 0);
+    if has_ingested_or_stored_activity {
+        return true;
+    }
+
+    let active_sessions = value
+        .get("active_sessions")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let skipped_unchanged_sessions = value
+        .get("skipped_unchanged_sessions")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if active_sessions > skipped_unchanged_sessions {
+        return true;
+    }
+
+    value
+        .get("pairing")
+        .map(|pairing| !pairing.is_null())
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+fn clear_channel_sync_due_gate_for_tests() {
+    if let Some(gate) = CHANNEL_SYNC_DUE_GATE.get() {
+        let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = None;
+    }
 }
 
 fn sync_configured_tickets(
@@ -18163,9 +19542,15 @@ fn apply_runtime_retry_feedback_to_leased_queue(
     if !runtime_error_is_transient_api_failure(error_text) {
         return Ok(0);
     }
-    let feedback_prompt = render_runtime_retry_prompt(job, error_text);
+    let feedback_prompt =
+        (!is_cv_print_parser_queue_job(job)).then(|| render_runtime_retry_prompt(job, error_text));
     let note = format!(
-        "Harness retry feedback injected after runtime failure: {}",
+        "Harness retry {} after runtime failure: {}",
+        if feedback_prompt.is_some() {
+            "feedback injected"
+        } else {
+            "kept original task prompt"
+        },
         clip_text(error_text.trim(), 180)
     );
     let mut updated = 0usize;
@@ -18177,7 +19562,7 @@ fn apply_runtime_retry_feedback_to_leased_queue(
             root,
             channels::QueueTaskUpdateRequest {
                 message_key: message_key.clone(),
-                prompt: Some(feedback_prompt.clone()),
+                prompt: feedback_prompt.clone(),
                 workspace_root: job.workspace_root.clone(),
                 status_note: Some(note.clone()),
                 ..Default::default()
@@ -18867,8 +20252,14 @@ fn launchd_bootstrap_and_start(root: &Path) -> Result<()> {
     let domain = launchd_user_domain();
     let target = launchd_target_label();
     let _ = launchd_bootout();
-    let _ = launchctl_user(vec!["enable".to_string(), target.clone()]);
+    launchd_enable().context("failed to enable CTOX launchd service before bootstrap")?;
     launchctl_user(vec!["bootstrap".to_string(), domain.clone(), plist_display])?;
+    launchd_enable().context("failed to enable CTOX launchd service after bootstrap")?;
+    if launchd_unit_disabled().unwrap_or(false) {
+        anyhow::bail!(
+            "CTOX launchd service stayed disabled after bootstrap; run `launchctl enable {target}` or reinstall CTOX"
+        );
+    }
     if let Err(err) = launchctl_user(vec!["kickstart".to_string(), "-k".to_string(), target]) {
         eprintln!("ctox service: launchctl kickstart warning: {err:#}");
     }
@@ -18880,6 +20271,10 @@ fn launchd_bootstrap_and_start(root: &Path) -> Result<()> {
     std::fs::write(&marker, "installed\n")
         .with_context(|| format!("failed to update {}", marker.display()))?;
     Ok(())
+}
+
+fn launchd_enable() -> Result<()> {
+    launchctl_user(vec!["enable".to_string(), launchd_target_label()])
 }
 
 fn launchd_bootout() -> Result<()> {
@@ -19163,6 +20558,171 @@ mod tests {
     }
 
     #[test]
+    fn channel_sync_due_gate_backs_off_unchanged_adapters() {
+        clear_channel_sync_due_gate_for_tests();
+        let root = temp_root("channel-sync-due-backoff");
+        let mut settings = BTreeMap::new();
+        settings.insert("CTOX_CHANNEL_SYNC_POLL_SECS".to_string(), "60".to_string());
+        let now = Instant::now();
+
+        assert!(
+            channel_sync_adapter_due(&root, &settings, "email", now),
+            "first adapter sync must be due"
+        );
+        mark_channel_sync_adapter_result(&root, &settings, "email", 60, true, false, now);
+        assert!(
+            !channel_sync_adapter_due(&root, &settings, "email", now + Duration::from_secs(59)),
+            "unchanged adapter should not run again before the base delay"
+        );
+        assert!(
+            channel_sync_adapter_due(&root, &settings, "email", now + Duration::from_secs(60)),
+            "adapter should become due after the base delay"
+        );
+
+        mark_channel_sync_adapter_result(
+            &root,
+            &settings,
+            "email",
+            60,
+            true,
+            false,
+            now + Duration::from_secs(60),
+        );
+        assert!(
+            !channel_sync_adapter_due(&root, &settings, "email", now + Duration::from_secs(179)),
+            "second unchanged sync should extend the backoff"
+        );
+        assert!(
+            channel_sync_adapter_due(&root, &settings, "email", now + Duration::from_secs(180)),
+            "extended backoff should still reopen deterministically"
+        );
+
+        clear_channel_sync_due_gate_for_tests();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn channel_sync_due_gate_resets_after_activity_or_settings_change() {
+        clear_channel_sync_due_gate_for_tests();
+        let root = temp_root("channel-sync-due-reset");
+        let mut settings = BTreeMap::new();
+        settings.insert("CTOX_CHANNEL_SYNC_POLL_SECS".to_string(), "60".to_string());
+        let now = Instant::now();
+
+        mark_channel_sync_adapter_result(&root, &settings, "meeting", 60, true, false, now);
+        mark_channel_sync_adapter_result(
+            &root,
+            &settings,
+            "meeting",
+            60,
+            true,
+            false,
+            now + Duration::from_secs(60),
+        );
+        mark_channel_sync_adapter_result(
+            &root,
+            &settings,
+            "meeting",
+            60,
+            true,
+            true,
+            now + Duration::from_secs(180),
+        );
+        assert!(
+            !channel_sync_adapter_due(&root, &settings, "meeting", now + Duration::from_secs(239)),
+            "activity should reset the delay to the base interval"
+        );
+        assert!(
+            channel_sync_adapter_due(&root, &settings, "meeting", now + Duration::from_secs(240)),
+            "activity reset should make the adapter due at the base interval"
+        );
+
+        mark_channel_sync_adapter_result(&root, &settings, "meeting", 60, true, false, now);
+        let mut changed_settings = settings.clone();
+        changed_settings.insert(
+            "CTO_EMAIL_ADDRESS".to_string(),
+            "agent@example.test".to_string(),
+        );
+        assert!(
+            channel_sync_adapter_due(&root, &changed_settings, "meeting", now),
+            "settings changes must reset the due gate"
+        );
+
+        clear_channel_sync_due_gate_for_tests();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn channel_sync_due_gate_backs_off_unchanged_active_meetings() {
+        clear_channel_sync_due_gate_for_tests();
+        let root = temp_root("channel-sync-due-meeting-unchanged");
+        let mut settings = BTreeMap::new();
+        settings.insert("CTOX_CHANNEL_SYNC_POLL_SECS".to_string(), "60".to_string());
+        let now = Instant::now();
+        let unchanged_active_meeting = json!({
+            "ok": true,
+            "active_sessions": 1,
+            "ingested": 0,
+            "skipped_unchanged_sessions": 1
+        });
+
+        assert!(
+            !channel_sync_result_has_activity(&unchanged_active_meeting),
+            "an unchanged active meeting file must not reset channel sync backoff"
+        );
+        mark_channel_sync_adapter_result(
+            &root,
+            &settings,
+            "meeting",
+            60,
+            true,
+            channel_sync_result_has_activity(&unchanged_active_meeting),
+            now,
+        );
+        mark_channel_sync_adapter_result(
+            &root,
+            &settings,
+            "meeting",
+            60,
+            true,
+            channel_sync_result_has_activity(&unchanged_active_meeting),
+            now + Duration::from_secs(60),
+        );
+        assert!(
+            !channel_sync_adapter_due(&root, &settings, "meeting", now + Duration::from_secs(179)),
+            "second unchanged active meeting sync should extend the backoff"
+        );
+        assert!(
+            channel_sync_adapter_due(&root, &settings, "meeting", now + Duration::from_secs(180)),
+            "unchanged active meeting backoff should reopen deterministically"
+        );
+
+        clear_channel_sync_due_gate_for_tests();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn channel_sync_activity_detection_covers_adapter_result_shapes() {
+        assert!(channel_sync_result_has_activity(&json!({"storedCount": 1})));
+        assert!(channel_sync_result_has_activity(
+            &json!({"messages_synced": 1})
+        ));
+        assert!(channel_sync_result_has_activity(&json!({"ingested": 1})));
+        assert!(channel_sync_result_has_activity(
+            &json!({"active_sessions": 1, "ingested": 0})
+        ));
+        assert!(channel_sync_result_has_activity(
+            &json!({"active_sessions": 2, "ingested": 0, "skipped_unchanged_sessions": 1})
+        ));
+        assert!(!channel_sync_result_has_activity(
+            &json!({"active_sessions": 1, "ingested": 0, "skipped_unchanged_sessions": 1})
+        ));
+        assert!(!channel_sync_result_has_activity(
+            &json!({"storedCount": 0, "messages_synced": 0, "ingested": 0, "active_sessions": 0})
+        ));
+    }
+
+    #[test]
     fn ticket_reconcile_gate_skips_unchanged_idle_state_until_core_db_changes() {
         clear_ticket_reconcile_gate_for_tests();
         let root = temp_root("ticket-reconcile-gate");
@@ -19337,6 +20897,53 @@ mod tests {
     }
 
     #[test]
+    fn business_os_app_recovery_idle_gate_reopens_when_core_db_changes() {
+        clear_business_os_app_recovery_idle_gate_for_tests();
+        let root = temp_root("business-os-app-recovery-idle-gate");
+        std::fs::create_dir_all(root.join("runtime")).unwrap();
+        let db_path = crate::paths::core_db(&root);
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE app_recovery_gate_probe (id INTEGER PRIMARY KEY, value TEXT);",
+            )
+            .unwrap();
+        }
+
+        assert!(
+            !should_skip_idle_business_os_app_recovery(&root),
+            "first app recovery tick must run"
+        );
+        mark_business_os_app_recovery_ran(&root);
+        assert!(
+            should_skip_idle_business_os_app_recovery(&root),
+            "unchanged core DB should skip app recovery inside the idle safety window"
+        );
+
+        std::fs::write(root.join("runtime").join("business-os.sqlite3"), b"churn").unwrap();
+        assert!(
+            should_skip_idle_business_os_app_recovery(&root),
+            "Business OS runtime store churn must not reopen the app recovery gate"
+        );
+
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute(
+                "INSERT INTO app_recovery_gate_probe (value) VALUES (?1)",
+                params!["changed"],
+            )
+            .unwrap();
+        }
+        assert!(
+            !should_skip_idle_business_os_app_recovery(&root),
+            "core DB changes must reopen the app recovery gate"
+        );
+
+        clear_business_os_app_recovery_idle_gate_for_tests();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn approval_nag_idle_gate_reopens_when_core_db_changes() {
         clear_approval_nag_idle_gate_for_tests();
         let root = temp_root("approval-nag-idle-gate");
@@ -19407,7 +21014,9 @@ mod tests {
                 "project customer order milestone budget actual fixed price time material automation"
             }
             "contracts" => "contract customer sla renewal cancellation deadline owner automation",
-            "quality" => "quality compliance complaint corrective action audit risk due date automation",
+            "quality" => {
+                "quality compliance complaint corrective action audit risk due date automation"
+            }
             _ => "business os module domain records follow-up automation",
         };
         let artifact_text =
@@ -19800,6 +21409,158 @@ mod tests {
             turn_loop::conversation_id_for_thread_key(Some("self-work/wi-9")),
             "plain jobs resolve the assurance id directly from the thread key"
         );
+    }
+
+    #[test]
+    fn cv_print_parser_execution_prompt_allows_required_json_writeback() {
+        let job = QueuedPrompt {
+            prompt: "business_os.chat.task\n- command_id: cmd-cv\nCV PDF extracted text:\nJulia Schikore\nPayload JSON:\n{\"writeback_contract\":{\"command_type\":\"ctox.cv_print.apply_parse\"}}".to_string(),
+            goal: "parse cv".to_string(),
+            preview: "cv".to_string(),
+            source_label: "business-os".to_string(),
+            suggested_skill: Some("ctox-cv-print-parser".to_string()),
+            leased_message_keys: vec!["queue:system::cv".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("business-os/cv-print-builder".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        assert!(is_cv_print_parser_queue_job(&job));
+        let prompt = business_os_cv_print_execution_prompt(&job);
+        assert!(prompt.contains("MUST be exactly one minified JSON object"));
+        assert!(prompt.contains("Raw JSON is required here"));
+        assert!(prompt.contains("Do not call tools"));
+        assert!(prompt.contains("Preserve all clearly extracted stations"));
+        assert!(prompt.contains("Weitere Fähigkeiten"));
+        assert!(prompt.contains("candidate.additional"));
+        assert!(
+            !prompt.contains("Do NOT include internal reasoning, chain-of-thought, planning notes, tool transcripts, command output, file paths, diffs, stack traces, raw JSON"),
+            "cv parser prompt must not inherit generic chat rules that forbid raw JSON"
+        );
+    }
+
+    #[test]
+    fn cv_print_compact_recovery_reply_stays_parseable_and_preserves_profile_shape() {
+        let prompt = r#"Skill: `ctox-cv-print-parser`.
+- filename: Lebenslauf_Schikore_Julia.pdf
+
+CV PDF extracted text:
+```text
+Lebenslauf
+Ausbildungsweg
+  Oktober 2015 – September 2019 Studium Maschinenbau
+                                Hochschule Coburg
+                                Abschluss Bachelor of Engineering
+Berufserfahrung
+  April 2023 – heute            Typisierungsingenieurin für Fahrerassistenzsysteme
+                                Porsche AG
+  Oktober 2019 – März 2023      Prüfingenieurin für Abgastechnik
+                                TÜV NORD Mobilität GmbH
+Kenntnisse
+  Sprachen                      Deutsch – Muttersprache
+                                Englisch – verhandlungssicher in Wort und Schrift
+  IT-Kenntnisse                 Autodesk Inventor / Siemens NX – sehr gut
+                                ANSYS / HyperMesh – Grundlagen
+Julia Schikore, Taubenweg 7, 71686 Remseck am Neckar
+T +49 160 2072610 E julia.schikore@t-online.de
+```
+
+Business OS command:
+- command_id: cmd-cv
+"#;
+        let reply = cv_print_compact_recovery_reply(
+            prompt,
+            "direct session error: stream disconnected before completion: max_output_tokens",
+        );
+        let value: Value = serde_json::from_str(&reply).expect("recovery reply is JSON");
+        assert_eq!(value["schema"], "ctox.cv_print_profile.v1");
+        assert_eq!(value["workflow"]["phase"], "review");
+        assert_eq!(value["candidate"]["name"], "Julia Schikore");
+        assert_eq!(
+            value["candidate"]["currentRole"],
+            "Typisierungsingenieurin für Fahrerassistenzsysteme"
+        );
+        assert_eq!(value["candidate"]["email"], "julia.schikore@t-online.de");
+        assert!(value["candidate"]["additional"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["key"] == "cv.experience"));
+        assert!(value["candidate"]["additional"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["key"] == "cv.skills"
+                && entry["value"].get("Weitere Fähigkeiten").is_some()));
+    }
+
+    #[test]
+    fn cv_print_compact_recovery_reply_handles_title_first_dates_and_colon_headings() {
+        let prompt = r#"Skill: `ctox-cv-print-parser`.
+- filename: Mohamed Aboarais_lebenslauf_JAN2026 (1).pdf
+
+CV PDF extracted text:
+```text
+Mohamed Aboarais
+ Ort: Stuttgart, Deutschland
+ E-Mail: m.aboarais@gmail.com | Mobil: +49 176 27794274 | LinkedIn: https://www.linkedin.com/in/aboarais
+ Arbeitserlaubnis: Niederlassungserlaubnis- Deutschland | Verfügbarkeit: Ab sofort
+Berufliche Zusammenfassung:
+ Angestrebte Position:Software Test Manager/Senior Software Test & Verification Engineer (Embedded&Safety-Critical Systems)
+Berufserfahrung:
+ Senior Software Test & Verification Engineer                                                  April 2023 – Januar 2026
+ BRUSA HyPower GmbH, Stuttgart, Deutschland (Rolle: Software Test Manager)
+ Projekte: OBC7xx: On-Board Charger für 400V & 800V HV-Batterien, ICS - Induktives Laden (11 kW).
+ Software Test Engineer | BorgWarner GmbH (Via: T&S consulting GmbH), Ludwigsburg.                   Juli 2022 – März 2023
+ Projekt: BorgWarner-eTurbo - Elektrische Turbolader für Hochleistungsmotoren.
+ Nov 2015 – März 2019 | Embedded Software Engineer | NARSS, Kairo, Ägypten
+ Projekt: EUS-CubeSat: 1U Cube Satellite-Projekt zu Bildgebungszwecken.
+Technische Fähigkeiten:
+ Tools & Sprachen: C/C++, MATLAB, CAPL, Tessy, vTESTstudio.
+ Standards & Tools: ASPICE (SWE.4-SWE.6), ISO 26262, ISO 21434, AUTOSAR, POLARION, DOORS, JIRA.
+ Sprachkenntnisse:
+ Arabisch: C2, Englisch: C2, Deutsch: B1
+Ausbildung:
+ • Okt 2017 – Mai 2021 | M.Sc. Computer und Systemtechnik
+   Electrical Engineering Department, Faculty of Engineering, Ain Shams University, Ägypten.
+ • Sep 2008 – Jun 2013 | B.Sc. in Kommunikations und Elektroniktechnik
+   Faculty of Engineering, Alexandria University, Ägypten.
+```
+
+Business OS command:
+- command_id: cmd-cv
+"#;
+        let reply = cv_print_compact_recovery_reply(
+            prompt,
+            "direct session error: stream disconnected before completion",
+        );
+        let value: Value = serde_json::from_str(&reply).expect("recovery reply is JSON");
+        let additional = value["candidate"]["additional"].as_array().unwrap();
+        let by_key = |key: &str| {
+            additional
+                .iter()
+                .find(|entry| entry["key"] == key)
+                .expect("additional key exists")
+                .get("value")
+                .unwrap()
+        };
+        assert_eq!(value["candidate"]["name"], "Mohamed Aboarais");
+        assert_eq!(
+            value["candidate"]["currentRole"],
+            "Senior Software Test & Verification Engineer"
+        );
+        assert_eq!(value["candidate"]["location"], "Stuttgart");
+        assert_eq!(value["candidate"]["email"], "m.aboarais@gmail.com");
+        assert_eq!(by_key("cv.experience").as_array().unwrap().len(), 3);
+        assert_eq!(by_key("cv.education").as_array().unwrap().len(), 2);
+        assert!(by_key("cv.skills")["Fachkenntnisse"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|skill| skill == "ISO 26262"));
     }
 
     fn review_outcome_for_no_send_test(summary: &str) -> review::ReviewOutcome {
@@ -21419,6 +23180,73 @@ mod tests {
     }
 
     #[test]
+    fn durable_status_snapshot_reuses_unchanged_store_after_ttl() {
+        let root = temp_root("status-durable-stamp-cache");
+        std::fs::create_dir_all(root.join("runtime")).unwrap();
+        let db_path = crate::paths::core_db(&root);
+        {
+            let engine =
+                lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default()).expect("open lcm db");
+            engine
+                .continuity_init_documents(turn_loop::CHAT_CONVERSATION_ID)
+                .expect("init continuity");
+            engine
+                .add_message_with_outcome(
+                    turn_loop::CHAT_CONVERSATION_ID,
+                    "assistant",
+                    "done",
+                    Some(lcm::AgentOutcome::Success),
+                )
+                .expect("add outcome message");
+        }
+
+        clear_durable_status_snapshot_cache_for_tests();
+        let first = durable_status_snapshot_cached(&root, Duration::ZERO);
+        assert_eq!(first.last_agent_outcome.as_deref(), Some("Success"));
+        assert_eq!(durable_status_load_count_for_test(&root), 1);
+        assert_eq!(durable_status_lcm_outcome_open_count_for_test(&root), 1);
+
+        let second = durable_status_snapshot_cached(&root, Duration::ZERO);
+        assert_eq!(second.last_agent_outcome.as_deref(), Some("Success"));
+        assert_eq!(
+            durable_status_load_count_for_test(&root),
+            1,
+            "unchanged status stores should reuse the cached durable snapshot even after ttl"
+        );
+        assert_eq!(
+            durable_status_lcm_outcome_open_count_for_test(&root),
+            1,
+            "unchanged status stores must not reopen LCM just to refresh status"
+        );
+
+        channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Invalidate durable status".to_string(),
+                prompt: "Confirm cache invalidation.".to_string(),
+                thread_key: "queue/status-cache".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("create queue task");
+        let third = durable_status_snapshot_cached(&root, Duration::ZERO);
+        assert_eq!(third.runnable_count, 1);
+        assert_eq!(
+            durable_status_load_count_for_test(&root),
+            2,
+            "core DB changes must invalidate the durable status cache"
+        );
+        assert_eq!(durable_status_lcm_outcome_open_count_for_test(&root), 2);
+
+        clear_durable_status_snapshot_cache_for_tests();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn service_status_separates_blocked_queue_tasks_from_pending() {
         let root = temp_root("status-blocked-queue");
         let task = channels::create_queue_task(
@@ -21569,7 +23397,14 @@ mod tests {
             stream.flush().unwrap();
         });
 
-        let status = service_status_snapshot(&root).unwrap();
+        let status = service_status_snapshot_with(
+            &root,
+            &StatusProbeOptions {
+                status_ipc_timeout: Some(Duration::from_millis(100)),
+                ..StatusProbeOptions::default()
+            },
+        )
+        .unwrap();
         handle.join().unwrap();
 
         assert!(status.running);
@@ -24274,7 +26109,9 @@ Business OS command:
         assert_eq!(blocked.route_status, "blocked");
         assert_eq!(
             blocked.status_note.as_deref(),
-            Some("business-os:blocked-unstarted-app: app target still missing or empty after 1 automatic requeue(s); owner review required before retry")
+            Some(
+                "business-os:blocked-unstarted-app: app target still missing or empty after 1 automatic requeue(s); owner review required before retry"
+            )
         );
         assert_eq!(
             business_os_app_unstarted_requeue_count(&root, &blocked)
@@ -24327,7 +26164,9 @@ Business OS command:
         assert_eq!(blocked.route_status, "blocked");
         assert_eq!(
             blocked.status_note.as_deref(),
-            Some("business-os:blocked-unstarted-app: app target still missing or empty after 1 automatic requeue(s); owner review required before retry")
+            Some(
+                "business-os:blocked-unstarted-app: app target still missing or empty after 1 automatic requeue(s); owner review required before retry"
+            )
         );
         assert_eq!(
             business_os_app_unstarted_requeue_count(&root, &blocked)
@@ -28449,6 +30288,58 @@ Use shell tools to create or update these files."
     }
 
     #[test]
+    fn cv_print_runtime_retry_keeps_original_parser_prompt() {
+        let root = temp_root("cv-print-runtime-retry-prompt");
+        let original_prompt = "ctox-cv-print-parser\nCV PDF extracted text:\nJulia Schikore\nPayload JSON:\n{\"writeback_contract\":{\"command_type\":\"ctox.cv_print.apply_parse\"}}"
+            .to_string();
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "CV strukturieren".to_string(),
+                prompt: original_prompt.clone(),
+                thread_key: "business-os/cv-print-builder".to_string(),
+                workspace_root: Some("/home/ctox/.local/lib/ctox/current".to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: Some("ctox-cv-print-parser".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create cv parser queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease cv parser queue task");
+        let job = QueuedPrompt {
+            prompt: original_prompt.clone(),
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: task.suggested_skill.clone(),
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: Some("/home/ctox/.local/lib/ctox/current".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let updated =
+            apply_runtime_retry_feedback_to_leased_queue(&root, &job, "database is locked")
+                .expect("runtime retry feedback should update status note");
+        let saved = channels::load_queue_task(&root, &task.message_key)
+            .expect("queue load should succeed")
+            .expect("queue task should exist");
+
+        assert_eq!(updated, 1);
+        assert_eq!(saved.prompt, original_prompt);
+        assert!(saved
+            .status_note
+            .as_deref()
+            .unwrap_or_default()
+            .contains("kept original task prompt"));
+    }
+
+    #[test]
     fn runtime_rate_limit_error_is_retryable_api_failure() {
         let error = "stream disconnected before completion: HTTP status 429 Too Many Requests";
         assert_eq!(
@@ -28936,11 +30827,9 @@ Use shell tools to create or update these files."
 
         assert_eq!(route_status_for(&state_root, &task.message_key), "handled");
         let shared = lock_shared_state(&state);
-        assert!(shared
-            .recent_events
-            .iter()
-            .any(|event| event
-                .contains("Recovered 1 abandoned Business OS app queue task(s) at boot")));
+        assert!(shared.recent_events.iter().any(|event| {
+            event.contains("Recovered 1 abandoned Business OS app queue task(s) at boot")
+        }));
     }
 
     #[test]
@@ -29219,15 +31108,14 @@ Use shell tools to create or update these files."
         )
         .expect("failed to seed durable queue task");
 
-        let skipped = maybe_next_idle_dispatch_prompt(&root, &state)
-            .expect("backoff idle dispatch should not fail");
-        assert!(skipped.is_none());
-        assert_eq!(route_status_for(&root, &queue_task.message_key), "pending");
+        assert!(
+            !should_skip_idle_durable_queue_empty_probe(&root),
+            "a core DB change must reopen the durable queue empty gate"
+        );
 
-        clear_idle_durable_queue_empty_gate(&root);
         let next = maybe_next_idle_dispatch_prompt(&root, &state)
-            .expect("idle dispatch should not fail after clearing backoff")
-            .expect("expected durable queue prompt after clearing backoff");
+            .expect("idle dispatch should not fail after queue source changed")
+            .expect("expected durable queue prompt after queue source changed");
         match next {
             IdleDispatchPrompt::Durable(prompt) => {
                 assert_eq!(prompt.leased_message_keys, vec![queue_task.message_key]);

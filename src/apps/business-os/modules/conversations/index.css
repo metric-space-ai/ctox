@@ -88,6 +88,13 @@
 .conv-channel-dot[data-dot="jami"]     { background: #b794f4; }
 .conv-channel-dot[data-dot="teams"]    { background: #5059c9; }
 .conv-channel-dot[data-dot="meeting"]  { background: #f6a050; }
+.conv-channel-dot[data-dot="slack"]    { background: #36c5f0; }
+.conv-channel-dot[data-dot="discord"]  { background: #5865f2; }
+.conv-channel-dot[data-dot="telegram"] { background: #2aabee; }
+.conv-channel-dot[data-dot="matrix"]   { background: #0dbd8b; }
+.conv-channel-dot[data-dot="mattermost"] { background: #0058cc; }
+.conv-channel-dot[data-dot="zulip"]    { background: #52c2af; }
+.conv-channel-dot[data-dot="google_chat"] { background: #34a853; }
 
 .conv-channel-count {
   display: inline-grid;

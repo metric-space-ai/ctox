@@ -8,34 +8,46 @@ cluster: business
 
 # CTOX CV Print Parser
 
-You turn an unstructured CV/résumé document into a single, normalized print
-profile for the Business OS `cv-print-builder` module. This is a generic
-document→structured-profile task: the recruiting specifics live entirely in the
-output schema, not in this skill's mechanics.
+You turn an unstructured CV/résumé document into the normalized
+qualification-profile model used by the Business OS `cv-print-builder` module.
+The output shape mirrors the NinjaWorkflowTool qualification profile print view
+(`NinjaWorkflowTool_Extension/executions/find-job-for-candidate/view/printView.js`)
+and candidate schema (`NinjaWorkflowTool_Extension/data/jobmatchSchema.js`).
 
 ## When this runs
 
 The `cv-print-builder` module dispatches a `business_os.chat.task` with
 `payload.skill = "ctox-cv-print-parser"`. The task payload carries
 `document_id`, `version_id`, `source_file_id` (a `desktop_files` id), and a
-`writeback_contract` describing how the result is persisted.
+`writeback_contract` describing how the result is persisted. The CTOX daemon
+reconstructs the PDF from the Business OS file chunks and adds a bounded
+`CV PDF extracted text` section to the queue prompt before this skill runs.
 
 ## Inputs
 
 - The source PDF is stored in the Business OS data plane as `desktop_files` +
-  `desktop_file_chunks`, keyed by `source_file_id` / `attachments[0].file_id`.
-- Read it through the CTOX PDF stack and the RxDB/WebRTC data plane only. Never
-  use HTTP fallbacks, external services, or machine-local file paths.
+  `desktop_file_chunks`, keyed by `source_file_id`.
+- Use the bounded `CV PDF extracted text` prompt section as the primary source.
+  Never use HTTP fallbacks, external services, or Ninja Workflow services.
+- Do not call tools or reopen the PDF when `CV PDF extracted text` is present.
+  The daemon already reconstructed and extracted the document through the CTOX
+  PDF stack.
+- If the extracted-text section is missing or obviously corrupt, return a
+  minimal review profile with a warning diagnostic instead of starting a long
+  tool-driven fallback.
 
 ## What to do
 
-1. Read and extract the text of the source PDF.
-2. Structure it into the `ctox.cv_print_profile.v1` profile (see Output).
+1. Use the extracted text provided by the CTOX PDF stack.
+2. Structure it into the `ctox.cv_print_profile.v1` qualification profile (see Output).
    Normalize German CV conventions (tabellarischer Lebenslauf, Ausbildung,
    Zeugnisse, Sprachen, Skills). Split education vs. experience, dedupe, and
    keep dates.
 3. Record every uncertain or missing field in `workflow.diagnostics` rather than
    inventing values.
+4. Return minified JSON and avoid raw CV dumps, but preserve all clearly
+   extracted stations and skill groups. Do not reduce the profile to a tiny
+   preview.
 
 ## Output — return ONLY this JSON object, nothing else
 
@@ -49,14 +61,18 @@ Markdown, no prose, no code fence. The native writeback
   "workflow": { "phase": "review", "diagnostics": [ { "level": "info|warn", "message": "..." } ] },
   "candidate": {
     "name": "...", "firstName": "...", "lastName": "...",
-    "currentRole": "...", "desiredPosition": "...", "location": "...",
-    "availability": "...", "email": "...",
-    "additional": {
-      "cv.education":  [ { "title": "...", "org": "...", "from": "...", "to": "...", "details": "..." } ],
-      "cv.experience": [ { "title": "...", "org": "...", "from": "...", "to": "...", "details": "..." } ],
-      "cv.skills":     [ { "label": "...", "level": "..." } ],
-      "cv.meta":       { "languages": [ { "label": "...", "level": "..." } ], "source_filename": "..." }
-    }
+    "currentRole": "...", "location": "...",
+    "availability": "...", "email": "...", "phone": "...",
+    "birthDate": "...", "nationality": "...",
+    "highestDegree": "...", "degree": "...",
+    "skills": [ "..." ],
+    "languages": [ { "label": "...", "level": "..." } ],
+    "additional": [
+      { "key": "cv.experience", "label": "Berufserfahrung (CV)", "type": "json", "value": [ { "job_title": "...", "employer": "...", "location": "...", "start_date": "...", "end_date": "...", "job_description": [ "..." ] } ] },
+      { "key": "cv.education", "label": "Ausbildung (CV)", "type": "json", "value": [ { "degree": "...", "institution": "...", "major": "...", "specialization": "...", "location": "...", "start_date": "...", "end_date": "...", "details": [ "..." ] } ] },
+      { "key": "cv.skills", "label": "Skills (CV)", "type": "json", "value": { "Fachkenntnisse": [ "..." ], "Sprachkenntnisse": [ "..." ], "Weitere Fähigkeiten": [ "..." ] } },
+      { "key": "cv.meta", "label": "Stammdaten (CV)", "type": "json", "value": { "birthDate": "...", "nationality": "...", "highestDegree": "...", "degree": "...", "availabilityFrom": "...", "languages": [ { "label": "...", "level": "..." } ], "source_filename": "..." } }
+    ]
   }
 }
 ```

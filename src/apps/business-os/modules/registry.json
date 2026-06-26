@@ -166,6 +166,53 @@
       "deletable": false
     },
     {
+      "id": "threads",
+      "title": "Threads",
+      "description": "User-focused Business OS hub for app-linked notes, mentions, handoffs, and CTOX approval requests across durable work lifecycle records.",
+      "entry": "modules/threads/index.html",
+      "collections": [
+        "business_commands",
+        "ctox_queue_tasks",
+        "user_threads",
+        "user_thread_messages",
+        "user_thread_links",
+        "user_notifications",
+        "ctox_task_approval_requests"
+      ],
+      "layout": {
+        "shell": "full-workspace",
+        "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-threads\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-threads\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\" /><stop offset=\"100%\" stop-color=\"#7c3aed\" /></linearGradient></defs><path d=\"M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v7A2.5 2.5 0 0 1 17.5 15H10l-5 4v-4.2A2.5 2.5 0 0 1 4 12.5z\" fill=\"url(#grad-threads)\" fill-opacity=\"0.12\" stroke=\"url(#grad-threads)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><path d=\"M8 8h8M8 11h5\" stroke=\"url(#grad-threads)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><circle cx=\"18\" cy=\"18\" r=\"3\" fill=\"#fff\" stroke=\"url(#grad-threads)\" stroke-width=\"1.5\"></circle><path d=\"M18 16.6v1.7l1.2.8\" stroke=\"url(#grad-threads)\" stroke-width=\"1.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path></svg>",
+        "left": "personal inbox, approvals, and source filters",
+        "center": "durable thread timeline tied to app records",
+        "right": "new notes, CTOX approval requests, and lifecycle context"
+      },
+      "category": "System",
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "tags": [
+        "threads",
+        "mentions",
+        "approvals",
+        "handoff",
+        "ctox"
+      ],
+      "store": {
+        "summary": "Business OS user-space hub for lifecycle-aware collaboration and CTOX approval workflows.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/threads",
+        "installable": false,
+        "editable_after_install": false,
+        "distribution": "system-module"
+      },
+      "install_scope": "core",
+      "default_installed": true,
+      "source": "core",
+      "core": true,
+      "editable": true,
+      "deletable": false
+    },
+    {
       "id": "documents",
       "title": "Documents",
       "description": "Native DOCX document workspace with document explorer, editor surface, and CTOX runbooks.",
@@ -1101,6 +1148,51 @@
       },
       "install_scope": "store",
       "default_installed": false
+    },
+    {
+      "id": "cv-print-builder",
+      "title": "CV Print Builder",
+      "description": "CV-PDFs strukturiert parsen, korrigieren und in einheitliche Druckansichten mit Template-System freigeben.",
+      "entry": "modules/cv-print-builder/index.html",
+      "collections": [
+        "business_commands",
+        "business_chats",
+        "ctox_queue_tasks",
+        "desktop_files",
+        "desktop_file_chunks",
+        "documents",
+        "document_versions"
+      ],
+      "source": "local",
+      "core": false,
+      "editable": true,
+      "deletable": true,
+      "layout": {
+        "shell": "full-workspace",
+        "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-cv-print-builder\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-cv-print-builder\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\"/><stop offset=\"100%\" stop-color=\"#64748b\"/></linearGradient></defs><path d=\"M6 3h8l4 4v14H6z\" fill=\"url(#grad-cv-print-builder)\" fill-opacity=\"0.12\" stroke=\"url(#grad-cv-print-builder)\" stroke-width=\"2\" stroke-linejoin=\"round\"/><path d=\"M14 3v5h4\" stroke=\"url(#grad-cv-print-builder)\" stroke-width=\"2\" stroke-linejoin=\"round\"/><path d=\"M8.5 12h7M8.5 15h7M8.5 18h4\" stroke=\"url(#grad-cv-print-builder)\" stroke-width=\"1.8\" stroke-linecap=\"round\"/></svg>",
+        "left": "Kandidaten-Shards und CV-Import",
+        "center": "Original-PDF, Split-Ansicht und Druckansicht"
+      },
+      "category": "Recruiting",
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "tags": [
+        "cv",
+        "pdf",
+        "print",
+        "parser"
+      ],
+      "store": {
+        "summary": "Business-OS CV-Parser mit PDF-Original, strukturierter Druckansicht, Freigabeprozess und Template-System.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/cv-print-builder",
+        "installable": true,
+        "editable_after_install": true,
+        "distribution": "catalog-module"
+      },
+      "install_scope": "starter",
+      "default_installed": true
     },
     {
       "id": "placements",

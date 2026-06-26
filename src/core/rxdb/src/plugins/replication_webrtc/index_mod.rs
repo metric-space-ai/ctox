@@ -38,7 +38,8 @@ use crate::plugins::replication::{
     RxReplicationState, StreamFactory,
 };
 use crate::plugins::replication_webrtc::connection_handler_rs::{
-    WebRTCRsConfig, WebRTCRsConnectionHandler, WebRTCRsPeer,
+    CollectionAuthzHook, DocumentReadAuthzHook, WebRTCRsConfig, WebRTCRsConnectionHandler,
+    WebRTCRsPeer,
 };
 use crate::plugins::replication_webrtc::signaling_client::SignalingClient;
 use crate::plugins::replication_webrtc::webrtc_helper::{
@@ -246,6 +247,8 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         let file_registry = Arc::new(super::file_fetch_handler::FileFetchRegistry::new(
             protocol_contract_generated::CTOX_QUERY_MAX_IN_FLIGHT_STREAMS as u64,
         ));
+        registry.set_auth_check(Arc::new(|_peer_identity, _collection| true));
+        file_registry.set_auth_check(Arc::new(|_peer_identity, _collection| true));
         let mut master_replication_handlers: HashMap<String, Arc<dyn RxReplicationHandler>> =
             HashMap::new();
         let mut collection_map: HashMap<String, Arc<RxCollection>> = HashMap::new();
@@ -515,6 +518,8 @@ pub async fn replicate_web_rtc_rs_multi(
         ice_servers,
         is_peer_valid,
         None,
+        None,
+        None,
         pull_batch_size,
         push_batch_size,
         retry_time,
@@ -535,7 +540,9 @@ pub async fn replicate_web_rtc_rs_multi_with_url_provider(
     peer_session_id: String,
     ice_servers: Vec<RTCIceServer>,
     is_peer_valid: Option<Arc<dyn Fn(&WebRTCRsPeer) -> bool + Send + Sync>>,
-    collection_authz: Option<Arc<dyn Fn(&str, &str) -> bool + Send + Sync>>,
+    collection_authz: Option<CollectionAuthzHook>,
+    collection_write_authz: Option<CollectionAuthzHook>,
+    document_read_authz: Option<DocumentReadAuthzHook>,
     pull_batch_size: u64,
     push_batch_size: u64,
     retry_time: u64,
@@ -549,6 +556,8 @@ pub async fn replicate_web_rtc_rs_multi_with_url_provider(
     let handler = WebRTCRsConnectionHandler::new_with_signaling(config).await?;
     // #12c: install the per-collection authz hook before peers connect.
     handler.set_collection_authz(collection_authz);
+    handler.set_collection_write_authz(collection_write_authz);
+    handler.set_document_read_authz(document_read_authz);
     replicate_web_rtc_inner(
         collections,
         handler,
@@ -767,13 +776,36 @@ where
                                     }),
                                     Vec::new(),
                                 )
+                            } else if method == "masterWrite"
+                                && !handler_task.is_collection_write_authorized_for_peer(
+                                    &item.peer,
+                                    &target_name,
+                                )
+                            {
+                                replication_error_result(
+                                    "RC_WEBRTC_PEER",
+                                    "replication-io",
+                                    "push",
+                                    serde_json::json!({
+                                        "collection": target_name,
+                                        "message": "peer is not authorized to write collection",
+                                    }),
+                                    Vec::new(),
+                                )
                             } else {
                                 match pool_task.master_handler_for(&target_name) {
                                     Some(master) => {
+                                        let document_filter = if method == "masterChangesSince" {
+                                            handler_task
+                                                .document_filter_for_peer(&item.peer, &target_name)
+                                        } else {
+                                            None
+                                        };
                                         call_master_method(
                                             master.as_ref(),
                                             method,
                                             item.message.params.clone(),
+                                            document_filter,
                                         )
                                         .await
                                     }
@@ -1066,6 +1098,15 @@ where
                                     ) {
                                         continue;
                                     }
+                                    let Some(ev) = handler_for_stream
+                                        .filter_master_change_for_peer(
+                                            &peer_for_stream,
+                                            &collection_name,
+                                            ev,
+                                        )
+                                    else {
+                                        continue;
+                                    };
                                     let resp = WebRTCResponse {
                                         // Collection-qualified id avoids the
                                         // single-id collision when many
@@ -1745,6 +1786,7 @@ async fn call_master_method(
     handler: &dyn RxReplicationHandler,
     method: &str,
     params: Vec<Value>,
+    document_filter: Option<Arc<dyn Fn(&Value) -> bool + Send + Sync>>,
 ) -> Value {
     match method {
         "masterChangesSince" => {
@@ -1758,19 +1800,24 @@ async fn call_master_method(
                 .master_changes_since(normalized_checkpoint.clone(), batch_size)
                 .await
             {
-                Ok(result) => serde_json::to_value(&result).unwrap_or_else(|e| {
-                    replication_error_result(
-                        "RC_PULL",
-                        "replication-pull",
-                        "pull",
-                        serde_json::json!({
-                            "checkpoint": normalized_checkpoint,
-                            "batchSize": batch_size,
-                            "message": format!("masterChangesSince encode: {}", e),
-                        }),
-                        Vec::new(),
-                    )
-                }),
+                Ok(mut result) => {
+                    if let Some(filter) = document_filter {
+                        result.documents.retain(|document| filter(document));
+                    }
+                    serde_json::to_value(&result).unwrap_or_else(|e| {
+                        replication_error_result(
+                            "RC_PULL",
+                            "replication-pull",
+                            "pull",
+                            serde_json::json!({
+                                "checkpoint": normalized_checkpoint,
+                                "batchSize": batch_size,
+                                "message": format!("masterChangesSince encode: {}", e),
+                            }),
+                            Vec::new(),
+                        )
+                    })
+                }
                 Err(error) => replication_error_result(
                     "RC_PULL",
                     "replication-pull",
@@ -1961,6 +2008,7 @@ mod tests {
             &handler,
             "masterChangesSince",
             vec![serde_json::json!({ "sequence": 1 }), Value::from(10)],
+            None,
         )
         .await;
 
@@ -1981,6 +2029,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn call_master_method_filters_master_changes_since_documents() {
+        let handler = StaticReplicationHandler {
+            pull_error: None,
+            push_error: None,
+        };
+
+        let result = call_master_method(
+            &handler,
+            "masterChangesSince",
+            vec![Value::Null, Value::from(10)],
+            Some(Arc::new(|document: &Value| {
+                document.get("id").and_then(Value::as_str) == Some("bob")
+            })),
+        )
+        .await;
+
+        assert_eq!(result["documents"], serde_json::json!([]));
+        assert_eq!(result["checkpoint"], serde_json::json!({ "sequence": 2 }));
+    }
+
+    #[tokio::test]
     async fn call_master_method_wraps_master_write_errors() {
         let handler = StaticReplicationHandler {
             pull_error: None,
@@ -1997,6 +2066,7 @@ mod tests {
                 "newDocumentState": { "id": "alice", "_deleted": false },
                 "assumedMasterState": { "id": "alice", "_deleted": false }
             }])],
+            None,
         )
         .await;
 
@@ -2026,6 +2096,7 @@ mod tests {
             &handler,
             "masterWrite",
             vec![serde_json::json!({ "newDocumentState": { "id": "not-an-array" } })],
+            None,
         )
         .await;
 

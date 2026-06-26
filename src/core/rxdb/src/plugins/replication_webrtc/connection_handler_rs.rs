@@ -74,6 +74,9 @@ pub const ACTIVE_COLLECTIONS_METHOD: &str = "rxdb.activeCollections";
 /// Peer identifier assigned by the shared signaling server.
 pub type WebRTCRsPeer = PeerId;
 
+pub type CollectionAuthzHook = Arc<dyn Fn(&str, &str) -> bool + Send + Sync>;
+pub type DocumentReadAuthzHook = Arc<dyn Fn(&str, &str, &Value) -> bool + Send + Sync>;
+
 #[derive(Clone)]
 pub struct WebRTCRsConfig {
     pub signaling: Arc<SignalingClient>,
@@ -385,7 +388,9 @@ pub struct WebRTCRsConnectionHandler {
     /// `is_collection_authorized_for_peer` consults it with the capability token
     /// the peer presented at handshake (captured into `peer_capability_tokens`).
     /// `None` => no enforcement (default), so replication behavior is unchanged.
-    collection_authz: Arc<Mutex<Option<Arc<dyn Fn(&str, &str) -> bool + Send + Sync>>>>,
+    collection_authz: Arc<Mutex<Option<CollectionAuthzHook>>>,
+    collection_write_authz: Arc<Mutex<Option<CollectionAuthzHook>>>,
+    document_read_authz: Arc<Mutex<Option<DocumentReadAuthzHook>>>,
     peer_capability_tokens: Arc<Mutex<HashMap<WebRTCRsPeer, String>>>,
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
@@ -436,6 +441,8 @@ impl WebRTCRsConnectionHandler {
             frame_counter: AtomicU64::new(0),
             backpressure: Arc::new(Mutex::new(HashMap::new())),
             collection_authz: Arc::new(Mutex::new(None)),
+            collection_write_authz: Arc::new(Mutex::new(None)),
+            document_read_authz: Arc::new(Mutex::new(None)),
             peer_capability_tokens: Arc::new(Mutex::new(HashMap::new())),
             tasks: Mutex::new(Vec::new()),
         }
@@ -443,11 +450,21 @@ impl WebRTCRsConnectionHandler {
 
     /// #12c: install the per-collection read-authz hook. Set once right after
     /// construction, before any peer connects. `None` disables enforcement.
-    pub fn set_collection_authz(
-        &self,
-        hook: Option<Arc<dyn Fn(&str, &str) -> bool + Send + Sync>>,
-    ) {
+    pub fn set_collection_authz(&self, hook: Option<CollectionAuthzHook>) {
         *self.collection_authz.lock() = hook;
+    }
+
+    /// Optional per-collection write gate. Native-owned collections can keep
+    /// read replication enabled while forcing browser mutations through
+    /// explicit command records.
+    pub fn set_collection_write_authz(&self, hook: Option<CollectionAuthzHook>) {
+        *self.collection_write_authz.lock() = hook;
+    }
+
+    /// Optional per-document read gate for user-scoped collections. When absent
+    /// the master returns the original unfiltered document batches.
+    pub fn set_document_read_authz(&self, hook: Option<DocumentReadAuthzHook>) {
+        *self.document_read_authz.lock() = hook;
     }
 
     /// Phase 1: fetch (or lazily create) the backpressure signal for a peer.
@@ -926,6 +943,67 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
                     .cloned()
                     .unwrap_or_default();
                 check(&token, collection)
+            }
+        }
+    }
+
+    /// Fail-open write authorization unless a caller installs a write hook.
+    fn is_collection_write_authorized_for_peer(&self, peer: &Self::Peer, collection: &str) -> bool {
+        let hook = self.collection_write_authz.lock().clone();
+        match hook {
+            None => true,
+            Some(check) => {
+                let token = self
+                    .peer_capability_tokens
+                    .lock()
+                    .get(peer)
+                    .cloned()
+                    .unwrap_or_default();
+                check(&token, collection)
+            }
+        }
+    }
+
+    fn document_filter_for_peer(
+        &self,
+        peer: &Self::Peer,
+        collection: &str,
+    ) -> Option<Arc<dyn Fn(&Value) -> bool + Send + Sync>> {
+        let hook = self.document_read_authz.lock().clone()?;
+        let token = self
+            .peer_capability_tokens
+            .lock()
+            .get(peer)
+            .cloned()
+            .unwrap_or_default();
+        let collection = collection.to_string();
+        Some(Arc::new(move |document: &Value| {
+            hook(&token, &collection, document)
+        }))
+    }
+
+    fn filter_master_change_for_peer(
+        &self,
+        peer: &Self::Peer,
+        collection: &str,
+        change: crate::types::RxReplicationMasterChange,
+    ) -> Option<crate::types::RxReplicationMasterChange> {
+        let Some(filter) = self.document_filter_for_peer(peer, collection) else {
+            return Some(change);
+        };
+        match change {
+            crate::types::RxReplicationMasterChange::Resync => {
+                Some(crate::types::RxReplicationMasterChange::Resync)
+            }
+            crate::types::RxReplicationMasterChange::Documents(mut documents) => {
+                documents.documents.retain(|document| filter(document));
+                if documents.documents.is_empty() {
+                    None
+                } else {
+                    Some(crate::types::RxReplicationMasterChange::Documents(
+                        documents,
+                    ))
+                }
             }
         }
     }
@@ -2325,6 +2403,35 @@ mod tests {
         // Removing enforcement returns to fail-open.
         handler.set_collection_authz(None);
         assert!(handler.is_collection_authorized_for_peer(&other, "anything"));
+    }
+
+    #[test]
+    fn write_and_document_authz_hooks_are_fail_open_then_enforced() {
+        let handler = WebRTCRsConnectionHandler::new();
+        let peer = "peer-1".to_string();
+        assert!(handler.is_collection_write_authorized_for_peer(&peer, "user_threads"));
+        assert!(handler
+            .document_filter_for_peer(&peer, "user_threads")
+            .is_none());
+
+        handler.set_collection_write_authz(Some(Arc::new(|token: &str, collection: &str| {
+            token == "tok-abc" && collection == "business_commands"
+        })));
+        handler.set_document_read_authz(Some(Arc::new(
+            |token: &str, _collection: &str, document: &Value| {
+                token == "tok-abc"
+                    && document.get("user_id").and_then(Value::as_str) == Some("alice")
+            },
+        )));
+        assert!(!handler.is_collection_write_authorized_for_peer(&peer, "business_commands"));
+        handler.set_peer_capability_token(&peer, "tok-abc".to_string());
+        assert!(handler.is_collection_write_authorized_for_peer(&peer, "business_commands"));
+        assert!(!handler.is_collection_write_authorized_for_peer(&peer, "user_threads"));
+        let filter = handler
+            .document_filter_for_peer(&peer, "user_notifications")
+            .expect("document filter");
+        assert!(filter(&serde_json::json!({ "user_id": "alice" })));
+        assert!(!filter(&serde_json::json!({ "user_id": "bob" })));
     }
 
     /// REGRESSION (52a1bf45): when the task draining a peer's send queue is

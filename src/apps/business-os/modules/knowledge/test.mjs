@@ -28,6 +28,12 @@ const {
   localDataFrameRows,
   localDataFrameSchema,
   mergeKnowledgeTableData,
+  canonicalCellValue,
+  columnHeaderHelp,
+  columnHeaderLabel,
+  dataframeToCsv,
+  formatCell,
+  normalizeColumns,
   normalizeStoredKnowledgeRecord,
   sourceScopeFor,
   valueForColumn,
@@ -107,6 +113,63 @@ test('merges item metadata with table payload data for dataframe rendering', () 
   assert.equal(localDataFrameRows(merged)[0].score, 88);
   assert.equal(localDataFrameSchema(merged).columns.length, 2);
   assert.equal(valueForColumn({ score_value: 91 }, { key: 'score_value', label: 'Score' }), 91);
+});
+
+test('standardizes dataframe headers with units and hover help', () => {
+  const [propeller, thrust] = normalizeColumns([
+    { name: 'propeller_size', label: 'Propeller size' },
+    { name: 'thrust_N', type: 'number' },
+  ]);
+
+  assert.equal(columnHeaderLabel(propeller), 'Propeller size (diameter x pitch, mm)');
+  assert.match(columnHeaderHelp(propeller), /9x5 means 9 inch diameter and 5 inch pitch/);
+  assert.equal(columnHeaderLabel(thrust), 'Thrust (N)');
+  assert.match(columnHeaderHelp(thrust), /newtons/i);
+});
+
+test('formats factual numeric values without locale separators', () => {
+  const [thrust, length] = normalizeColumns([
+    { name: 'thrust_N', type: 'number' },
+    { name: 'arm_length', unit: 'in', type: 'number' },
+  ]);
+
+  assert.equal(formatCell(1234.5, thrust), '1234.5');
+  assert.equal(formatCell('1.234,50', thrust), '1234.5');
+  assert.equal(formatCell(9, length), '228.6');
+});
+
+test('infers inch source units from dataframe column names and exports metric values', () => {
+  const [diameter, pitch] = normalizeColumns([
+    { name: 'prop_diameter_in', label: 'Prop Diameter In (mm)', unit: 'mm', type: 'number' },
+    { name: 'prop_pitch_in', label: 'Prop Pitch In (mm)', unit: 'mm', type: 'number' },
+  ]);
+
+  assert.equal(columnHeaderLabel(diameter), 'Prop Diameter (mm)');
+  assert.equal(columnHeaderLabel(pitch), 'Prop Pitch (mm)');
+  assert.match(columnHeaderHelp(diameter), /Source unit: in/);
+  assert.match(columnHeaderHelp(diameter), /Shown\/exported metric unit: mm/);
+  assert.equal(formatCell(9, diameter), '228.6');
+  assert.equal(formatCell(5, pitch), '127');
+  assert.equal(dataframeToCsv([diameter, pitch], [{ prop_diameter_in: 9, prop_pitch_in: 5 }]), 'Prop Diameter (mm),Prop Pitch (mm)\n228.6,127');
+});
+
+test('normalizes propeller sizes from inch shorthand to metric dimensions', () => {
+  const [propeller] = normalizeColumns([{ name: 'propeller_size', label: 'Propeller size' }]);
+
+  assert.equal(canonicalCellValue('9x5', propeller), '228.6 x 127');
+  assert.equal(canonicalCellValue('10.5x4.5', propeller), '266.7 x 114.3');
+});
+
+test('exports dataframe CSV with metric headers and Excel-friendly numeric cells', () => {
+  const columns = normalizeColumns([
+    { name: 'propeller_size', label: 'Propeller size' },
+    { name: 'thrust_N', type: 'number' },
+  ]);
+  const csv = dataframeToCsv(columns, [
+    { propeller_size: '9x5', thrust_N: '1.234,50' },
+  ]);
+
+  assert.equal(csv, '"Propeller size (diameter x pitch, mm)",Thrust (N)\n228.6 x 127,1234.5');
 });
 
 test('source filters classify user and system knowledge', () => {

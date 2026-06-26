@@ -66,10 +66,8 @@ function assertPackagedHelper(helperPath) {
 
 async function exercisePackagedHelper(helperPath) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ctox-business-os-desktop-packaged-runtime-"));
-  const target = path.join(tempRoot, "business-os");
   const desktopProfile = path.join(tempRoot, "desktop-profile");
   const registryPath = path.join(desktopProfile, "instances.json");
-  fs.mkdirSync(target, { recursive: true });
   fs.mkdirSync(desktopProfile, { recursive: true });
   const secrets = new Map();
   let registry = loadRegistry(registryPath);

@@ -4,6 +4,8 @@
 
 export function createMemoryMetaBackend() {
   const queryWindows = new Map();
+  const queryWindowRefsByDocument = new Map();
+  const queryWindowRefsByWindow = new Map();
   const documentAccess = new Map();
   const cacheStats = new Map();
 
@@ -18,10 +20,34 @@ export function createMemoryMetaBackend() {
       return entry ? { ...entry } : null;
     },
     async deleteQueryWindow(key) {
-      queryWindows.delete(stringKey(key));
+      const normalizedKey = stringKey(key);
+      queryWindows.delete(normalizedKey);
+      deleteQueryWindowRefs(normalizedKey);
     },
     async scanQueryWindows() {
       return Array.from(queryWindows.values(), (record) => ({ ...record }));
+    },
+    async replaceQueryWindowDocumentRefs(record) {
+      const windowKey = queryWindowKey(record);
+      deleteQueryWindowRefs(windowKey);
+      const documentKeys = new Set();
+      for (const id of normalizeDocumentIds(record.documentIds)) {
+        const documentKey = `${record.collection}|${id}`;
+        documentKeys.add(documentKey);
+        const refs = queryWindowRefsByDocument.get(documentKey) || new Set();
+        refs.add(windowKey);
+        queryWindowRefsByDocument.set(documentKey, refs);
+      }
+      queryWindowRefsByWindow.set(windowKey, documentKeys);
+    },
+    async getQueryWindowKeysByDocumentIds(collection, ids) {
+      const keys = new Set();
+      for (const id of normalizeDocumentIds(ids)) {
+        const refs = queryWindowRefsByDocument.get(`${collection}|${id}`);
+        if (!refs) continue;
+        for (const key of refs) keys.add(key);
+      }
+      return Array.from(keys);
     },
     async putDocumentAccess(record) {
       documentAccess.set(documentAccessKey(record), { ...record });
@@ -45,6 +71,8 @@ export function createMemoryMetaBackend() {
     },
     async clear() {
       queryWindows.clear();
+      queryWindowRefsByDocument.clear();
+      queryWindowRefsByWindow.clear();
       documentAccess.clear();
       cacheStats.clear();
     },
@@ -52,6 +80,18 @@ export function createMemoryMetaBackend() {
       // No-op for in-memory backend.
     },
   };
+
+  function deleteQueryWindowRefs(windowKey) {
+    const documentKeys = queryWindowRefsByWindow.get(windowKey);
+    if (!documentKeys) return;
+    for (const documentKey of documentKeys) {
+      const refs = queryWindowRefsByDocument.get(documentKey);
+      if (!refs) continue;
+      refs.delete(windowKey);
+      if (!refs.size) queryWindowRefsByDocument.delete(documentKey);
+    }
+    queryWindowRefsByWindow.delete(windowKey);
+  }
 }
 
 function queryWindowKey(record) {
@@ -66,4 +106,9 @@ function stringKey(key) {
   if (Array.isArray(key)) return key.join('|');
   if (typeof key === 'string') return key;
   throw new TypeError('query window key must be array or string');
+}
+
+function normalizeDocumentIds(ids) {
+  if (!Array.isArray(ids)) return [];
+  return Array.from(new Set(ids.map((id) => String(id || '')).filter(Boolean)));
 }

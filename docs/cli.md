@@ -84,8 +84,8 @@ ctox update rollback
 Switch the active chat model and runtime profile preset:
 
 ```sh
-ctox runtime switch Qwen/Qwen3.6-27B quality --context 128k
-ctox runtime switch openai/gpt-5.4 quality --context 128k --timeout 1800
+ctox runtime switch Qwen/Qwen3.6-27B quality --context 256k
+ctox runtime switch openai/gpt-5.4 quality --context 256k --timeout 1800
 ```
 
 Inspect or start a temporary chat runtime model boost lease:
@@ -297,8 +297,9 @@ ctox business-os status                               # Show native/bundled stat
 ctox business-os peer status                          # Show active pairing configuration
 ctox business-os peer rotate                          # Rotate signaling room and password
 ctox business-os serve [--addr 127.0.0.1:8765]        # Serve Business OS static web app
-ctox business-os app create --instruction "<text>"   # Queue runtime app creation
-ctox business-os app modify <module-id> --instruction "<text>"
+ctox business-os app create --instruction "<text>"           # Queue runtime app creation
+ctox business-os app modify <module-id> --instruction "<text>" # Enqueue app modification
+ctox business-os app validate <id> --installed               # Validate installed app artifact
 ctox business-os modules list|enable|disable          # Manage skill-app module options
 ctox business-os skills list|enable|disable           # Manage packed skills
 ```

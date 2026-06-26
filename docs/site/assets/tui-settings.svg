@@ -17,7 +17,7 @@
 <text x="24" y="214">Provider           local                                            mode     live</text>
 <text x="24" y="230">Base Model         google/gemma-4-E4B-it</text>
 <text x="24" y="246">Chat Preset        Quality                                          Start or stop the CTOX background loop from</text>
-<text x="24" y="262">Context Window     128k                                             within the TUI.</text>
+<text x="24" y="262">Context Window     256k                                             within the TUI.</text>
 <text x="24" y="278">Skill Preset       Standard</text>
 <text x="24" y="294">Refresh Budget     15                                               runtime</text>
 <text x="24" y="310">Autonomy           balanced                                         loop     stopped</text>
@@ -31,7 +31,7 @@
 <text x="24" y="438">Compact Mode       mid-task</text>
 <text x="24" y="454">Compact Fixed N    (empty)                                          plan</text>
 <text x="24" y="470">Compact Threshold  (empty)                                          cache     off</text>
-<text x="24" y="486">Compact Emergency  0.75                                             • Quality Q4K off 128k 108 tok/s</text>
-<text x="24" y="502">                                                                    • Performance Q4K off 128k 108 tok/s</text>
+<text x="24" y="486">Compact Emergency  0.75                                             • Quality Q4K off 256k 108 tok/s</text>
+<text x="24" y="502">                                                                    • Performance Q4K off 256k 108 tok/s</text>
   </g>
 </svg>

@@ -26,6 +26,17 @@ test('document records without is_deleted are active', () => {
   assert.equal(hooks.isActiveDocumentRecord({ id: 'doc_1', is_deleted: true }), false);
 });
 
+test('only superseded draft blobs are reclaimed, never the original or current blob', () => {
+  // Successive autosaves: the previous draft blob is collectable.
+  assert.equal(hooks.isReclaimableDraftBlob('v1_draft_100', 'v1_draft_200'), true);
+  // The original imported source blob must be preserved on first edit.
+  assert.equal(hooks.isReclaimableDraftBlob('v1_blob', 'v1_draft_200'), false);
+  // Never delete the blob the version still points at.
+  assert.equal(hooks.isReclaimableDraftBlob('v1_draft_200', 'v1_draft_200'), false);
+  // No previous blob -> nothing to reclaim.
+  assert.equal(hooks.isReclaimableDraftBlob('', 'v1_draft_200'), false);
+});
+
 test('visibleDocuments filters active normalized rows by status, tag, search, and sort', () => {
   const state = {
     searchQuery: 'vertrag',

@@ -45,12 +45,18 @@ pub fn detect_and_remove_margin_on_page(page: &mut ParsedPage) {
     let normalized: Vec<String> = kept
         .iter()
         .map(|line| {
-            let sliced = if line.len() > min_x {
-                &line[min_x..]
-            } else {
-                ""
-            };
-            sliced.trim_end().to_string()
+            // `min_x` is a character index (computed via `chars().position`), so it
+            // must be translated into a byte offset on a char boundary before
+            // slicing. Indexing `&line[min_x..]` directly treats it as a byte
+            // offset and panics on multibyte input (NBSP, accents, CJK), which is
+            // ubiquitous in real PDFs. `char_indices().nth(min_x)` yields the byte
+            // offset of the `min_x`-th character; lines with `<= min_x` characters
+            // map to end-of-string and slice empty.
+            let start = line
+                .char_indices()
+                .nth(min_x)
+                .map_or(line.len(), |(byte_idx, _)| byte_idx);
+            line[start..].trim_end().to_string()
         })
         .collect();
 
@@ -139,4 +145,46 @@ fn normalize_line_artifacts(line: &str) -> String {
     let line = DOUBLE_PERIOD_RE.replace_all(&line, "$1.$2");
     let line = DUPLICATE_COMMA_RE.replace_all(&line, ",");
     line.into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn page(text: &str) -> ParsedPage {
+        ParsedPage {
+            text: text.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn margin_removal_handles_multibyte_leading_whitespace() {
+        // NBSP (U+00A0, 2 bytes) as leading whitespace gives a char-index `min_x`
+        // that is not a valid byte boundary on the longer line. The pre-fix code
+        // sliced `&line[min_x..]` and panicked with "byte index is not a char
+        // boundary". This must now clean without panicking.
+        let mut p = page(" z\n\u{00a0}z");
+        detect_and_remove_margin_on_page(&mut p);
+        // min_x == 1 char of leading whitespace; one char stripped from each line.
+        assert_eq!(p.text, "z\nz");
+    }
+
+    #[test]
+    fn margin_removal_strips_common_char_indent_with_accents() {
+        // Two leading spaces are common to both lines; the accented content must
+        // survive intact (no byte/char index confusion mid-grapheme).
+        let mut p = page("  Müller\n  Größe");
+        detect_and_remove_margin_on_page(&mut p);
+        assert_eq!(p.text, "Müller\nGröße");
+    }
+
+    #[test]
+    fn margin_removal_is_panic_free_on_cjk_and_short_lines() {
+        // A line shorter than `min_x` characters and CJK content must not panic.
+        let mut p = page("   一\n二");
+        detect_and_remove_margin_on_page(&mut p);
+        // min_x is 0 (line "二" starts at column 0), so nothing is stripped.
+        assert_eq!(p.text, "   一\n二");
+    }
 }

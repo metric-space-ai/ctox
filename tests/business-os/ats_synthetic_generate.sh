@@ -30,6 +30,14 @@ sqlx() { sqlite3 "$DB" "$@"; }
 # ---- purge mode -------------------------------------------------------------
 if [ "${1:-}" = "--purge" ]; then
   echo "Purging batch $BATCH from $DB ..."
+  # placement-fee invoices first (linked via the placement's fee_invoice_id),
+  # before the placements they reference are deleted.
+  sqlx "DELETE FROM business_records WHERE collection='accounting_invoices' AND record_id IN (SELECT json_extract(payload_json,'\$.fee_invoice_id') FROM business_records WHERE collection='placements' AND json_extract(payload_json,'\$.candidate_id') LIKE 'syn_cand_${BATCH}_%');"
+  # nachweis invoices carry the batch in their id; command-created flow records
+  # (submissions/placements) carry no batch_id, so match by candidate prefix.
+  sqlx "DELETE FROM business_records WHERE collection='accounting_invoices' AND record_id LIKE 'inv_nachweis_syn_nw_${BATCH}_%';"
+  sqlx "DELETE FROM business_records WHERE collection IN ('submissions','placements') AND json_extract(payload_json,'\$.candidate_id') LIKE 'syn_cand_${BATCH}_%';"
+  # direct-seeded stammdaten carry the batch_id marker.
   sqlx "DELETE FROM business_records WHERE json_extract(payload_json,'\$.batch_id')='$BATCH';"
   echo "done."; exit 0
 fi

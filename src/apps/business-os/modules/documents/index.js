@@ -2040,11 +2040,21 @@ async function flushActiveSuperDocDraft(state, record = selectedRecord(state), o
       bytes,
     });
     const versionDoc = await documentCollection(state.ctx, 'document_versions').findOne(versionId).exec();
+    const previousBlobId = versionDoc?.get('blob_id') || '';
     await versionDoc?.incrementalPatch({
       source_kind: 'edited_docx',
       blob_id: blobId,
       updated_at_ms: now,
     });
+    // The version now points at the new blob; reclaim the superseded draft
+    // blob's chunks so per-keystroke autosaves don't accumulate unbounded full-
+    // document copies that replicate over WebRTC (the original imported blob is
+    // preserved).
+    if (isReclaimableDraftBlob(previousBlobId, blobId)) {
+      await deleteBlobChunks(state.ctx, previousBlobId).catch((error) => {
+        console.warn('[documents] failed to reclaim superseded draft blob', error);
+      });
+    }
     const recordDoc = await documentCollection(state.ctx, 'documents').findOne(recordId).exec();
     await recordDoc?.incrementalPatch({
       status: 'Draft',
@@ -2155,6 +2165,25 @@ async function saveBlobChunks(ctx, input) {
       created_at_ms: Date.now(),
     });
   }
+}
+
+// True when a version's previous blob is a superseded draft blob that can be
+// garbage-collected after the version is repointed to a new one. Draft blobs are
+// timestamped per autosave; the original imported source blob (no `_draft_`
+// marker) and the freshly written blob are never reclaimed.
+function isReclaimableDraftBlob(previousBlobId, currentBlobId) {
+  return Boolean(previousBlobId)
+    && previousBlobId !== currentBlobId
+    && String(previousBlobId).includes('_draft_');
+}
+
+async function deleteBlobChunks(ctx, blobId) {
+  requireDocumentPersistence(ctx);
+  if (!blobId) return;
+  const chunks = await documentCollection(ctx, 'document_blob_chunks')
+    .find({ selector: { blob_id: blobId } })
+    .exec();
+  await Promise.all(chunks.map((chunk) => chunk.remove()));
 }
 
 async function loadBlobBytes(ctx, blobId) {
@@ -2361,6 +2390,7 @@ export const __documentsTestHooks = {
   validateImportInput,
   validateNewDocumentInput,
   visibleDocuments,
+  isReclaimableDraftBlob,
 };
 
 function escapeHtml(value) {

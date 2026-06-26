@@ -9,8 +9,8 @@
 use std::fmt::Write as _;
 
 use crate::report::render::manuscript::{
-    AbbreviationRow, Manuscript, ManuscriptBlock, ManuscriptBlockKind, ManuscriptDoc,
-    ManuscriptTable, ReferenceEntry, StructuredFigure, StructuredTable,
+    AbbreviationRow, Manuscript, ManuscriptBlock, ManuscriptDoc, ManuscriptTable, ReferenceEntry,
+    StructuredFigure, StructuredTable,
 };
 use std::collections::HashMap;
 
@@ -363,26 +363,21 @@ fn write_block(out: &mut String, block: &ManuscriptBlock) {
     let _ = writeln!(out, "{prefix} {}", ascii_dashes(&block.title));
     out.push('\n');
 
-    let body = ascii_dashes(&block.markdown);
+    let body = ascii_dashes_prose(&block.markdown);
     let body_trimmed = body.trim();
     if !body_trimmed.is_empty() {
         out.push_str(body_trimmed);
         out.push_str("\n\n");
     }
 
-    if matches!(
-        block.kind,
-        ManuscriptBlockKind::Matrix
-            | ManuscriptBlockKind::ScenarioGrid
-            | ManuscriptBlockKind::RiskRegister
-            | ManuscriptBlockKind::DefectCatalog
-            | ManuscriptBlockKind::CompetitorMatrix
-            | ManuscriptBlockKind::CriteriaTable
-            | ManuscriptBlockKind::AbbreviationTable
-    ) {
-        if let Some(table) = &block.table {
-            write_table(out, table);
-        }
+    // `build_manuscript` parses and strips the first Markdown table out of the
+    // body for EVERY block kind (see manuscript.rs `parse_first_markdown_table` /
+    // `extract_non_table_markdown`), storing it on `block.table`. The renderer
+    // must therefore re-emit it for every kind that carries one — gating on a
+    // kind allowlist silently dropped tables embedded in Narrative and
+    // EvidenceRegister blocks.
+    if let Some(table) = &block.table {
+        write_table(out, table);
     }
 }
 
@@ -500,4 +495,168 @@ fn ascii_dashes(value: &str) -> String {
         out.push(replacement);
     }
     out
+}
+
+/// Apply [`ascii_dashes`] to prose only, leaving Markdown code verbatim: fenced
+/// blocks (```` ``` ````/`~~~`) and inline `` `code` `` spans keep their original
+/// dash/prime characters, so identifiers, command lines, and the like are not
+/// corrupted by the ASCII-hyphen normalization.
+fn ascii_dashes_prose(markdown: &str) -> String {
+    let mut out = String::with_capacity(markdown.len());
+    let mut in_fence = false;
+    for line in markdown.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+            out.push_str(line);
+            continue;
+        }
+        if in_fence {
+            out.push_str(line);
+            continue;
+        }
+        // Prose line: convert only the segments outside inline `code` spans.
+        let mut in_code = false;
+        let mut segment = String::new();
+        for ch in line.chars() {
+            if ch == '`' {
+                if in_code {
+                    out.push_str(&segment);
+                } else {
+                    out.push_str(&ascii_dashes(&segment));
+                }
+                segment.clear();
+                out.push('`');
+                in_code = !in_code;
+            } else {
+                segment.push(ch);
+            }
+        }
+        if in_code {
+            out.push_str(&segment);
+        } else {
+            out.push_str(&ascii_dashes(&segment));
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::report::render::manuscript::ManuscriptBlockKind;
+
+    fn sample_table() -> ManuscriptTable {
+        ManuscriptTable {
+            headers: vec!["Abk".into(), "Bedeutung".into()],
+            rows: vec![vec!["CTOX".into(), "Daemon".into()]],
+        }
+    }
+
+    fn block_with_table(kind: ManuscriptBlockKind) -> ManuscriptBlock {
+        ManuscriptBlock {
+            instance_id: "doc__b".into(),
+            block_id: "b".into(),
+            title: "Title".into(),
+            ord: 0,
+            level: 2,
+            kind,
+            // `build_manuscript` would have stripped the table out of the body,
+            // leaving only the surrounding prose here.
+            markdown: "Prose before.".into(),
+            table: Some(sample_table()),
+        }
+    }
+
+    #[test]
+    fn block_table_is_emitted_for_every_kind_not_just_table_kinds() {
+        // Regression for the silent table drop: `build_manuscript` parses and
+        // strips the first table out of EVERY block's body, so the renderer must
+        // re-emit it regardless of kind. Narrative and EvidenceRegister were not
+        // in the old allowlist, so their tables vanished from the output.
+        for kind in [
+            ManuscriptBlockKind::Narrative,
+            ManuscriptBlockKind::EvidenceRegister,
+            ManuscriptBlockKind::Matrix,
+        ] {
+            let mut out = String::new();
+            write_block(&mut out, &block_with_table(kind.clone()));
+            assert!(
+                out.contains("| Abk | Bedeutung |"),
+                "header row missing for {kind:?}: {out}"
+            );
+            assert!(
+                out.contains("| CTOX | Daemon |"),
+                "data row missing for {kind:?}: {out}"
+            );
+            assert!(
+                out.contains("Prose before."),
+                "surrounding prose missing for {kind:?}: {out}"
+            );
+        }
+    }
+
+    #[test]
+    fn write_table_pads_short_rows_and_escapes_pipes() {
+        let table = ManuscriptTable {
+            headers: vec!["A".into(), "B".into(), "C".into()],
+            rows: vec![
+                vec!["x|y".into(), "z".into()], // short row + pipe to escape
+                vec!["1".into(), "2".into(), "3".into()],
+            ],
+        };
+        let mut out = String::new();
+        write_table(&mut out, &table);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[0], "| A | B | C |");
+        assert_eq!(lines[1], "| --- | --- | --- |");
+        // Pipe inside a cell is escaped; the short row is padded to 3 columns.
+        assert_eq!(lines[2], r"| x\|y | z |  |");
+        assert_eq!(lines[3], "| 1 | 2 | 3 |");
+    }
+
+    #[test]
+    fn write_table_with_empty_headers_emits_nothing() {
+        let table = ManuscriptTable {
+            headers: vec![],
+            rows: vec![vec!["x".into()]],
+        };
+        let mut out = String::new();
+        write_table(&mut out, &table);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn ascii_dashes_normalizes_unicode_dashes_and_primes() {
+        // en/em/figure dashes -> ASCII hyphen; prime/double-prime -> ASCII quotes.
+        assert_eq!(ascii_dashes("2020\u{2013}2024"), "2020-2024");
+        assert_eq!(ascii_dashes("low\u{2014}high"), "low-high");
+        assert_eq!(ascii_dashes("5\u{2032}30\u{2033}"), "5'30\"");
+        // Unrelated Unicode is preserved.
+        assert_eq!(ascii_dashes("Größe \u{2728}"), "Größe \u{2728}");
+    }
+
+    #[test]
+    fn ascii_dashes_prose_preserves_dashes_inside_code() {
+        // Prose dashes are normalized; dashes inside inline code and fenced
+        // blocks are left verbatim.
+        let input = "Range 2020\u{2013}2024 and `flag\u{2013}value`.\n```\nx = a\u{2013}b\n```\ntail \u{2014} end\n";
+        let out = ascii_dashes_prose(input);
+        assert!(
+            out.contains("Range 2020-2024"),
+            "prose dash must be ASCII: {out}"
+        );
+        assert!(
+            out.contains("`flag\u{2013}value`"),
+            "inline-code dash must be verbatim: {out}"
+        );
+        assert!(
+            out.contains("x = a\u{2013}b"),
+            "fenced-code dash must be verbatim: {out}"
+        );
+        assert!(
+            out.contains("tail - end"),
+            "prose em-dash must be ASCII: {out}"
+        );
+    }
 }

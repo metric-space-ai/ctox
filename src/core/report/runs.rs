@@ -1,14 +1,14 @@
 //! `report_runs` CRUD: creating runs, listing, showing state.
 
+use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
-use anyhow::bail;
+use rusqlite::params;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
-use rusqlite::params;
 use serde::Serialize;
-use serde_json::Value;
 use serde_json::json;
+use serde_json::Value;
 
 use crate::report::blueprints::Blueprint;
 use crate::report::state_machine::Status;
@@ -86,7 +86,7 @@ pub fn load_run(conn: &Connection, run_id: &str) -> Result<Option<RunView>> {
 
 pub fn list_runs(conn: &Connection, status: Option<&str>, limit: usize) -> Result<Vec<RunView>> {
     let limit = limit.clamp(1, 200) as i64;
-    let mut rows: Vec<RunView> = if let Some(status) = status {
+    let rows: Vec<RunView> = if let Some(status) = status {
         let mut stmt = conn.prepare(
             "SELECT run_id, preset, blueprint_version, topic, language, status,
                     last_stage, next_stage, created_at, updated_at
@@ -130,7 +130,6 @@ pub fn list_runs(conn: &Connection, status: Option<&str>, limit: usize) -> Resul
         })?;
         it.collect::<rusqlite::Result<Vec<_>>>()?
     };
-    rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     Ok(rows)
 }
 

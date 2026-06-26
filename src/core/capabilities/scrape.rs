@@ -2591,6 +2591,61 @@ fn build_repair_prompt(
     )
 }
 
+/// Host environment variables preserved when running a scrape runner script.
+///
+/// The runner body is hot-revisable and may be rewritten by the auto-heal
+/// repair LLM, so we must treat it as untrusted. We `env_clear()` the child and
+/// re-add only what `node`/`tsx`/`bash`/Playwright/Chromium genuinely need to
+/// start, so a rewritten runner cannot read arbitrary daemon environment
+/// (including any secrets that happen to live there). Everything CTOX-specific
+/// is passed explicitly via the `CTOX_SCRAPE_*` variables.
+const SCRAPE_RUNNER_ENV_ALLOWLIST: &[&str] = &[
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "LANG",
+    "LANGUAGE",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LC_MESSAGES",
+    "PLAYWRIGHT_BROWSERS_PATH",
+    // Windows essentials so the node/Chromium process can start.
+    "SYSTEMROOT",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "PATHEXT",
+    "COMSPEC",
+    "WINDIR",
+];
+
+fn is_preserved_runner_env_key(key: &str) -> bool {
+    SCRAPE_RUNNER_ENV_ALLOWLIST
+        .iter()
+        .any(|allowed| allowed.eq_ignore_ascii_case(key))
+}
+
+/// Kill a timed-out runner and (on unix) its whole process group, so descendant
+/// processes such as Chromium are not orphaned. The child was spawned with
+/// `process_group(0)`, making it the group leader (pgid == child pid).
+fn kill_runner_process_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let pid = child.id() as libc::pid_t;
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+    }
+}
+
 fn execute_registered_script(
     target: &RegisteredTarget,
     run_dir: &Path,
@@ -2614,6 +2669,16 @@ fn execute_registered_script(
     let args = materialized.into_iter().skip(1).collect::<Vec<_>>();
 
     let mut child = Command::new(&executable);
+    // Trust boundary: the runner body is untrusted (hot-revisable / auto-heal
+    // LLM-rewritten). Start from an empty environment and re-add only the
+    // allow-listed host vars, so the script cannot read daemon secrets via the
+    // environment. CTOX-specific inputs are passed explicitly below.
+    child.env_clear();
+    for (key, value) in std::env::vars_os() {
+        if key.to_str().is_some_and(is_preserved_runner_env_key) {
+            child.env(&key, &value);
+        }
+    }
     child
         .args(&args)
         .current_dir(&target.workspace_root)
@@ -2668,6 +2733,13 @@ fn execute_registered_script(
         child.env("CTOX_SCRAPE_INPUT_JSON", text);
     }
     child.stdout(Stdio::piped()).stderr(Stdio::piped());
+    // Own process group so a timeout kills the whole runner tree (node/bash plus
+    // any Playwright/Chromium children), not just the direct parent.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        child.process_group(0);
+    }
 
     let mut child = child
         .spawn()
@@ -2702,7 +2774,7 @@ fn execute_registered_script(
         }
         if started.elapsed() >= Duration::from_secs(timeout_seconds) {
             timed_out = true;
-            let _ = child.kill();
+            kill_runner_process_tree(&mut child);
             let status = child.wait()?;
             break status.code();
         }
@@ -4562,6 +4634,22 @@ mod tests {
     use super::*;
     use std::io::BufReader;
     use std::net::TcpListener;
+
+    #[test]
+    fn scrape_runner_env_allowlist_keeps_runtime_drops_secrets() {
+        // Things node/Playwright need to start are preserved...
+        assert!(is_preserved_runner_env_key("PATH"));
+        assert!(is_preserved_runner_env_key("home")); // case-insensitive
+        assert!(is_preserved_runner_env_key("LANG"));
+        // ...but daemon secrets and arbitrary env are not handed to the
+        // untrusted, auto-heal-rewritable runner.
+        assert!(!is_preserved_runner_env_key("OPENAI_API_KEY"));
+        assert!(!is_preserved_runner_env_key("DNB_DIRECT_API_KEY"));
+        assert!(!is_preserved_runner_env_key("AWS_SECRET_ACCESS_KEY"));
+        assert!(!is_preserved_runner_env_key("CTOX_SECRET_TOKEN"));
+        assert!(!is_preserved_runner_env_key("GITHUB_TOKEN"));
+    }
+
     use std::net::TcpStream;
     #[cfg(unix)]
     use std::os::unix::net::UnixListener;

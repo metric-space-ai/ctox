@@ -16,6 +16,12 @@ export const collections = {
       updated_at_ms: { type: 'number' }
     },
     required: ['id', 'command_id', 'module', 'command_type', 'status', 'updated_at_ms'],
+    indexes: [
+      'status',
+      'command_id',
+      ['status', 'updated_at_ms'],
+      ['module', 'command_type', 'status', 'updated_at_ms']
+    ],
     additionalProperties: true
   },
   ctox_queue_tasks: {
@@ -24,6 +30,8 @@ export const collections = {
     type: 'object',
     properties: {
       id: { type: 'string', maxLength: 128 },
+      command_id: { type: 'string' },
+      command_type: { type: 'string' },
       title: { type: 'string' },
       status: { type: 'string' },
       module: { type: 'string' },
@@ -32,6 +40,13 @@ export const collections = {
       updated_at_ms: { type: 'number' }
     },
     required: ['id', 'title', 'status', 'module'],
+    indexes: [
+      'status',
+      'command_id',
+      'updated_at_ms',
+      ['status', 'updated_at_ms'],
+      ['command_id', 'status']
+    ],
     additionalProperties: true
   },
   business_chats: {
@@ -45,6 +60,12 @@ export const collections = {
       minimized: { type: 'boolean' },
       owner_user_id: { type: 'string' },
       lastTrackingId: { type: 'string' },
+      tracking_active: { type: 'boolean' },
+      tracking_status: { type: 'string' },
+      tracking_id: { type: 'string' },
+      tracking_command_id: { type: 'string' },
+      tracking_task_id: { type: 'string' },
+      tracking_message_id: { type: 'string' },
       messages: {
         type: 'array',
         items: { type: 'object', additionalProperties: true }
@@ -54,6 +75,18 @@ export const collections = {
       updated_at_ms: { type: 'number' }
     },
     required: ['id', 'title', 'updated_at_ms'],
+    indexes: [
+      'owner_user_id',
+      'lastTrackingId',
+      'tracking_active',
+      'tracking_status',
+      'tracking_id',
+      'tracking_command_id',
+      'tracking_task_id',
+      'updated_at_ms',
+      ['tracking_active', 'updated_at_ms'],
+      ['tracking_active', 'tracking_status', 'updated_at_ms']
+    ],
     additionalProperties: true
   },
   ctox_runs: {

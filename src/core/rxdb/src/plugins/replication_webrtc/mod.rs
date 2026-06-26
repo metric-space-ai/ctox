@@ -38,7 +38,10 @@ pub mod v1_5_status;
 pub mod webrtc_helper;
 pub mod webrtc_types;
 
-pub use connection_handler_rs::{WebRTCRsConfig, WebRTCRsConnectionHandler, WebRTCRsPeer};
+pub use connection_handler_rs::{
+    CollectionAuthzHook, DocumentReadAuthzHook, WebRTCRsConfig, WebRTCRsConnectionHandler,
+    WebRTCRsPeer,
+};
 pub use index_mod::{
     master_change_stream_id, replicate_web_rtc, replicate_web_rtc_multi, replicate_web_rtc_rs,
     replicate_web_rtc_rs_multi, replicate_web_rtc_rs_multi_with_url_provider,

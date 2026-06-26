@@ -160,6 +160,36 @@ pub trait WebRTCConnectionHandler: Send + Sync {
     fn is_collection_authorized_for_peer(&self, _peer: &Self::Peer, _collection: &str) -> bool {
         true
     }
+
+    /// Optional write gate for native-owned collections. Generic handlers keep
+    /// the upstream behavior and allow writes.
+    fn is_collection_write_authorized_for_peer(
+        &self,
+        _peer: &Self::Peer,
+        _collection: &str,
+    ) -> bool {
+        true
+    }
+
+    /// Optional per-peer document filter for master responses and live changes.
+    /// Returning `None` drops the whole change event for that peer.
+    fn filter_master_change_for_peer(
+        &self,
+        _peer: &Self::Peer,
+        _collection: &str,
+        change: crate::types::RxReplicationMasterChange,
+    ) -> Option<crate::types::RxReplicationMasterChange> {
+        Some(change)
+    }
+
+    /// Optional predicate used by `masterChangesSince` responses.
+    fn document_filter_for_peer(
+        &self,
+        _peer: &Self::Peer,
+        _collection: &str,
+    ) -> Option<Arc<dyn Fn(&Value) -> bool + Send + Sync>> {
+        None
+    }
 }
 
 /// Soft threshold above which the V1.5 dispatcher yields and waits before

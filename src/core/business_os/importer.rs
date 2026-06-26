@@ -435,6 +435,47 @@ fn outbound_company_research(
     })
 }
 
+/// GDPR provenance for persisted outbound contact rows. Outbound B2B contact
+/// research relies on the legitimate-interest basis; the operator must maintain
+/// a documented Legitimate Interest Assessment and honor erasure requests. We
+/// stamp every persisted person row with a lawful basis, purpose, and retention
+/// horizon so the data is accountable (Art. 5/6) and erasable by `subject_key`.
+/// Field names mirror the CONSENT-1 ledger shape in `ats_gates.rs`.
+const OUTBOUND_CONTACT_LEGAL_BASIS: &str = "legitimate_interest";
+const OUTBOUND_CONTACT_PURPOSE: &str = "outbound_b2b_contact_research";
+const OUTBOUND_CONTACT_BASIS_EVIDENCE: &str =
+    "Operator-asserted B2B prospecting; operator must keep a documented Legitimate \
+     Interest Assessment (LIA) and honor Art. 17 erasure requests.";
+/// Default retention horizon: 180 days. Personal data persisted past this is
+/// over-retained and should be purged by the retention sweep.
+const OUTBOUND_CONTACT_RETENTION_MS: i64 = 180 * 24 * 60 * 60 * 1000;
+
+/// Stable, opaque per-subject key so persisted person rows can be found and
+/// erased on request: the lower-cased email when present, else name + company.
+fn outbound_contact_subject_key(contact: &Value, company_name: &str) -> String {
+    let email = contact
+        .get("email")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
+    let seed = if !email.is_empty() {
+        email
+    } else {
+        format!(
+            "{}|{}",
+            contact
+                .get("contact_name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_lowercase(),
+            company_name.trim().to_lowercase()
+        )
+    };
+    format!("subj_{}", &hex_sha256(seed.as_bytes())[..16])
+}
+
 fn outbound_contact_research(
     root: &Path,
     command_id: &str,
@@ -512,6 +553,15 @@ fn outbound_contact_research(
                 "custom_instruction": str_path(&command.payload, &["custom_instruction"]),
                 "evidence_json": serde_json::to_string(contact.get("evidence").unwrap_or(&Value::Array(Vec::new()))).unwrap_or_else(|_| "[]".to_string()),
                 "updated_at_ms": now,
+                // GDPR provenance (WS2-01 / H2): every persisted person row
+                // carries a lawful basis, purpose, and retention horizon and is
+                // erasable by subject_key.
+                "legal_basis": OUTBOUND_CONTACT_LEGAL_BASIS,
+                "basis_evidence": OUTBOUND_CONTACT_BASIS_EVIDENCE,
+                "purpose": OUTBOUND_CONTACT_PURPOSE,
+                "granted_at_ms": now,
+                "expires_at_ms": now + OUTBOUND_CONTACT_RETENTION_MS,
+                "subject_key": outbound_contact_subject_key(contact, &company_name),
             })
         })
         .collect::<Vec<_>>();
@@ -648,11 +698,7 @@ fn import_matching_requirement(
 
     let mut http_status = 0;
     if html.trim().is_empty() {
-        let response = ureq::get(&url)
-            .set("User-Agent", "Mozilla/5.0 CTOX Business OS Importer")
-            .timeout(Duration::from_secs(30))
-            .call()
-            .with_context(|| format!("failed to fetch {url}"))?;
+        let response = fetch_url_guarded(&url)?;
         http_status = response.status();
         html = response
             .into_string()
@@ -850,10 +896,28 @@ fn import_matching_objects(
             .unwrap_or("application/pdf");
         let bytes =
             decode_file_payload(&file).with_context(|| format!("failed to decode {name}"))?;
-        let raw_text = parse_pdf_text(&bytes).unwrap_or_else(|err| {
+        let mut raw_text = parse_pdf_text(&bytes).unwrap_or_else(|err| {
             eprintln!("[business-os-import] PDF parse failed for {name}: {err:#}");
             String::new()
         });
+        if raw_text.trim().is_empty() {
+            // The native parser extracted no text — almost always a scanned /
+            // image-only PDF. Try a vision-model OCR pass; it degrades to None
+            // when vision is unavailable, in which case we import with empty text
+            // (the record still carries raw_text_length: 0 as a signal).
+            match ocr_pdf_via_vision(root, &bytes) {
+                Some(text) => {
+                    eprintln!(
+                        "[business-os-import] recovered {} chars from {name} via vision OCR",
+                        text.len()
+                    );
+                    raw_text = text;
+                }
+                None => eprintln!(
+                    "[business-os-import] no extractable text from {name} (scanned/image PDF; vision OCR unavailable)"
+                ),
+            }
+        }
         let candidate = parse_candidate_text(name, &raw_text);
         let now_iso = now_iso();
         let now_ms = now_ms() as i64;
@@ -1072,10 +1136,7 @@ fn import_requirement_url(
     let url = str_path(&command.payload, &["source", "url"]);
     anyhow::ensure!(!url.trim().is_empty(), "URL import requires source.url");
 
-    let response = ureq::get(&url)
-        .set("User-Agent", "Mozilla/5.0 CTOX Business OS Importer")
-        .call()
-        .with_context(|| format!("failed to fetch {url}"))?;
+    let response = fetch_url_guarded(&url)?;
     let http_status = response.status();
     let html = response
         .into_string()
@@ -1391,10 +1452,28 @@ fn import_candidate_documents(
         let bytes = BASE64_STANDARD
             .decode(compact_base64)
             .with_context(|| format!("failed to decode {name}"))?;
-        let raw_text = parse_pdf_text(&bytes).unwrap_or_else(|err| {
+        let mut raw_text = parse_pdf_text(&bytes).unwrap_or_else(|err| {
             eprintln!("[business-os-import] PDF parse failed for {name}: {err:#}");
             String::new()
         });
+        if raw_text.trim().is_empty() {
+            // The native parser extracted no text — almost always a scanned /
+            // image-only PDF. Try a vision-model OCR pass; it degrades to None
+            // when vision is unavailable, in which case we import with empty text
+            // (the record still carries raw_text_length: 0 as a signal).
+            match ocr_pdf_via_vision(root, &bytes) {
+                Some(text) => {
+                    eprintln!(
+                        "[business-os-import] recovered {} chars from {name} via vision OCR",
+                        text.len()
+                    );
+                    raw_text = text;
+                }
+                None => eprintln!(
+                    "[business-os-import] no extractable text from {name} (scanned/image PDF; vision OCR unavailable)"
+                ),
+            }
+        }
         let candidate = parse_candidate_text(name, &raw_text);
         let now_iso = now_iso();
         let now_ms = now_ms() as i64;
@@ -2410,6 +2489,100 @@ fn parse_pdf_text(bytes: &[u8]) -> anyhow::Result<String> {
     )
     .context("native PDF parser failed")?;
     Ok(result.text)
+}
+
+/// Maximum number of PDF pages sent to the vision model for OCR (bounds token /
+/// latency cost on long scans).
+const OCR_MAX_PAGES: usize = 8;
+/// Render DPI for OCR page images — legible glyphs without oversized payloads.
+const OCR_RENDER_DPI: u16 = 150;
+const OCR_INSTRUCTIONS: &str = "You are an OCR engine. Transcribe ALL visible text from the \
+    provided PDF page images verbatim, preserving reading order and line breaks. Output only the \
+    transcribed text with no commentary. Separate pages with a blank line.";
+
+/// OCR a (likely scanned / image-only) PDF by rendering its pages and asking a
+/// vision-capable model to transcribe them through the internal Responses
+/// gateway. Returns `Some(text)` on success and `None` whenever vision OCR is
+/// unavailable — no vision-capable model configured, managed local inference
+/// (private-IPC only; no loopback HTTP and no local vision backend wired), or
+/// the gateway is unreachable. It never panics and never fails the import.
+fn ocr_pdf_via_vision(root: &Path, pdf_bytes: &[u8]) -> Option<String> {
+    use base64::Engine as _;
+
+    let resolved =
+        crate::execution::models::runtime_kernel::InferenceRuntimeKernel::resolve(root).ok()?;
+    let model = resolved.active_model()?.to_string();
+    if !crate::execution::models::engine::model_supports_vision(&model) {
+        return None;
+    }
+    if resolved.state.source.is_local() {
+        return None;
+    }
+
+    let pages =
+        ctox_pdf_parse::render_pdf_pages_png(pdf_bytes, OCR_MAX_PAGES, OCR_RENDER_DPI, None)
+            .ok()?;
+    if pages.is_empty() {
+        return None;
+    }
+
+    let mut content: Vec<serde_json::Value> = Vec::with_capacity(pages.len() + 1);
+    content.push(serde_json::json!({"type": "input_text", "text": "Transcribe these PDF pages:"}));
+    for png in &pages {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(png);
+        content.push(serde_json::json!({
+            "type": "input_image",
+            "mime_type": "image/png",
+            "image_data": encoded,
+        }));
+    }
+
+    let request = serde_json::json!({
+        "model": model,
+        "instructions": OCR_INSTRUCTIONS,
+        "input": [{"type": "message", "role": "user", "content": content}],
+    });
+
+    let base_url = resolved.internal_responses_base_url();
+    let response = ureq::post(&format!("{}/v1/responses", base_url.trim_end_matches('/')))
+        .set("content-type", "application/json")
+        .timeout(Duration::from_secs(120))
+        .send_string(&serde_json::to_string(&request).ok()?)
+        .ok()?;
+    let body = response.into_string().ok()?;
+    let payload: serde_json::Value = serde_json::from_str(&body).ok()?;
+    extract_responses_output_text(&payload).filter(|text| !text.trim().is_empty())
+}
+
+/// Extract assistant text from a Responses-API payload, supporting both the flat
+/// `output_text` field and the structured `output[].content[]` array.
+fn extract_responses_output_text(payload: &serde_json::Value) -> Option<String> {
+    use serde_json::Value;
+    if let Some(text) = payload.get("output_text").and_then(Value::as_str) {
+        if !text.trim().is_empty() {
+            return Some(text.to_string());
+        }
+    }
+    payload
+        .get("output")
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items.iter().find_map(|item| {
+                item.get("content")
+                    .and_then(Value::as_array)
+                    .and_then(|content| {
+                        content.iter().find_map(|part| {
+                            if part.get("type").and_then(Value::as_str) == Some("output_text") {
+                                part.get("text")
+                                    .and_then(Value::as_str)
+                                    .map(ToOwned::to_owned)
+                            } else {
+                                None
+                            }
+                        })
+                    })
+            })
+        })
 }
 
 fn extract_candidate_name(filename: &str, text: &str) -> String {
@@ -3631,8 +3804,7 @@ fn build_match_items(
     ];
     dimensions
         .iter()
-        .enumerate()
-        .map(|(idx, (req_id, title, dimension, priority))| {
+        .map(|(req_id, title, dimension, priority)| {
             let score = dimension_score(dimension, job_text, cv_text);
             let match_level = if score >= 0.78 {
                 "full"
@@ -3670,7 +3842,7 @@ fn build_match_items(
                 "updatedAt": now_iso,
                 "priorityKey": priority_key,
                 "matchLevelKey": match_level_key,
-                "matchScoreKey": match_score_key + idx as i64 - idx as i64
+                "matchScoreKey": match_score_key
             })
         })
         .collect()
@@ -3728,21 +3900,67 @@ fn dimension_score(dimension: &str, job_text: &str, cv_text: &str) -> f64 {
         .filter(|keyword| job_lower.contains(&keyword.to_lowercase()))
         .copied()
         .collect::<Vec<_>>();
-    let basis = if required.is_empty() {
-        keywords.to_vec()
-    } else {
-        required
-    };
-    let hits = basis
+    if required.is_empty() {
+        // None of this dimension's curated keywords appear in the posting, so the
+        // hardcoded vocabulary is irrelevant here (e.g. an off-domain role).
+        // Scoring the CV against those irrelevant terms previously pinned every
+        // such candidate to a constant ~0.28 floor; fall back to direct
+        // requirement<->CV salient-term overlap so off-domain roles get a real
+        // signal instead.
+        return content_overlap_score(job_text, cv_text);
+    }
+    let hits = required
         .iter()
         .filter(|keyword| cv_lower.contains(&keyword.to_lowercase()))
         .count();
-    let ratio = if basis.is_empty() {
-        0.0
-    } else {
-        hits as f64 / basis.len() as f64
-    };
+    let ratio = hits as f64 / required.len() as f64;
     (0.28 + ratio * 0.68).clamp(0.0, 0.96)
+}
+
+/// Domain-agnostic salient-term overlap: the fraction of the requirement (job)
+/// text's salient terms that also occur in the CV text. Used as the fallback in
+/// [`dimension_score`] when a dimension's curated keyword vocabulary does not
+/// apply to the posting, so off-domain roles are scored on real content overlap
+/// rather than against an irrelevant hardcoded list.
+fn content_overlap_score(job_text: &str, cv_text: &str) -> f64 {
+    let job_terms = salient_terms(job_text);
+    if job_terms.is_empty() {
+        return 0.1;
+    }
+    let cv_terms = salient_terms(cv_text);
+    let overlap = job_terms
+        .iter()
+        .filter(|term| cv_terms.contains(*term))
+        .count();
+    let ratio = overlap as f64 / job_terms.len() as f64;
+    (0.10 + ratio * 0.80).clamp(0.0, 0.96)
+}
+
+/// Lower-cased word tokens of length >= 4 that are not common German/English
+/// stopwords. Deliberately simple and dependency-free.
+fn salient_terms(text: &str) -> std::collections::HashSet<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter_map(|word| {
+            let lowered = word.to_lowercase();
+            if lowered.chars().count() >= 4 && !is_match_stopword(&lowered) {
+                Some(lowered)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn is_match_stopword(word: &str) -> bool {
+    const STOPWORDS: &[&str] = &[
+        "und", "oder", "der", "die", "das", "den", "dem", "des", "ein", "eine", "einen", "einem",
+        "einer", "eines", "mit", "für", "von", "vom", "zur", "zum", "auf", "aus", "bei", "nach",
+        "über", "unter", "sowie", "sind", "wird", "werden", "haben", "sich", "auch", "nicht",
+        "dass", "ihre", "ihrer", "unsere", "unser", "diese", "dieser", "dieses", "sowohl", "and",
+        "the", "for", "with", "from", "that", "this", "your", "you", "our", "are", "will", "have",
+        "should", "must", "they", "their", "into", "such", "able", "well",
+    ];
+    STOPWORDS.contains(&word)
 }
 
 fn snippet_for_dimension(text: &str, dimension: &str) -> String {
@@ -3907,4 +4125,163 @@ fn short_hash(value: &str) -> String {
     let digest = sha2::Sha256::digest(value.as_bytes());
     base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, &digest)[..10]
         .to_string()
+}
+
+#[cfg(test)]
+mod outbound_provenance_tests {
+    use super::outbound_contact_subject_key;
+    use serde_json::json;
+
+    #[test]
+    fn subject_key_is_stable_and_email_first() {
+        let a = json!({"contact_name": "Anna Müller", "email": "Anna.Mueller@ACME.de"});
+        let b = json!({"contact_name": "different name", "email": "anna.mueller@acme.de"});
+        // Same email (case-insensitive) → same subject key regardless of name.
+        assert_eq!(
+            outbound_contact_subject_key(&a, "ACME GmbH"),
+            outbound_contact_subject_key(&b, "Other GmbH")
+        );
+        // Falls back to name+company when no email; different company → different key.
+        let no_email = json!({"contact_name": "Anna Müller"});
+        assert_ne!(
+            outbound_contact_subject_key(&no_email, "ACME GmbH"),
+            outbound_contact_subject_key(&no_email, "Beta GmbH")
+        );
+        assert!(outbound_contact_subject_key(&a, "ACME GmbH").starts_with("subj_"));
+    }
+}
+
+#[cfg(test)]
+mod ssrf_guard_tests {
+    use super::is_public_ip;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    fn v4(s: &str) -> IpAddr {
+        IpAddr::V4(s.parse::<Ipv4Addr>().unwrap())
+    }
+    fn v6(s: &str) -> IpAddr {
+        IpAddr::V6(s.parse::<Ipv6Addr>().unwrap())
+    }
+
+    #[test]
+    fn blocks_non_public_v4() {
+        for ip in [
+            "127.0.0.1",
+            "10.0.0.5",
+            "192.168.1.1",
+            "172.16.0.1",
+            "169.254.169.254",
+            "100.64.0.1",
+            "0.0.0.0",
+            "255.255.255.255",
+        ] {
+            assert!(!is_public_ip(v4(ip)), "{ip} must be blocked");
+        }
+    }
+
+    #[test]
+    fn allows_public_v4() {
+        for ip in ["8.8.8.8", "1.1.1.1", "93.184.216.34"] {
+            assert!(is_public_ip(v4(ip)), "{ip} must be allowed");
+        }
+    }
+
+    #[test]
+    fn blocks_non_public_v6_and_mapped() {
+        assert!(!is_public_ip(v6("::1")));
+        assert!(!is_public_ip(v6("fe80::1")));
+        assert!(!is_public_ip(v6("fc00::1")));
+        assert!(
+            !is_public_ip(v6("::ffff:10.0.0.1")),
+            "IPv4-mapped private must be blocked"
+        );
+        assert!(
+            is_public_ip(v6("2606:4700:4700::1111")),
+            "public v6 must be allowed"
+        );
+    }
+}
+
+#[cfg(test)]
+mod ocr_response_tests {
+    use super::extract_responses_output_text;
+    use serde_json::json;
+
+    #[test]
+    fn extracts_flat_output_text() {
+        let payload = json!({ "output_text": "hello world" });
+        assert_eq!(
+            extract_responses_output_text(&payload).as_deref(),
+            Some("hello world")
+        );
+    }
+
+    #[test]
+    fn extracts_structured_output_text() {
+        let payload = json!({
+            "output": [{ "content": [{ "type": "output_text", "text": "page text" }] }]
+        });
+        assert_eq!(
+            extract_responses_output_text(&payload).as_deref(),
+            Some("page text")
+        );
+    }
+
+    #[test]
+    fn returns_none_when_no_text_present() {
+        assert!(extract_responses_output_text(&json!({ "foo": 1 })).is_none());
+        assert!(extract_responses_output_text(&json!({ "output_text": "   " })).is_none());
+    }
+}
+
+#[cfg(test)]
+mod matching_score_tests {
+    use super::{content_overlap_score, dimension_score};
+
+    #[test]
+    fn in_domain_posting_keeps_keyword_path() {
+        // The posting mentions curated skill keywords and the CV matches them,
+        // so the unchanged keyword path yields a high score.
+        let job = "Wir suchen Erfahrung mit Python und SQL sowie CAD.";
+        let cv = "Python, SQL und CAD im Projekt eingesetzt.";
+        let score = dimension_score("skill", job, cv);
+        assert!(score > 0.9, "expected high in-domain score, got {score}");
+    }
+
+    #[test]
+    fn off_domain_posting_uses_real_content_overlap_not_a_constant_floor() {
+        // A nursing posting matches none of the engineering keywords, so the
+        // score must reflect actual requirement<->CV overlap rather than the old
+        // constant ~0.28 floor.
+        let job =
+            "Pflegefachkraft für die geriatrische Station, Wundversorgung und Medikamentengabe.";
+        let cv_match = "Examinierte Pflegefachkraft, Wundversorgung und Medikamentengabe auf der geriatrischen Station.";
+        let cv_unrelated = "Softwareentwickler mit Schwerpunkt verteilte Systeme und Datenbanken.";
+
+        let matched = dimension_score("skill", job, cv_match);
+        let unrelated = dimension_score("skill", job, cv_unrelated);
+
+        assert!(
+            matched > unrelated,
+            "matching CV ({matched}) must outscore unrelated CV ({unrelated})"
+        );
+        assert!(
+            matched > 0.5,
+            "strong overlap should score well, got {matched}"
+        );
+        assert!(
+            unrelated < 0.28,
+            "unrelated off-domain CV must not collapse onto the old 0.28 floor, got {unrelated}"
+        );
+    }
+
+    #[test]
+    fn content_overlap_score_is_bounded_and_handles_empty_input() {
+        assert!((content_overlap_score("", "anything") - 0.1).abs() < 1e-9);
+        let full = content_overlap_score("alpha bravo charlie", "alpha bravo charlie delta");
+        assert!(
+            full > 0.8 && full <= 0.96,
+            "full overlap should be high, got {full}"
+        );
+    }
 }

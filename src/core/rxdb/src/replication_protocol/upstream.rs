@@ -216,6 +216,7 @@ fn spawn_ongoing_upstream_with_timing(
             if let Some(wait_before_persist) = state.input.wait_before_persist.as_ref() {
                 wait_before_persist().await;
             }
+            let mut lagged_resync = event_bulk.is_rxsubject_lagged();
             let mut tasks = vec![(task_time, event_bulk)];
             while let Some(Some(next_event_bulk)) = stream.next().now_or_never() {
                 if state.events.canceled.get_value() {
@@ -224,8 +225,29 @@ fn spawn_ongoing_upstream_with_timing(
                 if state.events.paused.get_value() {
                     continue;
                 }
+                if next_event_bulk.is_rxsubject_lagged() {
+                    lagged_resync = true;
+                    continue;
+                }
                 let task_time = timer.fetch_add(1, AtomicOrdering::SeqCst);
                 tasks.push((task_time, next_event_bulk));
+            }
+            if lagged_resync {
+                state.events.active.up.next(true);
+                if let Err(e) = upstream_initial_sync_until_no_conflicts_with_timing(
+                    &state,
+                    &timer,
+                    &initial_sync_start_time,
+                )
+                .await
+                {
+                    tracing::error!(
+                        target: "ctox_rxdb::replication_protocol::upstream",
+                        "lagged fork change stream RESYNC upstreamInitialSync failed: {e}",
+                    );
+                }
+                state.events.active.up.next(false);
+                continue;
             }
             {
                 let mut stats = state.stats.up.lock();

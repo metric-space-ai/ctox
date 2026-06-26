@@ -276,6 +276,17 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                 }
             }
         }
+        (Method::Get, "/api/business-os/mcp/connect-info") => {
+            let session = request_session(root, &request);
+            if !session.authenticated {
+                respond_status(request, 401, "login required")?;
+            } else if !store::session_can_manage_all(&session) {
+                respond_status(request, 403, "chef or admin role required")?;
+            } else {
+                let payload = mcp_connect_info_payload(root, &request)?;
+                respond_json_value_no_store(request, payload)?;
+            }
+        }
         (Method::Post, "/api/business-os/ctox/subscription-auth/start") => {
             let session = request_session(root, &request);
             if !session.authenticated {
@@ -690,6 +701,10 @@ fn is_business_os_control_plane_path(path: &str) -> bool {
             // §9.1 auth/control-plane: issues a capability token bound to the
             // server-authenticated session. No Business OS records flow here.
             | "/api/business-os/auth/capability"
+            // Admin-only MCP setup metadata. It may reveal the inbound MCP
+            // bearer token, so it is a no-store control-plane route and never
+            // crosses the RxDB/WebRTC business-data plane.
+            | "/api/business-os/mcp/connect-info"
             // Peer-lifecycle control for the rxdb-soak rollover mode: restarts
             // the in-process native peer. No Business OS records flow here and
             // the route itself answers 403 unless
@@ -802,6 +817,104 @@ fn subscription_auth_start_payload(
         "user_code": login.device_user_code,
         "message": "ChatGPT Subscription Autorisierung gestartet."
     }))
+}
+
+fn mcp_connect_info_payload(root: &Path, request: &Request) -> anyhow::Result<Value> {
+    let sync = store::sync_config(root)?;
+    let managed_alias = managed_mcp_instance_id(request, &sync.instance_id);
+    let local_endpoint = "http://127.0.0.1:8788/mcp".to_string();
+    let managed_endpoint = format!("https://mcp.ctox.dev/mcp/{managed_alias}");
+    let managed_connect_url = format!("wss://mcp.ctox.dev/connect/{managed_alias}");
+    let token = super::mcp_channel::mcp_operator_auth_token(root)?;
+    let server_name = format!("{}-business-os-local", managed_alias.replace('.', "-"));
+    let authorization_header = format!("Bearer {token}");
+
+    let mut codex_servers = serde_json::Map::new();
+    codex_servers.insert(
+        server_name.clone(),
+        serde_json::json!({
+            "url": local_endpoint,
+            "headers": {
+                "Authorization": authorization_header
+            }
+        }),
+    );
+    let mut claude_servers = serde_json::Map::new();
+    claude_servers.insert(
+        server_name.clone(),
+        serde_json::json!({
+            "type": "http",
+            "url": local_endpoint,
+            "headers": {
+                "Authorization": authorization_header
+            }
+        }),
+    );
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "status": "local_ready_managed_not_connected",
+        "mode": "local",
+        "server_name": server_name,
+        "endpoint": local_endpoint,
+        "managed_instance_id": managed_alias,
+        "native_instance_id": sync.instance_id,
+        "token": token,
+        "token_type": "bearer",
+        "authorization_header": authorization_header,
+        "secret": {
+            "scope": "business_os",
+            "name": "mcp_inbound_auth_token",
+            "source": "ctox_secret_store"
+        },
+        "codex": {
+            "mcpServers": codex_servers
+        },
+        "claude": {
+            "mcpServers": claude_servers
+        },
+        "managed": {
+            "status": "not_connected",
+            "endpoint": managed_endpoint,
+            "connect_url": managed_connect_url,
+            "instance_alias": managed_alias,
+            "native_instance_id": sync.instance_id,
+            "requires": [
+                "ctox.dev Managed MCP client token",
+                "ctox.dev instance connect token",
+                "running outbound ctox business-os mcp connect service"
+            ]
+        },
+        "notes": [
+            "Local MCP is ready on 127.0.0.1 for agents running on the same machine or through an operator-managed tunnel.",
+            "Managed Web Auth is not connected yet. Do not use the local bearer token as a mcp.ctox.dev client token.",
+            "MCP clients must be configured on the client side; a running chat cannot safely install this server by tool call."
+        ]
+    }))
+}
+
+fn managed_mcp_instance_id(request: &Request, fallback_instance_id: &str) -> String {
+    for header in ["X-Forwarded-Host", "Host"] {
+        if let Some(host) =
+            header_value(request, header).and_then(|value| host_header_hostname(&value))
+        {
+            let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+            if host.is_empty() || host == "localhost" || host.ends_with(".localhost") {
+                continue;
+            }
+            if host.ends_with(".ctox.dev") {
+                if let Some(slug) = host.strip_suffix(".ctox.dev").map(str::trim) {
+                    if !slug.is_empty() && !slug.contains('.') {
+                        return slug.to_string();
+                    }
+                }
+            }
+            if host.parse::<IpAddr>().is_err() {
+                return host;
+            }
+        }
+    }
+    fallback_instance_id.to_string()
 }
 
 struct StartedChatgptSubscriptionLogin {
@@ -2733,6 +2846,17 @@ fn respond_json_value(request: Request, value: Value) -> anyhow::Result<()> {
     let body = serde_json::to_string_pretty(&value)?;
     let mut response = Response::from_string(body);
     response.add_header(Header::from_bytes("Content-Type", "application/json").unwrap());
+    add_cors_headers(&mut response);
+    add_common_response_headers(&mut response);
+    request.respond(response)?;
+    Ok(())
+}
+
+fn respond_json_value_no_store(request: Request, value: Value) -> anyhow::Result<()> {
+    let body = serde_json::to_string_pretty(&value)?;
+    let mut response = Response::from_string(body);
+    response.add_header(Header::from_bytes("Content-Type", "application/json").unwrap());
+    response.add_header(Header::from_bytes("Cache-Control", "no-store").unwrap());
     add_cors_headers(&mut response);
     add_common_response_headers(&mut response);
     request.respond(response)?;

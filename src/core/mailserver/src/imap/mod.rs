@@ -2,6 +2,7 @@
 // ref: ctox-mailserver SQLite-backed native IMAP server
 
 use crate::config::ImapConfig;
+use crate::store::sqlite::{MessageContent, MessageSummary};
 use crate::store::SqliteStore;
 use crate::util::errors::StalwartResult;
 use std::sync::Arc;
@@ -182,8 +183,7 @@ impl ImapServer {
                             if let Some(mailbox_id) =
                                 self.store.get_mailbox_id(username, mailbox_name)?
                             {
-                                let messages = self.store.get_messages(&mailbox_id)?;
-                                let count = messages.len();
+                                let count = self.store.count_messages(&mailbox_id)?;
                                 state = ImapState::Selected {
                                     username: username.clone(),
                                     mailbox_id: mailbox_id,
@@ -231,9 +231,14 @@ impl ImapServer {
                         if let ImapState::Selected { ref mailbox_id, .. } = state {
                             let sequence_set = &args[0];
                             let query = args[1..].join(" ");
-                            let messages = self.store.get_messages(mailbox_id)?;
-                            let mut chron_messages = messages;
+                            let mut chron_messages =
+                                self.store.get_message_summaries(mailbox_id)?;
                             chron_messages.reverse(); // sequence 1 is oldest
+                            let query_upper = query.to_uppercase();
+                            let requests_message_data =
+                                fetch_query_requests_message_data(&query_upper);
+                            let needs_content = requests_message_data
+                                || fetch_query_requests_message_size(&query_upper);
 
                             let indices = parse_sequence_set(sequence_set, chron_messages.len());
                             for idx in indices {
@@ -242,64 +247,42 @@ impl ImapServer {
                                 let uid = idx + 1;
 
                                 let mut fetch_res = Vec::new();
-                                let query_upper = query.to_uppercase();
 
                                 if query_upper.contains("UID") {
                                     fetch_res.push(format!("UID {}", uid));
                                 }
                                 if query_upper.contains("FLAGS") {
-                                    let flag_str = if msg.6 { "\\Seen" } else { "" };
+                                    let flag_str = if msg.is_read { "\\Seen" } else { "" };
                                     fetch_res.push(format!("FLAGS ({})", flag_str));
                                 }
                                 if query_upper.contains("INTERNALDATE") {
                                     fetch_res.push(format!(
                                         "INTERNALDATE \"{}\"",
-                                        format_imap_date(msg.7)
+                                        format_imap_date(msg.received_at)
                                     ));
                                 }
-                                if query_upper.contains("RFC822.SIZE")
-                                    || query_upper.contains("BODY.SIZE")
-                                {
-                                    let headers_part = msg.5.as_deref().unwrap_or("");
-                                    let full_raw = if headers_part.is_empty() {
-                                        format!(
-                                            "From: {}\r\nTo: {}\r\nSubject: {}\r\n\r\n{}",
-                                            msg.1,
-                                            msg.2,
-                                            msg.3.as_deref().unwrap_or(""),
-                                            msg.4
-                                        )
-                                    } else {
-                                        format!("{}\r\n{}", headers_part.trim_end(), msg.4)
-                                    };
-                                    fetch_res.push(format!("RFC822.SIZE {}", full_raw.len()));
+
+                                let content = if needs_content {
+                                    self.store.get_message_content(&msg.id)?
+                                } else {
+                                    None
+                                };
+                                if let Some(content) = content.as_ref() {
+                                    if query_upper.contains("RFC822.SIZE")
+                                        || query_upper.contains("BODY.SIZE")
+                                    {
+                                        fetch_res.push(format!(
+                                            "RFC822.SIZE {}",
+                                            message_full_raw(msg, content).len()
+                                        ));
+                                    }
                                 }
 
-                                if query_upper.contains("BODY") || query_upper.contains("RFC822") {
-                                    let headers_part = msg.5.as_deref().unwrap_or("");
-                                    let full_raw = if headers_part.is_empty() {
-                                        format!(
-                                            "From: {}\r\nTo: {}\r\nSubject: {}\r\n\r\n{}",
-                                            msg.1,
-                                            msg.2,
-                                            msg.3.as_deref().unwrap_or(""),
-                                            msg.4
-                                        )
-                                    } else {
-                                        format!("{}\r\n{}", headers_part.trim_end(), msg.4)
-                                    };
-
+                                if requests_message_data {
+                                    let content =
+                                        content.unwrap_or_else(empty_message_content_for_fetch);
                                     if query_upper.contains("HEADER") {
-                                        let headers_only = if headers_part.is_empty() {
-                                            format!(
-                                                "From: {}\r\nTo: {}\r\nSubject: {}\r\n\r\n",
-                                                msg.1,
-                                                msg.2,
-                                                msg.3.as_deref().unwrap_or("")
-                                            )
-                                        } else {
-                                            format!("{}\r\n", headers_part.trim_end())
-                                        };
+                                        let headers_only = message_headers_only(msg, &content);
                                         fetch_res.push(format!(
                                             "BODY[HEADER] {{{}}}\r\n{}",
                                             headers_only.len(),
@@ -308,10 +291,11 @@ impl ImapServer {
                                     } else if query_upper.contains("TEXT") {
                                         fetch_res.push(format!(
                                             "BODY[TEXT] {{{}}}\r\n{}",
-                                            msg.4.len(),
-                                            msg.4
+                                            content.body.len(),
+                                            content.body
                                         ));
                                     } else {
+                                        let full_raw = message_full_raw(msg, &content);
                                         fetch_res.push(format!(
                                             "BODY[] {{{}}}\r\n{}",
                                             full_raw.len(),
@@ -356,8 +340,8 @@ impl ImapServer {
                             let sequence_set = &args[0];
                             let _item = &args[1];
                             let value = args[2..].join(" ");
-                            let messages = self.store.get_messages(mailbox_id)?;
-                            let mut chron_messages = messages;
+                            let mut chron_messages =
+                                self.store.get_message_summaries(mailbox_id)?;
                             chron_messages.reverse();
 
                             let indices = parse_sequence_set(sequence_set, chron_messages.len());
@@ -367,9 +351,9 @@ impl ImapServer {
                             for idx in indices {
                                 let msg = &chron_messages[idx];
                                 if is_deleted {
-                                    self.store.delete_message(&msg.0)?;
+                                    self.store.delete_message(&msg.id)?;
                                 } else {
-                                    self.store.update_message_flags(&msg.0, is_seen)?;
+                                    self.store.update_message_flags(&msg.id, is_seen)?;
                                 }
 
                                 let flag_str = if is_deleted {
@@ -419,6 +403,54 @@ impl ImapServer {
         }
 
         Ok(())
+    }
+}
+
+fn fetch_query_requests_message_size(query_upper: &str) -> bool {
+    query_upper.contains("RFC822.SIZE") || query_upper.contains("BODY.SIZE")
+}
+
+fn fetch_query_requests_message_data(query_upper: &str) -> bool {
+    query_upper.contains("BODY[")
+        || query_upper.contains("BODY.PEEK")
+        || query_upper
+            .split(|ch: char| ch == '(' || ch == ')' || ch.is_whitespace())
+            .any(|token| token == "RFC822")
+}
+
+fn empty_message_content_for_fetch() -> MessageContent {
+    MessageContent {
+        body: String::new(),
+        headers: None,
+    }
+}
+
+fn message_full_raw(summary: &MessageSummary, content: &MessageContent) -> String {
+    let headers_part = content.headers.as_deref().unwrap_or("");
+    if headers_part.is_empty() {
+        format!(
+            "From: {}\r\nTo: {}\r\nSubject: {}\r\n\r\n{}",
+            summary.from_addr,
+            summary.to_addr,
+            summary.subject.as_deref().unwrap_or(""),
+            content.body
+        )
+    } else {
+        format!("{}\r\n{}", headers_part.trim_end(), content.body)
+    }
+}
+
+fn message_headers_only(summary: &MessageSummary, content: &MessageContent) -> String {
+    let headers_part = content.headers.as_deref().unwrap_or("");
+    if headers_part.is_empty() {
+        format!(
+            "From: {}\r\nTo: {}\r\nSubject: {}\r\n\r\n",
+            summary.from_addr,
+            summary.to_addr,
+            summary.subject.as_deref().unwrap_or("")
+        )
+    } else {
+        format!("{}\r\n", headers_part.trim_end())
     }
 }
 
@@ -488,4 +520,24 @@ fn format_imap_date(timestamp: u64) -> String {
     let dt = chrono::DateTime::from_timestamp(timestamp as i64, 0)
         .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
     dt.format("%d-%b-%Y %H:%M:%S +0000").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fetch_size_does_not_request_message_body_data() {
+        assert!(fetch_query_requests_message_size("RFC822.SIZE"));
+        assert!(!fetch_query_requests_message_data("RFC822.SIZE"));
+        assert!(fetch_query_requests_message_size("BODY.SIZE"));
+        assert!(!fetch_query_requests_message_data("BODY.SIZE"));
+    }
+
+    #[test]
+    fn fetch_body_and_header_queries_request_message_data() {
+        assert!(fetch_query_requests_message_data("BODY[]"));
+        assert!(fetch_query_requests_message_data("BODY.PEEK[HEADER]"));
+        assert!(fetch_query_requests_message_data("RFC822"));
+    }
 }

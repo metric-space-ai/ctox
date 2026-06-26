@@ -451,6 +451,17 @@ pub trait SourceModule: Sync {
         None
     }
 
+    /// Whether `person-research` must see an explicit per-run opt-in (via
+    /// `--include-private`/`include_private`) before this source runs.
+    ///
+    /// Defaults to credentialed (Tier C) sources, which scrape identifiable
+    /// people behind authenticated APIs. People-scraping Tier-S sources that
+    /// harvest personal data without credentials (e.g. `person-discovery`)
+    /// override this to `true` so people data is never collected implicitly.
+    fn privacy_opt_in_required(&self) -> bool {
+        self.tier() == Tier::C
+    }
+
     /// Metadata for Business-OS/Harness browser assist.
     ///
     /// The default recipe is intentionally conservative: it exists only for

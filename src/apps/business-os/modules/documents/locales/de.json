@@ -34,7 +34,7 @@
   "noSavedVersionFound": "Zu diesem Dokument wurde keine gespeicherte Version gefunden. Bitte erneut importieren oder den Datensatz verwalten.",
   "loadVersionFailed": "Dokumentversion konnte nicht geladen werden:",
   "deleteConfirmTitle": "Dokument löschen",
-  "deleteConfirmMessage": "Dokument \"{title}\" löschen?",
+  "deleteConfirmMessage": "Dokument \"{0}\" löschen?",
   "deleteLabel": "Löschen",
   "manageDocumentTitle": "Dokument verwalten",
   "newDocumentTitle": "Neues Dokument",

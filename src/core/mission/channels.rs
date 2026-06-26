@@ -61,8 +61,12 @@ static CHANNEL_OPEN_ROUTING_READY: OnceLock<
 static QUEUE_TASK_LIST_CACHE: OnceLock<
     Mutex<BTreeMap<QueueTaskListCacheKey, QueueTaskListCacheEntry>>,
 > = OnceLock::new();
+static QUEUE_TASK_COUNT_CACHE: OnceLock<
+    Mutex<BTreeMap<QueueTaskCountCacheKey, QueueTaskCountCacheEntry>>,
+> = OnceLock::new();
 
 const QUEUE_TASK_LIST_CACHE_MAX_ENTRIES: usize = 256;
+const QUEUE_TASK_COUNT_CACHE_MAX_ENTRIES: usize = 256;
 
 type ChannelFileChangeStamp = (u64, u128);
 type ChannelRoutingCacheStamp = (u64, u64, u64);
@@ -85,6 +89,49 @@ struct QueueTaskListCacheEntry {
     tasks: Vec<QueueTaskView>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct QueueTaskCountCacheKey {
+    database: ChannelSchemaCacheKey,
+    statuses: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct QueueTaskCountCacheEntry {
+    stamp: QueueTaskListCacheStamp,
+    count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CommunicationIntakeSourceStamp {
+    database_exists: bool,
+    accounts_table_exists: bool,
+    threads_table_exists: bool,
+    messages_table_exists: bool,
+    routing_table_exists: bool,
+    projection_version: i64,
+    account_count: usize,
+    latest_account_updated_at_ms: i64,
+    thread_count: usize,
+    latest_thread_updated_at_ms: i64,
+    message_count: usize,
+    latest_message_updated_at_ms: i64,
+    routing_count: usize,
+    clock_updated_at: String,
+    content_hash: String,
+}
+
+const COMMUNICATION_INTAKE_SOURCE_STAMP_SQL: &str = r#"
+    SELECT
+        version,
+        account_count,
+        thread_count,
+        message_count,
+        routing_count,
+        updated_at
+    FROM communication_projection_clock
+    WHERE id = 1
+"#;
+
 #[cfg(test)]
 static CHANNEL_SCHEMA_ENSURE_COUNTS: OnceLock<Mutex<BTreeMap<ChannelSchemaCacheKey, usize>>> =
     OnceLock::new();
@@ -101,6 +148,13 @@ static CHANNEL_OPEN_ROUTING_ENSURE_COUNTS: OnceLock<Mutex<BTreeMap<ChannelSchema
 #[cfg(test)]
 static QUEUE_TASK_LIST_CACHE_MISS_COUNTS: OnceLock<Mutex<BTreeMap<QueueTaskListCacheKey, usize>>> =
     OnceLock::new();
+
+#[cfg(test)]
+static QUEUE_TASK_COUNT_CACHE_MISS_COUNTS: OnceLock<
+    Mutex<BTreeMap<QueueTaskCountCacheKey, usize>>,
+> = OnceLock::new();
+#[cfg(test)]
+static CHANNEL_DB_OPEN_CALL_COUNTS: OnceLock<Mutex<BTreeMap<PathBuf, usize>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize)]
 pub struct QueueTaskView {
@@ -261,6 +315,222 @@ pub fn sync_prompt_identity(root: &Path, settings: &BTreeMap<String, String>) ->
             profile_name,
             "jami",
             profile_json,
+        )?;
+    }
+
+    let setting = |key: &str| -> String {
+        settings
+            .get(key)
+            .map(|value| value.trim().to_string())
+            .unwrap_or_default()
+    };
+    let first_setting = |keys: &[&str]| -> String {
+        keys.iter()
+            .find_map(|key| {
+                settings
+                    .get(*key)
+                    .map(|value| value.trim())
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            })
+            .unwrap_or_default()
+    };
+    let split_list = |raw: &str| -> Vec<String> {
+        raw.split(|ch| matches!(ch, ',' | ';' | '\n'))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let first_list = |keys: &[&str]| -> Vec<String> {
+        keys.iter()
+            .find_map(|key| {
+                settings
+                    .get(*key)
+                    .map(|value| split_list(value))
+                    .filter(|values| !values.is_empty())
+            })
+            .unwrap_or_default()
+    };
+    let mut ensure_chat_account = |channel: &str,
+                                   provider: &str,
+                                   id: String,
+                                   address: String,
+                                   profile_json: Value|
+     -> Result<()> {
+        if id.trim().is_empty() && address.trim().is_empty() {
+            return Ok(());
+        }
+        let suffix = if id.trim().is_empty() {
+            stable_digest(&address)
+        } else {
+            id.trim().to_string()
+        };
+        ensure_account(
+            &mut conn,
+            &format!("{channel}:{suffix}"),
+            channel,
+            if address.trim().is_empty() {
+                &suffix
+            } else {
+                address.trim()
+            },
+            provider,
+            profile_json,
+        )
+    };
+
+    if !first_setting(&[
+        "CTO_SLACK_BOT_TOKEN",
+        "CTO_SLACK_WORKSPACE_ID",
+        "CTO_SLACK_CHANNEL_ID",
+    ])
+    .is_empty()
+    {
+        let workspace_id = setting("CTO_SLACK_WORKSPACE_ID");
+        let bot_user_id = setting("CTO_SLACK_BOT_USER_ID");
+        ensure_chat_account(
+            "slack",
+            "slack-web-api",
+            first_setting(&["CTO_SLACK_BOT_USER_ID", "CTO_SLACK_WORKSPACE_ID"]),
+            if bot_user_id.is_empty() {
+                workspace_id.clone()
+            } else {
+                bot_user_id.clone()
+            },
+            json!({
+                "workspaceId": workspace_id,
+                "botUserId": bot_user_id,
+                "channelIds": first_list(&["CTO_SLACK_CHANNEL_IDS", "CTO_SLACK_CHANNEL_ID"]),
+                "apiBaseUrl": setting("CTO_SLACK_API_BASE_URL"),
+            }),
+        )?;
+    }
+
+    if !first_setting(&[
+        "CTO_DISCORD_BOT_TOKEN",
+        "CTO_DISCORD_APPLICATION_ID",
+        "CTO_DISCORD_CHANNEL_ID",
+    ])
+    .is_empty()
+    {
+        let application_id = setting("CTO_DISCORD_APPLICATION_ID");
+        ensure_chat_account(
+            "discord",
+            "discord-rest",
+            first_setting(&["CTO_DISCORD_APPLICATION_ID", "CTO_DISCORD_BOT_USER_ID"]),
+            if application_id.is_empty() {
+                setting("CTO_DISCORD_BOT_USER_ID")
+            } else {
+                application_id.clone()
+            },
+            json!({
+                "applicationId": application_id,
+                "botUserId": setting("CTO_DISCORD_BOT_USER_ID"),
+                "guildIds": first_list(&["CTO_DISCORD_GUILD_IDS", "CTO_DISCORD_GUILD_ID"]),
+                "channelIds": first_list(&["CTO_DISCORD_CHANNEL_IDS", "CTO_DISCORD_CHANNEL_ID"]),
+                "apiBaseUrl": setting("CTO_DISCORD_API_BASE_URL"),
+            }),
+        )?;
+    }
+
+    if !first_setting(&["CTO_TELEGRAM_BOT_TOKEN", "CTO_TELEGRAM_BOT_USERNAME"]).is_empty() {
+        let bot_username = setting("CTO_TELEGRAM_BOT_USERNAME");
+        ensure_chat_account(
+            "telegram",
+            "telegram-bot-api",
+            bot_username.clone(),
+            bot_username.clone(),
+            json!({
+                "botUsername": bot_username,
+                "chatIds": first_list(&["CTO_TELEGRAM_CHAT_IDS", "CTO_TELEGRAM_CHAT_ID"]),
+                "apiBaseUrl": setting("CTO_TELEGRAM_API_BASE_URL"),
+            }),
+        )?;
+    }
+
+    if !first_setting(&["CTO_MATRIX_HOMESERVER_URL", "CTO_MATRIX_USER_ID"]).is_empty() {
+        let user_id = setting("CTO_MATRIX_USER_ID");
+        ensure_chat_account(
+            "matrix",
+            "matrix-client-server",
+            user_id.clone(),
+            user_id.clone(),
+            json!({
+                "homeserverUrl": setting("CTO_MATRIX_HOMESERVER_URL"),
+                "userId": user_id,
+                "roomIds": first_list(&["CTO_MATRIX_ROOM_IDS", "CTO_MATRIX_ROOM_ID"]),
+            }),
+        )?;
+    }
+
+    if !first_setting(&[
+        "CTO_MATTERMOST_SERVER_URL",
+        "CTO_MATTERMOST_BOT_USER_ID",
+        "CTO_MATTERMOST_CHANNEL_ID",
+    ])
+    .is_empty()
+    {
+        let bot_user_id = setting("CTO_MATTERMOST_BOT_USER_ID");
+        ensure_chat_account(
+            "mattermost",
+            "mattermost-api-v4",
+            first_setting(&["CTO_MATTERMOST_BOT_USER_ID", "CTO_MATTERMOST_SERVER_URL"]),
+            if bot_user_id.is_empty() {
+                setting("CTO_MATTERMOST_SERVER_URL")
+            } else {
+                bot_user_id.clone()
+            },
+            json!({
+                "serverUrl": setting("CTO_MATTERMOST_SERVER_URL"),
+                "botUserId": bot_user_id,
+                "teamId": setting("CTO_MATTERMOST_TEAM_ID"),
+                "channelIds": first_list(&["CTO_MATTERMOST_CHANNEL_IDS", "CTO_MATTERMOST_CHANNEL_ID"]),
+            }),
+        )?;
+    }
+
+    if !first_setting(&[
+        "CTO_ZULIP_REALM_URL",
+        "CTO_ZULIP_BOT_EMAIL",
+        "CTO_ZULIP_EMAIL",
+    ])
+    .is_empty()
+    {
+        let bot_email = first_setting(&["CTO_ZULIP_BOT_EMAIL", "CTO_ZULIP_EMAIL"]);
+        ensure_chat_account(
+            "zulip",
+            "zulip-rest-api",
+            bot_email.clone(),
+            bot_email.clone(),
+            json!({
+                "realmUrl": setting("CTO_ZULIP_REALM_URL"),
+                "botEmail": bot_email,
+                "streams": first_list(&["CTO_ZULIP_STREAMS", "CTO_ZULIP_STREAM"]),
+                "topic": setting("CTO_ZULIP_TOPIC"),
+            }),
+        )?;
+    }
+
+    if !first_setting(&[
+        "CTO_GOOGLE_CHAT_USER",
+        "CTO_GOOGLE_CHAT_APP_ID",
+        "CTO_GOOGLE_CHAT_SPACE_NAME",
+    ])
+    .is_empty()
+    {
+        let account_id = first_setting(&["CTO_GOOGLE_CHAT_USER", "CTO_GOOGLE_CHAT_APP_ID"]);
+        ensure_chat_account(
+            "google_chat",
+            "google-chat-api",
+            account_id.clone(),
+            account_id.clone(),
+            json!({
+                "user": setting("CTO_GOOGLE_CHAT_USER"),
+                "appId": setting("CTO_GOOGLE_CHAT_APP_ID"),
+                "spaceNames": first_list(&["CTO_GOOGLE_CHAT_SPACE_NAMES", "CTO_GOOGLE_CHAT_SPACE_NAME"]),
+                "apiBaseUrl": setting("CTO_GOOGLE_CHAT_API_BASE_URL"),
+            }),
         )?;
     }
 
@@ -1410,7 +1680,7 @@ pub fn read_pairing_state_for_business_os(root: &Path, channel: &str) -> Value {
 /// for WhatsApp). The thread writes pairing artifacts to disk as it progresses; the
 /// UI polls read_pairing_state_for_business_os to render them.
 pub fn start_pairing_for_business_os(root: &Path, channel: &str) -> Result<Value> {
-    let supported = matches!(channel, "whatsapp" | "jami" | "teams" | "email" | "meeting");
+    let supported = communication_adapters::external_adapter_for_channel(channel).is_some();
     if !supported {
         anyhow::bail!("unsupported channel for pairing: {channel}");
     }
@@ -1517,6 +1787,161 @@ pub fn save_channel_settings_for_business_os(
                 env_map.insert("CTO_TEAMS_PASSWORD".to_owned(), value);
             }
         }
+        "slack" => {
+            if let Some(value) = str_field("bot_token") {
+                env_map.insert("CTO_SLACK_BOT_TOKEN".to_owned(), value);
+            }
+            if let Some(value) = str_field("app_token") {
+                env_map.insert("CTO_SLACK_APP_TOKEN".to_owned(), value);
+            }
+            if let Some(value) = str_field("signing_secret") {
+                env_map.insert("CTO_SLACK_SIGNING_SECRET".to_owned(), value);
+            }
+            if let Some(value) = str_field("workspace_id") {
+                env_map.insert("CTO_SLACK_WORKSPACE_ID".to_owned(), value);
+            }
+            if let Some(value) = str_field("bot_user_id") {
+                env_map.insert("CTO_SLACK_BOT_USER_ID".to_owned(), value);
+            }
+            if let Some(value) = str_field("channel_id") {
+                env_map.insert("CTO_SLACK_CHANNEL_ID".to_owned(), value);
+            }
+            if let Some(value) = str_field("channel_ids") {
+                env_map.insert("CTO_SLACK_CHANNEL_IDS".to_owned(), value);
+            }
+            if let Some(value) = str_field("api_base_url") {
+                env_map.insert("CTO_SLACK_API_BASE_URL".to_owned(), value);
+            }
+        }
+        "discord" => {
+            if let Some(value) = str_field("bot_token") {
+                env_map.insert("CTO_DISCORD_BOT_TOKEN".to_owned(), value);
+            }
+            if let Some(value) = str_field("application_id") {
+                env_map.insert("CTO_DISCORD_APPLICATION_ID".to_owned(), value);
+            }
+            if let Some(value) = str_field("bot_user_id") {
+                env_map.insert("CTO_DISCORD_BOT_USER_ID".to_owned(), value);
+            }
+            if let Some(value) = str_field("guild_id") {
+                env_map.insert("CTO_DISCORD_GUILD_ID".to_owned(), value);
+            }
+            if let Some(value) = str_field("guild_ids") {
+                env_map.insert("CTO_DISCORD_GUILD_IDS".to_owned(), value);
+            }
+            if let Some(value) = str_field("channel_id") {
+                env_map.insert("CTO_DISCORD_CHANNEL_ID".to_owned(), value);
+            }
+            if let Some(value) = str_field("channel_ids") {
+                env_map.insert("CTO_DISCORD_CHANNEL_IDS".to_owned(), value);
+            }
+            if let Some(value) = str_field("api_base_url") {
+                env_map.insert("CTO_DISCORD_API_BASE_URL".to_owned(), value);
+            }
+        }
+        "telegram" => {
+            if let Some(value) = str_field("bot_token") {
+                env_map.insert("CTO_TELEGRAM_BOT_TOKEN".to_owned(), value);
+            }
+            if let Some(value) = str_field("bot_username") {
+                env_map.insert("CTO_TELEGRAM_BOT_USERNAME".to_owned(), value);
+            }
+            if let Some(value) = str_field("chat_id") {
+                env_map.insert("CTO_TELEGRAM_CHAT_ID".to_owned(), value);
+            }
+            if let Some(value) = str_field("chat_ids") {
+                env_map.insert("CTO_TELEGRAM_CHAT_IDS".to_owned(), value);
+            }
+            if let Some(value) = str_field("api_base_url") {
+                env_map.insert("CTO_TELEGRAM_API_BASE_URL".to_owned(), value);
+            }
+        }
+        "matrix" => {
+            if let Some(value) = str_field("homeserver_url") {
+                env_map.insert("CTO_MATRIX_HOMESERVER_URL".to_owned(), value);
+            }
+            if let Some(value) = str_field("access_token") {
+                env_map.insert("CTO_MATRIX_ACCESS_TOKEN".to_owned(), value);
+            }
+            if let Some(value) = str_field("user_id") {
+                env_map.insert("CTO_MATRIX_USER_ID".to_owned(), value);
+            }
+            if let Some(value) = str_field("room_id") {
+                env_map.insert("CTO_MATRIX_ROOM_ID".to_owned(), value);
+            }
+            if let Some(value) = str_field("room_ids") {
+                env_map.insert("CTO_MATRIX_ROOM_IDS".to_owned(), value);
+            }
+        }
+        "mattermost" => {
+            if let Some(value) = str_field("server_url") {
+                env_map.insert("CTO_MATTERMOST_SERVER_URL".to_owned(), value);
+            }
+            if let Some(value) = str_field("bot_token") {
+                env_map.insert("CTO_MATTERMOST_BOT_TOKEN".to_owned(), value);
+            }
+            if let Some(value) = str_field("access_token") {
+                env_map.insert("CTO_MATTERMOST_ACCESS_TOKEN".to_owned(), value);
+            }
+            if let Some(value) = str_field("bot_username") {
+                env_map.insert("CTO_MATTERMOST_BOT_USERNAME".to_owned(), value);
+            }
+            if let Some(value) = str_field("bot_user_id") {
+                env_map.insert("CTO_MATTERMOST_BOT_USER_ID".to_owned(), value);
+            }
+            if let Some(value) = str_field("team_id") {
+                env_map.insert("CTO_MATTERMOST_TEAM_ID".to_owned(), value);
+            }
+            if let Some(value) = str_field("channel_id") {
+                env_map.insert("CTO_MATTERMOST_CHANNEL_ID".to_owned(), value);
+            }
+            if let Some(value) = str_field("channel_ids") {
+                env_map.insert("CTO_MATTERMOST_CHANNEL_IDS".to_owned(), value);
+            }
+        }
+        "zulip" => {
+            if let Some(value) = str_field("realm_url") {
+                env_map.insert("CTO_ZULIP_REALM_URL".to_owned(), value);
+            }
+            if let Some(value) = str_field("bot_email") {
+                env_map.insert("CTO_ZULIP_BOT_EMAIL".to_owned(), value);
+            }
+            if let Some(value) = str_field("email") {
+                env_map.insert("CTO_ZULIP_EMAIL".to_owned(), value);
+            }
+            if let Some(value) = str_field("api_key") {
+                env_map.insert("CTO_ZULIP_API_KEY".to_owned(), value);
+            }
+            if let Some(value) = str_field("stream") {
+                env_map.insert("CTO_ZULIP_STREAM".to_owned(), value);
+            }
+            if let Some(value) = str_field("streams") {
+                env_map.insert("CTO_ZULIP_STREAMS".to_owned(), value);
+            }
+            if let Some(value) = str_field("topic") {
+                env_map.insert("CTO_ZULIP_TOPIC".to_owned(), value);
+            }
+        }
+        "google_chat" => {
+            if let Some(value) = str_field("access_token") {
+                env_map.insert("CTO_GOOGLE_CHAT_ACCESS_TOKEN".to_owned(), value);
+            }
+            if let Some(value) = str_field("user") {
+                env_map.insert("CTO_GOOGLE_CHAT_USER".to_owned(), value);
+            }
+            if let Some(value) = str_field("app_id") {
+                env_map.insert("CTO_GOOGLE_CHAT_APP_ID".to_owned(), value);
+            }
+            if let Some(value) = str_field("space_name") {
+                env_map.insert("CTO_GOOGLE_CHAT_SPACE_NAME".to_owned(), value);
+            }
+            if let Some(value) = str_field("space_names") {
+                env_map.insert("CTO_GOOGLE_CHAT_SPACE_NAMES".to_owned(), value);
+            }
+            if let Some(value) = str_field("api_base_url") {
+                env_map.insert("CTO_GOOGLE_CHAT_API_BASE_URL".to_owned(), value);
+            }
+        }
         "jami" => {
             if let Some(value) = str_field("account_id") {
                 env_map.insert("CTO_JAMI_ACCOUNT_ID".to_owned(), value);
@@ -1540,6 +1965,33 @@ pub fn save_channel_settings_for_business_os(
 /// bridge. The bridge polls /api/business-os/rxdb/pull?collection=communication_accounts
 /// and feeds results into the browser-side RxDB collection of the Conversations
 /// audit module.
+fn communication_account_business_os_document(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+    let account_key: String = row.get(0)?;
+    let channel: String = row.get(1)?;
+    let address: String = row.get(2)?;
+    let provider: String = row.get(3)?;
+    let profile_raw: String = row.get(4)?;
+    let created_at: String = row.get(5)?;
+    let updated_at: String = row.get(6)?;
+    let last_inbound_ok_at: Option<String> = row.get(7)?;
+    let last_outbound_ok_at: Option<String> = row.get(8)?;
+    let updated_at_ms: Option<i64> = row.get(9)?;
+    Ok(json!({
+        "id": account_key,
+        "account_key": account_key,
+        "channel": channel,
+        "address": address,
+        "provider": provider,
+        "profile_json": serde_json::from_str::<Value>(&profile_raw).unwrap_or_else(|_| json!({})),
+        "created_at": created_at,
+        "updated_at": updated_at,
+        "last_inbound_ok_at": last_inbound_ok_at,
+        "last_outbound_ok_at": last_outbound_ok_at,
+        "updated_at_ms": updated_at_ms.unwrap_or(0),
+        "_deleted": false,
+    }))
+}
+
 pub fn pull_communication_accounts_for_business_os(
     root: &Path,
     since_ms: Option<i64>,
@@ -1571,30 +2023,7 @@ pub fn pull_communication_accounts_for_business_os(
     )?;
     let documents = stmt
         .query_map(params![since_ms, limit as i64], |row| {
-            let account_key: String = row.get(0)?;
-            let channel: String = row.get(1)?;
-            let address: String = row.get(2)?;
-            let provider: String = row.get(3)?;
-            let profile_raw: String = row.get(4)?;
-            let created_at: String = row.get(5)?;
-            let updated_at: String = row.get(6)?;
-            let last_inbound_ok_at: Option<String> = row.get(7)?;
-            let last_outbound_ok_at: Option<String> = row.get(8)?;
-            let updated_at_ms: Option<i64> = row.get(9)?;
-            Ok(json!({
-                "id": account_key,
-                "account_key": account_key,
-                "channel": channel,
-                "address": address,
-                "provider": provider,
-                "profile_json": serde_json::from_str::<Value>(&profile_raw).unwrap_or_else(|_| json!({})),
-                "created_at": created_at,
-                "updated_at": updated_at,
-                "last_inbound_ok_at": last_inbound_ok_at,
-                "last_outbound_ok_at": last_outbound_ok_at,
-                "updated_at_ms": updated_at_ms.unwrap_or(0),
-                "_deleted": false,
-            }))
+            communication_account_business_os_document(row)
         })?
         .collect::<rusqlite::Result<Vec<Value>>>()?;
     let count = documents.len();
@@ -1608,6 +2037,37 @@ pub fn pull_communication_accounts_for_business_os(
 }
 
 /// RxDB-shaped projection of communication_threads.
+fn communication_thread_business_os_document(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+    let thread_key: String = row.get(0)?;
+    let channel: String = row.get(1)?;
+    let account_key: String = row.get(2)?;
+    let subject: String = row.get(3)?;
+    let participants_raw: String = row.get(4)?;
+    let last_message_key: String = row.get(5)?;
+    let last_message_at: String = row.get(6)?;
+    let message_count: i64 = row.get(7)?;
+    let unread_count: i64 = row.get(8)?;
+    let metadata_raw: String = row.get(9)?;
+    let updated_at: String = row.get(10)?;
+    let updated_at_ms: Option<i64> = row.get(11)?;
+    Ok(json!({
+        "id": thread_key,
+        "thread_key": thread_key,
+        "channel": channel,
+        "account_key": account_key,
+        "subject": subject,
+        "participant_keys_json": serde_json::from_str::<Value>(&participants_raw).unwrap_or_else(|_| json!([])),
+        "last_message_key": last_message_key,
+        "last_message_at": last_message_at,
+        "message_count": message_count,
+        "unread_count": unread_count,
+        "metadata_json": serde_json::from_str::<Value>(&metadata_raw).unwrap_or_else(|_| json!({})),
+        "updated_at": updated_at,
+        "updated_at_ms": updated_at_ms.unwrap_or(0),
+        "_deleted": false,
+    }))
+}
+
 pub fn pull_communication_threads_for_business_os(
     root: &Path,
     since_ms: Option<i64>,
@@ -1640,34 +2100,7 @@ pub fn pull_communication_threads_for_business_os(
     )?;
     let documents = stmt
         .query_map(params![since_ms, limit as i64], |row| {
-            let thread_key: String = row.get(0)?;
-            let channel: String = row.get(1)?;
-            let account_key: String = row.get(2)?;
-            let subject: String = row.get(3)?;
-            let participants_raw: String = row.get(4)?;
-            let last_message_key: String = row.get(5)?;
-            let last_message_at: String = row.get(6)?;
-            let message_count: i64 = row.get(7)?;
-            let unread_count: i64 = row.get(8)?;
-            let metadata_raw: String = row.get(9)?;
-            let updated_at: String = row.get(10)?;
-            let updated_at_ms: Option<i64> = row.get(11)?;
-            Ok(json!({
-                "id": thread_key,
-                "thread_key": thread_key,
-                "channel": channel,
-                "account_key": account_key,
-                "subject": subject,
-                "participant_keys_json": serde_json::from_str::<Value>(&participants_raw).unwrap_or_else(|_| json!([])),
-                "last_message_key": last_message_key,
-                "last_message_at": last_message_at,
-                "message_count": message_count,
-                "unread_count": unread_count,
-                "metadata_json": serde_json::from_str::<Value>(&metadata_raw).unwrap_or_else(|_| json!({})),
-                "updated_at": updated_at,
-                "updated_at_ms": updated_at_ms.unwrap_or(0),
-                "_deleted": false,
-            }))
+            communication_thread_business_os_document(row)
         })?
         .collect::<rusqlite::Result<Vec<Value>>>()?;
     let count = documents.len();
@@ -1684,6 +2117,77 @@ pub fn pull_communication_threads_for_business_os(
 /// `route_status` and extracts `ticket_self_work_id` from metadata_json so the
 /// Conversations audit module can show task/work IDs and link to the harness
 /// flowview without extra round-trips.
+fn communication_message_business_os_document(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+    let message_key: String = row.get(0)?;
+    let channel: String = row.get(1)?;
+    let account_key: String = row.get(2)?;
+    let thread_key: String = row.get(3)?;
+    let remote_id: String = row.get(4)?;
+    let direction: String = row.get(5)?;
+    let folder_hint: String = row.get(6)?;
+    let sender_display: String = row.get(7)?;
+    let sender_address: String = row.get(8)?;
+    let recipients_raw: String = row.get(9)?;
+    let cc_raw: String = row.get(10)?;
+    let bcc_raw: String = row.get(11)?;
+    let subject: String = row.get(12)?;
+    let preview: String = row.get(13)?;
+    let body_text: String = row.get(14)?;
+    let body_html: String = row.get(15)?;
+    let raw_payload_ref: String = row.get(16)?;
+    let trust_level: String = row.get(17)?;
+    let status: String = row.get(18)?;
+    let seen: i64 = row.get(19)?;
+    let has_attachments: i64 = row.get(20)?;
+    let external_created_at: String = row.get(21)?;
+    let observed_at: String = row.get(22)?;
+    let metadata_raw: String = row.get(23)?;
+    let route_status: Option<String> = row.get(24)?;
+    let updated_at_ms: Option<i64> = row.get(25)?;
+    let metadata: Value =
+        serde_json::from_str::<Value>(&metadata_raw).unwrap_or_else(|_| json!({}));
+    let ticket_self_work_id = metadata
+        .get("ticket_self_work_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let work_id = metadata
+        .get("work_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    Ok(json!({
+        "id": message_key,
+        "message_key": message_key,
+        "channel": channel,
+        "account_key": account_key,
+        "thread_key": thread_key,
+        "remote_id": remote_id,
+        "direction": direction,
+        "folder_hint": folder_hint,
+        "sender_display": sender_display,
+        "sender_address": sender_address,
+        "recipient_addresses_json": serde_json::from_str::<Value>(&recipients_raw).unwrap_or_else(|_| json!([])),
+        "cc_addresses_json": serde_json::from_str::<Value>(&cc_raw).unwrap_or_else(|_| json!([])),
+        "bcc_addresses_json": serde_json::from_str::<Value>(&bcc_raw).unwrap_or_else(|_| json!([])),
+        "subject": subject,
+        "preview": preview,
+        "body_text": body_text,
+        "body_html": body_html,
+        "raw_payload_ref": raw_payload_ref,
+        "trust_level": trust_level,
+        "status": status,
+        "seen": seen,
+        "has_attachments": has_attachments,
+        "external_created_at": external_created_at,
+        "observed_at": observed_at,
+        "metadata_json": metadata,
+        "route_status": route_status,
+        "ticket_self_work_id": ticket_self_work_id,
+        "work_id": work_id,
+        "updated_at_ms": updated_at_ms.unwrap_or(0),
+        "_deleted": false,
+    }))
+}
+
 pub fn pull_communication_messages_for_business_os(
     root: &Path,
     since_ms: Option<i64>,
@@ -1724,74 +2228,7 @@ pub fn pull_communication_messages_for_business_os(
     )?;
     let documents = stmt
         .query_map(params![since_ms, limit as i64], |row| {
-            let message_key: String = row.get(0)?;
-            let channel: String = row.get(1)?;
-            let account_key: String = row.get(2)?;
-            let thread_key: String = row.get(3)?;
-            let remote_id: String = row.get(4)?;
-            let direction: String = row.get(5)?;
-            let folder_hint: String = row.get(6)?;
-            let sender_display: String = row.get(7)?;
-            let sender_address: String = row.get(8)?;
-            let recipients_raw: String = row.get(9)?;
-            let cc_raw: String = row.get(10)?;
-            let bcc_raw: String = row.get(11)?;
-            let subject: String = row.get(12)?;
-            let preview: String = row.get(13)?;
-            let body_text: String = row.get(14)?;
-            let body_html: String = row.get(15)?;
-            let raw_payload_ref: String = row.get(16)?;
-            let trust_level: String = row.get(17)?;
-            let status: String = row.get(18)?;
-            let seen: i64 = row.get(19)?;
-            let has_attachments: i64 = row.get(20)?;
-            let external_created_at: String = row.get(21)?;
-            let observed_at: String = row.get(22)?;
-            let metadata_raw: String = row.get(23)?;
-            let route_status: Option<String> = row.get(24)?;
-            let updated_at_ms: Option<i64> = row.get(25)?;
-            let metadata: Value =
-                serde_json::from_str::<Value>(&metadata_raw).unwrap_or_else(|_| json!({}));
-            let ticket_self_work_id = metadata
-                .get("ticket_self_work_id")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned);
-            let work_id = metadata
-                .get("work_id")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned);
-            Ok(json!({
-                "id": message_key,
-                "message_key": message_key,
-                "channel": channel,
-                "account_key": account_key,
-                "thread_key": thread_key,
-                "remote_id": remote_id,
-                "direction": direction,
-                "folder_hint": folder_hint,
-                "sender_display": sender_display,
-                "sender_address": sender_address,
-                "recipient_addresses_json": serde_json::from_str::<Value>(&recipients_raw).unwrap_or_else(|_| json!([])),
-                "cc_addresses_json": serde_json::from_str::<Value>(&cc_raw).unwrap_or_else(|_| json!([])),
-                "bcc_addresses_json": serde_json::from_str::<Value>(&bcc_raw).unwrap_or_else(|_| json!([])),
-                "subject": subject,
-                "preview": preview,
-                "body_text": body_text,
-                "body_html": body_html,
-                "raw_payload_ref": raw_payload_ref,
-                "trust_level": trust_level,
-                "status": status,
-                "seen": seen,
-                "has_attachments": has_attachments,
-                "external_created_at": external_created_at,
-                "observed_at": observed_at,
-                "metadata_json": metadata,
-                "route_status": route_status,
-                "ticket_self_work_id": ticket_self_work_id,
-                "work_id": work_id,
-                "updated_at_ms": updated_at_ms.unwrap_or(0),
-                "_deleted": false,
-            }))
+            communication_message_business_os_document(row)
         })?
         .collect::<rusqlite::Result<Vec<Value>>>()?;
     let count = documents.len();
@@ -1802,6 +2239,198 @@ pub fn pull_communication_messages_for_business_os(
         "count": count,
         "since_ms": since_ms,
     }))
+}
+
+pub fn pull_communication_record_for_business_os(
+    root: &Path,
+    collection: &str,
+    record_id: &str,
+) -> Result<Option<Value>> {
+    let record_id = record_id.trim();
+    if record_id.is_empty() {
+        return Ok(None);
+    }
+    let db_path = resolve_db_path(root, None);
+    let Some(conn) = open_channel_db_read_only(&db_path)? else {
+        return Ok(None);
+    };
+    match collection {
+        "communication_accounts" => {
+            if !channel_projection_tables_exist(&conn, &["communication_accounts"])? {
+                return Ok(None);
+            }
+            conn.query_row(
+                r#"
+                SELECT
+                    account_key, channel, address, provider, profile_json,
+                    created_at, updated_at, last_inbound_ok_at, last_outbound_ok_at,
+                    CAST(strftime('%s', COALESCE(updated_at, created_at)) AS INTEGER) * 1000 AS updated_at_ms
+                FROM communication_accounts
+                WHERE account_key = ?1
+                "#,
+                [record_id],
+                communication_account_business_os_document,
+            )
+            .optional()
+            .map_err(Into::into)
+        }
+        "communication_threads" => {
+            if !channel_projection_tables_exist(&conn, &["communication_threads"])? {
+                return Ok(None);
+            }
+            conn.query_row(
+                r#"
+                SELECT
+                    thread_key, channel, account_key, subject,
+                    participant_keys_json, last_message_key, last_message_at,
+                    message_count, unread_count, metadata_json, updated_at,
+                    CAST(strftime('%s', COALESCE(updated_at, last_message_at)) AS INTEGER) * 1000 AS updated_at_ms
+                FROM communication_threads
+                WHERE thread_key = ?1
+                "#,
+                [record_id],
+                communication_thread_business_os_document,
+            )
+            .optional()
+            .map_err(Into::into)
+        }
+        "communication_messages" => {
+            if !channel_projection_tables_exist(
+                &conn,
+                &["communication_messages", "communication_routing_state"],
+            )? {
+                return Ok(None);
+            }
+            conn.query_row(
+                r#"
+                SELECT
+                    m.message_key, m.channel, m.account_key, m.thread_key, m.remote_id,
+                    m.direction, m.folder_hint, m.sender_display, m.sender_address,
+                    m.recipient_addresses_json, m.cc_addresses_json, m.bcc_addresses_json,
+                    m.subject, m.preview, m.body_text, m.body_html, m.raw_payload_ref,
+                    m.trust_level, m.status, m.seen, m.has_attachments,
+                    m.external_created_at, m.observed_at, m.metadata_json,
+                    r.route_status,
+                    CAST(strftime('%s', COALESCE(m.observed_at, m.external_created_at)) AS INTEGER) * 1000 AS updated_at_ms
+                FROM communication_messages m
+                LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
+                WHERE m.message_key = ?1
+                "#,
+                [record_id],
+                communication_message_business_os_document,
+            )
+            .optional()
+            .map_err(Into::into)
+        }
+        _ => Ok(None),
+    }
+}
+
+pub(crate) fn communication_intake_source_stamp(
+    root: &Path,
+) -> Result<CommunicationIntakeSourceStamp> {
+    let db_path = resolve_db_path(root, None);
+    if !db_path.exists() {
+        return Ok(empty_communication_intake_source_stamp(false));
+    }
+    let Some(mut conn) = open_channel_db_read_only(&db_path)? else {
+        return Ok(empty_communication_intake_source_stamp(false));
+    };
+
+    let mut accounts_table_exists =
+        channel_projection_tables_exist(&conn, &["communication_accounts"])?;
+    let mut threads_table_exists =
+        channel_projection_tables_exist(&conn, &["communication_threads"])?;
+    let mut messages_table_exists =
+        channel_projection_tables_exist(&conn, &["communication_messages"])?;
+    let mut routing_table_exists =
+        channel_projection_tables_exist(&conn, &["communication_routing_state"])?;
+    let clock_table_exists =
+        channel_projection_tables_exist(&conn, &["communication_projection_clock"])?;
+
+    if !clock_table_exists {
+        drop(conn);
+        let schema_conn = open_channel_db(&db_path)?;
+        drop(schema_conn);
+        let Some(reopened) = open_channel_db_read_only(&db_path)? else {
+            return Ok(empty_communication_intake_source_stamp(false));
+        };
+        conn = reopened;
+        accounts_table_exists =
+            channel_projection_tables_exist(&conn, &["communication_accounts"])?;
+        threads_table_exists = channel_projection_tables_exist(&conn, &["communication_threads"])?;
+        messages_table_exists =
+            channel_projection_tables_exist(&conn, &["communication_messages"])?;
+        routing_table_exists =
+            channel_projection_tables_exist(&conn, &["communication_routing_state"])?;
+    }
+
+    let (
+        projection_version,
+        account_count,
+        thread_count,
+        message_count,
+        routing_count,
+        clock_updated_at,
+    ) = conn
+        .query_row(COMMUNICATION_INTAKE_SOURCE_STAMP_SQL, [], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })
+        .optional()?
+        .unwrap_or_else(|| (0, 0, 0, 0, 0, String::new()));
+
+    Ok(CommunicationIntakeSourceStamp {
+        database_exists: true,
+        accounts_table_exists,
+        threads_table_exists,
+        messages_table_exists,
+        routing_table_exists,
+        projection_version,
+        account_count: non_negative_i64_to_usize(account_count),
+        latest_account_updated_at_ms: 0,
+        thread_count: non_negative_i64_to_usize(thread_count),
+        latest_thread_updated_at_ms: 0,
+        message_count: non_negative_i64_to_usize(message_count),
+        latest_message_updated_at_ms: 0,
+        routing_count: non_negative_i64_to_usize(routing_count),
+        clock_updated_at: clock_updated_at.clone(),
+        content_hash: format!(
+            "communication-projection-clock:{projection_version}:{clock_updated_at}"
+        ),
+    })
+}
+
+fn empty_communication_intake_source_stamp(
+    database_exists: bool,
+) -> CommunicationIntakeSourceStamp {
+    CommunicationIntakeSourceStamp {
+        database_exists,
+        accounts_table_exists: false,
+        threads_table_exists: false,
+        messages_table_exists: false,
+        routing_table_exists: false,
+        projection_version: 0,
+        account_count: 0,
+        latest_account_updated_at_ms: 0,
+        thread_count: 0,
+        latest_thread_updated_at_ms: 0,
+        message_count: 0,
+        latest_message_updated_at_ms: 0,
+        routing_count: 0,
+        clock_updated_at: String::new(),
+        content_hash: String::new(),
+    }
+}
+
+fn non_negative_i64_to_usize(value: i64) -> usize {
+    value.max(0) as usize
 }
 
 pub fn handle_channel_command(root: &Path, args: &[String]) -> Result<()> {
@@ -1976,7 +2605,7 @@ pub fn handle_channel_command(root: &Path, args: &[String]) -> Result<()> {
         }
         _ => {
             anyhow::bail!(
-                "usage:\n  ctox channel init [--db <path>]\n  ctox channel sync --channel <email|jami|teams|meeting|whatsapp> [--db <path>] [adapter flags]\n  ctox channel take [--db <path>] [--channel <name>] [--limit <n>] [--lease-owner <owner>]\n  ctox channel ack [--db <path>] [--status <status>] <message-key>...\n  ctox channel send --channel <tui|email|jami|teams|meeting|whatsapp> --account-key <key> --thread-key <key> --body <text> [--subject <text>] [--to <addr>]... [--cc <addr>]... [--attach-file <path>]... [--send-voice] [--reviewed-founder-send] [--reviewed-communication-send]\n  ctox channel founder-reply --message-key <inbound-email-key> --body <text>\n  ctox channel test --channel <tui|email|jami|teams|whatsapp> [--db <path>] [--account-key <key>]\n  ctox channel ingest-tui --account-key <key> --thread-key <key> --body <text> [--sender-display <name>] [--sender-address <addr>] [--subject <text>]\n  ctox channel list [--db <path>] [--channel <name>] [--limit <n>]\n  ctox channel history --thread-key <key> [--db <path>] [--limit <n>]\n  ctox channel search --query <text> [--db <path>] [--channel <name>] [--sender <addr>] [--limit <n>]\n  ctox channel context --thread-key <key> [--db <path>] [--query <text>] [--sender <addr>] [--limit <n>]\n  ctox channel pipeline-status [--thread-key <key>] [--limit <n>]"
+                "usage:\n  ctox channel init [--db <path>]\n  ctox channel sync --channel <email|jami|teams|meeting|whatsapp|slack|discord|telegram|matrix|mattermost|zulip|google_chat> [--db <path>] [adapter flags]\n  ctox channel take [--db <path>] [--channel <name>] [--limit <n>] [--lease-owner <owner>]\n  ctox channel ack [--db <path>] [--status <status>] <message-key>...\n  ctox channel send --channel <tui|email|jami|teams|meeting|whatsapp|slack|discord|telegram|matrix|mattermost|zulip|google_chat> --account-key <key> --thread-key <key> --body <text> [--subject <text>] [--to <addr>]... [--cc <addr>]... [--attach-file <path>]... [--send-voice] [--reviewed-founder-send] [--reviewed-communication-send]\n  ctox channel founder-reply --message-key <inbound-email-key> --body <text>\n  ctox channel test --channel <tui|email|jami|teams|whatsapp|slack|discord|telegram|matrix|mattermost|zulip|google_chat> [--db <path>] [--account-key <key>]\n  ctox channel ingest-tui --account-key <key> --thread-key <key> --body <text> [--sender-display <name>] [--sender-address <addr>] [--subject <text>]\n  ctox channel list [--db <path>] [--channel <name>] [--limit <n>]\n  ctox channel history --thread-key <key> [--db <path>] [--limit <n>]\n  ctox channel search --query <text> [--db <path>] [--channel <name>] [--sender <addr>] [--limit <n>]\n  ctox channel context --thread-key <key> [--db <path>] [--query <text>] [--sender <addr>] [--limit <n>]\n  ctox channel pipeline-status [--thread-key <key>] [--limit <n>]"
             )
         }
     }
@@ -2628,10 +3257,37 @@ pub fn list_queue_tasks(
     Ok(tasks)
 }
 
-pub fn count_queue_tasks(root: &Path, statuses: &[String]) -> Result<usize> {
+pub fn load_queue_task_for_business_os_command(
+    root: &Path,
+    command_id: &str,
+) -> Result<Option<QueueTaskView>> {
+    let command_id = command_id.trim();
+    if command_id.is_empty() {
+        return Ok(None);
+    }
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
-    if statuses.is_empty() {
+    load_queue_task_for_business_os_command_from_conn(&conn, command_id)
+}
+
+pub fn count_queue_tasks(root: &Path, statuses: &[String]) -> Result<usize> {
+    let db_path = resolve_db_path(root, None);
+    let allowed = statuses
+        .iter()
+        .map(|status| status.trim().to_lowercase())
+        .filter(|status| !status.is_empty())
+        .collect::<Vec<_>>();
+    if !statuses.is_empty() && allowed.is_empty() {
+        return Ok(0);
+    }
+    let cache_key = queue_task_count_cache_key(&db_path, &allowed);
+    let stamp = queue_task_list_cache_stamp(&db_path);
+    if let Some(count) = cached_queue_task_count(&cache_key, &stamp) {
+        return Ok(count);
+    }
+
+    let conn = open_channel_db(&db_path)?;
+    let count = if allowed.is_empty() {
         let count: i64 = conn.query_row(
             "SELECT COUNT(*)
              FROM communication_messages
@@ -2640,17 +3296,17 @@ pub fn count_queue_tasks(root: &Path, statuses: &[String]) -> Result<usize> {
             params![QUEUE_CHANNEL_NAME],
             |row| row.get(0),
         )?;
-        return Ok(count.max(0) as usize);
-    }
-    let allowed = statuses
-        .iter()
-        .map(|status| status.trim().to_lowercase())
-        .filter(|status| !status.is_empty())
-        .collect::<Vec<_>>();
-    if allowed.is_empty() {
-        return Ok(0);
-    }
-    count_queue_tasks_from_conn_with_statuses(&conn, &allowed)
+        count.max(0) as usize
+    } else {
+        count_queue_tasks_from_conn_with_statuses(&conn, &allowed)?
+    };
+    drop(conn);
+    let cache_key = queue_task_count_cache_key(&db_path, &allowed);
+    let stamp = queue_task_list_cache_stamp(&db_path);
+    #[cfg(test)]
+    record_queue_task_count_cache_miss_for_tests(&cache_key);
+    store_queue_task_count_cache(cache_key, stamp, count);
+    Ok(count)
 }
 
 pub fn load_queue_task(root: &Path, message_key: &str) -> Result<Option<QueueTaskView>> {
@@ -3473,7 +4129,41 @@ pub(crate) struct ExternalChatAction {
 fn sync_channel(root: &Path, db_path: &Path, channel: &str, args: &[String]) -> Result<Value> {
     let conn = open_channel_db(db_path)?;
     match communication_adapters::external_adapter_for_channel(channel) {
+        Some(communication_adapters::ExternalCommunicationAdapter::Discord(adapter)) => {
+            let adapter_json = adapter.sync_cli(
+                root,
+                &communication_adapters::AdapterSyncCommandRequest {
+                    db_path,
+                    passthrough_args: args,
+                    skip_flags: &["--db", "--channel"],
+                },
+            )?;
+            ensure_routing_rows_for_inbound(&conn)?;
+            Ok(json!({
+                "ok": true,
+                "channel": adapter.channel_name(),
+                "db_path": db_path,
+                "adapter_result": adapter_json,
+            }))
+        }
         Some(communication_adapters::ExternalCommunicationAdapter::Email(adapter)) => {
+            let adapter_json = adapter.sync_cli(
+                root,
+                &communication_adapters::AdapterSyncCommandRequest {
+                    db_path,
+                    passthrough_args: args,
+                    skip_flags: &["--db", "--channel"],
+                },
+            )?;
+            ensure_routing_rows_for_inbound(&conn)?;
+            Ok(json!({
+                "ok": true,
+                "channel": adapter.channel_name(),
+                "db_path": db_path,
+                "adapter_result": adapter_json,
+            }))
+        }
+        Some(communication_adapters::ExternalCommunicationAdapter::GoogleChat(adapter)) => {
             let adapter_json = adapter.sync_cli(
                 root,
                 &communication_adapters::AdapterSyncCommandRequest {
@@ -3507,7 +4197,58 @@ fn sync_channel(root: &Path, db_path: &Path, channel: &str, args: &[String]) -> 
                 "adapter_result": adapter_json,
             }))
         }
+        Some(communication_adapters::ExternalCommunicationAdapter::Matrix(adapter)) => {
+            let adapter_json = adapter.sync_cli(
+                root,
+                &communication_adapters::AdapterSyncCommandRequest {
+                    db_path,
+                    passthrough_args: args,
+                    skip_flags: &["--db", "--channel"],
+                },
+            )?;
+            ensure_routing_rows_for_inbound(&conn)?;
+            Ok(json!({
+                "ok": true,
+                "channel": adapter.channel_name(),
+                "db_path": db_path,
+                "adapter_result": adapter_json,
+            }))
+        }
+        Some(communication_adapters::ExternalCommunicationAdapter::Mattermost(adapter)) => {
+            let adapter_json = adapter.sync_cli(
+                root,
+                &communication_adapters::AdapterSyncCommandRequest {
+                    db_path,
+                    passthrough_args: args,
+                    skip_flags: &["--db", "--channel"],
+                },
+            )?;
+            ensure_routing_rows_for_inbound(&conn)?;
+            Ok(json!({
+                "ok": true,
+                "channel": adapter.channel_name(),
+                "db_path": db_path,
+                "adapter_result": adapter_json,
+            }))
+        }
         Some(communication_adapters::ExternalCommunicationAdapter::Meeting(adapter)) => {
+            let adapter_json = adapter.sync_cli(
+                root,
+                &communication_adapters::AdapterSyncCommandRequest {
+                    db_path,
+                    passthrough_args: args,
+                    skip_flags: &["--db", "--channel"],
+                },
+            )?;
+            ensure_routing_rows_for_inbound(&conn)?;
+            Ok(json!({
+                "ok": true,
+                "channel": adapter.channel_name(),
+                "db_path": db_path,
+                "adapter_result": adapter_json,
+            }))
+        }
+        Some(communication_adapters::ExternalCommunicationAdapter::Slack(adapter)) => {
             let adapter_json = adapter.sync_cli(
                 root,
                 &communication_adapters::AdapterSyncCommandRequest {
@@ -3541,7 +4282,41 @@ fn sync_channel(root: &Path, db_path: &Path, channel: &str, args: &[String]) -> 
                 "adapter_result": adapter_json,
             }))
         }
+        Some(communication_adapters::ExternalCommunicationAdapter::Telegram(adapter)) => {
+            let adapter_json = adapter.sync_cli(
+                root,
+                &communication_adapters::AdapterSyncCommandRequest {
+                    db_path,
+                    passthrough_args: args,
+                    skip_flags: &["--db", "--channel"],
+                },
+            )?;
+            ensure_routing_rows_for_inbound(&conn)?;
+            Ok(json!({
+                "ok": true,
+                "channel": adapter.channel_name(),
+                "db_path": db_path,
+                "adapter_result": adapter_json,
+            }))
+        }
         Some(communication_adapters::ExternalCommunicationAdapter::Whatsapp(adapter)) => {
+            let adapter_json = adapter.sync_cli(
+                root,
+                &communication_adapters::AdapterSyncCommandRequest {
+                    db_path,
+                    passthrough_args: args,
+                    skip_flags: &["--db", "--channel"],
+                },
+            )?;
+            ensure_routing_rows_for_inbound(&conn)?;
+            Ok(json!({
+                "ok": true,
+                "channel": adapter.channel_name(),
+                "db_path": db_path,
+                "adapter_result": adapter_json,
+            }))
+        }
+        Some(communication_adapters::ExternalCommunicationAdapter::Zulip(adapter)) => {
             let adapter_json = adapter.sync_cli(
                 root,
                 &communication_adapters::AdapterSyncCommandRequest {
@@ -3579,6 +4354,48 @@ fn send_message(root: &Path, db_path: &Path, request: ChannelSendRequest) -> Res
         } else {
             None
         };
+    macro_rules! send_chat_adapter {
+        ($factory:ident, $channel:literal) => {{
+            let _core_send_proof = enforce_reviewed_communication_send_core_transition_if_approved(
+                &conn,
+                &request,
+                reviewed_external_chat_approval.as_ref(),
+            )?;
+            let adapter = communication_adapters::$factory();
+            let adapter_json = adapter.send_cli(
+                root,
+                &communication_adapters::ChatSendCommandRequest {
+                    db_path,
+                    account_key: &request.account_key,
+                    thread_key: &request.thread_key,
+                    to: &request.to,
+                    cc: &request.cc,
+                    sender_display: request.sender_display.as_deref(),
+                    subject: &request.subject,
+                    body: &request.body,
+                    attachments: &request.attachments,
+                },
+            )?;
+            if let Some((approval_key, _anchor_key)) = reviewed_external_chat_approval.as_ref() {
+                mark_founder_reply_review_sent(&conn, approval_key, &adapter_json)?;
+            }
+            Ok(json!({
+                "ok": true,
+                "channel": $channel,
+                "db_path": db_path,
+                "status": adapter_json
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("sent"),
+                "delivery_confirmed": adapter_json
+                    .get("delivery")
+                    .and_then(|value| value.get("confirmed"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                "adapter_result": adapter_json,
+            }))
+        }};
+    }
     match request.channel.as_str() {
         "tui" => {
             let message_key = store_tui_outbound_message(&mut conn, &request)?;
@@ -3613,6 +4430,8 @@ fn send_message(root: &Path, db_path: &Path, request: ChannelSendRequest) -> Res
             validate_founder_outbound_email(&settings, &request)?;
             send_email_message(root, &conn, db_path, &request, None)
         }
+        "discord" => send_chat_adapter!(discord, "discord"),
+        "google_chat" => send_chat_adapter!(google_chat, "google_chat"),
         "jami" => {
             let _core_send_proof = enforce_reviewed_communication_send_core_transition_if_approved(
                 &conn,
@@ -3659,6 +4478,8 @@ fn send_message(root: &Path, db_path: &Path, request: ChannelSendRequest) -> Res
                 "adapter_result": adapter_json,
             }))
         }
+        "matrix" => send_chat_adapter!(matrix, "matrix"),
+        "mattermost" => send_chat_adapter!(mattermost, "mattermost"),
         "teams" => {
             let _core_send_proof = enforce_reviewed_communication_send_core_transition_if_approved(
                 &conn,
@@ -3700,6 +4521,8 @@ fn send_message(root: &Path, db_path: &Path, request: ChannelSendRequest) -> Res
                 "adapter_result": adapter_json,
             }))
         }
+        "slack" => send_chat_adapter!(slack, "slack"),
+        "telegram" => send_chat_adapter!(telegram, "telegram"),
         "whatsapp" => {
             let _core_send_proof = enforce_reviewed_communication_send_core_transition_if_approved(
                 &conn,
@@ -3738,6 +4561,7 @@ fn send_message(root: &Path, db_path: &Path, request: ChannelSendRequest) -> Res
                 "adapter_result": adapter_json,
             }))
         }
+        "zulip" => send_chat_adapter!(zulip, "zulip"),
         "meeting" => {
             let _core_send_proof = enforce_reviewed_communication_send_core_transition_if_approved(
                 &conn,
@@ -3773,12 +4597,41 @@ fn send_message(root: &Path, db_path: &Path, request: ChannelSendRequest) -> Res
 }
 
 fn enforce_channel_attachment_support(request: &ChannelSendRequest) -> Result<()> {
-    let _ = request;
+    if request.attachments.is_empty() {
+        return Ok(());
+    }
+    if chat_channel_is_text_only_v1(&request.channel) {
+        anyhow::bail!(
+            "{} attachments are not supported by the native chat adapter v1. Send a text-only message or upload/share the file through a supported channel after attachment handling has a provider-specific security review.",
+            request.channel
+        );
+    }
     Ok(())
 }
 
+fn chat_channel_is_text_only_v1(channel: &str) -> bool {
+    matches!(
+        channel,
+        "slack" | "discord" | "telegram" | "matrix" | "mattermost" | "zulip" | "google_chat"
+    )
+}
+
 fn is_review_required_outbound_channel(channel: &str) -> bool {
-    matches!(channel, "email" | "teams" | "jami" | "whatsapp" | "meeting")
+    matches!(
+        channel,
+        "email"
+            | "teams"
+            | "jami"
+            | "whatsapp"
+            | "meeting"
+            | "slack"
+            | "discord"
+            | "telegram"
+            | "matrix"
+            | "mattermost"
+            | "zulip"
+            | "google_chat"
+    )
 }
 
 fn enforce_external_chat_send_is_reviewed(request: &ChannelSendRequest) -> Result<()> {
@@ -3797,7 +4650,17 @@ fn enforce_external_work_ack_has_pipeline_backing(
 ) -> Result<()> {
     if !matches!(
         request.channel.as_str(),
-        "teams" | "jami" | "whatsapp" | "meeting"
+        "teams"
+            | "jami"
+            | "whatsapp"
+            | "meeting"
+            | "slack"
+            | "discord"
+            | "telegram"
+            | "matrix"
+            | "mattermost"
+            | "zulip"
+            | "google_chat"
     ) {
         return Ok(());
     }
@@ -5027,7 +5890,20 @@ fn external_chat_review_digest(
 }
 
 fn is_reviewed_external_chat_channel(channel: &str) -> bool {
-    matches!(channel, "teams" | "jami" | "whatsapp" | "meeting")
+    matches!(
+        channel,
+        "teams"
+            | "jami"
+            | "whatsapp"
+            | "meeting"
+            | "slack"
+            | "discord"
+            | "telegram"
+            | "matrix"
+            | "mattermost"
+            | "zulip"
+            | "google_chat"
+    )
 }
 
 fn external_chat_action_from_send_request(request: &ChannelSendRequest) -> ExternalChatAction {
@@ -6252,6 +7128,35 @@ fn test_channel(
     channel: &str,
     account_key: Option<&str>,
 ) -> Result<Value> {
+    macro_rules! test_chat_adapter {
+        ($factory:ident, $channel:literal) => {{
+            bootstrap_channel_account(root, $channel)?;
+            let conn = open_channel_db(db_path)?;
+            let adapter = communication_adapters::$factory();
+            let resolved_account_key = resolve_account_key(&conn, $channel, account_key).ok();
+            let account_config = resolved_account_key
+                .as_deref()
+                .and_then(|key| load_account_config(&conn, key).ok().flatten());
+            let empty_profile = json!({});
+            let adapter_json = adapter.test_cli(
+                root,
+                &communication_adapters::ChatTestCommandRequest {
+                    db_path,
+                    profile_json: account_config
+                        .as_ref()
+                        .map(|config| &config.profile_json)
+                        .unwrap_or(&empty_profile),
+                },
+            )?;
+            Ok(json!({
+                "ok": adapter_json.get("ok").and_then(Value::as_bool).unwrap_or(false),
+                "channel": $channel,
+                "account_key": resolved_account_key,
+                "db_path": db_path,
+                "adapter_result": adapter_json,
+            }))
+        }};
+    }
     match channel {
         "tui" => Ok(json!({
             "ok": true,
@@ -6348,6 +7253,8 @@ fn test_channel(
                 "adapter_result": adapter_json,
             }))
         }
+        "discord" => test_chat_adapter!(discord, "discord"),
+        "google_chat" => test_chat_adapter!(google_chat, "google_chat"),
         "whatsapp" => {
             let conn = open_channel_db(db_path)?;
             let resolved_account_key = resolve_account_key(&conn, "whatsapp", account_key).ok();
@@ -6367,6 +7274,11 @@ fn test_channel(
                 "adapter_result": adapter_json,
             }))
         }
+        "matrix" => test_chat_adapter!(matrix, "matrix"),
+        "mattermost" => test_chat_adapter!(mattermost, "mattermost"),
+        "slack" => test_chat_adapter!(slack, "slack"),
+        "telegram" => test_chat_adapter!(telegram, "telegram"),
+        "zulip" => test_chat_adapter!(zulip, "zulip"),
         other => anyhow::bail!("unsupported channel test target: {other}"),
     }
 }
@@ -6452,14 +7364,26 @@ fn parse_send_request(args: &[String]) -> Result<ChannelSendRequest> {
         .map(ToOwned::to_owned)
         .unwrap_or_default();
     let to = collect_flag_values(args, "--to");
-    // "tui", "teams", "meeting", and WhatsApp thread replies don't require ad hoc recipients here:
-    // tui is local, teams targets the configured Graph chat/channel or the
-    // stored Teams thread key, meeting broadcasts through the active
-    // Playwright session, and WhatsApp replies target the chat encoded in
-    // thread_key. Email and Jami still need explicit remote targets.
+    // Local/configured chat transports do not require ad hoc recipients here:
+    // tui is local, Teams and the bot-platform adapters can target configured
+    // default destinations or destination markers in thread_key, meeting
+    // broadcasts through the active Playwright session, and WhatsApp replies
+    // target the chat encoded in thread_key. Email and Jami still need
+    // explicit remote targets.
     let whatsapp_thread_reply = channel == "whatsapp" && thread_key.contains("::chat::");
-    if !matches!(channel.as_str(), "tui" | "teams" | "meeting")
-        && !whatsapp_thread_reply
+    if !matches!(
+        channel.as_str(),
+        "tui"
+            | "teams"
+            | "meeting"
+            | "slack"
+            | "discord"
+            | "telegram"
+            | "matrix"
+            | "mattermost"
+            | "zulip"
+            | "google_chat"
+    ) && !whatsapp_thread_reply
         && to.is_empty()
     {
         anyhow::bail!("channel send for {channel} requires at least one --to value");
@@ -6606,6 +7530,8 @@ pub(crate) fn open_channel_db(path: &Path) -> Result<Connection> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create db parent {}", parent.display()))?;
     }
+    #[cfg(test)]
+    record_channel_db_open_for_tests(path);
     let conn = Connection::open(path)
         .with_context(|| format!("failed to open channel db {}", path.display()))?;
     conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
@@ -6706,6 +7632,42 @@ fn store_queue_task_list_cache(
     cache.insert(key, QueueTaskListCacheEntry { stamp, tasks });
 }
 
+fn queue_task_count_cache_key(path: &Path, statuses: &[String]) -> QueueTaskCountCacheKey {
+    QueueTaskCountCacheKey {
+        database: channel_schema_cache_key(path),
+        statuses: statuses.to_vec(),
+    }
+}
+
+fn cached_queue_task_count(
+    key: &QueueTaskCountCacheKey,
+    stamp: &QueueTaskListCacheStamp,
+) -> Option<usize> {
+    let cache = QUEUE_TASK_COUNT_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache
+        .get(key)
+        .filter(|entry| &entry.stamp == stamp)
+        .map(|entry| entry.count)
+}
+
+fn store_queue_task_count_cache(
+    key: QueueTaskCountCacheKey,
+    stamp: QueueTaskListCacheStamp,
+    count: usize,
+) {
+    let cache = QUEUE_TASK_COUNT_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if cache.len() >= QUEUE_TASK_COUNT_CACHE_MAX_ENTRIES && !cache.contains_key(&key) {
+        cache.clear();
+    }
+    cache.insert(key, QueueTaskCountCacheEntry { stamp, count });
+}
+
 fn absolute_channel_db_path(path: &Path) -> PathBuf {
     if path.is_absolute() {
         return path.to_path_buf();
@@ -6799,6 +7761,36 @@ fn channel_open_routing_ensure_count_for_tests(path: &Path) -> usize {
 }
 
 #[cfg(test)]
+fn record_channel_db_open_for_tests(path: &Path) {
+    let counts = CHANNEL_DB_OPEN_CALL_COUNTS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut counts = counts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *counts.entry(path.to_path_buf()).or_insert(0) += 1;
+}
+
+#[cfg(test)]
+pub(crate) fn reset_channel_db_open_count_for_tests(path: &Path) {
+    if let Some(counts) = CHANNEL_DB_OPEN_CALL_COUNTS.get() {
+        counts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(path);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn channel_db_open_count_for_tests(path: &Path) -> usize {
+    let Some(counts) = CHANNEL_DB_OPEN_CALL_COUNTS.get() else {
+        return 0;
+    };
+    let counts = counts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    counts.get(path).copied().unwrap_or(0)
+}
+
+#[cfg(test)]
 fn record_queue_task_list_cache_miss_for_tests(key: &QueueTaskListCacheKey) {
     let counts = QUEUE_TASK_LIST_CACHE_MISS_COUNTS.get_or_init(|| Mutex::new(BTreeMap::new()));
     let mut counts = counts
@@ -6815,6 +7807,27 @@ fn queue_task_list_cache_miss_count_for_tests(
 ) -> usize {
     let key = queue_task_list_cache_key(path, statuses, limit);
     let Some(counts) = QUEUE_TASK_LIST_CACHE_MISS_COUNTS.get() else {
+        return 0;
+    };
+    let counts = counts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    counts.get(&key).copied().unwrap_or(0)
+}
+
+#[cfg(test)]
+fn record_queue_task_count_cache_miss_for_tests(key: &QueueTaskCountCacheKey) {
+    let counts = QUEUE_TASK_COUNT_CACHE_MISS_COUNTS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut counts = counts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *counts.entry(key.clone()).or_insert(0) += 1;
+}
+
+#[cfg(test)]
+fn queue_task_count_cache_miss_count_for_tests(path: &Path, statuses: &[String]) -> usize {
+    let key = queue_task_count_cache_key(path, statuses);
+    let Some(counts) = QUEUE_TASK_COUNT_CACHE_MISS_COUNTS.get() else {
         return 0;
     };
     let counts = counts
@@ -6933,6 +7946,13 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_communication_messages_channel_remote
             ON communication_messages(channel, account_key, remote_id);
 
+        CREATE INDEX IF NOT EXISTS idx_communication_messages_email_folder_remote
+            ON communication_messages(channel, account_key, folder_hint, remote_id);
+
+        CREATE INDEX IF NOT EXISTS idx_communication_messages_queue_business_command_valid
+            ON communication_messages(json_extract(metadata_json, '$.business_os_command_id'), observed_at DESC)
+            WHERE channel = 'queue' AND direction = 'inbound' AND json_valid(metadata_json);
+
         CREATE TABLE IF NOT EXISTS communication_sync_runs (
             run_key TEXT PRIMARY KEY,
             channel TEXT NOT NULL,
@@ -6959,6 +7979,159 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_communication_routing_status_owner
             ON communication_routing_state(route_status, lease_owner, leased_at, updated_at);
+
+        CREATE TABLE IF NOT EXISTS communication_projection_clock (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            version INTEGER NOT NULL,
+            account_count INTEGER NOT NULL,
+            thread_count INTEGER NOT NULL,
+            message_count INTEGER NOT NULL,
+            routing_count INTEGER NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        INSERT INTO communication_projection_clock (
+            id, version, account_count, thread_count, message_count, routing_count, updated_at
+        )
+        SELECT
+            1,
+            0,
+            (SELECT COUNT(*) FROM communication_accounts),
+            (SELECT COUNT(*) FROM communication_threads),
+            (SELECT COUNT(*) FROM communication_messages),
+            (SELECT COUNT(*) FROM communication_routing_state),
+            strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE NOT EXISTS (
+            SELECT 1 FROM communication_projection_clock WHERE id = 1
+        );
+
+        CREATE TRIGGER IF NOT EXISTS trg_communication_projection_clock_accounts_insert
+        AFTER INSERT ON communication_accounts
+        BEGIN
+            UPDATE communication_projection_clock
+            SET version = version + 1,
+                account_count = account_count + 1,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = 1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS trg_communication_projection_clock_accounts_update
+        AFTER UPDATE ON communication_accounts
+        BEGIN
+            UPDATE communication_projection_clock
+            SET version = version + 1,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = 1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS trg_communication_projection_clock_accounts_delete
+        AFTER DELETE ON communication_accounts
+        BEGIN
+            UPDATE communication_projection_clock
+            SET version = version + 1,
+                account_count = CASE
+                    WHEN account_count > 0 THEN account_count - 1
+                    ELSE 0
+                END,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = 1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS trg_communication_projection_clock_threads_insert
+        AFTER INSERT ON communication_threads
+        BEGIN
+            UPDATE communication_projection_clock
+            SET version = version + 1,
+                thread_count = thread_count + 1,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = 1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS trg_communication_projection_clock_threads_update
+        AFTER UPDATE ON communication_threads
+        BEGIN
+            UPDATE communication_projection_clock
+            SET version = version + 1,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = 1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS trg_communication_projection_clock_threads_delete
+        AFTER DELETE ON communication_threads
+        BEGIN
+            UPDATE communication_projection_clock
+            SET version = version + 1,
+                thread_count = CASE
+                    WHEN thread_count > 0 THEN thread_count - 1
+                    ELSE 0
+                END,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = 1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS trg_communication_projection_clock_messages_insert
+        AFTER INSERT ON communication_messages
+        BEGIN
+            UPDATE communication_projection_clock
+            SET version = version + 1,
+                message_count = message_count + 1,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = 1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS trg_communication_projection_clock_messages_update
+        AFTER UPDATE ON communication_messages
+        BEGIN
+            UPDATE communication_projection_clock
+            SET version = version + 1,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = 1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS trg_communication_projection_clock_messages_delete
+        AFTER DELETE ON communication_messages
+        BEGIN
+            UPDATE communication_projection_clock
+            SET version = version + 1,
+                message_count = CASE
+                    WHEN message_count > 0 THEN message_count - 1
+                    ELSE 0
+                END,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = 1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS trg_communication_projection_clock_routing_insert
+        AFTER INSERT ON communication_routing_state
+        BEGIN
+            UPDATE communication_projection_clock
+            SET version = version + 1,
+                routing_count = routing_count + 1,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = 1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS trg_communication_projection_clock_routing_update
+        AFTER UPDATE ON communication_routing_state
+        BEGIN
+            UPDATE communication_projection_clock
+            SET version = version + 1,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = 1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS trg_communication_projection_clock_routing_delete
+        AFTER DELETE ON communication_routing_state
+        BEGIN
+            UPDATE communication_projection_clock
+            SET version = version + 1,
+                routing_count = CASE
+                    WHEN routing_count > 0 THEN routing_count - 1
+                    ELSE 0
+                END,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = 1;
+        END;
 
         CREATE TABLE IF NOT EXISTS communication_founder_reply_reviews (
             approval_key TEXT PRIMARY KEY,
@@ -8265,6 +9438,121 @@ fn load_queue_task_from_conn(
         .transpose()
 }
 
+pub(crate) fn load_queue_tasks_by_message_key_from_conn(
+    conn: &Connection,
+    message_keys: &[String],
+) -> Result<BTreeMap<String, QueueTaskView>> {
+    let mut tasks = BTreeMap::new();
+    if message_keys.is_empty() {
+        return Ok(tasks);
+    }
+    for chunk in message_keys.chunks(500) {
+        let placeholders = (0..chunk.len())
+            .map(|index| format!("?{}", index + 2))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            r#"
+            SELECT
+                m.message_key,
+                m.channel,
+                m.account_key,
+                m.thread_key,
+                m.remote_id,
+                m.direction,
+                m.folder_hint,
+                m.sender_display,
+                m.sender_address,
+                m.subject,
+                m.preview,
+                m.body_text,
+                m.status,
+                m.seen,
+                m.external_created_at,
+                m.observed_at,
+                m.metadata_json,
+                COALESCE(r.route_status, 'pending'),
+                r.lease_owner,
+                r.leased_at,
+                r.acked_at,
+                COALESCE(r.updated_at, m.observed_at)
+            FROM communication_messages m
+            LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
+            WHERE m.channel = ?1
+              AND m.direction = 'inbound'
+              AND m.message_key IN ({placeholders})
+            "#
+        );
+        let mut values = Vec::with_capacity(chunk.len() + 1);
+        values.push(SqlValue::Text(QUEUE_CHANNEL_NAME.to_string()));
+        values.extend(chunk.iter().cloned().map(SqlValue::Text));
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement.query_map(params_from_iter(values), map_channel_message_row)?;
+        for row in rows {
+            let task = queue_task_from_message(row?)?;
+            tasks.insert(task.message_key.clone(), task);
+        }
+    }
+    Ok(tasks)
+}
+
+fn load_queue_task_for_business_os_command_from_conn(
+    conn: &Connection,
+    command_id: &str,
+) -> Result<Option<QueueTaskView>> {
+    conn.query_row(
+        r#"
+        SELECT
+            m.message_key,
+            m.channel,
+            m.account_key,
+            m.thread_key,
+            m.remote_id,
+            m.direction,
+            m.folder_hint,
+            m.sender_display,
+            m.sender_address,
+            m.subject,
+            m.preview,
+            m.body_text,
+            m.status,
+            m.seen,
+            m.external_created_at,
+            m.observed_at,
+            m.metadata_json,
+            COALESCE(r.route_status, 'pending'),
+            r.lease_owner,
+            r.leased_at,
+            r.acked_at,
+            COALESCE(r.updated_at, m.observed_at)
+        FROM communication_messages m
+        LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
+        WHERE m.channel = ?1
+          AND m.direction = 'inbound'
+          AND json_valid(m.metadata_json)
+          AND json_extract(m.metadata_json, '$.business_os_command_id') = ?2
+        ORDER BY
+            CASE COALESCE(r.route_status, 'pending')
+                WHEN 'pending' THEN 0
+                WHEN 'leased' THEN 1
+                WHEN 'blocked' THEN 2
+                WHEN 'failed' THEN 3
+                WHEN 'handled' THEN 4
+                WHEN 'cancelled' THEN 5
+                ELSE 9
+            END ASC,
+            m.external_created_at ASC,
+            m.observed_at ASC
+        LIMIT 1
+        "#,
+        params![QUEUE_CHANNEL_NAME, command_id],
+        map_channel_message_row,
+    )
+    .optional()?
+    .map(queue_task_from_message)
+    .transpose()
+}
+
 fn queue_task_from_message(message: ChannelMessageView) -> Result<QueueTaskView> {
     if message.channel != QUEUE_CHANNEL_NAME || message.direction != "inbound" {
         anyhow::bail!("message is not a queue task");
@@ -9487,6 +10775,93 @@ mod tests {
     }
 
     #[test]
+    fn communication_intake_source_stamp_uses_projection_clock() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let db_path = resolve_db_path(root.path(), None);
+        let mut conn = open_channel_db(&db_path)?;
+        upsert_communication_account(
+            &mut conn,
+            "email:agent@example.test",
+            "email",
+            "agent@example.test",
+            "imap",
+            json!({ "display": "Agent" }),
+        )?;
+        upsert_communication_message(
+            &mut conn,
+            UpsertMessage {
+                message_key: "email:agent@example.test::INBOX::42",
+                channel: "email",
+                account_key: "email:agent@example.test",
+                thread_key: "thread:projection-clock",
+                remote_id: "42",
+                direction: "inbound",
+                folder_hint: "INBOX",
+                sender_display: "Sender",
+                sender_address: "sender@example.test",
+                recipient_addresses_json: "[]",
+                cc_addresses_json: "[]",
+                bcc_addresses_json: "[]",
+                subject: "Projection clock",
+                preview: "Projection clock preview",
+                body_text: "Projection clock body",
+                body_html: "",
+                raw_payload_ref: "",
+                trust_level: "normal",
+                status: "received",
+                seen: false,
+                has_attachments: false,
+                external_created_at: "2026-06-25T00:00:00Z",
+                observed_at: "2026-06-25T00:00:00Z",
+                metadata_json: "{}",
+            },
+        )?;
+
+        let first = communication_intake_source_stamp(root.path())?;
+        assert_eq!(first.account_count, 1);
+        assert_eq!(first.message_count, 1);
+        assert!(
+            first.projection_version >= 2,
+            "account/message inserts must advance projection clock, got {:?}",
+            first
+        );
+
+        let explain_sql = format!("EXPLAIN QUERY PLAN {COMMUNICATION_INTAKE_SOURCE_STAMP_SQL}");
+        let plan = conn
+            .prepare(&explain_sql)?
+            .query_map([], |row| row.get::<_, String>(3))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        assert!(
+            plan.iter()
+                .any(|detail| detail.contains("communication_projection_clock")),
+            "communication intake source stamp must read the projection clock, got {plan:?}"
+        );
+        assert!(
+            !plan
+                .iter()
+                .any(|detail| detail.contains("communication_messages")),
+            "communication intake source stamp must not scan communication_messages, got {plan:?}"
+        );
+
+        conn.execute(
+            r#"
+            UPDATE communication_messages
+            SET metadata_json = '{"changed":true}'
+            WHERE message_key = 'email:agent@example.test::INBOX::42'
+            "#,
+            [],
+        )?;
+        let second = communication_intake_source_stamp(root.path())?;
+        assert_eq!(second.message_count, 1);
+        assert!(
+            second.projection_version > first.projection_version,
+            "message metadata update must advance projection clock"
+        );
+        assert_ne!(second, first);
+        Ok(())
+    }
+
+    #[test]
     fn communication_accounts_projection_respects_since_ms() -> Result<()> {
         let root = std::env::temp_dir().join(format!(
             "ctox-communication-accounts-projection-{}",
@@ -9529,6 +10904,119 @@ mod tests {
             after_checkpoint.get("since_ms").and_then(Value::as_i64),
             Some(updated_at_ms.saturating_add(1))
         );
+
+        let _ = fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn communication_record_projection_uses_keyed_lookup() -> Result<()> {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-communication-record-projection-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root)?;
+        let mut conn = open_channel_db(&resolve_db_path(&root, None))?;
+        upsert_communication_account(
+            &mut conn,
+            "email:founder@example.test",
+            "email",
+            "founder@example.test",
+            "imap",
+            json!({ "display": "Founder" }),
+        )?;
+        conn.execute(
+            r#"
+            INSERT INTO communication_threads (
+                thread_key, channel, account_key, subject, participant_keys_json,
+                last_message_key, last_message_at, message_count, unread_count,
+                metadata_json, updated_at
+            ) VALUES (
+                'thread-keyed', 'email', 'email:founder@example.test', 'Keyed thread',
+                '[]', 'message-keyed', '2026-06-26T08:00:00Z', 1, 0,
+                '{}', '2026-06-26T08:00:00Z'
+            )
+            "#,
+            [],
+        )?;
+        conn.execute(
+            r#"
+            INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction,
+                folder_hint, sender_display, sender_address, recipient_addresses_json,
+                cc_addresses_json, bcc_addresses_json, subject, preview, body_text,
+                body_html, raw_payload_ref, trust_level, status, seen,
+                has_attachments, external_created_at, observed_at, metadata_json
+            ) VALUES (
+                'message-keyed', 'email', 'email:founder@example.test', 'thread-keyed',
+                'remote-keyed', 'inbound', 'INBOX', 'Founder',
+                'founder@example.test', '[]', '[]', '[]', 'Subject', 'Preview',
+                'Body', '', '', 'normal', 'received', 0, 0,
+                '2026-06-26T08:00:00Z', '2026-06-26T08:00:00Z',
+                '{"ticket_self_work_id":"work-1"}'
+            )
+            "#,
+            [],
+        )?;
+        conn.execute(
+            r#"
+            INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, acked_at,
+                last_error, updated_at
+            ) VALUES (
+                'message-keyed', 'queued', '', NULL, NULL, NULL,
+                '2026-06-26T08:00:00Z'
+            )
+            "#,
+            [],
+        )?;
+        drop(conn);
+
+        let account = pull_communication_record_for_business_os(
+            &root,
+            "communication_accounts",
+            "email:founder@example.test",
+        )?
+        .context("expected keyed communication account")?;
+        assert_eq!(
+            account.get("id").and_then(Value::as_str),
+            Some("email:founder@example.test")
+        );
+
+        let thread = pull_communication_record_for_business_os(
+            &root,
+            "communication_threads",
+            "thread-keyed",
+        )?
+        .context("expected keyed communication thread")?;
+        assert_eq!(
+            thread.get("subject").and_then(Value::as_str),
+            Some("Keyed thread")
+        );
+
+        let message = pull_communication_record_for_business_os(
+            &root,
+            "communication_messages",
+            "message-keyed",
+        )?
+        .context("expected keyed communication message")?;
+        assert_eq!(
+            message.get("route_status").and_then(Value::as_str),
+            Some("queued")
+        );
+        assert_eq!(
+            message.get("ticket_self_work_id").and_then(Value::as_str),
+            Some("work-1")
+        );
+        assert!(pull_communication_record_for_business_os(
+            &root,
+            "communication_messages",
+            "missing"
+        )?
+        .is_none());
 
         let _ = fs::remove_dir_all(&root);
         Ok(())
@@ -9886,6 +11374,101 @@ mod tests {
             queue_task_list_cache_miss_count_for_tests(&db_path, &pending, 10),
             3,
             "status updates must invalidate the cached queue snapshot"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn queue_task_count_cache_reuses_idle_reads_until_store_changes() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-queue-count-cache-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("failed to create temp test root");
+        let db_path = resolve_db_path(&root, None);
+        let pending = vec!["pending".to_string()];
+        let blocked = vec!["blocked".to_string()];
+
+        let first = count_queue_tasks(&root, &pending).expect("failed to count empty queue");
+        assert_eq!(first, 0);
+        assert_eq!(
+            queue_task_count_cache_miss_count_for_tests(&db_path, &pending),
+            1,
+            "first queue count must hit SQLite"
+        );
+
+        let second = count_queue_tasks(&root, &pending).expect("failed to recount empty queue");
+        assert_eq!(second, 0);
+        assert_eq!(
+            queue_task_count_cache_miss_count_for_tests(&db_path, &pending),
+            1,
+            "unchanged idle queue count must reuse the cached count"
+        );
+
+        let created = create_queue_task(
+            &root,
+            QueueTaskCreateRequest {
+                title: "count cache invalidation".to_string(),
+                prompt: "Make the queue count cache refresh after a store write.".to_string(),
+                thread_key: "queue/count-cache".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+
+        let after_write =
+            count_queue_tasks(&root, &pending).expect("failed to count queue after write");
+        assert_eq!(after_write, 1);
+        assert_eq!(
+            queue_task_count_cache_miss_count_for_tests(&db_path, &pending),
+            2,
+            "store writes must invalidate the cached queue count"
+        );
+
+        let after_idle =
+            count_queue_tasks(&root, &pending).expect("failed to count queue after idle");
+        assert_eq!(after_idle, 1);
+        assert_eq!(
+            queue_task_count_cache_miss_count_for_tests(&db_path, &pending),
+            2,
+            "unchanged post-write queue count must reuse the refreshed count"
+        );
+
+        update_queue_task(
+            &root,
+            QueueTaskUpdateRequest {
+                message_key: created.message_key,
+                route_status: Some("blocked".to_string()),
+                status_note: Some("count cache invalidation after status update".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("failed to update queue task status");
+
+        let pending_after_status_update = count_queue_tasks(&root, &pending)
+            .expect("failed to count pending queue after status update");
+        assert_eq!(pending_after_status_update, 0);
+        assert_eq!(
+            queue_task_count_cache_miss_count_for_tests(&db_path, &pending),
+            3,
+            "status updates must invalidate the cached pending count"
+        );
+
+        let blocked_after_status_update = count_queue_tasks(&root, &blocked)
+            .expect("failed to count blocked queue after status update");
+        assert_eq!(blocked_after_status_update, 1);
+        assert_eq!(
+            queue_task_count_cache_miss_count_for_tests(&db_path, &blocked),
+            1,
+            "a different status set has an independent cache entry"
         );
 
         let _ = fs::remove_dir_all(&root);
@@ -10646,6 +12229,36 @@ mod tests {
     }
 
     #[test]
+    fn parse_send_request_allows_bot_chat_adapters_without_to_recipient() {
+        for channel in [
+            "slack",
+            "discord",
+            "telegram",
+            "matrix",
+            "mattermost",
+            "zulip",
+            "google_chat",
+        ] {
+            let args = vec![
+                "send".to_string(),
+                "--channel".to_string(),
+                channel.to_string(),
+                "--account-key".to_string(),
+                format!("{channel}:bot"),
+                "--thread-key".to_string(),
+                format!("{channel}:bot::channel::configured-default"),
+                "--body".to_string(),
+                "kurze antwort".to_string(),
+            ];
+
+            let request = parse_send_request(&args)
+                .unwrap_or_else(|error| panic!("{channel} should not require --to: {error}"));
+            assert_eq!(request.channel, channel);
+            assert!(request.to.is_empty());
+        }
+    }
+
+    #[test]
     fn teams_tenant_comes_from_profile_not_account_key() {
         let account = AccountConfig {
             provider: "graph".to_string(),
@@ -11243,6 +12856,128 @@ mod tests {
     }
 
     #[test]
+    fn fake_bot_chat_send_requires_exact_review_and_marks_audit_sent() {
+        let root = unique_root("ctox-fake-chat-reviewed-send");
+        fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
+        let mut runtime_settings = BTreeMap::new();
+        runtime_settings.insert(
+            "CTO_SLACK_API_BASE_URL".to_string(),
+            "ctox-fake://slack".to_string(),
+        );
+        runtime_settings.insert("CTO_SLACK_BOT_TOKEN".to_string(), "ctox-fake".to_string());
+        runtime_settings.insert("CTO_SLACK_WORKSPACE_ID".to_string(), "TFAKE".to_string());
+        runtime_settings.insert("CTO_SLACK_BOT_USER_ID".to_string(), "UFAKE".to_string());
+        runtime_settings.insert("CTO_SLACK_CHANNEL_ID".to_string(), "CFAKE".to_string());
+        crate::inference::runtime_env::save_runtime_env_map(&root, &runtime_settings)
+            .expect("failed to persist fake Slack runtime settings");
+        let db_path = resolve_db_path(&root, None);
+        let body = "OK.";
+        let action = ExternalChatAction {
+            channel: "slack".to_string(),
+            account_key: "slack:UFAKE".to_string(),
+            thread_key: "slack:UFAKE::channel::CFAKE::thread::1719360000.000001".to_string(),
+            subject: "(Slack)".to_string(),
+            to: Vec::new(),
+            cc: Vec::new(),
+            attachments: Vec::new(),
+        };
+
+        let direct = send_message(
+            &root,
+            &db_path,
+            ChannelSendRequest {
+                channel: action.channel.clone(),
+                account_key: action.account_key.clone(),
+                thread_key: action.thread_key.clone(),
+                body: body.to_string(),
+                subject: action.subject.clone(),
+                to: action.to.clone(),
+                cc: action.cc.clone(),
+                attachments: action.attachments.clone(),
+                sender_display: None,
+                sender_address: None,
+                send_voice: false,
+                reviewed_founder_send: false,
+            },
+        )
+        .expect_err("direct fake Slack send must be blocked before review");
+        assert!(
+            direct
+                .to_string()
+                .contains("must pass communication review"),
+            "unexpected error: {direct}"
+        );
+
+        let missing_review = send_reviewed_external_chat_action(&root, &action, body)
+            .expect_err("reviewed fake Slack send must still require an approval row");
+        assert!(
+            missing_review
+                .to_string()
+                .contains("no matching unconsumed review approval"),
+            "unexpected error: {missing_review}"
+        );
+
+        record_external_chat_review_approval(
+            &root,
+            "slack:UFAKE::channel::CFAKE::inbound-review-anchor",
+            &action,
+            body,
+            "PASS: fake Slack send approved",
+        )
+        .expect("failed to record chat review approval");
+        let send_result = send_reviewed_external_chat_action(&root, &action, body)
+            .expect("approved fake Slack send should succeed");
+        assert_eq!(send_result.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            send_result.get("status").and_then(Value::as_str),
+            Some("sent")
+        );
+
+        let conn = open_channel_db(&db_path).expect("failed to reopen db");
+        let (sent_reviews, sent_result_status): (i64, String) = conn
+            .query_row(
+                r#"
+                SELECT COUNT(*), COALESCE(MAX(json_extract(send_result_json, '$.status')), '')
+                FROM communication_founder_reply_reviews
+                WHERE sent_at IS NOT NULL
+                  AND json_extract(action_json, '$.channel') = 'slack'
+                "#,
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("failed to query sent review");
+        assert_eq!(sent_reviews, 1);
+        assert_eq!(sent_result_status, "sent");
+        let outbound_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM communication_messages WHERE channel = 'slack' AND direction = 'outbound' AND status = 'sent'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("failed to count outbound fake Slack messages");
+        assert_eq!(outbound_rows, 1);
+        let (remote_id, provider_ts): (String, String) = conn
+            .query_row(
+                r#"
+                SELECT remote_id,
+                       COALESCE(json_extract(metadata_json, '$.providerResponse.ts'), '')
+                FROM communication_messages
+                WHERE channel = 'slack'
+                  AND direction = 'outbound'
+                  AND status = 'sent'
+                LIMIT 1
+                "#,
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("failed to inspect outbound fake Slack evidence");
+        assert_eq!(remote_id, "1719360000.000001");
+        assert_eq!(provider_ts, "1719360000.000001");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn teams_reviewed_send_allows_attachments_for_adapter_delivery() {
         let request = ChannelSendRequest {
             channel: "teams".to_string(),
@@ -11263,6 +12998,33 @@ mod tests {
             .expect("reviewed Teams attachment send should pass review guard");
         enforce_channel_attachment_support(&request)
             .expect("Teams attachments are handed to the adapter for Graph delivery");
+    }
+
+    #[test]
+    fn bot_chat_adapter_rejects_attachments_until_provider_review_exists() {
+        let request = ChannelSendRequest {
+            channel: "slack".to_string(),
+            account_key: "slack:bot".to_string(),
+            thread_key: "slack:bot::channel::C123::thread::1719360000.000001".to_string(),
+            body: "Hier ist die Datei.".to_string(),
+            subject: "(Slack)".to_string(),
+            to: Vec::new(),
+            cc: Vec::new(),
+            attachments: vec!["/tmp/result.pdf".to_string()],
+            sender_display: None,
+            sender_address: None,
+            send_voice: false,
+            reviewed_founder_send: true,
+        };
+
+        let error = enforce_channel_attachment_support(&request)
+            .expect_err("Slack attachment send must stay blocked in text-only v1");
+        assert!(
+            error
+                .to_string()
+                .contains("attachments are not supported by the native chat adapter v1"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

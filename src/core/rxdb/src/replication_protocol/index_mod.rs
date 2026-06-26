@@ -179,6 +179,9 @@ impl crate::types::RxReplicationHandler for StorageReplicationHandler {
         let keep_meta = self.keep_meta;
         let stream = self.instance.change_stream();
         Box::pin(stream.map(move |event_bulk| {
+            if event_bulk.is_rxsubject_lagged() {
+                return crate::types::RxReplicationMasterChange::Resync;
+            }
             let documents: Vec<serde_json::Value> = event_bulk
                 .events
                 .iter()
@@ -438,7 +441,45 @@ fn checkpoint_from_document(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::{BTreeSet, HashMap};
+
     use serde_json::json;
+    use tokio::time::{timeout, Duration};
+
+    use crate::plugins::storage_memory::get_rx_storage_memory;
+    use crate::replication_protocol::default_conflict_handler::DefaultConflictHandler;
+    use crate::rx_schema_helper::fill_with_default_settings;
+    use crate::rxjs_compat::DEFAULT_SUBJECT_BUFFER;
+    use crate::types::{
+        BulkWriteRow, JsonSchema, PrimaryKey, RxJsonSchema, RxReplicationMasterChange,
+        RxStorageInstance, RxStorageInstanceCreationParams,
+    };
+
+    fn test_schema() -> RxJsonSchema {
+        let mut properties = HashMap::new();
+        properties.insert(
+            "id".to_string(),
+            JsonSchema {
+                schema_type: Some("string".to_string()),
+                max_length: Some(100),
+                ..Default::default()
+            },
+        );
+        fill_with_default_settings(RxJsonSchema {
+            version: 0,
+            primary_key: PrimaryKey::Simple("id".to_string()),
+            schema_type: "object".to_string(),
+            properties,
+            required: vec!["id".to_string()],
+            indexes: Vec::new(),
+            encrypted: Vec::new(),
+            internal_indexes: Vec::new(),
+            key_compression: false,
+            attachments: None,
+            additional_properties: true,
+            extra: HashMap::new(),
+        })
+    }
 
     #[test]
     fn desktop_file_chunk_response_limit_advances_checkpoint_to_last_sent_doc() {
@@ -471,5 +512,129 @@ mod tests {
 
         assert_eq!(limited.documents.len(), 2);
         assert_eq!(limited.checkpoint, fallback);
+    }
+
+    #[tokio::test]
+    async fn storage_master_change_stream_lag_maps_to_resync() {
+        let storage = get_rx_storage_memory(());
+        let schema = test_schema();
+        let instance: Arc<dyn RxStorageInstance> = storage
+            .create_storage_instance(
+                RxStorageInstanceCreationParams {
+                    database_instance_token: "db-token".to_string(),
+                    database_name: "db-master-lag".to_string(),
+                    collection_name: "docs".to_string(),
+                    schema,
+                    options: HashMap::new(),
+                    multi_instance: false,
+                    dev_mode: false,
+                    password: None,
+                },
+                (),
+            )
+            .await
+            .unwrap();
+        let handler = rx_storage_instance_to_replication_handler(
+            Arc::clone(&instance),
+            Arc::new(DefaultConflictHandler),
+            "db-token".to_string(),
+            false,
+        );
+        let mut stream = handler.master_change_stream();
+        for i in 0..(DEFAULT_SUBJECT_BUFFER + 8) {
+            instance
+                .bulk_write(
+                    vec![BulkWriteRow {
+                        previous: None,
+                        document: json!({ "id": format!("doc-{i}") }),
+                    }],
+                    "test",
+                )
+                .await
+                .unwrap();
+        }
+
+        let first = timeout(Duration::from_secs(1), stream.next())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first, RxReplicationMasterChange::Resync);
+    }
+
+    #[tokio::test]
+    async fn slow_master_change_stream_peer_recovers_all_docs_after_resync() {
+        let storage = get_rx_storage_memory(());
+        let schema = test_schema();
+        let instance: Arc<dyn RxStorageInstance> = storage
+            .create_storage_instance(
+                RxStorageInstanceCreationParams {
+                    database_instance_token: "db-token".to_string(),
+                    database_name: "db-master-slow-peer-resync".to_string(),
+                    collection_name: "docs".to_string(),
+                    schema,
+                    options: HashMap::new(),
+                    multi_instance: false,
+                    dev_mode: false,
+                    password: None,
+                },
+                (),
+            )
+            .await
+            .unwrap();
+        let handler = rx_storage_instance_to_replication_handler(
+            Arc::clone(&instance),
+            Arc::new(DefaultConflictHandler),
+            "db-token".to_string(),
+            false,
+        );
+        let mut stream = handler.master_change_stream();
+        let total = DEFAULT_SUBJECT_BUFFER + 31;
+        for i in 0..total {
+            instance
+                .bulk_write(
+                    vec![BulkWriteRow {
+                        previous: None,
+                        document: json!({ "id": format!("doc-{i:04}") }),
+                    }],
+                    "test",
+                )
+                .await
+                .unwrap();
+        }
+
+        let first = timeout(Duration::from_secs(1), stream.next())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first, RxReplicationMasterChange::Resync);
+
+        let mut checkpoint = None;
+        let mut recovered_ids = BTreeSet::new();
+        loop {
+            let page = handler
+                .master_changes_since(checkpoint.take(), 17)
+                .await
+                .unwrap();
+            if page.documents.is_empty() {
+                break;
+            }
+            for doc in page.documents {
+                recovered_ids.insert(
+                    doc.get("id")
+                        .and_then(|value| value.as_str())
+                        .expect("recovered document id")
+                        .to_string(),
+                );
+            }
+            checkpoint = Some(page.checkpoint);
+        }
+
+        let expected_last = format!("doc-{:04}", total - 1);
+        assert_eq!(recovered_ids.len(), total);
+        assert_eq!(recovered_ids.first().map(String::as_str), Some("doc-0000"));
+        assert_eq!(
+            recovered_ids.last().map(String::as_str),
+            Some(expected_last.as_str())
+        );
     }
 }

@@ -789,6 +789,16 @@ fn is_doi_suffix_byte(b: u8) -> bool {
 }
 
 fn augment_results_with_open_access_pdfs(root: &Path, results: &mut [ScholarlyResult]) {
+    // Unpaywall's API policy requires a real contact email on every request.
+    // Never query it with a placeholder address: without an operator-configured
+    // `CTOX_UNPAYWALL_EMAIL` we skip OA-PDF augmentation entirely rather than
+    // violate the API terms (and risk getting the shared default blocked).
+    let Some(contact_email) = runtime_config::get(root, "CTOX_UNPAYWALL_EMAIL")
+        .map(|email| email.trim().to_string())
+        .filter(|email| !email.is_empty())
+    else {
+        return;
+    };
     let timeout_ms = runtime_config::get(root, "CTOX_SCHOLARLY_TIMEOUT_MS")
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(8000);
@@ -802,8 +812,6 @@ fn augment_results_with_open_access_pdfs(root: &Path, results: &mut [ScholarlyRe
         .build();
     let unpaywall_base = runtime_config::get(root, "CTOX_UNPAYWALL_BASE_URL")
         .unwrap_or_else(|| UNPAYWALL_DEFAULT_BASE_URL.to_string());
-    let contact_email = runtime_config::get(root, "CTOX_UNPAYWALL_EMAIL")
-        .unwrap_or_else(|| "ctox@example.org".to_string());
     for hit in results.iter_mut() {
         let Some(doi) = hit.doi.as_deref() else {
             continue;
@@ -949,16 +957,29 @@ fn database_response(
     }
 }
 
+/// Contact email for the Crossref / OpenAlex "polite pool" (better rate limits,
+/// and a way for the providers to reach the operator). Reuses the Unpaywall
+/// contact email when a dedicated one is not set. `None` → anonymous pool.
+fn scholarly_contact_email(root: &Path) -> Option<String> {
+    runtime_config::get(root, "CTOX_SCHOLARLY_CONTACT_EMAIL")
+        .or_else(|| runtime_config::get(root, "CTOX_UNPAYWALL_EMAIL"))
+        .map(|email| email.trim().to_string())
+        .filter(|email| !email.is_empty())
+}
+
 fn crossref_search(root: &Path, request: &ScholarlySearchRequest) -> Result<Vec<ScholarlyResult>> {
     let limit = request.max_results.unwrap_or(20).clamp(1, 20);
     let base = runtime_config::get(root, "CTOX_CROSSREF_BASE_URL")
         .unwrap_or_else(|| "https://api.crossref.org".to_string());
-    let url = format!(
+    let mut url = format!(
         "{}/works?rows={}&query.bibliographic={}",
         base.trim_end_matches('/'),
         limit,
         encode_query(request.query.trim())
     );
+    if let Some(email) = scholarly_contact_email(root) {
+        url.push_str(&format!("&mailto={}", encode_query(&email)));
+    }
     let payload = fetch_json(&url)?;
     let items = payload
         .get("message")
@@ -1010,12 +1031,15 @@ fn openalex_search(root: &Path, request: &ScholarlySearchRequest) -> Result<Vec<
     let limit = request.max_results.unwrap_or(25).clamp(1, 25);
     let base = runtime_config::get(root, "CTOX_OPENALEX_BASE_URL")
         .unwrap_or_else(|| "https://api.openalex.org".to_string());
-    let url = format!(
+    let mut url = format!(
         "{}/works?per-page={}&search={}",
         base.trim_end_matches('/'),
         limit,
         encode_query(request.query.trim())
     );
+    if let Some(email) = scholarly_contact_email(root) {
+        url.push_str(&format!("&mailto={}", encode_query(&email)));
+    }
     let payload = fetch_json(&url)?;
     let items = payload
         .get("results")

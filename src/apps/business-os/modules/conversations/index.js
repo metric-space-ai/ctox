@@ -7,7 +7,20 @@ import { CtoxResizer } from '../../shared/resizer.js';
 // view bucket them client-side by participant_keys_json.
 
 const STYLE_BUILD = '20260605-rxdb-cancel1';
-const SUPPORTED_CHANNELS = ['whatsapp', 'email', 'jami', 'teams', 'meeting'];
+const SUPPORTED_CHANNELS = [
+  'whatsapp',
+  'email',
+  'jami',
+  'teams',
+  'meeting',
+  'slack',
+  'discord',
+  'telegram',
+  'matrix',
+  'mattermost',
+  'zulip',
+  'google_chat',
+];
 const COMMUNICATION_DIAGNOSTIC_COLLECTIONS = [
   'communication_accounts',
   'communication_threads',
@@ -35,6 +48,13 @@ const CHANNEL_LABEL_FALLBACK = {
   jami: 'Jami',
   teams: 'MS Teams',
   meeting: 'Meeting',
+  slack: 'Slack',
+  discord: 'Discord',
+  telegram: 'Telegram',
+  matrix: 'Matrix',
+  mattermost: 'Mattermost',
+  zulip: 'Zulip',
+  google_chat: 'Google Chat',
 };
 const ALL_CHANNELS_TAB = '__all__';
 const MESSAGE_PAGE_SIZE = 200;
@@ -52,9 +72,16 @@ const FALLBACK_LABELS = {
     channelJami: 'Jami',
     channelTeams: 'MS Teams',
     channelMeeting: 'Meeting',
+    channelSlack: 'Slack',
+    channelDiscord: 'Discord',
+    channelTelegram: 'Telegram',
+    channelMatrix: 'Matrix',
+    channelMattermost: 'Mattermost',
+    channelZulip: 'Zulip',
+    channelGoogleChat: 'Google Chat',
     searchPlaceholder: 'Kontakt/Text/Account',
     emptyListTitle: 'Keine Konversationen',
-    emptyListBody: 'Hier erscheinen Kommunikationen, die CTOX über WhatsApp, E-Mail, Jami, MS Teams oder Meeting führt.',
+    emptyListBody: 'Hier erscheinen Kommunikationen, die CTOX über verbundene Channels führt.',
     noResultsTitle: 'Keine Treffer',
     noResultsBody: 'Keine Konversation passt zu den aktiven Filtern.',
     syncFailureTitle: 'Kommunikation ist gerade nicht verfügbar',
@@ -167,9 +194,16 @@ const FALLBACK_LABELS = {
     channelJami: 'Jami',
     channelTeams: 'MS Teams',
     channelMeeting: 'Meeting',
+    channelSlack: 'Slack',
+    channelDiscord: 'Discord',
+    channelTelegram: 'Telegram',
+    channelMatrix: 'Matrix',
+    channelMattermost: 'Mattermost',
+    channelZulip: 'Zulip',
+    channelGoogleChat: 'Google Chat',
     searchPlaceholder: 'Contact/text/account',
     emptyListTitle: 'No conversations',
-    emptyListBody: 'Communications CTOX has on WhatsApp, Email, Jami, MS Teams, or Meeting appear here.',
+    emptyListBody: 'Communications CTOX has on connected channels appear here.',
     noResultsTitle: 'No matches',
     noResultsBody: 'No conversation matches the active filters.',
     syncFailureTitle: 'Communication is unavailable right now',
@@ -2327,7 +2361,7 @@ export async function mount(ctx) {
   function buildAccountRow(account) {
     const row = document.createElement('div');
     row.className = 'conv-account-row';
-    const health = healthStateFor(account);
+    const health = healthStateFor(account, t);
     row.innerHTML = `
       <span class="conv-account-health" data-state="${health.state}" title="${health.tooltip}"></span>
       <div class="conv-account-meta">
@@ -2488,6 +2522,13 @@ function applyStaticLabels(root, t) {
     jami: t('channelJami', 'Jami'),
     teams: t('channelTeams', 'MS Teams'),
     meeting: t('channelMeeting', 'Meeting'),
+    slack: t('channelSlack', 'Slack'),
+    discord: t('channelDiscord', 'Discord'),
+    telegram: t('channelTelegram', 'Telegram'),
+    matrix: t('channelMatrix', 'Matrix'),
+    mattermost: t('channelMattermost', 'Mattermost'),
+    zulip: t('channelZulip', 'Zulip'),
+    google_chat: t('channelGoogleChat', 'Google Chat'),
   };
   for (const btn of root.querySelectorAll('[data-conv-channel-filters] [data-channel]')) {
     const channel = btn.dataset.channel;
@@ -2836,7 +2877,12 @@ function sumValues(map) {
 
 function labelForChannel(channel, t) {
   if (!channel) return '';
-  return t(`channel${channel[0].toUpperCase()}${channel.slice(1)}`, CHANNEL_LABEL_FALLBACK[channel] || channel);
+  const suffix = String(channel)
+    .split('_')
+    .filter(Boolean)
+    .map((part) => `${part[0].toUpperCase()}${part.slice(1)}`)
+    .join('');
+  return t(`channel${suffix}`, CHANNEL_LABEL_FALLBACK[channel] || channel);
 }
 
 function labelForFolder(folder, t) {
@@ -2932,13 +2978,60 @@ function avatarGlyphFor(name) {
   return initials.toUpperCase();
 }
 
-function healthStateFor(account) {
+function healthStateFor(account, t = (_key, fallback) => fallback) {
+  const adapterStatus = accountAdapterStatus(account);
+  const authState = String(adapterStatus.auth_state || '').toLowerCase();
+  const syncState = String(adapterStatus.sync_state || '').toLowerCase();
+  const rateLimitedUntil = Number(adapterStatus.rate_limited_until_ms || 0);
+  if (authState === 'failed' || authState === 'deauthorized') {
+    return { state: 'bad', tooltip: adapterHealthTooltip(adapterStatus, t) };
+  }
+  if (syncState === 'failed') {
+    return { state: 'bad', tooltip: adapterHealthTooltip(adapterStatus, t) };
+  }
+  if (rateLimitedUntil > Date.now()) {
+    return { state: 'warn', tooltip: adapterHealthTooltip(adapterStatus, t) };
+  }
+  if (adapterStatus.last_success_at_ms) {
+    const age = Date.now() - Number(adapterStatus.last_success_at_ms);
+    if (age < ACCOUNT_HEALTH_WARN_MS) {
+      return { state: 'ok', tooltip: adapterHealthTooltip(adapterStatus, t) };
+    }
+  }
   const latest = Math.max(isoToMs(account?.last_inbound_ok_at), isoToMs(account?.last_outbound_ok_at));
   if (!latest) return { state: 'bad', tooltip: 'never' };
   const age = Date.now() - latest;
   if (age < ACCOUNT_HEALTH_WARN_MS) return { state: 'ok', tooltip: '' };
   if (age < ACCOUNT_HEALTH_BAD_MS) return { state: 'warn', tooltip: '' };
   return { state: 'bad', tooltip: '' };
+}
+
+function accountAdapterStatus(account) {
+  let profile = account?.profile_json || {};
+  if (typeof profile === 'string') {
+    try {
+      profile = JSON.parse(profile);
+    } catch {
+      profile = {};
+    }
+  }
+  return profile.adapterStatus || profile.adapter_status || {};
+}
+
+function adapterHealthTooltip(adapterStatus, t) {
+  const kind = String(adapterStatus?.provider_error_kind || '').toLowerCase();
+  if (kind && kind !== 'none') {
+    if (kind === 'deauthorized') return t('healthAuthFailed', 'Auth fehlgeschlagen');
+    if (kind === 'missing_scope') return t('healthMissingScope', 'Scopes fehlen');
+    if (kind === 'missing_intent') return t('healthMissingIntent', 'Discord Intent fehlt');
+    if (kind === 'missing_permission') return t('healthMissingPermission', 'Berechtigung fehlt');
+    if (kind === 'rate_limited') return t('healthRateLimited', 'Rate Limit aktiv');
+    return kind;
+  }
+  if (adapterStatus?.last_operation) {
+    return `${adapterStatus.last_operation}: ${adapterStatus.sync_state || adapterStatus.auth_state || 'ok'}`;
+  }
+  return '';
 }
 
 function formatRelativeOrNever(iso, t) {

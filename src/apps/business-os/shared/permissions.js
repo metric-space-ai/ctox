@@ -128,6 +128,20 @@ export function canModifyBusinessModule(moduleLike, options = {}) {
   });
 }
 
+// Whether the actor may run a data change in this module themselves. When false,
+// the right-click menu must steer them to delegate the change to a reviewer via an
+// approval request instead of self-executing. This mirrors the native data.write
+// chokepoint -- it is a UI hint, native policy stays authoritative.
+export function canSelfExecuteBusinessData(moduleLike, options = {}) {
+  const moduleId = String(moduleLike?.id || moduleLike?.module_id || '').trim();
+  return canUseBusinessPermission({
+    ...options,
+    permission: BusinessOsPermissions.DataWrite,
+    scopeType: moduleId ? 'module' : 'workspace',
+    scopeId: moduleId,
+  });
+}
+
 export function canUseBusinessExplicitOrAssignedPermission({
   session = null,
   governance = null,

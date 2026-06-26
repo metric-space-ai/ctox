@@ -72,8 +72,8 @@ wieder testbar:
   akzeptiert und koennen dadurch nicht versehentlich die globale
   CTOX-Installation steuern.
 - `npm run smoke:local-runtime` validiert einen echten lokalen Runtime-Flow
-  gegen ein reales `ctox` Binary und ein frisches Desktop-Profil: Business OS
-  wird in ein Temp-Ziel installiert, dieses Ziel wird als Runtime-Root korrekt
+  gegen ein reales `ctox` Binary und ein frisches Desktop-Profil: ein
+  Nicht-Runtime-Root wird als Runtime-Root korrekt
   abgelehnt, `peer ensure` laeuft gegen einen validen CTOX Runtime-Root, die
   Desktop-Quelle attached lokal, Secrets bleiben im SecretStore und der Launch
   bleibt WebRTC-only.
@@ -599,6 +599,7 @@ Aufgaben:
 
 - [x] Lokales CTOX erkennen auf CLI-Contract-Ebene.
 - [x] `ctox business-os peer status` / `peer ensure` anbinden.
+- [x] Lokale Daemon-Pruefung und Attach per Business-OS Peer-CLI delegieren.
 - [x] Lokalen CTOX-Peer per `ctox business-os peer ensure/status` delegieren.
 - [x] App-Restart-Smoke fuer persistierte lokale Instanz ohne ctox.dev Account.
 - [x] Runtime-Smoke mit realem lokalem `ctox` Binary: Nicht-Runtime-Root

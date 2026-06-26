@@ -33,6 +33,11 @@ fn config_cache() -> &'static Mutex<HashMap<PathBuf, CachedConfig>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+fn root_key_cache() -> &'static Mutex<HashMap<PathBuf, PathBuf>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, PathBuf>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkHoursConfig {
     pub enabled: bool,
@@ -142,7 +147,24 @@ fn invalidate_config_cache(root: &Path) {
 }
 
 fn work_hours_cache_key(root: &Path) -> PathBuf {
-    fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf())
+    if !root.is_absolute() {
+        return fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    }
+    let raw = root.to_path_buf();
+    {
+        let cache = root_key_cache()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(cached) = cache.get(&raw) {
+            return cached.clone();
+        }
+    }
+    let key = fs::canonicalize(root).unwrap_or_else(|_| raw.clone());
+    root_key_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(raw, key.clone());
+    key
 }
 
 fn runtime_config_stamp(path: &Path) -> RuntimeConfigStamp {
@@ -294,6 +316,20 @@ mod tests {
             !secret_store_path.exists(),
             "working-hours snapshot must not load or initialize the secret store"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn work_hours_cache_key_reuses_absolute_root_resolution() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().to_path_buf();
+        assert!(root.is_absolute());
+
+        let first = work_hours_cache_key(&root);
+        let second = work_hours_cache_key(&root);
+
+        assert_eq!(first, second);
+        assert_eq!(first, fs::canonicalize(&root)?);
         Ok(())
     }
 }

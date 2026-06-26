@@ -8,7 +8,7 @@
 <text x="24" y="70"></text>
 <text x="24" y="86">source local model gemma-4-E4B-it</text>
 <text x="24" y="102">▕                                          ◆             │                                                       ▏</text>
-<text x="24" y="118">context pending 0k used of 128k live</text>
+<text x="24" y="118">context pending 0k used of 256k live</text>
 <text x="24" y="134">──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</text>
 <text x="24" y="150">Chat Skills Settings</text>
 <text x="24" y="166"> skills ────────────────────────────────── selected skill ────────────────────────────────────────────────────────────</text>

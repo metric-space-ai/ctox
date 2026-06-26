@@ -1,4 +1,4 @@
-import { readStoredFileFromChunks } from './file-integrity.js?v=20260603-active-chunk-query2';
+import { readStoredFileFromDemandChunks } from './file-integrity.js?v=20260603-active-chunk-query2';
 
 const STATUS_KEY = 'ctox.businessOs.importer.status.v1';
 
@@ -243,13 +243,7 @@ export async function openUniversalImporter(ctx, config = {}) {
     listEl.innerHTML = `<div class="explorer-loading">Lade "${escapeHtml(fileDoc.name)}" ...</div>`;
 
     try {
-      const db = ctx?.db;
-      const chunksColl = db?.collection?.('desktop_file_chunks');
-      if (!chunksColl) throw new Error('desktop_file_chunks collection not found');
-
-      const docs = await chunksColl.find().exec();
-      const allChunks = docs.map(doc => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc));
-      const blob = await readStoredFileFromChunks(allChunks, fileId, fileDoc.mime_type || guessMimeType(fileDoc.name), {
+      const blob = await readBusinessOsFileFromDemand(ctx, fileId, fileDoc.mime_type || guessMimeType(fileDoc.name), {
         contentGenerationId: fileDoc.content_generation_id || '',
         contentHash: fileDoc.content_hash || '',
         contentHashScheme: fileDoc.content_hash_scheme || '',
@@ -347,6 +341,37 @@ export async function openUniversalImporter(ctx, config = {}) {
   updateImporterFields(drawer);
   drawer.querySelector('[data-import-title]')?.focus();
   return drawer;
+}
+
+async function readBusinessOsFileFromDemand(ctx, fileId, mimeType = 'application/octet-stream', options = {}) {
+  const loader = await fileDemandLoaderFor(ctx).catch(() => null);
+  if (!loader?.fetchFile) {
+    throw new Error('Dateiinhalt ist noch nicht über den Sync-Demand-Pfad verfügbar.');
+  }
+  const chunks = await loader.fetchFile(fileId);
+  return readStoredFileFromDemandChunks(chunks, mimeType, options);
+}
+
+async function fileDemandLoaderFor(ctx) {
+  if (!ctx?.sync?.startCollection) return null;
+  const bridge = await ctx.sync.startCollection('desktop_files');
+  await waitForReplicationBridge(bridge, 15000);
+  return bridge?.state?.demandFileLoader || null;
+}
+
+async function waitForReplicationBridge(bridge, timeoutMs = 10000) {
+  const state = bridge?.state;
+  if (!state) return;
+  await Promise.race([
+    Promise.resolve()
+      .then(() => state.awaitInSync?.() || state.awaitInitialReplication?.())
+      .catch(() => {}),
+    delay(timeoutMs),
+  ]);
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
 }
 
 export async function dispatchImportCommand(ctx, command) {

@@ -552,12 +552,12 @@ where
         emit("invoke-model");
         let reply = match session.as_deref_mut() {
             Some(sess) => {
-                sess.run_turn_inner(prompt, Some(Duration::from_secs(config.turn_timeout_secs)))?
+                sess.run_turn_inner(prompt, Some(Duration::from_secs(config.turn_timeout_secs)), None)?
             }
             None => owned_session
                 .as_mut()
                 .expect("owned persistent session should exist when no session was supplied")
-                .run_turn_inner(prompt, Some(Duration::from_secs(config.turn_timeout_secs)))?,
+                .run_turn_inner(prompt, Some(Duration::from_secs(config.turn_timeout_secs)), None)?,
         };
         emit("persist-assistant-turn");
         persist_lcm_message_with_retry(db_path, conversation_id, "assistant", &reply, &mut emit)?;
@@ -665,6 +665,7 @@ where
         .map(|sess| sess.base_instructions().to_string())
         .unwrap_or_default();
     let mut previous_preflight_tokens: Option<i64> = None;
+    let mut exact_prompt_preflight: Option<super::direct_session::ExactPromptTokenCount> = None;
     for exact_preflight_round in 0..=2 {
         let preflight_text = format!(
             "{preflight_base_instructions}\n\n{}",
@@ -681,6 +682,7 @@ where
             exact_preflight_round, count.tokens, safe_budget, count.context_limit, count.source
         ));
         if count.tokens <= safe_budget {
+            exact_prompt_preflight = Some(count);
             break;
         }
         // LCM compaction only shrinks the conversation-evidence section;
@@ -811,6 +813,7 @@ where
         Some(sess) => sess.run_turn_inner(
             &rendered_prompt.prompt,
             Some(Duration::from_secs(config.turn_timeout_secs)),
+            exact_prompt_preflight.clone(),
         )?,
         None => owned_session
             .as_mut()
@@ -818,6 +821,7 @@ where
             .run_turn_inner(
                 &rendered_prompt.prompt,
                 Some(Duration::from_secs(config.turn_timeout_secs)),
+                exact_prompt_preflight.clone(),
             )?,
     };
     emit("persist-assistant-turn");

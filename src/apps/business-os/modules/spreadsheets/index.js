@@ -274,7 +274,7 @@ async function createNewSpreadsheet(state, input = {}) {
   };
 
   // Convert to CSV string representation for raw blob persist
-  const csvText = modelJson.data.map(row => row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(',')).join('\n');
+  const csvText = rowsToCsv(modelJson.data);
   const bytes = new TextEncoder().encode(csvText);
 
   await saveBlobChunks(state.ctx, {
@@ -989,6 +989,55 @@ function recalculateSpreadsheet(state) {
   }
 }
 
+// Evaluate formula cells (leading "=") to their computed values via HyperFormula,
+// returning a deep copy of the grid with formulas replaced by values; non-formula
+// cells pass through unchanged and the input is never mutated (the live editor
+// model keeps its formulas for round-trip editing). This is what persisted and
+// exported artifacts use so non-browser consumers of the canonical CSV never see
+// raw "=SUM(...)" strings. `engine` is injectable for tests. Falls back to the
+// raw cells if the engine cannot build.
+// Serialize one CSV cell with minimal RFC-4180 quoting: only quote when the
+// value contains a delimiter, quote, newline, or leading/trailing whitespace.
+// Numeric and plain cells are emitted raw so their type survives a CSV
+// round-trip (force-quoting every cell turned every value into a string on
+// re-import).
+function escapeCsvCell(value) {
+  const str = String(value ?? '');
+  if (/[",\r\n]/.test(str) || str !== str.trim()) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+// Serialize a 2D array of cells to CSV text.
+function rowsToCsv(rows) {
+  return (rows || []).map(row => (row || []).map(escapeCsvCell).join(',')).join('\n');
+}
+
+function evaluateGridData(rawData, engine = HyperFormula) {
+  if (!Array.isArray(rawData)) return rawData;
+  let hf;
+  try {
+    hf = engine.buildFromArray(rawData);
+  } catch (err) {
+    console.error('HyperFormula evaluation failed; persisting raw cells', err);
+    return rawData.map(row => (Array.isArray(row) ? row.slice() : row));
+  }
+  try {
+    return rawData.map((row, r) => (Array.isArray(row)
+      ? row.map((val, c) => {
+        if (typeof val === 'string' && val.startsWith('=')) {
+          const calc = hf.getCellValue({ sheet: 0, col: c, row: r });
+          return (calc === null || calc === undefined) ? '' : calc;
+        }
+        return val;
+      })
+      : row));
+  } finally {
+    hf.destroy?.();
+  }
+}
+
 // Apply the column's numeric mask (e.g. "$ #.##0,00") to a calculated value so
 // formula results in numeric columns render with the same formatting as the
 // typed numeric cells above them. Mirrors jSuites' mask conventions: '.' is the
@@ -1065,6 +1114,10 @@ async function saveActiveSpreadsheetDraft(state) {
       decimal: col.decimal || null
     }));
 
+    // The model keeps formulas (round-trip editing); the canonical CSV blob and
+    // search index carry computed values for non-browser consumers (H14).
+    const evaluatedData = evaluateGridData(rawData);
+
     const modelJson = {
       data: rawData,
       columns: columnsData,
@@ -1077,8 +1130,8 @@ async function saveActiveSpreadsheetDraft(state) {
     const docBlobId = state.selectedVersion?.blob_id || `${docVersionId}_blob`;
     const now = Date.now();
 
-    // Serialize to CSV text representing the raw blob
-    const csvText = modelJson.data.map(row => row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(',')).join('\n');
+    // Serialize evaluated values to the canonical CSV blob.
+    const csvText = rowsToCsv(evaluatedData);
     const bytes = new TextEncoder().encode(csvText);
 
     // Delete previous blob chunks first to avoid stacking duplicate indices
@@ -1111,7 +1164,7 @@ async function saveActiveSpreadsheetDraft(state) {
         row_count: modelJson.data.length,
         col_count: modelJson.columns.length,
         source_sha256: await sha256Hex(bytes),
-        index_text: sheetDoc.toJSON().title + '\n' + modelJson.data.slice(0, 10).map(r => r.join(' ')).join('\n'),
+        index_text: sheetDoc.toJSON().title + '\n' + evaluatedData.slice(0, 10).map(r => r.join(' ')).join('\n'),
         updated_at_ms: now
       });
     }
@@ -1509,6 +1562,7 @@ function openExportModal(state) {
       await flushActiveSpreadsheetDraft(state);
 
       const rawData = state.editorHandle.getData();
+      const evaluatedData = evaluateGridData(rawData);
       let content = '';
       let fileExt = '.csv';
       let mime = CSV_MIME;
@@ -1524,7 +1578,10 @@ function openExportModal(state) {
         }));
 
         const modelJson = {
+          // `data` keeps formulas so the export round-trips back into the editor;
+          // `computed` carries the evaluated values for non-browser consumers.
           data: rawData,
+          computed: evaluatedData,
           columns: columnsData,
           nestedHeaders: state.editorHandle.options.nestedHeaders || null,
           mergeCells: mergeData,
@@ -1534,8 +1591,9 @@ function openExportModal(state) {
         fileExt = '.json';
         mime = JSON_MIME;
       } else {
-        // CSV Format
-        content = rawData.map(row => row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(',')).join('\n');
+        // CSV exports evaluated values (a flat CSV consumer wants results, not
+        // raw "=SUM(...)").
+        content = rowsToCsv(evaluatedData);
       }
 
       const downloadName = ensureExtension(slugFilename(record.title || 'export'), fileExt);
@@ -2121,6 +2179,9 @@ export const __spreadsheetsTestHooks = {
   validateImportInput,
   validateNewSpreadsheetInput,
   visibleSpreadsheets,
+  evaluateGridData,
+  escapeCsvCell,
+  rowsToCsv,
 };
 
 function iconSvg(name) {

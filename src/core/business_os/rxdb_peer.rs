@@ -24,9 +24,11 @@ use crate::mission::tickets;
 use anyhow::Context;
 use base64::Engine;
 use chrono::{DateTime, FixedOffset};
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
+use rusqlite::types::Value as SqlValue;
+use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension};
 use rxdb::plugins::replication_webrtc::{
-    RTCIceServer, RxWebRTCReplicationPool, WebRTCRsConnectionHandler,
+    file_fetch_handler::FileRange, CollectionAuthzHook, DocumentReadAuthzHook, RTCIceServer,
+    RxWebRTCReplicationPool, WebRTCRsConnectionHandler,
 };
 use rxdb::rx_collection::RxCollection;
 use rxdb::rx_collection_helper::fill_object_data_before_insert;
@@ -36,7 +38,7 @@ use rxdb::types::{BulkWriteRow, HashOutput, JsonSchema, MangoQuery, RxJsonSchema
 use serde_json::json;
 use serde_json::Value;
 use sha2::Digest;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::fs::File;
 use std::path::Path;
@@ -47,6 +49,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::Duration;
+use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tokio::sync::Mutex as AsyncMutex;
@@ -66,6 +69,34 @@ const SIGNALING_TOKEN_TTL_SECONDS: u64 = 24 * 60 * 60;
 /// alive but whose replication bring-up failed used to be indistinguishable
 /// from a healthy one ("running" status, zero sync).
 static NATIVE_PEER_REPLICATION_UP: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static DESKTOP_FILE_CHUNK_COMPLETENESS_CHECKS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+#[cfg(test)]
+static CHAT_TRACKING_BATCH_DOCUMENT_LOOKUPS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+static NOTES_LOOP_METRICS: NativePeerLoopMetrics = NativePeerLoopMetrics::new("notes");
+static DESKTOP_FILE_INDEX_LOOP_METRICS: NativePeerLoopMetrics =
+    NativePeerLoopMetrics::new("desktop_file_index");
+static CHANNEL_STATE_LOOP_METRICS: NativePeerLoopMetrics =
+    NativePeerLoopMetrics::new("channel_state");
+static BUSINESS_USERS_LOOP_METRICS: NativePeerLoopMetrics =
+    NativePeerLoopMetrics::new("business_users");
+static RUNTIME_SETTINGS_LOOP_METRICS: NativePeerLoopMetrics =
+    NativePeerLoopMetrics::new("runtime_settings");
+static MODULE_CATALOG_LOOP_METRICS: NativePeerLoopMetrics =
+    NativePeerLoopMetrics::new("module_catalog");
+static TICKET_STATE_LOOP_METRICS: NativePeerLoopMetrics =
+    NativePeerLoopMetrics::new("ticket_state");
+static KNOWLEDGE_TABLES_LOOP_METRICS: NativePeerLoopMetrics =
+    NativePeerLoopMetrics::new("knowledge_tables");
+static BUSINESS_RECORDS_LOOP_METRICS: NativePeerLoopMetrics =
+    NativePeerLoopMetrics::new("business_records");
+static BUSINESS_COMMANDS_LOOP_METRICS: NativePeerLoopMetrics =
+    NativePeerLoopMetrics::new("business_commands");
+static BROWSER_RUNTIME_LOOP_METRICS: NativePeerLoopMetrics =
+    NativePeerLoopMetrics::new("browser_runtime");
+static DEMAND_FILE_FETCH_METRICS: DemandFileFetchMetrics = DemandFileFetchMetrics::new();
 
 /// Supervision backoff bounds for respawning the native peer after a
 /// non-intentional exit (bring-up failure, watchdog-stale heartbeat,
@@ -103,8 +134,10 @@ const CTOX_NATIVE_CAPABILITIES: &[&str] = &[
     "ctox-checkpoint-epoch-v1",
 ];
 const DESKTOP_FILE_CHUNK_SIZE: usize = 16 * 1024;
+const DESKTOP_FILE_CHUNK_DECODED_SIZE: u64 = (DESKTOP_FILE_CHUNK_SIZE as u64 / 4) * 3;
 const DESKTOP_FILE_EAGER_LIMIT_BYTES: u64 = 1024 * 1024;
 const DESKTOP_FILE_SCAN_INTERVAL_SECS: u64 = 15;
+const DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS: u64 = 5 * 60;
 const DESKTOP_FILE_SCAN_MAX_DEPTH: usize = 6;
 const DESKTOP_FILE_SCAN_MAX_FILES: usize = 200;
 const DESKTOP_FILE_CHUNK_RETAIN_GENERATIONS: usize = 2;
@@ -116,6 +149,9 @@ const DESKTOP_FILE_CONTENT_HASH_SCHEME: &str = "sha256-bytes-v1";
 const DESKTOP_FILE_CHUNK_HASH_SCHEME: &str = "sha256-base64-chunk-v1";
 const CTOX_DESKTOP_FOLDER_ID: &str = "fs_ctox";
 const CTOX_DESKTOP_FOLDER_PATH: &str = "/CTOX";
+const NOTES_SYNC_ACTIVE_INTERVAL_SECS: u64 = 3;
+const NOTES_SYNC_IDLE_INTERVAL_SECS: u64 = 60;
+const NOTES_SYNC_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 const CHANNEL_STATE_SYNC_INTERVAL_SECS: u64 = 3;
 const RXDB_SQLITE_DATABASE_NAME: &str = "ctox_business_os";
 const BUSINESS_USERS_SYNC_INTERVAL_SECS: u64 = 3;
@@ -133,14 +169,36 @@ const BUSINESS_RECORD_PROJECTION_SYNC_INTERVAL_SECS: u64 = 3;
 const BUSINESS_RECORD_PROJECTION_IDLE_SYNC_INTERVAL_SECS: u64 = 60;
 const BUSINESS_RECORD_PROJECTION_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 const BUSINESS_RECORD_PROJECTION_SYNC_LIMIT: usize = 2_000;
+const QUEUE_CHAT_REPAIR_ORPHAN_EPOCH_MS: i64 = 10 * 60 * 1_000;
 const BUSINESS_COMMAND_ACTIVE_POLL_SECS: u64 = 1;
-const BUSINESS_COMMAND_IDLE_POLL_SECS: u64 = 10;
+const BUSINESS_COMMAND_IDLE_POLL_SECS: u64 = 5 * 60;
 const BUSINESS_COMMAND_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 const SUPPORT_COMMUNICATION_INTAKE_SINCE_KEY: &str = "__support_communication_intake";
+const THREADS_CTOX_RELEVANCE_COMMANDS_SINCE_KEY: &str =
+    "__threads_ctox_relevance_business_commands";
+const THREADS_CTOX_RELEVANCE_TASKS_SINCE_KEY: &str = "__threads_ctox_relevance_ctox_queue_tasks";
+const THREADS_APP_RELEVANCE_SINCE_KEY_PREFIX: &str = "__threads_app_relevance_";
 const TICKET_STATE_SYNC_LIMIT: usize = 500;
 const BROWSER_RUNTIME_ACTIVE_MAINTENANCE_INTERVAL_MS: u64 = 300;
 const BROWSER_RUNTIME_IDLE_MAINTENANCE_INTERVAL_SECS: u64 = 10;
-const BUSINESS_OS_CHANNEL_IDS: &[&str] = &["whatsapp", "jami", "teams", "email", "meeting"];
+const BROWSER_RUNTIME_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
+const BROWSER_FRAME_GC_LIMIT: u64 = 256;
+const BROWSER_INPUT_EVENT_GC_LIMIT: u64 = 512;
+const BROWSER_INPUT_EVENT_RETENTION_SECS: u64 = 60 * 60;
+const BUSINESS_OS_CHANNEL_IDS: &[&str] = &[
+    "whatsapp",
+    "jami",
+    "teams",
+    "email",
+    "meeting",
+    "slack",
+    "discord",
+    "telegram",
+    "matrix",
+    "mattermost",
+    "zulip",
+    "google_chat",
+];
 const NATIVE_PEER_STATUS_VERSION: &str = "ctox-native-rxdb-peer-status-v1";
 const NATIVE_PEER_HEARTBEAT_INTERVAL_SECS: u64 = 5;
 const NATIVE_PEER_HEARTBEAT_TTL_MS: u64 = 30_000;
@@ -427,6 +485,249 @@ fn spawn_iot_agent_supervisors(root: PathBuf) -> Vec<Arc<AtomicBool>> {
 
 type WebRtcPool = Arc<RxWebRTCReplicationPool<WebRTCRsConnectionHandler>>;
 
+struct NativePeerLoopMetrics {
+    name: &'static str,
+    ticks: std::sync::atomic::AtomicU64,
+    idle_ticks: std::sync::atomic::AtomicU64,
+    active_ticks: std::sync::atomic::AtomicU64,
+    error_ticks: std::sync::atomic::AtomicU64,
+    rows: std::sync::atomic::AtomicU64,
+    total_duration_ms: std::sync::atomic::AtomicU64,
+    max_duration_ms: std::sync::atomic::AtomicU64,
+    last_duration_ms: std::sync::atomic::AtomicU64,
+}
+
+impl NativePeerLoopMetrics {
+    const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            ticks: std::sync::atomic::AtomicU64::new(0),
+            idle_ticks: std::sync::atomic::AtomicU64::new(0),
+            active_ticks: std::sync::atomic::AtomicU64::new(0),
+            error_ticks: std::sync::atomic::AtomicU64::new(0),
+            rows: std::sync::atomic::AtomicU64::new(0),
+            total_duration_ms: std::sync::atomic::AtomicU64::new(0),
+            max_duration_ms: std::sync::atomic::AtomicU64::new(0),
+            last_duration_ms: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    fn record(&self, rows: Option<usize>, elapsed: Duration) {
+        let duration_ms = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
+        self.ticks.fetch_add(1, Ordering::Relaxed);
+        self.last_duration_ms.store(duration_ms, Ordering::Relaxed);
+        self.total_duration_ms
+            .fetch_add(duration_ms, Ordering::Relaxed);
+        update_atomic_max(&self.max_duration_ms, duration_ms);
+        match rows {
+            Some(0) => {
+                self.idle_ticks.fetch_add(1, Ordering::Relaxed);
+            }
+            Some(rows) => {
+                self.active_ticks.fetch_add(1, Ordering::Relaxed);
+                self.rows.fetch_add(rows as u64, Ordering::Relaxed);
+            }
+            None => {
+                self.error_ticks.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn snapshot(&self) -> Value {
+        json!({
+            "name": self.name,
+            "ticks": self.ticks.load(Ordering::Relaxed),
+            "idle_ticks": self.idle_ticks.load(Ordering::Relaxed),
+            "active_ticks": self.active_ticks.load(Ordering::Relaxed),
+            "error_ticks": self.error_ticks.load(Ordering::Relaxed),
+            "rows": self.rows.load(Ordering::Relaxed),
+            "last_duration_ms": self.last_duration_ms.load(Ordering::Relaxed),
+            "max_duration_ms": self.max_duration_ms.load(Ordering::Relaxed),
+            "total_duration_ms": self.total_duration_ms.load(Ordering::Relaxed),
+        })
+    }
+}
+
+#[derive(Default)]
+struct DemandFileFetchRequestStats {
+    ranged: bool,
+    rows_loaded: u64,
+    chunks_decoded: u64,
+    bytes_requested: u64,
+    bytes_decoded: u64,
+    bytes_emitted: u64,
+}
+
+impl DemandFileFetchRequestStats {
+    fn new(range: Option<&FileRange>) -> Self {
+        Self {
+            ranged: range.is_some(),
+            bytes_requested: range.map(|range| range.length).unwrap_or_default(),
+            ..Self::default()
+        }
+    }
+
+    fn finish(&mut self) {
+        if !self.ranged {
+            self.bytes_requested = self.bytes_emitted;
+        }
+    }
+}
+
+struct DemandFileFetchMetrics {
+    requests: std::sync::atomic::AtomicU64,
+    ranged_requests: std::sync::atomic::AtomicU64,
+    error_requests: std::sync::atomic::AtomicU64,
+    rows_loaded: std::sync::atomic::AtomicU64,
+    chunks_decoded: std::sync::atomic::AtomicU64,
+    bytes_requested: std::sync::atomic::AtomicU64,
+    bytes_decoded: std::sync::atomic::AtomicU64,
+    bytes_emitted: std::sync::atomic::AtomicU64,
+    max_rows_loaded: std::sync::atomic::AtomicU64,
+    max_bytes_decoded: std::sync::atomic::AtomicU64,
+}
+
+impl DemandFileFetchMetrics {
+    const fn new() -> Self {
+        Self {
+            requests: std::sync::atomic::AtomicU64::new(0),
+            ranged_requests: std::sync::atomic::AtomicU64::new(0),
+            error_requests: std::sync::atomic::AtomicU64::new(0),
+            rows_loaded: std::sync::atomic::AtomicU64::new(0),
+            chunks_decoded: std::sync::atomic::AtomicU64::new(0),
+            bytes_requested: std::sync::atomic::AtomicU64::new(0),
+            bytes_decoded: std::sync::atomic::AtomicU64::new(0),
+            bytes_emitted: std::sync::atomic::AtomicU64::new(0),
+            max_rows_loaded: std::sync::atomic::AtomicU64::new(0),
+            max_bytes_decoded: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    fn record(&self, stats: &DemandFileFetchRequestStats, success: bool) {
+        self.requests.fetch_add(1, Ordering::Relaxed);
+        if stats.ranged {
+            self.ranged_requests.fetch_add(1, Ordering::Relaxed);
+        }
+        if !success {
+            self.error_requests.fetch_add(1, Ordering::Relaxed);
+        }
+        self.rows_loaded
+            .fetch_add(stats.rows_loaded, Ordering::Relaxed);
+        self.chunks_decoded
+            .fetch_add(stats.chunks_decoded, Ordering::Relaxed);
+        self.bytes_requested
+            .fetch_add(stats.bytes_requested, Ordering::Relaxed);
+        self.bytes_decoded
+            .fetch_add(stats.bytes_decoded, Ordering::Relaxed);
+        self.bytes_emitted
+            .fetch_add(stats.bytes_emitted, Ordering::Relaxed);
+        update_atomic_max(&self.max_rows_loaded, stats.rows_loaded);
+        update_atomic_max(&self.max_bytes_decoded, stats.bytes_decoded);
+    }
+
+    fn snapshot(&self) -> Value {
+        json!({
+            "schema": "ctox.native_peer.file_fetch.performance.v1",
+            "requests": self.requests.load(Ordering::Relaxed),
+            "ranged_requests": self.ranged_requests.load(Ordering::Relaxed),
+            "error_requests": self.error_requests.load(Ordering::Relaxed),
+            "rows_loaded": self.rows_loaded.load(Ordering::Relaxed),
+            "chunks_decoded": self.chunks_decoded.load(Ordering::Relaxed),
+            "bytes_requested": self.bytes_requested.load(Ordering::Relaxed),
+            "bytes_decoded": self.bytes_decoded.load(Ordering::Relaxed),
+            "bytes_emitted": self.bytes_emitted.load(Ordering::Relaxed),
+            "max_rows_loaded": self.max_rows_loaded.load(Ordering::Relaxed),
+            "max_bytes_decoded": self.max_bytes_decoded.load(Ordering::Relaxed),
+        })
+    }
+
+    #[cfg(test)]
+    fn reset(&self) {
+        self.requests.store(0, Ordering::Relaxed);
+        self.ranged_requests.store(0, Ordering::Relaxed);
+        self.error_requests.store(0, Ordering::Relaxed);
+        self.rows_loaded.store(0, Ordering::Relaxed);
+        self.chunks_decoded.store(0, Ordering::Relaxed);
+        self.bytes_requested.store(0, Ordering::Relaxed);
+        self.bytes_decoded.store(0, Ordering::Relaxed);
+        self.bytes_emitted.store(0, Ordering::Relaxed);
+        self.max_rows_loaded.store(0, Ordering::Relaxed);
+        self.max_bytes_decoded.store(0, Ordering::Relaxed);
+    }
+}
+
+fn update_atomic_max(value: &std::sync::atomic::AtomicU64, candidate: u64) {
+    let mut current = value.load(Ordering::Relaxed);
+    while candidate > current {
+        match value.compare_exchange_weak(current, candidate, Ordering::Relaxed, Ordering::Relaxed)
+        {
+            Ok(_) => break,
+            Err(next_current) => current = next_current,
+        }
+    }
+}
+
+fn record_native_peer_loop_result(
+    metrics: &NativePeerLoopMetrics,
+    result: &anyhow::Result<usize>,
+    elapsed: Duration,
+) {
+    match result {
+        Ok(rows) => metrics.record(Some(*rows), elapsed),
+        Err(_) => metrics.record(None, elapsed),
+    }
+}
+
+fn record_native_peer_bool_loop_result(
+    metrics: &NativePeerLoopMetrics,
+    result: &anyhow::Result<bool>,
+    elapsed: Duration,
+) {
+    match result {
+        Ok(true) => metrics.record(Some(1), elapsed),
+        Ok(false) => metrics.record(Some(0), elapsed),
+        Err(_) => metrics.record(None, elapsed),
+    }
+}
+
+fn native_peer_performance_snapshot() -> Value {
+    json!({
+        "schema": "ctox.native_peer.performance.v1",
+        "loops": {
+            "notes": NOTES_LOOP_METRICS.snapshot(),
+            "desktop_file_index": DESKTOP_FILE_INDEX_LOOP_METRICS.snapshot(),
+            "channel_state": CHANNEL_STATE_LOOP_METRICS.snapshot(),
+            "business_users": BUSINESS_USERS_LOOP_METRICS.snapshot(),
+            "runtime_settings": RUNTIME_SETTINGS_LOOP_METRICS.snapshot(),
+            "module_catalog": MODULE_CATALOG_LOOP_METRICS.snapshot(),
+            "ticket_state": TICKET_STATE_LOOP_METRICS.snapshot(),
+            "knowledge_tables": KNOWLEDGE_TABLES_LOOP_METRICS.snapshot(),
+            "business_records": BUSINESS_RECORDS_LOOP_METRICS.snapshot(),
+            "business_commands": BUSINESS_COMMANDS_LOOP_METRICS.snapshot(),
+            "browser_runtime": BROWSER_RUNTIME_LOOP_METRICS.snapshot(),
+        },
+        "file_fetch": DEMAND_FILE_FETCH_METRICS.snapshot(),
+        "rxdb_sqlite": rxdb::storage::sqlite::instance::sqlite_runtime_counters_snapshot(),
+        "rxdb_subjects": {
+            "schema": "ctox.rxdb.subjects.runtime_counters.v1",
+            "lagged_items_total": rxdb::rxjs_compat::rx_subject_lagged_items_total(),
+        },
+    })
+}
+
+fn native_peer_performance_status(heartbeat: Option<&Value>, heartbeat_fresh: bool) -> Value {
+    if is_native_peer_running() {
+        return native_peer_performance_snapshot();
+    }
+    if heartbeat_fresh {
+        return heartbeat
+            .and_then(|value| value.get("performance"))
+            .cloned()
+            .unwrap_or(Value::Null);
+    }
+    Value::Null
+}
+
 struct NativePeer {
     root: PathBuf,
     database: Arc<RxDatabase>,
@@ -577,6 +878,7 @@ pub fn native_peer_status(root: &Path) -> Value {
             "action": "repair-optional-drift",
             "status": "available",
         },
+        "performance": native_peer_performance_status(heartbeat.as_ref(), heartbeat_fresh),
         "peer_session_id": current_peer()
             .map(|peer| peer.peer_session_id.clone())
             .or_else(|| heartbeat_peer_session_id(heartbeat.as_ref()))
@@ -821,7 +1123,7 @@ fn sync_desktop_file_from_path_with_policy(
             .add_collections(collection_creators())
             .await
             .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
-        upsert_desktop_file_with_policy(&database, path, policy).await?;
+        upsert_desktop_file_with_policy(root, &database, path, policy).await?;
         database
             .close()
             .await
@@ -908,6 +1210,52 @@ fn sync_desktop_file_index(root: &Path) -> anyhow::Result<usize> {
             .await
             .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
         let indexed = sync_desktop_file_index_with_database(root, &database).await?;
+        database
+            .close()
+            .await
+            .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
+        Ok(indexed)
+    })
+}
+
+#[cfg(test)]
+fn sync_desktop_file_index_if_changed(
+    root: &Path,
+    last_projection_stamp: &mut Option<DesktopFileIndexProjectionStamp>,
+) -> anyhow::Result<usize> {
+    let database_path = store::rxdb_store_path(root);
+    if let Some(parent) = database_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create RxDB runtime dir {}", parent.display()))?;
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to create Business OS desktop file index runtime")?;
+    let _database_guard = TEMPORARY_RXDB_DATABASE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    runtime.block_on(async move {
+        if let Some(peer) = current_peer() {
+            return sync_desktop_file_index_with_database_if_changed(
+                root,
+                &peer.database,
+                last_projection_stamp,
+            )
+            .await;
+        }
+
+        let database = open_database(database_path).await?;
+        database
+            .add_collections(collection_creators())
+            .await
+            .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
+        let indexed = sync_desktop_file_index_with_database_if_changed(
+            root,
+            &database,
+            last_projection_stamp,
+        )
+        .await?;
         database
             .close()
             .await
@@ -1026,6 +1374,49 @@ fn sync_business_users(root: &Path) -> anyhow::Result<usize> {
 }
 
 #[cfg(test)]
+fn sync_business_users_if_changed(
+    root: &Path,
+    last_projection_stamp: &mut Option<store::BusinessUsersProjectionStamp>,
+) -> anyhow::Result<usize> {
+    let database_path = store::rxdb_store_path(root);
+    if let Some(parent) = database_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create RxDB runtime dir {}", parent.display()))?;
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to create Business OS users sync runtime")?;
+    let _database_guard = TEMPORARY_RXDB_DATABASE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    runtime.block_on(async move {
+        if let Some(peer) = current_peer() {
+            return sync_business_users_with_database_if_changed(
+                root,
+                &peer.database,
+                last_projection_stamp,
+            )
+            .await;
+        }
+
+        let database = open_database(database_path).await?;
+        database
+            .add_collections(collection_creators())
+            .await
+            .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
+        let synced =
+            sync_business_users_with_database_if_changed(root, &database, last_projection_stamp)
+                .await?;
+        database
+            .close()
+            .await
+            .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
+        Ok(synced)
+    })
+}
+
+#[cfg(test)]
 fn sync_runtime_settings(root: &Path) -> anyhow::Result<usize> {
     let database_path = store::rxdb_store_path(root);
     if let Some(parent) = database_path.parent() {
@@ -1050,6 +1441,49 @@ fn sync_runtime_settings(root: &Path) -> anyhow::Result<usize> {
             .await
             .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
         let synced = sync_runtime_settings_with_database(root, &database).await?;
+        database
+            .close()
+            .await
+            .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
+        Ok(synced)
+    })
+}
+
+#[cfg(test)]
+fn sync_runtime_settings_if_changed(
+    root: &Path,
+    last_projection_stamp: &mut Option<store::RuntimeSettingsProjectionStamp>,
+) -> anyhow::Result<usize> {
+    let database_path = store::rxdb_store_path(root);
+    if let Some(parent) = database_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create RxDB runtime dir {}", parent.display()))?;
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to create Business OS runtime settings sync runtime")?;
+    let _database_guard = TEMPORARY_RXDB_DATABASE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    runtime.block_on(async move {
+        if let Some(peer) = current_peer() {
+            return sync_runtime_settings_with_database_if_changed(
+                root,
+                &peer.database,
+                last_projection_stamp,
+            )
+            .await;
+        }
+
+        let database = open_database(database_path).await?;
+        database
+            .add_collections(collection_creators())
+            .await
+            .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
+        let synced =
+            sync_runtime_settings_with_database_if_changed(root, &database, last_projection_stamp)
+                .await?;
         database
             .close()
             .await
@@ -1092,6 +1526,49 @@ fn sync_module_catalog(root: &Path) -> anyhow::Result<usize> {
 }
 
 #[cfg(test)]
+fn sync_module_catalog_if_changed(
+    root: &Path,
+    last_projection_stamp: &mut Option<store::ModuleCatalogProjectionStamp>,
+) -> anyhow::Result<usize> {
+    let database_path = store::rxdb_store_path(root);
+    if let Some(parent) = database_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create RxDB runtime dir {}", parent.display()))?;
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to create Business OS module catalog sync runtime")?;
+    let _database_guard = TEMPORARY_RXDB_DATABASE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    runtime.block_on(async move {
+        if let Some(peer) = current_peer() {
+            return sync_module_catalog_with_database_if_changed(
+                root,
+                &peer.database,
+                last_projection_stamp,
+            )
+            .await;
+        }
+
+        let database = open_database(database_path).await?;
+        database
+            .add_collections(collection_creators())
+            .await
+            .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
+        let synced =
+            sync_module_catalog_with_database_if_changed(root, &database, last_projection_stamp)
+                .await?;
+        database
+            .close()
+            .await
+            .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
+        Ok(synced)
+    })
+}
+
+#[cfg(test)]
 fn sync_ticket_state(root: &Path) -> anyhow::Result<usize> {
     let database_path = store::rxdb_store_path(root);
     if let Some(parent) = database_path.parent() {
@@ -1116,6 +1593,48 @@ fn sync_ticket_state(root: &Path) -> anyhow::Result<usize> {
             .await
             .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
         let synced = sync_ticket_state_with_database(root, &database).await?;
+        database
+            .close()
+            .await
+            .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
+        Ok(synced)
+    })
+}
+
+#[cfg(test)]
+fn sync_ticket_state_if_changed(
+    root: &Path,
+    last_source_stamp: &mut Option<tickets::TicketStoreChangeStamp>,
+) -> anyhow::Result<usize> {
+    let database_path = store::rxdb_store_path(root);
+    if let Some(parent) = database_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create RxDB runtime dir {}", parent.display()))?;
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to create Business OS ticket state sync runtime")?;
+    let _database_guard = TEMPORARY_RXDB_DATABASE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    runtime.block_on(async move {
+        if let Some(peer) = current_peer() {
+            return sync_ticket_state_with_database_if_changed(
+                root,
+                &peer.database,
+                last_source_stamp,
+            )
+            .await;
+        }
+
+        let database = open_database(database_path).await?;
+        database
+            .add_collections(collection_creators())
+            .await
+            .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
+        let synced =
+            sync_ticket_state_with_database_if_changed(root, &database, last_source_stamp).await?;
         database
             .close()
             .await
@@ -1158,6 +1677,49 @@ fn sync_knowledge_tables(root: &Path) -> anyhow::Result<usize> {
 }
 
 #[cfg(test)]
+fn sync_knowledge_tables_if_changed(
+    root: &Path,
+    last_source_stamp: &mut Option<crate::knowledge::KnowledgeTablesProjectionSourceStamp>,
+) -> anyhow::Result<usize> {
+    let database_path = store::rxdb_store_path(root);
+    if let Some(parent) = database_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create RxDB runtime dir {}", parent.display()))?;
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to create Business OS knowledge tables sync runtime")?;
+    let _database_guard = TEMPORARY_RXDB_DATABASE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    runtime.block_on(async move {
+        if let Some(peer) = current_peer() {
+            return sync_knowledge_tables_with_database_if_changed(
+                root,
+                &peer.database,
+                last_source_stamp,
+            )
+            .await;
+        }
+
+        let database = open_database(database_path).await?;
+        database
+            .add_collections(collection_creators())
+            .await
+            .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
+        let synced =
+            sync_knowledge_tables_with_database_if_changed(root, &database, last_source_stamp)
+                .await?;
+        database
+            .close()
+            .await
+            .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
+        Ok(synced)
+    })
+}
+
+#[cfg(test)]
 fn sync_business_record_projections(root: &Path) -> anyhow::Result<usize> {
     let database_path = store::rxdb_store_path(root);
     if let Some(parent) = database_path.parent() {
@@ -1174,10 +1736,12 @@ fn sync_business_record_projections(root: &Path) -> anyhow::Result<usize> {
     runtime.block_on(async move {
         if let Some(peer) = current_peer() {
             let mut since_by_collection = HashMap::new();
+            let mut queue_chat_repair_stamp = None;
             return sync_business_record_projections_with_database(
                 root,
                 &peer.database,
                 &mut since_by_collection,
+                &mut queue_chat_repair_stamp,
             )
             .await;
         }
@@ -1188,10 +1752,64 @@ fn sync_business_record_projections(root: &Path) -> anyhow::Result<usize> {
             .await
             .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
         let mut since_by_collection = HashMap::new();
+        let mut queue_chat_repair_stamp = None;
         let synced = sync_business_record_projections_with_database(
             root,
             &database,
             &mut since_by_collection,
+            &mut queue_chat_repair_stamp,
+        )
+        .await?;
+        database
+            .close()
+            .await
+            .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
+        Ok(synced)
+    })
+}
+
+#[cfg(test)]
+fn sync_business_record_projections_if_changed(
+    root: &Path,
+    since_by_collection: &mut HashMap<String, i64>,
+    queue_chat_repair_stamp: &mut Option<QueueChatRepairProjectionStamp>,
+    last_source_stamp: &mut Option<BusinessRecordProjectionSourceStamp>,
+) -> anyhow::Result<usize> {
+    let database_path = store::rxdb_store_path(root);
+    if let Some(parent) = database_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create RxDB runtime dir {}", parent.display()))?;
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to create Business OS business record projection sync runtime")?;
+    let _database_guard = TEMPORARY_RXDB_DATABASE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    runtime.block_on(async move {
+        if let Some(peer) = current_peer() {
+            return sync_business_record_projections_with_database_if_changed(
+                root,
+                &peer.database,
+                since_by_collection,
+                queue_chat_repair_stamp,
+                last_source_stamp,
+            )
+            .await;
+        }
+
+        let database = open_database(database_path).await?;
+        database
+            .add_collections(collection_creators())
+            .await
+            .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
+        let synced = sync_business_record_projections_with_database_if_changed(
+            root,
+            &database,
+            since_by_collection,
+            queue_chat_repair_stamp,
+            last_source_stamp,
         )
         .await?;
         database
@@ -1506,12 +2124,12 @@ async fn run_native_peer(
             std::sync::Arc::new(move |peer_id: &String| {
                 !store::is_business_peer_revoked(&revocation_root, peer_id)
             });
-        // #12c: server-authoritative per-collection read authz. Built only when
-        // the operator-gated runtime flag is on (default OFF => None => no
-        // enforcement). The closure verifies the peer's capability token to its
-        // role and applies the policy deny-set; an empty/invalid token maps to
-        // least privilege (User) so ordinary collections still replicate.
-        let collection_authz: Option<std::sync::Arc<dyn Fn(&str, &str) -> bool + Send + Sync>> =
+        // #12c: server-authoritative per-collection read authz. Built by default
+        // unless explicitly disabled in typed runtime config. The closure
+        // verifies the peer's capability token to its role and applies the policy
+        // deny-set; an empty/invalid token maps to least privilege (User) so
+        // ordinary collections still replicate while admin-only data does not.
+        let collection_authz: Option<CollectionAuthzHook> =
             if store::collection_authz_enabled(&root) {
                 let authz_root = root.clone();
                 Some(std::sync::Arc::new(move |token: &str, collection: &str| {
@@ -1525,6 +2143,25 @@ async fn run_native_peer(
             } else {
                 None
             };
+        let collection_write_authz: Option<CollectionAuthzHook> = {
+            let write_authz_root = root.clone();
+            Some(std::sync::Arc::new(move |token: &str, collection: &str| {
+                super::threads::may_accept_peer_write(&write_authz_root, token, collection)
+            }))
+        };
+        let document_read_authz: Option<DocumentReadAuthzHook> = {
+            let doc_authz_root = root.clone();
+            Some(std::sync::Arc::new(
+                move |token: &str, collection: &str, document: &Value| {
+                    super::threads::may_replicate_document(
+                        &doc_authz_root,
+                        token,
+                        collection,
+                        document,
+                    )
+                },
+            ))
+        };
         let mut bringup = tokio::spawn(async move {
             rxdb::plugins::replication_webrtc::replicate_web_rtc_rs_multi_with_url_provider(
                 collection_list,
@@ -1534,6 +2171,8 @@ async fn run_native_peer(
                 multi_ice_servers,
                 Some(is_peer_valid),
                 collection_authz,
+                collection_write_authz,
+                document_read_authz,
                 20,
                 20,
                 5_000,
@@ -1562,7 +2201,7 @@ async fn run_native_peer(
                 // dispatcher always returns FILE_NOT_FOUND). The query registry
                 // already auto-registers every multiplexed collection inside
                 // `RxWebRTCReplicationPool::new_multi`.
-                register_demand_file_sources(&pool, &database);
+                register_demand_file_sources(&pool, &database, &root);
                 NATIVE_PEER_REPLICATION_UP.store(true, Ordering::SeqCst);
                 pools.push(pool);
             }
@@ -2043,6 +2682,7 @@ fn write_native_peer_heartbeat(
         // "replication session up" are different facts, and conflating them
         // hid bring-up failures behind a healthy-looking status.
         "replicationUp": NATIVE_PEER_REPLICATION_UP.load(Ordering::SeqCst),
+        "performance": native_peer_performance_snapshot(),
     });
     let temporary_path = path.with_extension("status.json.tmp");
     fs::write(&temporary_path, serde_json::to_vec_pretty(&payload)?).with_context(|| {
@@ -2173,7 +2813,7 @@ impl NativePeer {
         path: PathBuf,
         policy: DesktopFileContentPolicy,
     ) -> anyhow::Result<()> {
-        upsert_desktop_file_with_policy(&self.database, path, policy).await
+        upsert_desktop_file_with_policy(&self.root, &self.database, path, policy).await
     }
 
     async fn sync_desktop_files_from_scan_roots(
@@ -2202,18 +2842,85 @@ struct DesktopFileIndexCandidate {
     scan_root: DesktopFileScanRoot,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DesktopFileIndexProjectionStamp {
+    scan_root_count: usize,
+    candidate_count: usize,
+    truncated: bool,
+    content_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DesktopFileScanRootsStamp {
+    scan_root_count: usize,
+    content_hash: String,
+}
+
+#[derive(Debug)]
+struct DesktopFileIndexScan {
+    scan_roots: Vec<DesktopFileScanRoot>,
+    candidates: Vec<DesktopFileIndexCandidate>,
+    stamp: DesktopFileIndexProjectionStamp,
+}
+
 async fn sync_notes_background_loop(root: PathBuf) {
+    let mut last_source_stamp: Option<store::LocalMarkdownNotesSourceStamp> = None;
+    let mut unchanged_ticks = 0u32;
     loop {
-        let root_clone = root.clone();
-        let res =
-            tokio::task::spawn_blocking(move || store::sync_local_markdown_notes(&root_clone))
-                .await;
-        if let Err(err) = res {
-            eprintln!("[business-os] native rxdb notes sync join failed: {err:#}");
-        } else if let Ok(Err(err)) = res {
-            eprintln!("[business-os] native rxdb notes sync failed: {err:#}");
+        let started = Instant::now();
+        let result: anyhow::Result<bool> = async {
+            let root_for_stamp = root.clone();
+            let source_stamp = tokio::task::spawn_blocking(move || {
+                store::local_markdown_notes_source_stamp(&root_for_stamp)
+            })
+            .await
+            .context("join native notes source stamp")??;
+            if last_source_stamp.as_ref() == Some(&source_stamp) {
+                return Ok(false);
+            }
+
+            let root_for_sync = root.clone();
+            tokio::task::spawn_blocking(move || store::sync_local_markdown_notes(&root_for_sync))
+                .await
+                .context("join native rxdb notes sync")??;
+            let root_for_stamp = root.clone();
+            last_source_stamp = Some(
+                tokio::task::spawn_blocking(move || {
+                    store::local_markdown_notes_source_stamp(&root_for_stamp)
+                })
+                .await
+                .context("join native notes source stamp after sync")??,
+            );
+            Ok(true)
         }
-        tokio::time::sleep(Duration::from_secs(3)).await;
+        .await;
+        record_native_peer_bool_loop_result(&NOTES_LOOP_METRICS, &result, started.elapsed());
+        match result {
+            Ok(source_changed) => {
+                notes_sync_update_idle_ticks(&mut unchanged_ticks, source_changed);
+            }
+            Err(err) => {
+                unchanged_ticks = 0;
+                eprintln!("[business-os] native rxdb notes sync failed: {err:#}");
+            }
+        }
+        tokio::time::sleep(notes_sync_sleep_interval(unchanged_ticks)).await;
+    }
+}
+
+fn notes_sync_update_idle_ticks(unchanged_ticks: &mut u32, source_changed: bool) {
+    if source_changed {
+        *unchanged_ticks = 0;
+    } else {
+        *unchanged_ticks = unchanged_ticks.saturating_add(1);
+    }
+}
+
+fn notes_sync_sleep_interval(unchanged_ticks: u32) -> Duration {
+    if unchanged_ticks >= NOTES_SYNC_IDLE_BACKOFF_AFTER_TICKS {
+        Duration::from_secs(NOTES_SYNC_IDLE_INTERVAL_SECS)
+    } else {
+        Duration::from_secs(NOTES_SYNC_ACTIVE_INTERVAL_SECS)
     }
 }
 
@@ -2223,15 +2930,30 @@ async fn sync_desktop_file_index_background_loop(
     database_write_lock: Arc<AsyncMutex<()>>,
 ) {
     let mut last_maintenance_at = SystemTime::UNIX_EPOCH;
+    let mut last_projection_stamp: Option<DesktopFileIndexProjectionStamp> = None;
+    let mut last_scan_roots_stamp: Option<DesktopFileScanRootsStamp> = None;
+    let mut last_full_scan_at: Option<SystemTime> = None;
     loop {
-        let result = {
-            let _guard = database_write_lock.lock().await;
+        let started = Instant::now();
+        let result: anyhow::Result<usize> = async {
             let run_maintenance = last_maintenance_at
                 .elapsed()
                 .map(|elapsed| {
                     elapsed >= Duration::from_secs(DESKTOP_FILE_INDEX_MAINTENANCE_INTERVAL_SECS)
                 })
                 .unwrap_or(true);
+            let scan_roots = desktop_file_scan_roots(&root);
+            let scan_roots_stamp = desktop_file_scan_roots_stamp(&scan_roots);
+            let should_collect_scan = desktop_file_index_should_collect_scan(
+                last_scan_roots_stamp.as_ref(),
+                last_full_scan_at,
+                &scan_roots_stamp,
+                SystemTime::now(),
+            );
+            if !run_maintenance && !should_collect_scan {
+                return Ok(0);
+            }
+
             if run_maintenance {
                 match compact_desktop_file_index_store(&root).await {
                     Ok(stats) if stats.changed() => {
@@ -2251,8 +2973,29 @@ async fn sync_desktop_file_index_background_loop(
                 }
                 last_maintenance_at = SystemTime::now();
             }
-            sync_desktop_file_index_with_database(&root, &database).await
-        };
+            if !should_collect_scan {
+                return Ok(0);
+            }
+
+            let scan = collect_desktop_file_index_scan(scan_roots).await?;
+            last_scan_roots_stamp = Some(scan_roots_stamp);
+            last_full_scan_at = Some(SystemTime::now());
+            let projection_changed = last_projection_stamp.as_ref() != Some(&scan.stamp);
+            if !projection_changed {
+                return Ok(0);
+            }
+            let projection_stamp = scan.stamp.clone();
+            let _guard = database_write_lock.lock().await;
+            let indexed = sync_desktop_file_scan_with_database(&root, &database, scan).await?;
+            last_projection_stamp = Some(projection_stamp);
+            Ok(indexed)
+        }
+        .await;
+        record_native_peer_loop_result(
+            &DESKTOP_FILE_INDEX_LOOP_METRICS,
+            &result,
+            started.elapsed(),
+        );
         if let Err(err) = result {
             eprintln!("[business-os] native rxdb desktop file index failed: {err:#}");
         }
@@ -2268,15 +3011,20 @@ async fn sync_channel_state_background_loop(
     let mut last_projection_stamp: Option<ChannelStateProjectionStamp> = None;
     let mut consecutive_idle_rounds = 0u32;
     loop {
-        let result = {
+        let started = Instant::now();
+        let result: anyhow::Result<usize> = async {
+            let projection_stamp = channel_state_projection_stamp_async(&root).await?;
+            if last_projection_stamp.as_ref() == Some(&projection_stamp) {
+                return Ok(0);
+            }
+
             let _guard = database_write_lock.lock().await;
-            sync_channel_state_with_database_if_changed(
-                &root,
-                &database,
-                &mut last_projection_stamp,
-            )
-            .await
-        };
+            let synced = sync_channel_state_with_database(&root, &database).await?;
+            last_projection_stamp = Some(projection_stamp);
+            Ok(synced)
+        }
+        .await;
+        record_native_peer_loop_result(&CHANNEL_STATE_LOOP_METRICS, &result, started.elapsed());
         update_projection_idle_rounds(
             result,
             &mut consecutive_idle_rounds,
@@ -2295,12 +3043,23 @@ async fn sync_business_users_background_loop(
     database: Arc<RxDatabase>,
     database_write_lock: Arc<AsyncMutex<()>>,
 ) {
+    let mut last_projection_stamp: Option<store::BusinessUsersProjectionStamp> = None;
     let mut consecutive_idle_rounds = 0u32;
     loop {
-        let result = {
+        let started = Instant::now();
+        let result: anyhow::Result<usize> = async {
+            let projection_stamp = business_users_projection_stamp(&root).await?;
+            if last_projection_stamp.as_ref() == Some(&projection_stamp) {
+                return Ok(0);
+            }
+
             let _guard = database_write_lock.lock().await;
-            sync_business_users_with_database(&root, &database).await
-        };
+            let synced = sync_business_users_with_database(&root, &database).await?;
+            last_projection_stamp = Some(business_users_projection_stamp(&root).await?);
+            Ok(synced)
+        }
+        .await;
+        record_native_peer_loop_result(&BUSINESS_USERS_LOOP_METRICS, &result, started.elapsed());
         update_projection_idle_rounds(
             result,
             &mut consecutive_idle_rounds,
@@ -2319,12 +3078,23 @@ async fn sync_runtime_settings_background_loop(
     database: Arc<RxDatabase>,
     database_write_lock: Arc<AsyncMutex<()>>,
 ) {
+    let mut last_projection_stamp: Option<store::RuntimeSettingsProjectionStamp> = None;
     let mut consecutive_idle_rounds = 0u32;
     loop {
-        let result = {
+        let started = Instant::now();
+        let result: anyhow::Result<usize> = async {
+            let projection_stamp = runtime_settings_projection_stamp(&root).await?;
+            if last_projection_stamp.as_ref() == Some(&projection_stamp) {
+                return Ok(0);
+            }
+
             let _guard = database_write_lock.lock().await;
-            sync_runtime_settings_with_database(&root, &database).await
-        };
+            let synced = sync_runtime_settings_with_database(&root, &database).await?;
+            last_projection_stamp = Some(projection_stamp);
+            Ok(synced)
+        }
+        .await;
+        record_native_peer_loop_result(&RUNTIME_SETTINGS_LOOP_METRICS, &result, started.elapsed());
         update_projection_idle_rounds(
             result,
             &mut consecutive_idle_rounds,
@@ -2343,12 +3113,23 @@ async fn sync_module_catalog_background_loop(
     database: Arc<RxDatabase>,
     database_write_lock: Arc<AsyncMutex<()>>,
 ) {
+    let mut last_projection_stamp: Option<store::ModuleCatalogProjectionStamp> = None;
     let mut consecutive_idle_rounds = 0u32;
     loop {
-        let result = {
+        let started = Instant::now();
+        let result: anyhow::Result<usize> = async {
+            let projection_stamp = module_catalog_projection_stamp(&root).await?;
+            if last_projection_stamp.as_ref() == Some(&projection_stamp) {
+                return Ok(0);
+            }
+
             let _guard = database_write_lock.lock().await;
-            sync_module_catalog_with_database(&root, &database).await
-        };
+            let synced = sync_module_catalog_with_database(&root, &database).await?;
+            last_projection_stamp = Some(module_catalog_projection_stamp(&root).await?);
+            Ok(synced)
+        }
+        .await;
+        record_native_peer_loop_result(&MODULE_CATALOG_LOOP_METRICS, &result, started.elapsed());
         update_projection_idle_rounds(
             result,
             &mut consecutive_idle_rounds,
@@ -2368,11 +3149,22 @@ async fn sync_ticket_state_background_loop(
     database_write_lock: Arc<AsyncMutex<()>>,
 ) {
     let mut consecutive_idle_rounds = 0u32;
+    let mut last_source_stamp = None;
     loop {
-        let result = {
+        let started = Instant::now();
+        let result = async {
+            let source_stamp = ticket_state_source_stamp(&root).await?;
+            if last_source_stamp.as_ref() == Some(&source_stamp) {
+                return Ok(0);
+            }
+
             let _guard = database_write_lock.lock().await;
-            sync_ticket_state_with_database(&root, &database).await
-        };
+            let synced = sync_ticket_state_with_database(&root, &database).await?;
+            last_source_stamp = Some(source_stamp);
+            Ok(synced)
+        }
+        .await;
+        record_native_peer_loop_result(&TICKET_STATE_LOOP_METRICS, &result, started.elapsed());
         update_projection_idle_rounds(
             result,
             &mut consecutive_idle_rounds,
@@ -2392,11 +3184,22 @@ async fn sync_knowledge_tables_background_loop(
     database_write_lock: Arc<AsyncMutex<()>>,
 ) {
     let mut consecutive_idle_rounds = 0u32;
+    let mut last_source_stamp = None;
     loop {
-        let result = {
+        let started = Instant::now();
+        let result = async {
+            let source_stamp = knowledge_tables_source_stamp(&root).await?;
+            if last_source_stamp.as_ref() == Some(&source_stamp) {
+                return Ok(0);
+            }
+
             let _guard = database_write_lock.lock().await;
-            sync_knowledge_tables_with_database(&root, &database).await
-        };
+            let synced = sync_knowledge_tables_with_database(&root, &database).await?;
+            last_source_stamp = Some(source_stamp);
+            Ok(synced)
+        }
+        .await;
+        record_native_peer_loop_result(&KNOWLEDGE_TABLES_LOOP_METRICS, &result, started.elapsed());
         update_projection_idle_rounds(
             result,
             &mut consecutive_idle_rounds,
@@ -2416,17 +3219,30 @@ async fn sync_business_record_projections_background_loop(
     database_write_lock: Arc<AsyncMutex<()>>,
 ) {
     let mut since_by_collection = HashMap::<String, i64>::new();
+    let mut queue_chat_repair_stamp = None;
+    let mut last_source_stamp = None;
     let mut consecutive_idle_rounds = 0u32;
     loop {
-        let result = {
+        let started = Instant::now();
+        let result = async {
+            let source_stamp = business_record_projection_source_stamp(&root).await?;
+            if last_source_stamp.as_ref() == Some(&source_stamp) {
+                return Ok(0);
+            }
+
             let _guard = database_write_lock.lock().await;
-            sync_business_record_projections_with_database(
+            let synced = sync_business_record_projections_with_database(
                 &root,
                 &database,
                 &mut since_by_collection,
+                &mut queue_chat_repair_stamp,
             )
-            .await
-        };
+            .await?;
+            last_source_stamp = Some(source_stamp);
+            Ok(synced)
+        }
+        .await;
+        record_native_peer_loop_result(&BUSINESS_RECORDS_LOOP_METRICS, &result, started.elapsed());
         update_projection_idle_rounds(
             result,
             &mut consecutive_idle_rounds,
@@ -2502,12 +3318,26 @@ async fn consume_business_commands_loop(
     // re-sorted to the head on the next 1s tick, and starve every command
     // behind it — browser-issued commands then appeared to hang forever.
     let mut accept_failures: HashMap<String, u32> = HashMap::new();
+    let mut last_source_stamp: Option<BusinessCommandsSourceStamp> = None;
     let mut consecutive_idle_rounds = 0u32;
     loop {
-        let result = {
+        let started = Instant::now();
+        let result: anyhow::Result<usize> = async {
+            if business_commands_source_change(&root, &mut last_source_stamp)
+                .await?
+                .is_none()
+            {
+                return Ok(0);
+            }
+
             let _guard = database_write_lock.lock().await;
-            consume_pending_business_commands(&root, &database, &mut accept_failures).await
-        };
+            let consumed =
+                consume_pending_business_commands(&root, &database, &mut accept_failures).await?;
+            refresh_business_commands_source_stamp(&root, &mut last_source_stamp).await?;
+            Ok(consumed)
+        }
+        .await;
+        record_native_peer_loop_result(&BUSINESS_COMMANDS_LOOP_METRICS, &result, started.elapsed());
         match result {
             Ok(0) => {
                 consecutive_idle_rounds = consecutive_idle_rounds.saturating_add(1);
@@ -2520,10 +3350,8 @@ async fn consume_business_commands_loop(
                 eprintln!("[business-os] native rxdb command consumer failed: {err:#}");
             }
         }
-        tokio::time::sleep(Duration::from_secs(business_command_poll_sleep_secs(
-            consecutive_idle_rounds,
-        )))
-        .await;
+        wait_for_business_command_wake(&root, last_source_stamp.as_ref(), consecutive_idle_rounds)
+            .await;
     }
 }
 
@@ -2534,6 +3362,38 @@ fn business_command_poll_sleep_secs(consecutive_idle_rounds: u32) -> u64 {
         BUSINESS_COMMAND_IDLE_BACKOFF_AFTER_TICKS,
         consecutive_idle_rounds,
     )
+}
+
+async fn wait_for_business_command_wake(
+    root: &Path,
+    last_source_stamp: Option<&BusinessCommandsSourceStamp>,
+    consecutive_idle_rounds: u32,
+) {
+    let sleep_for = Duration::from_secs(business_command_poll_sleep_secs(consecutive_idle_rounds));
+    if consecutive_idle_rounds < BUSINESS_COMMAND_IDLE_BACKOFF_AFTER_TICKS {
+        tokio::time::sleep(sleep_for).await;
+        return;
+    }
+    let Some(table_name) = last_source_stamp
+        .and_then(|stamp| stamp.table.table_name.as_deref())
+        .filter(|name| !name.is_empty())
+    else {
+        tokio::time::sleep(sleep_for).await;
+        return;
+    };
+    let database_path = store::rxdb_store_path(root);
+    let seen_generation = rxdb::storage::sqlite::instance::table_change_generation_for_path(
+        &database_path,
+        table_name,
+    )
+    .unwrap_or(0);
+    rxdb::storage::sqlite::instance::wait_for_table_change_for_path(
+        &database_path,
+        table_name,
+        seen_generation,
+        sleep_for,
+    )
+    .await;
 }
 
 /// How often a single command may fail `accept_pending_business_command`
@@ -2989,6 +3849,9 @@ async fn accept_pending_business_command(
     if command_type.starts_with("support.") {
         project_support_command_result(root.clone(), database, &accepted).await?;
     }
+    if command_type.starts_with("threads.") {
+        project_threads_command_result(root.clone(), database, &accepted).await?;
+    }
     if command_type == "ctox.file.materialize" {
         if let Some(materialized_path) = accepted
             .get("result")
@@ -2999,6 +3862,7 @@ async fn accept_pending_business_command(
             .filter(|value| !value.is_empty())
         {
             upsert_desktop_file_with_policy(
+                &root,
                 database,
                 PathBuf::from(materialized_path),
                 DesktopFileContentPolicy::Eager,
@@ -3150,6 +4014,51 @@ fn support_projection_collection(collection: &str) -> Option<&'static str> {
         "support_agent_suggestions" => Some("support_agent_suggestions"),
         "support_reporting_events" => Some("support_reporting_events"),
         "support_reporting_rollups" => Some("support_reporting_rollups"),
+        _ => None,
+    }
+}
+
+async fn project_threads_command_result(
+    root: PathBuf,
+    database: &Arc<RxDatabase>,
+    accepted: &Value,
+) -> anyhow::Result<()> {
+    let projections = accepted
+        .get("result")
+        .and_then(|result| result.get("projections"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for projection in projections {
+        let Some(collection) = projection
+            .get("collection")
+            .and_then(Value::as_str)
+            .and_then(threads_projection_collection)
+        else {
+            continue;
+        };
+        let Some(record_id) = projection
+            .get("record_id")
+            .or_else(|| projection.get("id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        upsert_business_record_projection(root.clone(), database, collection, record_id).await?;
+    }
+    Ok(())
+}
+
+fn threads_projection_collection(collection: &str) -> Option<&'static str> {
+    match collection {
+        "user_threads" => Some("user_threads"),
+        "user_thread_messages" => Some("user_thread_messages"),
+        "user_thread_links" => Some("user_thread_links"),
+        "user_notifications" => Some("user_notifications"),
+        "ctox_task_approval_requests" => Some("ctox_task_approval_requests"),
         _ => None,
     }
 }
@@ -3605,38 +4514,89 @@ async fn browser_runtime_maintenance_loop(
     database: Arc<RxDatabase>,
     database_write_lock: Arc<AsyncMutex<()>>,
 ) {
-    let _ = root;
+    let mut consecutive_idle_rounds = 0u32;
     loop {
         if browser_runtime_manager().active_session_ids().is_empty() {
+            consecutive_idle_rounds = 0;
             tokio::time::sleep(Duration::from_secs(
                 BROWSER_RUNTIME_IDLE_MAINTENANCE_INTERVAL_SECS,
             ))
             .await;
             continue;
         }
-        {
+        let did_work = {
             let _guard = database_write_lock.lock().await;
             let _browser_guard = BROWSER_RUNTIME_COMMAND_LOCK.lock().await;
-            if let Err(err) = run_browser_runtime_maintenance(&database).await {
-                eprintln!("[business-os] browser runtime maintenance failed: {err:#}");
+            let started = Instant::now();
+            let result = run_browser_runtime_maintenance(&database).await;
+            record_native_peer_loop_result(
+                &BROWSER_RUNTIME_LOOP_METRICS,
+                &result,
+                started.elapsed(),
+            );
+            match result {
+                Ok(rows) => rows > 0,
+                Err(err) => {
+                    eprintln!("[business-os] browser runtime maintenance failed: {err:#}");
+                    true
+                }
             }
+        };
+        if did_work {
+            consecutive_idle_rounds = 0;
+        } else {
+            consecutive_idle_rounds = consecutive_idle_rounds.saturating_add(1);
         }
-        tokio::time::sleep(Duration::from_millis(
-            BROWSER_RUNTIME_ACTIVE_MAINTENANCE_INTERVAL_MS,
-        ))
-        .await;
+        wait_for_browser_runtime_maintenance_wake(&root, consecutive_idle_rounds).await;
     }
 }
 
-async fn run_browser_runtime_maintenance(database: &Arc<RxDatabase>) -> anyhow::Result<()> {
+fn browser_runtime_maintenance_sleep(consecutive_idle_rounds: u32) -> Duration {
+    if consecutive_idle_rounds >= BROWSER_RUNTIME_IDLE_BACKOFF_AFTER_TICKS {
+        Duration::from_secs(BROWSER_RUNTIME_IDLE_MAINTENANCE_INTERVAL_SECS)
+    } else {
+        Duration::from_millis(BROWSER_RUNTIME_ACTIVE_MAINTENANCE_INTERVAL_MS)
+    }
+}
+
+async fn wait_for_browser_runtime_maintenance_wake(root: &Path, consecutive_idle_rounds: u32) {
+    let sleep_for = browser_runtime_maintenance_sleep(consecutive_idle_rounds);
+    if consecutive_idle_rounds < BROWSER_RUNTIME_IDLE_BACKOFF_AFTER_TICKS {
+        tokio::time::sleep(sleep_for).await;
+        return;
+    }
+    let table_name = rxdb_collection_version_table_name("browser_input_events", 0);
+    let database_path = store::rxdb_store_path(root);
+    let seen_generation = rxdb::storage::sqlite::instance::table_change_generation_for_path(
+        &database_path,
+        &table_name,
+    )
+    .unwrap_or(0);
+    rxdb::storage::sqlite::instance::wait_for_table_change_for_path(
+        &database_path,
+        &table_name,
+        seen_generation,
+        sleep_for,
+    )
+    .await;
+}
+
+async fn run_browser_runtime_maintenance(database: &Arc<RxDatabase>) -> anyhow::Result<usize> {
     let manager = browser_runtime_manager();
+    let mut rows_touched = 0usize;
     for session_id in manager.active_session_ids() {
-        if let Err(err) = drain_browser_session_inputs(database, &session_id).await {
-            eprintln!("[business-os] browser input drain failed for {session_id}: {err:#}");
+        match drain_browser_session_inputs(database, &session_id).await {
+            Ok(session_rows) => {
+                rows_touched = rows_touched.saturating_add(session_rows);
+            }
+            Err(err) => {
+                eprintln!("[business-os] browser input drain failed for {session_id}: {err:#}");
+            }
         }
     }
-    gc_expired_browser_frames(database).await?;
-    Ok(())
+    rows_touched = rows_touched.saturating_add(gc_expired_browser_frames(database).await?);
+    rows_touched = rows_touched.saturating_add(gc_consumed_browser_input_events(database).await?);
+    Ok(rows_touched)
 }
 
 /// Replay all pending `browser_input_events` for one session against its live
@@ -3644,10 +4604,10 @@ async fn run_browser_runtime_maintenance(database: &Arc<RxDatabase>) -> anyhow::
 async fn drain_browser_session_inputs(
     database: &Arc<RxDatabase>,
     session_id: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<usize> {
     let manager = browser_runtime_manager();
     let Some(session) = manager.get(session_id) else {
-        return Ok(());
+        return Ok(0);
     };
 
     let events_collection = database
@@ -3670,11 +4630,12 @@ async fn drain_browser_session_inputs(
         .await
         .map_err(|err| anyhow::anyhow!("exec pending browser_input_events query: {err}"))?;
     let Some(rows) = pending.as_array() else {
-        return Ok(());
+        return Ok(0);
     };
     if rows.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
+    let touched_rows = rows.len();
 
     let mut events = Vec::with_capacity(rows.len());
     let mut max_seq = 0u64;
@@ -3737,7 +4698,7 @@ async fn drain_browser_session_inputs(
                 &format!("{err:#}"),
             )
             .await?;
-            return Ok(());
+            return Ok(touched_rows);
         }
     };
 
@@ -3775,7 +4736,7 @@ async fn drain_browser_session_inputs(
         capture_and_store_browser_frame(database, &session, session_id, Some(&nav)).await?;
         update_browser_session_input_state(database, session_id, max_seq).await?;
     }
-    Ok(())
+    Ok(touched_rows)
 }
 
 /// Capture a fresh frame from the live page and persist it plus the derived
@@ -3907,19 +4868,18 @@ async fn update_browser_session_input_state(
         .collection("browser_input_events")
         .context("browser_input_events collection is not registered")?;
     let pending = events_collection
-        .find(Some(MangoQuery {
+        .count(Some(MangoQuery {
             selector: Some(json!({
                 "session_id": { "$eq": session_id },
                 "status": { "$eq": "pending" }
             })),
-            limit: Some(512),
             ..Default::default()
         }))
         .map_err(|err| anyhow::anyhow!("count pending browser_input_events: {err}"))?
         .exec(false)
         .await
         .map_err(|err| anyhow::anyhow!("exec count pending browser_input_events: {err}"))?;
-    let pending_count = pending.as_array().map(|rows| rows.len()).unwrap_or(0) as u64;
+    let pending_count = pending.as_u64().unwrap_or(0);
 
     let sessions = database
         .collection("browser_sessions")
@@ -3954,7 +4914,7 @@ async fn update_browser_session_input_state(
 }
 
 /// Remove expired frames so `browser_frames` does not grow without bound.
-async fn gc_expired_browser_frames(database: &Arc<RxDatabase>) -> anyhow::Result<()> {
+async fn gc_expired_browser_frames(database: &Arc<RxDatabase>) -> anyhow::Result<usize> {
     let now = now_ms() as u64;
     let frames = database
         .collection("browser_frames")
@@ -3962,7 +4922,7 @@ async fn gc_expired_browser_frames(database: &Arc<RxDatabase>) -> anyhow::Result
     let expired = frames
         .find(Some(MangoQuery {
             selector: Some(json!({ "expires_at_ms": { "$lt": now } })),
-            limit: Some(256),
+            limit: Some(BROWSER_FRAME_GC_LIMIT),
             ..Default::default()
         }))
         .map_err(|err| anyhow::anyhow!("query expired browser_frames: {err}"))?
@@ -3970,7 +4930,7 @@ async fn gc_expired_browser_frames(database: &Arc<RxDatabase>) -> anyhow::Result
         .await
         .map_err(|err| anyhow::anyhow!("exec expired browser_frames query: {err}"))?;
     let Some(rows) = expired.as_array() else {
-        return Ok(());
+        return Ok(0);
     };
     let ids: Vec<String> = rows
         .iter()
@@ -3978,13 +4938,85 @@ async fn gc_expired_browser_frames(database: &Arc<RxDatabase>) -> anyhow::Result
         .map(str::to_string)
         .collect();
     if ids.is_empty() {
-        return Ok(());
+        return Ok(0);
+    }
+    let redacted = rows
+        .iter()
+        .filter_map(redacted_expired_browser_frame)
+        .collect::<Vec<_>>();
+    if !redacted.is_empty() {
+        frames
+            .bulk_upsert(redacted)
+            .await
+            .map_err(|err| anyhow::anyhow!("redact expired browser_frames: {err}"))?;
     }
     frames
         .bulk_remove_by_ids(ids)
         .await
         .map_err(|err| anyhow::anyhow!("remove expired browser_frames: {err}"))?;
-    Ok(())
+    Ok(rows.len())
+}
+
+fn redacted_expired_browser_frame(row: &Value) -> Option<Value> {
+    let mut next = row.clone();
+    let obj = next.as_object_mut()?;
+    obj.remove("_rev");
+    obj.remove("_meta");
+    obj.insert("data".to_string(), Value::String(String::new()));
+    obj.insert(
+        "encoding".to_string(),
+        Value::String("redacted".to_string()),
+    );
+    obj.insert("size_bytes".to_string(), Value::from(0));
+    obj.insert("frame_hash".to_string(), Value::String(String::new()));
+    obj.insert("updated_at_ms".to_string(), Value::from(now_ms() as u64));
+    Some(next)
+}
+
+/// Drop consumed/failed input events after a retention window. Pending events
+/// stay until drained, and the bounded query keeps active browser maintenance
+/// from repeatedly touching old input-event history while idle.
+async fn gc_consumed_browser_input_events(database: &Arc<RxDatabase>) -> anyhow::Result<usize> {
+    let cutoff = (now_ms() as u64).saturating_sub(BROWSER_INPUT_EVENT_RETENTION_SECS * 1_000);
+    let events = database
+        .collection("browser_input_events")
+        .context("browser_input_events collection is not registered")?;
+    let mut removed = 0usize;
+    for status in ["consumed", "failed"] {
+        let stale = events
+            .find(Some(MangoQuery {
+                selector: Some(json!({
+                    "status": { "$eq": status },
+                    "created_at_ms": { "$lt": cutoff }
+                })),
+                sort: Some(vec![[("created_at_ms".to_string(), "asc".to_string())]
+                    .into_iter()
+                    .collect()]),
+                limit: Some(BROWSER_INPUT_EVENT_GC_LIMIT),
+                ..Default::default()
+            }))
+            .map_err(|err| anyhow::anyhow!("query stale browser_input_events: {err}"))?
+            .exec(false)
+            .await
+            .map_err(|err| anyhow::anyhow!("exec stale browser_input_events query: {err}"))?;
+        let Some(rows) = stale.as_array() else {
+            continue;
+        };
+        let ids = rows
+            .iter()
+            .filter_map(|row| row.get("id").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        if ids.is_empty() {
+            continue;
+        }
+        events
+            .bulk_remove_by_ids(ids)
+            .await
+            .map_err(|err| anyhow::anyhow!("remove stale browser_input_events: {err}"))?;
+        removed = removed.saturating_add(rows.len());
+    }
+    Ok(removed)
 }
 
 /// On peer startup, no live processes exist yet. Any session row left `active`
@@ -4451,6 +5483,30 @@ async fn sync_business_users_with_database(
     Ok(count)
 }
 
+async fn sync_business_users_with_database_if_changed(
+    root: &Path,
+    database: &Arc<RxDatabase>,
+    last_projection_stamp: &mut Option<store::BusinessUsersProjectionStamp>,
+) -> anyhow::Result<usize> {
+    let projection_stamp = business_users_projection_stamp(root).await?;
+    if last_projection_stamp.as_ref() == Some(&projection_stamp) {
+        return Ok(0);
+    }
+
+    let synced = sync_business_users_with_database(root, database).await?;
+    *last_projection_stamp = Some(business_users_projection_stamp(root).await?);
+    Ok(synced)
+}
+
+async fn business_users_projection_stamp(
+    root: &Path,
+) -> anyhow::Result<store::BusinessUsersProjectionStamp> {
+    let root_for_stamp = root.to_path_buf();
+    tokio::task::spawn_blocking(move || store::business_users_projection_stamp(&root_for_stamp))
+        .await
+        .context("join native business users projection stamp")?
+}
+
 async fn sync_runtime_settings_with_database(
     root: &Path,
     database: &Arc<RxDatabase>,
@@ -4477,6 +5533,30 @@ async fn sync_runtime_settings_with_database(
     Ok(usize::from(changed))
 }
 
+async fn sync_runtime_settings_with_database_if_changed(
+    root: &Path,
+    database: &Arc<RxDatabase>,
+    last_projection_stamp: &mut Option<store::RuntimeSettingsProjectionStamp>,
+) -> anyhow::Result<usize> {
+    let projection_stamp = runtime_settings_projection_stamp(root).await?;
+    if last_projection_stamp.as_ref() == Some(&projection_stamp) {
+        return Ok(0);
+    }
+
+    let synced = sync_runtime_settings_with_database(root, database).await?;
+    *last_projection_stamp = Some(projection_stamp);
+    Ok(synced)
+}
+
+async fn runtime_settings_projection_stamp(
+    root: &Path,
+) -> anyhow::Result<store::RuntimeSettingsProjectionStamp> {
+    let root_for_stamp = root.to_path_buf();
+    tokio::task::spawn_blocking(move || store::runtime_settings_projection_stamp(&root_for_stamp))
+        .await
+        .context("join native runtime settings projection stamp")
+}
+
 async fn sync_module_catalog_with_database(
     root: &Path,
     database: &Arc<RxDatabase>,
@@ -4501,6 +5581,30 @@ async fn sync_module_catalog_with_database(
         incremental_upsert_projection_if_changed(&module_catalog, document, "module catalog")
             .await?;
     Ok(usize::from(changed))
+}
+
+async fn sync_module_catalog_with_database_if_changed(
+    root: &Path,
+    database: &Arc<RxDatabase>,
+    last_projection_stamp: &mut Option<store::ModuleCatalogProjectionStamp>,
+) -> anyhow::Result<usize> {
+    let projection_stamp = module_catalog_projection_stamp(root).await?;
+    if last_projection_stamp.as_ref() == Some(&projection_stamp) {
+        return Ok(0);
+    }
+
+    let synced = sync_module_catalog_with_database(root, database).await?;
+    *last_projection_stamp = Some(module_catalog_projection_stamp(root).await?);
+    Ok(synced)
+}
+
+async fn module_catalog_projection_stamp(
+    root: &Path,
+) -> anyhow::Result<store::ModuleCatalogProjectionStamp> {
+    let root_for_stamp = root.to_path_buf();
+    tokio::task::spawn_blocking(move || store::module_catalog_projection_stamp(&root_for_stamp))
+        .await
+        .context("join native module catalog projection stamp")?
 }
 
 async fn sync_ticket_state_with_database(
@@ -4543,6 +5647,28 @@ async fn sync_ticket_state_with_database(
         }
     }
     Ok(count)
+}
+
+async fn sync_ticket_state_with_database_if_changed(
+    root: &Path,
+    database: &Arc<RxDatabase>,
+    last_source_stamp: &mut Option<tickets::TicketStoreChangeStamp>,
+) -> anyhow::Result<usize> {
+    let source_stamp = ticket_state_source_stamp(root).await?;
+    if last_source_stamp.as_ref() == Some(&source_stamp) {
+        return Ok(0);
+    }
+
+    let synced = sync_ticket_state_with_database(root, database).await?;
+    *last_source_stamp = Some(source_stamp);
+    Ok(synced)
+}
+
+async fn ticket_state_source_stamp(root: &Path) -> anyhow::Result<tickets::TicketStoreChangeStamp> {
+    let root = root.to_path_buf();
+    tokio::task::spawn_blocking(move || tickets::ticket_store_change_stamp(&root))
+        .await
+        .context("join native ticket state source stamp")
 }
 
 /// Project the record-shape knowledge catalog (`knowledge_data_tables`) into
@@ -4625,10 +5751,86 @@ async fn sync_knowledge_tables_with_database(
     Ok(count)
 }
 
+async fn sync_knowledge_tables_with_database_if_changed(
+    root: &Path,
+    database: &Arc<RxDatabase>,
+    last_source_stamp: &mut Option<crate::knowledge::KnowledgeTablesProjectionSourceStamp>,
+) -> anyhow::Result<usize> {
+    let source_stamp = knowledge_tables_source_stamp(root).await?;
+    if last_source_stamp.as_ref() == Some(&source_stamp) {
+        return Ok(0);
+    }
+
+    let synced = sync_knowledge_tables_with_database(root, database).await?;
+    *last_source_stamp = Some(source_stamp);
+    Ok(synced)
+}
+
+async fn knowledge_tables_source_stamp(
+    root: &Path,
+) -> anyhow::Result<crate::knowledge::KnowledgeTablesProjectionSourceStamp> {
+    let root = root.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        crate::knowledge::knowledge_tables_projection_source_stamp(&root)
+    })
+    .await
+    .context("join native knowledge tables source stamp")?
+}
+
+async fn sync_business_record_projections_with_database_if_changed(
+    root: &Path,
+    database: &Arc<RxDatabase>,
+    since_by_collection: &mut HashMap<String, i64>,
+    queue_chat_repair_stamp: &mut Option<QueueChatRepairProjectionStamp>,
+    last_source_stamp: &mut Option<BusinessRecordProjectionSourceStamp>,
+) -> anyhow::Result<usize> {
+    let source_stamp = business_record_projection_source_stamp(root).await?;
+    if last_source_stamp.as_ref() == Some(&source_stamp) {
+        return Ok(0);
+    }
+
+    let synced = sync_business_record_projections_with_database(
+        root,
+        database,
+        since_by_collection,
+        queue_chat_repair_stamp,
+    )
+    .await?;
+    *last_source_stamp = Some(source_stamp);
+    Ok(synced)
+}
+
+async fn business_record_projection_source_stamp(
+    root: &Path,
+) -> anyhow::Result<BusinessRecordProjectionSourceStamp> {
+    let queue_stamp_root = root.to_path_buf();
+    let store_stamp_root = root.to_path_buf();
+    let collections = business_record_projection_collections();
+    let queue_chat_repair = queue_chat_repair_projection_stamp_async(&queue_stamp_root).await?;
+    let (records, communication) = tokio::task::spawn_blocking(move || {
+        Ok::<_, anyhow::Error>((
+            store::business_records_projection_stamp(&store_stamp_root, &collections)?,
+            channels::communication_intake_source_stamp(&store_stamp_root)?,
+        ))
+    })
+    .await
+    .context("join native business record projection source stamp")??;
+    Ok(BusinessRecordProjectionSourceStamp {
+        records,
+        communication,
+        queue_chat_repair,
+    })
+}
+
+fn threads_app_relevance_cursor_key(collection: &str) -> String {
+    format!("{THREADS_APP_RELEVANCE_SINCE_KEY_PREFIX}{collection}")
+}
+
 async fn sync_business_record_projections_with_database(
     root: &Path,
     database: &Arc<RxDatabase>,
     since_by_collection: &mut HashMap<String, i64>,
+    queue_chat_repair_stamp: &mut Option<QueueChatRepairProjectionStamp>,
 ) -> anyhow::Result<usize> {
     let support_intake_root = root.to_path_buf();
     let support_intake_since_ms = *since_by_collection
@@ -4668,9 +5870,49 @@ async fn sync_business_record_projections_with_database(
         .context("join native business record projection load")??;
         pulled_collections.push(pulled_collection);
     }
+    let threads_relevance_commands_since_ms = *since_by_collection
+        .get(THREADS_CTOX_RELEVANCE_COMMANDS_SINCE_KEY)
+        .unwrap_or(&0);
+    let threads_relevance_tasks_since_ms = *since_by_collection
+        .get(THREADS_CTOX_RELEVANCE_TASKS_SINCE_KEY)
+        .unwrap_or(&0);
+    let threads_app_relevance_cursors = super::threads::app_relevance_source_collections()
+        .iter()
+        .map(|collection| {
+            (
+                *collection,
+                *since_by_collection
+                    .get(&threads_app_relevance_cursor_key(collection))
+                    .unwrap_or(&0),
+            )
+        })
+        .collect::<Vec<_>>();
+    let threads_relevance_root = root.clone();
+    let threads_relevance = tokio::task::spawn_blocking(move || {
+        super::threads::project_ctox_relevance(
+            &threads_relevance_root,
+            threads_relevance_commands_since_ms,
+            threads_relevance_tasks_since_ms,
+            BUSINESS_RECORD_PROJECTION_SYNC_LIMIT,
+        )
+    })
+    .await
+    .context("join native threads ctox relevance projection")??;
+    let threads_app_relevance_root = root.clone();
+    let threads_app_relevance = tokio::task::spawn_blocking(move || {
+        super::threads::project_app_relevance(
+            &threads_app_relevance_root,
+            &threads_app_relevance_cursors,
+            BUSINESS_RECORD_PROJECTION_SYNC_LIMIT,
+        )
+    })
+    .await
+    .context("join native threads app relevance projection")??;
 
     let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
-    let mut count = support_intake_count.changed_count;
+    let mut count = support_intake_count.changed_count
+        + threads_relevance.changed_count
+        + threads_app_relevance.changed_count;
     for (collection_name, since_ms, pulled) in pulled_collections {
         let documents = pulled
             .get("documents")
@@ -4707,8 +5949,36 @@ async fn sync_business_record_projections_with_database(
         }
         since_by_collection.insert(collection_name, max_updated_at_ms.saturating_add(1));
     }
-    count += reconcile_ctox_queue_task_projections(root.as_path(), database).await?;
-    count += reconcile_business_chat_tracking_projections(database).await?;
+    for (collection, record_id) in threads_relevance.projections {
+        upsert_business_record_projection(root.clone(), database, collection, record_id).await?;
+    }
+    for (collection, record_id) in threads_app_relevance.projections {
+        upsert_business_record_projection(root.clone(), database, collection, record_id).await?;
+    }
+    for (source_collection, max_updated_at_ms) in threads_relevance.source_cursors {
+        let cursor_key = match source_collection {
+            "business_commands" => THREADS_CTOX_RELEVANCE_COMMANDS_SINCE_KEY,
+            "ctox_queue_tasks" => THREADS_CTOX_RELEVANCE_TASKS_SINCE_KEY,
+            _ => continue,
+        };
+        let previous = *since_by_collection.get(cursor_key).unwrap_or(&0);
+        if max_updated_at_ms >= previous {
+            since_by_collection.insert(cursor_key.to_string(), max_updated_at_ms.saturating_add(1));
+        }
+    }
+    for (source_collection, max_updated_at_ms) in threads_app_relevance.source_cursors {
+        let cursor_key = threads_app_relevance_cursor_key(source_collection);
+        let previous = *since_by_collection.get(&cursor_key).unwrap_or(&0);
+        if max_updated_at_ms >= previous {
+            since_by_collection.insert(cursor_key, max_updated_at_ms.saturating_add(1));
+        }
+    }
+    count += reconcile_queue_chat_tracking_projections_if_changed(
+        root.as_path(),
+        database,
+        queue_chat_repair_stamp,
+    )
+    .await?;
     Ok(count)
 }
 
@@ -4724,6 +5994,9 @@ async fn reconcile_ctox_queue_task_projections(
         .context("business_commands collection is not registered")?;
     let queue_docs = queue
         .find(Some(MangoQuery {
+            selector: Some(json!({
+                "status": { "$in": ["queued", "running", "accepted"] }
+            })),
             limit: Some(500),
             ..Default::default()
         }))
@@ -4809,7 +6082,8 @@ async fn reconcile_ctox_queue_task_projections(
             Some((status, command_updated_at_ms, None, None, None))
         } else if matches!(command_status, "accepted" | "pending" | "pending_sync")
             && projection_queue_task_is_orphaned(root, queue_doc)
-            && projection_document_age_ms(queue_doc, command_updated_at_ms) > 10 * 60 * 1_000
+            && projection_document_age_ms(queue_doc, command_updated_at_ms)
+                > QUEUE_CHAT_REPAIR_ORPHAN_EPOCH_MS
         {
             Some((
                 "failed",
@@ -4912,15 +6186,6 @@ async fn reconcile_ctox_queue_task_projections(
         })
         .await
         .context("join ctox_queue_tasks reconciliation writeback")??;
-        let root_for_repair = root.to_path_buf();
-        tokio::task::spawn_blocking(move || {
-            store::repair_queue_projections(
-                &root_for_repair,
-                store::QueueProjectionRepairOptions { apply: true },
-            )
-        })
-        .await
-        .context("join queue projection command repair")??;
     }
     for (command_id, failed_at_ms) in orphaned_commands {
         let root = root.to_path_buf();
@@ -5007,6 +6272,7 @@ async fn reconcile_business_chat_tracking_projections(
         .context("ctox_queue_tasks collection is not registered")?;
     let chat_docs = chats
         .find(Some(MangoQuery {
+            selector: Some(json!({ "tracking_active": true })),
             limit: Some(200),
             ..Default::default()
         }))
@@ -5017,6 +6283,50 @@ async fn reconcile_business_chat_tracking_projections(
     let Some(chat_docs) = chat_docs.as_array() else {
         return Ok(0);
     };
+
+    let mut command_ids = BTreeSet::new();
+    let mut task_ids = BTreeSet::new();
+    for chat_doc in chat_docs {
+        if chat_doc
+            .get("_deleted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let Some(messages) = chat_doc.get("messages").and_then(Value::as_array) else {
+            continue;
+        };
+        for message in messages {
+            let Some(message_object) = message.as_object() else {
+                continue;
+            };
+            let status = chat_tracking_message_status(message_object);
+            if !chat_tracking_status_is_active(&status) {
+                continue;
+            }
+            let (command_id, task_id) = chat_tracking_message_command_and_task_ids(message_object);
+            if let Some(command_id) = command_id {
+                command_ids.insert(command_id.to_string());
+            }
+            if let Some(task_id) = task_id {
+                task_ids.insert(task_id.to_string());
+            }
+        }
+    }
+    let command_docs =
+        find_projection_documents_by_id(&commands, "business_commands", command_ids).await?;
+    for command_doc in command_docs.values() {
+        if let Some(task_id) = command_doc
+            .get("task_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            task_ids.insert(task_id.to_string());
+        }
+    }
+    let task_docs = find_projection_documents_by_id(&queue, "ctox_queue_tasks", task_ids).await?;
 
     let mut repaired = 0;
     for chat_doc in chat_docs {
@@ -5040,61 +6350,34 @@ async fn reconcile_business_chat_tracking_projections(
             let Some(message_object) = message.as_object_mut() else {
                 continue;
             };
-            let status = message_object
-                .get("status")
-                .and_then(Value::as_str)
-                .map(normalize_chat_tracking_status)
-                .unwrap_or_else(|| "queued".to_string());
+            let status = chat_tracking_message_status(message_object);
             if !chat_tracking_status_is_active(&status) {
                 continue;
             }
-            let command_id = message_object
-                .get("commandId")
-                .or_else(|| message_object.get("command_id"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty());
-            let task_id = message_object
-                .get("taskId")
-                .or_else(|| message_object.get("task_id"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty());
+            let (command_id, task_id) = chat_tracking_message_command_and_task_ids(message_object);
             if command_id.is_none() && task_id.is_none() {
                 continue;
             }
 
-            let command_doc = match command_id {
-                Some(command_id) => find_projection_document(&commands, command_id).await?,
-                None => None,
-            };
+            let command_doc = command_id.and_then(|command_id| command_docs.get(command_id));
             let resolved_task_id = task_id.map(str::to_string).or_else(|| {
                 command_doc
-                    .as_ref()
                     .and_then(|doc| doc.get("task_id").and_then(Value::as_str))
                     .map(str::to_string)
             });
-            let task_doc = match resolved_task_id.as_deref() {
-                Some(task_id) => find_projection_document(&queue, task_id).await?,
-                None => None,
-            };
+            let task_doc = resolved_task_id
+                .as_deref()
+                .and_then(|task_id| task_docs.get(task_id));
             let next_status = task_doc
-                .as_ref()
                 .and_then(|doc| doc.get("status").and_then(Value::as_str))
                 .or_else(|| {
-                    command_doc
-                        .as_ref()
-                        .and_then(|doc| doc.get("task_status").and_then(Value::as_str))
+                    command_doc.and_then(|doc| doc.get("task_status").and_then(Value::as_str))
                 })
-                .or_else(|| {
-                    command_doc
-                        .as_ref()
-                        .and_then(|doc| doc.get("status").and_then(Value::as_str))
-                })
+                .or_else(|| command_doc.and_then(|doc| doc.get("status").and_then(Value::as_str)))
                 .map(normalize_chat_tracking_status);
             let orphaned = command_doc.is_none()
                 && task_doc.is_none()
-                && chat_tracking_message_age_ms(message_object) > 10 * 60 * 1_000;
+                && chat_tracking_message_age_ms(message_object) > QUEUE_CHAT_REPAIR_ORPHAN_EPOCH_MS;
             let Some(next_status) = next_status.or_else(|| orphaned.then(|| "failed".to_string()))
             else {
                 continue;
@@ -5120,6 +6403,7 @@ async fn reconcile_business_chat_tracking_projections(
             }
         }
 
+        changed |= apply_business_chat_tracking_summary(object);
         if !changed {
             continue;
         }
@@ -5135,20 +6419,174 @@ async fn reconcile_business_chat_tracking_projections(
     Ok(repaired)
 }
 
-async fn find_projection_document(
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BusinessChatTrackingSummary {
+    active: bool,
+    status: String,
+    tracking_id: String,
+    command_id: String,
+    task_id: String,
+    message_id: String,
+}
+
+fn apply_business_chat_tracking_summary(object: &mut serde_json::Map<String, Value>) -> bool {
+    let messages = object
+        .get("messages")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let summary = business_chat_tracking_summary(messages);
+    let mut changed = false;
+    changed |= set_json_bool_field(object, "tracking_active", summary.active);
+    changed |= set_json_string_field(object, "tracking_status", &summary.status);
+    changed |= set_json_string_field(object, "tracking_id", &summary.tracking_id);
+    changed |= set_json_string_field(object, "tracking_command_id", &summary.command_id);
+    changed |= set_json_string_field(object, "tracking_task_id", &summary.task_id);
+    changed |= set_json_string_field(object, "tracking_message_id", &summary.message_id);
+    changed
+}
+
+fn business_chat_tracking_summary(messages: &[Value]) -> BusinessChatTrackingSummary {
+    for message in messages.iter().rev() {
+        let Some(message_object) = message.as_object() else {
+            continue;
+        };
+        let trackable = message_object
+            .get("trackable")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let command_id = message_object
+            .get("commandId")
+            .or_else(|| message_object.get("command_id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_default()
+            .to_string();
+        let task_id = message_object
+            .get("taskId")
+            .or_else(|| message_object.get("task_id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_default()
+            .to_string();
+        if command_id.is_empty() && task_id.is_empty() {
+            continue;
+        }
+        let status = message_object
+            .get("status")
+            .and_then(Value::as_str)
+            .map(normalize_chat_tracking_status)
+            .unwrap_or_else(|| "queued".to_string());
+        let message_id = message_object
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_default()
+            .to_string();
+        return BusinessChatTrackingSummary {
+            active: trackable && chat_tracking_status_is_active(&status),
+            status,
+            tracking_id: if task_id.is_empty() {
+                command_id.clone()
+            } else {
+                task_id.clone()
+            },
+            command_id,
+            task_id,
+            message_id,
+        };
+    }
+    BusinessChatTrackingSummary {
+        active: false,
+        status: String::new(),
+        tracking_id: String::new(),
+        command_id: String::new(),
+        task_id: String::new(),
+        message_id: String::new(),
+    }
+}
+
+fn set_json_bool_field(
+    object: &mut serde_json::Map<String, Value>,
+    field: &str,
+    value: bool,
+) -> bool {
+    if object.get(field).and_then(Value::as_bool) == Some(value) {
+        return false;
+    }
+    object.insert(field.to_string(), Value::Bool(value));
+    true
+}
+
+fn set_json_string_field(
+    object: &mut serde_json::Map<String, Value>,
+    field: &str,
+    value: &str,
+) -> bool {
+    if object.get(field).and_then(Value::as_str) == Some(value) {
+        return false;
+    }
+    object.insert(field.to_string(), Value::String(value.to_string()));
+    true
+}
+
+fn chat_tracking_message_status(message: &serde_json::Map<String, Value>) -> String {
+    message
+        .get("status")
+        .and_then(Value::as_str)
+        .map(normalize_chat_tracking_status)
+        .unwrap_or_else(|| "queued".to_string())
+}
+
+fn chat_tracking_message_command_and_task_ids<'a>(
+    message: &'a serde_json::Map<String, Value>,
+) -> (Option<&'a str>, Option<&'a str>) {
+    let command_id = message
+        .get("commandId")
+        .or_else(|| message.get("command_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let task_id = message
+        .get("taskId")
+        .or_else(|| message.get("task_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    (command_id, task_id)
+}
+
+async fn find_projection_documents_by_id(
     collection: &Arc<RxCollection>,
-    id: &str,
-) -> anyhow::Result<Option<Value>> {
-    let document = collection
-        .find_one(Some(MangoQuery {
-            selector: Some(json!({ "id": { "$eq": id } })),
-            ..Default::default()
-        }))
-        .map_err(|err| anyhow::anyhow!("query projection document {id}: {err}"))?
-        .exec(false)
+    collection_name: &str,
+    ids: BTreeSet<String>,
+) -> anyhow::Result<HashMap<String, Value>> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    #[cfg(test)]
+    CHAT_TRACKING_BATCH_DOCUMENT_LOOKUPS.fetch_add(1, Ordering::Relaxed);
+    let ids = ids.into_iter().collect::<Vec<_>>();
+    let documents = collection
+        .storage_instance
+        .find_documents_by_id(&ids, false)
         .await
-        .map_err(|err| anyhow::anyhow!("exec projection document {id} query: {err}"))?;
-    Ok(document.is_object().then_some(document))
+        .map_err(|err| anyhow::anyhow!("find {collection_name} projection documents: {err}"))?;
+    let mut by_id = HashMap::with_capacity(documents.len());
+    for document in documents {
+        let Some(id) = document
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        by_id.insert(id, document);
+    }
+    Ok(by_id)
 }
 
 fn normalize_chat_tracking_status(status: &str) -> String {
@@ -5182,24 +6620,7 @@ async fn upsert_business_record_projection(
     record_id: String,
 ) -> anyhow::Result<()> {
     let document = tokio::task::spawn_blocking(move || {
-        let pulled = store::pull_collection_records_for_projection(
-            &root,
-            collection_name,
-            Some(0),
-            Some(2_000),
-        )?;
-        let document = pulled
-            .get("documents")
-            .and_then(Value::as_array)
-            .and_then(|documents| {
-                documents
-                    .iter()
-                    .find(|document| {
-                        document.get("id").and_then(Value::as_str) == Some(record_id.as_str())
-                    })
-                    .cloned()
-            });
-        Ok::<_, anyhow::Error>(document)
+        store::pull_collection_record(&root, collection_name, &record_id)
     })
     .await
     .with_context(|| format!("join native {collection_name} projection load"))??;
@@ -5805,16 +7226,430 @@ struct ProjectionFileStamp {
     modified_ns: u128,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BusinessCommandsSourceStamp {
+    table: BusinessCommandsTableStamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BusinessCommandsTableStamp {
+    table_name: Option<String>,
+    pending_count: i64,
+    latest_pending_lwt_bits: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BusinessRecordProjectionSourceStamp {
+    records: store::BusinessRecordsProjectionStamp,
+    communication: channels::CommunicationIntakeSourceStamp,
+    queue_chat_repair: QueueChatRepairProjectionStamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct QueueChatRepairProjectionStamp {
+    rxdb_queue_tasks: RxdbCollectionSummaryStamp,
+    rxdb_business_commands: RxdbCollectionSummaryStamp,
+    rxdb_business_chats: RxdbCollectionSummaryStamp,
+    canonical_queue: CanonicalQueueRepairStamp,
+    orphan_repair_epoch: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RxdbCollectionSummaryStamp {
+    table_name: Option<String>,
+    row_count: i64,
+    deleted_count: i64,
+    latest_lwt_bits: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CanonicalQueueRepairStamp {
+    database: SqliteProjectionFilesStamp,
+    queue_message_count: i64,
+    routing_count: i64,
+    latest_queue_observed_at: String,
+    latest_routing_updated_at: String,
+    routing_status_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SqliteProjectionFilesStamp {
+    db: ProjectionFileStamp,
+    wal: ProjectionFileStamp,
+    shm: ProjectionFileStamp,
+    journal: ProjectionFileStamp,
+}
+
+async fn business_commands_source_change(
+    root: &Path,
+    last_source_stamp: &mut Option<BusinessCommandsSourceStamp>,
+) -> anyhow::Result<Option<BusinessCommandsSourceStamp>> {
+    let source_stamp = business_commands_source_stamp(root).await?;
+    if source_stamp.table.pending_count == 0 {
+        *last_source_stamp = Some(source_stamp);
+        return Ok(None);
+    }
+    Ok(Some(source_stamp))
+}
+
+async fn refresh_business_commands_source_stamp(
+    root: &Path,
+    last_source_stamp: &mut Option<BusinessCommandsSourceStamp>,
+) -> anyhow::Result<()> {
+    *last_source_stamp = Some(business_commands_source_stamp(root).await?);
+    Ok(())
+}
+
+async fn business_commands_source_stamp(
+    root: &Path,
+) -> anyhow::Result<BusinessCommandsSourceStamp> {
+    let root = root.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        Ok(BusinessCommandsSourceStamp {
+            table: business_commands_table_stamp(&root)?,
+        })
+    })
+    .await
+    .context("join business commands source stamp")?
+}
+
+fn business_commands_table_stamp(root: &Path) -> anyhow::Result<BusinessCommandsTableStamp> {
+    let path = store::rxdb_store_path(root);
+    if !path.exists() {
+        return Ok(empty_business_commands_table_stamp(None));
+    }
+    let conn = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| {
+        format!(
+            "open Business OS RxDB store for command source stamp {}",
+            path.display()
+        )
+    })?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .context("configure business command source stamp busy_timeout")?;
+    let Some(table) = latest_rxdb_collection_table(&conn, "business_commands")? else {
+        return Ok(empty_business_commands_table_stamp(None));
+    };
+    let quoted = sqlite_quote_identifier(&table);
+    let deleted_expr = if sqlite_table_has_column(&conn, &table, "deleted")? {
+        "deleted"
+    } else {
+        "0"
+    };
+    let lwt_expr = if sqlite_table_has_column(&conn, &table, "lastWriteTime")? {
+        "COALESCE(lastWriteTime, 0)"
+    } else {
+        "CAST(COALESCE(json_extract(data, '$._meta.lwt'), json_extract(data, '$.updated_at_ms'), 0) AS REAL)"
+    };
+    let (pending_count, latest_pending_lwt): (i64, f64) = conn
+        .query_row(
+            &format!(
+                "SELECT COUNT(*), COALESCE(MAX({lwt_expr}), 0)
+                 FROM {quoted}
+                 WHERE {deleted_expr} = 0
+                   AND json_extract(data, '$.status') = 'pending_sync'"
+            ),
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .with_context(|| format!("stamp pending business_commands rows in {table}"))?;
+    Ok(BusinessCommandsTableStamp {
+        table_name: Some(table),
+        pending_count,
+        latest_pending_lwt_bits: latest_pending_lwt.to_bits(),
+    })
+}
+
+fn empty_business_commands_table_stamp(table_name: Option<String>) -> BusinessCommandsTableStamp {
+    BusinessCommandsTableStamp {
+        table_name,
+        pending_count: 0,
+        latest_pending_lwt_bits: 0,
+    }
+}
+
+async fn reconcile_queue_chat_tracking_projections_if_changed(
+    root: &Path,
+    database: &Arc<RxDatabase>,
+    last_projection_stamp: &mut Option<QueueChatRepairProjectionStamp>,
+) -> anyhow::Result<usize> {
+    let projection_stamp = queue_chat_repair_projection_stamp_async(root).await?;
+    if last_projection_stamp.as_ref() == Some(&projection_stamp) {
+        return Ok(0);
+    }
+
+    let mut count = reconcile_ctox_queue_task_projections(root, database).await?;
+    count += reconcile_business_chat_tracking_projections(database).await?;
+    *last_projection_stamp = Some(queue_chat_repair_projection_stamp_async(root).await?);
+    Ok(count)
+}
+
+async fn queue_chat_repair_projection_stamp_async(
+    root: &Path,
+) -> anyhow::Result<QueueChatRepairProjectionStamp> {
+    let root = root.to_path_buf();
+    tokio::task::spawn_blocking(move || queue_chat_repair_projection_stamp(&root))
+        .await
+        .context("join queue/chat repair projection stamp")?
+}
+
+fn queue_chat_repair_projection_stamp(
+    root: &Path,
+) -> anyhow::Result<QueueChatRepairProjectionStamp> {
+    let now = now_ms() as i64;
+    let orphan_repair_epoch = (now / QUEUE_CHAT_REPAIR_ORPHAN_EPOCH_MS.max(1)).max(0) as u64;
+    let rxdb_path = store::rxdb_store_path(root);
+    let (rxdb_queue_tasks, rxdb_business_commands, rxdb_business_chats) =
+        rxdb_queue_chat_repair_stamps(&rxdb_path)?;
+    Ok(QueueChatRepairProjectionStamp {
+        rxdb_queue_tasks,
+        rxdb_business_commands,
+        rxdb_business_chats,
+        canonical_queue: canonical_queue_repair_stamp(root)?,
+        orphan_repair_epoch,
+    })
+}
+
+fn rxdb_queue_chat_repair_stamps(
+    rxdb_path: &Path,
+) -> anyhow::Result<(
+    RxdbCollectionSummaryStamp,
+    RxdbCollectionSummaryStamp,
+    RxdbCollectionSummaryStamp,
+)> {
+    if !rxdb_path.exists() {
+        return Ok((
+            empty_rxdb_collection_summary_stamp(None),
+            empty_rxdb_collection_summary_stamp(None),
+            empty_rxdb_collection_summary_stamp(None),
+        ));
+    }
+    let conn = Connection::open_with_flags(
+        rxdb_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| {
+        format!(
+            "open Business OS RxDB store for queue/chat repair stamp {}",
+            rxdb_path.display()
+        )
+    })?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .context("configure queue/chat repair stamp busy_timeout")?;
+    Ok((
+        rxdb_collection_summary_stamp(&conn, "ctox_queue_tasks")?,
+        rxdb_collection_summary_stamp(&conn, "business_commands")?,
+        rxdb_collection_summary_stamp(&conn, "business_chats")?,
+    ))
+}
+
+fn rxdb_collection_summary_stamp(
+    conn: &Connection,
+    collection: &str,
+) -> anyhow::Result<RxdbCollectionSummaryStamp> {
+    let Some(table) = latest_rxdb_collection_table(conn, collection)? else {
+        return Ok(empty_rxdb_collection_summary_stamp(None));
+    };
+    let quoted = sqlite_quote_identifier(&table);
+    let deleted_expr = if sqlite_table_has_column(conn, &table, "deleted")? {
+        "COALESCE(deleted, 0)"
+    } else {
+        "0"
+    };
+    let lwt_expr = if sqlite_table_has_column(conn, &table, "lastWriteTime")? {
+        "COALESCE(lastWriteTime, 0)"
+    } else {
+        "CAST(COALESCE(json_extract(data, '$._meta.lwt'), json_extract(data, '$.updated_at_ms'), 0) AS REAL)"
+    };
+    let (row_count, deleted_count, latest_lwt): (i64, i64, f64) = conn
+        .query_row(
+            &format!(
+                "SELECT COUNT(*), COALESCE(SUM({deleted_expr}), 0), COALESCE(MAX({lwt_expr}), 0)
+                 FROM {quoted}"
+            ),
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .with_context(|| format!("stamp {collection} repair table {table}"))?;
+    Ok(RxdbCollectionSummaryStamp {
+        table_name: Some(table),
+        row_count,
+        deleted_count,
+        latest_lwt_bits: latest_lwt.to_bits(),
+    })
+}
+
+fn empty_rxdb_collection_summary_stamp(table_name: Option<String>) -> RxdbCollectionSummaryStamp {
+    RxdbCollectionSummaryStamp {
+        table_name,
+        row_count: 0,
+        deleted_count: 0,
+        latest_lwt_bits: 0,
+    }
+}
+
+fn canonical_queue_repair_stamp(root: &Path) -> anyhow::Result<CanonicalQueueRepairStamp> {
+    let db_path = crate::paths::core_db(root);
+    let database = sqlite_projection_files_stamp(&db_path);
+    if !db_path.exists() {
+        return Ok(empty_canonical_queue_repair_stamp(database));
+    }
+    let conn = Connection::open_with_flags(
+        &db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("open core DB for queue repair stamp {}", db_path.display()))?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .context("configure canonical queue repair stamp busy_timeout")?;
+    if !sqlite_table_exists(&conn, "communication_messages")?
+        || !sqlite_table_exists(&conn, "communication_routing_state")?
+    {
+        return Ok(empty_canonical_queue_repair_stamp(database));
+    }
+
+    let (queue_message_count, latest_queue_observed_at): (i64, Option<String>) = conn
+        .query_row(
+            "SELECT COUNT(*), MAX(observed_at)
+             FROM communication_messages
+             WHERE channel = 'queue'
+               AND direction = 'inbound'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .context("stamp canonical queue messages")?;
+    let (routing_count, latest_routing_updated_at): (i64, Option<String>) = conn
+        .query_row(
+            "SELECT COUNT(*), MAX(r.updated_at)
+             FROM communication_routing_state r
+             JOIN communication_messages m ON m.message_key = r.message_key
+             WHERE m.channel = 'queue'
+               AND m.direction = 'inbound'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .context("stamp canonical queue routing")?;
+    let routing_status_hash = canonical_queue_routing_status_hash(&conn)?;
+
+    Ok(CanonicalQueueRepairStamp {
+        database,
+        queue_message_count,
+        routing_count,
+        latest_queue_observed_at: latest_queue_observed_at.unwrap_or_default(),
+        latest_routing_updated_at: latest_routing_updated_at.unwrap_or_default(),
+        routing_status_hash,
+    })
+}
+
+fn canonical_queue_routing_status_hash(conn: &Connection) -> anyhow::Result<String> {
+    let mut hasher = sha2::Sha256::new();
+    let mut stmt = conn
+        .prepare(
+            "SELECT r.route_status, COUNT(*), COALESCE(MAX(r.updated_at), '')
+             FROM communication_routing_state r
+             JOIN communication_messages m ON m.message_key = r.message_key
+             WHERE m.channel = 'queue'
+               AND m.direction = 'inbound'
+             GROUP BY r.route_status
+             ORDER BY r.route_status ASC",
+        )
+        .context("prepare canonical queue routing status stamp")?;
+    let mut rows = stmt
+        .query([])
+        .context("query canonical queue routing status stamp")?;
+    while let Some(row) = rows.next()? {
+        let route_status: String = row.get(0)?;
+        let count: i64 = row.get(1)?;
+        let latest_updated_at: String = row.get(2)?;
+        update_hash_with_string(&mut hasher, &route_status);
+        hasher.update(count.to_le_bytes());
+        update_hash_with_string(&mut hasher, &latest_updated_at);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn empty_canonical_queue_repair_stamp(
+    database: SqliteProjectionFilesStamp,
+) -> CanonicalQueueRepairStamp {
+    CanonicalQueueRepairStamp {
+        database,
+        queue_message_count: 0,
+        routing_count: 0,
+        latest_queue_observed_at: String::new(),
+        latest_routing_updated_at: String::new(),
+        routing_status_hash: String::new(),
+    }
+}
+
+fn sqlite_projection_files_stamp(path: &Path) -> SqliteProjectionFilesStamp {
+    SqliteProjectionFilesStamp {
+        db: projection_file_stamp(path),
+        wal: projection_file_stamp(&sqlite_sidecar_path(path, "-wal")),
+        shm: projection_file_stamp(&sqlite_sidecar_path(path, "-shm")),
+        journal: projection_file_stamp(&sqlite_sidecar_path(path, "-journal")),
+    }
+}
+
+fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut os = path.as_os_str().to_owned();
+    os.push(suffix);
+    PathBuf::from(os)
+}
+
+fn latest_rxdb_collection_table(
+    conn: &Connection,
+    collection: &str,
+) -> anyhow::Result<Option<String>> {
+    let marker = format!("__{collection}__v");
+    let mut stmt = conn
+        .prepare(
+            "SELECT name FROM sqlite_master
+             WHERE type = 'table'",
+        )
+        .with_context(|| format!("prepare {collection} RxDB table lookup"))?;
+    let mut rows = stmt
+        .query([])
+        .with_context(|| format!("query {collection} RxDB tables"))?;
+    let mut latest: Option<(i64, String)> = None;
+    while let Some(row) = rows.next()? {
+        let table: String = row.get(0)?;
+        let Some(version) = rxdb_collection_version_from_dynamic_table_name(&table, &marker) else {
+            continue;
+        };
+        if latest
+            .as_ref()
+            .is_none_or(|(latest_version, _)| version > *latest_version)
+        {
+            latest = Some((version, table));
+        }
+    }
+    Ok(latest.map(|(_, table)| table))
+}
+
+fn rxdb_collection_version_from_dynamic_table_name(table: &str, marker: &str) -> Option<i64> {
+    let (_, suffix) = table.rsplit_once(marker)?;
+    if suffix.is_empty() || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    suffix.parse().ok()
+}
+
+fn sqlite_quote_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
+fn sqlite_quote_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
 async fn sync_channel_state_with_database_if_changed(
     root: &Path,
     database: &Arc<RxDatabase>,
     last_projection_stamp: &mut Option<ChannelStateProjectionStamp>,
 ) -> anyhow::Result<usize> {
-    let root_for_stamp = root.to_path_buf();
-    let projection_stamp =
-        tokio::task::spawn_blocking(move || channel_state_projection_stamp(&root_for_stamp))
-            .await
-            .context("join native channel state projection stamp")??;
+    let projection_stamp = channel_state_projection_stamp_async(root).await?;
     if last_projection_stamp.as_ref() == Some(&projection_stamp) {
         return Ok(0);
     }
@@ -5822,6 +7657,15 @@ async fn sync_channel_state_with_database_if_changed(
     let synced = sync_channel_state_with_database(root, database).await?;
     *last_projection_stamp = Some(projection_stamp);
     Ok(synced)
+}
+
+async fn channel_state_projection_stamp_async(
+    root: &Path,
+) -> anyhow::Result<ChannelStateProjectionStamp> {
+    let root_for_stamp = root.to_path_buf();
+    tokio::task::spawn_blocking(move || channel_state_projection_stamp(&root_for_stamp))
+        .await
+        .context("join native channel state projection stamp")?
 }
 
 async fn sync_channel_state_with_database(
@@ -6220,12 +8064,14 @@ fn channel_pairing_state_document(channel: String, state: Value, now: u128) -> V
 }
 
 async fn upsert_desktop_file_with_policy(
+    root: &Path,
     database: &Arc<RxDatabase>,
     path: PathBuf,
     policy: DesktopFileContentPolicy,
 ) -> anyhow::Result<()> {
     let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
     upsert_desktop_file_with_parent(
+        root,
         database,
         path,
         policy,
@@ -6316,6 +8162,8 @@ async fn desktop_file_chunk_generation_is_complete(
     generation_id: &str,
     size_bytes: u64,
 ) -> bool {
+    #[cfg(test)]
+    DESKTOP_FILE_CHUNK_COMPLETENESS_CHECKS.fetch_add(1, Ordering::Relaxed);
     if generation_id.is_empty() {
         return false;
     }
@@ -6361,6 +8209,7 @@ async fn desktop_file_chunk_generation_is_complete(
 }
 
 async fn upsert_desktop_file_with_parent(
+    root: &Path,
     database: &Arc<RxDatabase>,
     path: PathBuf,
     policy: DesktopFileContentPolicy,
@@ -6450,8 +8299,9 @@ async fn upsert_desktop_file_with_parent(
             }
         };
         if same_location && same_stat && not_deleted && content_ready {
-            // Self-healing: only skip when the indexed generation's chunks
-            // are actually (still) complete in the chunk store.
+            // Self-healing is expensive for large materialized files, so use
+            // the persisted verification marker first. Full chunk verification
+            // is reserved for generations that have not been verified yet.
             let chunks_complete = match policy {
                 DesktopFileContentPolicy::Eager => {
                     let generation = doc
@@ -6461,29 +8311,14 @@ async fn upsert_desktop_file_with_parent(
                     if desktop_file_generation_verified_by_metadata(doc, generation, metadata.len())
                     {
                         true
-                    } else {
-                        desktop_file_chunk_generation_is_complete(
-                            database,
-                            &file_id,
-                            generation,
-                            metadata.len(),
-                        )
-                        .await
-                    }
-                }
-                DesktopFileContentPolicy::Lazy => true,
-            };
-            if chunks_complete {
-                if policy == DesktopFileContentPolicy::Eager {
-                    let generation = doc
-                        .get("content_generation_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    if !desktop_file_generation_verified_by_metadata(
-                        doc,
+                    } else if desktop_file_chunk_generation_is_complete(
+                        database,
+                        &file_id,
                         generation,
                         metadata.len(),
-                    ) {
+                    )
+                    .await
+                    {
                         mark_desktop_file_chunk_generation_verified(
                             &files,
                             doc,
@@ -6491,109 +8326,115 @@ async fn upsert_desktop_file_with_parent(
                             now,
                         )
                         .await?;
+                        true
+                    } else {
+                        false
                     }
                 }
+                DesktopFileContentPolicy::Lazy => true,
+            };
+            if chunks_complete {
                 return Ok(());
             }
         }
     }
 
-    let (content_hash, content_generation_id, active_generation_id) =
-        if policy == DesktopFileContentPolicy::Eager {
-            let bytes = fs::read(&path)
-                .with_context(|| format!("failed to read desktop file {}", path.display()))?;
-            let content_hash = hex_sha256(&bytes);
-            // Same content as the indexed generation (e.g. touch / metadata
-            // change): keep the replicated generation and its chunks instead
-            // of rotating a byte-identical copy through the data plane.
-            let reused_generation_id = existing_file_doc.as_ref().and_then(|doc| {
-                if doc.get("content_hash").and_then(Value::as_str) != Some(content_hash.as_str())
-                    || doc.get("content_state").and_then(Value::as_str) != Some("available")
-                {
-                    return None;
-                }
-                doc.get("content_generation_id")
-                    .and_then(Value::as_str)
-                    .filter(|generation| !generation.is_empty())
-                    .map(str::to_string)
+    let (content_hash, content_generation_id, active_generation_id) = if policy
+        == DesktopFileContentPolicy::Eager
+    {
+        let bytes = fs::read(&path)
+            .with_context(|| format!("failed to read desktop file {}", path.display()))?;
+        let content_hash = hex_sha256(&bytes);
+        // Same content as the indexed generation (e.g. touch / metadata
+        // change): keep the replicated generation and its chunks instead
+        // of rotating a byte-identical copy through the data plane.
+        let reused_generation_id = existing_file_doc.as_ref().and_then(|doc| {
+            if doc.get("content_hash").and_then(Value::as_str) != Some(content_hash.as_str())
+                || doc.get("content_state").and_then(Value::as_str) != Some("available")
+            {
+                return None;
+            }
+            doc.get("content_generation_id")
+                .and_then(Value::as_str)
+                .filter(|generation| !generation.is_empty())
+                .map(str::to_string)
+        });
+        // Reuse only a generation whose chunks are complete; otherwise
+        // fall through to a full rewrite (self-healing repair).
+        let mut reused_generation_id = reused_generation_id;
+        if let Some(generation) = reused_generation_id.as_deref() {
+            let metadata_verified = existing_file_doc.as_ref().is_some_and(|doc| {
+                desktop_file_generation_verified_by_metadata(doc, generation, metadata.len())
             });
-            // Reuse only a generation whose chunks are complete; otherwise
-            // fall through to a full rewrite (self-healing repair).
-            let mut reused_generation_id = reused_generation_id;
-            if let Some(generation) = reused_generation_id.as_deref() {
-                let verified_by_metadata = existing_file_doc.as_ref().is_some_and(|doc| {
-                    desktop_file_generation_verified_by_metadata(doc, generation, metadata.len())
-                });
-                if !verified_by_metadata
-                    && !desktop_file_chunk_generation_is_complete(
-                        database,
-                        &file_id,
-                        generation,
-                        metadata.len(),
-                    )
-                    .await
-                {
-                    reused_generation_id = None;
-                }
-            }
-            if let Some(generation_id) = reused_generation_id {
-                (
-                    content_hash,
-                    Value::String(generation_id.clone()),
-                    Some(generation_id),
+            if !metadata_verified
+                && !desktop_file_chunk_generation_is_complete(
+                    database,
+                    &file_id,
+                    generation,
+                    metadata.len(),
                 )
-            } else {
-                let generation_suffix = content_hash.get(..12).unwrap_or(content_hash.as_str());
-                let generation_id = format!("gen_{now}_{generation_suffix}");
-                let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                let total = encoded.len().div_ceil(DESKTOP_FILE_CHUNK_SIZE).max(1);
-                let chunks = database
-                    .collection("desktop_file_chunks")
-                    .context("desktop_file_chunks collection is not registered")?;
-
-                let chunk_payloads: Vec<&str> = if encoded.is_empty() {
-                    vec![""]
-                } else {
-                    encoded
-                        .as_bytes()
-                        .chunks(DESKTOP_FILE_CHUNK_SIZE)
-                        .map(|chunk| std::str::from_utf8(chunk).unwrap_or_default())
-                        .collect()
-                };
-                for (idx, data) in chunk_payloads.into_iter().enumerate() {
-                    let chunk_hash = hex_sha256(data.as_bytes());
-                    chunks
-                        .incremental_upsert(json!({
-                            "id": format!("{file_id}_{generation_id}_{idx}"),
-                            "file_id": file_id,
-                            "generation_id": generation_id.clone(),
-                            "content_hash": content_hash.clone(),
-                            "content_hash_scheme": DESKTOP_FILE_CONTENT_HASH_SCHEME,
-                            "idx": idx as u64,
-                            "total": total as u64,
-                            "encoding": "base64",
-                            "data": data,
-                            "chunk_hash": chunk_hash,
-                            "chunk_hash_scheme": DESKTOP_FILE_CHUNK_HASH_SCHEME,
-                            "size_bytes": data.len() as u64,
-                            "created_at_ms": now,
-                        }))
-                        .await
-                        .map_err(|err| anyhow::anyhow!("upsert desktop file chunk {idx}: {err}"))?;
-                }
-                (
-                    content_hash,
-                    Value::String(generation_id.clone()),
-                    Some(generation_id),
-                )
+                .await
+            {
+                reused_generation_id = None;
             }
-        } else {
+        }
+        if let Some(generation_id) = reused_generation_id {
             (
-                format!("mtime:{modified_at_ms}:size:{}", metadata.len()),
-                Value::Null,
-                None,
+                content_hash,
+                Value::String(generation_id.clone()),
+                Some(generation_id),
             )
-        };
+        } else {
+            let generation_suffix = content_hash.get(..12).unwrap_or(content_hash.as_str());
+            let generation_id = format!("gen_{now}_{generation_suffix}");
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            let total = encoded.len().div_ceil(DESKTOP_FILE_CHUNK_SIZE).max(1);
+            let chunks = database
+                .collection("desktop_file_chunks")
+                .context("desktop_file_chunks collection is not registered")?;
+
+            let chunk_payloads: Vec<&str> = if encoded.is_empty() {
+                vec![""]
+            } else {
+                encoded
+                    .as_bytes()
+                    .chunks(DESKTOP_FILE_CHUNK_SIZE)
+                    .map(|chunk| std::str::from_utf8(chunk).unwrap_or_default())
+                    .collect()
+            };
+            let mut chunk_documents = Vec::with_capacity(chunk_payloads.len());
+            for (idx, data) in chunk_payloads.into_iter().enumerate() {
+                let chunk_hash = hex_sha256(data.as_bytes());
+                chunk_documents.push(json!({
+                    "id": format!("{file_id}_{generation_id}_{idx}"),
+                    "file_id": file_id,
+                    "generation_id": generation_id.clone(),
+                    "content_hash": content_hash.clone(),
+                    "content_hash_scheme": DESKTOP_FILE_CONTENT_HASH_SCHEME,
+                    "idx": idx as u64,
+                    "total": total as u64,
+                    "encoding": "base64",
+                    "data": data,
+                    "chunk_hash": chunk_hash,
+                    "chunk_hash_scheme": DESKTOP_FILE_CHUNK_HASH_SCHEME,
+                    "size_bytes": data.len() as u64,
+                    "created_at_ms": now,
+                }));
+            }
+            bulk_upsert_or_error(&chunks, chunk_documents, "upsert desktop file chunks").await?;
+            (
+                content_hash,
+                Value::String(generation_id.clone()),
+                Some(generation_id),
+            )
+        }
+    } else {
+        (
+            format!("mtime:{modified_at_ms}:size:{}", metadata.len()),
+            Value::Null,
+            None,
+        )
+    };
 
     ensure_ctox_desktop_folder(database, now).await?;
     let now_u64 = u64::try_from(now).unwrap_or(u64::MAX);
@@ -6653,7 +8494,8 @@ async fn upsert_desktop_file_with_parent(
         .map_err(|err| anyhow::anyhow!("upsert desktop file row: {err}"))?;
 
     if let Some(active_generation_id) = active_generation_id.as_deref() {
-        prune_desktop_file_chunk_generations(database, &file_id, active_generation_id).await?;
+        prune_desktop_file_chunk_generations(root, database, &file_id, active_generation_id)
+            .await?;
     }
 
     Ok(())
@@ -6695,10 +8537,10 @@ const DEMAND_FILE_CHUNK_COLLECTIONS: &[DemandFileChunkCollection] = &[
 /// Phase 4: register a bounded-memory file stream source on the pool's file
 /// fetch registry for each file-bearing chunk collection that is actually
 /// registered on this database. Without this, `rxdb.file.fetch` always returns
-/// FILE_NOT_FOUND (no source). The source closure is sync (it owns the read
-/// loop); it `block_on`s the async storage query to fetch the chunk docs, then
-/// emits decoded bytes chunk-by-chunk so server RAM stays bounded to one chunk.
-fn register_demand_file_sources(pool: &WebRtcPool, database: &Arc<RxDatabase>) {
+/// FILE_NOT_FOUND (no source). The source closure is sync and reads the local
+/// RxDB SQLite store through read-only queries; the file-fetch dispatcher runs
+/// it on a blocking worker and applies async transport backpressure.
+fn register_demand_file_sources(pool: &WebRtcPool, database: &Arc<RxDatabase>, root: &Path) {
     for source_config in DEMAND_FILE_CHUNK_COLLECTIONS {
         // Only register sources whose backing storage collection exists (the
         // catalog is fault-tolerant; optional chunk collections may be absent).
@@ -6708,7 +8550,7 @@ fn register_demand_file_sources(pool: &WebRtcPool, database: &Arc<RxDatabase>) {
         {
             continue;
         }
-        let database = Arc::clone(database);
+        let root = root.to_path_buf();
         let request_collection = source_config.request_collection;
         let storage_collection = source_config.storage_collection.to_string();
         let key_field = source_config.key_field.to_string();
@@ -6716,7 +8558,7 @@ fn register_demand_file_sources(pool: &WebRtcPool, database: &Arc<RxDatabase>) {
         let source: Arc<rxdb::plugins::replication_webrtc::file_fetch_handler::FileChunkStreamFn> =
             Arc::new(move |_collection, file_id, range, emit| {
                 stream_demand_file_chunks(
-                    &database,
+                    &root,
                     &storage_collection,
                     &closure_key_field,
                     file_id,
@@ -6741,56 +8583,37 @@ fn register_demand_file_sources(pool: &WebRtcPool, database: &Arc<RxDatabase>) {
 /// missing or the query fails; emits nothing (→ FILE_NOT_FOUND upstream) when
 /// the file has no chunks.
 fn stream_demand_file_chunks(
-    database: &Arc<RxDatabase>,
+    root: &Path,
     collection: &str,
     key_field: &str,
     file_id: &str,
-    range: Option<&rxdb::plugins::replication_webrtc::file_fetch_handler::FileRange>,
+    range: Option<&FileRange>,
     emit: &mut dyn FnMut(&[u8]) -> rxdb::rx_error::RxResult<bool>,
 ) -> rxdb::rx_error::RxResult<()> {
-    let chunk_collection = database.collection(collection).ok_or_else(|| {
-        rxdb::rx_error::new_rx_error(
-            "RC_WEBRTC_PEER",
-            Some(json!({
-                "message": format!("demand-fetch collection {collection} is not registered"),
-            })),
-        )
-    })?;
+    let mut stats = DemandFileFetchRequestStats::new(range);
+    let result = stream_demand_file_chunks_inner(
+        root, collection, key_field, file_id, range, emit, &mut stats,
+    );
+    stats.finish();
+    DEMAND_FILE_FETCH_METRICS.record(&stats, result.is_ok());
+    result
+}
+
+fn stream_demand_file_chunks_inner(
+    root: &Path,
+    collection: &str,
+    key_field: &str,
+    file_id: &str,
+    range: Option<&FileRange>,
+    emit: &mut dyn FnMut(&[u8]) -> rxdb::rx_error::RxResult<bool>,
+    stats: &mut DemandFileFetchRequestStats,
+) -> rxdb::rx_error::RxResult<()> {
     let mut chunk_rows = if collection == "desktop_file_chunks" {
-        match active_desktop_file_metadata(database, file_id) {
-            Some(metadata) => desktop_file_chunk_rows_by_id(
-                &chunk_collection,
-                file_id,
-                &metadata.generation_id,
-                metadata.size_bytes,
-            )?,
-            None => Vec::new(),
-        }
+        active_desktop_file_chunk_rows_from_sqlite(root, file_id, range, stats)?
     } else {
-        let query = MangoQuery {
-            selector: Some(json!({ key_field: { "$eq": file_id } })),
-            ..Default::default()
-        };
-        // The stream source closure is sync, but the file-fetch dispatcher runs it
-        // inside a tokio task (`tokio::spawn` in index_mod.rs). `block_in_place`
-        // hands the blocking work to a dedicated worker so the async storage query
-        // can be driven to completion without stalling the runtime, keeping the
-        // file-read loop owned by this closure (bounded memory, no full-file
-        // materialization on the wire).
-        let prepared = chunk_collection.find(Some(query))?;
-        let rows = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                prepared.exec(false).await.map_err(|err| {
-                    rxdb::rx_error::new_rx_error(
-                        "RC_WEBRTC_PEER",
-                        Some(json!({
-                            "message": format!("query {collection} chunks for {file_id}: {err}"),
-                        })),
-                    )
-                })
-            })
-        })?;
-        rows.as_array().cloned().unwrap_or_default()
+        demand_file_chunk_rows_for_key_from_sqlite(
+            root, collection, key_field, file_id, None, None, stats,
+        )?
     };
     // Order by `idx` so the reassembled byte stream is correct.
     chunk_rows.sort_by_key(|chunk: &Value| chunk.get("idx").and_then(Value::as_u64).unwrap_or(0));
@@ -6818,6 +8641,10 @@ fn stream_demand_file_chunks(
                     })),
                 )
             })?;
+        stats.chunks_decoded = stats.chunks_decoded.saturating_add(1);
+        stats.bytes_decoded = stats
+            .bytes_decoded
+            .saturating_add(u64::try_from(decoded.len()).unwrap_or(u64::MAX));
         let chunk_start = emitted_offset;
         let chunk_end = emitted_offset.saturating_add(decoded.len() as u64);
         emitted_offset = chunk_end;
@@ -6835,8 +8662,33 @@ fn stream_demand_file_chunks(
         if !emit(slice)? {
             break;
         }
+        stats.bytes_emitted = stats
+            .bytes_emitted
+            .saturating_add(u64::try_from(slice.len()).unwrap_or(u64::MAX));
     }
     Ok(())
+}
+
+fn desktop_file_chunk_index_window(size_bytes: u64, range: Option<&FileRange>) -> (u64, u64) {
+    let expected_total = expected_desktop_file_chunk_total(size_bytes);
+    let Some(range) = range else {
+        return (0, expected_total);
+    };
+    if range.length == 0 || range.offset >= size_bytes {
+        return (0, 0);
+    }
+    let end = range.offset.saturating_add(range.length).min(size_bytes);
+    if end <= range.offset {
+        return (0, 0);
+    }
+    let start_idx = range.offset / DESKTOP_FILE_CHUNK_DECODED_SIZE;
+    let end_idx = end
+        .saturating_sub(1)
+        .checked_div(DESKTOP_FILE_CHUNK_DECODED_SIZE)
+        .unwrap_or(0)
+        .saturating_add(1)
+        .min(expected_total);
+    (start_idx.min(expected_total), end_idx)
 }
 
 struct DesktopFileDemandMetadata {
@@ -6844,73 +8696,178 @@ struct DesktopFileDemandMetadata {
     size_bytes: u64,
 }
 
-fn active_desktop_file_metadata(
-    database: &Arc<RxDatabase>,
+fn demand_file_source_error(message: impl Into<String>) -> rxdb::rx_error::RxError {
+    rxdb::rx_error::new_rx_error("RC_WEBRTC_PEER", Some(json!({ "message": message.into() })))
+}
+
+fn active_desktop_file_chunk_rows_from_sqlite(
+    root: &Path,
     file_id: &str,
-) -> Option<DesktopFileDemandMetadata> {
-    let files = database.collection("desktop_files")?;
-    let ids = vec![file_id.to_string()];
-    let mut file_rows = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
-            files
-                .storage_instance
-                .find_documents_by_id(&ids, false)
-                .await
-                .ok()
-        })
+    range: Option<&FileRange>,
+    stats: &mut DemandFileFetchRequestStats,
+) -> rxdb::rx_error::RxResult<Vec<Value>> {
+    let database_path = store::rxdb_store_path(root);
+    if !database_path.exists() {
+        return Ok(Vec::new());
+    }
+    let conn = Connection::open_with_flags(&database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|err| {
+            demand_file_source_error(format!(
+                "open RxDB store {} for desktop file fetch: {err}",
+                database_path.display()
+            ))
+        })?;
+    if !sqlite_table_exists(&conn, "ctox_business_os__desktop_files__v0")
+        .map_err(|err| demand_file_source_error(format!("inspect desktop_files table: {err}")))?
+        || !sqlite_table_exists(&conn, "ctox_business_os__desktop_file_chunks__v0").map_err(
+            |err| demand_file_source_error(format!("inspect desktop_file_chunks table: {err}")),
+        )?
+    {
+        return Ok(Vec::new());
+    }
+    let Some(metadata) = active_desktop_file_metadata_from_sqlite(&conn, file_id)? else {
+        return Ok(Vec::new());
+    };
+    let index_window = desktop_file_chunk_index_window(metadata.size_bytes, range);
+    if index_window.0 >= index_window.1 {
+        return Ok(Vec::new());
+    }
+    let canonical = desktop_file_chunk_rows_by_id_from_sqlite(
+        &conn,
+        file_id,
+        &metadata.generation_id,
+        metadata.size_bytes,
+        index_window,
+        stats,
+    )?;
+    let expected_range_total = index_window.1.saturating_sub(index_window.0);
+    if u64::try_from(canonical.len()).unwrap_or_default() >= expected_range_total {
+        return Ok(canonical);
+    }
+
+    let fallback = demand_file_chunk_rows_for_key_from_sqlite(
+        root,
+        "desktop_file_chunks",
+        "file_id",
+        file_id,
+        Some(metadata.generation_id.as_str()),
+        Some(index_window),
+        stats,
+    )?
+    .into_iter()
+    .filter(|chunk| {
+        chunk.get("generation_id").and_then(Value::as_str) == Some(metadata.generation_id.as_str())
+            && chunk
+                .get("idx")
+                .and_then(Value::as_u64)
+                .is_some_and(|idx| idx >= index_window.0 && idx < index_window.1)
+    })
+    .collect::<Vec<_>>();
+    if fallback.len() > canonical.len() {
+        return Ok(dedupe_desktop_file_chunks_by_idx(fallback));
+    }
+    Ok(canonical)
+}
+
+fn dedupe_desktop_file_chunks_by_idx(chunks: Vec<Value>) -> Vec<Value> {
+    let mut by_idx: BTreeMap<u64, Value> = BTreeMap::new();
+    for chunk in chunks {
+        let Some(idx) = chunk.get("idx").and_then(Value::as_u64) else {
+            continue;
+        };
+        by_idx.entry(idx).or_insert(chunk);
+    }
+    by_idx.into_values().collect()
+}
+
+fn active_desktop_file_metadata_from_sqlite(
+    conn: &Connection,
+    file_id: &str,
+) -> rxdb::rx_error::RxResult<Option<DesktopFileDemandMetadata>> {
+    let file_json = conn
+        .query_row(
+            "SELECT data FROM ctox_business_os__desktop_files__v0 \
+             WHERE id = ?1 AND COALESCE(deleted, 0) = 0",
+            [file_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|err| demand_file_source_error(format!("read desktop file {file_id}: {err}")))?;
+    let Some(file_json) = file_json else {
+        return Ok(None);
+    };
+    let file_row: Value = serde_json::from_str(&file_json).map_err(|err| {
+        demand_file_source_error(format!("decode desktop file {file_id} metadata: {err}"))
     })?;
-    let file_row = file_rows.pop()?;
+    if file_row.get("content_state").and_then(Value::as_str) != Some("available") {
+        return Ok(None);
+    }
     let generation_id = file_row
         .get("content_generation_id")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .trim();
     if generation_id.is_empty() {
-        return None;
+        return Ok(None);
     }
-    Some(DesktopFileDemandMetadata {
+    Ok(Some(DesktopFileDemandMetadata {
         generation_id: generation_id.to_string(),
         size_bytes: file_row
             .get("size_bytes")
             .and_then(Value::as_u64)
             .unwrap_or_default(),
-    })
+    }))
 }
 
-fn desktop_file_chunk_rows_by_id(
-    chunks: &Arc<RxCollection>,
+fn desktop_file_chunk_rows_by_id_from_sqlite(
+    conn: &Connection,
     file_id: &str,
     generation_id: &str,
     size_bytes: u64,
+    index_window: (u64, u64),
+    stats: &mut DemandFileFetchRequestStats,
 ) -> rxdb::rx_error::RxResult<Vec<Value>> {
     let expected_total = expected_desktop_file_chunk_total(size_bytes);
-    let expected_total_usize = usize::try_from(expected_total).map_err(|err| {
+    let start_idx = usize::try_from(index_window.0).map_err(|err| {
         rxdb::rx_error::new_rx_error(
             "RC_WEBRTC_PEER",
             Some(json!({
-                "message": format!("desktop file chunk count overflow for {file_id}: {err}"),
+                "message": format!("desktop file chunk start overflow for {file_id}: {err}"),
             })),
         )
     })?;
-    let ids: Vec<String> = (0..expected_total_usize)
-        .map(|idx| format!("{file_id}_{generation_id}_{idx}"))
-        .collect();
-    let mut rows = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
-            chunks
-                .storage_instance
-                .find_documents_by_id(&ids, false)
-                .await
-                .map_err(|err| {
-                    rxdb::rx_error::new_rx_error(
-                        "RC_WEBRTC_PEER",
-                        Some(json!({
-                            "message": format!("load desktop file chunks by id for {file_id}: {err}"),
-                        })),
-                    )
-                })
-        })
+    let end_idx = usize::try_from(index_window.1).map_err(|err| {
+        rxdb::rx_error::new_rx_error(
+            "RC_WEBRTC_PEER",
+            Some(json!({
+                "message": format!("desktop file chunk end overflow for {file_id}: {err}"),
+            })),
+        )
     })?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT data FROM ctox_business_os__desktop_file_chunks__v0 \
+             WHERE id = ?1 AND COALESCE(deleted, 0) = 0",
+        )
+        .map_err(|err| demand_file_source_error(format!("prepare chunk lookup: {err}")))?;
+    let mut rows = Vec::with_capacity(end_idx.saturating_sub(start_idx));
+    for idx in start_idx..end_idx {
+        let chunk_id = format!("{file_id}_{generation_id}_{idx}");
+        let Some(raw) = stmt
+            .query_row([chunk_id.as_str()], |row| row.get::<_, String>(0))
+            .optional()
+            .map_err(|err| {
+                demand_file_source_error(format!("load desktop file chunk {chunk_id}: {err}"))
+            })?
+        else {
+            continue;
+        };
+        stats.rows_loaded = stats.rows_loaded.saturating_add(1);
+        let value = serde_json::from_str::<Value>(&raw).map_err(|err| {
+            demand_file_source_error(format!("decode desktop file chunk {chunk_id}: {err}"))
+        })?;
+        rows.push(value);
+    }
     rows.retain(|chunk| {
         chunk.get("file_id").and_then(Value::as_str) == Some(file_id)
             && chunk.get("generation_id").and_then(Value::as_str) == Some(generation_id)
@@ -6922,7 +8879,139 @@ fn desktop_file_chunk_rows_by_id(
     Ok(rows)
 }
 
+fn demand_file_chunk_rows_for_key_from_sqlite(
+    root: &Path,
+    collection: &str,
+    key_field: &str,
+    file_id: &str,
+    generation_id: Option<&str>,
+    index_window: Option<(u64, u64)>,
+    stats: &mut DemandFileFetchRequestStats,
+) -> rxdb::rx_error::RxResult<Vec<Value>> {
+    let database_path = store::rxdb_store_path(root);
+    if !database_path.exists() {
+        return Ok(Vec::new());
+    }
+    let conn = Connection::open_with_flags(&database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|err| {
+            demand_file_source_error(format!(
+                "open RxDB store {} for file fetch: {err}",
+                database_path.display()
+            ))
+        })?;
+    let table = rxdb_collection_version_table_name(collection, 0);
+    if !sqlite_table_exists(&conn, &table)
+        .map_err(|err| demand_file_source_error(format!("inspect {table} table: {err}")))?
+    {
+        return Ok(Vec::new());
+    }
+    if !key_field
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return Err(demand_file_source_error(format!(
+            "invalid demand-fetch key field {key_field}"
+        )));
+    }
+    let quoted_table = sqlite_quote_identifier(&table);
+    let key_path = format!("$.{key_field}");
+    let mut where_clauses = vec![
+        "COALESCE(deleted, 0) = 0".to_string(),
+        format!(
+            "json_extract(data, {}) = ?",
+            sqlite_quote_literal(&key_path)
+        ),
+    ];
+    let mut query_params = vec![SqlValue::Text(file_id.to_string())];
+    if let Some(generation_id) = generation_id {
+        where_clauses.push("json_extract(data, '$.generation_id') = ?".to_string());
+        query_params.push(SqlValue::Text(generation_id.to_string()));
+    }
+    if let Some((start_idx, end_idx)) = index_window {
+        where_clauses
+            .push("CAST(COALESCE(json_extract(data, '$.idx'), -1) AS INTEGER) >= ?".to_string());
+        query_params.push(SqlValue::Integer(
+            i64::try_from(start_idx).unwrap_or(i64::MAX),
+        ));
+        where_clauses
+            .push("CAST(COALESCE(json_extract(data, '$.idx'), -1) AS INTEGER) < ?".to_string());
+        query_params.push(SqlValue::Integer(
+            i64::try_from(end_idx).unwrap_or(i64::MAX),
+        ));
+    }
+    query_params.push(SqlValue::Integer(
+        i64::try_from(DESKTOP_FILE_CHUNK_CLEANUP_SCAN_LIMIT).unwrap_or(i64::MAX),
+    ));
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT data FROM {quoted_table}
+             WHERE {}
+             ORDER BY CAST(COALESCE(json_extract(data, '$.idx'), 0) AS INTEGER), id
+             LIMIT ?",
+            where_clauses.join(" AND ")
+        ))
+        .map_err(|err| demand_file_source_error(format!("prepare {collection} fetch: {err}")))?;
+    let rows = stmt
+        .query_map(params_from_iter(query_params), |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|err| demand_file_source_error(format!("query {collection} chunks: {err}")))?;
+    let mut chunks = Vec::new();
+    for row in rows {
+        let raw =
+            row.map_err(|err| demand_file_source_error(format!("read {collection} chunk: {err}")))?;
+        stats.rows_loaded = stats.rows_loaded.saturating_add(1);
+        let value = serde_json::from_str::<Value>(&raw).map_err(|err| {
+            demand_file_source_error(format!("decode {collection} chunk for {file_id}: {err}"))
+        })?;
+        chunks.push(value);
+    }
+    Ok(chunks)
+}
+
+fn desktop_file_chunk_rows_for_file_id(root: &Path, file_id: &str) -> anyhow::Result<Vec<Value>> {
+    const CHUNKS_TABLE: &str = "\"ctox_business_os__desktop_file_chunks__v0\"";
+
+    let database_path = store::rxdb_store_path(root);
+    if !database_path.exists() {
+        return Ok(Vec::new());
+    }
+    let conn = Connection::open_with_flags(&database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("open RxDB store {}", database_path.display()))?;
+    if !sqlite_table_exists(&conn, "ctox_business_os__desktop_file_chunks__v0")? {
+        return Ok(Vec::new());
+    }
+    let (chunk_id_lower, chunk_id_upper) = desktop_file_chunk_id_bounds(file_id);
+    let mut stmt = conn.prepare(&format!(
+        "SELECT data FROM {CHUNKS_TABLE}
+         WHERE id >= ?1
+           AND id < ?2
+           AND COALESCE(deleted, 0) = 0
+         LIMIT ?3"
+    ))?;
+    let rows = stmt.query_map(
+        params![
+            chunk_id_lower,
+            chunk_id_upper,
+            DESKTOP_FILE_CHUNK_CLEANUP_SCAN_LIMIT as i64
+        ],
+        |row| row.get::<_, String>(0),
+    )?;
+    let mut chunks = Vec::new();
+    for row in rows {
+        let raw = row?;
+        let Ok(value) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        if value.get("file_id").and_then(Value::as_str) == Some(file_id) {
+            chunks.push(value);
+        }
+    }
+    Ok(chunks)
+}
+
 async fn prune_desktop_file_chunk_generations(
+    root: &Path,
     database: &Arc<RxDatabase>,
     file_id: &str,
     active_generation_id: &str,
@@ -6930,17 +9019,7 @@ async fn prune_desktop_file_chunk_generations(
     let chunks = database
         .collection("desktop_file_chunks")
         .context("desktop_file_chunks collection is not registered")?;
-    let rows = chunks
-        .find(Some(MangoQuery {
-            selector: Some(json!({ "file_id": { "$eq": file_id } })),
-            limit: Some(DESKTOP_FILE_CHUNK_CLEANUP_SCAN_LIMIT),
-            ..Default::default()
-        }))
-        .map_err(|err| anyhow::anyhow!("query desktop file chunks for cleanup: {err}"))?
-        .exec(false)
-        .await
-        .map_err(|err| anyhow::anyhow!("exec desktop file chunk cleanup query: {err}"))?;
-    let chunk_rows = rows.as_array().cloned().unwrap_or_default();
+    let chunk_rows = desktop_file_chunk_rows_for_file_id(root, file_id)?;
     if chunk_rows.is_empty() {
         return Ok(0);
     }
@@ -6984,6 +9063,7 @@ async fn prune_desktop_file_chunk_generations(
 
     let removed = stale_chunks.len();
     let pruned_at_ms = now_ms();
+    let mut pruned_chunks = Vec::with_capacity(stale_chunks.len());
     for mut chunk in stale_chunks {
         if let Some(object) = chunk.as_object_mut() {
             object.insert("data".to_string(), Value::String(String::new()));
@@ -6995,12 +9075,33 @@ async fn prune_desktop_file_chunk_generations(
                 Value::String("stale_generation".to_string()),
             );
         }
-        chunks
-            .incremental_upsert(chunk)
-            .await
-            .map_err(|err| anyhow::anyhow!("redact stale desktop file chunk: {err}"))?;
+        pruned_chunks.push(chunk);
     }
+    bulk_upsert_or_error(&chunks, pruned_chunks, "redact stale desktop file chunks").await?;
     Ok(removed)
+}
+
+async fn bulk_upsert_or_error(
+    collection: &Arc<RxCollection>,
+    documents: Vec<Value>,
+    context: &str,
+) -> anyhow::Result<()> {
+    if documents.is_empty() {
+        return Ok(());
+    }
+    let result = collection
+        .bulk_upsert(documents)
+        .await
+        .map_err(|err| anyhow::anyhow!("{context}: {err}"))?;
+    if let Some(error) = result.error.first() {
+        anyhow::bail!(
+            "{context}: {} write error(s), first document {} status {}",
+            result.error.len(),
+            error.document_id,
+            error.status
+        );
+    }
+    Ok(())
 }
 
 fn desktop_file_chunk_generation_key(chunk: &Value) -> String {
@@ -7138,26 +9239,58 @@ async fn sync_desktop_file_index_with_database(
     sync_desktop_file_scan_roots_with_database(root, database, desktop_file_scan_roots(root)).await
 }
 
+async fn sync_desktop_file_index_with_database_if_changed(
+    root: &Path,
+    database: &Arc<RxDatabase>,
+    last_projection_stamp: &mut Option<DesktopFileIndexProjectionStamp>,
+) -> anyhow::Result<usize> {
+    sync_desktop_file_scan_roots_with_database_if_changed(
+        root,
+        database,
+        desktop_file_scan_roots(root),
+        last_projection_stamp,
+    )
+    .await
+}
+
 async fn sync_desktop_file_scan_roots_with_database(
     root: &Path,
     database: &Arc<RxDatabase>,
-    mut scan_roots: Vec<DesktopFileScanRoot>,
+    scan_roots: Vec<DesktopFileScanRoot>,
 ) -> anyhow::Result<usize> {
-    let mut indexed = 0usize;
-    normalize_desktop_file_scan_roots(&mut scan_roots);
-    let scan_roots_clone = scan_roots.clone();
-    let candidates = tokio::task::spawn_blocking(move || {
-        collect_desktop_file_index_candidates(&scan_roots_clone)
-    })
-    .await
-    .context("join native desktop file scanning candidates")?;
+    let scan = collect_desktop_file_index_scan(scan_roots).await?;
+    sync_desktop_file_scan_with_database(root, database, scan).await
+}
 
-    let candidate_count = candidates.len();
-    let mut seen_file_ids = HashSet::with_capacity(candidates.len());
+async fn sync_desktop_file_scan_roots_with_database_if_changed(
+    root: &Path,
+    database: &Arc<RxDatabase>,
+    scan_roots: Vec<DesktopFileScanRoot>,
+    last_projection_stamp: &mut Option<DesktopFileIndexProjectionStamp>,
+) -> anyhow::Result<usize> {
+    let scan = collect_desktop_file_index_scan(scan_roots).await?;
+    if last_projection_stamp.as_ref() == Some(&scan.stamp) {
+        return Ok(0);
+    }
+
+    let projection_stamp = scan.stamp.clone();
+    let indexed = sync_desktop_file_scan_with_database(root, database, scan).await?;
+    *last_projection_stamp = Some(projection_stamp);
+    Ok(indexed)
+}
+
+async fn sync_desktop_file_scan_with_database(
+    root: &Path,
+    database: &Arc<RxDatabase>,
+    scan: DesktopFileIndexScan,
+) -> anyhow::Result<usize> {
+    let candidate_count = scan.candidates.len();
+    let mut seen_file_ids = HashSet::with_capacity(scan.candidates.len());
+    let mut indexed = 0usize;
 
     // Acquire write lock specifically for the DB write iteration
     let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
-    for candidate in candidates {
+    for candidate in scan.candidates {
         let path = candidate.path;
         let metadata = match fs::metadata(&path) {
             Ok(metadata) if metadata.is_file() => metadata,
@@ -7174,6 +9307,7 @@ async fn sync_desktop_file_scan_roots_with_database(
         let parent_id =
             ensure_ctox_desktop_folder_path(database, now_ms(), &folder_components).await?;
         if let Err(err) = upsert_desktop_file_with_parent(
+            root,
             database,
             path.clone(),
             policy,
@@ -7192,7 +9326,8 @@ async fn sync_desktop_file_scan_roots_with_database(
         indexed += 1;
     }
     if candidate_count < DESKTOP_FILE_SCAN_MAX_FILES {
-        mark_missing_scanned_desktop_files(root, database, &scan_roots, &seen_file_ids).await?;
+        mark_missing_scanned_desktop_files(root, database, &scan.scan_roots, &seen_file_ids)
+            .await?;
     }
     Ok(indexed)
 }
@@ -7246,16 +9381,18 @@ fn compact_desktop_file_index_store_sync(
     ensure_desktop_file_index_query_indexes(&conn)?;
 
     let unsafe_files = {
-        let mut stmt = conn.prepare(&format!(
-            "SELECT id, revision, data FROM {FILES_TABLE} WHERE COALESCE(deleted, 0) = 0"
-        ))?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })?;
+        let unsafe_candidates_sql = unsafe_desktop_file_index_candidates_sql(FILES_TABLE);
+        let mut stmt = conn.prepare(&unsafe_candidates_sql)?;
+        let rows = stmt.query_map(
+            params![DESKTOP_FILE_INDEX_MAINTENANCE_FILE_LIMIT as i64],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )?;
         let mut unsafe_files = Vec::new();
         for row in rows {
             let (id, revision, data) = row?;
@@ -7362,6 +9499,28 @@ fn compact_desktop_file_index_store_sync(
     Ok(stats)
 }
 
+fn unsafe_desktop_file_index_candidates_sql(files_table: &str) -> String {
+    const PATH_EXPR: &str =
+        "COALESCE(json_extract(data, '$.local_path'), json_extract(data, '$.path'))";
+    format!(
+        "SELECT id, revision, data FROM {files_table} \
+         INDEXED BY ctox_business_os_desktop_files_live_core_idx
+         WHERE COALESCE(deleted, 0) = 0
+           AND json_extract(data, '$.source') = 'ctox-core'
+           AND json_extract(data, '$.kind') = 'file'
+           AND COALESCE(json_extract(data, '$.is_deleted'), 0) = 0
+           AND (
+             ({PATH_EXPR} >= '/tmp/' AND {PATH_EXPR} < '/tmp0')
+             OR ({PATH_EXPR} >= '/var/tmp/' AND {PATH_EXPR} < '/var/tmp0')
+             OR ({PATH_EXPR} >= '/var/folders/' AND {PATH_EXPR} < '/var/folders0')
+             OR ({PATH_EXPR} >= '/private/var/folders/' AND {PATH_EXPR} < '/private/var/folders0')
+             OR {PATH_EXPR} GLOB '*/.local/lib/ctox/*'
+             OR {PATH_EXPR} GLOB '*/.local/state/ctox/*'
+           )
+         LIMIT ?1"
+    )
+}
+
 fn desktop_file_chunk_id_bounds(file_id: &str) -> (String, String) {
     // Chunk IDs are "{file_id}_{generation_id}_{idx}". The upper bound uses
     // the next ASCII character after '_' so SQLite can use the primary-key
@@ -7425,6 +9584,22 @@ fn ensure_desktop_file_index_query_indexes(conn: &Connection) -> anyhow::Result<
         [],
     )
     .context("ensure desktop_files live ctox-core index")?;
+    if sqlite_table_exists(conn, "ctox_business_os__desktop_file_chunks__v0")?
+        && sqlite_table_has_column(conn, "ctox_business_os__desktop_file_chunks__v0", "deleted")?
+    {
+        conn.execute(
+            r#"
+            CREATE INDEX IF NOT EXISTS ctox_business_os_desktop_file_chunks_deleted_idx
+            ON "ctox_business_os__desktop_file_chunks__v0" (
+                COALESCE(deleted, 0),
+                id
+            )
+            WHERE COALESCE(deleted, 0) = 1
+            "#,
+            [],
+        )
+        .context("ensure desktop_file_chunks deleted index")?;
+    }
     Ok(())
 }
 
@@ -7491,6 +9666,145 @@ fn collect_desktop_file_index_candidates(
     }
     candidates.truncate(DESKTOP_FILE_SCAN_MAX_FILES);
     candidates
+}
+
+async fn collect_desktop_file_index_scan(
+    scan_roots: Vec<DesktopFileScanRoot>,
+) -> anyhow::Result<DesktopFileIndexScan> {
+    tokio::task::spawn_blocking(move || collect_desktop_file_index_scan_sync(scan_roots))
+        .await
+        .context("join native desktop file index scan")
+}
+
+fn collect_desktop_file_index_scan_sync(
+    mut scan_roots: Vec<DesktopFileScanRoot>,
+) -> DesktopFileIndexScan {
+    normalize_desktop_file_scan_roots(&mut scan_roots);
+    let mut candidates = collect_desktop_file_index_candidates(&scan_roots);
+    candidates.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then(left.scan_root.path.cmp(&right.scan_root.path))
+    });
+    let truncated = candidates.len() >= DESKTOP_FILE_SCAN_MAX_FILES;
+    let stamp = desktop_file_index_projection_stamp(&scan_roots, &candidates, truncated);
+    DesktopFileIndexScan {
+        scan_roots,
+        candidates,
+        stamp,
+    }
+}
+
+fn desktop_file_index_projection_stamp(
+    scan_roots: &[DesktopFileScanRoot],
+    candidates: &[DesktopFileIndexCandidate],
+    truncated: bool,
+) -> DesktopFileIndexProjectionStamp {
+    let mut hasher = sha2::Sha256::new();
+    for scan_root in scan_roots {
+        update_hash_with_string(&mut hasher, &scan_root.path.to_string_lossy());
+        update_hash_with_string(&mut hasher, &scan_root.label);
+    }
+    for candidate in candidates {
+        update_hash_with_string(&mut hasher, &candidate.path.to_string_lossy());
+        update_hash_with_string(&mut hasher, &candidate.scan_root.path.to_string_lossy());
+        update_hash_with_string(&mut hasher, &candidate.scan_root.label);
+        let metadata = fs::metadata(&candidate.path);
+        match metadata {
+            Ok(metadata) if metadata.is_file() => {
+                hasher.update([1]);
+                hasher.update(metadata.len().to_le_bytes());
+                hasher.update(metadata_modified_at_ms(&metadata).to_le_bytes());
+                hasher.update([u8::from(should_eager_sync_file(&candidate.path, &metadata))]);
+            }
+            _ => {
+                hasher.update([0]);
+            }
+        }
+    }
+    DesktopFileIndexProjectionStamp {
+        scan_root_count: scan_roots.len(),
+        candidate_count: candidates.len(),
+        truncated,
+        content_hash: format!("{:x}", hasher.finalize()),
+    }
+}
+
+fn desktop_file_scan_roots_stamp(scan_roots: &[DesktopFileScanRoot]) -> DesktopFileScanRootsStamp {
+    let mut hasher = sha2::Sha256::new();
+    for scan_root in scan_roots {
+        update_hash_with_string(&mut hasher, &scan_root.path.to_string_lossy());
+        update_hash_with_string(&mut hasher, &scan_root.label);
+        match fs::metadata(&scan_root.path) {
+            Ok(metadata) if metadata.is_dir() => {
+                hasher.update([1]);
+                hasher.update(metadata.len().to_le_bytes());
+                hasher.update(metadata_modified_at_ms(&metadata).to_le_bytes());
+            }
+            _ => {
+                hasher.update([0]);
+                continue;
+            }
+        }
+
+        let mut entries = Vec::new();
+        if let Ok(read_dir) = fs::read_dir(&scan_root.path) {
+            for entry in read_dir.flatten() {
+                let path = entry.path();
+                let Some(name) = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_string)
+                else {
+                    continue;
+                };
+                let Ok(metadata) = entry.metadata() else {
+                    continue;
+                };
+                entries.push((
+                    name,
+                    metadata.is_dir(),
+                    metadata.is_file(),
+                    metadata.len(),
+                    metadata_modified_at_ms(&metadata),
+                ));
+            }
+        }
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        hasher.update(entries.len().to_le_bytes());
+        for (name, is_dir, is_file, len, modified_at_ms) in entries {
+            update_hash_with_string(&mut hasher, &name);
+            hasher.update([u8::from(is_dir), u8::from(is_file)]);
+            hasher.update(len.to_le_bytes());
+            hasher.update(modified_at_ms.to_le_bytes());
+        }
+    }
+    DesktopFileScanRootsStamp {
+        scan_root_count: scan_roots.len(),
+        content_hash: format!("{:x}", hasher.finalize()),
+    }
+}
+
+fn desktop_file_index_should_collect_scan(
+    last_scan_roots_stamp: Option<&DesktopFileScanRootsStamp>,
+    last_full_scan_at: Option<SystemTime>,
+    scan_roots_stamp: &DesktopFileScanRootsStamp,
+    now: SystemTime,
+) -> bool {
+    if last_scan_roots_stamp != Some(scan_roots_stamp) {
+        return true;
+    }
+    let Some(last_full_scan_at) = last_full_scan_at else {
+        return true;
+    };
+    now.duration_since(last_full_scan_at)
+        .map(|elapsed| elapsed >= Duration::from_secs(DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS))
+        .unwrap_or(true)
+}
+
+fn update_hash_with_string(hasher: &mut sha2::Sha256, value: &str) {
+    hasher.update(value.len().to_le_bytes());
+    hasher.update(value.as_bytes());
 }
 
 fn normalize_desktop_file_scan_roots(roots: &mut Vec<DesktopFileScanRoot>) {
@@ -8763,6 +11077,29 @@ mod tests {
     }
 
     #[test]
+    fn notes_sync_sleep_backs_off_after_unchanged_round_and_resets_on_change() {
+        assert_eq!(
+            notes_sync_sleep_interval(0),
+            Duration::from_secs(NOTES_SYNC_ACTIVE_INTERVAL_SECS)
+        );
+
+        let mut unchanged_ticks = 0;
+        notes_sync_update_idle_ticks(&mut unchanged_ticks, false);
+        assert_eq!(unchanged_ticks, 1);
+        assert_eq!(
+            notes_sync_sleep_interval(unchanged_ticks),
+            Duration::from_secs(NOTES_SYNC_IDLE_INTERVAL_SECS)
+        );
+
+        notes_sync_update_idle_ticks(&mut unchanged_ticks, true);
+        assert_eq!(unchanged_ticks, 0);
+        assert_eq!(
+            notes_sync_sleep_interval(unchanged_ticks),
+            Duration::from_secs(NOTES_SYNC_ACTIVE_INTERVAL_SECS)
+        );
+    }
+
+    #[test]
     fn business_command_poll_sleep_backs_off_after_idle_round() {
         assert_eq!(
             business_command_poll_sleep_secs(0),
@@ -8776,6 +11113,181 @@ mod tests {
             business_command_poll_sleep_secs(u32::MAX),
             BUSINESS_COMMAND_IDLE_POLL_SECS
         );
+    }
+
+    #[test]
+    fn browser_runtime_maintenance_sleep_backs_off_after_idle_round() {
+        assert_eq!(
+            browser_runtime_maintenance_sleep(0),
+            Duration::from_millis(BROWSER_RUNTIME_ACTIVE_MAINTENANCE_INTERVAL_MS)
+        );
+        assert_eq!(
+            browser_runtime_maintenance_sleep(1),
+            Duration::from_secs(BROWSER_RUNTIME_IDLE_MAINTENANCE_INTERVAL_SECS)
+        );
+        assert_eq!(
+            browser_runtime_maintenance_sleep(u32::MAX),
+            Duration::from_secs(BROWSER_RUNTIME_IDLE_MAINTENANCE_INTERVAL_SECS)
+        );
+    }
+
+    #[test]
+    fn business_command_idle_gate_skips_when_no_pending_commands() {
+        let root = tempfile::tempdir().expect("temp root");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let database = open_test_database(store::rxdb_store_path(root.path()))
+                .await
+                .expect("open rxdb sqlite");
+            database
+                .add_collections(collection_creators())
+                .await
+                .expect("register collections");
+
+            let mut last_source_stamp = None;
+            assert!(
+                business_commands_source_change(root.path(), &mut last_source_stamp)
+                    .await
+                    .expect("first command source stamp")
+                    .is_none()
+            );
+            refresh_business_commands_source_stamp(root.path(), &mut last_source_stamp)
+                .await
+                .expect("refresh first command source stamp");
+            assert!(
+                business_commands_source_change(root.path(), &mut last_source_stamp)
+                    .await
+                    .expect("unchanged command source stamp")
+                    .is_none()
+            );
+
+            let commands = database
+                .collection("business_commands")
+                .expect("business_commands collection");
+            commands
+                .insert(json!({
+                    "id": "cmd_idle_gate_pending",
+                    "command_id": "cmd_idle_gate_pending",
+                    "module": "ctox",
+                    "command_type": "business_os.test",
+                    "record_id": "",
+                    "status": "pending_sync",
+                    "inbound_channel": "ctox",
+                    "payload": { "title": "Idle gate pending command" },
+                    "client_context": {},
+                    "updated_at_ms": now_ms() as u64
+                }))
+                .await
+                .expect("insert pending command");
+
+            assert!(
+                business_commands_source_change(root.path(), &mut last_source_stamp)
+                    .await
+                    .expect("changed command source stamp")
+                    .is_some()
+            );
+            refresh_business_commands_source_stamp(root.path(), &mut last_source_stamp)
+                .await
+                .expect("refresh changed command source stamp");
+            assert!(
+                business_commands_source_change(root.path(), &mut last_source_stamp)
+                    .await
+                    .expect("pending command source stamp after refresh")
+                    .is_some()
+            );
+
+            commands
+                .incremental_upsert(json!({
+                    "id": "cmd_idle_gate_pending",
+                    "command_id": "cmd_idle_gate_pending",
+                    "module": "ctox",
+                    "command_type": "business_os.test",
+                    "record_id": "",
+                    "status": "accepted",
+                    "inbound_channel": "ctox",
+                    "payload": { "title": "Idle gate pending command" },
+                    "client_context": {},
+                    "updated_at_ms": now_ms() as u64
+                }))
+                .await
+                .expect("mark command accepted");
+            refresh_business_commands_source_stamp(root.path(), &mut last_source_stamp)
+                .await
+                .expect("refresh accepted command source stamp");
+            assert!(
+                business_commands_source_change(root.path(), &mut last_source_stamp)
+                    .await
+                    .expect("accepted command source stamp")
+                    .is_none()
+            );
+        });
+    }
+
+    #[test]
+    fn business_command_idle_wait_wakes_on_rxdb_table_change() {
+        let root = tempfile::tempdir().expect("temp root");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let database = open_test_database(store::rxdb_store_path(root.path()))
+                .await
+                .expect("open rxdb sqlite");
+            database
+                .add_collections(collection_creators())
+                .await
+                .expect("register collections");
+
+            let source_stamp = business_commands_source_stamp(root.path())
+                .await
+                .expect("command source stamp");
+            assert!(
+                source_stamp.table.table_name.is_some(),
+                "business_commands table should be registered"
+            );
+
+            let wait_root = root.path().to_path_buf();
+            let wait_stamp = source_stamp.clone();
+            let waiter = tokio::spawn(async move {
+                wait_for_business_command_wake(
+                    &wait_root,
+                    Some(&wait_stamp),
+                    BUSINESS_COMMAND_IDLE_BACKOFF_AFTER_TICKS,
+                )
+                .await;
+            });
+            tokio::time::sleep(Duration::from_millis(25)).await;
+
+            let commands = database
+                .collection("business_commands")
+                .expect("business_commands collection");
+            commands
+                .insert(json!({
+                    "id": "cmd_idle_wait_wake",
+                    "command_id": "cmd_idle_wait_wake",
+                    "module": "ctox",
+                    "command_type": "business_os.test",
+                    "record_id": "",
+                    "status": "pending_sync",
+                    "inbound_channel": "ctox",
+                    "payload": { "title": "Idle wait wake command" },
+                    "client_context": {},
+                    "updated_at_ms": now_ms() as u64
+                }))
+                .await
+                .expect("insert pending command");
+
+            tokio::time::timeout(Duration::from_millis(750), waiter)
+                .await
+                .expect("business command idle wait should wake on table notify")
+                .expect("waiter task should not panic");
+        });
     }
 
     #[test]
@@ -9052,6 +11564,28 @@ mod tests {
         assert_eq!(status["running"], true);
         assert_eq!(status["heartbeat"]["fresh"], true);
         assert_eq!(status["peer_session_id"], "rxdb-rs-test");
+        assert_eq!(
+            status
+                .pointer("/performance/schema")
+                .and_then(Value::as_str),
+            Some("ctox.native_peer.performance.v1")
+        );
+        assert_eq!(
+            status
+                .pointer("/performance/rxdb_sqlite/schema")
+                .and_then(Value::as_str),
+            Some("ctox.rxdb.sqlite.runtime_counters.v1")
+        );
+        assert_eq!(
+            status
+                .pointer("/performance/rxdb_subjects/schema")
+                .and_then(Value::as_str),
+            Some("ctox.rxdb.subjects.runtime_counters.v1")
+        );
+        assert!(status
+            .pointer("/performance/rxdb_subjects/lagged_items_total")
+            .and_then(Value::as_u64)
+            .is_some());
         assert!(is_native_peer_running_for_root(root.path()));
     }
 
@@ -9286,9 +11820,439 @@ mod tests {
         );
     }
 
-    // Multi-thread flavor: `stream_demand_file_chunks` uses
-    // `tokio::task::block_in_place`, which requires the multi-threaded runtime
-    // (matching production, where ctox runs on `rt-multi-thread`).
+    #[tokio::test]
+    async fn hot_business_os_schema_indexes_have_sqlite_query_plan_guards() {
+        let root = tempfile::tempdir().expect("temp root");
+        let database_path = root.path().join("hot-indexes.sqlite3");
+        let database = open_test_database(database_path.clone())
+            .await
+            .expect("open test database");
+        database
+            .add_collections(HashMap::from([
+                (
+                    "business_commands".to_string(),
+                    RxCollectionCreator {
+                        schema: business_os_schema("business_commands", "id"),
+                        conflict_handler: None,
+                        options: HashMap::new(),
+                    },
+                ),
+                (
+                    "ctox_queue_tasks".to_string(),
+                    RxCollectionCreator {
+                        schema: business_os_schema("ctox_queue_tasks", "id"),
+                        conflict_handler: None,
+                        options: HashMap::new(),
+                    },
+                ),
+                (
+                    "desktop_file_chunks".to_string(),
+                    RxCollectionCreator {
+                        schema: business_os_schema("desktop_file_chunks", "id"),
+                        conflict_handler: None,
+                        options: HashMap::new(),
+                    },
+                ),
+                (
+                    "browser_frames".to_string(),
+                    RxCollectionCreator {
+                        schema: business_os_schema("browser_frames", "id"),
+                        conflict_handler: None,
+                        options: HashMap::new(),
+                    },
+                ),
+                (
+                    "browser_input_events".to_string(),
+                    RxCollectionCreator {
+                        schema: business_os_schema("browser_input_events", "id"),
+                        conflict_handler: None,
+                        options: HashMap::new(),
+                    },
+                ),
+            ]))
+            .await
+            .expect("add hot collections");
+        let commands = database
+            .collection("business_commands")
+            .expect("business_commands collection");
+        let queue_tasks = database
+            .collection("ctox_queue_tasks")
+            .expect("ctox_queue_tasks collection");
+        let chunks = database
+            .collection("desktop_file_chunks")
+            .expect("desktop_file_chunks collection");
+        let browser_frames = database
+            .collection("browser_frames")
+            .expect("browser_frames collection");
+        let browser_input_events = database
+            .collection("browser_input_events")
+            .expect("browser_input_events collection");
+        for idx in 0..200 {
+            let command_status = if idx == 0 {
+                "pending_sync"
+            } else {
+                "completed"
+            };
+            let task_status = if idx == 0 { "queued" } else { "done" };
+            commands
+                .incremental_upsert(json!({
+                    "id": format!("cmd_doc_{idx}"),
+                    "command_id": format!("cmd_{idx}"),
+                    "module": "ctox",
+                    "command_type": "queue",
+                    "record_id": format!("record_{idx}"),
+                    "status": command_status,
+                    "updated_at_ms": idx,
+                }))
+                .await
+                .expect("insert business command");
+            queue_tasks
+                .incremental_upsert(json!({
+                    "id": format!("task_doc_{idx}"),
+                    "command_id": format!("cmd_{idx}"),
+                    "command_type": "queue",
+                    "title": format!("Task {idx}"),
+                    "status": task_status,
+                    "module": "ctox",
+                    "updated_at_ms": idx,
+                }))
+                .await
+                .expect("insert queue task");
+            chunks
+                .incremental_upsert(json!({
+                    "id": format!("file_1_gen_1_{idx}"),
+                    "file_id": "file_1",
+                    "generation_id": "gen_1",
+                    "idx": idx,
+                    "total": 200,
+                    "encoding": "base64",
+                    "data": "",
+                    "created_at_ms": idx,
+                }))
+                .await
+                .expect("insert desktop file chunk");
+            browser_frames
+                .incremental_upsert(json!({
+                    "id": format!("frame_{idx}"),
+                    "session_id": "session_1",
+                    "tab_id": "tab_1",
+                    "seq": idx,
+                    "mime_type": "image/png",
+                    "encoding": "base64",
+                    "data": "",
+                    "width": 10,
+                    "height": 10,
+                    "captured_at_ms": idx,
+                    "expires_at_ms": idx,
+                    "updated_at_ms": idx,
+                }))
+                .await
+                .expect("insert browser frame");
+            browser_input_events
+                .incremental_upsert(json!({
+                    "id": format!("input_{idx}"),
+                    "session_id": "session_1",
+                    "tab_id": "tab_1",
+                    "seq": idx,
+                    "type": "click",
+                    "status": if idx == 0 { "pending" } else { "consumed" },
+                    "created_at_ms": idx,
+                    "updated_at_ms": idx,
+                }))
+                .await
+                .expect("insert browser input event");
+        }
+        let conn = Connection::open(&database_path).expect("open sqlite");
+        conn.execute_batch("ANALYZE")
+            .expect("analyze hot index test db");
+        let business_commands_table = rxdb_test_table_name(&conn, "business_commands", 1);
+        let ctox_queue_tasks_table = rxdb_test_table_name(&conn, "ctox_queue_tasks", 0);
+        let desktop_file_chunks_table = rxdb_test_table_name(&conn, "desktop_file_chunks", 0);
+        let browser_frames_table = rxdb_test_table_name(&conn, "browser_frames", 0);
+        let browser_input_events_table = rxdb_test_table_name(&conn, "browser_input_events", 0);
+
+        assert_plan_uses_index(
+            &conn,
+            &format!(
+                r#"
+            SELECT data FROM {}
+            WHERE deleted = 0
+              AND json_extract(data, '$.status') = ?
+            LIMIT 10
+            "#,
+                quote_sqlite_identifier(&business_commands_table)
+            ),
+            &[&"pending_sync"],
+            &format!("{business_commands_table}_json__deleted__status"),
+        );
+        assert_plan_uses_index(
+            &conn,
+            &format!(
+                r#"
+            SELECT data FROM {}
+            WHERE deleted = 0
+              AND json_extract(data, '$.command_id') = ?
+            LIMIT 1
+            "#,
+                quote_sqlite_identifier(&business_commands_table)
+            ),
+            &[&"cmd_1"],
+            &format!("{business_commands_table}_json__deleted__command_id"),
+        );
+        assert_plan_uses_index(
+            &conn,
+            &format!(
+                r#"
+            SELECT data FROM {}
+            WHERE deleted = 0
+              AND json_extract(data, '$.status') = ?
+            LIMIT 10
+            "#,
+                quote_sqlite_identifier(&ctox_queue_tasks_table)
+            ),
+            &[&"queued"],
+            &format!("{ctox_queue_tasks_table}_json__deleted__status"),
+        );
+        assert_plan_uses_index(
+            &conn,
+            &format!(
+                r#"
+            SELECT data FROM {}
+            WHERE deleted = 0
+              AND json_extract(data, '$.command_id') = ?
+            LIMIT 1
+            "#,
+                quote_sqlite_identifier(&ctox_queue_tasks_table)
+            ),
+            &[&"cmd_1"],
+            &format!("{ctox_queue_tasks_table}_json__deleted__command_id"),
+        );
+        assert_plan_uses_index(
+            &conn,
+            &format!(
+                r#"
+            SELECT data FROM {}
+            WHERE deleted = 0
+              AND json_extract(data, '$.file_id') = ?
+              AND json_extract(data, '$.generation_id') = ?
+            ORDER BY json_extract(data, '$.idx') ASC
+            LIMIT 100
+            "#,
+                quote_sqlite_identifier(&desktop_file_chunks_table)
+            ),
+            &[&"file_1", &"gen_1"],
+            &format!(
+                "{desktop_file_chunks_table}_json__deleted__file_id__generation_id__idx__id_idx"
+            ),
+        );
+        assert_plan_uses_index(
+            &conn,
+            &format!(
+                r#"
+            SELECT data FROM {}
+            WHERE deleted = 0
+              AND json_extract(data, '$.expires_at_ms') < ?
+            LIMIT 256
+            "#,
+                quote_sqlite_identifier(&browser_frames_table)
+            ),
+            &[&1_i64],
+            &format!("{browser_frames_table}_json__deleted__expires_at_ms"),
+        );
+        assert_plan_uses_index(
+            &conn,
+            &format!(
+                r#"
+            SELECT data FROM {}
+            WHERE deleted = 0
+              AND json_extract(data, '$.session_id') = ?
+              AND json_extract(data, '$.status') = ?
+            ORDER BY json_extract(data, '$.seq') ASC
+            LIMIT 64
+            "#,
+                quote_sqlite_identifier(&browser_input_events_table)
+            ),
+            &[&"session_1", &"pending"],
+            &format!("{browser_input_events_table}_json__deleted__session_id__status__seq"),
+        );
+    }
+
+    #[tokio::test]
+    async fn browser_runtime_gc_redacts_frames_and_retires_old_input_events() {
+        let root = tempfile::tempdir().expect("temp root");
+        let database_path = root.path().join("browser-runtime-gc.sqlite3");
+        let database = open_test_database(database_path.clone())
+            .await
+            .expect("open test database");
+        database
+            .add_collections(HashMap::from([
+                (
+                    "browser_frames".to_string(),
+                    RxCollectionCreator {
+                        schema: business_os_schema("browser_frames", "id"),
+                        conflict_handler: None,
+                        options: HashMap::new(),
+                    },
+                ),
+                (
+                    "browser_input_events".to_string(),
+                    RxCollectionCreator {
+                        schema: business_os_schema("browser_input_events", "id"),
+                        conflict_handler: None,
+                        options: HashMap::new(),
+                    },
+                ),
+            ]))
+            .await
+            .expect("add browser runtime collections");
+        let frames = database
+            .collection("browser_frames")
+            .expect("browser_frames collection");
+        frames
+            .incremental_upsert(json!({
+                "id": "expired_frame",
+                "session_id": "session_1",
+                "tab_id": "tab_1",
+                "seq": 1,
+                "mime_type": "image/png",
+                "encoding": "base64",
+                "data": "AAAA",
+                "width": 10,
+                "height": 10,
+                "captured_at_ms": 1,
+                "expires_at_ms": 1,
+                "updated_at_ms": 1,
+                "size_bytes": 3,
+                "frame_hash": "hash",
+            }))
+            .await
+            .expect("insert expired frame");
+        let events = database
+            .collection("browser_input_events")
+            .expect("browser_input_events collection");
+        for (id, status, created_at_ms) in [
+            ("old_consumed", "consumed", 1_u64),
+            ("old_failed", "failed", 1_u64),
+            ("old_pending", "pending", 1_u64),
+            (
+                "recent_consumed",
+                "consumed",
+                now_ms() as u64 - (BROWSER_INPUT_EVENT_RETENTION_SECS * 500),
+            ),
+        ] {
+            events
+                .incremental_upsert(json!({
+                    "id": id,
+                    "session_id": "session_1",
+                    "tab_id": "tab_1",
+                    "seq": 1,
+                    "type": "click",
+                    "status": status,
+                    "created_at_ms": created_at_ms,
+                    "updated_at_ms": created_at_ms,
+                }))
+                .await
+                .expect("insert browser input event");
+        }
+
+        assert_eq!(gc_expired_browser_frames(&database).await.unwrap(), 1);
+        assert_eq!(
+            gc_consumed_browser_input_events(&database).await.unwrap(),
+            2
+        );
+
+        let conn = Connection::open(&database_path).expect("open sqlite");
+        let frame_table = rxdb_test_table_name(&conn, "browser_frames", 0);
+        let frame: (i64, String, i64, String) = conn
+            .query_row(
+                &format!(
+                    "SELECT deleted, json_extract(data, '$.data'), CAST(json_extract(data, '$.size_bytes') AS INTEGER), json_extract(data, '$.encoding') FROM {} WHERE id = ?1",
+                    quote_sqlite_identifier(&frame_table)
+                ),
+                params!["expired_frame"],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("expired frame row");
+        assert_eq!(frame, (1, String::new(), 0, "redacted".to_string()));
+
+        let input_table = rxdb_test_table_name(&conn, "browser_input_events", 0);
+        let deleted_state = |id: &str| -> i64 {
+            conn.query_row(
+                &format!(
+                    "SELECT deleted FROM {} WHERE id = ?1",
+                    quote_sqlite_identifier(&input_table)
+                ),
+                params![id],
+                |row| row.get(0),
+            )
+            .expect("input event row")
+        };
+        assert_eq!(deleted_state("old_consumed"), 1);
+        assert_eq!(deleted_state("old_failed"), 1);
+        assert_eq!(deleted_state("old_pending"), 0);
+        assert_eq!(deleted_state("recent_consumed"), 0);
+    }
+
+    fn rxdb_test_table_name(conn: &Connection, collection: &str, version: i64) -> String {
+        conn.query_row(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE ?1 ORDER BY name",
+            params![format!("%__{collection}__v{version}")],
+            |row| row.get::<_, String>(0),
+        )
+        .expect("RxDB collection table exists")
+    }
+
+    fn quote_sqlite_identifier(identifier: &str) -> String {
+        format!("\"{}\"", identifier.replace('"', "\"\""))
+    }
+
+    fn assert_plan_uses_index(
+        conn: &Connection,
+        sql: &str,
+        params: &[&dyn rusqlite::ToSql],
+        expected_index: &str,
+    ) {
+        let plan = sqlite_query_plan(conn, sql, params);
+        assert!(
+            plan.contains(expected_index),
+            "expected SQLite plan to use {expected_index}, got:\n{plan}\nindexes:\n{}",
+            sqlite_index_debug_list(conn)
+        );
+    }
+
+    fn sqlite_query_plan(conn: &Connection, sql: &str, params: &[&dyn rusqlite::ToSql]) -> String {
+        let mut statement = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .expect("prepare explain query plan");
+        statement
+            .query_map(params, |row| row.get::<_, String>(3))
+            .expect("query explain plan")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect explain plan")
+            .join("\n")
+    }
+
+    fn sqlite_index_debug_list(conn: &Connection) -> String {
+        let mut statement = conn
+            .prepare(
+                "SELECT name, COALESCE(sql, '') FROM sqlite_master \
+                 WHERE type = 'index' ORDER BY name",
+            )
+            .expect("prepare index debug list");
+        statement
+            .query_map([], |row| {
+                Ok(format!(
+                    "{}: {}",
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?
+                ))
+            })
+            .expect("query index debug list")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect index debug list")
+            .join("\n")
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn demand_file_source_streams_decoded_chunks_in_idx_order() {
         // Phase 4: a registered file stream source must read the chunk docs by
@@ -9296,9 +12260,12 @@ mod tests {
         // and emit the raw bytes in order. This is what makes `rxdb.file.fetch`
         // serve bytes instead of FILE_NOT_FOUND.
         let root = tempfile::tempdir().expect("temp root");
-        let database = open_test_database(root.path().join("demand.sqlite3"))
-            .await
-            .expect("open db");
+        let database_path = store::rxdb_store_path(root.path());
+        fs::create_dir_all(database_path.parent().expect("rxdb parent")).expect("runtime dir");
+        let database =
+            open_test_database_with_name(database_path, RXDB_SQLITE_DATABASE_NAME.to_string())
+                .await
+                .expect("open db");
         database
             .add_collections(HashMap::from([
                 (
@@ -9323,12 +12290,14 @@ mod tests {
         let files = database
             .collection("desktop_files")
             .expect("desktop_files collection");
+        let mut payload = vec![b'a'; DESKTOP_FILE_CHUNK_DECODED_SIZE as usize];
+        payload.extend_from_slice(b"world!");
         files
             .incremental_upsert(json!({
                 "id": "f1",
                 "name": "file.txt",
                 "kind": "file",
-                "size_bytes": DESKTOP_FILE_CHUNK_SIZE as u64,
+                "size_bytes": payload.len() as u64,
                 "content_state": "available",
                 "content_generation_id": "gen-active",
                 "created_at_ms": 1,
@@ -9339,19 +12308,30 @@ mod tests {
         let chunks = database
             .collection("desktop_file_chunks")
             .expect("desktop_file_chunks collection");
-        // Two chunks for file "f1": "Hello, " then "world!" (base64-encoded),
-        // inserted out of order to prove the source sorts by `idx`.
+        // Insert production-shaped chunks out of order to prove the source
+        // sorts by `idx` while range fetches can still load only the touched
+        // chunk ids.
         let enc = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
-        for (idx, payload) in [(1u64, &b"world!"[..]), (0u64, &b"Hello, "[..])] {
+        let encoded = enc(&payload);
+        let chunk_payloads = if encoded.is_empty() {
+            vec![""]
+        } else {
+            encoded
+                .as_bytes()
+                .chunks(DESKTOP_FILE_CHUNK_SIZE)
+                .map(|chunk| std::str::from_utf8(chunk).unwrap())
+                .collect::<Vec<_>>()
+        };
+        for (idx, data) in chunk_payloads.iter().enumerate().rev() {
             chunks
                 .incremental_upsert(json!({
                     "id": format!("f1_gen-active_{idx}"),
                     "file_id": "f1",
                     "generation_id": "gen-active",
                     "idx": idx,
-                    "total": 2,
+                    "total": chunk_payloads.len(),
                     "encoding": "base64",
-                    "data": enc(payload),
+                    "data": data,
                     "created_at_ms": 1,
                 }))
                 .await
@@ -9360,7 +12340,7 @@ mod tests {
 
         let mut collected: Vec<u8> = Vec::new();
         stream_demand_file_chunks(
-            &database,
+            root.path(),
             "desktop_file_chunks",
             "file_id",
             "f1",
@@ -9371,21 +12351,20 @@ mod tests {
             },
         )
         .expect("stream chunks");
-        assert_eq!(String::from_utf8(collected).unwrap(), "Hello, world!");
+        assert_eq!(collected, payload);
 
         // A byte range clips the stream across chunk boundaries.
+        DEMAND_FILE_FETCH_METRICS.reset();
         let mut ranged: Vec<u8> = Vec::new();
         stream_demand_file_chunks(
-            &database,
+            root.path(),
             "desktop_file_chunks",
             "file_id",
             "f1",
-            Some(
-                &rxdb::plugins::replication_webrtc::file_fetch_handler::FileRange {
-                    offset: 7,
-                    length: 5,
-                },
-            ),
+            Some(&FileRange {
+                offset: DESKTOP_FILE_CHUNK_DECODED_SIZE,
+                length: 5,
+            }),
             &mut |bytes| {
                 ranged.extend_from_slice(bytes);
                 Ok(true)
@@ -9393,11 +12372,39 @@ mod tests {
         )
         .expect("stream ranged");
         assert_eq!(String::from_utf8(ranged).unwrap(), "world");
+        let metrics = DEMAND_FILE_FETCH_METRICS.snapshot();
+        assert_eq!(
+            metrics.pointer("/ranged_requests").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            metrics.pointer("/rows_loaded").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            metrics.pointer("/chunks_decoded").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            metrics.pointer("/bytes_requested").and_then(Value::as_u64),
+            Some(5)
+        );
+        assert_eq!(
+            metrics.pointer("/bytes_emitted").and_then(Value::as_u64),
+            Some(5)
+        );
+        assert!(
+            metrics
+                .pointer("/bytes_decoded")
+                .and_then(Value::as_u64)
+                .is_some_and(|bytes| bytes < DESKTOP_FILE_CHUNK_DECODED_SIZE),
+            "range fetch must decode only the touched tail chunk: {metrics}"
+        );
 
         // Unknown file → no bytes emitted (dispatcher maps that to FILE_NOT_FOUND).
         let mut none: Vec<u8> = Vec::new();
         stream_demand_file_chunks(
-            &database,
+            root.path(),
             "desktop_file_chunks",
             "file_id",
             "missing",
@@ -9414,9 +12421,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn demand_file_source_streams_active_desktop_file_generation() {
         let root = tempfile::tempdir().expect("temp root");
-        let database = open_test_database(root.path().join("demand-active-generation.sqlite3"))
-            .await
-            .expect("open db");
+        let database_path = store::rxdb_store_path(root.path());
+        fs::create_dir_all(database_path.parent().expect("rxdb parent")).expect("runtime dir");
+        let database =
+            open_test_database_with_name(database_path, RXDB_SQLITE_DATABASE_NAME.to_string())
+                .await
+                .expect("open db");
         database
             .add_collections(HashMap::from([
                 (
@@ -9475,7 +12485,7 @@ mod tests {
 
         let mut collected: Vec<u8> = Vec::new();
         stream_demand_file_chunks(
-            &database,
+            root.path(),
             "desktop_file_chunks",
             "file_id",
             "f1",
@@ -9491,9 +12501,17 @@ mod tests {
 
     async fn open_test_database(database_path: PathBuf) -> anyhow::Result<Arc<RxDatabase>> {
         let test_id = TEST_RXDB_DATABASE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        open_test_database_with_name(database_path, format!("ctox-business-os-test-{test_id}"))
+            .await
+    }
+
+    async fn open_test_database_with_name(
+        database_path: PathBuf,
+        name: String,
+    ) -> anyhow::Result<Arc<RxDatabase>> {
         let storage = get_rx_storage_sqlite(RxStorageSqliteSettings { database_path });
         create_rx_database(RxDatabaseCreator {
-            name: format!("ctox-business-os-test-{test_id}"),
+            name,
             storage,
             multi_instance: false,
             password: None,
@@ -9720,6 +12738,64 @@ mod tests {
             reconstruct_desktop_file_chunks(&wrong_total, &file_id, generation_id, content_hash),
             "chunk total mismatch",
         );
+    }
+
+    #[test]
+    fn active_desktop_file_demand_fetch_falls_back_to_file_id_chunks() {
+        let root = tempfile::tempdir().expect("temp root");
+        let file_path = root.path().join("fallback.pdf");
+        let payload = vec![b'p'; DESKTOP_FILE_CHUNK_SIZE + 117];
+        fs::write(&file_path, &payload).expect("write fallback artifact");
+
+        sync_desktop_file_from_path(root.path(), &file_path).expect("sync desktop file");
+
+        let canonical = file_path.canonicalize().expect("canonical file");
+        let file_id = desktop_file_id(&canonical);
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
+        let file = read_desktop_file_row(&conn, &file_id);
+        let generation_id = file
+            .get("content_generation_id")
+            .and_then(Value::as_str)
+            .expect("active generation id");
+        let content_hash = file
+            .get("content_hash")
+            .and_then(Value::as_str)
+            .expect("content hash");
+        let chunks = read_desktop_file_chunks(&conn, &file_id, false);
+        assert!(
+            chunks.len() > 1,
+            "test file should create multiple chunks for fallback coverage"
+        );
+        for chunk in &chunks {
+            let old_id = chunk.get("id").and_then(Value::as_str).expect("chunk id");
+            let idx = chunk.get("idx").and_then(Value::as_u64).expect("chunk idx");
+            let legacy_id = format!("{file_id}-legacy-{idx}");
+            conn.execute(
+                "UPDATE ctox_business_os__desktop_file_chunks__v0 \
+                 SET id = ?1, data = json_set(data, '$.id', ?1) \
+                 WHERE id = ?2",
+                params![legacy_id, old_id],
+            )
+            .expect("rewrite chunk id to legacy form");
+        }
+        drop(conn);
+
+        let mut fallback_stats = DemandFileFetchRequestStats::new(None);
+        let fallback_chunks = active_desktop_file_chunk_rows_from_sqlite(
+            root.path(),
+            &file_id,
+            None,
+            &mut fallback_stats,
+        )
+        .expect("load fallback chunks");
+        let decoded = reconstruct_desktop_file_chunks(
+            &fallback_chunks,
+            &file_id,
+            generation_id,
+            content_hash,
+        )
+        .expect("fallback chunks reconstruct");
+        assert_eq!(decoded, payload);
     }
 
     #[test]
@@ -9955,6 +13031,74 @@ mod tests {
             pruned_chunk.get("prune_reason").and_then(Value::as_str),
             Some("stale_generation")
         );
+    }
+
+    #[test]
+    fn desktop_file_chunk_cleanup_uses_primary_key_range_plan() {
+        let root = tempfile::tempdir().expect("temp root");
+        let file_path = root.path().join("range-plan.txt");
+        fs::write(&file_path, vec![b'a'; DESKTOP_FILE_CHUNK_SIZE + 32])
+            .expect("write desktop file");
+
+        sync_desktop_file_from_path(root.path(), &file_path).expect("sync desktop file");
+        let canonical = file_path.canonicalize().expect("canonical file");
+        let file_id = desktop_file_id(&canonical);
+        let mut conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
+        {
+            let tx = conn.transaction().expect("begin irrelevant chunk seed tx");
+            for idx in 0..5_000 {
+                let irrelevant_id = format!("irrelevant_{idx}_gen_0_0");
+                let irrelevant_file_id = format!("irrelevant_{idx}");
+                let data = json!({
+                    "id": irrelevant_id,
+                    "file_id": irrelevant_file_id,
+                    "generation_id": "gen_0",
+                    "idx": 0,
+                    "total": 1,
+                    "encoding": "base64",
+                    "data": "",
+                    "created_at_ms": idx,
+                })
+                .to_string();
+                tx.execute(
+                    "INSERT INTO ctox_business_os__desktop_file_chunks__v0 \
+                     (id, revision, deleted, lastWriteTime, data) \
+                     VALUES (?1, ?2, 0, ?3, ?4)",
+                    params![irrelevant_id, "1-seed", idx as f64, data],
+                )
+                .expect("insert irrelevant chunk row");
+            }
+            tx.commit().expect("commit irrelevant chunk seed tx");
+        }
+        conn.execute_batch("ANALYZE")
+            .expect("analyze desktop chunk db");
+
+        let table = quote_sqlite_identifier("ctox_business_os__desktop_file_chunks__v0");
+        let (chunk_id_lower, chunk_id_upper) = desktop_file_chunk_id_bounds(&file_id);
+        let limit = DESKTOP_FILE_CHUNK_CLEANUP_SCAN_LIMIT as i64;
+        let sql = format!(
+            "SELECT data FROM {table}
+             WHERE id >= ?1
+               AND id < ?2
+               AND COALESCE(deleted, 0) = 0
+             LIMIT ?3"
+        );
+        let plan = sqlite_query_plan(&conn, &sql, &[&chunk_id_lower, &chunk_id_upper, &limit]);
+        assert!(
+            plan.contains("SEARCH") && plan.contains("id>?"),
+            "desktop chunk cleanup must use the primary-key range, got:\n{plan}"
+        );
+        assert!(
+            !plan.contains("SCAN "),
+            "desktop chunk cleanup must not scan the chunk table, got:\n{plan}"
+        );
+
+        let chunks =
+            desktop_file_chunk_rows_for_file_id(root.path(), &file_id).expect("load chunks");
+        assert!(!chunks.is_empty(), "chunk range query should return rows");
+        assert!(chunks.iter().all(|chunk| {
+            chunk.get("file_id").and_then(Value::as_str) == Some(file_id.as_str())
+        }));
     }
 
     #[test]
@@ -10223,6 +13367,80 @@ mod tests {
     }
 
     #[test]
+    fn sync_business_users_idle_gate_skips_unchanged_projection() {
+        let root = tempfile::tempdir().expect("temp root");
+        let admin = store::BusinessOsSession {
+            ok: true,
+            authenticated: true,
+            auth_required: true,
+            user: Some(store::BusinessOsSessionUser {
+                id: "admin".to_string(),
+                display_name: "Admin".to_string(),
+                role: "admin".to_string(),
+                is_admin: true,
+            }),
+            login_url: None,
+            reason: None,
+        };
+        store::upsert_user(
+            root.path(),
+            &admin,
+            store::BusinessOsUserMutation {
+                id: "alice".to_string(),
+                display_name: "Alice".to_string(),
+                role: "founder".to_string(),
+                active: true,
+                accept_recovery_responsibility: false,
+            },
+        )
+        .expect("upsert business user");
+
+        let mut last_projection_stamp = None;
+        let first = sync_business_users_if_changed(root.path(), &mut last_projection_stamp)
+            .expect("first business users sync");
+        assert!(first >= 2);
+
+        let second = sync_business_users_if_changed(root.path(), &mut last_projection_stamp)
+            .expect("unchanged business users sync");
+        assert_eq!(second, 0);
+
+        store::upsert_user(
+            root.path(),
+            &admin,
+            store::BusinessOsUserMutation {
+                id: "alice".to_string(),
+                display_name: "Alice Updated".to_string(),
+                role: "founder".to_string(),
+                active: true,
+                accept_recovery_responsibility: false,
+            },
+        )
+        .expect("update business user");
+
+        let third = sync_business_users_if_changed(root.path(), &mut last_projection_stamp)
+            .expect("changed business users sync");
+        assert!(third >= 1);
+
+        let fourth = sync_business_users_if_changed(root.path(), &mut last_projection_stamp)
+            .expect("unchanged business users resync");
+        assert_eq!(fourth, 0);
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open rxdb sqlite");
+        let user_json: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__business_users__v0 WHERE id = 'alice'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("projected user row");
+        let user: Value = serde_json::from_str(&user_json).expect("user json");
+        assert_eq!(
+            user.get("display_name").and_then(Value::as_str),
+            Some("Alice Updated")
+        );
+    }
+
+    #[test]
     fn sync_runtime_settings_projects_status_document() {
         let root = tempfile::tempdir().expect("temp root");
 
@@ -10259,6 +13477,50 @@ mod tests {
             .get("diagnostics")
             .and_then(Value::as_object)
             .is_some());
+    }
+
+    #[test]
+    fn sync_runtime_settings_idle_gate_skips_unchanged_projection() {
+        let root = tempfile::tempdir().expect("temp root");
+        let mut last_projection_stamp = None;
+
+        let first = sync_runtime_settings_if_changed(root.path(), &mut last_projection_stamp)
+            .expect("first runtime settings sync");
+        assert_eq!(first, 1);
+
+        let second = sync_runtime_settings_if_changed(root.path(), &mut last_projection_stamp)
+            .expect("unchanged runtime settings sync");
+        assert_eq!(second, 0);
+
+        crate::inference::runtime_env::set_runtime_env_value(
+            root.path(),
+            "CTOX_CHAT_TURN_TIMEOUT_SECS",
+            "777",
+        )
+        .expect("persist runtime setting");
+        let third = sync_runtime_settings_if_changed(root.path(), &mut last_projection_stamp)
+            .expect("changed runtime settings sync");
+        assert_eq!(third, 1);
+
+        let fourth = sync_runtime_settings_if_changed(root.path(), &mut last_projection_stamp)
+            .expect("runtime settings sync after changed projection");
+        assert_eq!(fourth, 0);
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open rxdb sqlite");
+        let settings_json: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__ctox_runtime_settings__v0 WHERE id = 'runtime-settings'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("projected runtime settings row");
+        let settings: Value = serde_json::from_str(&settings_json).expect("runtime settings json");
+        assert_eq!(
+            settings
+                .pointer("/runtime/max_run_secs")
+                .and_then(Value::as_u64),
+            Some(777)
+        );
     }
 
     #[test]
@@ -10327,6 +13589,51 @@ mod tests {
     }
 
     #[test]
+    fn sync_module_catalog_idle_gate_skips_unchanged_projection() {
+        let root = tempfile::tempdir().expect("temp root");
+        let app_root = root.path().join("src/apps/business-os");
+        fs::create_dir_all(app_root.join("modules/ctox")).expect("create ctox module");
+        fs::write(app_root.join("index.html"), "<!doctype html>").expect("write app index");
+        fs::write(
+            app_root.join("modules/ctox/module.json"),
+            r#"{"id":"ctox","title":"CTOX","entry":"modules/ctox/index.html","collections":["ctox_queue_tasks"]}"#,
+        )
+        .expect("write ctox manifest");
+
+        let mut last_projection_stamp = None;
+        let first = sync_module_catalog_if_changed(root.path(), &mut last_projection_stamp)
+            .expect("first module catalog sync");
+        assert_eq!(first, 1);
+
+        let second = sync_module_catalog_if_changed(root.path(), &mut last_projection_stamp)
+            .expect("unchanged module catalog sync");
+        assert_eq!(second, 0);
+
+        fs::write(app_root.join("modules/ctox/icon.svg"), "<svg></svg>").expect("write ctox icon");
+        let third = sync_module_catalog_if_changed(root.path(), &mut last_projection_stamp)
+            .expect("changed module catalog source sync");
+        assert_eq!(third, 1);
+
+        let fourth = sync_module_catalog_if_changed(root.path(), &mut last_projection_stamp)
+            .expect("unchanged module catalog resync");
+        assert_eq!(fourth, 0);
+
+        crate::inference::runtime_env::set_runtime_env_value(
+            root.path(),
+            "CTOX_BUSINESS_OS_MODULE_ALLOWLIST",
+            "ctox",
+        )
+        .expect("persist module allowlist");
+        let fifth = sync_module_catalog_if_changed(root.path(), &mut last_projection_stamp)
+            .expect("changed module catalog allowlist sync");
+        assert_eq!(fifth, 1);
+
+        let sixth = sync_module_catalog_if_changed(root.path(), &mut last_projection_stamp)
+            .expect("unchanged module catalog sync after allowlist");
+        assert_eq!(sixth, 0);
+    }
+
+    #[test]
     fn sync_knowledge_tables_tombstones_stale_once_then_noops() {
         let root = tempfile::tempdir().expect("temp root");
         assert_eq!(
@@ -10373,6 +13680,72 @@ mod tests {
             )
             .expect("stale knowledge tombstone row");
         assert_eq!(deleted, 1);
+    }
+
+    #[test]
+    fn sync_knowledge_tables_idle_gate_skips_unchanged_source() {
+        let root = tempfile::tempdir().expect("temp root");
+        crate::knowledge::knowledge_tables_projection_source_stamp(root.path())
+            .expect("bootstrap knowledge schema");
+        let conn = Connection::open(crate::paths::core_db(root.path())).expect("open core db");
+        conn.execute(
+            "INSERT INTO knowledge_data_tables (
+                 table_id, domain, table_key, source_system, title, description,
+                 parquet_path, schema_hash, row_count, bytes, tags_json, archived_at,
+                 created_at, updated_at
+             ) VALUES ('kdt-idle-gate', 'idle', 'gate', 'agent',
+                       'Idle Gate Table', 'Knowledge source gate test',
+                       '/stale.parquet', '', 0, 0, '{}', NULL,
+                       '2026-06-25T00:00:00+00:00',
+                       '2026-06-25T00:00:00+00:00')",
+            [],
+        )
+        .expect("insert knowledge catalog row");
+        drop(conn);
+
+        let mut last_source_stamp = None;
+        let first = sync_knowledge_tables_if_changed(root.path(), &mut last_source_stamp)
+            .expect("first knowledge tables sync");
+        assert_eq!(first, 1);
+
+        let unchanged_stamp = last_source_stamp.clone();
+        let second = sync_knowledge_tables_if_changed(root.path(), &mut last_source_stamp)
+            .expect("unchanged knowledge tables sync");
+        assert_eq!(second, 0);
+        assert_eq!(last_source_stamp, unchanged_stamp);
+
+        let conn = Connection::open(crate::paths::core_db(root.path())).expect("open core db");
+        conn.execute(
+            "UPDATE knowledge_data_tables
+                SET title = 'Idle Gate Table Updated',
+                    updated_at = '2026-06-25T00:00:01+00:00'
+              WHERE table_id = 'kdt-idle-gate'",
+            [],
+        )
+        .expect("update knowledge catalog row");
+        drop(conn);
+
+        let third = sync_knowledge_tables_if_changed(root.path(), &mut last_source_stamp)
+            .expect("changed knowledge tables sync");
+        assert_eq!(third, 1);
+
+        let fourth = sync_knowledge_tables_if_changed(root.path(), &mut last_source_stamp)
+            .expect("unchanged knowledge tables resync");
+        assert_eq!(fourth, 0);
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open rxdb sqlite");
+        let table_json: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__knowledge_tables__v0 WHERE id = 'table:kdt-idle-gate'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("knowledge table projection row");
+        let table: Value = serde_json::from_str(&table_json).expect("knowledge table json");
+        assert_eq!(
+            table.get("title").and_then(Value::as_str),
+            Some("Idle Gate Table Updated")
+        );
     }
 
     #[test]
@@ -10444,6 +13817,113 @@ mod tests {
             )
             .expect("projected version count");
         assert_eq!(version_count, 1);
+    }
+
+    #[test]
+    fn sync_business_record_projections_idle_gate_skips_unchanged_source() {
+        let root = tempfile::tempdir().expect("temp root");
+        let conn = store::open_store(root.path()).expect("open business store");
+        store::upsert_business_record(
+            &conn,
+            "documents",
+            "doc_projection_idle_gate",
+            1_000,
+            json!({
+                "id": "doc_projection_idle_gate",
+                "title": "Projected idle gate document",
+                "filename": "idle-gate.docx",
+                "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "status": "imported",
+                "current_version_id": "doc_projection_idle_gate_v1",
+                "index_text": "Projected idle gate document body",
+                "is_deleted": false,
+                "created_at_ms": 900,
+                "updated_at_ms": 1_000
+            }),
+        )
+        .expect("insert document business record");
+        drop(conn);
+
+        let mut since_by_collection = HashMap::new();
+        let mut queue_chat_repair_stamp = None;
+        let mut last_source_stamp = None;
+        let first = sync_business_record_projections_if_changed(
+            root.path(),
+            &mut since_by_collection,
+            &mut queue_chat_repair_stamp,
+            &mut last_source_stamp,
+        )
+        .expect("first business record projection sync");
+        assert!(first >= 1);
+
+        let unchanged_stamp = last_source_stamp.clone();
+        let second = sync_business_record_projections_if_changed(
+            root.path(),
+            &mut since_by_collection,
+            &mut queue_chat_repair_stamp,
+            &mut last_source_stamp,
+        )
+        .expect("unchanged business record projection sync");
+        assert_eq!(second, 0);
+        assert_eq!(last_source_stamp, unchanged_stamp);
+
+        let conn = store::open_store(root.path()).expect("reopen business store");
+        store::upsert_business_record(
+            &conn,
+            "documents",
+            "doc_projection_idle_gate",
+            2_000,
+            json!({
+                "id": "doc_projection_idle_gate",
+                "title": "Projected idle gate document updated",
+                "filename": "idle-gate.docx",
+                "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "status": "imported",
+                "current_version_id": "doc_projection_idle_gate_v1",
+                "index_text": "Projected idle gate document body",
+                "is_deleted": false,
+                "created_at_ms": 900,
+                "updated_at_ms": 2_000
+            }),
+        )
+        .expect("update document business record");
+        drop(conn);
+
+        let third = sync_business_record_projections_if_changed(
+            root.path(),
+            &mut since_by_collection,
+            &mut queue_chat_repair_stamp,
+            &mut last_source_stamp,
+        )
+        .expect("changed business record projection sync");
+        assert!(third >= 1);
+
+        let fourth = sync_business_record_projections_if_changed(
+            root.path(),
+            &mut since_by_collection,
+            &mut queue_chat_repair_stamp,
+            &mut last_source_stamp,
+        )
+        .expect("unchanged business record projection resync");
+        assert_eq!(fourth, 0);
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open rxdb sqlite");
+        let document_json: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__documents__v0 WHERE id = 'doc_projection_idle_gate'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("projected idle gate document row");
+        let document: Value = serde_json::from_str(&document_json).expect("document json");
+        assert_eq!(
+            document.get("title").and_then(Value::as_str),
+            Some("Projected idle gate document updated")
+        );
+        assert_eq!(
+            document.get("updated_at_ms").and_then(Value::as_i64),
+            Some(2_000)
+        );
     }
 
     #[test]
@@ -10983,6 +14463,360 @@ mod tests {
     }
 
     #[test]
+    fn reconcile_ctox_queue_task_projections_filters_to_active_queue_statuses() {
+        let root = tempfile::tempdir().expect("temp root");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let database = open_test_database(store::rxdb_store_path(root.path()))
+                .await
+                .expect("open rxdb sqlite");
+            database
+                .add_collections(collection_creators())
+                .await
+                .expect("register collections");
+            let commands = database
+                .collection("business_commands")
+                .expect("business_commands collection");
+            commands
+                .insert(json!({
+                    "id": "cmd_queue_active_after_terminals",
+                    "command_id": "cmd_queue_active_after_terminals",
+                    "module": "ctox",
+                    "command_type": "ctox.test.completed",
+                    "record_id": "cmd_queue_active_after_terminals",
+                    "status": "completed",
+                    "inbound_channel": "ctox",
+                    "payload": { "ok": true },
+                    "client_context": {},
+                    "updated_at_ms": 5_000
+                }))
+                .await
+                .expect("insert completed command");
+
+            let queue = database
+                .collection("ctox_queue_tasks")
+                .expect("ctox_queue_tasks collection");
+            let mut rxdb_conn =
+                Connection::open(store::rxdb_store_path(root.path())).expect("open rxdb sqlite");
+            let queue_table = rxdb_test_table_name(&rxdb_conn, "ctox_queue_tasks", 0);
+            let queue_table_sql = quote_sqlite_identifier(&queue_table);
+            let insert_sql = format!(
+                "INSERT INTO {queue_table_sql} (id, revision, deleted, lastWriteTime, data)
+                 VALUES (?1, ?2, 0, ?3, ?4)"
+            );
+            let tx = rxdb_conn.transaction().expect("seed terminal queue tx");
+            for index in 0..600 {
+                let id = format!("task_terminal_{index:03}");
+                let payload = json!({
+                    "id": id.clone(),
+                    "command_id": format!("cmd_terminal_{index:03}"),
+                    "title": "terminal filler",
+                    "status": "completed",
+                    "route_status": "handled",
+                    "task_status": "completed",
+                    "module": "ctox",
+                    "source_module": "ctox",
+                    "inbound_channel": "ctox",
+                    "updated_at_ms": index,
+                    "_deleted": false,
+                    "_rev": "1-terminal",
+                    "_meta": { "lwt": index as f64 }
+                });
+                tx.execute(
+                    &insert_sql,
+                    params![
+                        id,
+                        "1-terminal",
+                        index as f64,
+                        serde_json::to_string(&payload).expect("serialize terminal queue payload")
+                    ],
+                )
+                .expect("insert terminal filler queue projection");
+            }
+            tx.commit().expect("commit terminal queue seed");
+            queue
+                .insert(json!({
+                    "id": "task_active_after_terminals",
+                    "command_id": "cmd_queue_active_after_terminals",
+                    "title": "active after terminals",
+                    "status": "queued",
+                    "route_status": "queued",
+                    "task_status": "queued",
+                    "module": "ctox",
+                    "source_module": "ctox",
+                    "inbound_channel": "ctox",
+                    "updated_at_ms": 6_000
+                }))
+                .await
+                .expect("insert active queue projection");
+
+            assert_eq!(
+                reconcile_ctox_queue_task_projections(root.path(), &database)
+                    .await
+                    .expect("reconcile queue projections"),
+                1,
+                "active queue docs must be selected even when terminal docs fill the first page"
+            );
+
+            let repaired = queue
+                .find_one(Some(MangoQuery {
+                    selector: Some(json!({ "id": { "$eq": "task_active_after_terminals" } })),
+                    ..Default::default()
+                }))
+                .expect("queue task query")
+                .exec(false)
+                .await
+                .expect("queue task document");
+            assert_eq!(
+                repaired.get("status").and_then(Value::as_str),
+                Some("completed")
+            );
+            assert_eq!(
+                repaired.get("route_status").and_then(Value::as_str),
+                Some("handled")
+            );
+        });
+    }
+
+    #[test]
+    fn reconcile_ctox_queue_task_projections_does_not_run_global_queue_repair() {
+        let root = tempfile::tempdir().expect("temp root");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let database = open_test_database(store::rxdb_store_path(root.path()))
+                .await
+                .expect("open rxdb sqlite");
+            database
+                .add_collections(collection_creators())
+                .await
+                .expect("register collections");
+            let commands = database
+                .collection("business_commands")
+                .expect("business_commands collection");
+            commands
+                .insert(json!({
+                    "id": "cmd_queue_local_completed",
+                    "command_id": "cmd_queue_local_completed",
+                    "module": "ctox",
+                    "command_type": "ctox.test.completed",
+                    "record_id": "cmd_queue_local_completed",
+                    "status": "completed",
+                    "inbound_channel": "ctox",
+                    "payload": { "ok": true },
+                    "client_context": {},
+                    "updated_at_ms": 2_000
+                }))
+                .await
+                .expect("insert completed command");
+
+            let queue = database
+                .collection("ctox_queue_tasks")
+                .expect("ctox_queue_tasks collection");
+            queue
+                .insert(json!({
+                    "id": "task_queue_local_completed",
+                    "command_id": "cmd_queue_local_completed",
+                    "title": "completed task",
+                    "status": "queued",
+                    "route_status": "queued",
+                    "task_status": "queued",
+                    "module": "ctox",
+                    "source_module": "ctox",
+                    "inbound_channel": "ctox",
+                    "updated_at_ms": 1_000
+                }))
+                .await
+                .expect("insert stale queue projection");
+
+            store::push_collection_records(
+                root.path(),
+                json!({
+                    "collection": "ctox_queue_tasks",
+                    "documents": [
+                        {
+                            "id": "task_unrelated_old_orphan",
+                            "command_id": "cmd_unrelated_missing",
+                            "title": "unrelated old orphan",
+                            "status": "queued",
+                            "route_status": "queued",
+                            "task_status": "queued",
+                            "module": "ctox",
+                            "source_module": "ctox",
+                            "inbound_channel": "ctox",
+                            "updated_at_ms": 1
+                        }
+                    ]
+                }),
+            )
+            .expect("seed unrelated stale queue business record");
+
+            assert_eq!(
+                reconcile_ctox_queue_task_projections(root.path(), &database)
+                    .await
+                    .expect("reconcile queue projections"),
+                1
+            );
+
+            let conn = store::open_store(root.path()).expect("open business store");
+            let local_payload_json: String = conn
+                .query_row(
+                    "SELECT payload_json
+                     FROM business_records
+                     WHERE collection = 'ctox_queue_tasks' AND record_id = 'task_queue_local_completed'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("local queue task business record");
+            let local_payload: Value =
+                serde_json::from_str(&local_payload_json).expect("local queue payload");
+            assert_eq!(
+                local_payload.get("status").and_then(Value::as_str),
+                Some("completed")
+            );
+
+            let unrelated_payload_json: String = conn
+                .query_row(
+                    "SELECT payload_json
+                     FROM business_records
+                     WHERE collection = 'ctox_queue_tasks' AND record_id = 'task_unrelated_old_orphan'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("unrelated queue task business record");
+            let unrelated_payload: Value =
+                serde_json::from_str(&unrelated_payload_json).expect("unrelated queue payload");
+            assert_eq!(
+                unrelated_payload.get("status").and_then(Value::as_str),
+                Some("queued"),
+                "local queue reconciliation must not run global orphan repair"
+            );
+            assert!(
+                unrelated_payload.get("repair_note").is_none(),
+                "global queue repair would have marked unrelated records"
+            );
+            assert!(
+                unrelated_payload.get("error").is_none(),
+                "global queue repair would have failed the unrelated orphan"
+            );
+        });
+    }
+
+    #[test]
+    fn queue_chat_repair_idle_gate_skips_unchanged_sources() {
+        let root = tempfile::tempdir().expect("temp root");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let database = open_test_database(store::rxdb_store_path(root.path()))
+                .await
+                .expect("open rxdb sqlite");
+            database
+                .add_collections(collection_creators())
+                .await
+                .expect("register collections");
+
+            let mut last_projection_stamp =
+                Some(queue_chat_repair_projection_stamp(root.path()).expect("initial stamp"));
+            let unchanged_stamp = last_projection_stamp.clone();
+            assert_eq!(
+                reconcile_queue_chat_tracking_projections_if_changed(
+                    root.path(),
+                    &database,
+                    &mut last_projection_stamp
+                )
+                .await
+                .expect("idle queue/chat repair gate"),
+                0
+            );
+            assert_eq!(last_projection_stamp, unchanged_stamp);
+
+            let commands = database
+                .collection("business_commands")
+                .expect("business_commands collection");
+            commands
+                .insert(json!({
+                    "id": "cmd_queue_idle_gate",
+                    "command_id": "cmd_queue_idle_gate",
+                    "module": "ctox",
+                    "command_type": "ctox.test.idle_gate",
+                    "record_id": "cmd_queue_idle_gate",
+                    "status": "completed",
+                    "inbound_channel": "ctox",
+                    "payload": { "ok": true },
+                    "client_context": {},
+                    "updated_at_ms": 2_000
+                }))
+                .await
+                .expect("insert completed command");
+
+            let queue = database
+                .collection("ctox_queue_tasks")
+                .expect("ctox_queue_tasks collection");
+            queue
+                .insert(json!({
+                    "id": "task_queue_idle_gate",
+                    "command_id": "cmd_queue_idle_gate",
+                    "title": "idle gate task",
+                    "status": "queued",
+                    "route_status": "queued",
+                    "task_status": "queued",
+                    "module": "ctox",
+                    "source_module": "ctox",
+                    "inbound_channel": "ctox",
+                    "updated_at_ms": 1_000
+                }))
+                .await
+                .expect("insert stale queue projection");
+
+            assert_eq!(
+                reconcile_queue_chat_tracking_projections_if_changed(
+                    root.path(),
+                    &database,
+                    &mut last_projection_stamp
+                )
+                .await
+                .expect("changed queue/chat repair gate"),
+                1
+            );
+            let repaired = queue
+                .find_one(Some(MangoQuery {
+                    selector: Some(json!({ "id": { "$eq": "task_queue_idle_gate" } })),
+                    ..Default::default()
+                }))
+                .expect("queue task query")
+                .exec(false)
+                .await
+                .expect("queue task document");
+            assert_eq!(
+                repaired.get("status").and_then(Value::as_str),
+                Some("completed")
+            );
+
+            assert_eq!(
+                reconcile_queue_chat_tracking_projections_if_changed(
+                    root.path(),
+                    &database,
+                    &mut last_projection_stamp
+                )
+                .await
+                .expect("unchanged queue/chat repair gate"),
+                0
+            );
+        });
+    }
+
+    #[test]
     fn reconcile_ctox_queue_task_projections_fails_orphaned_accepted_commands() {
         let root = tempfile::tempdir().expect("temp root");
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -11111,6 +14945,12 @@ mod tests {
                     "id": "chat_orphaned",
                     "title": "stale chat",
                     "open": true,
+                    "tracking_active": true,
+                    "tracking_status": "queued",
+                    "tracking_id": "task_missing",
+                    "tracking_command_id": "cmd_missing",
+                    "tracking_task_id": "task_missing",
+                    "tracking_message_id": "status_cmd_missing",
                     "messages": [
                         {
                             "id": "status_cmd_missing",
@@ -11156,11 +14996,289 @@ mod tests {
                 message.get("trackable").and_then(Value::as_bool),
                 Some(false)
             );
+            assert_eq!(
+                repaired.get("tracking_active").and_then(Value::as_bool),
+                Some(false)
+            );
+            assert_eq!(
+                repaired.get("tracking_status").and_then(Value::as_str),
+                Some("failed")
+            );
             assert!(message
                 .get("text")
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .contains("kein passender Command"));
+        });
+    }
+
+    #[test]
+    fn reconcile_business_chat_tracking_projections_filters_to_active_tracking() {
+        let root = tempfile::tempdir().expect("temp root");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let database = open_test_database(store::rxdb_store_path(root.path()))
+                .await
+                .expect("open rxdb sqlite");
+            database
+                .add_collections(collection_creators())
+                .await
+                .expect("register collections");
+            let commands = database
+                .collection("business_commands")
+                .expect("business_commands collection");
+            commands
+                .insert(json!({
+                    "id": "cmd_chat_active_after_inactive",
+                    "command_id": "cmd_chat_active_after_inactive",
+                    "module": "ctox",
+                    "command_type": "business_os.chat.task",
+                    "record_id": "chat_active_after_inactive",
+                    "status": "completed",
+                    "inbound_channel": "ctox",
+                    "payload": { "ok": true },
+                    "client_context": {},
+                    "updated_at_ms": 5_000
+                }))
+                .await
+                .expect("insert completed chat command");
+
+            let chats = database
+                .collection("business_chats")
+                .expect("business_chats collection");
+            let mut rxdb_conn =
+                Connection::open(store::rxdb_store_path(root.path())).expect("open rxdb sqlite");
+            let chat_table = rxdb_test_table_name(&rxdb_conn, "business_chats", 0);
+            let chat_table_sql = quote_sqlite_identifier(&chat_table);
+            let insert_sql = format!(
+                "INSERT INTO {chat_table_sql} (id, revision, deleted, lastWriteTime, data)
+                 VALUES (?1, ?2, 0, ?3, ?4)"
+            );
+            let tx = rxdb_conn.transaction().expect("seed inactive chats tx");
+            for index in 0..600 {
+                let id = format!("chat_inactive_{index:03}");
+                let payload = json!({
+                    "id": id.clone(),
+                    "title": "inactive filler",
+                    "open": false,
+                    "tracking_active": false,
+                    "tracking_status": "completed",
+                    "tracking_id": format!("task_inactive_{index:03}"),
+                    "tracking_task_id": format!("task_inactive_{index:03}"),
+                    "messages": [],
+                    "updated_at_ms": index,
+                    "_deleted": false,
+                    "_rev": "1-inactive",
+                    "_meta": { "lwt": index as f64 }
+                });
+                tx.execute(
+                    &insert_sql,
+                    params![
+                        id,
+                        "1-inactive",
+                        index as f64,
+                        serde_json::to_string(&payload).expect("serialize inactive chat payload")
+                    ],
+                )
+                .expect("insert inactive filler chat");
+            }
+            tx.commit().expect("commit inactive chats seed");
+
+            chats
+                .insert(json!({
+                    "id": "chat_active_after_inactive",
+                    "title": "active after inactive fillers",
+                    "open": true,
+                    "tracking_active": true,
+                    "tracking_status": "queued",
+                    "tracking_id": "cmd_chat_active_after_inactive",
+                    "tracking_command_id": "cmd_chat_active_after_inactive",
+                    "tracking_task_id": "",
+                    "tracking_message_id": "status_cmd_chat_active_after_inactive",
+                    "messages": [
+                        {
+                            "id": "status_cmd_chat_active_after_inactive",
+                            "role": "ctox",
+                            "text": "Task angelegt und in der CTOX Queue.",
+                            "commandId": "cmd_chat_active_after_inactive",
+                            "taskId": "",
+                            "status": "queued",
+                            "createdAt": 6_000
+                        }
+                    ],
+                    "updated_at_ms": 6_000
+                }))
+                .await
+                .expect("insert active chat projection");
+
+            assert_eq!(
+                reconcile_business_chat_tracking_projections(&database)
+                    .await
+                    .expect("reconcile chat projections"),
+                1,
+                "active chat docs must be selected even when inactive docs fill the first page"
+            );
+
+            let repaired = chats
+                .find_one(Some(MangoQuery {
+                    selector: Some(json!({ "id": { "$eq": "chat_active_after_inactive" } })),
+                    ..Default::default()
+                }))
+                .expect("chat query")
+                .exec(false)
+                .await
+                .expect("chat document");
+            let message = repaired
+                .get("messages")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .expect("chat status message");
+            assert_eq!(
+                message.get("status").and_then(Value::as_str),
+                Some("completed")
+            );
+            assert_eq!(
+                repaired.get("tracking_active").and_then(Value::as_bool),
+                Some(false)
+            );
+            assert_eq!(
+                repaired.get("tracking_status").and_then(Value::as_str),
+                Some("completed")
+            );
+        });
+    }
+
+    #[test]
+    fn reconcile_business_chat_tracking_projections_batches_active_document_lookups() {
+        let root = tempfile::tempdir().expect("temp root");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let database = open_test_database(store::rxdb_store_path(root.path()))
+                .await
+                .expect("open rxdb sqlite");
+            database
+                .add_collections(collection_creators())
+                .await
+                .expect("register collections");
+            let commands = database
+                .collection("business_commands")
+                .expect("business_commands collection");
+            let queue = database
+                .collection("ctox_queue_tasks")
+                .expect("ctox_queue_tasks collection");
+            let mut messages = Vec::new();
+            for index in 0..40 {
+                let command_id = format!("cmd_chat_batch_{index:03}");
+                let task_id = format!("task_chat_batch_{index:03}");
+                commands
+                    .insert(json!({
+                        "id": command_id.clone(),
+                        "command_id": command_id.clone(),
+                        "module": "ctox",
+                        "command_type": "business_os.chat.task",
+                        "record_id": "chat_batch",
+                        "status": "running",
+                        "task_id": task_id.clone(),
+                        "task_status": "running",
+                        "inbound_channel": "ctox",
+                        "payload": { "ok": true },
+                        "client_context": {},
+                        "updated_at_ms": index
+                    }))
+                    .await
+                    .expect("insert batch chat command");
+                queue
+                    .insert(json!({
+                        "id": task_id.clone(),
+                        "command_id": command_id.clone(),
+                        "title": "batch chat task",
+                        "status": "completed",
+                        "route_status": "handled",
+                        "task_status": "completed",
+                        "module": "ctox",
+                        "source_module": "ctox",
+                        "inbound_channel": "ctox",
+                        "updated_at_ms": index
+                    }))
+                    .await
+                    .expect("insert batch chat queue task");
+                messages.push(json!({
+                    "id": format!("status_cmd_chat_batch_{index:03}"),
+                    "role": "ctox",
+                    "text": "Task angelegt und in der CTOX Queue.",
+                    "commandId": command_id,
+                    "taskId": task_id,
+                    "status": "queued",
+                    "createdAt": index
+                }));
+            }
+
+            let chats = database
+                .collection("business_chats")
+                .expect("business_chats collection");
+            chats
+                .insert(json!({
+                    "id": "chat_batch",
+                    "title": "batch active chat",
+                    "open": true,
+                    "tracking_active": true,
+                    "tracking_status": "queued",
+                    "tracking_id": "task_chat_batch_039",
+                    "tracking_command_id": "cmd_chat_batch_039",
+                    "tracking_task_id": "task_chat_batch_039",
+                    "tracking_message_id": "status_cmd_chat_batch_039",
+                    "messages": messages,
+                    "updated_at_ms": 10_000
+                }))
+                .await
+                .expect("insert batch chat projection");
+
+            CHAT_TRACKING_BATCH_DOCUMENT_LOOKUPS.store(0, Ordering::Relaxed);
+            assert_eq!(
+                reconcile_business_chat_tracking_projections(&database)
+                    .await
+                    .expect("reconcile chat projections"),
+                1
+            );
+            assert_eq!(
+                CHAT_TRACKING_BATCH_DOCUMENT_LOOKUPS.load(Ordering::Relaxed),
+                2,
+                "active Chat tracking repair must batch command and task lookups"
+            );
+
+            let repaired = chats
+                .find_one(Some(MangoQuery {
+                    selector: Some(json!({ "id": { "$eq": "chat_batch" } })),
+                    ..Default::default()
+                }))
+                .expect("chat query")
+                .exec(false)
+                .await
+                .expect("chat document");
+            let repaired_messages = repaired
+                .get("messages")
+                .and_then(Value::as_array)
+                .expect("repaired chat messages");
+            assert_eq!(repaired_messages.len(), 40);
+            assert!(repaired_messages.iter().all(|message| {
+                message.get("status").and_then(Value::as_str) == Some("completed")
+            }));
+            assert_eq!(
+                repaired.get("tracking_active").and_then(Value::as_bool),
+                Some(false)
+            );
+            assert_eq!(
+                repaired.get("tracking_status").and_then(Value::as_str),
+                Some("completed")
+            );
         });
     }
 
@@ -11318,6 +15436,106 @@ mod tests {
         assert_eq!(
             deleted_large.get("is_deleted").and_then(Value::as_bool),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn desktop_file_index_idle_gate_skips_unchanged_scan_roots() {
+        let root = tempfile::tempdir().expect("temp root");
+        let imports_dir = root.path().join("runtime/business-os-imports");
+        fs::create_dir_all(&imports_dir).expect("create imports dir");
+        let file_path = imports_dir.join("handoff.md");
+        fs::write(&file_path, b"# Handoff\n\ninitial\n").expect("write import file");
+
+        let mut last_projection_stamp = None;
+        let first = sync_desktop_file_index_if_changed(root.path(), &mut last_projection_stamp)
+            .expect("first desktop file index sync");
+        assert_eq!(first, 1);
+
+        let second = sync_desktop_file_index_if_changed(root.path(), &mut last_projection_stamp)
+            .expect("unchanged desktop file index sync");
+        assert_eq!(
+            second, 0,
+            "unchanged scan roots must not enter the RxDB write path"
+        );
+
+        fs::write(
+            &file_path,
+            b"# Handoff\n\nchanged content with a different size\n",
+        )
+        .expect("update import file");
+        let third = sync_desktop_file_index_if_changed(root.path(), &mut last_projection_stamp)
+            .expect("changed desktop file index sync");
+        assert_eq!(third, 1);
+
+        let fourth = sync_desktop_file_index_if_changed(root.path(), &mut last_projection_stamp)
+            .expect("stable desktop file index sync after change");
+        assert_eq!(
+            fourth, 0,
+            "the source stamp must settle after the changed file was synced"
+        );
+
+        let file_id = desktop_file_id(&file_path.canonicalize().expect("canonical file"));
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
+        let file = read_desktop_file_row(&conn, &file_id);
+        assert_eq!(
+            file.get("size_bytes").and_then(Value::as_u64),
+            Some(b"# Handoff\n\nchanged content with a different size\n".len() as u64)
+        );
+    }
+
+    #[test]
+    fn desktop_file_background_scan_gate_skips_recursive_scan_until_dirty_or_fallback() {
+        let root = tempfile::tempdir().expect("temp root");
+        let imports_dir = root.path().join("runtime/business-os-imports");
+        fs::create_dir_all(&imports_dir).expect("create imports dir");
+        let file_path = imports_dir.join("handoff.md");
+        fs::write(&file_path, b"# Handoff\n\ninitial\n").expect("write import file");
+
+        let scan_roots = desktop_file_scan_roots(root.path());
+        let first_stamp = desktop_file_scan_roots_stamp(&scan_roots);
+        let first_scan_at = UNIX_EPOCH + Duration::from_secs(1_000);
+        assert!(
+            desktop_file_index_should_collect_scan(None, None, &first_stamp, first_scan_at),
+            "first background round must collect a full scan"
+        );
+        assert!(
+            !desktop_file_index_should_collect_scan(
+                Some(&first_stamp),
+                Some(first_scan_at),
+                &first_stamp,
+                first_scan_at + Duration::from_secs(DESKTOP_FILE_SCAN_INTERVAL_SECS)
+            ),
+            "unchanged roots must not recurse every desktop scan interval"
+        );
+
+        fs::write(
+            &file_path,
+            b"# Handoff\n\nchanged content with a different size\n",
+        )
+        .expect("update import file");
+        let changed_stamp = desktop_file_scan_roots_stamp(&scan_roots);
+        assert_ne!(
+            first_stamp, changed_stamp,
+            "direct scan-root file metadata changes must dirty the cheap root stamp"
+        );
+        assert!(
+            desktop_file_index_should_collect_scan(
+                Some(&first_stamp),
+                Some(first_scan_at),
+                &changed_stamp,
+                first_scan_at + Duration::from_secs(DESKTOP_FILE_SCAN_INTERVAL_SECS)
+            ),
+            "dirty roots must collect a full scan without waiting for fallback"
+        );
+        assert!(
+            desktop_file_index_should_collect_scan(
+                Some(&changed_stamp),
+                Some(first_scan_at),
+                &changed_stamp,
+                first_scan_at + Duration::from_secs(DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS)
+            ),
+            "unchanged roots still get a slow fallback scan for missed nested events"
         );
     }
 
@@ -11574,6 +15792,179 @@ mod tests {
     }
 
     #[test]
+    fn desktop_file_index_maintenance_uses_bounded_unsafe_candidate_plan() {
+        let root = tempfile::tempdir().expect("temp root");
+        let database_path = store::rxdb_store_path(root.path());
+        fs::create_dir_all(database_path.parent().expect("rxdb parent")).expect("create rxdb dir");
+        let mut conn = Connection::open(&database_path).expect("open rxdb sqlite");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE ctox_business_os__desktop_files__v0 (
+                id TEXT NOT NULL PRIMARY KEY UNIQUE,
+                revision TEXT,
+                deleted INTEGER NOT NULL CHECK (deleted IN (0, 1)),
+                lastWriteTime REAL NOT NULL,
+                data TEXT NOT NULL
+            );
+            CREATE TABLE ctox_business_os__desktop_file_chunks__v0 (
+                id TEXT NOT NULL PRIMARY KEY UNIQUE,
+                revision TEXT,
+                deleted INTEGER NOT NULL CHECK (deleted IN (0, 1)),
+                lastWriteTime REAL NOT NULL,
+                data TEXT NOT NULL
+            );
+            "#,
+        )
+        .expect("create desktop index tables");
+        {
+            let tx = conn.transaction().expect("begin seed tx");
+            for idx in 0..1_500 {
+                let id = format!("safe-core-{idx}");
+                let path = format!("/Users/test/Documents/safe-{idx}.md");
+                let document = json!({
+                    "id": id,
+                    "_rev": "1-seed",
+                    "kind": "file",
+                    "source": "ctox-core",
+                    "is_deleted": false,
+                    "local_path": path,
+                });
+                tx.execute(
+                    "INSERT INTO ctox_business_os__desktop_files__v0 \
+                     (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, ?3, ?4)",
+                    params![
+                        document.get("id").and_then(Value::as_str).unwrap(),
+                        "1-seed",
+                        idx as f64,
+                        serde_json::to_string(&document).expect("safe core json")
+                    ],
+                )
+                .expect("insert safe core file");
+            }
+            for idx in 0..1_500 {
+                let id = format!("upload-temp-{idx}");
+                let path = format!("/tmp/upload-{idx}.md");
+                let document = json!({
+                    "id": id,
+                    "_rev": "1-seed",
+                    "kind": "file",
+                    "source": "upload",
+                    "is_deleted": false,
+                    "local_path": path,
+                });
+                tx.execute(
+                    "INSERT INTO ctox_business_os__desktop_files__v0 \
+                     (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, ?3, ?4)",
+                    params![
+                        document.get("id").and_then(Value::as_str).unwrap(),
+                        "1-seed",
+                        idx as f64,
+                        serde_json::to_string(&document).expect("upload json")
+                    ],
+                )
+                .expect("insert upload file");
+            }
+            let unsafe_file = json!({
+                "id": "unsafe-temp-file",
+                "_rev": "1-seed",
+                "kind": "file",
+                "source": "ctox-core",
+                "is_deleted": false,
+                "local_path": "/tmp/ctox-leaked-index/file.md",
+                "content_generation_id": "gen-1",
+            });
+            tx.execute(
+                "INSERT INTO ctox_business_os__desktop_files__v0 \
+                 (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, ?3, ?4)",
+                params![
+                    "unsafe-temp-file",
+                    "1-seed",
+                    9_999_f64,
+                    serde_json::to_string(&unsafe_file).expect("unsafe file json")
+                ],
+            )
+            .expect("insert unsafe file");
+            let unsafe_chunk = json!({
+                "id": "unsafe-temp-file_gen-1_0",
+                "file_id": "unsafe-temp-file",
+                "generation_id": "gen-1",
+                "idx": 0,
+                "total": 1,
+                "encoding": "base64",
+                "data": "",
+            });
+            tx.execute(
+                "INSERT INTO ctox_business_os__desktop_file_chunks__v0 \
+                 (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, ?3, ?4)",
+                params![
+                    "unsafe-temp-file_gen-1_0",
+                    "1-seed",
+                    9_999_f64,
+                    serde_json::to_string(&unsafe_chunk).expect("unsafe chunk json")
+                ],
+            )
+            .expect("insert unsafe chunk");
+            tx.commit().expect("commit seed tx");
+        }
+
+        ensure_desktop_file_index_query_indexes(&conn).expect("ensure query indexes");
+        conn.execute_batch("ANALYZE")
+            .expect("analyze desktop index seed");
+        let limit = DESKTOP_FILE_INDEX_MAINTENANCE_FILE_LIMIT as i64;
+        let sql =
+            unsafe_desktop_file_index_candidates_sql("\"ctox_business_os__desktop_files__v0\"");
+        let plan = sqlite_query_plan(&conn, &sql, &[&limit]);
+        assert!(
+            plan.contains("ctox_business_os_desktop_files_live_core_idx"),
+            "unsafe maintenance candidate query must use the live core index, got:\n{plan}"
+        );
+        assert!(
+            !plan.contains("SCAN ctox_business_os__desktop_files__v0"),
+            "unsafe maintenance candidate query must not full-scan desktop_files, got:\n{plan}"
+        );
+        drop(conn);
+
+        let stats = compact_desktop_file_index_store_sync(root.path(), None)
+            .expect("compact desktop index");
+        assert_eq!(stats.tombstoned_unsafe_files, 1);
+        assert_eq!(stats.removed_unsafe_chunks, 1);
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("reopen sqlite");
+        let unsafe_row = read_desktop_file_row(&conn, "unsafe-temp-file");
+        assert_eq!(
+            unsafe_row.get("_deleted").and_then(Value::as_bool),
+            Some(true)
+        );
+        let safe_deleted: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ctox_business_os__desktop_files__v0 \
+                 WHERE id LIKE 'safe-core-%' AND deleted = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("safe deleted count");
+        assert_eq!(safe_deleted, 0);
+        let upload_deleted: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ctox_business_os__desktop_files__v0 \
+                 WHERE id LIKE 'upload-temp-%' AND deleted = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("upload deleted count");
+        assert_eq!(upload_deleted, 0);
+        let unsafe_chunks: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ctox_business_os__desktop_file_chunks__v0 \
+                 WHERE id LIKE 'unsafe-temp-file_%'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("unsafe chunk count");
+        assert_eq!(unsafe_chunks, 0);
+    }
+
+    #[test]
     fn live_ctox_desktop_file_loader_filters_non_core_and_deleted_rows() {
         let root = tempfile::tempdir().expect("temp root");
         let database_path = store::rxdb_store_path(root.path());
@@ -11705,7 +16096,13 @@ mod tests {
         }
         assert!(!first_chunks.is_empty(), "first scan produced chunks");
 
+        DESKTOP_FILE_CHUNK_COMPLETENESS_CHECKS.store(0, Ordering::Relaxed);
         sync_desktop_files_from_workspace_root(root.path(), &workspace).expect("rescan");
+        assert_eq!(
+            DESKTOP_FILE_CHUNK_COMPLETENESS_CHECKS.load(Ordering::Relaxed),
+            0,
+            "verified unchanged file rescan must not re-check every chunk id"
+        );
 
         let second_file;
         let second_chunks;
@@ -11822,7 +16219,13 @@ mod tests {
 
         // The periodic index scan revisits the file with its size policy
         // (lazy). It must keep the materialized state, not demote it.
+        DESKTOP_FILE_CHUNK_COMPLETENESS_CHECKS.store(0, Ordering::Relaxed);
         sync_desktop_file_from_path(root.path(), &file_path).expect("rescan");
+        assert_eq!(
+            DESKTOP_FILE_CHUNK_COMPLETENESS_CHECKS.load(Ordering::Relaxed),
+            0,
+            "verified materialized file rescan must not re-check every chunk id"
+        );
 
         let conn = Connection::open(store::rxdb_store_path(root.path())).expect("reopen sqlite");
         let file_after = read_desktop_file_row(&conn, &file_id);
@@ -12170,6 +16573,49 @@ mod tests {
             )
             .expect("ticket event projection count");
         assert!(event_count >= 1, "expected projected ticket events");
+    }
+
+    #[test]
+    fn sync_ticket_state_idle_gate_skips_unchanged_source() {
+        let root = tempfile::tempdir().expect("temp root");
+        crate::mission::ticket_local_native::create_local_ticket(
+            root.path(),
+            "Business OS ticket idle gate",
+            "Ticket source should only project after changes.",
+            Some("open"),
+            Some("normal"),
+        )
+        .expect("create local ticket");
+        tickets::sync_ticket_system(root.path(), "local").expect("sync local tickets");
+
+        let mut last_source_stamp = None;
+        let first = sync_ticket_state_if_changed(root.path(), &mut last_source_stamp)
+            .expect("first ticket source sync");
+        assert!(first >= 2, "expected item and event projection");
+
+        let unchanged_stamp = last_source_stamp.clone();
+        let second = sync_ticket_state_if_changed(root.path(), &mut last_source_stamp)
+            .expect("unchanged ticket source sync");
+        assert_eq!(second, 0);
+        assert_eq!(last_source_stamp, unchanged_stamp);
+
+        crate::mission::ticket_local_native::create_local_ticket(
+            root.path(),
+            "Business OS ticket idle gate change",
+            "A second ticket should refresh the projection.",
+            Some("open"),
+            Some("normal"),
+        )
+        .expect("create changed local ticket");
+        tickets::sync_ticket_system(root.path(), "local").expect("sync changed local tickets");
+
+        let third = sync_ticket_state_if_changed(root.path(), &mut last_source_stamp)
+            .expect("changed ticket source sync");
+        assert!(third >= 2, "expected changed ticket projection");
+
+        let fourth = sync_ticket_state_if_changed(root.path(), &mut last_source_stamp)
+            .expect("unchanged ticket source resync");
+        assert_eq!(fourth, 0);
     }
 
     #[test]

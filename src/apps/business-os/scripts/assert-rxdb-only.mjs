@@ -35,6 +35,7 @@ const forbidden = [
 
 const offenders = [];
 assertBusinessOsShellBuildKeyIsCurrent();
+assertBusinessOsStaticImportsResolve();
 assertAdvancedStatusInterfaceExists();
 assertFileChunkIntegrityContract();
 assertActiveNotesModuleDoesNotUseLegacyNotesnookBuild();
@@ -92,6 +93,87 @@ function assertBusinessOsShellBuildKeyIsCurrent() {
   }
 }
 
+function assertBusinessOsStaticImportsResolve() {
+  const frontendFiles = expandFiles([
+    join(appRoot, 'app.js'),
+    join(appRoot, 'shared'),
+    join(appRoot, 'modules'),
+    join(appRoot, 'desktop-apps'),
+  ]).filter((file) => /\.(js|mjs)$/.test(file));
+
+  for (const file of frontendFiles) {
+    const content = readFileSync(file, 'utf8');
+    for (const staticImport of staticImports(content)) {
+      if (!staticImport.specifier.startsWith('.')) continue;
+      const target = resolve(dirname(file), staticImport.specifier.split(/[?#]/)[0]);
+      const stat = statSync(target, { throwIfNoEntry: false });
+      const relFile = relative(repoRoot, file);
+      const relTarget = relative(repoRoot, target);
+      if (!stat?.isFile()) {
+        offenders.push(`${relFile}: static import target does not exist: ${staticImport.specifier}`);
+        continue;
+      }
+      if (!staticImport.named.length) continue;
+      const targetContent = readFileSync(target, 'utf8');
+      for (const name of staticImport.named) {
+        if (!hasNamedExport(targetContent, name)) {
+          offenders.push(`${relFile}: import "${name}" from ${staticImport.specifier} is not exported by ${relTarget}`);
+        }
+      }
+    }
+  }
+}
+
+function staticImports(content) {
+  const imports = [];
+  const importPattern = /(^|\n)\s*import\s+([\s\S]*?)\s+from\s+['"]([^'"]+)['"]/g;
+  let match;
+  while ((match = importPattern.exec(content))) {
+    const clause = match[2] || '';
+    imports.push({
+      specifier: match[3],
+      named: namedImportsFromClause(clause),
+    });
+  }
+  return imports;
+}
+
+function namedImportsFromClause(clause) {
+  const named = clause.match(/\{([\s\S]*?)\}/)?.[1] || '';
+  if (!named.trim()) return [];
+  return named
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => part.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/g, '').trim())
+    .filter(Boolean)
+    .map((part) => part.split(/\s+as\s+/i)[0].trim())
+    .filter(Boolean);
+}
+
+function hasNamedExport(content, name) {
+  const escaped = escapeRegExp(name);
+  if (new RegExp(`export\\s+(?:async\\s+)?function\\s+${escaped}\\b`).test(content)) return true;
+  if (new RegExp(`export\\s+class\\s+${escaped}\\b`).test(content)) return true;
+  if (new RegExp(`export\\s+(?:const|let|var)\\s+${escaped}\\b`).test(content)) return true;
+  for (const block of content.matchAll(/export\s*\{([\s\S]*?)\}/g)) {
+    const entries = block[1]
+      .split(',')
+      .map((part) => part.trim())
+      .filter(Boolean);
+    for (const entry of entries) {
+      const aliasMatch = entry.match(/\s+as\s+([A-Za-z_$][\w$]*)$/);
+      const exportedName = aliasMatch ? aliasMatch[1] : entry.split(/\s+/)[0];
+      if (exportedName === name) return true;
+    }
+  }
+  return false;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function contentForForbiddenHttpScan(file, content) {
   const rel = relative(repoRoot, file).replaceAll('\\', '/');
   let scanned = content;
@@ -101,6 +183,7 @@ function contentForForbiddenHttpScan(file, content) {
 
   if (rel === 'src/apps/business-os/shared/react-settings.js') {
     allow(
+      /['"]\/api\/business-os\/mcp\/connect-info['"]/g,
       /['"]\/api\/business-os\/ctox\/subscription-auth\/callback['"]/g,
       /['"]\/api\/business-os\/ctox\/subscription-auth\/start['"]/g,
     );
@@ -120,6 +203,7 @@ function contentForForbiddenHttpScan(file, content) {
 
   if (rel === 'src/core/business_os/server.rs') {
     allow(
+      /"\/api\/business-os\/mcp\/connect-info"/g,
       /"\/api\/business-os\/ctox\/subscription-auth\/start"/g,
       /"\/api\/business-os\/ctox\/subscription-auth\/callback"/g,
     );
@@ -159,6 +243,21 @@ function assertBusinessOsServerHttpDataApisAreGated() {
   ]) {
     if (server.includes(marker)) {
       offenders.push(`src/core/business_os/server.rs: legacy module HTTP handler marker must not exist: ${marker}`);
+    }
+  }
+  // The control-plane allowlist must never re-admit a Business OS data path. The
+  // knowledge / dataframe / document HTTP handlers still exist behind the 410
+  // gate, so a single allowlist entry like "/api/business-os/knowledge/document"
+  // would silently re-open them as a data bridge. Pin the allowlist to non-data
+  // control-plane routes only; data windows must be served over RxDB/WebRTC.
+  const controlPlane = server.match(/fn is_business_os_control_plane_path[\s\S]*?\n\}/);
+  if (!controlPlane) {
+    offenders.push('src/core/business_os/server.rs: is_business_os_control_plane_path must exist so its allowlist can be audited');
+  } else {
+    for (const dataPath of ['knowledge', 'dataframe', '/document', '/records', '/users', '/channels', '/reports']) {
+      if (controlPlane[0].includes(dataPath)) {
+        offenders.push(`src/core/business_os/server.rs: control-plane allowlist must not admit data path "${dataPath}" (would re-open an HTTP data bridge; serve it over RxDB/WebRTC instead)`);
+      }
     }
   }
 }
@@ -494,20 +593,23 @@ function assertFileChunkIntegrityContract() {
       offenders.push(`src/apps/business-os/shared/file-integrity.js: file chunk integrity missing ${marker}`);
     }
   }
-  for (const marker of ['readStoredFileFromChunks', 'file-integrity.js?v=20260603-active-chunk-query2']) {
+  for (const marker of ['readStoredFileFromDemandChunks', 'file-integrity.js?v=20260624-demand-file-fetch1']) {
     if (!fileViewer.includes(marker)) {
       offenders.push(`src/apps/business-os/desktop-apps/file-viewer/app.js: file chunk integrity missing ${marker}`);
     }
   }
-  for (const marker of ['FILE_CONTENT_HASH_SCHEME', 'FILE_CHUNK_HASH_SCHEME', 'chunk_hash', 'base64ToBytes', 'readStoredFileFromChunks']) {
+  for (const marker of ['FILE_CONTENT_HASH_SCHEME', 'FILE_CHUNK_HASH_SCHEME', 'chunk_hash', 'base64ToBytes', 'readStoredFileFromDemandChunks']) {
     if (!explorer.includes(marker)) {
       offenders.push(`src/apps/business-os/desktop-apps/explorer/app.js: uploaded file chunk contract missing ${marker}`);
     }
   }
-  for (const marker of ['readStoredFileFromChunks', 'file-integrity.js?v=20260603-active-chunk-query2', 'contentHashScheme']) {
+  for (const marker of ['readStoredFileFromDemandChunks', 'fileDemandLoaderFor', 'contentHashScheme']) {
     if (!universalImporter.includes(marker)) {
       offenders.push(`src/apps/business-os/shared/universal-importer.js: imported virtual file integrity missing ${marker}`);
     }
+  }
+  if (/desktop_file_chunks[\s\S]{0,160}\.find\(\)\s*\.\s*exec\(/.test(universalImporter)) {
+    offenders.push('src/apps/business-os/shared/universal-importer.js: imported virtual files must use rxdb.file.fetch, not broad desktop_file_chunks.find().exec()');
   }
   for (const marker of ['DESKTOP_FILE_CONTENT_HASH_SCHEME', 'DESKTOP_FILE_CHUNK_HASH_SCHEME', 'chunk_hash']) {
     if (!rustPeer.includes(marker)) {

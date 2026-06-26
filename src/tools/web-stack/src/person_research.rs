@@ -123,6 +123,12 @@ pub fn run_ctox_person_research_tool(
     let ctox_bin = scrape_bridge::default_ctox_bin();
 
     for plan in &plans {
+        // Fields this source's scrape target already produced this iteration.
+        // The cascade below intentionally still runs (to supplement fields the
+        // scrape target did not cover), but must not re-emit evidence for a
+        // field the scrape target already extracted — that is duplicate
+        // evidence for the same (source, field).
+        let mut scrape_covered_fields: BTreeSet<FieldKey> = BTreeSet::new();
         // If the module is registered as a CTOX scrape target, delegate
         // extraction to the universal-scraping pipeline. Drift then flows
         // through `ctox scrape execute --allow-heal` into the repair queue
@@ -158,6 +164,7 @@ pub fn run_ctox_person_research_tool(
                         "via": "scrape_target",
                         "note": ev.note,
                     }));
+                    scrape_covered_fields.insert(field);
                 }
                 // For drift / unreachable / blocked, fall through to the
                 // search+read path as a safety net; for `succeeded` we
@@ -256,6 +263,9 @@ pub fn run_ctox_person_research_tool(
                         if !request.fields.is_empty() && !request.fields.contains(&field) {
                             continue;
                         }
+                        if scrape_covered_fields.contains(&field) {
+                            continue;
+                        }
                         field_evidence.entry(field).or_default().push(json!({
                             "value": ev.value,
                             "confidence": ev.confidence.as_str(),
@@ -315,6 +325,9 @@ pub fn run_ctox_person_research_tool(
                                 continue;
                             };
                             if !request.fields.is_empty() && !request.fields.contains(&field) {
+                                continue;
+                            }
+                            if scrape_covered_fields.contains(&field) {
                                 continue;
                             }
                             let mut tagged = entry.clone();
@@ -454,7 +467,9 @@ fn build_person_research_plan(request: &PersonResearchRequest) -> Vec<PersonRese
             if !module.authoritative_for().contains(field) {
                 continue;
             }
-            if module.tier() == Tier::C && !is_tier_c_opt_in(module, &request.include_private) {
+            if module.privacy_opt_in_required()
+                && !is_source_opted_in(module, &request.include_private)
+            {
                 continue;
             }
             let entry = per_source
@@ -479,7 +494,7 @@ fn build_person_research_plan(request: &PersonResearchRequest) -> Vec<PersonRese
     plans
 }
 
-fn is_tier_c_opt_in(module: &'static dyn SourceModule, include_private: &[String]) -> bool {
+fn is_source_opted_in(module: &'static dyn SourceModule, include_private: &[String]) -> bool {
     let id = module.id().to_ascii_lowercase();
     for raw in include_private {
         let needle = raw.trim().to_ascii_lowercase();
@@ -1296,6 +1311,37 @@ mod tests {
                 plan.source_id
             );
         }
+    }
+
+    #[test]
+    fn plan_excludes_person_discovery_without_opt_in() {
+        // person-discovery (Tier S, people-scraping) must NOT run implicitly on
+        // a plain company lookup — it harvests GDPR personal data.
+        let request = PersonResearchRequest {
+            company: "ACME".into(),
+            country: Country::De,
+            mode: ResearchMode::NewRecord,
+            fields: vec![FieldKey::PersonVorname],
+            include_private: Vec::new(),
+            workspace: None,
+            persist_workspace: false,
+        };
+        let plans = build_person_research_plan(&request);
+        assert!(
+            !plans.iter().any(|p| p.source_id == "person-discovery"),
+            "person-discovery must be gated behind an explicit opt-in"
+        );
+
+        // With an explicit opt-in it appears again.
+        let opted = PersonResearchRequest {
+            include_private: vec!["person-discovery".into()],
+            ..request
+        };
+        let plans = build_person_research_plan(&opted);
+        assert!(
+            plans.iter().any(|p| p.source_id == "person-discovery"),
+            "person-discovery must run when explicitly opted in"
+        );
     }
 
     #[test]

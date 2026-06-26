@@ -47,6 +47,12 @@ export async function openReactSettings({
       loaded: false,
       error: '',
     },
+    mcp: {
+      loading: false,
+      info: null,
+      error: '',
+      copied: '',
+    },
     modules: Array.isArray(modules) ? modules : [],
     governance,
     templates: null,
@@ -173,6 +179,31 @@ export async function openReactSettings({
     }
     render();
   };
+  const refreshMcpConnectInfo = async () => {
+    if (!isAdmin) return;
+    settingsState.mcp = {
+      ...settingsState.mcp,
+      loading: true,
+      error: '',
+      copied: '',
+    };
+    render();
+    try {
+      settingsState.mcp = {
+        loading: false,
+        info: await loadMcpConnectInfo(),
+        error: '',
+        copied: '',
+      };
+    } catch (error) {
+      settingsState.mcp = {
+        ...settingsState.mcp,
+        loading: false,
+        error: String(error?.message || error),
+      };
+    }
+    render();
+  };
   const revokeModuleSupportDownloadUrl = (moduleId) => {
     const status = settingsState.moduleSupportStatus?.[moduleId];
     if (status?.downloadUrl && globalThis.URL?.revokeObjectURL) {
@@ -214,6 +245,7 @@ export async function openReactSettings({
       moduleSupportStatus: settingsState.moduleSupportStatus,
       governance: settingsState.governance,
       channels: settingsState.channels,
+      mcp: settingsState.mcp,
     });
     body.querySelector('[data-close-settings]')?.addEventListener('click', () => {
       try { channelsAccountsSub?.unsubscribe?.(); } catch {}
@@ -250,6 +282,9 @@ export async function openReactSettings({
         }
         if (settingsState.tab === 'activity' && isAdmin && !settingsState.activity.loaded) {
           refreshActivity();
+        }
+        if (settingsState.tab === 'mcp' && isAdmin && !settingsState.mcp.info && !settingsState.mcp.loading) {
+          refreshMcpConnectInfo();
         }
       });
     });
@@ -299,6 +334,20 @@ export async function openReactSettings({
     });
     body.querySelector('[data-runtime-refresh]')?.addEventListener('click', refreshRuntimeSettings);
     body.querySelector('[data-activity-refresh]')?.addEventListener('click', refreshActivity);
+    body.querySelector('[data-mcp-refresh]')?.addEventListener('click', refreshMcpConnectInfo);
+    body.querySelectorAll('[data-mcp-copy]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const value = mcpCopyValue(button.dataset.mcpCopy, settingsState.mcp.info);
+        if (!value) return;
+        try {
+          await navigator.clipboard?.writeText?.(value);
+          settingsState.mcp = { ...settingsState.mcp, copied: button.dataset.mcpCopy };
+        } catch {
+          settingsState.mcp = { ...settingsState.mcp, copied: 'failed' };
+        }
+        render();
+      });
+    });
     body.querySelector('[data-runtime-authorize-subscription]')?.addEventListener('click', async () => {
       const authWindow = window.open('', 'ctox-chatgpt-subscription');
       settingsState.subscriptionAuth = { status: 'starting', message: 'Geräte-Code wird bei CTOX angefordert.' };
@@ -589,6 +638,9 @@ export async function openReactSettings({
   if (settingsState.tab === 'activity' && isAdmin) {
     refreshActivity();
   }
+  if (settingsState.tab === 'mcp' && isAdmin) {
+    refreshMcpConnectInfo();
+  }
 }
 
 function settingsTemplate({
@@ -616,6 +668,7 @@ function settingsTemplate({
   moduleSupportStatus,
   governance,
   channels,
+  mcp,
 }) {
   return `
     <header class="drawer-header-row settings-head">
@@ -636,6 +689,7 @@ function settingsTemplate({
       ${tabButton('runtime', 'Runtime', tab)}
       ${tabButton('channels', 'Channels', tab)}
       ${tabButton('sync', 'Sync', tab)}
+      ${isAdmin ? tabButton('mcp', 'MCP', tab) : ''}
       ${tabButton('users', 'Nutzer', tab)}
       ${isAdmin ? tabButton('activity', 'Aktivität', tab) : ''}
       ${canOpenAdmin ? tabButton('admin', 'Module', tab) : ''}
@@ -645,6 +699,7 @@ function settingsTemplate({
       ${tab === 'runtime' ? runtimePanel(isAdmin, runtimeSettings, runtimeLoading, subscriptionAuth) : ''}
       ${tab === 'channels' ? channelsPanel(channels) : ''}
       ${tab === 'sync' ? syncPanel(syncConfig, isAdmin) : ''}
+      ${tab === 'mcp' && isAdmin ? mcpPanel(mcp) : ''}
       ${tab === 'users' ? usersPanel(user, role, isAdmin, users, canManageUsers) : ''}
       ${tab === 'activity' && isAdmin ? activityPanel(activity) : ''}
       ${tab === 'admin' && canOpenAdmin ? adminPanel(managedModules || modules, templates, editingModuleId, {
@@ -822,6 +877,74 @@ function syncPanel(syncConfig, isAdmin) {
       ${isAdmin ? `<button class="text-button settings-primary" type="button" data-settings-command="sync">Sync Konfiguration an CTOX geben</button>` : ''}
     </section>
   `;
+}
+
+function mcpPanel(mcp = {}) {
+  const info = mcp.info || null;
+  const codexConfig = info ? JSON.stringify(info.codex || {}, null, 2) : '';
+  const claudeConfig = info ? JSON.stringify(info.claude || {}, null, 2) : '';
+  const managed = info?.managed || null;
+  const copied = mcp.copied || '';
+  return `
+    <section class="settings-section">
+      <header>
+        <h3>Business OS MCP</h3>
+        <span>${escapeHtml(mcp.loading ? 'Verbindung wird gelesen.' : mcpStatusLabel(info, mcp.error))}</span>
+      </header>
+      <dl class="settings-kv">
+        ${kv('Status', mcp.error ? 'Fehler' : (info?.status || 'Noch nicht geladen'))}
+        ${kv('Modus', info?.mode || '-')}
+        ${kv('Server', info?.server_name || '-')}
+        ${kv('Lokaler Endpoint', info?.endpoint || '-')}
+        ${kv('Managed Endpoint', managed?.endpoint || '-')}
+        ${kv('Managed Status', managed?.status || 'nicht geladen')}
+        ${kv('Instanz', managed?.instance_alias || info?.managed_instance_id || '-')}
+        ${kv('Secret', info?.secret ? `${info.secret.scope}/${info.secret.name}` : 'business_os/mcp_inbound_auth_token')}
+      </dl>
+      <div class="runtime-actions">
+        <button class="text-button settings-primary" type="button" data-mcp-refresh ${mcp.loading ? 'disabled' : ''}>MCP Status laden</button>
+        ${info ? `<button class="text-button" type="button" data-mcp-copy="endpoint">Lokalen Endpoint kopieren</button>` : ''}
+        ${info ? `<button class="text-button" type="button" data-mcp-copy="managedEndpoint">Managed Endpoint kopieren</button>` : ''}
+        ${info ? `<button class="text-button" type="button" data-mcp-copy="token">Lokalen Token kopieren</button>` : ''}
+      </div>
+      ${mcp.error ? `<p class="settings-note">${escapeHtml(mcp.error)}</p>` : ''}
+      ${copied ? `<p class="settings-note">${escapeHtml(copied === 'failed' ? 'Kopieren fehlgeschlagen.' : 'In die Zwischenablage kopiert.')}</p>` : ''}
+    </section>
+    ${info ? `
+      <section class="settings-section">
+        <header><h3>Lokale Codex / Claude Config</h3><span>Nur fuer Agenten mit Zugriff auf 127.0.0.1 dieser Instanz.</span></header>
+        <div class="settings-grid is-one">
+          <label><span>Lokaler Bearer Token</span><input type="password" readonly value="${escapeAttr(info.token || '')}" /></label>
+          <label><span>Codex JSON</span><textarea readonly rows="8">${escapeHtml(codexConfig)}</textarea></label>
+          <label><span>Claude JSON</span><textarea readonly rows="8">${escapeHtml(claudeConfig)}</textarea></label>
+        </div>
+        <div class="runtime-actions">
+          <button class="text-button settings-primary" type="button" data-mcp-copy="codex">Codex Config kopieren</button>
+          <button class="text-button" type="button" data-mcp-copy="claude">Claude Config kopieren</button>
+          <button class="text-button" type="button" data-mcp-copy="authHeader">Authorization Header kopieren</button>
+        </div>
+        <p class="settings-note">Dieser lokale Token ist nicht der mcp.ctox.dev Web-Auth-Token. Fuer beliebige Coding Agents muss Managed MCP in ctox.dev verbunden werden.</p>
+      </section>
+    ` : ''}
+  `;
+}
+
+function mcpStatusLabel(info, error) {
+  if (error) return 'Nicht verbunden.';
+  if (!info) return 'Noch nicht geladen.';
+  if (info.status === 'local_ready_managed_not_connected') return 'Lokal bereit; Managed Web Auth fehlt.';
+  return info.status === 'ready' ? 'Bereit fuer externe MCP Clients.' : String(info.status || 'Status unbekannt.');
+}
+
+function mcpCopyValue(kind, info) {
+  if (!info) return '';
+  if (kind === 'endpoint') return info.endpoint || '';
+  if (kind === 'managedEndpoint') return info.managed?.endpoint || '';
+  if (kind === 'token') return info.token || '';
+  if (kind === 'authHeader') return info.authorization_header || (info.token ? `Bearer ${info.token}` : '');
+  if (kind === 'codex') return JSON.stringify(info.codex || {}, null, 2);
+  if (kind === 'claude') return JSON.stringify(info.claude || {}, null, 2);
+  return '';
 }
 
 function usersPanel(user, role, isAdmin, users, canManageUsers) {
@@ -2238,6 +2361,28 @@ async function loadTemplates({ db } = {}) {
   };
 }
 
+async function loadMcpConnectInfo() {
+  const response = await fetch('/api/business-os/mcp/connect-info', {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
+    cache: 'no-store',
+  });
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = null;
+  }
+  if (!response.ok) {
+    throw new Error(payload?.message || payload?.error || text || `MCP Status konnte nicht geladen werden (${response.status}).`);
+  }
+  if (!payload?.ok) {
+    throw new Error(payload?.message || payload?.error || 'MCP Status konnte nicht geladen werden.');
+  }
+  return payload;
+}
+
 async function saveModule(payload, { commandBus, db, session } = {}) {
   const command = await dispatchModuleCommand({
     commandBus,
@@ -2440,9 +2585,9 @@ function cssEscape(value) {
 
 // ============================================================================
 // Channels tab — onboarding hub + per-channel wizards.
-// All wizard actions are click-through stubs today; the real wiring lives behind
-// CTOX-Core command handlers that don't exist yet. The UI shows the full flow
-// so user-facing copy and steps can be iterated before any backend work.
+// Wizard actions dispatch server-authoritative CTOX channel commands. The
+// browser never talks directly to provider APIs and never stores provider
+// tokens in replicated Business OS collections.
 // ============================================================================
 
 const CHANNEL_DEFINITIONS = [
@@ -2469,6 +2614,48 @@ const CHANNEL_DEFINITIONS = [
     title: 'MS Teams',
     dot: '#5059c9',
     short: 'Microsoft Teams via Graph-API. OAuth-Login mit deinem Tenant.',
+  },
+  {
+    id: 'slack',
+    title: 'Slack',
+    dot: '#4a154b',
+    short: 'Slack Workspace per Bot Token, Channel-IDs und Socket-/Events-kompatiblem Backend.',
+  },
+  {
+    id: 'discord',
+    title: 'Discord',
+    dot: '#5865f2',
+    short: 'Discord Bot fuer erlaubte Server- und Channel-Kontexte.',
+  },
+  {
+    id: 'telegram',
+    title: 'Telegram',
+    dot: '#229ed9',
+    short: 'Telegram Bot fuer DMs, Gruppen, Supergruppen und Channels.',
+  },
+  {
+    id: 'matrix',
+    title: 'Matrix',
+    dot: '#0dbd8b',
+    short: 'Matrix Homeserver mit Access Token und erlaubten Rooms.',
+  },
+  {
+    id: 'mattermost',
+    title: 'Mattermost',
+    dot: '#0058cc',
+    short: 'Self-hosted Mattermost per Server-URL, Bot Token und Channel-IDs.',
+  },
+  {
+    id: 'zulip',
+    title: 'Zulip',
+    dot: '#6492fe',
+    short: 'Zulip Realm mit Bot Email, API Key, Streams und Topics.',
+  },
+  {
+    id: 'google_chat',
+    title: 'Google Chat',
+    dot: '#34a853',
+    short: 'Google Workspace Chat Spaces per OAuth Access Token.',
   },
 ];
 
@@ -2504,6 +2691,80 @@ const EMAIL_PROVIDERS = [
     glyph: '⚙',
   },
 ];
+
+const BOT_CHAT_CHANNELS = {
+  slack: {
+    title: 'Slack einrichten',
+    fields: [
+      ['botToken', 'Bot Token', 'password', 'xoxb-...'],
+      ['workspaceId', 'Workspace-ID', 'text', 'T012345'],
+      ['botUserId', 'Bot-User-ID', 'text', 'U012345'],
+      ['channelIds', 'Channel-IDs', 'text', 'C012345,C067890'],
+      ['appToken', 'App Token (Socket Mode, optional)', 'password', 'xapp-...'],
+      ['signingSecret', 'Signing Secret (optional)', 'password', ''],
+      ['apiBaseUrl', 'API Base URL (optional)', 'url', 'https://slack.com/api'],
+    ],
+  },
+  discord: {
+    title: 'Discord einrichten',
+    fields: [
+      ['botToken', 'Bot Token', 'password', ''],
+      ['applicationId', 'Application-ID', 'text', ''],
+      ['botUserId', 'Bot-User-ID (optional)', 'text', ''],
+      ['guildIds', 'Guild-IDs', 'text', '123,456'],
+      ['channelIds', 'Channel-IDs', 'text', '123,456'],
+      ['apiBaseUrl', 'API Base URL (optional)', 'url', 'https://discord.com/api/v10'],
+    ],
+  },
+  telegram: {
+    title: 'Telegram einrichten',
+    fields: [
+      ['botToken', 'Bot Token', 'password', '123456:ABC...'],
+      ['botUsername', 'Bot Username', 'text', 'ctox_bot'],
+      ['chatIds', 'Chat-IDs', 'text', '-100123,12345'],
+      ['apiBaseUrl', 'API Base URL (optional)', 'url', 'https://api.telegram.org'],
+    ],
+  },
+  matrix: {
+    title: 'Matrix einrichten',
+    fields: [
+      ['homeserverUrl', 'Homeserver URL', 'url', 'https://matrix.example.org'],
+      ['accessToken', 'Access Token', 'password', ''],
+      ['userId', 'User-ID', 'text', '@ctox:example.org'],
+      ['roomIds', 'Room-IDs', 'text', '!room:example.org'],
+    ],
+  },
+  mattermost: {
+    title: 'Mattermost einrichten',
+    fields: [
+      ['serverUrl', 'Server URL', 'url', 'https://mattermost.example.org'],
+      ['botToken', 'Bot Token', 'password', ''],
+      ['botUserId', 'Bot-User-ID', 'text', ''],
+      ['teamId', 'Team-ID', 'text', ''],
+      ['channelIds', 'Channel-IDs', 'text', 'abc,def'],
+    ],
+  },
+  zulip: {
+    title: 'Zulip einrichten',
+    fields: [
+      ['realmUrl', 'Realm URL', 'url', 'https://zulip.example.org'],
+      ['botEmail', 'Bot Email', 'email', 'ctox-bot@example.org'],
+      ['apiKey', 'API Key', 'password', ''],
+      ['streams', 'Streams', 'text', 'general,support'],
+      ['topic', 'Topic (optional)', 'text', 'CTOX'],
+    ],
+  },
+  google_chat: {
+    title: 'Google Chat einrichten',
+    fields: [
+      ['accessToken', 'Access Token', 'password', 'ya29...'],
+      ['user', 'User/App Label', 'text', 'ctox@example.com'],
+      ['appId', 'App-ID (optional)', 'text', ''],
+      ['spaceNames', 'Space Names', 'text', 'spaces/AAAA...'],
+      ['apiBaseUrl', 'API Base URL (optional)', 'url', 'https://chat.googleapis.com'],
+    ],
+  },
+};
 
 function channelsPanel(state) {
   if (state.wizard) return channelsWizardPanel(state);
@@ -2569,6 +2830,35 @@ function channelHubRow(def, accounts) {
 }
 
 function channelHealthBadge(account) {
+  const adapterStatus = channelAdapterStatus(account);
+  const authState = String(adapterStatus.auth_state || '').toLowerCase();
+  const syncState = String(adapterStatus.sync_state || '').toLowerCase();
+  const scopeState = String(adapterStatus.scope_state || '').toLowerCase();
+  const permissionState = String(adapterStatus.permission_state || '').toLowerCase();
+  const probeState = String(adapterStatus.probe_state || '').toLowerCase();
+  const rateLimitedUntil = Number(adapterStatus.rate_limited_until_ms || 0);
+  if (authState === 'failed' || authState === 'deauthorized') {
+    return `<span class="channel-row-status channel-row-status--bad">Auth fehlgeschlagen</span>`;
+  }
+  if (scopeState === 'missing_scope') {
+    return `<span class="channel-row-status channel-row-status--bad">Scope fehlt</span>`;
+  }
+  if (permissionState === 'missing_permission') {
+    return `<span class="channel-row-status channel-row-status--bad">Rechte fehlen</span>`;
+  }
+  if (probeState === 'failed') {
+    return `<span class="channel-row-status channel-row-status--warn">Probe fehlgeschlagen</span>`;
+  }
+  if (syncState === 'failed') {
+    return `<span class="channel-row-status channel-row-status--bad">Sync fehlgeschlagen</span>`;
+  }
+  if (rateLimitedUntil > Date.now()) {
+    return `<span class="channel-row-status channel-row-status--warn">Rate Limit</span>`;
+  }
+  if (adapterStatus.last_success_at_ms) {
+    const ageMs = Date.now() - Number(adapterStatus.last_success_at_ms);
+    if (ageMs < 24 * 3600 * 1000) return `<span class="channel-row-status channel-row-status--ok">Aktiv</span>`;
+  }
   const latest = Math.max(parseIso(account.last_inbound_ok_at), parseIso(account.last_outbound_ok_at));
   if (!latest) return `<span class="channel-row-status channel-row-status--warn">Noch keine Aktivität</span>`;
   const ageMs = Date.now() - latest;
@@ -2578,9 +2868,87 @@ function channelHealthBadge(account) {
 }
 
 function channelLastActivityLine(account) {
+  const adapterStatus = channelAdapterStatus(account);
   const inbound = account.last_inbound_ok_at ? `Letzter Eingang: ${formatIsoShort(account.last_inbound_ok_at)}` : 'Noch kein Eingang';
   const outbound = account.last_outbound_ok_at ? `Letzter Ausgang: ${formatIsoShort(account.last_outbound_ok_at)}` : 'Noch kein Ausgang';
-  return `<small class="channel-row-meta">${escapeHtml(inbound)} · ${escapeHtml(outbound)}</small>`;
+  const statusBits = [];
+  if (adapterStatus.provider_error_kind && adapterStatus.provider_error_kind !== 'none') {
+    statusBits.push(`Status: ${adapterStatus.provider_error_kind}`);
+  }
+  const remediation = channelAdapterRemediation(adapterStatus);
+  if (remediation) statusBits.push(`Hinweis: ${remediation}`);
+  if (adapterStatus.last_operation) statusBits.push(`Operation: ${adapterStatus.last_operation}`);
+  if (adapterStatus.last_cursor) statusBits.push(`Cursor: ${adapterStatus.last_cursor}`);
+  if (adapterStatus.realtime_transport) statusBits.push(`Realtime: ${adapterStatus.realtime_transport}`);
+  if (adapterStatus.realtime_config_state && !['configured', 'fake'].includes(String(adapterStatus.realtime_config_state))) {
+    statusBits.push(`Realtime-Konfig: ${adapterStatus.realtime_config_state}`);
+  }
+  if (adapterStatus.realtime_supervision_state && !['polling_via_service_sync', 'fake'].includes(String(adapterStatus.realtime_supervision_state))) {
+    statusBits.push(`Realtime-Supervision: ${adapterStatus.realtime_supervision_state}`);
+  }
+  if (adapterStatus.realtime_last_cursor) statusBits.push(`Realtime-Cursor: ${adapterStatus.realtime_last_cursor}`);
+  if (adapterStatus.telegram_group_privacy_state && adapterStatus.telegram_group_privacy_state !== 'all_group_messages_visible') {
+    statusBits.push(`Telegram-Privacy: ${adapterStatus.telegram_group_privacy_state}`);
+  }
+  if (adapterStatus.slack_socket_mode_state && adapterStatus.slack_socket_mode_state !== 'ready_to_connect') {
+    statusBits.push(`Slack-Socket: ${adapterStatus.slack_socket_mode_state}`);
+  }
+  if (adapterStatus.slack_socket_mode_supervisor_state) {
+    statusBits.push(`Slack-Socket-Supervision: ${adapterStatus.slack_socket_mode_supervisor_state}`);
+  }
+  if (adapterStatus.realtime_backoff_reason) {
+    statusBits.push(`Realtime-Backoff: ${adapterStatus.realtime_backoff_reason}`);
+  }
+  if (adapterStatus.matrix_e2ee_state && adapterStatus.matrix_e2ee_state !== 'plaintext_only') {
+    statusBits.push(`Matrix-E2EE: ${adapterStatus.matrix_e2ee_state}`);
+  }
+  if (adapterStatus.matrix_sdk_state_persistence && adapterStatus.matrix_sdk_state_persistence !== 'not_required_plaintext_v1') {
+    statusBits.push(`Matrix-SDK-State: ${adapterStatus.matrix_sdk_state_persistence}`);
+  }
+  if (adapterStatus.channel_probe_state && !['ok', 'unknown'].includes(String(adapterStatus.channel_probe_state))) {
+    statusBits.push(`Channel-Probe: ${adapterStatus.channel_probe_state}`);
+  }
+  if (adapterStatus.guild_probe_state && !['ok', 'unknown'].includes(String(adapterStatus.guild_probe_state))) {
+    statusBits.push(`Guild-Probe: ${adapterStatus.guild_probe_state}`);
+  }
+  if (adapterStatus.gateway_probe_state && !['ok', 'unknown'].includes(String(adapterStatus.gateway_probe_state))) {
+    statusBits.push(`Gateway-Probe: ${adapterStatus.gateway_probe_state}`);
+  }
+  if (adapterStatus.application_probe_state && !['ok', 'unknown'].includes(String(adapterStatus.application_probe_state))) {
+    statusBits.push(`Application-Probe: ${adapterStatus.application_probe_state}`);
+  }
+  if (adapterStatus.server_version) statusBits.push(`Server: ${adapterStatus.server_version}`);
+  if (adapterStatus.server_probe_state && !['ok', 'unknown'].includes(String(adapterStatus.server_probe_state))) {
+    statusBits.push(`Server-Probe: ${adapterStatus.server_probe_state}`);
+  }
+  if (adapterStatus.tls_state === 'plain_http') statusBits.push('TLS: plain_http');
+  if (adapterStatus.rate_limited_until_ms && Number(adapterStatus.rate_limited_until_ms) > Date.now()) {
+    statusBits.push(`Rate Limit bis ${formatMillisShort(Number(adapterStatus.rate_limited_until_ms))}`);
+  }
+  if (adapterStatus.last_error) statusBits.push(`Fehler: ${adapterStatus.last_error}`);
+  const suffix = statusBits.length ? ` · ${escapeHtml(statusBits.join(' · '))}` : '';
+  return `<small class="channel-row-meta">${escapeHtml(inbound)} · ${escapeHtml(outbound)}${suffix}</small>`;
+}
+
+function channelAdapterStatus(account) {
+  const profile = account?.profile_json || {};
+  return profile.adapterStatus || profile.adapter_status || {};
+}
+
+function channelAdapterRemediation(adapterStatus) {
+  const kind = String(adapterStatus?.provider_error_kind || '').toLowerCase();
+  if (!kind || kind === 'none') return '';
+  if (kind === 'deauthorized') return 'Account neu verbinden oder Bot-Token im Secret Store rotieren.';
+  if (kind === 'missing_scope') return 'OAuth-Scopes und Admin-Freigaben beim Anbieter pruefen.';
+  if (kind === 'missing_intent') return 'Discord MESSAGE_CONTENT Intent aktivieren oder auf DMs/Mentions begrenzen.';
+  if (kind === 'missing_permission') return 'Bot-Mitgliedschaft, Channel-Allowlist und Anbieterrechte pruefen.';
+  if (kind === 'rate_limited') return 'Retry-After abwarten; der naechste Sync versucht es erneut.';
+  return adapterStatus?.provider_remediation || '';
+}
+
+function formatMillisShort(value) {
+  if (!Number.isFinite(value) || value <= 0) return '';
+  return formatIsoShort(new Date(value).toISOString());
 }
 
 function channelsWizardPanel(state) {
@@ -2588,6 +2956,7 @@ function channelsWizardPanel(state) {
   if (state.wizard === 'jami') return jamiWizard(state);
   if (state.wizard === 'email') return emailWizard(state);
   if (state.wizard === 'teams') return teamsWizard(state);
+  if (BOT_CHAT_CHANNELS[state.wizard]) return botChatWizard(state, BOT_CHAT_CHANNELS[state.wizard]);
   return '';
 }
 
@@ -2722,6 +3091,68 @@ function renderPairingStatus(status) {
     return `<div class="channels-qr-status is-waiting">⏳ Warte auf Scan…</div>`;
   }
   return `<div class="channels-qr-status is-waiting">${escapeHtml(status || 'unbekannt')}</div>`;
+}
+
+function botChatWizard(state, def) {
+  const step = state.step || 'intro';
+  const channelId = state.wizard;
+  const errorBlock = state.error
+    ? `<div class="channels-alert channels-alert--err">${escapeHtml(state.error)}</div>`
+    : '';
+  if (step === 'testing') {
+    return wizardShell({
+      title: def.title,
+      step: 2, totalSteps: 3,
+      body: `
+        <div class="channels-testing">
+          <div class="channels-testing-step is-active">CTOX testet ${escapeHtml(channelId)} ...</div>
+          <small class="channels-form-note">Backend ruft den nativen Adapter ueber <code>ctox.channel.test</code>.</small>
+        </div>
+        ${errorBlock}
+      `,
+    });
+  }
+  if (step === 'confirm') {
+    const result = state.data?.testResult?.adapter_result || state.data?.testResult || {};
+    const accountKey = result.account_key || state.data?.connectedAccountKey || '';
+    return wizardShell({
+      title: def.title,
+      step: 3, totalSteps: 3,
+      body: `
+        <div class="channels-confirm">
+          <div class="channels-confirm-icon channels-confirm-icon--ok">✓</div>
+          <h4>${escapeHtml(channelTitle(channelId))} ist verbunden</h4>
+          ${accountKey ? `<div class="channels-confirm-detail"><span>Account</span><strong>${escapeHtml(accountKey)}</strong></div>` : ''}
+          ${result.status ? `<div class="channels-confirm-detail"><span>Status</span><strong>${escapeHtml(result.status)}</strong></div>` : ''}
+        </div>
+      `,
+      backLabel: '',
+      nextLabel: 'Fertig',
+      nextAction: 'wizard:done',
+    });
+  }
+  return wizardShell({
+    title: def.title,
+    step: 1, totalSteps: 3,
+    body: `
+      <div class="channels-form">
+        ${def.fields.map(([key, label, type, placeholder]) => `
+          <label class="channels-field">
+            <span>${escapeHtml(label)}</span>
+            <input type="${escapeHtml(type)}" data-channel-input="${escapeHtml(`${channelId}:${key}`)}" placeholder="${escapeHtml(placeholder || '')}" value="${type === 'password' ? '' : escapeHtml(state.data?.[key] || '')}" />
+          </label>
+        `).join('')}
+        <small class="channels-form-note">Tokens werden serverseitig im CTOX Runtime-Settings-Pfad gespeichert und nicht in Browser-Collections repliziert.</small>
+        ${errorBlock}
+      </div>
+    `,
+    nextLabel: 'Verbinden + testen',
+    nextAction: `${channelId}:save_test`,
+  });
+}
+
+function channelTitle(channelId) {
+  return CHANNEL_DEFINITIONS.find((def) => def.id === channelId)?.title || channelId;
 }
 
 // ---- Jami wizard ----
@@ -3318,6 +3749,10 @@ function channelCommandForEndpoint(path, payload) {
 }
 
 function channelDataKey(inputKey) {
+  const [channelId, fieldKey] = String(inputKey || '').split(':');
+  if (BOT_CHAT_CHANNELS[channelId]?.fields?.some(([key]) => key === fieldKey)) {
+    return fieldKey;
+  }
   switch (inputKey) {
     case 'jami:displayName': return 'jamiDisplayName';
     case 'email:address': return 'emailAddress';
@@ -3347,6 +3782,36 @@ async function handleChannelAction(action, ctx) {
     resetWizard();
     channels.status = 'Setup abgeschlossen.';
     render();
+    return;
+  }
+
+  const botMatch = action.match(/^([a-z_]+):save_test$/);
+  if (botMatch && BOT_CHAT_CHANNELS[botMatch[1]]) {
+    const channelId = botMatch[1];
+    channels.error = '';
+    channels.step = 'testing';
+    render();
+    const payload = botChatConfigPayload(channelId, channels);
+    const saveResult = await postChannelEndpoint('channel.settings.save', {
+      channel: channelId,
+      config: payload,
+    });
+    if (!saveResult) {
+      channels.step = 'intro';
+      render();
+      return;
+    }
+    const testResult = await postChannelEndpoint('channel.test', {
+      channel: channelId,
+    });
+    if (!testResult) {
+      channels.step = 'intro';
+      render();
+      return;
+    }
+    channels.data.testResult = testResult;
+    channels.step = 'confirm';
+    pollAccountAppearance(channelId);
     return;
   }
 
@@ -3509,6 +3974,16 @@ function teamsConfigPayload(channels) {
     username: data.teamsUsername || '',
     password: data.teamsPassword || '',
   };
+}
+
+function botChatConfigPayload(channelId, channels) {
+  const data = channels.data || {};
+  const snake = (key) => key.replace(/[A-Z]/g, (ch) => `_${ch.toLowerCase()}`);
+  const payload = {};
+  for (const [key] of BOT_CHAT_CHANNELS[channelId]?.fields || []) {
+    payload[snake(key)] = data[key] || '';
+  }
+  return payload;
 }
 
 function collectTeamsSubscriptions() {

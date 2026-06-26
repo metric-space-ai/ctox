@@ -1216,28 +1216,52 @@ function handleEditorInput(e) {
   // Lexical handles input automatically via its registerUpdateListener
 }
 
+function lockedPlaceholderTitle(t = state.t) {
+  return t('lockedNoteTitle', 'Gesperrte Notiz');
+}
+
+function deriveTitleFromPlainText(plainText, t = state.t) {
+  const lines = String(plainText || '').split('\n').map(l => l.trim()).filter(Boolean);
+  const title = lines.length > 0 ? lines[0].replace(/^#+\s+/, '').trim() : '';
+  return title || t('untitled', 'Unbenannte Notiz');
+}
+
+// Builds the metadata fields persisted to the synced collection. This is the
+// single chokepoint that enforces the zero-knowledge invariants for locked
+// notes: the cleartext passcode is never persisted (it lives only in-memory in
+// state.activeNoteDecrypted), and the title is replaced with a non-revealing
+// placeholder so the synced/replicated store never carries the first line of a
+// locked note's decrypted body.
+function buildNotePersistPayload(note, t = state.t) {
+  const isLocked = !!note.is_locked;
+  return {
+    title: isLocked ? lockedPlaceholderTitle(t) : (note.title || ''),
+    notebook: note.notebook || '',
+    tags: note.tags || '',
+    is_favorite: !!note.is_favorite,
+    is_trashed: !!note.is_trashed,
+    is_locked: isLocked,
+    lock_passcode: ''
+  };
+}
+
 function processContentInput(newHtml) {
   const note = state.notes.find(n => n.id === state.activeNoteId);
   if (!note) return;
-  
+
   const plainText = getPlainText(newHtml);
-  
-  // Calculate new title from first line
-  let newTitle = '';
-  const lines = plainText.split('\n').map(l => l.trim()).filter(Boolean);
-  if (lines.length > 0) {
-    newTitle = lines[0].replace(/^#+\s+/, '').trim();
-  }
-  if (!newTitle) {
-    newTitle = state.t('untitled');
-  }
-  
+
+  let newTitle;
   if (note.is_locked) {
     state.activeNoteDecryptedContent[note.id] = newHtml;
+    // Zero-knowledge: never derive a cleartext title from a locked note's
+    // decrypted body — the title is persisted in cleartext (see commitSave).
+    newTitle = lockedPlaceholderTitle();
   } else {
     note.content = newHtml;
+    newTitle = deriveTitleFromPlainText(plainText);
   }
-  
+
   note.title = newTitle;
   note.updated_at_ms = Date.now();
   if (!note[DRAFT_NOTE_MARKER]) {
@@ -1326,14 +1350,8 @@ async function commitSave(note) {
       }
       
       await doc.patch({
-        title: note.title,
+        ...buildNotePersistPayload(note),
         content: contentToSave,
-        notebook: note.notebook || '',
-        tags: note.tags || '',
-        is_favorite: !!note.is_favorite,
-        is_trashed: !!note.is_trashed,
-        is_locked: !!note.is_locked,
-        lock_passcode: note.lock_passcode || '',
         updated_at_ms: Date.now()
       });
       
@@ -1717,9 +1735,11 @@ async function handleLockNoteClick() {
     note.is_locked = false;
     note.lock_passcode = '';
     note.content = plainText;
+    // Note is now cleartext again — restore a content-derived title.
+    note.title = deriveTitleFromPlainText(getPlainText(plainText));
     delete state.activeNoteDecrypted[note.id];
     delete state.activeNoteDecryptedContent[note.id];
-    
+
     saveToLocalCache();
     scheduleRender();
     await commitSave(note);
@@ -1731,9 +1751,14 @@ async function handleLockNoteClick() {
     try {
       const encrypted = await encryptContent(plainText, pw);
       note.is_locked = true;
-      note.lock_passcode = pw;
+      // Zero-knowledge: the passcode is kept only in-memory (state below); it
+      // is never written onto the note object, so it cannot reach localStorage
+      // or the synced collection.
+      note.lock_passcode = '';
       note.content = JSON.stringify(encrypted);
-      
+      // Replace the cleartext title with a non-revealing placeholder.
+      note.title = lockedPlaceholderTitle();
+
       state.activeNoteDecrypted[note.id] = pw;
       state.activeNoteDecryptedContent[note.id] = plainText;
       
@@ -3077,5 +3102,8 @@ export const __notesTestHooks = {
   createDefaultNotes,
   getCachePrefix,
   isBusinessOsPermissionDenied,
-  noteActionAvailability
+  noteActionAvailability,
+  buildNotePersistPayload,
+  deriveTitleFromPlainText,
+  lockedPlaceholderTitle
 };

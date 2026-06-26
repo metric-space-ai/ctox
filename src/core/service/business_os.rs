@@ -508,15 +508,16 @@ pub fn business_os_status_text(root: &Path) -> String {
          Native store: {native_store}\n\n\
          Serve the native no-build Business OS:\n\
            ctox business-os serve --addr 127.0.0.1:8765\n\n\
-         Create or modify runtime-installed apps:\n\
+         Create or modify runtime-installed Business OS apps:\n\
            ctox business-os app create --instruction <text> [--module-id <id>]\n\
            ctox business-os app modify <module-id> --instruction <text>\n\n\
          Runtime contract:\n\
-           - Web deploy can host the RxDB Business OS app shell.\n\
-           - CTOX core runs as the outbound RxDB/WebRTC peer.\n\
+           - Business OS apps are runtime-installed vanilla HTML/CSS/JS modules.\n\
+           - Dynamic apps live under runtime/business-os/installed-modules/<module-id>.\n\
+           - CTOX core runs as the outbound CTOX DB/WebRTC peer.\n\
            - SQLite state, commands, module manifests, and files sync over RxDB.\n\
            - Only system Business OS apps are installed by default.\n\
-           - Non-system apps are runtime-installed under runtime/business-os/installed-modules.\n",
+           - Non-system apps are installed through the app store only.\n",
         native_app_status = exists_label(native_app.join("index.html").is_file()),
         installed_modules_status = exists_label(installed_modules.is_dir()),
         native_app = native_app.display(),

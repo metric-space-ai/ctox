@@ -297,13 +297,33 @@ fn extract_from_pdf_text(text: &str, source_url: &str) -> Vec<(FieldKey, FieldEv
 /// how the Excel-Pipeline of person-research wants them.
 fn normalise_amount(raw: &str) -> String {
     let mut s = raw.trim().to_string();
+    // German GuV tables routinely print the prior-year comparative column right
+    // next to the current value, separated by a run of 2+ spaces. The
+    // label-anchored regex can capture across that gap, so cut at the first
+    // column break and keep only the current-year figure — otherwise two
+    // numbers get concatenated into one corrupt High-confidence amount. A
+    // single space is kept, because the PDF parser occasionally splits a
+    // thousand-grouped number ("485 .732 .145").
+    if let Some(idx) = first_column_break(&s) {
+        s.truncate(idx);
+        s = s.trim_end().to_string();
+    }
     // Parenthesised negative: "(123)" → "-123"
     if s.starts_with('(') && s.ends_with(')') {
         s = format!("-{}", &s[1..s.len() - 1]);
     }
     // Collapse internal whitespace ("485 .732 .145,00" → "485.732.145,00").
-    let collapsed: String = s.chars().filter(|c| !c.is_whitespace()).collect();
-    collapsed
+    s.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// Byte index of the first whitespace character that starts a run of two or
+/// more whitespace characters (a column gap in the flattened GuV table).
+fn first_column_break(s: &str) -> Option<usize> {
+    let chars: Vec<(usize, char)> = s.char_indices().collect();
+    chars
+        .windows(2)
+        .find(|pair| pair[0].1.is_whitespace() && pair[1].1.is_whitespace())
+        .map(|pair| pair[0].0)
 }
 
 /// Normalise an Arbeitnehmer count: drop thousand separators and
@@ -528,6 +548,21 @@ mod tests {
             .expect("mitarbeiter extracted");
         assert_eq!(mitarbeiter.value, "1842");
         assert_eq!(mitarbeiter.confidence, Confidence::High);
+    }
+
+    #[test]
+    fn umsatz_keeps_current_year_when_prior_year_column_is_adjacent() {
+        // Multi-column GuV: current and prior-year figures side by side.
+        // Only the first (current-year) value must be captured, never the two
+        // concatenated. Covers both the decimal and the integer-column case.
+        assert_eq!(
+            normalise_amount("485.732.145,00     460.123.456,00"),
+            "485.732.145,00"
+        );
+        assert_eq!(normalise_amount("485.732.145   460.123.456"), "485.732.145");
+        // Single-space split-digit artifacts are still repaired, not cut.
+        assert_eq!(normalise_amount("485 .732 .145,00"), "485.732.145,00");
+        assert_eq!(normalise_amount("(1.234)"), "-1.234");
     }
 
     #[test]

@@ -15,7 +15,10 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write as IoWrite};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration as StdDuration, Instant, SystemTime, UNIX_EPOCH};
+
+use rusqlite::OptionalExtension;
 
 use crate::communication::adapters::{AdapterSyncCommandRequest, MeetingSendCommandRequest};
 use crate::communication::runtime as communication_runtime;
@@ -27,6 +30,21 @@ use crate::mission::channels::{
 
 const DEFAULT_MEETING_STT_MODEL: &str = "engineai/Voxtral-Mini-4B-Realtime-2602";
 const MEETING_XVFB_SERVER_ARGS: &str = "-screen 0 1920x1080x24 -ac +extension RANDR";
+
+static MEETING_SYNC_FILE_CACHE: OnceLock<Mutex<BTreeMap<PathBuf, MeetingSyncFileState>>> =
+    OnceLock::new();
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MeetingSessionFileStamp {
+    len: u64,
+    modified_ns: u128,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MeetingSyncFileState {
+    stamp: MeetingSessionFileStamp,
+    active: bool,
+}
 
 // ---------------------------------------------------------------------------
 // Public adapter interface (sync / send / service_sync)
@@ -49,13 +67,31 @@ pub(crate) fn sync(
     let mut conn = open_channel_db(db_path)?;
     let mut active = 0u64;
     let mut ingested = 0u64;
+    let mut skipped_unchanged = 0u64;
+    let mut session_files_seen = 0u64;
+    let mut seen_session_files = Vec::new();
     let account_key = "meeting:system";
 
     for sessions_dir in session_dirs {
-        for entry in fs::read_dir(&sessions_dir).unwrap_or_else(|_| fs::read_dir(".").unwrap()) {
+        let Ok(entries) = fs::read_dir(&sessions_dir) else {
+            continue;
+        };
+        for entry in entries {
             let Ok(entry) = entry else { continue };
             let path = entry.path();
             if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(stamp) = meeting_session_file_stamp(&path) else {
+                continue;
+            };
+            session_files_seen += 1;
+            seen_session_files.push(path.clone());
+            if let Some(cached) = cached_meeting_session_file_state(&path, stamp) {
+                if cached.active {
+                    active += 1;
+                }
+                skipped_unchanged += 1;
                 continue;
             }
             let Ok(contents) = fs::read_to_string(&path) else {
@@ -69,9 +105,11 @@ pub(crate) fn sync(
                 .and_then(Value::as_str)
                 .unwrap_or("unknown");
             if status != "active" && status != "joining" && status != "running" {
+                remember_meeting_session_file_state(&path, stamp, false);
                 continue;
             }
             active += 1;
+            let mut session_ingested = 0u64;
 
             let session_id = session
                 .get("session_id")
@@ -111,6 +149,35 @@ pub(crate) fn sync(
                     session_id,
                     stable_digest(&format!("{sender}:{text}:{timestamp}"))
                 );
+                let is_mention = MeetingSession::is_mention(text);
+                let known_message = communication_message_exists(&conn, &message_key)?;
+                if known_message {
+                    if is_mention
+                        && !session
+                            .get("mention_ack_sent")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false)
+                    {
+                        let ack_text = first_mention_ack_text();
+                        let _ = write_chat_command_to_session(&session, ack_text);
+                        record_meeting_outbound_message(
+                            &mut conn,
+                            &session_id,
+                            &provider,
+                            ack_text,
+                            "ctox_first_mention_ack",
+                        )?;
+                        if let Some(object) = session.as_object_mut() {
+                            object.insert("mention_ack_sent".to_string(), Value::Bool(true));
+                            object.insert(
+                                "mention_ack_sent_at".to_string(),
+                                Value::String(now_iso_string()),
+                            );
+                        }
+                        let _ = fs::write(&path, serde_json::to_string_pretty(&session)?);
+                    }
+                    continue;
+                }
 
                 let observed_at = if timestamp.is_empty() {
                     now_iso_string()
@@ -118,7 +185,6 @@ pub(crate) fn sync(
                     timestamp.to_string()
                 };
 
-                let is_mention = MeetingSession::is_mention(text);
                 if is_mention
                     && !session
                         .get("mention_ack_sent")
@@ -211,20 +277,30 @@ pub(crate) fn sync(
                         metadata_json: &serde_json::to_string(&metadata)?,
                     },
                 )?;
+                session_ingested += 1;
                 ingested += 1;
             }
 
-            if !chat_messages.is_empty() {
+            if session_ingested > 0 {
                 let _ = refresh_thread(&mut conn, &session_id);
             }
+            let latest_stamp = meeting_session_file_stamp(&path).unwrap_or(stamp);
+            remember_meeting_session_file_state(&path, latest_stamp, true);
         }
     }
+    retain_seen_meeting_session_file_cache(&seen_session_files);
 
     if ingested > 0 {
         ensure_routing_rows_for_inbound(&conn)?;
     }
 
-    Ok(json!({"ok": true, "active_sessions": active, "ingested": ingested}))
+    Ok(json!({
+        "ok": true,
+        "active_sessions": active,
+        "ingested": ingested,
+        "session_files_seen": session_files_seen,
+        "skipped_unchanged_sessions": skipped_unchanged,
+    }))
 }
 
 /// Send a chat message to a running meeting session.
@@ -407,6 +483,58 @@ fn process_is_running(pid: u64) -> bool {
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|status| status.success())
+}
+
+fn meeting_session_file_stamp(path: &Path) -> Option<MeetingSessionFileStamp> {
+    let metadata = fs::metadata(path).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    let modified_ns = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    Some(MeetingSessionFileStamp {
+        len: metadata.len(),
+        modified_ns,
+    })
+}
+
+fn cached_meeting_session_file_state(
+    path: &Path,
+    stamp: MeetingSessionFileStamp,
+) -> Option<MeetingSyncFileState> {
+    let cache = MEETING_SYNC_FILE_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let cache = cache.lock().ok()?;
+    let state = cache.get(path)?;
+    (state.stamp == stamp).then_some(*state)
+}
+
+fn remember_meeting_session_file_state(path: &Path, stamp: MeetingSessionFileStamp, active: bool) {
+    let cache = MEETING_SYNC_FILE_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(path.to_path_buf(), MeetingSyncFileState { stamp, active });
+    }
+}
+
+fn retain_seen_meeting_session_file_cache(seen_session_files: &[PathBuf]) {
+    let cache = MEETING_SYNC_FILE_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    if let Ok(mut cache) = cache.lock() {
+        cache.retain(|path, _| seen_session_files.iter().any(|seen| seen == path) || path.exists());
+    }
+}
+
+fn communication_message_exists(conn: &rusqlite::Connection, message_key: &str) -> Result<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM communication_messages WHERE message_key = ?1 LIMIT 1",
+            [message_key],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
 }
 
 fn record_meeting_outbound_message(
@@ -1388,7 +1516,9 @@ fn generate_preflight_speech_audio(dir: &Path, stem: &str, phrase: &str) -> Resu
             return Ok(wav);
         }
     }
-    bail!("could not generate German speech fixture; install `say`, `espeak-ng`, or pass --audio <wav>")
+    bail!(
+        "could not generate German speech fixture; install `say`, `espeak-ng`, or pass --audio <wav>"
+    )
 }
 
 fn convert_audio_to_wav(input: &Path, output: &Path) -> Result<()> {
@@ -7595,7 +7725,10 @@ mod tests {
         let first = sync(&root, &BTreeMap::new(), &request).expect("first sync");
         let second = sync(&root, &BTreeMap::new(), &request).expect("second sync");
         assert_eq!(first["active_sessions"], 1);
+        assert_eq!(first["ingested"], 1);
         assert_eq!(second["active_sessions"], 1);
+        assert_eq!(second["ingested"], 0);
+        assert_eq!(second["skipped_unchanged_sessions"], 1);
 
         let stdin_contents = std::fs::read_to_string(&stdin_path).expect("stdin contents");
         let commands = stdin_contents.lines().collect::<Vec<_>>();
@@ -7674,6 +7807,12 @@ mod tests {
             .expect("service sync")
             .expect("meeting sync result");
         assert_eq!(result["ingested"], 1);
+        let idle_result = service_sync(&root, &BTreeMap::new())
+            .expect("idle service sync")
+            .expect("meeting sync result");
+        assert_eq!(idle_result["active_sessions"], 1);
+        assert_eq!(idle_result["ingested"], 0);
+        assert_eq!(idle_result["skipped_unchanged_sessions"], 1);
 
         let conn = open_channel_db(&root.join("runtime/ctox.sqlite3")).expect("channel db");
         let count: i64 = conn

@@ -48,6 +48,7 @@ export const ACTIVE_COLLECTIONS_METHOD = 'rxdb.activeCollections';
 // eviction never runs, so the cache grows unbounded under real-time
 // replication. 128 MiB is a sane ceiling for a peer-driven cache.
 export const DEFAULT_QUERY_META_BUDGET_BYTES = 128 * 1024 * 1024;
+const LOCAL_WRITE_PUSH_DEBOUNCE_MS = 50;
 
 const BROWSER_CAPABILITIES = [
   'ctox-rxdb-browser-v1',
@@ -92,6 +93,7 @@ const SHARED_ROOM_PEERS = new Map(); // key -> SharedRoomPeer
 const SHARED_HANDSHAKE_TIMEOUT_MS = 60000;
 const SHARED_TOKEN_TIMEOUT_MS = 30000;
 const SHARED_PEER_OPEN_WAIT_MS = 60000;
+const SHARED_PROTOCOL_COLLECTION_CONCURRENCY = 8;
 const VOLATILE_SIGNALING_QUERY_PARAMS = new Set([
   'client',
   'role',
@@ -128,6 +130,7 @@ function stableSignalingUrlKey(signalingUrl) {
 }
 
 export const replicationWebRtcTestInternals = Object.freeze({
+  changeEventHasOnlyReplicationOriginWrites,
   sharedRoomPeerKey,
   stableSignalingUrlKey,
   shouldAttachQueryDemandLoader,
@@ -436,28 +439,25 @@ class SharedRoomPeer {
   // Build `{ collectionName -> { schemaVersion, schemaHash, schemaHashSource } }`
   // across every registered collection on this shared connection.
   async collectCollectionSchemas() {
-    const map = {};
-    for (const [name, registration] of this.collections.entries()) {
+    return this.collectCollectionMap(async (name, registration) => {
       const state = registration.state;
-      if (!state) continue;
+      if (!state) return null;
       let hash = state.schemaHashValue;
       if (!hash) {
         try { hash = await state.collection.schema.hash(); } catch { hash = null; }
       }
-      map[name] = {
+      return [name, {
         schemaVersion: state.collection?.schema?.version ?? null,
         schemaHash: hash || null,
         schemaHashSource: schemaHashSource(name),
-      };
-    }
-    return map;
+      }];
+    });
   }
 
   async collectCollectionCheckpoints() {
-    const map = {};
-    for (const [name, registration] of this.collections.entries()) {
+    return this.collectCollectionMap(async (name, registration) => {
       const state = registration.state;
-      if (!state) continue;
+      if (!state) return null;
       let hash = state.schemaHashValue;
       if (!hash) {
         try { hash = await state.collection.schema.hash(); } catch { hash = null; }
@@ -465,15 +465,36 @@ class SharedRoomPeer {
       try {
         const checkpoint = await state.collection.storageCollection.replicationCheckpointStatus(hash || null);
         if (checkpoint && typeof checkpoint === 'object') {
-          map[name] = {
+          return [name, {
             ...checkpoint,
             collection: checkpoint.collection || name,
-          };
+          }];
         }
       } catch {
         // The room-level payload still carries the representative checkpoint.
         // A per-collection checkpoint will be absent until the storage opens.
       }
+      return null;
+    });
+  }
+
+  async collectCollectionMap(mapper) {
+    const entries = [...this.collections.entries()];
+    const results = new Array(entries.length);
+    let nextIndex = 0;
+    const workerCount = Math.min(SHARED_PROTOCOL_COLLECTION_CONCURRENCY, entries.length);
+    await Promise.all(Array.from({ length: workerCount }, async () => {
+      while (nextIndex < entries.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        const [name, registration] = entries[index];
+        results[index] = await mapper(name, registration);
+      }
+    }));
+    const map = {};
+    for (const result of results) {
+      if (!Array.isArray(result) || !result[0]) continue;
+      map[result[0]] = result[1];
     }
     return map;
   }
@@ -702,6 +723,7 @@ class CtoxWebRtcReplicationState {
     this.pushAgainAfterCurrent = false;
     this.pullRetryTimer = null;
     this.pushRetryTimer = null;
+    this.localPushTimer = null;
     // Checkpoints retained across a peer drop, keyed by the remote storage
     // epoch + native peer session. Reused on reconnect when both still match,
     // so a transport blip does not force a from-scratch resync.
@@ -731,8 +753,11 @@ class CtoxWebRtcReplicationState {
       state: this,
     });
     this.shared.start();
-    this.changeSubscription = this.collection.observe(() => {
-      this.pushToRemotePeers().catch((error) => this.error$.next(error));
+    this.changeSubscription = this.collection.observe((event) => {
+      if (changeEventHasOnlyReplicationOriginWrites(event)) {
+        return;
+      }
+      this.scheduleLocalWritePush();
     });
     const periodicPushMs = this.periodicPushIntervalMs();
     if (periodicPushMs > 0) {
@@ -795,14 +820,7 @@ class CtoxWebRtcReplicationState {
     // peer can bind this peer to its role for per-collection read authz. Best
     // effort — a missing/failed token simply omits the field (native treats it
     // as least privilege). Never let token resolution break the handshake.
-    let capabilityToken = null;
-    try {
-      const source = this.ctox?.capabilityToken;
-      if (typeof source === 'function') capabilityToken = await source();
-      else if (typeof source === 'string') capabilityToken = source;
-    } catch {
-      capabilityToken = null;
-    }
+    const capabilityToken = await resolveCapabilityToken(this.ctox);
     return buildProtocolPayload({
       collectionName: this.collection.name,
       schemaVersion: this.collection.schema.version,
@@ -812,6 +830,7 @@ class CtoxWebRtcReplicationState {
       peerGeneration: 1,
       checkpoint,
       role: 'browser',
+      capabilityToken,
       capabilities: BROWSER_CAPABILITIES,
       capabilityToken: typeof capabilityToken === 'string' ? capabilityToken : null,
     });
@@ -941,6 +960,16 @@ class CtoxWebRtcReplicationState {
     }, Math.max(1000, Number(this.retryTime) || 5000));
   }
 
+  scheduleLocalWritePush() {
+    if (this.cancelled || !this.push || this.localPushTimer) return;
+    this.localPushTimer = setTimeout(() => {
+      this.localPushTimer = null;
+      if (this.cancelled) return;
+      this.pushToRemotePeers().catch((error) => this.error$.next(error));
+    }, LOCAL_WRITE_PUSH_DEBOUNCE_MS);
+    this.localPushTimer.unref?.();
+  }
+
   async pullFromPeer(peerId) {
     const batchSize = Number(this.pull?.batchSize || 10);
     let activePeerId = peerId;
@@ -951,7 +980,6 @@ class CtoxWebRtcReplicationState {
       const result = response.result || {};
       const documents = Array.isArray(result?.documents) ? result.documents : [];
       if (documents.length) {
-        await this.invalidateDemandCacheForRemoteWrite(documents);
         await this.collection.storageCollection.bulkWrite(documents, {
           replicationOrigin: this.replicationOriginForPeer(activePeerId),
         });
@@ -1046,7 +1074,17 @@ class CtoxWebRtcReplicationState {
       );
       const documents = Array.isArray(result?.documents) ? result.documents : [];
       if (!documents.length) {
-        checkpoint = result?.checkpoint || checkpoint;
+        const nextCheckpoint = result?.checkpoint || checkpoint;
+        if (
+          result?.scanLimitReached
+          && nextCheckpoint
+          && checkpointKey(nextCheckpoint) !== checkpointKey(checkpoint)
+        ) {
+          checkpoint = nextCheckpoint;
+          this.pushCheckpointsByPeer.set(peerId, checkpoint);
+          continue;
+        }
+        checkpoint = nextCheckpoint;
         this.pushCheckpointsByPeer.set(peerId, checkpoint);
         break;
       }
@@ -1101,7 +1139,6 @@ class CtoxWebRtcReplicationState {
     const rows = Array.isArray(params?.[0]) ? params[0] : [];
     const docs = rows.map((row) => row?.newDocumentState || row?.document || row).filter(Boolean);
     if (docs.length) {
-      await this.invalidateDemandCacheForRemoteWrite(docs);
       await this.collection.storageCollection.bulkWrite(docs, {
         replicationOrigin: this.replicationOriginForPeer(peerId),
       });
@@ -1121,8 +1158,8 @@ class CtoxWebRtcReplicationState {
       .then(() => this.pushToRemotePeers());
   }
 
-  getTransportStatus() {
-    return this.decorateTransportStatus(this.shared?.getTransportStatus?.() || this.transportStatus$.getValue?.() || {});
+  getTransportStatus(options = {}) {
+    return this.decorateTransportStatus(this.shared?.getTransportStatus?.(options) || this.transportStatus$.getValue?.() || {});
   }
 
   async cancel() {
@@ -1146,6 +1183,10 @@ class CtoxWebRtcReplicationState {
     if (this.pushRetryTimer) {
       clearTimeout(this.pushRetryTimer);
       this.pushRetryTimer = null;
+    }
+    if (this.localPushTimer) {
+      clearTimeout(this.localPushTimer);
+      this.localPushTimer = null;
     }
     // Drop this collection from the shared peer before slower sidecar cleanup.
     // Restart paths stop collections with a bounded timeout and then
@@ -1516,6 +1557,39 @@ function documentsByPrimaryPath(documents = [], primaryPath = 'id') {
     if (id) map.set(id, doc);
   }
   return map;
+}
+
+function changeEventHasOnlyReplicationOriginWrites(event) {
+  const docs = Object.values(event?.success || {});
+  return docs.length > 0 && docs.every((doc) => Boolean(doc?._meta?.ctoxReplicationOrigin?.role));
+}
+
+async function resolveCapabilityToken(ctox = {}) {
+  if (typeof ctox?.capabilityTokenProvider === 'function') {
+    try {
+      const token = await ctox.capabilityTokenProvider();
+      return typeof token === 'string' && token.trim() ? token.trim() : null;
+    } catch {
+      return null;
+    }
+  }
+  // #12c: also support ctox.capabilityToken being a function (best-effort
+  // resolver) in addition to a plain string. Never let resolution throw.
+  const source = ctox?.capabilityToken;
+  if (typeof source === 'function') {
+    try {
+      const token = await source();
+      return typeof token === 'string' && token.trim() ? token.trim() : null;
+    } catch {
+      return null;
+    }
+  }
+  return typeof source === 'string' && source.trim() ? source.trim() : null;
+}
+
+function checkpointKey(checkpoint) {
+  if (!checkpoint) return '';
+  return `${Number(checkpoint.lwt || 0)}\0${String(checkpoint.id || '')}`;
 }
 
 function primaryValue(doc = {}, primaryPath = 'id') {

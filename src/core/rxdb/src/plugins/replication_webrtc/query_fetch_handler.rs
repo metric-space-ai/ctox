@@ -24,6 +24,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::Write as _;
+use tokio::sync::mpsc;
 
 /// Chunks below this raw JSON-byte size are not compressed (overhead would
 /// dominate). Above this threshold deflate kicks in.
@@ -35,8 +36,9 @@ use crate::rx_query_helper::{normalize_mango_query, prepare_query};
 use crate::types::MangoQuery;
 
 use super::protocol_contract_generated::{
-    CTOX_QUERY_MAX_BYTES_PER_CHUNK, CTOX_QUERY_MAX_DOCUMENTS_PER_CHUNK, CTOX_QUERY_MAX_RUNTIME_MS,
-    CTOX_QUERY_RPC_CANCEL, CTOX_QUERY_RPC_CHUNK, CTOX_QUERY_RPC_ERROR, CTOX_QUERY_RPC_FETCH,
+    CTOX_QUERY_DEFAULT_WINDOW_LIMIT, CTOX_QUERY_MAX_BYTES_PER_CHUNK,
+    CTOX_QUERY_MAX_DOCUMENTS_PER_CHUNK, CTOX_QUERY_MAX_RUNTIME_MS, CTOX_QUERY_RPC_CANCEL,
+    CTOX_QUERY_RPC_CHUNK, CTOX_QUERY_RPC_ERROR, CTOX_QUERY_RPC_FETCH,
 };
 use super::webrtc_types::{
     WebRTCConnectionHandler, WebRTCMessage, WebRTCResponse, WebRTCWireFrame,
@@ -115,6 +117,9 @@ pub const QUERY_FETCH_ERROR_RATE_LIMITED: &str = "RATE_LIMITED";
 pub const QUERY_FETCH_ERROR_FEATURE_DISABLED: &str = "FEATURE_DISABLED";
 pub const QUERY_FETCH_ERROR_REMOTE: &str = "REMOTE_ERROR";
 
+const QUERY_FETCH_STREAM_UNSUPPORTED_STORAGE_CODE: &str = "SQLITE_QUERY_STREAM_UNSUPPORTED";
+const QUERY_FETCH_STREAM_UNSUPPORTED_DISPATCH_CODE: &str = "QUERY_FETCH_STREAM_UNSUPPORTED";
+
 /// Per-peer rate-limit token bucket. This intentionally does not mirror the
 /// concurrent stream limit: a browser startup may legitimately open many
 /// short demand-load windows, while only a few streams run at the same time.
@@ -122,12 +127,15 @@ const RATE_BUCKET_REFILL_INTERVAL: Duration = Duration::from_secs(1);
 const RATE_BUCKET_MIN_BURST: u32 = 32;
 const RATE_BUCKET_BURST_MULTIPLIER: u32 = 8;
 const RATE_BUCKET_REFILL_PER_SECOND: u32 = 16;
+const QUERY_FETCH_MAX_WINDOW_LIMIT: u64 = CTOX_QUERY_DEFAULT_WINDOW_LIMIT as u64 * 25;
 
 /// Authorization callback. The dispatcher calls this with the peer-identity
 /// (opaque string from the connection handler) and the requested collection;
-/// returns Ok(true) to allow, Ok(false) to deny. Default registry implementation
-/// allows everything for backward compatibility; production wiring overrides this.
+/// returns true to allow, false to deny. Missing callback is fail-closed:
+/// production pools must install an explicit registry gate, and the dispatcher
+/// still checks the connection handler's peer/capability-bound collection gate.
 pub type AuthCheckFn = dyn Fn(&str, &str) -> bool + Send + Sync;
+type DocumentFilterFn = dyn Fn(&Value) -> bool + Send + Sync;
 
 struct PeerRateBucket {
     last_refill: Instant,
@@ -211,9 +219,8 @@ impl QueryFetchRegistry {
         self.feature_enabled.load(Ordering::SeqCst)
     }
 
-    /// Install a peer-identity → collection authorization callback. Without
-    /// a callback the registry allows any peer to query any registered
-    /// collection (legacy behavior). Production wiring MUST set this.
+    /// Install a peer-identity -> collection authorization callback. Without
+    /// a callback the registry denies query-fetch requests.
     pub fn set_auth_check(&self, check: Arc<AuthCheckFn>) {
         *self.auth_check.lock() = Some(check);
     }
@@ -221,7 +228,7 @@ impl QueryFetchRegistry {
     fn check_authorized(&self, peer_identity: &str, collection: &str) -> bool {
         match self.auth_check.lock().as_ref() {
             Some(cb) => cb(peer_identity, collection),
-            None => true,
+            None => false,
         }
     }
 
@@ -324,7 +331,7 @@ pub fn parse_query_cancel_request(message: &WebRTCMessage) -> RxResult<String> {
 ///
 /// `peer_identity` is the stable identity used for authz + rate-limiting.
 /// The connection handler typically derives this from the WebRTC session.
-pub async fn run_query_fetch<H: WebRTCConnectionHandler>(
+pub async fn run_query_fetch<H: WebRTCConnectionHandler + 'static>(
     registry: Arc<QueryFetchRegistry>,
     handler: Arc<H>,
     peer: H::Peer,
@@ -364,7 +371,9 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler>(
         }
     };
 
-    if !registry.check_authorized(&peer_identity, &request.collection_name) {
+    if !registry.check_authorized(&peer_identity, &request.collection_name)
+        || !handler.is_collection_authorized_for_peer(&peer, &request.collection_name)
+    {
         send_error(
             handler.as_ref(),
             &peer,
@@ -436,30 +445,49 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler>(
     };
     let _ = handler.send(&peer, WebRTCWireFrame::Response(ack)).await;
 
-    let outcome = stream_chunks(handler.as_ref(), &peer, &collection, &request, &cancel_flag).await;
+    let document_filter = handler.document_filter_for_peer(&peer, &request.collection_name);
+    let outcome = stream_chunks(
+        Arc::clone(&handler),
+        peer.clone(),
+        Arc::clone(&collection),
+        request.clone(),
+        Arc::clone(&cancel_flag),
+        document_filter,
+    )
+    .await;
     registry.release(&request.request_id);
     if let Err(err) = &outcome {
+        let (code, retryable) = query_fetch_error_code_for_rx_error(err);
         let message = err.to_string();
         send_error(
             handler.as_ref(),
             &peer,
             "",
             &request.request_id,
-            QUERY_FETCH_ERROR_REMOTE,
+            code,
             &message,
-            true,
+            retryable,
         )
         .await;
     }
     outcome
 }
 
-async fn stream_chunks<H: WebRTCConnectionHandler>(
-    handler: &H,
-    peer: &H::Peer,
-    collection: &Arc<RxCollection>,
-    request: &QueryFetchRequest,
-    cancel_flag: &Arc<AtomicBool>,
+fn query_fetch_error_code_for_rx_error(err: &RxError) -> (&'static str, bool) {
+    match err.code() {
+        QUERY_FETCH_STREAM_UNSUPPORTED_STORAGE_CODE
+        | QUERY_FETCH_STREAM_UNSUPPORTED_DISPATCH_CODE => (QUERY_FETCH_ERROR_NOT_SUPPORTED, false),
+        _ => (QUERY_FETCH_ERROR_REMOTE, true),
+    }
+}
+
+async fn stream_chunks<H: WebRTCConnectionHandler + 'static>(
+    handler: Arc<H>,
+    peer: H::Peer,
+    collection: Arc<RxCollection>,
+    request: QueryFetchRequest,
+    cancel_flag: Arc<AtomicBool>,
+    document_filter: Option<Arc<DocumentFilterFn>>,
 ) -> RxResult<()> {
     let schema = collection
         .schema
@@ -467,8 +495,8 @@ async fn stream_chunks<H: WebRTCConnectionHandler>(
         .ok_or_else(|| new_rx_error("QU_SCHEMA", Some(json!({ "collection": collection.name }))))?;
     if request.schema_version > 0 && schema.version() != request.schema_version as i32 {
         send_error(
-            handler,
-            peer,
+            handler.as_ref(),
+            &peer,
             "",
             &request.request_id,
             QUERY_FETCH_ERROR_SCHEMA_MISMATCH,
@@ -483,12 +511,12 @@ async fn stream_chunks<H: WebRTCConnectionHandler>(
         return Ok(());
     }
 
-    let mango: MangoQuery = match serde_json::from_value(request.query.clone()) {
+    let mut mango: MangoQuery = match serde_json::from_value(request.query.clone()) {
         Ok(q) => q,
         Err(err) => {
             send_error(
-                handler,
-                peer,
+                handler.as_ref(),
+                &peer,
                 "",
                 &request.request_id,
                 QUERY_FETCH_ERROR_NOT_SUPPORTED,
@@ -499,6 +527,22 @@ async fn stream_chunks<H: WebRTCConnectionHandler>(
             return Ok(());
         }
     };
+    match apply_request_window_to_mango(&request.window, &mut mango) {
+        Ok(()) => {}
+        Err(message) => {
+            send_error(
+                handler.as_ref(),
+                &peer,
+                "",
+                &request.request_id,
+                QUERY_FETCH_ERROR_STREAM_LIMIT,
+                &message,
+                true,
+            )
+            .await;
+            return Ok(());
+        }
+    }
     let normalized = normalize_mango_query(&schema.json_schema, mango);
     let prepared = prepare_query(&schema.json_schema, normalized)?;
 
@@ -507,116 +551,78 @@ async fn stream_chunks<H: WebRTCConnectionHandler>(
     let runtime_deadline = Instant::now() + Duration::from_millis(CTOX_QUERY_MAX_RUNTIME_MS as u64);
     let revision = request.query_fingerprint.clone();
     let projection: Option<Vec<String>> = request.projection.clone();
-    let apply_projection = |doc: Value| -> Value {
-        match &projection {
-            Some(fields) if !fields.is_empty() => match doc {
-                Value::Object(map) => {
-                    let mut out = serde_json::Map::new();
-                    for field in fields {
-                        if let Some(v) = map.get(field) {
-                            out.insert(field.clone(), v.clone());
-                        }
-                    }
-                    Value::Object(out)
-                }
-                other => other,
-            },
-            _ => doc,
-        }
-    };
 
-    // Streaming path: pull from the storage instance one cursor-bounded
-    // batch at a time, then split each batch into wire chunks that respect
-    // BOTH the doc-count and byte-cap. Memory bound on the server side is
-    // O(chunk_size × doc_bytes), not O(total_matches).
-    //
-    // The state we need across the closure invocations:
-    //   - sequence: the next wire-chunk sequence number
-    //   - pending: a small lookahead buffer so we can decide whether the
-    //              current chunk can fit "one more" doc without exceeding
-    //              max_byte_chunk
-    //   - any_emitted: ensure an empty-result query still gets one terminal
-    //                  chunk so the browser-side request resolves
-    let mut sequence: u32 = 0;
-    let mut pending: Vec<Value> = Vec::new();
-    let mut any_emitted = false;
+    let (frame_tx, mut frame_rx) = mpsc::channel::<QueryFetchFrame>(2);
     let cancel_seen = Arc::new(AtomicBool::new(false));
     let timeout_seen = Arc::new(AtomicBool::new(false));
 
-    // Helper closures share state via captures. We collect the wire frames
-    // into a queue and send them outside the streaming callback so the
-    // SQLite connection lock is released before the async send.
-    let mut frames_to_send: Vec<(u32, Vec<Value>, bool)> = Vec::new();
+    let sender_handler = Arc::clone(&handler);
+    let sender_peer = peer.clone();
+    let sender_request = request.clone();
+    let sender_revision = revision.clone();
+    let sender_cancel_flag = Arc::clone(&cancel_flag);
+    let sender_task = tokio::spawn(async move {
+        while let Some(frame) = frame_rx.recv().await {
+            let stop = send_query_fetch_frame(
+                sender_handler.as_ref(),
+                &sender_peer,
+                &sender_request,
+                &sender_cancel_flag,
+                &sender_revision,
+                runtime_deadline,
+                frame,
+            )
+            .await;
+            if stop {
+                break;
+            }
+        }
+    });
 
-    let cancel_for_cb = Arc::clone(cancel_flag);
-    let cancel_seen_for_cb = Arc::clone(&cancel_seen);
-    let timeout_seen_for_cb = Arc::clone(&timeout_seen);
-    let storage_result = collection
-        .storage_instance
-        .query_stream_into(&prepared, max_doc_chunk, &mut |batch| {
-            if cancel_for_cb.load(Ordering::SeqCst) {
-                cancel_seen_for_cb.store(true, Ordering::SeqCst);
-                return Ok(false);
-            }
-            if Instant::now() >= runtime_deadline {
-                timeout_seen_for_cb.store(true, Ordering::SeqCst);
-                return Ok(false);
-            }
-            // Apply server-side projection BEFORE chunk-budgeting so byte
-            // accounting reflects what actually goes on the wire.
-            let projected: Vec<Value> = batch.into_iter().map(&apply_projection).collect();
-            pending.extend(projected);
-            // Drain `pending` into wire-sized chunks. We hold back the last
-            // partial chunk in case the NEXT storage batch can fill it up
-            // without exceeding the doc-count or byte-cap. The final flush
-            // happens after the streaming callback returns.
-            while pending.len() >= max_doc_chunk {
-                let mut chunk_docs: Vec<Value> = Vec::new();
-                let mut chunk_bytes: usize = 64;
-                while let Some(doc) = pending.first() {
-                    if chunk_docs.len() >= max_doc_chunk {
-                        break;
-                    }
-                    let doc_bytes = doc.to_string().len();
-                    if !chunk_docs.is_empty() && chunk_bytes + doc_bytes > max_byte_chunk {
-                        break;
-                    }
-                    chunk_bytes += doc_bytes + 1;
-                    chunk_docs.push(pending.remove(0));
-                    if chunk_bytes >= max_byte_chunk {
-                        break;
-                    }
-                }
-                if chunk_docs.is_empty() {
-                    break;
-                }
-                frames_to_send.push((sequence, chunk_docs, false));
-                sequence += 1;
-                any_emitted = true;
-            }
-            Ok(true)
-        })
-        .await;
-    storage_result?;
-
-    if cancel_seen.load(Ordering::SeqCst) {
-        send_chunk(
-            handler,
-            peer,
-            request,
-            sequence,
-            Vec::new(),
-            true,
-            &revision,
-            true,
+    // Run the blocking storage cursor on a blocking worker. The cursor emits
+    // wire-ready frames into a small bounded channel, while the async sender
+    // drains that channel with DataChannel backpressure. This keeps memory
+    // bounded and lets the first frame leave before the full result set has
+    // been scanned.
+    let producer_collection = Arc::clone(&collection);
+    let producer_cancel_flag = Arc::clone(&cancel_flag);
+    let producer_cancel_seen = Arc::clone(&cancel_seen);
+    let producer_timeout_seen = Arc::clone(&timeout_seen);
+    let producer_task = tokio::task::spawn_blocking(move || -> RxResult<()> {
+        produce_query_fetch_frames(
+            producer_collection,
+            prepared,
+            max_doc_chunk,
+            max_byte_chunk,
+            runtime_deadline,
+            projection,
+            document_filter,
+            producer_cancel_flag,
+            producer_cancel_seen,
+            producer_timeout_seen,
+            frame_tx,
         )
-        .await;
-        return Ok(());
-    }
+    });
+
+    let producer_result = producer_task.await.map_err(|err| {
+        new_rx_error(
+            "QUERY_FETCH_JOIN",
+            Some(json!({ "message": format!("query fetch producer join failed: {err}") })),
+        )
+    })?;
+    let sender_result = sender_task.await.map_err(|err| {
+        new_rx_error(
+            "QUERY_FETCH_JOIN",
+            Some(json!({ "message": format!("query fetch sender join failed: {err}") })),
+        )
+    });
+    producer_result?;
+    sender_result?;
+
     if timeout_seen.load(Ordering::SeqCst) {
         send_error(
-            handler,
-            peer,
+            handler.as_ref(),
+            &peer,
             "",
             &request.request_id,
             QUERY_FETCH_ERROR_REMOTE_TIMEOUT,
@@ -624,108 +630,290 @@ async fn stream_chunks<H: WebRTCConnectionHandler>(
             true,
         )
         .await;
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+struct QueryFetchFrame {
+    sequence: u32,
+    documents: Vec<Value>,
+    complete: bool,
+    cancelled: bool,
+}
+
+fn produce_query_fetch_frames(
+    collection: Arc<RxCollection>,
+    prepared: Value,
+    max_doc_chunk: usize,
+    max_byte_chunk: usize,
+    runtime_deadline: Instant,
+    projection: Option<Vec<String>>,
+    document_filter: Option<Arc<DocumentFilterFn>>,
+    cancel_flag: Arc<AtomicBool>,
+    cancel_seen: Arc<AtomicBool>,
+    timeout_seen: Arc<AtomicBool>,
+    frame_tx: mpsc::Sender<QueryFetchFrame>,
+) -> RxResult<()> {
+    let mut sequence: u32 = 0;
+    let mut pending: Vec<Value> = Vec::new();
+    let mut any_emitted = false;
+
+    let storage_result = collection
+        .storage_instance
+        .query_stream_into_blocking(&prepared, max_doc_chunk, &mut |batch| {
+            if cancel_flag.load(Ordering::SeqCst) {
+                cancel_seen.store(true, Ordering::SeqCst);
+                return Ok(false);
+            }
+            if Instant::now() >= runtime_deadline {
+                timeout_seen.store(true, Ordering::SeqCst);
+                return Ok(false);
+            }
+            let projected: Vec<Value> = batch
+                .into_iter()
+                .filter(|doc| {
+                    document_filter
+                        .as_ref()
+                        .map(|filter| filter(doc))
+                        .unwrap_or(true)
+                })
+                .map(|doc| apply_query_fetch_projection(doc, &projection))
+                .collect();
+            pending.extend(projected);
+            while pending.len() >= max_doc_chunk {
+                let Some(chunk_docs) =
+                    pop_query_fetch_chunk(&mut pending, max_doc_chunk, max_byte_chunk)
+                else {
+                    break;
+                };
+                if frame_tx
+                    .blocking_send(QueryFetchFrame {
+                        sequence,
+                        documents: chunk_docs,
+                        complete: false,
+                        cancelled: false,
+                    })
+                    .is_err()
+                {
+                    return Ok(false);
+                }
+                sequence += 1;
+                any_emitted = true;
+            }
+            Ok(true)
+        })
+        .unwrap_or_else(|| {
+            Err(new_rx_error(
+                "QUERY_FETCH_STREAM_UNSUPPORTED",
+                Some(json!({
+                    "message": "storage does not expose a blocking query stream"
+                })),
+            ))
+        });
+    storage_result?;
+
+    if cancel_seen.load(Ordering::SeqCst) {
+        let _ = frame_tx.blocking_send(QueryFetchFrame {
+            sequence,
+            documents: Vec::new(),
+            complete: true,
+            cancelled: true,
+        });
+        return Ok(());
+    }
+    if timeout_seen.load(Ordering::SeqCst) {
         return Ok(());
     }
 
-    // Flush remaining pending docs as the terminal chunk(s).
+    let had_pending_after_storage = !pending.is_empty();
     while !pending.is_empty() {
-        let mut chunk_docs: Vec<Value> = Vec::new();
-        let mut chunk_bytes: usize = 64;
-        while let Some(doc) = pending.first() {
-            if chunk_docs.len() >= max_doc_chunk {
-                break;
-            }
-            let doc_bytes = doc.to_string().len();
-            if !chunk_docs.is_empty() && chunk_bytes + doc_bytes > max_byte_chunk {
-                break;
-            }
-            chunk_bytes += doc_bytes + 1;
-            chunk_docs.push(pending.remove(0));
-            if chunk_bytes >= max_byte_chunk {
-                break;
-            }
-        }
-        if chunk_docs.is_empty() {
+        let Some(chunk_docs) = pop_query_fetch_chunk(&mut pending, max_doc_chunk, max_byte_chunk)
+        else {
             break;
-        }
+        };
         let complete = pending.is_empty();
-        frames_to_send.push((sequence, chunk_docs, complete));
+        if frame_tx
+            .blocking_send(QueryFetchFrame {
+                sequence,
+                documents: chunk_docs,
+                complete,
+                cancelled: false,
+            })
+            .is_err()
+        {
+            return Ok(());
+        }
         sequence += 1;
         any_emitted = true;
     }
     if !any_emitted {
-        // Empty result still emits one terminal chunk so the JS side resolves.
+        let _ = frame_tx.blocking_send(QueryFetchFrame {
+            sequence: 0,
+            documents: Vec::new(),
+            complete: true,
+            cancelled: false,
+        });
+    } else if !had_pending_after_storage {
+        let _ = frame_tx.blocking_send(QueryFetchFrame {
+            sequence,
+            documents: Vec::new(),
+            complete: true,
+            cancelled: false,
+        });
+    }
+    Ok(())
+}
+
+fn apply_query_fetch_projection(doc: Value, projection: &Option<Vec<String>>) -> Value {
+    match projection {
+        Some(fields) if !fields.is_empty() => match doc {
+            Value::Object(map) => {
+                let mut out = serde_json::Map::new();
+                for field in fields {
+                    if let Some(v) = map.get(field) {
+                        out.insert(field.clone(), v.clone());
+                    }
+                }
+                Value::Object(out)
+            }
+            other => other,
+        },
+        _ => doc,
+    }
+}
+
+fn pop_query_fetch_chunk(
+    pending: &mut Vec<Value>,
+    max_doc_chunk: usize,
+    max_byte_chunk: usize,
+) -> Option<Vec<Value>> {
+    let mut chunk_docs: Vec<Value> = Vec::new();
+    let mut chunk_bytes: usize = 64;
+    while let Some(doc) = pending.first() {
+        if chunk_docs.len() >= max_doc_chunk {
+            break;
+        }
+        let doc_bytes = doc.to_string().len();
+        if !chunk_docs.is_empty() && chunk_bytes + doc_bytes > max_byte_chunk {
+            break;
+        }
+        chunk_bytes += doc_bytes + 1;
+        chunk_docs.push(pending.remove(0));
+        if chunk_bytes >= max_byte_chunk {
+            break;
+        }
+    }
+    if chunk_docs.is_empty() {
+        None
+    } else {
+        Some(chunk_docs)
+    }
+}
+
+async fn send_query_fetch_frame<H: WebRTCConnectionHandler>(
+    handler: &H,
+    peer: &H::Peer,
+    request: &QueryFetchRequest,
+    cancel_flag: &Arc<AtomicBool>,
+    revision: &str,
+    runtime_deadline: Instant,
+    frame: QueryFetchFrame,
+) -> bool {
+    if cancel_flag.load(Ordering::SeqCst) && !frame.cancelled {
         send_chunk(
             handler,
             peer,
             request,
-            0,
+            frame.sequence,
             Vec::new(),
             true,
-            &revision,
-            false,
+            revision,
+            true,
         )
         .await;
-        return Ok(());
+        return true;
     }
-    if let Some(last) = frames_to_send.last_mut() {
-        last.2 = true;
-    }
-
-    // Emit frames with backpressure awareness.
-    for (seq, docs, complete) in frames_to_send.into_iter() {
-        if cancel_flag.load(Ordering::SeqCst) {
+    let mut backoff_ms = 4u64;
+    while handler.buffered_bytes(peer) > WEBRTC_BUFFERED_HIGH_WATER {
+        if cancel_flag.load(Ordering::SeqCst) && !frame.cancelled {
             send_chunk(
                 handler,
                 peer,
                 request,
-                seq,
+                frame.sequence,
                 Vec::new(),
                 true,
-                &revision,
+                revision,
                 true,
             )
             .await;
-            return Ok(());
+            return true;
         }
-        let mut backoff_ms = 4u64;
-        while handler.buffered_bytes(peer) > WEBRTC_BUFFERED_HIGH_WATER {
-            if cancel_flag.load(Ordering::SeqCst) {
-                send_chunk(
-                    handler,
-                    peer,
-                    request,
-                    seq,
-                    Vec::new(),
-                    true,
-                    &revision,
-                    true,
-                )
-                .await;
-                return Ok(());
-            }
-            if Instant::now() >= runtime_deadline {
-                send_error(
-                    handler,
-                    peer,
-                    "",
-                    &request.request_id,
-                    QUERY_FETCH_ERROR_REMOTE_TIMEOUT,
-                    "stalled on backpressure beyond CTOX_QUERY_MAX_RUNTIME_MS",
-                    true,
-                )
-                .await;
-                return Ok(());
-            }
-            tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-            backoff_ms = (backoff_ms * 2).min(64);
+        if Instant::now() >= runtime_deadline {
+            send_error(
+                handler,
+                peer,
+                "",
+                &request.request_id,
+                QUERY_FETCH_ERROR_REMOTE_TIMEOUT,
+                "stalled on backpressure beyond CTOX_QUERY_MAX_RUNTIME_MS",
+                true,
+            )
+            .await;
+            return true;
         }
-        send_chunk(
-            handler, peer, request, seq, docs, complete, &revision, false,
-        )
-        .await;
+        tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+        backoff_ms = (backoff_ms * 2).min(64);
     }
+    send_chunk(
+        handler,
+        peer,
+        request,
+        frame.sequence,
+        frame.documents,
+        frame.complete,
+        revision,
+        frame.cancelled,
+    )
+    .await;
+    frame.complete
+}
+
+fn apply_request_window_to_mango(window: &Value, mango: &mut MangoQuery) -> Result<(), String> {
+    let offset = window
+        .get("offset")
+        .and_then(window_u64)
+        .or(mango.skip)
+        .unwrap_or(0);
+    let limit = window
+        .get("limit")
+        .and_then(window_u64)
+        .or(mango.limit)
+        .unwrap_or(CTOX_QUERY_DEFAULT_WINDOW_LIMIT as u64);
+    let limit = limit.max(1);
+    if limit > QUERY_FETCH_MAX_WINDOW_LIMIT {
+        return Err(format!(
+            "query window limit {limit} exceeds server cap {QUERY_FETCH_MAX_WINDOW_LIMIT}"
+        ));
+    }
+    mango.skip = Some(offset);
+    mango.limit = Some(limit);
     Ok(())
+}
+
+fn window_u64(value: &Value) -> Option<u64> {
+    if let Some(value) = value.as_u64() {
+        return Some(value);
+    }
+    if let Some(value) = value.as_i64() {
+        return u64::try_from(value).ok();
+    }
+    let value = value.as_f64()?;
+    if !value.is_finite() || value < 0.0 {
+        return None;
+    }
+    Some(value.floor() as u64)
 }
 
 async fn send_chunk<H: WebRTCConnectionHandler>(
@@ -893,12 +1081,15 @@ mod tests {
     use crate::replication_protocol::default_conflict_handler::DefaultConflictHandler;
     use crate::rx_collection::RxCollection;
     use crate::rx_database::RxDatabase;
+    use crate::rx_error::RxError;
     use crate::rx_schema::create_rx_schema;
     use crate::rxjs_compat::{RxStream, RxSubject};
+    use crate::storage::sqlite::{get_rx_storage_sqlite, RxStorageSqliteSettings};
     use crate::types::{
         BulkWriteRow, EventBulk, HashFunction, HashOutput, JsonSchema, PrimaryKey, RxJsonSchema,
-        RxStorageBulkWriteResponse, RxStorageChangedDocumentsSinceResult, RxStorageCountResult,
-        RxStorageInstance, RxStorageInstanceCreationParams, RxStorageQueryResult,
+        RxStorage, RxStorageBulkWriteResponse, RxStorageChangedDocumentsSinceResult,
+        RxStorageCountResult, RxStorageInstance, RxStorageInstanceCreationParams,
+        RxStorageQueryResult,
     };
     use async_trait::async_trait;
     use parking_lot::Mutex as TokioMutex;
@@ -999,6 +1190,45 @@ mod tests {
         )
     }
 
+    async fn seeded_sqlite_collection(count: usize) -> Arc<RxCollection> {
+        let hash = Arc::new(TestHashFunction);
+        let raw = schema();
+        let rx_schema = Arc::new(create_rx_schema(raw, hash.clone(), false).unwrap());
+        let dir = tempfile::tempdir().unwrap().keep();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.join("ctox.sqlite3"),
+        });
+        let storage_instance: Arc<dyn RxStorageInstance> = storage
+            .create_storage_instance(RxStorageInstanceCreationParams {
+                database_instance_token: "tok".to_string(),
+                database_name: "db".to_string(),
+                collection_name: "business_records".to_string(),
+                schema: rx_schema.json_schema.clone(),
+                options: HashMap::new(),
+                multi_instance: false,
+                dev_mode: false,
+                password: None,
+            })
+            .await
+            .unwrap();
+        let mut rows = Vec::with_capacity(count);
+        for i in 0..count {
+            rows.push(BulkWriteRow {
+                previous: None,
+                document: doc(&format!("doc-{i:04}"), i as i64),
+            });
+        }
+        storage_instance.bulk_write(rows, "seed").await.unwrap();
+        let database = RxDatabase::new("db", "tok", "stoken", false, hash, storage);
+        RxCollection::new_with_schema(
+            "business_records",
+            database,
+            storage_instance,
+            Arc::new(DefaultConflictHandler),
+            rx_schema,
+        )
+    }
+
     struct FailingQueryStorage {
         inner: Arc<dyn RxStorageInstance>,
     }
@@ -1038,6 +1268,18 @@ mod tests {
                 "TEST_QUERY_STREAM",
                 Some(json!({ "message": "forced query stream failure" })),
             ))
+        }
+
+        fn query_stream_into_blocking(
+            &self,
+            _prepared_query: &Value,
+            _chunk_size: usize,
+            _on_batch: &mut (dyn FnMut(Vec<Value>) -> Result<bool, RxError> + Send),
+        ) -> Option<Result<(), RxError>> {
+            Some(Err(new_rx_error(
+                "TEST_QUERY_STREAM",
+                Some(json!({ "message": "forced query stream failure" })),
+            )))
         }
 
         async fn count(&self, prepared_query: &Value) -> Result<RxStorageCountResult, RxError> {
@@ -1102,6 +1344,8 @@ mod tests {
     struct MockHandler {
         sent: Arc<TokioMutex<Vec<WebRTCWireFrame>>>,
         buffered: Arc<std::sync::atomic::AtomicUsize>,
+        document_filter: Arc<TokioMutex<Option<Arc<DocumentFilterFn>>>>,
+        collection_authorized: Arc<AtomicBool>,
     }
 
     impl MockHandler {
@@ -1109,7 +1353,18 @@ mod tests {
             Self {
                 sent: Arc::new(TokioMutex::new(Vec::new())),
                 buffered: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                document_filter: Arc::new(TokioMutex::new(None)),
+                collection_authorized: Arc::new(AtomicBool::new(true)),
             }
+        }
+
+        fn set_document_filter(&self, filter: Arc<DocumentFilterFn>) {
+            *self.document_filter.lock() = Some(filter);
+        }
+
+        fn set_collection_authorized(&self, authorized: bool) {
+            self.collection_authorized
+                .store(authorized, Ordering::SeqCst);
         }
     }
 
@@ -1144,6 +1399,16 @@ mod tests {
         fn peer_identity(&self, peer: &Self::Peer) -> String {
             peer.0.to_string()
         }
+        fn is_collection_authorized_for_peer(&self, _peer: &Self::Peer, _collection: &str) -> bool {
+            self.collection_authorized.load(Ordering::SeqCst)
+        }
+        fn document_filter_for_peer(
+            &self,
+            _peer: &Self::Peer,
+            _collection: &str,
+        ) -> Option<Arc<DocumentFilterFn>> {
+            self.document_filter.lock().clone()
+        }
     }
 
     fn make_request(request_id: &str, collection: &str, schema_version: u32) -> WebRTCMessage {
@@ -1166,9 +1431,34 @@ mod tests {
         }
     }
 
+    fn authorized_query_registry(max_inflight: u64) -> Arc<QueryFetchRegistry> {
+        let registry = Arc::new(QueryFetchRegistry::new(max_inflight));
+        registry.set_auth_check(Arc::new(|_peer, _collection| true));
+        registry
+    }
+
+    #[tokio::test]
+    async fn query_fetch_without_auth_callback_is_denied() {
+        let collection = seeded_collection(1).await;
+        let registry = Arc::new(QueryFetchRegistry::new(4));
+        registry.register(Arc::clone(&collection));
+        let handler = Arc::new(MockHandler::new());
+        run_query_fetch(
+            registry,
+            Arc::clone(&handler),
+            MockPeer("p1"),
+            "p1".to_string(),
+            make_request("auth-missing", "business_records", 0),
+        )
+        .await
+        .unwrap();
+        let frames = handler.sent.lock();
+        assert!(error_code_emitted(&frames, QUERY_FETCH_ERROR_UNAUTHORIZED));
+    }
+
     #[tokio::test]
     async fn rejects_unregistered_collection() {
-        let registry = Arc::new(QueryFetchRegistry::new(4));
+        let registry = authorized_query_registry(4);
         let handler = Arc::new(MockHandler::new());
         let message = make_request("r1", "not_registered", 0);
         run_query_fetch(
@@ -1193,7 +1483,7 @@ mod tests {
     #[tokio::test]
     async fn streams_documents_as_chunks() {
         let collection = seeded_collection(450).await;
-        let registry = Arc::new(QueryFetchRegistry::new(4));
+        let registry = authorized_query_registry(4);
         registry.register(Arc::clone(&collection));
         let handler = Arc::new(MockHandler::new());
         let message = make_request("r2", "business_records", 0);
@@ -1240,9 +1530,179 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn query_fetch_sends_first_chunk_before_producer_completes() {
+        let collection = seeded_collection(CTOX_QUERY_MAX_DOCUMENTS_PER_CHUNK as usize * 3).await;
+        let registry = authorized_query_registry(4);
+        registry.register(Arc::clone(&collection));
+        let handler = Arc::new(MockHandler::new());
+
+        let seen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let producer_blocked = Arc::new(AtomicBool::new(false));
+        let release_producer = Arc::new(AtomicBool::new(false));
+        let filter_seen = Arc::clone(&seen);
+        let filter_blocked = Arc::clone(&producer_blocked);
+        let filter_release = Arc::clone(&release_producer);
+        handler.set_document_filter(Arc::new(move |_doc: &Value| {
+            let current = filter_seen.fetch_add(1, Ordering::SeqCst) + 1;
+            if current > CTOX_QUERY_MAX_DOCUMENTS_PER_CHUNK as usize {
+                filter_blocked.store(true, Ordering::SeqCst);
+                while !filter_release.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+            }
+            true
+        }));
+
+        let task = tokio::spawn(run_query_fetch(
+            registry,
+            Arc::clone(&handler),
+            MockPeer("p1"),
+            "p1".to_string(),
+            make_request("frame-as-produced", "business_records", 0),
+        ));
+
+        let mut blocked = false;
+        for _ in 0..100 {
+            if producer_blocked.load(Ordering::SeqCst) {
+                blocked = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            blocked,
+            "test setup expected the storage producer to block mid-stream"
+        );
+
+        let mut saw_chunk_while_producer_blocked = false;
+        for _ in 0..100 {
+            saw_chunk_while_producer_blocked = handler.sent.lock().iter().any(|frame| {
+                matches!(frame, WebRTCWireFrame::Message(message) if message.method == CTOX_QUERY_RPC_CHUNK)
+            });
+            if saw_chunk_while_producer_blocked {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        release_producer.store(true, Ordering::SeqCst);
+        assert!(
+            saw_chunk_while_producer_blocked,
+            "query.fetch must send the first chunk before the producer finishes scanning"
+        );
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("query fetch task timed out")
+            .expect("query fetch join failed")
+            .expect("query fetch failed");
+
+        let frames = handler.sent.lock();
+        let chunks: Vec<_> = frames
+            .iter()
+            .filter_map(|frame| match frame {
+                WebRTCWireFrame::Message(message) if message.method == CTOX_QUERY_RPC_CHUNK => {
+                    serde_json::from_value::<QueryFetchChunk>(message.params[0].clone()).ok()
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            chunks.last().map(|chunk| chunk.complete).unwrap_or(false),
+            "stream must still end with a complete chunk"
+        );
+    }
+
+    #[tokio::test]
+    async fn query_fetch_applies_request_window_before_streaming() {
+        let collection = seeded_collection(450).await;
+        let registry = authorized_query_registry(4);
+        registry.register(Arc::clone(&collection));
+        let handler = Arc::new(MockHandler::new());
+        let mut message = make_request("windowed", "business_records", 0);
+        if let Some(payload) = message.params.get_mut(0).and_then(Value::as_object_mut) {
+            payload.insert("window".to_string(), json!({ "offset": 10, "limit": 25 }));
+        }
+        run_query_fetch(
+            registry,
+            Arc::clone(&handler),
+            MockPeer("p1"),
+            "p1".to_string(),
+            message,
+        )
+        .await
+        .unwrap();
+
+        let frames = handler.sent.lock();
+        let documents = frames
+            .iter()
+            .filter_map(|frame| match frame {
+                WebRTCWireFrame::Message(message) if message.method == CTOX_QUERY_RPC_CHUNK => {
+                    serde_json::from_value::<QueryFetchChunk>(message.params[0].clone()).ok()
+                }
+                _ => None,
+            })
+            .flat_map(|chunk| decode_chunk_documents(&chunk).expect("decode chunk documents"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            documents.len(),
+            25,
+            "query.fetch must stream only the requested window, not the full result set"
+        );
+        assert_eq!(
+            documents
+                .first()
+                .and_then(|doc| doc.get("id"))
+                .and_then(Value::as_str),
+            Some("doc-0010")
+        );
+        assert_eq!(
+            documents
+                .last()
+                .and_then(|doc| doc.get("id"))
+                .and_then(Value::as_str),
+            Some("doc-0034")
+        );
+    }
+
+    #[tokio::test]
+    async fn query_fetch_rejects_unbounded_window_limit() {
+        let collection = seeded_collection(1).await;
+        let registry = authorized_query_registry(4);
+        registry.register(Arc::clone(&collection));
+        let handler = Arc::new(MockHandler::new());
+        let mut message = make_request("too-wide", "business_records", 0);
+        if let Some(payload) = message.params.get_mut(0).and_then(Value::as_object_mut) {
+            payload.insert(
+                "window".to_string(),
+                json!({ "offset": 0, "limit": QUERY_FETCH_MAX_WINDOW_LIMIT + 1 }),
+            );
+        }
+        run_query_fetch(
+            registry,
+            Arc::clone(&handler),
+            MockPeer("p1"),
+            "p1".to_string(),
+            message,
+        )
+        .await
+        .unwrap();
+        let frames = handler.sent.lock();
+        assert!(
+            error_code_emitted(&frames, QUERY_FETCH_ERROR_STREAM_LIMIT),
+            "over-cap query windows must be rejected instead of buffered"
+        );
+        assert!(
+            frames.iter().all(
+                |frame| !matches!(frame, WebRTCWireFrame::Message(message) if message.method == CTOX_QUERY_RPC_CHUNK)
+            ),
+            "over-cap query windows must not emit data chunks"
+        );
+    }
+
+    #[tokio::test]
     async fn empty_result_still_emits_complete_chunk() {
         let collection = seeded_collection(0).await;
-        let registry = Arc::new(QueryFetchRegistry::new(4));
+        let registry = authorized_query_registry(4);
         registry.register(Arc::clone(&collection));
         let handler = Arc::new(MockHandler::new());
         let message = make_request("r3", "business_records", 0);
@@ -1275,9 +1735,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn query_fetch_rejects_sqlite_stream_fallback_query() {
+        let collection = seeded_sqlite_collection(100).await;
+        let registry = authorized_query_registry(4);
+        registry.register(Arc::clone(&collection));
+        let handler = Arc::new(MockHandler::new());
+        let message = WebRTCMessage {
+            id: "msg-regex".to_string(),
+            method: CTOX_QUERY_RPC_FETCH.to_string(),
+            params: vec![json!({
+                "requestId": "regex-fallback",
+                "collectionName": "business_records",
+                "schemaVersion": 0,
+                "queryFingerprint": "regex-fallback",
+                "query": {
+                    "selector": { "id": { "$regex": "^doc-09" } },
+                    "sort": [{ "age": "asc" }]
+                },
+                "window": { "offset": 0, "limit": 25 }
+            })],
+            collection: Some("business_records".to_string()),
+        };
+
+        let result = run_query_fetch(
+            registry,
+            Arc::clone(&handler),
+            MockPeer("p1"),
+            "p1".to_string(),
+            message,
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "unsupported SQLite stream fallback should surface an error"
+        );
+
+        let frames = handler.sent.lock();
+        assert!(
+            matches!(
+                frames.first(),
+                Some(WebRTCWireFrame::Response(WebRTCResponse {
+                    error: None,
+                    ..
+                }))
+            ),
+            "query fetch should ack before the producer rejects an unsupported fallback"
+        );
+        assert!(
+            error_code_emitted(&frames, QUERY_FETCH_ERROR_NOT_SUPPORTED),
+            "unsupported SQLite query-stream fallbacks must be protocol-visible"
+        );
+        assert!(
+            frames.iter().all(
+                |frame| !matches!(frame, WebRTCWireFrame::Message(message) if message.method == CTOX_QUERY_RPC_CHUNK)
+            ),
+            "unsupported fallback query must not emit data chunks"
+        );
+    }
+
+    #[tokio::test]
     async fn stream_error_after_ack_emits_query_error_frame() {
         let collection = collection_with_failing_query(seeded_collection(1).await);
-        let registry = Arc::new(QueryFetchRegistry::new(4));
+        let registry = authorized_query_registry(4);
         registry.register(Arc::clone(&collection));
         let handler = Arc::new(MockHandler::new());
         let message = make_request("r-stream-error", "business_records", 0);
@@ -1327,7 +1846,7 @@ mod tests {
 
     #[tokio::test]
     async fn max_inflight_returns_stream_limit_error() {
-        let registry = Arc::new(QueryFetchRegistry::new(1));
+        let registry = authorized_query_registry(1);
         let collection = seeded_collection(10).await;
         registry.register(Arc::clone(&collection));
         let _hold = registry.try_acquire("hold").unwrap();
@@ -1363,7 +1882,7 @@ mod tests {
 
     #[tokio::test]
     async fn feature_flag_disabled_blocks_fetch() {
-        let registry = Arc::new(QueryFetchRegistry::new(4));
+        let registry = authorized_query_registry(4);
         registry.set_feature_enabled(false);
         let handler = Arc::new(MockHandler::new());
         let message = make_request("rf", "business_records", 0);
@@ -1405,9 +1924,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn query_fetch_uses_handler_collection_authorization() {
+        let collection = seeded_collection(3).await;
+        let registry = authorized_query_registry(4);
+        registry.register(Arc::clone(&collection));
+        let handler = Arc::new(MockHandler::new());
+        handler.set_collection_authorized(false);
+        let message = make_request("handler-deny", "business_records", 0);
+        run_query_fetch(
+            registry,
+            Arc::clone(&handler),
+            MockPeer("p1"),
+            "p1".to_string(),
+            message,
+        )
+        .await
+        .unwrap();
+        let frames = handler.sent.lock();
+        assert!(error_code_emitted(&frames, QUERY_FETCH_ERROR_UNAUTHORIZED));
+    }
+
+    #[tokio::test]
+    async fn query_fetch_applies_document_filter_before_streaming() {
+        let collection = seeded_collection(4).await;
+        let registry = authorized_query_registry(4);
+        registry.register(Arc::clone(&collection));
+        let handler = Arc::new(MockHandler::new());
+        handler.set_document_filter(Arc::new(|doc: &Value| {
+            doc.get("id").and_then(Value::as_str) == Some("doc-0002")
+        }));
+        let message = make_request("rf", "business_records", 0);
+        run_query_fetch(
+            registry,
+            Arc::clone(&handler),
+            MockPeer("p1"),
+            "p1".to_string(),
+            message,
+        )
+        .await
+        .unwrap();
+
+        let frames = handler.sent.lock();
+        let documents = frames
+            .iter()
+            .filter_map(|frame| match frame {
+                WebRTCWireFrame::Message(message) if message.method == CTOX_QUERY_RPC_CHUNK => {
+                    serde_json::from_value::<QueryFetchChunk>(message.params[0].clone()).ok()
+                }
+                _ => None,
+            })
+            .flat_map(|chunk| decode_chunk_documents(&chunk).unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(documents.len(), 1);
+        assert_eq!(
+            documents[0].get("id").and_then(Value::as_str),
+            Some("doc-0002")
+        );
+    }
+
+    #[tokio::test]
     async fn rate_limit_kicks_in_after_burst() {
         let collection = seeded_collection(1).await;
-        let registry = Arc::new(QueryFetchRegistry::new(2));
+        let registry = authorized_query_registry(2);
         registry.register(Arc::clone(&collection));
         // Exhaust the bucket: each accepted call consumes one token. The burst
         // is intentionally larger than max_inflight, but finite.
@@ -1432,7 +2010,7 @@ mod tests {
     #[tokio::test]
     async fn normal_startup_burst_is_not_rate_limited() {
         let collection = seeded_collection(1).await;
-        let registry = Arc::new(QueryFetchRegistry::new(4));
+        let registry = authorized_query_registry(4);
         registry.register(Arc::clone(&collection));
         let handler = Arc::new(MockHandler::new());
         for i in 0..16 {
@@ -1457,7 +2035,7 @@ mod tests {
     #[tokio::test]
     async fn unsupported_collection_does_not_consume_rate_tokens() {
         let collection = seeded_collection(1).await;
-        let registry = Arc::new(QueryFetchRegistry::new(2));
+        let registry = authorized_query_registry(2);
         registry.register(Arc::clone(&collection));
         let handler = Arc::new(MockHandler::new());
 
@@ -1495,7 +2073,7 @@ mod tests {
     #[tokio::test]
     async fn rate_limit_is_per_peer_not_global() {
         let collection = seeded_collection(1).await;
-        let registry = Arc::new(QueryFetchRegistry::new(2));
+        let registry = authorized_query_registry(2);
         registry.register(Arc::clone(&collection));
         let handler = Arc::new(MockHandler::new());
         // peer1 burns its bucket
@@ -1530,7 +2108,7 @@ mod tests {
     #[tokio::test]
     async fn buffered_bytes_above_water_pauses_send() {
         let collection = seeded_collection(800).await;
-        let registry = Arc::new(QueryFetchRegistry::new(4));
+        let registry = authorized_query_registry(4);
         registry.register(Arc::clone(&collection));
         let handler = Arc::new(MockHandler::new());
         // Simulate a slow drain: buffered jumps high after every send, then
@@ -1629,7 +2207,7 @@ mod tests {
             Arc::new(DefaultConflictHandler),
             rx_schema,
         );
-        let registry = Arc::new(QueryFetchRegistry::new(4));
+        let registry = authorized_query_registry(4);
         registry.register(Arc::clone(&collection));
         let handler = Arc::new(MockHandler::new());
         run_query_fetch(

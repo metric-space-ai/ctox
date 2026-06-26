@@ -345,6 +345,7 @@ pub fn evaluate(
         }
         BusinessOsPermission::ExternalApprove => {
             matches!(actor.role, BusinessOsRole::Chef | BusinessOsRole::Admin)
+                || scope.assigned_to_actor
         }
         BusinessOsPermission::SupportManageInboxes
         | BusinessOsPermission::SupportManageMacros
@@ -533,8 +534,37 @@ mod tests {
             (
                 &team,
                 BusinessOsPermission::ExternalApprove,
-                &assigned_module,
+                &unassigned_module,
                 false,
+            ),
+            (
+                &team,
+                BusinessOsPermission::ExternalApprove,
+                &assigned_module,
+                true,
+            ),
+            // data.write gate: the exact boundary the browser canSelfExecuteBusinessData
+            // mirrors -- only chef/admin or an actor assigned to the module may write;
+            // an unassigned team member is denied and must delegate the change via approval.
+            (&owner, BusinessOsPermission::DataWrite, &workspace, true),
+            (&admin, BusinessOsPermission::DataWrite, &workspace, true),
+            (
+                &team,
+                BusinessOsPermission::DataWrite,
+                &unassigned_module,
+                false,
+            ),
+            (
+                &team,
+                BusinessOsPermission::DataWrite,
+                &assigned_module,
+                true,
+            ),
+            (
+                &founder,
+                BusinessOsPermission::DataWrite,
+                &assigned_module,
+                true,
             ),
             (
                 &owner,

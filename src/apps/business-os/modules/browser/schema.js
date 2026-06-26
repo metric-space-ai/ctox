@@ -101,6 +101,7 @@ const browserFrameSchema = {
   ],
   indexes: [
     'session_id',
+    'expires_at_ms',
     ['session_id', 'seq'],
     ['session_id', 'expires_at_ms'],
     ['tab_id', 'seq'],
@@ -139,6 +140,7 @@ const browserInputEventSchema = {
   indexes: [
     'session_id',
     ['session_id', 'seq'],
+    ['session_id', 'status', 'seq'],
     ['status', 'created_at_ms'],
   ],
   additionalProperties: true,

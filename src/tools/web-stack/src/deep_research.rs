@@ -1703,8 +1703,11 @@ struct Snapshot {
 }
 
 fn fetch_limited_snapshot(url: &str, max_bytes: usize) -> Result<Snapshot> {
+    // SSRF guard: snapshot/text fetchers pull caller- and third-party-supplied
+    // source URLs (incl. open-access PDF URLs resolved from external APIs).
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(8))
+        .resolver(crate::egress::SsrfResolver::new(Vec::new()))
         .build();
     let response = agent
         .get(url)
@@ -1748,8 +1751,11 @@ fn snapshot_extension(url: &str, content_type: Option<&str>) -> &'static str {
 }
 
 fn fetch_text(url: &str) -> Result<String> {
+    // SSRF guard: snapshot/text fetchers pull caller- and third-party-supplied
+    // source URLs (incl. open-access PDF URLs resolved from external APIs).
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(8))
+        .resolver(crate::egress::SsrfResolver::new(Vec::new()))
         .build();
     agent
         .get(url)

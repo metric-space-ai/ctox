@@ -509,6 +509,7 @@
     ],
     "indexes": [
       "session_id",
+      "expires_at_ms",
       [
         "session_id",
         "seq"
@@ -611,6 +612,11 @@
       "session_id",
       [
         "session_id",
+        "seq"
+      ],
+      [
+        "session_id",
+        "status",
         "seq"
       ],
       [
@@ -799,6 +805,24 @@
       "lastTrackingId": {
         "type": "string"
       },
+      "tracking_active": {
+        "type": "boolean"
+      },
+      "tracking_status": {
+        "type": "string"
+      },
+      "tracking_id": {
+        "type": "string"
+      },
+      "tracking_command_id": {
+        "type": "string"
+      },
+      "tracking_task_id": {
+        "type": "string"
+      },
+      "tracking_message_id": {
+        "type": "string"
+      },
       "messages": {
         "type": "array",
         "items": {
@@ -820,6 +844,25 @@
       "id",
       "title",
       "updated_at_ms"
+    ],
+    "indexes": [
+      "owner_user_id",
+      "lastTrackingId",
+      "tracking_active",
+      "tracking_status",
+      "tracking_id",
+      "tracking_command_id",
+      "tracking_task_id",
+      "updated_at_ms",
+      [
+        "tracking_active",
+        "updated_at_ms"
+      ],
+      [
+        "tracking_active",
+        "tracking_status",
+        "updated_at_ms"
+      ]
     ],
     "additionalProperties": true
   },
@@ -869,6 +912,20 @@
       "command_type",
       "status",
       "updated_at_ms"
+    ],
+    "indexes": [
+      "status",
+      "command_id",
+      [
+        "status",
+        "updated_at_ms"
+      ],
+      [
+        "module",
+        "command_type",
+        "status",
+        "updated_at_ms"
+      ]
     ],
     "additionalProperties": true
   },
@@ -2148,6 +2205,12 @@
         "type": "string",
         "maxLength": 128
       },
+      "command_id": {
+        "type": "string"
+      },
+      "command_type": {
+        "type": "string"
+      },
       "title": {
         "type": "string"
       },
@@ -2172,6 +2235,19 @@
       "title",
       "status",
       "module"
+    ],
+    "indexes": [
+      "status",
+      "command_id",
+      "updated_at_ms",
+      [
+        "status",
+        "updated_at_ms"
+      ],
+      [
+        "command_id",
+        "status"
+      ]
     ],
     "additionalProperties": true
   },
@@ -2265,6 +2341,136 @@
       "auth",
       "diagnostics",
       "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "ctox_task_approval_requests": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "approval_request_id": {
+        "type": "string"
+      },
+      "thread_id": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "requester_user_id": {
+        "type": "string"
+      },
+      "requester_display_name": {
+        "type": "string"
+      },
+      "reviewer_user_id": {
+        "type": "string"
+      },
+      "reviewer_display_name": {
+        "type": "string"
+      },
+      "prompt": {
+        "type": "string"
+      },
+      "instruction": {
+        "type": "string"
+      },
+      "target_command_type": {
+        "type": "string"
+      },
+      "target_module": {
+        "type": "string"
+      },
+      "target_record_id": {
+        "type": "string"
+      },
+      "source_module": {
+        "type": "string"
+      },
+      "source_record_type": {
+        "type": "string"
+      },
+      "source_record_id": {
+        "type": "string"
+      },
+      "source_label": {
+        "type": "string"
+      },
+      "source_deep_link": {
+        "type": "string"
+      },
+      "requested_at_ms": {
+        "type": "number"
+      },
+      "decided_at_ms": {
+        "type": "number"
+      },
+      "decision_by_id": {
+        "type": "string"
+      },
+      "decision_note": {
+        "type": "string"
+      },
+      "approved_command_id": {
+        "type": "string"
+      },
+      "approved_task_id": {
+        "type": "string"
+      },
+      "target_payload": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "source_context": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "client_context": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "thread_id",
+      "status",
+      "requester_user_id",
+      "reviewer_user_id",
+      "prompt"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "status",
+      "requester_user_id",
+      "reviewer_user_id",
+      "thread_id",
+      [
+        "reviewer_user_id",
+        "status",
+        "updated_at_ms"
+      ]
     ],
     "additionalProperties": true
   },
@@ -3698,6 +3904,14 @@
       "encoding",
       "data",
       "created_at_ms"
+    ],
+    "indexes": [
+      "file_id",
+      [
+        "file_id",
+        "generation_id",
+        "idx"
+      ]
     ],
     "additionalProperties": true
   },
@@ -8656,6 +8870,378 @@
       "owner_id",
       "scope",
       "position"
+    ],
+    "additionalProperties": true
+  },
+  "user_notifications": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "notification_id": {
+        "type": "string"
+      },
+      "user_id": {
+        "type": "string"
+      },
+      "thread_id": {
+        "type": "string"
+      },
+      "message_id": {
+        "type": "string"
+      },
+      "approval_request_id": {
+        "type": "string"
+      },
+      "notification_type": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "body_preview": {
+        "type": "string"
+      },
+      "source_module": {
+        "type": "string"
+      },
+      "source_record_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "user_id",
+      "thread_id",
+      "notification_type",
+      "status"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "user_id",
+      "status",
+      "thread_id",
+      [
+        "user_id",
+        "status",
+        "updated_at_ms"
+      ]
+    ],
+    "additionalProperties": true
+  },
+  "user_thread_links": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "thread_id": {
+        "type": "string"
+      },
+      "source_module": {
+        "type": "string"
+      },
+      "source_record_type": {
+        "type": "string"
+      },
+      "source_record_id": {
+        "type": "string"
+      },
+      "source_label": {
+        "type": "string"
+      },
+      "link_role": {
+        "type": "string"
+      },
+      "link_type": {
+        "type": "string"
+      },
+      "command_id": {
+        "type": "string"
+      },
+      "task_id": {
+        "type": "string"
+      },
+      "case_id": {
+        "type": "string"
+      },
+      "deep_link": {
+        "type": "string"
+      },
+      "label": {
+        "type": "string"
+      },
+      "context": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "thread_id"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "thread_id",
+      "source_module",
+      "source_record_id"
+    ],
+    "additionalProperties": true
+  },
+  "user_thread_messages": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "message_id": {
+        "type": "string"
+      },
+      "thread_id": {
+        "type": "string"
+      },
+      "kind": {
+        "type": "string"
+      },
+      "author_user_id": {
+        "type": "string"
+      },
+      "author_display_name": {
+        "type": "string"
+      },
+      "target_user_ids": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "body": {
+        "type": "string"
+      },
+      "source_module": {
+        "type": "string"
+      },
+      "source_record_type": {
+        "type": "string"
+      },
+      "source_record_id": {
+        "type": "string"
+      },
+      "source_label": {
+        "type": "string"
+      },
+      "source_deep_link": {
+        "type": "string"
+      },
+      "approval_request_id": {
+        "type": "string"
+      },
+      "command_id": {
+        "type": "string"
+      },
+      "metadata": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "thread_id",
+      "kind",
+      "body"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "thread_id",
+      "author_user_id",
+      "approval_request_id",
+      [
+        "thread_id",
+        "created_at_ms"
+      ]
+    ],
+    "additionalProperties": true
+  },
+  "user_threads": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "thread_id": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "kind": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "participant_ids": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "watcher_user_ids": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "owner_user_id": {
+        "type": "string"
+      },
+      "created_by_id": {
+        "type": "string"
+      },
+      "assigned_user_id": {
+        "type": "string"
+      },
+      "source_module": {
+        "type": "string"
+      },
+      "source_record_type": {
+        "type": "string"
+      },
+      "source_record_id": {
+        "type": "string"
+      },
+      "source_label": {
+        "type": "string"
+      },
+      "source_deep_link": {
+        "type": "string"
+      },
+      "last_message_id": {
+        "type": "string"
+      },
+      "last_message_at_ms": {
+        "type": "number"
+      },
+      "pending_approval_count": {
+        "type": "number"
+      },
+      "snoozed_until_ms": {
+        "type": "number"
+      },
+      "archived_at_ms": {
+        "type": "number"
+      },
+      "last_seen_by_user": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "metadata": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms",
+      "title",
+      "status",
+      "participant_ids"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "status",
+      "owner_user_id",
+      "assigned_user_id",
+      "watcher_user_ids",
+      "source_module",
+      "source_record_id",
+      [
+        "status",
+        "updated_at_ms"
+      ]
     ],
     "additionalProperties": true
   }

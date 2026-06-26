@@ -16,11 +16,9 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ctox-business-os-desktop-bundled-runtime-"));
   const helperPath = path.join(tempRoot, "resources", "ctox", process.platform === "win32" ? "ctox.cmd" : "ctox");
-  const target = path.join(tempRoot, "business-os");
   const desktopProfile = path.join(tempRoot, "desktop-profile");
   const registryPath = path.join(desktopProfile, "instances.json");
   fs.mkdirSync(path.dirname(helperPath), { recursive: true });
-  fs.mkdirSync(target, { recursive: true });
   fs.mkdirSync(desktopProfile, { recursive: true });
   writeBundledCtoxHelper(helperPath);
 
@@ -88,7 +86,6 @@ async function main() {
     if (!options.keepTarget) {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     } else {
-      console.log(`desktop local bundled runtime smoke target kept: ${target}`);
       console.log(`desktop local bundled runtime smoke profile kept: ${desktopProfile}`);
       console.log(`desktop local bundled runtime smoke helper kept: ${helperPath}`);
     }

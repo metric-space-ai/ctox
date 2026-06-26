@@ -55,6 +55,21 @@ export function validateSkillContract({ skillText, rustText, planText }) {
   if (!skillText.includes("response_too_large")) {
     errors.push("skill must document response_too_large handling");
   }
+  for (const phrase of [
+    "Business OS access is two-layered",
+    "apps.view",
+    "data.read",
+    "data.write",
+    "apps.modify",
+    "external.approve",
+    "0.x.y",
+    "1.0.0",
+    "business_os_policy"
+  ]) {
+    if (!skillText.includes(phrase)) {
+      errors.push(`skill must document remote role/app/data scope phrase: ${phrase}`);
+    }
+  }
 
   return {
     ok: errors.length === 0,

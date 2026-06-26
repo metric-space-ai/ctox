@@ -1,0 +1,23 @@
+{
+  "refresh": "Aktualisieren",
+  "search": "Threads suchen",
+  "noThreads": "Keine relevanten Threads vorhanden.",
+  "noSelection": "Kein Thread ausgewählt.",
+  "commandFailed": "Aktion konnte nicht abgeschlossen werden.",
+  "filterApprovals": "Freigaben",
+  "filterDelegated": "Delegiert",
+  "approvalPanelTitle": "CTOX Freigabe",
+  "approvalReviewerLabel": "Reviewer",
+  "approvalReviewerPlaceholder": "erfahrener-user-id",
+  "approvalPromptLabel": "Prompt",
+  "approvalPromptPlaceholder": "Was CTOX nach Freigabe tun soll",
+  "approvalRequestSubmit": "Freigabe anfragen",
+  "approvalEdit": "Bearbeiten",
+  "approvalApprove": "Freigeben",
+  "approvalReject": "Ablehnen",
+  "approvalRequester": "Anfragende:r",
+  "approvalReviewerShort": "Reviewer",
+  "approvalCommand": "Befehl",
+  "approvalTask": "Aufgabe",
+  "approvalHeadingPrefix": "CTOX Freigabe"
+}

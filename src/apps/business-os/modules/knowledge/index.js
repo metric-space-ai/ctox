@@ -196,6 +196,7 @@ function documentTemplate() {
           <div class="dataframe-bar">
             <div><strong data-table-title>DataFrame</strong><span data-table-meta></span></div>
             <div class="table-pager">
+              <button type="button" data-action="export-table-csv">CSV</button>
               <button type="button" data-action="prev-rows">Zurück</button>
               <button type="button" data-action="next-rows">Weiter</button>
             </div>
@@ -241,6 +242,7 @@ function wireEvents() {
   }
   state.ctx.host.querySelector('[data-action="prev-rows"]').addEventListener('click', () => pageTable(-1));
   state.ctx.host.querySelector('[data-action="next-rows"]').addEventListener('click', () => pageTable(1));
+  state.ctx.host.querySelector('[data-action="export-table-csv"]')?.addEventListener('click', exportActiveTableCsv);
   state.ctx.host.querySelector('[data-action="create-knowledge-book"]')?.addEventListener('click', () => openCreateKnowledgeBookDrawer());
   state.ctx.host.querySelector('[data-action="import-knowledge-book"]')?.addEventListener('click', () => openImportKnowledgeBookDrawer());
   state.ctx.host.querySelector('[data-action="export-knowledge-book"]')?.addEventListener('click', () => openExportKnowledgeBookDrawer());
@@ -1451,13 +1453,30 @@ function renderDataFrameTable(columns, rows) {
     els.tableHost.innerHTML = '<div class="empty-state"><strong>Keine Spalten</strong></div>';
     return;
   }
+  const normalColumns = normalizeColumns(columns);
   const table = document.createElement('table');
   table.className = 'dataframe-table';
   table.innerHTML = `
-    <thead><tr>${columns.map((column) => `<th title="${escapeHtml(column.dtype || column.type || '')}">${escapeHtml(column.label || column.name || column.key)}</th>`).join('')}</tr></thead>
-    <tbody>${rows.map((row) => `<tr>${columns.map((column) => `<td>${escapeHtml(formatCell(valueForColumn(row, column)))}</td>`).join('')}</tr>`).join('')}</tbody>
+    <thead><tr>${normalColumns.map((column) => dataframeHeaderHtml(column)).join('')}</tr></thead>
+    <tbody>${rows.map((row) => `<tr>${normalColumns.map((column) => `<td>${escapeHtml(formatCell(valueForColumn(row, column), column))}</td>`).join('')}</tr>`).join('')}</tbody>
   `;
   els.tableHost.replaceChildren(table);
+}
+
+function dataframeHeaderHtml(column) {
+  const label = columnHeaderLabel(column);
+  const help = columnHeaderHelp(column);
+  const meta = [
+    column.dtype || column.type || '',
+    column.unit ? `Einheit: ${column.unit}` : '',
+    column.key && column.key !== label ? `Key: ${column.key}` : '',
+  ].filter(Boolean).join(' · ');
+  return `
+    <th title="${escapeHtml(help || meta)}">
+      <span class="column-label">${escapeHtml(label)}</span>
+      ${help ? `<span class="column-help" tabindex="0" aria-label="${escapeHtml(help)}" data-tooltip="${escapeHtml(help)}">i</span>` : ''}
+    </th>
+  `;
 }
 
 function valueForColumn(row, column) {
@@ -2174,10 +2193,221 @@ function firstArray(...values) {
 
 function normalizeColumns(columns) {
   return (columns || []).map((column) => {
-    if (typeof column === 'string') return { key: column, name: column, label: column };
+    if (typeof column === 'string') return enrichColumn({ key: column, name: column, label: titleFromSlug(column) });
     const key = column?.key || column?.id || column?.name || column?.field || '';
-    return { ...column, key, name: column?.name || key, label: column?.label || column?.title || key };
+    return enrichColumn({ ...column, key, name: column?.name || key, label: column?.label || column?.title || titleFromSlug(key) });
   }).filter((column) => column.key);
+}
+
+function enrichColumn(column) {
+  const inferred = inferColumnSemantics(column);
+  const unit = normalizeUnit(inferred.unit || column.unit || column.units || '');
+  return {
+    ...column,
+    unit,
+    description: column.description || column.help || inferred.description || '',
+    metricUnit: inferred.metricUnit || unit,
+    valueKind: column.valueKind || inferred.valueKind || '',
+  };
+}
+
+function inferColumnSemantics(column = {}) {
+  const key = String(column.key || column.name || column.label || '').toLowerCase();
+  const nameUnit = inferredUnitFromColumnName(column);
+  const declaredUnit = normalizeUnit(column.unit || column.units || '');
+  const explicitUnit = nameUnit && nameUnit !== declaredUnit ? nameUnit : (declaredUnit || nameUnit);
+  if (key.includes('propeller') && (key.includes('size') || key.includes('dimension'))) {
+    return {
+      unit: explicitUnit || 'in',
+      metricUnit: 'mm',
+      valueKind: 'propeller_size',
+      description: 'Propeller size such as 9x5 means 9 inch diameter and 5 inch pitch. Knowledge normalizes this as diameter x pitch in millimetres for metric comparison and CSV export.',
+    };
+  }
+  const unitByToken = [
+    [/thrust|force|load|bearing_load|weight_force/, 'N', 'Force or load in newtons.'],
+    [/torque|moment/, 'N m', 'Torque in newton metres.'],
+    [/diameter|width|height|length|span|pitch|distance/, 'mm', 'Length in millimetres.'],
+    [/mass/, 'kg', 'Mass in kilograms.'],
+    [/weight/, 'kg', 'Weight/mass value normalized to kilograms when source data carries mass units.'],
+    [/voltage|volt/, 'V', 'Voltage in volts.'],
+    [/current|amp/, 'A', 'Current in amperes.'],
+    [/power|watt/, 'W', 'Power in watts.'],
+    [/capacity/, 'Ah', 'Capacity in ampere hours unless the source column states another unit.'],
+    [/rpm|rev/, 'rpm', 'Rotational speed in revolutions per minute.'],
+    [/speed|velocity/, 'm/s', 'Speed in metres per second.'],
+    [/temperature|temp/, 'deg C', 'Temperature in degrees Celsius.'],
+  ];
+  for (const [pattern, unit, description] of unitByToken) {
+    if (pattern.test(key)) return { unit: explicitUnit || unit, metricUnit: normalizeUnit(unit), valueKind: 'numeric', description };
+  }
+  if (/score|ratio|percent|share|count|qty|quantity|number|index|value/.test(key)) {
+    return { unit: explicitUnit, metricUnit: explicitUnit, valueKind: 'numeric', description: 'Numeric value; exported without thousands separators and with a dot as decimal separator.' };
+  }
+  return { unit: explicitUnit, metricUnit: explicitUnit, valueKind: '' };
+}
+
+function inferredUnitFromColumnName(column = {}) {
+  const candidates = [column.key, column.name, column.field, column.id, column.label, column.title].filter(Boolean);
+  for (const candidate of candidates) {
+    const unit = inferredUnitFromText(candidate);
+    if (unit) return unit;
+  }
+  return '';
+}
+
+function inferredUnitFromText(value = '') {
+  const tokens = String(value || '')
+    .toLowerCase()
+    .split(/[^a-z0-9°/]+/)
+    .filter(Boolean);
+  if (!tokens.length) return '';
+  const last = tokens[tokens.length - 1];
+  const previous = tokens[tokens.length - 2] || '';
+  if ((previous === 'n' || previous === 'newton') && (last === 'm' || last === 'meter' || last === 'metre')) return 'N m';
+  if (last === 'nm') return 'N m';
+  const unit = normalizeUnit(last);
+  return unit === last && !knownUnitToken(last) ? '' : unit;
+}
+
+function knownUnitToken(token) {
+  return new Set([
+    'n',
+    'newton',
+    'newtons',
+    'nm',
+    'mm',
+    'millimeter',
+    'millimetre',
+    'cm',
+    'm',
+    'meter',
+    'metre',
+    'in',
+    'inch',
+    'inches',
+    'ft',
+    'feet',
+    'kg',
+    'kilogram',
+    'lb',
+    'lbs',
+    'pound',
+    'oz',
+    'v',
+    'volt',
+    'a',
+    'amp',
+    'ampere',
+    'w',
+    'watt',
+    'ah',
+    'rpm',
+    'm/s',
+    'km/h',
+    'c',
+    '°c',
+    'celsius',
+  ]).has(token);
+}
+
+function normalizeUnit(unit) {
+  const raw = String(unit || '').trim();
+  if (!raw) return '';
+  const normal = raw.toLowerCase().replace(/\s+/g, ' ');
+  return ({
+    n: 'N',
+    newton: 'N',
+    newtons: 'N',
+    nm: 'N m',
+    'n*m': 'N m',
+    'n-m': 'N m',
+    'newton meter': 'N m',
+    'newton metre': 'N m',
+    mm: 'mm',
+    millimeter: 'mm',
+    millimetre: 'mm',
+    cm: 'cm',
+    m: 'm',
+    meter: 'm',
+    metre: 'm',
+    in: 'in',
+    inch: 'in',
+    inches: 'in',
+    ft: 'ft',
+    feet: 'ft',
+    kg: 'kg',
+    kilogram: 'kg',
+    g: 'g',
+    gram: 'g',
+    lb: 'lb',
+    lbs: 'lb',
+    pound: 'lb',
+    oz: 'oz',
+    v: 'V',
+    volt: 'V',
+    a: 'A',
+    amp: 'A',
+    ampere: 'A',
+    w: 'W',
+    watt: 'W',
+    ah: 'Ah',
+    rpm: 'rpm',
+    'm/s': 'm/s',
+    'km/h': 'km/h',
+    c: 'deg C',
+    '°c': 'deg C',
+    celsius: 'deg C',
+  })[normal] || raw;
+}
+
+function columnHeaderLabel(column) {
+  const base = String(column.label || column.name || column.key || 'Column').trim();
+  const metricUnit = metricUnitForColumn(column);
+  if (!metricUnit) return base;
+  let label = stripUnitSuffix(base, metricUnit);
+  if (column.unit && column.unit !== metricUnit) label = stripUnitSuffix(label, column.unit);
+  if (column.valueKind === 'propeller_size') return `${label} (diameter x pitch, ${metricUnit})`;
+  return `${label} (${metricUnit})`;
+}
+
+function labelEndsWithUnitInParens(label, unit) {
+  return new RegExp(`\\(${escapeRegExp(unit)}\\)\\s*$`, 'i').test(String(label || ''));
+}
+
+function stripUnitSuffix(label, unit = '') {
+  let value = String(label || '').replace(/\s*\([^)]*\)\s*$/g, '').trim();
+  if (!unit) return value;
+  const compactUnit = String(unit).replace(/\s+/g, '');
+  const aliases = new Set([unit, compactUnit]);
+  if (unit === 'N m') aliases.add('Nm');
+  for (const alias of aliases) {
+    if (!alias) continue;
+    value = value.replace(new RegExp(`[\\s_-]+${escapeRegExp(alias)}\\s*$`, 'i'), '').trim();
+  }
+  return value || String(label || '').trim();
+}
+
+function metricUnitForColumn(column) {
+  if (column.valueKind === 'propeller_size') return 'mm';
+  return ({
+    in: 'mm',
+    ft: 'm',
+    lb: 'kg',
+    oz: 'g',
+  })[column.unit] || column.metricUnit || column.unit || '';
+}
+
+function columnHeaderHelp(column) {
+  const parts = [];
+  if (column.description) parts.push(column.description);
+  if (column.unit) parts.push(`Source unit: ${column.unit}.`);
+  const metricUnit = metricUnitForColumn(column);
+  if (metricUnit && metricUnit !== column.unit) parts.push(`Shown/exported metric unit: ${metricUnit}.`);
+  if (column.dtype || column.type) parts.push(`Type: ${column.dtype || column.type}.`);
+  if (column.key) parts.push(`Column key: ${column.key}.`);
+  if (!parts.length) return '';
+  return parts.join(' ');
 }
 
 function localMarkdownForItem(item) {
@@ -2283,10 +2513,135 @@ function groupLabel(kind) {
   })[kind] || 'Knowledge';
 }
 
-function formatCell(value) {
+function formatCell(value, column = null) {
+  const normalized = canonicalCellValue(value, column);
+  if (normalized == null) return '';
+  return String(normalized);
+}
+
+function canonicalCellValue(value, column = null) {
   if (value == null) return '';
+  if (column?.valueKind === 'propeller_size') return normalizePropellerSize(value);
+  if (typeof value === 'number') return convertAndFormatNumber(value, column);
+  if (typeof value === 'string') {
+    const normalizedPropeller = column?.valueKind === 'propeller_size' ? normalizePropellerSize(value) : '';
+    if (normalizedPropeller) return normalizedPropeller;
+    const parsed = parseNumericString(value);
+    if (parsed != null && isNumericColumn(column)) return convertAndFormatNumber(parsed, column);
+    return value.trim();
+  }
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
   if (typeof value === 'object') return JSON.stringify(value);
   return String(value);
+}
+
+function isNumericColumn(column) {
+  if (!column) return false;
+  const type = String(column.type || column.dtype || '').toLowerCase();
+  if (/number|integer|float|double|decimal/.test(type)) return true;
+  return Boolean(column.valueKind === 'numeric' || column.unit || column.metricUnit);
+}
+
+function convertAndFormatNumber(value, column = null) {
+  const converted = convertToMetric(Number(value), column);
+  return formatPlainNumber(converted);
+}
+
+function convertToMetric(value, column = null) {
+  if (!Number.isFinite(value) || !column?.unit) return value;
+  if (column.unit === 'in') return value * 25.4;
+  if (column.unit === 'ft') return value * 0.3048;
+  if (column.unit === 'lb') return value * 0.45359237;
+  if (column.unit === 'oz') return value * 28.349523125;
+  return value;
+}
+
+function normalizePropellerSize(value) {
+  const text = String(value ?? '').trim().toLowerCase().replace(/\s+/g, '');
+  const match = text.match(/^([0-9]+(?:[.,][0-9]+)?)x([0-9]+(?:[.,][0-9]+)?)(?:in|inch|")?$/);
+  if (!match) return String(value ?? '').trim();
+  const diameterIn = parseNumericString(match[1]);
+  const pitchIn = parseNumericString(match[2]);
+  if (diameterIn == null || pitchIn == null) return String(value ?? '').trim();
+  return `${formatPlainNumber(diameterIn * 25.4)} x ${formatPlainNumber(pitchIn * 25.4)}`;
+}
+
+function parseNumericString(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  if (!/^[+-]?(?:\d+|\d{1,3}(?:[., ]\d{3})+)(?:[.,]\d+)?$/.test(text)) return null;
+  let normalized = text.replace(/\s+/g, '');
+  const lastComma = normalized.lastIndexOf(',');
+  const lastDot = normalized.lastIndexOf('.');
+  if (lastComma >= 0 && lastDot >= 0) {
+    const decimal = lastComma > lastDot ? ',' : '.';
+    const thousands = decimal === ',' ? /\./g : /,/g;
+    normalized = normalized.replace(thousands, '').replace(decimal, '.');
+  } else if (lastComma >= 0) {
+    const groups = normalized.split(',');
+    normalized = groups.length === 2 && groups[1].length !== 3
+      ? normalized.replace(',', '.')
+      : normalized.replace(/,/g, '');
+  } else if ((normalized.match(/\./g) || []).length > 1) {
+    normalized = normalized.replace(/\./g, '');
+  }
+  const number = Number(normalized);
+  return Number.isFinite(number) ? number : null;
+}
+
+function formatPlainNumber(value) {
+  if (!Number.isFinite(value)) return '';
+  const clean = Object.is(value, -0) ? 0 : value;
+  if (Number.isInteger(clean)) return String(clean);
+  let text = clean.toString();
+  if (text.includes('e')) text = clean.toFixed(12);
+  return text.replace(/(\.\d*?[1-9])0+$/g, '$1').replace(/\.0+$/g, '');
+}
+
+function exportActiveTableCsv() {
+  const tableId = activeTableId();
+  const item = state.items.find((entry) => entry.id === tableId);
+  const tableRecord = tableForItem(item || { id: tableId }, state.tables);
+  const tableSource = mergeKnowledgeTableData(item, tableRecord);
+  if (!tableSource?.has_table) return;
+  const rows = localDataFrameRows(tableSource);
+  const schema = localDataFrameSchema(tableSource);
+  const csv = dataframeToCsv(schema.columns || [], rows);
+  downloadTextFile(
+    `${normaliseName(schema.title || tableSource.title || tableId || 'knowledge-table') || 'knowledge-table'}.csv`,
+    csv,
+    'text/csv;charset=utf-8'
+  );
+}
+
+function dataframeToCsv(columns, rows) {
+  const normalColumns = normalizeColumns(columns);
+  const header = normalColumns.map((column) => csvEscape(columnHeaderLabel(column))).join(',');
+  const body = rows.map((row) => normalColumns.map((column) => (
+    csvEscape(canonicalCellValue(valueForColumn(row, column), column))
+  )).join(','));
+  return [header, ...body].join('\n');
+}
+
+function csvEscape(value) {
+  const text = String(value ?? '');
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function downloadTextFile(filename, content, type = 'text/plain;charset=utf-8') {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function escapeHtml(value) {
@@ -2313,7 +2668,13 @@ export const __knowledgeTestHooks = {
   localDataFrameRows,
   localDataFrameSchema,
   mergeKnowledgeTableData,
+  canonicalCellValue,
+  columnHeaderHelp,
+  columnHeaderLabel,
+  dataframeToCsv,
+  formatCell,
   normalizeStoredKnowledgeRecord,
+  normalizeColumns,
   sourceScopeFor,
   valueForColumn,
 };

@@ -932,7 +932,7 @@ ctox
 # Chat Model: Qwen/Qwen3.6-27B
 
 ctox doctor
-ctox runtime switch Qwen/Qwen3.6-27B quality --context 128k</code></pre>
+ctox runtime switch Qwen/Qwen3.6-27B quality --context 256k</code></pre>
           <p>
             The 27B local example is for a Linux host with NVIDIA CUDA and the
             required local model artifacts. If CUDA, weights, or runtime files
@@ -976,8 +976,8 @@ ctox runtime switch Qwen/Qwen3.6-27B quality --context 128k</code></pre>
                 </tr>
                 <tr>
                   <td>Context window</td>
-                  <td><code>32768</code>, <code>65536</code>, <code>131072</code>, <code>262144</code></td>
-                  <td>Target context window for prompt assembly and runtime planning.</td>
+                  <td><code>262144</code> / <code>256k</code></td>
+                  <td>Supported chat context window for prompt assembly and runtime planning.</td>
                 </tr>
                 <tr>
                   <td>Skill and runtime preset</td>
@@ -992,8 +992,8 @@ ctox runtime switch Qwen/Qwen3.6-27B quality --context 128k</code></pre>
               </tbody>
             </table>
           </div>
-          <pre><code>ctox runtime switch gpt-5.4 quality --context 128k --timeout 1800
-ctox runtime switch Qwen/Qwen3.5-4B quality --context 128k</code></pre>
+          <pre><code>ctox runtime switch gpt-5.4 quality --context 256k --timeout 1800
+ctox runtime switch Qwen/Qwen3.6-27B quality --context 256k</code></pre>
           <p class="note">
             A configured model backend is necessary, but it is not the core
             CTOX concept. The daemon, runtime state, work queue, context

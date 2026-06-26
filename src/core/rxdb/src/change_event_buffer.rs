@@ -54,6 +54,10 @@ impl ChangeEventBuffer {
         let handle = tokio::spawn(async move {
             let mut s = events_stream;
             while let Some(bulk) = s.next().await {
+                if bulk.is_rxsubject_lagged() {
+                    Self::handle_lagged(&inner_for_task);
+                    continue;
+                }
                 Self::handle_change_events(&inner_for_task, &bulk.events, limit);
             }
         });
@@ -92,6 +96,13 @@ impl ChangeEventBuffer {
                 state.oldest_counter = 1;
             }
         }
+    }
+
+    fn handle_lagged(inner: &Arc<Mutex<Inner>>) {
+        let mut state = inner.lock();
+        state.counter = state.counter.saturating_add(1);
+        state.oldest_counter = state.counter.saturating_add(1);
+        state.buffer.clear();
     }
 
     // ref: rxdb/src/change-event-buffer.ts:90-93
@@ -162,4 +173,42 @@ impl ChangeEventBuffer {
 // ref: rxdb/src/change-event-buffer.ts:167-171
 pub fn create_change_event_buffer(events_stream: RxStream<EventBulk>) -> Arc<ChangeEventBuffer> {
     ChangeEventBuffer::new(events_stream)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rxjs_compat::RxSubject;
+
+    #[tokio::test]
+    async fn lagged_marker_invalidates_incremental_buffer() {
+        let subject = RxSubject::<EventBulk>::new();
+        let buffer = ChangeEventBuffer::new(subject.subscribe());
+        subject.next(EventBulk {
+            id: "bulk-1".to_string(),
+            events: vec![RxStorageChangeEvent {
+                operation: "INSERT".to_string(),
+                document_id: "a".to_string(),
+                document_data: Some(serde_json::json!({ "id": "a" })),
+                previous_document_data: None,
+                is_local: false,
+            }],
+            checkpoint: Some(serde_json::json!({ "id": "a", "lwt": 1 })),
+            context: None,
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        assert_eq!(buffer.get_counter(), 1);
+        assert!(buffer.get_from(1).is_some());
+
+        subject.next(EventBulk::rxsubject_lagged(4));
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        assert_eq!(buffer.get_counter(), 2);
+        assert!(
+            buffer.get_from(2).is_none(),
+            "lagged marker must force full query re-execution"
+        );
+        assert!(buffer.get_buffer().is_empty());
+        buffer.close();
+    }
 }

@@ -86,7 +86,7 @@ test("local command options bind child processes to the selected ctox root", () 
 
 test("local command options reject non-runtime roots", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ctox-desktop-non-runtime-root-"));
-  fs.writeFileSync(path.join(tempRoot, "README.md"), "# not ctox\n");
+  fs.writeFileSync(path.join(tempRoot, "README.md"), "not a CTOX runtime root\n");
 
   assert.throws(
     () => assertLocalCtoxRoot(tempRoot),

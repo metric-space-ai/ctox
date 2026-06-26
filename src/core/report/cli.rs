@@ -3035,11 +3035,23 @@ fn cmd_render(root: &Path, args: &[String]) -> Result<()> {
                 ensure_required_release_checks_ready(&conn, run_id, "render DOCX")?;
             }
             let path = out_path.unwrap_or_else(|| PathBuf::from(format!("{run_id}.docx")));
-            let skill_root = root
-                .join("skills")
-                .join("system")
-                .join("research")
-                .join("systematic-research");
+            // System skills are compiled into the SQLite skill store (include_dir!),
+            // not laid down under `root/skills/...`, so resolving the render script
+            // from that on-disk path failed on every runtime. Materialize the
+            // bundle on demand and hand render_docx the materialized directory,
+            // which contains `scripts/render_manuscript.py`.
+            let skill_root = crate::skill_store::materialize_skill_bundle(
+                root,
+                "systematic-research",
+            )
+            .map_err(|err| {
+                anyhow!("failed to materialize systematic-research skill for DOCX rendering: {err}")
+            })?
+            .ok_or_else(|| {
+                anyhow!(
+                    "DOCX rendering requires the systematic-research skill bundle, which is not installed"
+                )
+            })?;
             match render_docx(&manuscript, &path, &skill_root, None) {
                 Ok(outcome) => {
                     println!(

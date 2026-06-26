@@ -3,11 +3,19 @@
 
 pub(crate) mod adapters;
 pub(crate) mod attachments;
+pub(crate) mod chat_native;
+pub(crate) mod discord_native;
 pub(crate) mod email_native;
 pub(crate) mod gateway;
+pub(crate) mod google_chat_native;
 pub(crate) mod jami_native;
+pub(crate) mod matrix_native;
+pub(crate) mod mattermost_native;
 pub(crate) mod meeting_native;
 pub(crate) mod microsoft_graph_auth;
 pub(crate) mod runtime;
+pub(crate) mod slack_native;
 pub(crate) mod teams_native;
+pub(crate) mod telegram_native;
 pub(crate) mod whatsapp_native;
+pub(crate) mod zulip_native;

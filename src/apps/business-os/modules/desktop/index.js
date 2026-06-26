@@ -1,11 +1,16 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { showBusinessPrompt } from '../../shared/dialogs.js';
 import { createCtoxLauncher } from './ctoxLauncher.js';
-import { makeIconDraggable } from './iconDrag.js';
+import { makeIconDraggable } from './iconDrag.js?v=20260626-desktop-sync-idle-v4';
 import { getSvgIcon as getFallbackSvgIcon } from '../../shared/icons.js';
 
-const STYLE_BUILD = '20260605-rxdb-cancel1';
+const STYLE_BUILD = '20260626-desktop-sync-idle-v4';
 const LAYOUT_DOC_ID = 'layout';
+const DESKTOP_SYNC_COLLECTIONS = Object.freeze([
+  'desktop_icons',
+  'desktop_layout',
+  'desktop_notifications',
+]);
 const DEFAULT_GRID = { cellW: 104, cellH: 120, offset: 24 };
 const COMPACT_GRID = { cellW: 88, cellH: 100, offset: 12 };
 const ICON_METRICS = {
@@ -33,6 +38,13 @@ const FALLBACK_LABELS = {
     iconRestoreDefaults: 'Standard-Icons wiederherstellen',
     refresh: 'Aktualisieren',
     platformActive: 'CTOX Plattform aktiv',
+    syncReady: 'Sync aktuell',
+    syncStarting: 'Sync startet',
+    syncRunning: 'Sync läuft',
+    syncIssue: 'Sync prüfen',
+    syncNoDiagnostics: 'Warte auf WebRTC-Diagnostik',
+    syncReadyDetail: 'Icons, Layout und Hinweise sind lokal bereit.',
+    syncWaitingOn: 'Wartet auf {collections}',
     ctoxLiveActivity: 'CTOX live',
   },
   en: {
@@ -52,7 +64,27 @@ const FALLBACK_LABELS = {
     iconRestoreDefaults: 'Restore default icons',
     refresh: 'Refresh',
     platformActive: 'CTOX platform active',
+    syncReady: 'Sync current',
+    syncStarting: 'Starting sync',
+    syncRunning: 'Sync running',
+    syncIssue: 'Check sync',
+    syncNoDiagnostics: 'Waiting for WebRTC diagnostics',
+    syncReadyDetail: 'Icons, layout and notices are locally ready.',
+    syncWaitingOn: 'Waiting for {collections}',
     ctoxLiveActivity: 'CTOX live',
+  },
+};
+
+const SYNC_COLLECTION_LABELS = {
+  de: {
+    desktop_icons: 'Icons',
+    desktop_layout: 'Layout',
+    desktop_notifications: 'Benachrichtigungen',
+  },
+  en: {
+    desktop_icons: 'Icons',
+    desktop_layout: 'Layout',
+    desktop_notifications: 'Notifications',
   },
 };
 
@@ -74,12 +106,18 @@ export async function mount(ctx) {
     surface: root.querySelector('[data-desktop-surface]'),
     icons: root.querySelector('[data-desktop-icons]'),
     widgetStatus: root.querySelector('[data-widget-status]'),
+    widgetSync: root.querySelector('[data-widget-sync]'),
+    widgetSyncTitle: root.querySelector('[data-widget-sync-title]'),
+    widgetSyncCount: root.querySelector('[data-widget-sync-count]'),
+    widgetSyncDetail: root.querySelector('[data-widget-sync-detail]'),
+    widgetSyncFill: root.querySelector('[data-widget-sync-fill]'),
   };
 
   const initialModules = Array.isArray(ctx.modules) ? ctx.modules : await loadModuleRegistry();
   let launcher = createLauncher(initialModules);
 
   const cleanups = [];
+  let disposed = false;
 
   // Wire up the live clock and date widget
   const timeEl = refs.root.querySelector('[data-widget-time]');
@@ -110,10 +148,10 @@ export async function mount(ctx) {
     const clockInterval = setInterval(updateClock, 1000);
     cleanups.push(() => clearInterval(clockInterval));
   }
+  wireSyncStatusWidget();
   const layoutCollection = ctx.db?.collection?.('desktop_layout');
   const iconsCollection = ctx.db?.collection?.('desktop_icons');
   const commandsCollection = ctx.db?.collection?.('business_commands');
-  let disposed = false;
 
   const layout = await ensureLayout(layoutCollection, launcher);
   await ensureIcons(iconsCollection, launcher);
@@ -158,6 +196,139 @@ export async function mount(ctx) {
   };
 
   // ---------- helpers (closures over the mount scope) ----------
+
+  function wireSyncStatusWidget() {
+    if (!refs.widgetSync) return;
+    const render = () => {
+      if (disposed) return;
+      renderSyncStatus(syncStatusView(window.ctoxBusinessOsSyncDiagnostics || ctx.sync?.diagnostics || null));
+    };
+    render();
+    window.addEventListener('ctox-business-os-sync-diagnostics', render);
+    const interval = setInterval(render, 2000);
+    cleanups.push(() => {
+      window.removeEventListener('ctox-business-os-sync-diagnostics', render);
+      clearInterval(interval);
+    });
+  }
+
+  function syncStatusView(snapshot) {
+    const declaredCollections = Array.isArray(ctx.module?.collections)
+      ? ctx.module.collections.filter(Boolean)
+      : [];
+    const declaredSet = new Set(declaredCollections);
+    const collections = DESKTOP_SYNC_COLLECTIONS.filter((name) => !declaredSet.size || declaredSet.has(name));
+    const total = collections.length;
+    if (!snapshot || snapshot.mode !== 'webrtc' || !snapshot.collections) {
+      return {
+        hidden: true,
+        state: 'idle',
+        ready: 0,
+        total,
+        title: '',
+        detail: '',
+      };
+    }
+
+    const items = collections.map((name) => {
+      const diagnostics = snapshot.collections?.[name] || null;
+      const status = diagnostics?.connectionStatus || diagnostics?.status || 'pending';
+      return {
+        name,
+        label: syncCollectionLabel(name),
+        status,
+        diagnostics,
+        ready: isSyncCollectionReady(diagnostics),
+        issue: ['failed', 'error', 'stopped'].includes(status),
+      };
+    });
+    const ready = items.filter((item) => item.ready).length;
+    const issueItems = items.filter((item) => item.issue);
+    const pending = items.filter((item) => !item.ready);
+
+    if (issueItems.length) {
+      return {
+        state: 'issue',
+        ready,
+        total,
+        title: t('syncIssue', 'Sync prüfen'),
+        detail: `${issueItems[0].label}: ${syncStatusLabel(issueItems[0])}`,
+      };
+    }
+    if (ready >= total) {
+      return {
+        hidden: true,
+        state: 'idle',
+        ready,
+        total,
+        title: '',
+        detail: '',
+      };
+    }
+    const waiting = pending.slice(0, 2).map((item) => item.label).join(', ');
+    return {
+      state: 'syncing',
+      ready,
+      total,
+      title: t('syncRunning', 'Sync läuft'),
+      detail: t('syncWaitingOn', 'Wartet auf {collections}').replace('{collections}', waiting || 'Daten'),
+    };
+  }
+
+  function syncCollectionLabel(name) {
+    const lang = ctx.locale === 'en' ? 'en' : 'de';
+    return SYNC_COLLECTION_LABELS[lang]?.[name] || name.replace(/^desktop_/, '').replaceAll('_', ' ');
+  }
+
+  function isSyncCollectionReady(diagnostics) {
+    if (!diagnostics) return false;
+    const status = diagnostics.connectionStatus || diagnostics.status || '';
+    if (diagnostics.initialReplicationAt || diagnostics.connectedAt) return true;
+    if (diagnostics.initialReplicationState === 'complete') return true;
+    return ['connected', 'running', 'reused'].includes(status);
+  }
+
+  function syncStatusLabel(item) {
+    const lastError = item?.diagnostics?.lastError?.message || item?.diagnostics?.lastError?.code || '';
+    if (lastError) return shortSyncDetail(lastError);
+    const status = item?.status || 'pending';
+    const lang = ctx.locale === 'en' ? 'en' : 'de';
+    const labels = {
+      de: {
+        connecting: 'verbindet',
+        pending: 'wartet',
+        reconnecting: 'verbindet neu',
+        error: 'Fehler',
+        failed: 'fehlgeschlagen',
+        stopped: 'gestoppt',
+      },
+      en: {
+        connecting: 'connecting',
+        pending: 'waiting',
+        reconnecting: 'reconnecting',
+        error: 'error',
+        failed: 'failed',
+        stopped: 'stopped',
+      },
+    };
+    return labels[lang]?.[status] || status;
+  }
+
+  function shortSyncDetail(value) {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    if (text.length <= 72) return text;
+    return `${text.slice(0, 69)}...`;
+  }
+
+  function renderSyncStatus(view) {
+    refs.widgetSync.hidden = Boolean(view.hidden);
+    refs.widgetSync.dataset.state = view.state;
+    refs.widgetSyncTitle.textContent = view.title;
+    refs.widgetSyncCount.textContent = `${view.ready}/${view.total}`;
+    refs.widgetSyncDetail.textContent = view.detail;
+    const percent = view.total > 0 ? Math.round((view.ready / view.total) * 100) : 0;
+    refs.widgetSyncFill.style.width = `${Math.min(100, Math.max(0, percent))}%`;
+  }
 
   function createLauncher(modules) {
     return createCtoxLauncher({

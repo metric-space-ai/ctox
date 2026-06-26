@@ -4,6 +4,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use regex::Regex;
 use rusqlite::params;
+use rusqlite::params_from_iter;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
 use serde::de::DeserializeOwned;
@@ -137,6 +138,10 @@ static TICKET_SELF_WORK_LIST_CACHE_MISS_COUNTS: OnceLock<
 static TICKET_WORKFLOW_MATERIALIZE_CACHE_MISS_COUNTS: OnceLock<
     Mutex<BTreeMap<TicketWorkflowMaterializeCacheKey, usize>>,
 > = OnceLock::new();
+#[cfg(test)]
+static TICKET_SELF_WORK_ASSIGNMENT_BATCH_HYDRATION_CALLS: OnceLock<Mutex<usize>> = OnceLock::new();
+#[cfg(test)]
+static TICKET_DB_OPEN_CALL_COUNTS: OnceLock<Mutex<BTreeMap<PathBuf, usize>>> = OnceLock::new();
 
 thread_local! {
     static TICKET_RECONCILE_DB: RefCell<Option<CachedTicketConnection>> = RefCell::new(None);
@@ -3383,10 +3388,7 @@ fn list_ticket_self_work_items_on_conn(
     let items = rows
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(anyhow::Error::from)?;
-    items
-        .into_iter()
-        .map(|item| hydrate_ticket_self_work_item(conn, item))
-        .collect()
+    hydrate_ticket_self_work_items_with_latest_assignments(conn, items)
 }
 
 pub(crate) fn load_ticket_self_work_item(
@@ -4401,6 +4403,38 @@ fn load_ticket_self_work_item_raw(
     .map_err(anyhow::Error::from)
 }
 
+pub(crate) fn load_ticket_self_work_items_by_work_id_from_conn(
+    conn: &Connection,
+    work_ids: &[String],
+) -> Result<BTreeMap<String, TicketSelfWorkItemView>> {
+    let mut items_by_work_id = BTreeMap::new();
+    if work_ids.is_empty() {
+        return Ok(items_by_work_id);
+    }
+    for chunk in work_ids.chunks(500) {
+        let placeholders = std::iter::repeat("?")
+            .take(chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            r#"
+            SELECT work_id, source_system, kind, title, body_text, state, metadata_json, remote_ticket_id, remote_locator, created_at, updated_at
+            FROM ticket_self_work_items
+            WHERE work_id IN ({placeholders})
+            "#
+        );
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement.query_map(params_from_iter(chunk.iter()), map_ticket_self_work_row)?;
+        let items = rows
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(anyhow::Error::from)?;
+        for item in hydrate_ticket_self_work_items_with_latest_assignments(conn, items)? {
+            items_by_work_id.insert(item.work_id.clone(), item);
+        }
+    }
+    Ok(items_by_work_id)
+}
+
 fn hydrate_ticket_self_work_item(
     conn: &Connection,
     mut item: TicketSelfWorkItemView,
@@ -4414,6 +4448,57 @@ fn hydrate_ticket_self_work_item(
         item.assigned_at = Some(assignment.created_at);
     }
     Ok(item)
+}
+
+fn hydrate_ticket_self_work_items_with_latest_assignments(
+    conn: &Connection,
+    mut items: Vec<TicketSelfWorkItemView>,
+) -> Result<Vec<TicketSelfWorkItemView>> {
+    if items.is_empty() {
+        return Ok(items);
+    }
+    let work_ids = items
+        .iter()
+        .map(|item| item.work_id.clone())
+        .collect::<Vec<_>>();
+    let placeholders = std::iter::repeat("?")
+        .take(work_ids.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        r#"
+        SELECT assignment_id, work_id, assigned_to, assigned_by, rationale, remote_event_id, created_at
+        FROM (
+            SELECT assignment_id, work_id, assigned_to, assigned_by, rationale, remote_event_id, created_at,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY work_id
+                       ORDER BY created_at DESC, assignment_id DESC
+                   ) AS assignment_rank
+            FROM ticket_self_work_assignments
+            WHERE work_id IN ({placeholders})
+        )
+        WHERE assignment_rank = 1
+        "#
+    );
+    #[cfg(test)]
+    record_ticket_self_work_assignment_batch_hydration_for_tests();
+    let mut statement = conn.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(work_ids.iter()), |row| {
+        map_ticket_self_work_assignment_row(row)
+    })?;
+    let latest = rows
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .into_iter()
+        .map(|assignment| (assignment.work_id.clone(), assignment))
+        .collect::<BTreeMap<_, _>>();
+    for item in &mut items {
+        if let Some(assignment) = latest.get(&item.work_id) {
+            item.assigned_to = Some(assignment.assigned_to.clone());
+            item.assigned_by = Some(assignment.assigned_by.clone());
+            item.assigned_at = Some(assignment.created_at.clone());
+        }
+    }
+    Ok(items)
 }
 
 fn self_work_message_key(item: &TicketSelfWorkItemView) -> Option<&str> {
@@ -7267,6 +7352,14 @@ pub(crate) fn record_ticket_sync_failure(root: &Path, system: &str, error: &str)
 
 fn list_tickets(root: &Path, system: Option<&str>, limit: usize) -> Result<Vec<TicketItemView>> {
     let conn = open_ticket_db(root)?;
+    list_tickets_on_conn(&conn, system, limit)
+}
+
+fn list_tickets_on_conn(
+    conn: &Connection,
+    system: Option<&str>,
+    limit: usize,
+) -> Result<Vec<TicketItemView>> {
     let sql = if system.is_some() {
         r#"
         SELECT ticket_key, source_system, remote_ticket_id, title, body_text, remote_status,
@@ -7359,7 +7452,7 @@ pub(crate) fn business_os_ticket_projection_documents(
 
     documents.insert(
         "ctox_ticket_items".to_string(),
-        list_tickets(root, None, limit)?
+        list_tickets_on_conn(&conn, None, limit)?
             .into_iter()
             .map(|item| {
                 ticket_projection_document(item, |value| {
@@ -7411,7 +7504,7 @@ pub(crate) fn business_os_ticket_projection_documents(
 
     documents.insert(
         "ctox_ticket_cases".to_string(),
-        list_cases(root, None, limit)?
+        list_cases_on_conn(&conn, None, limit)?
             .into_iter()
             .map(|case| {
                 ticket_projection_document(case, |value| {
@@ -7434,7 +7527,7 @@ pub(crate) fn business_os_ticket_projection_documents(
 
     documents.insert(
         "ctox_ticket_self_work_items".to_string(),
-        list_ticket_self_work_items(root, None, None, limit)?
+        list_ticket_self_work_items_on_conn(&conn, None, None, limit)?
             .into_iter()
             .map(|item| {
                 ticket_projection_document(item, |value| {
@@ -7465,7 +7558,7 @@ pub(crate) fn business_os_ticket_projection_documents(
     );
     documents.insert(
         "ctox_ticket_control_bundles".to_string(),
-        list_control_bundles(root)?
+        list_control_bundles_on_conn(&conn)?
             .into_iter()
             .map(|bundle| {
                 ticket_projection_document(bundle, |value| {
@@ -7953,6 +8046,10 @@ fn put_control_bundle(root: &Path, input: ControlBundleInput) -> Result<ControlB
 
 fn list_control_bundles(root: &Path) -> Result<Vec<ControlBundleView>> {
     let conn = open_ticket_db(root)?;
+    list_control_bundles_on_conn(&conn)
+}
+
+fn list_control_bundles_on_conn(conn: &Connection) -> Result<Vec<ControlBundleView>> {
     let mut statement = conn.prepare(
         r#"
         SELECT label, bundle_version, runbook_id, runbook_version, policy_id, policy_version,
@@ -8379,6 +8476,14 @@ pub fn list_cases(
     limit: usize,
 ) -> Result<Vec<TicketCaseView>> {
     let conn = open_ticket_db(root)?;
+    list_cases_on_conn(&conn, ticket_key, limit)
+}
+
+fn list_cases_on_conn(
+    conn: &Connection,
+    ticket_key: Option<&str>,
+    limit: usize,
+) -> Result<Vec<TicketCaseView>> {
     let sql = if ticket_key.is_some() {
         r#"
         SELECT case_id, ticket_key, label, bundle_label, bundle_version, state, approval_mode,
@@ -10122,6 +10227,8 @@ fn open_ticket_db(root: &Path) -> Result<Connection> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create ticket db parent {}", parent.display()))?;
     }
+    #[cfg(test)]
+    record_ticket_db_open_for_tests(&path);
     let conn = Connection::open(&path)
         .with_context(|| format!("failed to open ticket db {}", path.display()))?;
     conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
@@ -10352,6 +10459,56 @@ fn record_ticket_workflow_materialize_cache_miss_for_tests(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     *counts.entry(key.clone()).or_insert(0) += 1;
+}
+
+#[cfg(test)]
+fn record_ticket_self_work_assignment_batch_hydration_for_tests() {
+    let calls = TICKET_SELF_WORK_ASSIGNMENT_BATCH_HYDRATION_CALLS.get_or_init(|| Mutex::new(0));
+    let mut calls = calls
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *calls += 1;
+}
+
+#[cfg(test)]
+fn ticket_self_work_assignment_batch_hydration_call_count_for_tests() -> usize {
+    let Some(calls) = TICKET_SELF_WORK_ASSIGNMENT_BATCH_HYDRATION_CALLS.get() else {
+        return 0;
+    };
+    let calls = calls
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *calls
+}
+
+#[cfg(test)]
+fn record_ticket_db_open_for_tests(path: &Path) {
+    let counts = TICKET_DB_OPEN_CALL_COUNTS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut counts = counts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *counts.entry(path.to_path_buf()).or_insert(0) += 1;
+}
+
+#[cfg(test)]
+pub(crate) fn reset_ticket_db_open_call_count_for_tests(path: &Path) {
+    if let Some(counts) = TICKET_DB_OPEN_CALL_COUNTS.get() {
+        counts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(path);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn ticket_db_open_call_count_for_tests(path: &Path) -> usize {
+    let Some(counts) = TICKET_DB_OPEN_CALL_COUNTS.get() else {
+        return 0;
+    };
+    let counts = counts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    counts.get(path).copied().unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -12401,6 +12558,57 @@ mod tests {
     }
 
     #[test]
+    fn business_os_ticket_projection_reuses_one_ticket_db_connection() -> Result<()> {
+        let root = temp_root("ticket-projection-single-db-open");
+        std::fs::create_dir_all(&root)?;
+        let db_path = resolve_db_path(&root);
+
+        ticket_local_native::create_local_ticket(
+            &root,
+            "Projection connection reuse",
+            "Project ticket state without reopening the ticket database per bucket.",
+            Some("open"),
+            Some("normal"),
+        )?;
+        sync_ticket_system(&root, "local")?;
+        put_control_bundle(
+            &root,
+            ControlBundleInput {
+                label: "support/projection".to_string(),
+                runbook_id: "rb-projection".to_string(),
+                runbook_version: "v1".to_string(),
+                policy_id: "pol-projection".to_string(),
+                policy_version: "v1".to_string(),
+                approval_mode: "direct_execute_allowed".to_string(),
+                autonomy_level: "A1".to_string(),
+                verification_profile_id: "verify-projection".to_string(),
+                writeback_profile_id: "writeback-comment".to_string(),
+                support_mode: "support_case".to_string(),
+                default_risk_level: "low".to_string(),
+                execution_actions: default_execution_actions(),
+                notes: Some("Projection connection reuse guard".to_string()),
+            },
+        )?;
+
+        let before = ticket_db_open_call_count_for_tests(&db_path);
+        let projection = business_os_ticket_projection_documents(&root, 50)?;
+        assert!(
+            projection
+                .get("ctox_ticket_control_bundles")
+                .is_some_and(|docs| !docs.is_empty()),
+            "control bundles must still be projected"
+        );
+        assert_eq!(
+            ticket_db_open_call_count_for_tests(&db_path) - before,
+            1,
+            "Business OS ticket projection must reuse its single ticket DB connection across buckets"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
     fn published_clarification_resolves_from_later_inbound_ticket_comment() -> Result<()> {
         let root = temp_root("ticket-clarification-inbound");
         std::fs::create_dir_all(&root)?;
@@ -12957,6 +13165,58 @@ mod tests {
             ticket_self_work_list_cache_miss_count_for_tests(&db_path, Some("local"), None, 10),
             3,
             "unchanged assigned self-work list must stay cached"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn ticket_self_work_list_batches_latest_assignment_hydration() -> Result<()> {
+        let root = temp_root("self-work-assignment-batch-hydration");
+        std::fs::create_dir_all(&root)?;
+        let before = ticket_self_work_assignment_batch_hydration_call_count_for_tests();
+
+        let mut expected = BTreeMap::new();
+        for index in 0..5 {
+            let item = put_ticket_self_work_item(
+                &root,
+                TicketSelfWorkUpsertInput {
+                    source_system: "local".to_string(),
+                    kind: "batch-hydration".to_string(),
+                    title: format!("Batch hydrate {index}"),
+                    body_text: "Hydrate assignment in one set-based pass.".to_string(),
+                    state: "open".to_string(),
+                    metadata: json!({
+                        "skill": "batch-hydration",
+                        "dedupe_key": format!("self-work-assignment-batch-{index}"),
+                    }),
+                },
+                false,
+            )?;
+            let assignee = format!("ctox-agent-{index}");
+            assign_ticket_self_work_item(
+                &root,
+                &item.work_id,
+                &assignee,
+                "batch-test",
+                Some("exercise batch assignment hydration"),
+            )?;
+            expected.insert(item.work_id, assignee);
+        }
+
+        let items = list_ticket_self_work_items(&root, Some("local"), None, 10)?;
+        assert_eq!(items.len(), 5);
+        for item in &items {
+            assert_eq!(
+                item.assigned_to.as_deref(),
+                expected.get(&item.work_id).map(String::as_str)
+            );
+        }
+        assert_eq!(
+            ticket_self_work_assignment_batch_hydration_call_count_for_tests() - before,
+            1,
+            "self-work list assignment hydration must be one batch query, not one query per item"
         );
 
         let _ = std::fs::remove_dir_all(&root);

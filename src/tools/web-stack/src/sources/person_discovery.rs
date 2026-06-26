@@ -66,6 +66,14 @@ impl SourceModule for PersonDiscovery {
         Tier::S
     }
 
+    /// People-scraping source: harvests names/roles/profile URLs of
+    /// identifiable persons (GDPR personal data) via Google snippet-mining.
+    /// Gate it behind the same explicit opt-in as the credentialed people
+    /// sources so it never runs implicitly on a plain company lookup.
+    fn privacy_opt_in_required(&self) -> bool {
+        true
+    }
+
     fn countries(&self) -> &'static [Country] {
         &[Country::De, Country::At, Country::Ch]
     }

@@ -94,6 +94,8 @@ Action tools:
 ```text
 business_os.list_module_actions
 business_os.propose_action
+business_os.create_app
+business_os.modify_app
 business_os.execute_action
 business_os.approve
 business_os.reject
@@ -121,6 +123,41 @@ instance_id
 If the response reports a different actor/workspace than expected, treat it as
 the server's identity decision. Do not try to spoof `_context` through tool
 arguments.
+
+## Business OS Roles And App/Data Scope
+
+Business OS access is two-layered. MCP channel policy decides whether a remote
+actor may use the channel at all. Business OS roles, app lifecycle visibility,
+and explicit grants then decide whether that actor may see an app, read data,
+write data, modify apps, approve work, or perform external effects.
+
+Use the business labels with humans, and the stored role names in policy/audit
+output:
+
+```text
+Owner -> chef
+Admin -> admin
+App-Verantwortliche:r -> founder
+Teammitglied -> user
+```
+
+Runtime app visibility is version-aware: `0.x.y`, missing, or invalid SemVer
+apps are private unless the actor is responsible for the app or has explicit
+`apps.view`; `1.0.0+` apps are team-visible by default unless restricted.
+
+Do not infer data access from app visibility:
+
+- app visibility for private/preview/restricted apps requires `apps.view`
+- app details, entities, actions, and record reads require `data.read`
+- module action execution requires app visibility plus `data.write`
+- app creation/modification requires `apps.install` or `apps.modify`
+- approvals require `external.approve`
+- MCP status/audit access requires `mcp.manage` unless the actor is admin/owner
+
+`data.read` or `data.write` must not make a hidden app visible. `apps.view`
+must not expose record data by itself. If the server returns
+`permission_denied` with field `business_os_policy`, treat it as an
+authoritative role/grant denial.
 
 ## Runtime Policy
 

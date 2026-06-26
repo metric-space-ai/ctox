@@ -80,6 +80,7 @@ impl RxStorageSqlite {
                 "#,
             )
             .map_err(sqlite_error)?;
+        crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
 
         let database_key = crate::storage::sqlite::instance::database_key_for_path(path);
         start_external_database_poll(
@@ -228,10 +229,14 @@ fn open_external_poll_connection(path: &PathBuf) -> rusqlite::Result<Connection>
 }
 
 fn read_data_version(conn: &Connection) -> rusqlite::Result<i64> {
+    crate::storage::sqlite::instance::record_sqlite_external_poll_data_version_read();
+    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
     conn.query_row("PRAGMA data_version", [], |row| row.get(0))
 }
 
 fn read_changed_table_versions(conn: &Connection) -> rusqlite::Result<HashMap<String, i64>> {
+    crate::storage::sqlite::instance::record_sqlite_external_poll_changed_table_read();
+    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
     let exists = conn
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
@@ -243,6 +248,7 @@ fn read_changed_table_versions(conn: &Connection) -> rusqlite::Result<HashMap<St
     if !exists {
         return Ok(HashMap::new());
     }
+    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
     let mut stmt = conn.prepare(&format!(
         "SELECT table_name, changed_at FROM {}",
         crate::storage::sqlite::sql::quote_identifier(SQLITE_CHANGED_TABLES_TABLE)

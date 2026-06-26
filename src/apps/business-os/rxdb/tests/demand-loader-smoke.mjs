@@ -68,6 +68,17 @@ const r2 = await loader.resolveQuery({ selector: { status: 'open' } });
 assert(r2.length === 5, 'second resolve same length');
 assert(fetchCount === 1, 'second resolve must hit cache');
 
+let scanCount = 0;
+const originalScanQueryWindows = sidecar.backend.scanQueryWindows.bind(sidecar.backend);
+sidecar.backend.scanQueryWindows = async () => {
+  scanCount += 1;
+  throw new Error('invalidateDocumentChange must use sidecar document refs');
+};
+const invalidated = await loader.invalidateDocumentChange(['doc-0']);
+assert(invalidated === 1, `invalidateDocumentChange must invalidate one window (got ${invalidated})`);
+assert(scanCount === 0, 'invalidateDocumentChange must not scan all query windows when refs exist');
+sidecar.backend.scanQueryWindows = originalScanQueryWindows;
+
 // Concurrent identical resolves: share one in-flight promise.
 fetchCount = 0;
 status.queryFetchDedupHitCount = 0;

@@ -1,0 +1,23 @@
+{
+  "refresh": "Refresh",
+  "search": "Search threads",
+  "noThreads": "No relevant threads.",
+  "noSelection": "No thread selected.",
+  "commandFailed": "Action could not be completed.",
+  "filterApprovals": "Approvals",
+  "filterDelegated": "Delegated",
+  "approvalPanelTitle": "CTOX approval",
+  "approvalReviewerLabel": "Reviewer",
+  "approvalReviewerPlaceholder": "experienced-user-id",
+  "approvalPromptLabel": "Prompt",
+  "approvalPromptPlaceholder": "What CTOX should do after approval",
+  "approvalRequestSubmit": "Request approval",
+  "approvalEdit": "Edit",
+  "approvalApprove": "Approve",
+  "approvalReject": "Reject",
+  "approvalRequester": "Requester",
+  "approvalReviewerShort": "Reviewer",
+  "approvalCommand": "Command",
+  "approvalTask": "Task",
+  "approvalHeadingPrefix": "CTOX approval"
+}
