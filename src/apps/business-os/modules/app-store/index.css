@@ -602,6 +602,18 @@
   color: var(--app-store-info-ink);
 }
 
+.app-external-source {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+}
+
 .app-card-footer {
   display: flex;
   justify-content: space-between;

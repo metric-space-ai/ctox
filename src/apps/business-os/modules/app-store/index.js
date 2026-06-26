@@ -198,6 +198,10 @@ function wireEvents() {
   state.ctx.host.querySelector('#btn-create-scratch')?.addEventListener('click', () => {
     openCreatorFromStore({ mode: 'scratch' });
   });
+
+  state.ctx.host.querySelector('#btn-install-github')?.addEventListener('click', () => {
+    installFromGithub();
+  });
 }
 
 async function triggerCardAction(appId, actionType) {
@@ -480,8 +484,19 @@ function normalizeItem(item, kind) {
     release_projection: releaseProjection,
     version_state: versionStateFor(id),
     latest_release: release,
+    app_source: (item.app_source && typeof item.app_source === 'object') ? item.app_source : null,
     raw: item,
   };
+}
+
+function externalSourceBadgeHtml(item) {
+  const src = item?.app_source;
+  if (!src || typeof src !== 'object') return '';
+  const kind = String(src.kind || '').trim();
+  if (kind !== 'github' && kind !== 'url') return '';
+  if (src.verified === true) return '';
+  const where = kind === 'github' && src.repo ? ` · ${escapeHtml(String(src.repo))}` : '';
+  return `<span class="app-external-source" title="Aus externer Quelle installiert – noch nicht verifiziert. Externe Apps erhalten keine Datenrechte bis zum Data-Access-Review.">Externe Quelle · nicht verifiziert${where}</span>`;
 }
 
 function normalizeDesktopAppItem(item) {
@@ -726,6 +741,7 @@ function renderCard(item) {
       ${item.lifecycle?.runtimeInstalled ? `<span class="app-lifecycle-badge" data-state="${escapeHtml(item.lifecycle.state)}" title="${escapeAttr(item.lifecycle.title)}">${escapeHtml(item.lifecycle.version)} · ${escapeHtml(item.lifecycle.text)}</span>` : ''}
       ${releaseProjectionBadgeHtml(item)}
       <span class="app-mod-state ${escapeHtml(item.modification_status)}">${escapeHtml(item.modification_label)}</span>
+      ${externalSourceBadgeHtml(item)}
     </div>
     ${actionsHtml}
     ${operationHtml}
@@ -879,6 +895,45 @@ async function installMarketplaceItem(item, { update = false } = {}) {
       download_url: item.download_url,
       source_path: item.source_path,
       manifest_url: item.manifest_url,
+    },
+  });
+}
+
+async function installFromGithub() {
+  if (!canInstallBusinessApps(appStorePermissionOptions(state))) {
+    state.status = { kind: 'error', text: 'Du darfst keine Apps installieren.' };
+    render();
+    return;
+  }
+  const repo = (window.prompt('GitHub-Repository (owner/name):', '') || '').trim();
+  if (!repo) return;
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
+    state.status = { kind: 'error', text: `Ungültiges Repository: ${repo} (erwartet owner/name).` };
+    render();
+    return;
+  }
+  const gitRef = (window.prompt('Branch / Tag / Commit (leer = HEAD):', 'main') || '').trim();
+  const subpath = (window.prompt('Pfad zum Modul im Repo (leer = Wurzel):', '') || '').trim();
+  const moduleId = sanitizeId((window.prompt('Modul-ID (muss zur module.json im Repo passen):', '') || '').trim());
+  if (!moduleId) {
+    state.status = { kind: 'error', text: 'Modul-ID ist erforderlich.' };
+    render();
+    return;
+  }
+  if (!window.confirm(`Aus EXTERNER Quelle installieren?\n\nRepo: ${repo}\nRef: ${gitRef || 'HEAD'}\nModul: ${moduleId}\n\nExterne Apps sind zunächst NICHT verifiziert und erhalten keine Datenrechte bis zur Prüfung.`)) {
+    return;
+  }
+  await runStoreCommand({
+    label: `Installiere ${moduleId} aus GitHub...`,
+    success: `${moduleId} installiert (externe Quelle – nicht verifiziert).`,
+    commandType: 'ctox.app_store.install',
+    moduleId,
+    payload: {
+      module_id: moduleId,
+      source_kind: 'github',
+      repo,
+      git_ref: gitRef,
+      subpath,
     },
   });
 }

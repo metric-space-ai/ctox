@@ -434,9 +434,23 @@ pub struct ModuleSourceRollbackSnapshotRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct AppStoreInstallRequest {
     pub module_id: String,
+    #[serde(default)]
     pub download_url: String,
     #[serde(default)]
     pub source_path: String,
+    /// Source kind: "" / "url" (legacy `download_url`), "github". (zip uploads
+    /// install through the chunk store, not this request.)
+    #[serde(default)]
+    pub source_kind: String,
+    /// GitHub "owner/name" when `source_kind = "github"`.
+    #[serde(default)]
+    pub repo: String,
+    /// GitHub ref (branch / tag / commit) when `source_kind = "github"`.
+    #[serde(default)]
+    pub git_ref: String,
+    /// Subpath within the archive that holds the module (the `module.json` dir).
+    #[serde(default)]
+    pub subpath: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -687,6 +701,11 @@ struct ModuleManifest {
     /// back to its upstream source so `update_available` can be computed.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     source_module_id: String,
+    /// Provenance for non-catalog installs (github/zip): `{kind, repo, ref,
+    /// subpath, pinned_bundle_sha256, verified}`. `verified=false` until a
+    /// data-access review; drives the "external source — unverified" badge.
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    app_source: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -8295,6 +8314,60 @@ fn find_module_json_dir_by_id(dir: &Path, module_id: &str) -> anyhow::Result<Opt
     Ok(None)
 }
 
+/// Validate a GitHub `owner/name` slug — no scheme, no path traversal.
+fn validate_github_repo(repo: &str) -> anyhow::Result<String> {
+    let repo = repo.trim().trim_end_matches('/');
+    let parts: Vec<&str> = repo.split('/').collect();
+    anyhow::ensure!(
+        parts.len() == 2,
+        "github repo must be 'owner/name', got '{repo}'"
+    );
+    for part in &parts {
+        anyhow::ensure!(
+            !part.is_empty()
+                && part.len() <= 100
+                && *part != "."
+                && *part != ".."
+                && part
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')),
+            "invalid github repo component '{part}'"
+        );
+    }
+    Ok(format!("{}/{}", parts[0], parts[1]))
+}
+
+/// Sanitize a git ref (branch/tag/commit); defaults to `HEAD`.
+fn sanitize_git_ref(git_ref: &str) -> anyhow::Result<String> {
+    let r = git_ref.trim();
+    if r.is_empty() {
+        return Ok("HEAD".to_owned());
+    }
+    anyhow::ensure!(
+        r.len() <= 200
+            && !r.contains("..")
+            && !r.contains(char::is_whitespace)
+            && !r.contains(['\0', '\\', '?', '#']),
+        "invalid git ref '{git_ref}'"
+    );
+    Ok(r.to_owned())
+}
+
+/// codeload archive URL for a repo + ref (the SSRF guard validates the host).
+fn github_archive_url(repo: &str, git_ref: &str) -> String {
+    format!("https://codeload.github.com/{repo}/zip/{git_ref}")
+}
+
+/// Normalize an archive subpath — relative, no traversal.
+fn source_relative_subpath(subpath: &str) -> anyhow::Result<String> {
+    let s = subpath.trim().trim_start_matches('/').trim_end_matches('/');
+    anyhow::ensure!(
+        !s.contains("..") && !s.contains('\\') && !s.contains('\0'),
+        "invalid subpath '{subpath}'"
+    );
+    Ok(s.to_owned())
+}
+
 pub fn install_app_module(
     root: &Path,
     app_root: &Path,
@@ -8309,18 +8382,47 @@ pub fn install_app_module(
         "chef or admin role required to install modules"
     );
 
-    // Download the ZIP archive
-    let response = ureq::get(&request.download_url)
-        .set("User-Agent", "Mozilla/5.0 CTOX Business OS App Installer")
-        .timeout(Duration::from_secs(60))
-        .call()
-        .with_context(|| {
-            format!(
-                "Failed to download module zip from {}",
-                request.download_url
+    // Resolve the install source. GitHub repos and legacy download URLs are
+    // both fetched through the SSRF-guarded agent (PublicOnlyResolver) so an
+    // attacker-supplied source can never reach loopback/metadata/private hosts.
+    let source_kind = if !request.source_kind.trim().is_empty() {
+        request.source_kind.trim().to_ascii_lowercase()
+    } else if !request.repo.trim().is_empty() {
+        "github".to_owned()
+    } else {
+        "url".to_owned()
+    };
+    let (fetch_url, effective_source_path, app_source_base) = match source_kind.as_str() {
+        "github" => {
+            let repo = validate_github_repo(&request.repo)?;
+            let git_ref = sanitize_git_ref(&request.git_ref)?;
+            let subpath = source_relative_subpath(&request.subpath)?;
+            let url = github_archive_url(&repo, &git_ref);
+            let descriptor = serde_json::json!({
+                "kind": "github",
+                "repo": repo,
+                "ref": git_ref,
+                "subpath": subpath,
+            });
+            (url, subpath, descriptor)
+        }
+        "url" | "" => {
+            anyhow::ensure!(
+                !request.download_url.trim().is_empty(),
+                "download_url is required for a url install"
+            );
+            let url = request.download_url.trim().to_owned();
+            (
+                url.clone(),
+                request.source_path.clone(),
+                serde_json::json!({ "kind": "url", "url": url }),
             )
-        })?;
+        }
+        other => anyhow::bail!("unsupported install source kind '{other}'"),
+    };
 
+    let response = super::importer::fetch_url_guarded(&fetch_url)
+        .with_context(|| format!("Failed to download module archive from {fetch_url}"))?;
     let mut zip_bytes = Vec::new();
     response
         .into_reader()
@@ -8359,7 +8461,7 @@ pub fn install_app_module(
     }
 
     // Search recursively for the directory containing module.json
-    let found_dir = find_module_json_dir_for_install(&temp_dir, &module_id, &request.source_path)?
+    let found_dir = find_module_json_dir_for_install(&temp_dir, &module_id, &effective_source_path)?
         .with_context(|| {
             format!(
                 "No module.json for module '{}' found in the downloaded repository archive",
@@ -8408,6 +8510,16 @@ pub fn install_app_module(
     manifest["entry"] = Value::String(format!("installed-modules/{module_id}/index.html"));
     manifest["install_scope"] = Value::String("installed".to_owned());
     manifest["default_installed"] = Value::Bool(false);
+    // Stamp the source provenance. External sources (github/url) are unverified
+    // until a data-access review; they carry no data grants (the `installed`
+    // scope already implies none) and surface an "unverified" badge.
+    {
+        let mut app_source = app_source_base;
+        if let Some(object) = app_source.as_object_mut() {
+            object.insert("verified".to_owned(), Value::Bool(false));
+        }
+        manifest["app_source"] = app_source;
+    }
     ensure_local_icon_manifest_value(&mut manifest, &dest_dir);
     fs::write(
         dest_dir.join("module.json"),
@@ -29804,6 +29916,28 @@ mod tests {
             Some("accepted")
         );
         Ok(())
+    }
+
+    #[test]
+    fn github_source_url_and_validation() {
+        assert_eq!(
+            github_archive_url("acme/widgets", "main"),
+            "https://codeload.github.com/acme/widgets/zip/main"
+        );
+        assert_eq!(
+            validate_github_repo(" acme/widgets/ ").unwrap(),
+            "acme/widgets"
+        );
+        assert!(validate_github_repo("acme").is_err());
+        assert!(validate_github_repo("acme/widgets/extra").is_err());
+        assert!(validate_github_repo("../etc/passwd").is_err());
+        assert!(validate_github_repo("acme/..").is_err());
+        assert_eq!(sanitize_git_ref("").unwrap(), "HEAD");
+        assert_eq!(sanitize_git_ref("v1.2.3").unwrap(), "v1.2.3");
+        assert!(sanitize_git_ref("a b").is_err());
+        assert!(sanitize_git_ref("a/../b").is_err());
+        assert_eq!(source_relative_subpath("/modules/x/").unwrap(), "modules/x");
+        assert!(source_relative_subpath("../x").is_err());
     }
 
     #[test]

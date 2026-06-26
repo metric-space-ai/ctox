@@ -2320,6 +2320,83 @@ fn parse_candidate_text(filename: &str, text: &str) -> CandidateParse {
     }
 }
 
+/// SSRF-guarded HTTP GET for caller-supplied job-posting URLs. Rejects
+/// non-http(s) schemes and installs a resolver that filters every DNS result —
+/// including redirect re-resolutions — down to publicly routable addresses, so
+/// a supplied URL cannot reach loopback / RFC1918 / link-local / CGNAT / cloud-
+/// metadata endpoints.
+///
+/// NOTE: the IP-range logic duplicates `ctox-web-stack`'s `egress` module
+/// (currently `pub(crate)`); fold onto that shared guard once it is exposed.
+pub(crate) fn fetch_url_guarded(url: &str) -> anyhow::Result<ureq::Response> {
+    let parsed =
+        url::Url::parse(url).map_err(|err| anyhow::anyhow!("invalid URL '{url}': {err}"))?;
+    match parsed.scheme() {
+        "http" | "https" => {}
+        other => anyhow::bail!("refusing to fetch URL with non-http(s) scheme '{other}': {url}"),
+    }
+    let agent = ureq::AgentBuilder::new()
+        .resolver(PublicOnlyResolver)
+        .timeout(Duration::from_secs(30))
+        .build();
+    agent
+        .get(url)
+        .set("User-Agent", "Mozilla/5.0 CTOX Business OS Importer")
+        .call()
+        .with_context(|| format!("failed to fetch {url}"))
+}
+
+struct PublicOnlyResolver;
+
+impl ureq::Resolver for PublicOnlyResolver {
+    fn resolve(&self, netloc: &str) -> std::io::Result<Vec<std::net::SocketAddr>> {
+        use std::net::ToSocketAddrs;
+        let public: Vec<std::net::SocketAddr> = netloc
+            .to_socket_addrs()?
+            .filter(|addr| is_public_ip(addr.ip()))
+            .collect();
+        if public.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!("SSRF guard: '{netloc}' resolves only to non-public addresses"),
+            ));
+        }
+        Ok(public)
+    }
+}
+
+/// True for publicly routable addresses; false for loopback, RFC1918 private,
+/// link-local (incl. 169.254.169.254 metadata), CGNAT (100.64/10), broadcast,
+/// documentation, unspecified, and the IPv6 equivalents. Uses only stable
+/// `std::net` predicates.
+fn is_public_ip(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            !(v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+                || v4.is_unspecified()
+                || o[0] == 0
+                || (o[0] == 100 && (64..=127).contains(&o[1])))
+        }
+        IpAddr::V6(v6) => {
+            if v6.is_loopback() || v6.is_unspecified() {
+                return false;
+            }
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                return is_public_ip(IpAddr::V4(mapped));
+            }
+            let seg = v6.segments();
+            // fe80::/10 link-local, fc00::/7 unique-local.
+            !((seg[0] & 0xffc0) == 0xfe80 || (seg[0] & 0xfe00) == 0xfc00)
+        }
+    }
+}
+
 fn parse_pdf_text(bytes: &[u8]) -> anyhow::Result<String> {
     let result = ctox_pdf_parse::parse_pdf_bytes(
         bytes,
