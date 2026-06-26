@@ -434,13 +434,68 @@ pub struct ModuleSourceRollbackSnapshotRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct AppStoreInstallRequest {
     pub module_id: String,
+    #[serde(default)]
     pub download_url: String,
     #[serde(default)]
     pub source_path: String,
+    /// Source kind: "" / "url" (legacy `download_url`), "github". (zip uploads
+    /// install through the chunk store, not this request.)
+    #[serde(default)]
+    pub source_kind: String,
+    /// GitHub "owner/name" when `source_kind = "github"`.
+    #[serde(default)]
+    pub repo: String,
+    /// GitHub ref (branch / tag / commit) when `source_kind = "github"`.
+    #[serde(default)]
+    pub git_ref: String,
+    /// Subpath within the archive that holds the module (the `module.json` dir).
+    #[serde(default)]
+    pub subpath: String,
+    /// Desktop file id of an uploaded `.zip` when `source_kind = "zip"` (the
+    /// bytes are read from the RxDB chunk store, never over HTTP).
+    #[serde(default)]
+    pub file_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AppStoreUninstallRequest {
+    pub module_id: String,
+}
+
+/// Update a runtime-installed module to the current catalog (`modules/<source>`)
+/// bundle. `mode = "vanilla"` (default) refuses to overwrite local edits;
+/// `mode = "discard"` overwrites them after taking an auto-recovery snapshot.
+/// `expected_baseline_sha256`, when set, is an optimistic-concurrency guard
+/// against the install/update baseline having moved since the UI computed it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModuleUpdateRequest {
+    pub module_id: String,
+    #[serde(default = "default_update_mode")]
+    pub mode: String,
+    #[serde(default)]
+    pub expected_baseline_sha256: String,
+    #[serde(default)]
+    pub target_catalog_version: String,
+}
+
+fn default_update_mode() -> String {
+    "vanilla".to_owned()
+}
+
+/// Install (`visible = true`) or remove (`visible = false`) a packaged catalog
+/// module as a launcher tab on this instance. Only meaningful in `"base"`
+/// provisioning mode; core modules are always tabs.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModuleSetVisibleRequest {
+    pub module_id: String,
+    #[serde(default = "default_true")]
+    pub visible: bool,
+}
+
+/// Re-check a github-sourced module's upstream for a newer bundle (records the
+/// remote hash so the projection can light up `update_available`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModuleCheckUpdatesRequest {
     pub module_id: String,
 }
 
@@ -659,6 +714,19 @@ struct ModuleManifest {
     manifest_sha256: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     local_manifest_path: String,
+    /// Template id this runtime module was installed from (stamped at install).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    template_id: String,
+    /// Catalog module (`modules/<id>`) this runtime module was copied from.
+    /// Load-bearing for the catalog/update diff: it links an installed instance
+    /// back to its upstream source so `update_available` can be computed.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    source_module_id: String,
+    /// Provenance for non-catalog installs (github/zip): `{kind, repo, ref,
+    /// subpath, pinned_bundle_sha256, verified}`. `verified=false` until a
+    /// data-access review; drives the "external source — unverified" badge.
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    app_source: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1195,6 +1263,149 @@ pub fn business_os_module_allowlist(root: &Path) -> Vec<String> {
         }
     }
     ids
+}
+
+const PROVISIONING_MODE_KEY: &str = "CTOX_BUSINESS_OS_PROVISIONING_MODE";
+const VISIBLE_MODULES_KEY: &str = "CTOX_BUSINESS_OS_VISIBLE_MODULES";
+
+/// Provisioning mode for this instance: `"base"` (a fresh instance comes up with
+/// only the core base set as tabs; everything else is installable from the app
+/// store) or `"legacy"` (every shipped module is a tab — the historical
+/// behaviour). Determined once, lazily, and persisted in the runtime store.
+///
+/// The determination ERRS TO `"legacy"`: any sign the instance has already been
+/// used (installed modules, more than a bootstrap user, module ACLs or recorded
+/// versions) classifies it legacy, so an upgrade never hides a live instance's
+/// apps. Only a genuinely empty, brand-new instance provisions as `"base"`.
+fn business_os_provisioning_mode(root: &Path, installed_app_root: &Path) -> String {
+    if let Some(mode) =
+        crate::inference::runtime_env::get_runtime_env_value(root, PROVISIONING_MODE_KEY)
+    {
+        let mode = mode.trim().to_ascii_lowercase();
+        if mode == "base" || mode == "legacy" {
+            return mode;
+        }
+    }
+    let mode = if instance_is_fresh(root, installed_app_root) {
+        "base"
+    } else {
+        "legacy"
+    };
+    let _ = crate::inference::runtime_env::set_runtime_env_value(root, PROVISIONING_MODE_KEY, mode);
+    mode.to_owned()
+}
+
+/// True only for an empty, never-used instance. Any error or any content errs to
+/// `false` (legacy), so the base-set reduction can never strip a used instance.
+fn instance_is_fresh(root: &Path, installed_app_root: &Path) -> bool {
+    if let Ok(entries) = fs::read_dir(installed_app_root.join("installed-modules")) {
+        for entry in entries.flatten() {
+            if entry.path().join("module.json").is_file() {
+                return false;
+            }
+        }
+    }
+    let Ok(conn) = open_store(root) else {
+        return false;
+    };
+    let users: i64 = conn
+        .query_row("SELECT COUNT(*) FROM business_users", [], |row| row.get(0))
+        .unwrap_or(1);
+    let acls: i64 = conn
+        .query_row("SELECT COUNT(*) FROM business_module_acl", [], |row| {
+            row.get(0)
+        })
+        .unwrap_or(1);
+    let versions: i64 = conn
+        .query_row("SELECT COUNT(*) FROM business_module_versions", [], |row| {
+            row.get(0)
+        })
+        .unwrap_or(1);
+    users <= 1 && acls == 0 && versions == 0
+}
+
+/// The set of non-core module ids this instance has explicitly installed as
+/// tabs (only meaningful in `"base"` mode; core modules are always tabs).
+fn business_os_visible_modules(root: &Path) -> std::collections::BTreeSet<String> {
+    let mut set = std::collections::BTreeSet::new();
+    if let Some(raw) = crate::inference::runtime_env::get_runtime_env_value(root, VISIBLE_MODULES_KEY)
+    {
+        for id in raw.split([',', ';', '\n', '\t', ' ']) {
+            let id = id.trim();
+            if !id.is_empty() {
+                set.insert(id.to_owned());
+            }
+        }
+    }
+    set
+}
+
+/// Add or remove a module from this instance's installed-tabs set.
+fn business_os_set_module_visible(
+    root: &Path,
+    module_id: &str,
+    visible: bool,
+) -> anyhow::Result<()> {
+    let mut set = business_os_visible_modules(root);
+    if visible {
+        set.insert(module_id.to_owned());
+    } else {
+        set.remove(module_id);
+    }
+    let joined = set.into_iter().collect::<Vec<_>>().join(",");
+    crate::inference::runtime_env::set_runtime_env_value(root, VISIBLE_MODULES_KEY, &joined)?;
+    Ok(())
+}
+
+/// Fold per-instance tab visibility into each projected module. A module is a
+/// tab when it is core, runtime-installed, explicitly installed (visible set),
+/// or the instance is legacy (show all). Non-visible modules still appear in the
+/// app store — they are just not launcher tabs.
+fn augment_modules_with_instance_visibility(
+    root: &Path,
+    installed_app_root: &Path,
+    modules: &mut [Value],
+) {
+    let mode = business_os_provisioning_mode(root, installed_app_root);
+    let legacy = mode != "base";
+    let visible_set = if legacy {
+        std::collections::BTreeSet::new()
+    } else {
+        business_os_visible_modules(root)
+    };
+    for module in modules.iter_mut() {
+        let id = module
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let runtime_installed = module
+            .get("lifecycle")
+            .and_then(|lifecycle| lifecycle.get("runtime_installed"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let visible =
+            legacy || is_core_module(&id) || runtime_installed || visible_set.contains(&id);
+        if let Some(object) = module.as_object_mut() {
+            object.insert("instance_visible".to_owned(), Value::Bool(visible));
+        }
+    }
+}
+
+/// Last known upstream bundle hash for a github-sourced module, recorded by
+/// `ctox.module.check_updates`. Kept in the runtime store (NOT in module.json,
+/// which is part of the bundle hash) so it never makes the app look modified.
+fn business_os_module_remote_sha(root: &Path, module_id: &str) -> Option<String> {
+    let key = format!("CTOX_BUSINESS_OS_REMOTE_SHA__{module_id}");
+    crate::inference::runtime_env::get_runtime_env_value(root, &key)
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn business_os_set_module_remote_sha(root: &Path, module_id: &str, sha: &str) -> anyhow::Result<()> {
+    let key = format!("CTOX_BUSINESS_OS_REMOTE_SHA__{module_id}");
+    crate::inference::runtime_env::set_runtime_env_value(root, &key, sha)?;
+    Ok(())
 }
 
 pub(crate) fn sync_connection_config(
@@ -3697,7 +3908,9 @@ pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         },
     )?;
     let version_states = module_version_states(root, &app_root).unwrap_or(Value::Null);
-    let (modules, lifecycle) = modules_with_projected_lifecycle(root, modules, &version_states)?;
+    let (mut modules, lifecycle) = modules_with_projected_lifecycle(root, modules, &version_states)?;
+    augment_modules_with_catalog_update_state(root, &app_root, &mut modules, &version_states);
+    augment_modules_with_instance_visibility(root, &installed_app_root, &mut modules);
     if let Some(object) = governance.as_object_mut() {
         object.insert("lifecycle".to_owned(), lifecycle);
     }
@@ -4603,6 +4816,196 @@ pub fn install_template_module_command(
         "ok": true,
         "module_id": manifest.id,
         "module": manifest
+    }))
+}
+
+/// Baseline bundle hash for a module: the bundle this instance last
+/// installed/updated from (latest install/update/app_create row), falling back
+/// to the earliest recorded version. Mirrors `module_version_states` so the
+/// update precondition and the projected `update_available` agree.
+fn installed_baseline_bundle_sha(root: &Path, module_id: &str) -> anyhow::Result<String> {
+    let conn = open_store(root)?;
+    let sha: Option<String> = conn
+        .query_row(
+            "SELECT bundle_sha256 FROM business_module_versions v1
+             WHERE v1.module_id = ?1
+               AND v1.seq = COALESCE(
+                   (SELECT MAX(seq) FROM business_module_versions v2
+                    WHERE v2.module_id = ?1
+                      AND v2.origin IN ('install', 'update', 'app_create')),
+                   (SELECT MIN(seq) FROM business_module_versions v3
+                    WHERE v3.module_id = ?1))",
+            params![module_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(sha.unwrap_or_default())
+}
+
+/// Re-check a github-sourced module against its upstream. Fetches the archive
+/// (SSRF-guarded), records the remote bundle hash in the runtime store, and
+/// reports whether a newer bundle is available. Detection only — the actual
+/// update re-installs from github via `ctox.app_store.install`.
+fn check_module_updates(
+    root: &Path,
+    installed_app_root: &Path,
+    module_id: &str,
+) -> anyhow::Result<Value> {
+    let app_source = installed_module_app_source(installed_app_root, module_id)
+        .context("module has no source descriptor to check")?;
+    let kind = app_source
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    anyhow::ensure!(
+        kind == "github",
+        "update check is only supported for github-sourced apps"
+    );
+    let repo = app_source.get("repo").and_then(Value::as_str).unwrap_or_default();
+    let git_ref = app_source.get("ref").and_then(Value::as_str).unwrap_or_default();
+    let subpath = app_source
+        .get("subpath")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let remote_sha = fetch_github_source_bundle_sha(repo, git_ref, subpath, module_id)?;
+    business_os_set_module_remote_sha(root, module_id, &remote_sha)?;
+    let installed_from = installed_baseline_bundle_sha(root, module_id)?;
+    let update_available =
+        !installed_from.is_empty() && !remote_sha.is_empty() && installed_from != remote_sha;
+    write_module_catalog_projection_to_rxdb(root)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "module_id": module_id,
+        "update_available": update_available,
+        "remote_bundle_sha256": remote_sha,
+    }))
+}
+
+/// Re-sync a runtime-installed module to the current catalog bundle of the
+/// catalog module it was installed from. Vanilla apps update in place; a
+/// customized app requires `mode = "discard"` and gets an auto-recovery snapshot
+/// first. The copy is staged outside `installed-modules/` and swapped so a
+/// mid-update failure never leaves a half-written module directory.
+pub fn update_module_to_catalog(
+    root: &Path,
+    source_app_root: &Path,
+    installed_app_root: &Path,
+    session: &BusinessOsSession,
+    request: ModuleUpdateRequest,
+) -> anyhow::Result<Value> {
+    let module_id = source_sanitize_slug(&request.module_id);
+    anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+    let installed_dir = installed_app_root
+        .join("installed-modules")
+        .join(&module_id);
+    let manifest_path = installed_dir.join("module.json");
+    anyhow::ensure!(
+        manifest_path.is_file(),
+        "module `{module_id}` is not a runtime-installed app"
+    );
+    let installed_manifest: Value = serde_json::from_str(&fs::read_to_string(&manifest_path)?)?;
+    let source_module = module_catalog_source_id(source_app_root, &installed_manifest)
+        .context("installed module has no catalog source to update from")?;
+    let source_dir = source_app_root.join("modules").join(&source_module);
+    anyhow::ensure!(
+        source_dir.join("module.json").is_file(),
+        "catalog source `{source_module}` is missing"
+    );
+
+    let current_sha = compute_module_bundle(installed_app_root, &module_id)
+        .map(|bundle| bundle.sha256)
+        .unwrap_or_default();
+    let catalog_sha = compute_module_bundle(source_app_root, &source_module)
+        .map(|bundle| bundle.sha256)
+        .unwrap_or_default();
+    let installed_from = installed_baseline_bundle_sha(root, &module_id)?;
+    let mode = request.mode.trim();
+    let is_customized = !installed_from.is_empty() && current_sha != installed_from;
+
+    if !request.expected_baseline_sha256.trim().is_empty()
+        && request.expected_baseline_sha256.trim() != installed_from
+    {
+        anyhow::bail!("update precondition failed: install baseline has moved");
+    }
+    if is_customized && mode != "discard" {
+        anyhow::bail!(
+            "module `{module_id}` has local changes; pass mode=discard to overwrite (a recovery version is saved first)"
+        );
+    }
+    if !catalog_sha.is_empty() && catalog_sha == current_sha {
+        return Ok(serde_json::json!({
+            "ok": true,
+            "module_id": module_id,
+            "updated": false,
+            "reason": "already_current",
+        }));
+    }
+
+    let created_by = session_user_id(session).unwrap_or("").to_string();
+    if is_customized {
+        record_module_version(
+            root,
+            installed_app_root,
+            &module_id,
+            "edit",
+            "Auto-Sicherung vor Update",
+            &created_by,
+        )?;
+    }
+
+    let staging = installed_app_root.join(format!(".module-update-{module_id}-{}", Uuid::new_v4()));
+    if staging.exists() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    copy_dir_recursive(&source_dir, &staging)?;
+    let staged_manifest_path = staging.join("module.json");
+    let mut staged: Value = serde_json::from_str(&fs::read_to_string(&staged_manifest_path)?)?;
+    staged["id"] = Value::String(module_id.clone());
+    if let Some(title) = installed_manifest.get("title").filter(|value| value.is_string()) {
+        staged["title"] = title.clone();
+    }
+    staged["entry"] = Value::String(format!("installed-modules/{module_id}/index.html"));
+    staged["install_scope"] = Value::String("installed".to_owned());
+    staged["default_installed"] = Value::Bool(false);
+    if let Some(template_id) = installed_manifest
+        .get("template_id")
+        .filter(|value| value.is_string())
+    {
+        staged["template_id"] = template_id.clone();
+    }
+    staged["source_module_id"] = Value::String(source_module.clone());
+    ensure_local_icon_manifest_value(&mut staged, &staging);
+    fs::write(&staged_manifest_path, serde_json::to_vec_pretty(&staged)?)?;
+
+    // Swap: move the live dir aside, move staging into place, drop the backup.
+    // On failure, restore the backup so the installed module is never lost.
+    let backup = installed_app_root.join(format!(".module-backup-{module_id}-{}", Uuid::new_v4()));
+    fs::rename(&installed_dir, &backup)
+        .with_context(|| format!("failed to move {} aside", installed_dir.display()))?;
+    if let Err(error) = fs::rename(&staging, &installed_dir) {
+        let _ = fs::rename(&backup, &installed_dir);
+        let _ = fs::remove_dir_all(&staging);
+        return Err(anyhow::Error::new(error).context("failed to swap updated module into place"));
+    }
+    let _ = fs::remove_dir_all(&backup);
+
+    let catalog_version = catalog_module_version(source_app_root, &source_module);
+    record_module_version(
+        root,
+        installed_app_root,
+        &module_id,
+        "update",
+        &format!("Update auf Katalog {catalog_version}"),
+        &created_by,
+    )?;
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "module_id": module_id,
+        "updated": true,
+        "source_module_id": source_module,
+        "catalog_version": catalog_version,
+        "mode": if is_customized { "discard" } else { "vanilla" },
     }))
 }
 
@@ -6535,6 +6938,30 @@ fn desktop_file_generation_chunk_id_bounds(file_id: &str, generation_id: &str) -
     (prefix.clone(), format!("{prefix}`"))
 }
 
+/// Load and verify a desktop file's bytes from the RxDB chunk store (the WebRTC
+/// data plane — no HTTP). Used to install an app from an uploaded `.zip`.
+fn load_desktop_file_bytes(root: &Path, file_id: &str) -> anyhow::Result<Vec<u8>> {
+    let doc = rxdb_desktop_file_document(root, file_id)?;
+    let generation_id = doc
+        .get("content_generation_id")
+        .or_else(|| doc.get("generation_id"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    anyhow::ensure!(
+        !generation_id.is_empty(),
+        "desktop file `{file_id}` has no generation id"
+    );
+    let content_hash = doc
+        .get("content_hash")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let size_bytes = doc.get("size_bytes").and_then(Value::as_u64).unwrap_or(0);
+    let chunks = rxdb_desktop_file_chunks(root, file_id, &generation_id)?;
+    decode_verified_desktop_file_chunks(file_id, &generation_id, size_bytes, &content_hash, chunks)
+}
+
 fn resolve_business_os_app_root(root: &Path) -> anyhow::Result<PathBuf> {
     let mut candidates = Vec::new();
     if root
@@ -6862,6 +7289,9 @@ fn install_template_module(
     manifest_value["install_scope"] = Value::String("installed".to_owned());
     manifest_value["default_installed"] = Value::Bool(false);
     manifest_value["template_id"] = Value::String(template.id);
+    // Link the installed instance back to the catalog module it was copied from
+    // so the catalog/update diff can detect a newer upstream bundle later.
+    manifest_value["source_module_id"] = Value::String(source_module.clone());
     ensure_local_icon_manifest_value(&mut manifest_value, &target);
     fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest_value)?)
         .with_context(|| format!("failed to write {}", manifest_path.display()))?;
@@ -7415,8 +7845,15 @@ struct ModuleBundle {
 
 fn compute_module_bundle(app_root: &Path, module_id: &str) -> anyhow::Result<ModuleBundle> {
     let module_root = resolve_module_source_root(app_root, module_id)?;
+    compute_module_bundle_at(&module_root, module_id)
+}
+
+/// Deterministic bundle hash over an explicit module directory (used for the
+/// live install dir, a catalog source, and a freshly fetched github archive so
+/// they are all comparable).
+fn compute_module_bundle_at(module_root: &Path, module_id: &str) -> anyhow::Result<ModuleBundle> {
     let mut raw = Vec::new();
-    collect_module_source_files(module_id, &module_root, &module_root, &mut raw)?;
+    collect_module_source_files(module_id, module_root, module_root, &mut raw)?;
     let mut files: Vec<Value> = raw
         .into_iter()
         .map(|doc| {
@@ -7691,17 +8128,24 @@ pub fn list_module_versions(
 
 /// Per-module bundle modification state for the app-store badge.
 ///
-/// For every module that has a recorded version timeline, reports the install
-/// baseline bundle hash (lowest seq), the live current bundle hash, and whether
-/// the working tree diverges from that baseline. This replaces the old
-/// module.json-only manifest hash compare with a whole-bundle signal.
+/// For every module that has a recorded version timeline, reports the baseline
+/// bundle hash (the latest upstream sync point — the most recent
+/// install/update/app_create row, falling back to the earliest row), the live
+/// current bundle hash, and whether the working tree diverges from that
+/// baseline. Keying off the latest sync point (not the original install) is
+/// what lets a freshly updated vanilla app read as unmodified again instead of
+/// staying "modified" forever after an upstream update.
 fn module_version_states(root: &Path, app_root: &Path) -> anyhow::Result<Value> {
     let conn = open_store(root)?;
     let mut stmt = conn.prepare(
         "SELECT module_id, bundle_sha256, origin, seq
          FROM business_module_versions v1
-         WHERE seq = (SELECT MIN(seq) FROM business_module_versions v2
-                      WHERE v2.module_id = v1.module_id)",
+         WHERE seq = COALESCE(
+             (SELECT MAX(seq) FROM business_module_versions v2
+              WHERE v2.module_id = v1.module_id
+                AND v2.origin IN ('install', 'update', 'app_create')),
+             (SELECT MIN(seq) FROM business_module_versions v3
+              WHERE v3.module_id = v1.module_id))",
     )?;
     let baselines = stmt
         .query_map([], |row| {
@@ -7735,6 +8179,9 @@ fn module_version_states(root: &Path, app_root: &Path) -> anyhow::Result<Value> 
             module_id.clone(),
             serde_json::json!({
                 "baseline_bundle_sha256": baseline_sha,
+                // Explicit alias: the bundle this instance last installed/updated
+                // from (the catalog/update diff and the vanilla check use this).
+                "installed_from_bundle_sha256": baseline_sha,
                 "baseline_origin": baseline_origin,
                 "current_bundle_sha256": current_sha,
                 "modified": modified,
@@ -7744,6 +8191,172 @@ fn module_version_states(root: &Path, app_root: &Path) -> anyhow::Result<Value> 
         );
     }
     Ok(Value::Object(states))
+}
+
+/// Resolve the catalog module (`modules/<id>`) a projected module was installed
+/// from. Prefers the stamped `source_module_id`; falls back to resolving a
+/// legacy `template_id` through the template manifest. Returns `None` for
+/// bespoke app-created modules with no catalog upstream.
+fn module_catalog_source_id(app_root: &Path, module: &Value) -> Option<String> {
+    if let Some(direct) = module
+        .get("source_module_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(direct.to_owned());
+    }
+    let template_id = module
+        .get("template_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let template_path = app_root
+        .join("template-store")
+        .join(template_id)
+        .join("template.json");
+    let text = fs::read_to_string(&template_path).ok()?;
+    let template: TemplateManifest = serde_json::from_str(&text).ok()?;
+    let source = if template.source_module.trim().is_empty() {
+        template.id
+    } else {
+        template.source_module
+    };
+    let source = source.trim();
+    if source.is_empty() {
+        None
+    } else {
+        Some(source.to_owned())
+    }
+}
+
+/// Read the declared version string of a catalog (`modules/<id>`) module.
+fn catalog_module_version(app_root: &Path, module_id: &str) -> String {
+    let path = app_root.join("modules").join(module_id).join("module.json");
+    fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|value| {
+            value
+                .get("version")
+                .and_then(Value::as_str)
+                .map(|version| version.trim().to_owned())
+        })
+        .unwrap_or_default()
+}
+
+/// Folds the install/catalog update signal into each projected module's
+/// `lifecycle`. For a runtime-installed module copied from a catalog source,
+/// `update_available` is true when the source bundle on disk diverges from the
+/// bundle this instance last installed/updated (the `installed_from` baseline in
+/// `version_states`). Packaged modules never surface an app-store update — they
+/// refresh through `ctox upgrade` — so they always report `update_available =
+/// false`. `modification_state` is the vanilla/customized/unknown signal derived
+/// from the same baseline.
+fn augment_modules_with_catalog_update_state(
+    root: &Path,
+    app_root: &Path,
+    modules: &mut [Value],
+    version_states: &Value,
+) {
+    // Memoize per source module so several instances of the same template only
+    // hash the catalog bundle once per projection.
+    let mut catalog_cache: HashMap<String, (String, String)> = HashMap::new();
+    for module in modules.iter_mut() {
+        let module_id = module
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let runtime_installed = module
+            .get("lifecycle")
+            .and_then(|lifecycle| lifecycle.get("runtime_installed"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let version_state = version_states.get(&module_id);
+        let installed_from = version_state
+            .and_then(|state| state.get("baseline_bundle_sha256"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let current = version_state
+            .and_then(|state| state.get("current_bundle_sha256"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let modification_state = if installed_from.is_empty() {
+            "unknown"
+        } else if current == installed_from {
+            "vanilla"
+        } else {
+            "customized"
+        };
+
+        let mut catalog_bundle_sha256 = String::new();
+        let mut catalog_version = String::new();
+        let mut update_available = false;
+        if runtime_installed {
+            if let Some(source) = module_catalog_source_id(app_root, module) {
+                let (sha, version) = catalog_cache
+                    .entry(source.clone())
+                    .or_insert_with(|| {
+                        let sha = compute_module_bundle(app_root, &source)
+                            .map(|bundle| bundle.sha256)
+                            .unwrap_or_default();
+                        (sha, catalog_module_version(app_root, &source))
+                    })
+                    .clone();
+                catalog_bundle_sha256 = sha;
+                catalog_version = version;
+                update_available = !installed_from.is_empty()
+                    && !catalog_bundle_sha256.is_empty()
+                    && installed_from != catalog_bundle_sha256;
+            } else if module
+                .get("app_source")
+                .and_then(|source| source.get("kind"))
+                .and_then(Value::as_str)
+                == Some("github")
+            {
+                // github upstream is not fetched per projection; it is recorded
+                // by ctox.module.check_updates and compared against the install
+                // baseline here.
+                if let Some(remote) = business_os_module_remote_sha(root, &module_id) {
+                    catalog_bundle_sha256 = remote.clone();
+                    update_available = !installed_from.is_empty() && installed_from != remote;
+                }
+            }
+        }
+
+        let installed_version = module
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+
+        if let Some(lifecycle) = module.get_mut("lifecycle").and_then(Value::as_object_mut) {
+            lifecycle.insert(
+                "modification_state".to_owned(),
+                Value::String(modification_state.to_owned()),
+            );
+            lifecycle.insert("update_available".to_owned(), Value::Bool(update_available));
+            lifecycle.insert("catalog_version".to_owned(), Value::String(catalog_version));
+            lifecycle.insert(
+                "installed_version".to_owned(),
+                Value::String(installed_version),
+            );
+            lifecycle.insert(
+                "catalog_bundle_sha256".to_owned(),
+                Value::String(catalog_bundle_sha256),
+            );
+            lifecycle.insert(
+                "installed_from_bundle_sha256".to_owned(),
+                Value::String(installed_from),
+            );
+        }
+        if let Some(object) = module.as_object_mut() {
+            object.insert("update_available".to_owned(), Value::Bool(update_available));
+        }
+    }
 }
 
 pub fn rollback_module_to_version(
@@ -7950,6 +8563,129 @@ fn find_module_json_dir_by_id(dir: &Path, module_id: &str) -> anyhow::Result<Opt
     Ok(None)
 }
 
+/// Validate a GitHub `owner/name` slug — no scheme, no path traversal.
+fn validate_github_repo(repo: &str) -> anyhow::Result<String> {
+    let repo = repo.trim().trim_end_matches('/');
+    let parts: Vec<&str> = repo.split('/').collect();
+    anyhow::ensure!(
+        parts.len() == 2,
+        "github repo must be 'owner/name', got '{repo}'"
+    );
+    for part in &parts {
+        anyhow::ensure!(
+            !part.is_empty()
+                && part.len() <= 100
+                && *part != "."
+                && *part != ".."
+                && part
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')),
+            "invalid github repo component '{part}'"
+        );
+    }
+    Ok(format!("{}/{}", parts[0], parts[1]))
+}
+
+/// Sanitize a git ref (branch/tag/commit); defaults to `HEAD`.
+fn sanitize_git_ref(git_ref: &str) -> anyhow::Result<String> {
+    let r = git_ref.trim();
+    if r.is_empty() {
+        return Ok("HEAD".to_owned());
+    }
+    anyhow::ensure!(
+        r.len() <= 200
+            && !r.contains("..")
+            && !r.contains(char::is_whitespace)
+            && !r.contains(['\0', '\\', '?', '#']),
+        "invalid git ref '{git_ref}'"
+    );
+    Ok(r.to_owned())
+}
+
+/// codeload archive URL for a repo + ref (the SSRF guard validates the host).
+fn github_archive_url(repo: &str, git_ref: &str) -> String {
+    format!("https://codeload.github.com/{repo}/zip/{git_ref}")
+}
+
+/// Normalize an archive subpath — relative, no traversal.
+fn source_relative_subpath(subpath: &str) -> anyhow::Result<String> {
+    let s = subpath.trim().trim_start_matches('/').trim_end_matches('/');
+    anyhow::ensure!(
+        !s.contains("..") && !s.contains('\\') && !s.contains('\0'),
+        "invalid subpath '{subpath}'"
+    );
+    Ok(s.to_owned())
+}
+
+/// Download an archive over the SSRF-guarded agent and read it into memory.
+fn fetch_archive_bytes(url: &str) -> anyhow::Result<Vec<u8>> {
+    let response = super::importer::fetch_url_guarded(url)
+        .with_context(|| format!("Failed to download module archive from {url}"))?;
+    let mut bytes = Vec::new();
+    response
+        .into_reader()
+        .read_to_end(&mut bytes)
+        .context("Failed to read module archive stream")?;
+    Ok(bytes)
+}
+
+/// Read the `app_source` descriptor from an installed module's manifest.
+fn installed_module_app_source(installed_app_root: &Path, module_id: &str) -> Option<Value> {
+    let path = installed_app_root
+        .join("installed-modules")
+        .join(module_id)
+        .join("module.json");
+    let manifest: Value = serde_json::from_str(&fs::read_to_string(path).ok()?).ok()?;
+    manifest
+        .get("app_source")
+        .cloned()
+        .filter(Value::is_object)
+}
+
+/// Fetch a github archive (SSRF-guarded) and compute the bundle hash of the
+/// module at `subpath` — lets `check_updates` detect a newer upstream without
+/// installing anything.
+fn fetch_github_source_bundle_sha(
+    repo: &str,
+    git_ref: &str,
+    subpath: &str,
+    module_id: &str,
+) -> anyhow::Result<String> {
+    let repo = validate_github_repo(repo)?;
+    let git_ref = sanitize_git_ref(git_ref)?;
+    let subpath = source_relative_subpath(subpath)?;
+    let url = github_archive_url(&repo, &git_ref);
+    let response = super::importer::fetch_url_guarded(&url)
+        .with_context(|| format!("failed to fetch github archive {url}"))?;
+    let mut zip_bytes = Vec::new();
+    response.into_reader().read_to_end(&mut zip_bytes)?;
+    let temp_dir = std::env::temp_dir().join(format!("ctox-app-checkupd-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_dir)?;
+    let cursor = std::io::Cursor::new(zip_bytes);
+    let mut archive = zip::ZipArchive::new(cursor).context("downloaded archive is not a zip")?;
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i)?;
+        let Some(filepath) = file.enclosed_name().map(|path| path.to_owned()) else {
+            continue;
+        };
+        let outpath = temp_dir.join(filepath);
+        if file.is_dir() {
+            fs::create_dir_all(&outpath)?;
+        } else {
+            if let Some(parent) = outpath.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let mut out = fs::File::create(&outpath)?;
+            std::io::copy(&mut file, &mut out)?;
+        }
+    }
+    let found = find_module_json_dir_for_install(&temp_dir, module_id, &subpath)?
+        .context("module.json not found in github archive")?;
+    let sha = compute_module_bundle_at(&found, module_id).map(|bundle| bundle.sha256);
+    let _ = fs::remove_dir_all(&temp_dir);
+    sha
+}
+
 pub fn install_app_module(
     root: &Path,
     app_root: &Path,
@@ -7964,23 +8700,59 @@ pub fn install_app_module(
         "chef or admin role required to install modules"
     );
 
-    // Download the ZIP archive
-    let response = ureq::get(&request.download_url)
-        .set("User-Agent", "Mozilla/5.0 CTOX Business OS App Installer")
-        .timeout(Duration::from_secs(60))
-        .call()
-        .with_context(|| {
-            format!(
-                "Failed to download module zip from {}",
-                request.download_url
+    // Resolve the install source. GitHub repos and legacy download URLs are
+    // fetched through the SSRF-guarded agent (PublicOnlyResolver) so an
+    // attacker-supplied source can never reach loopback/metadata/private hosts.
+    // Zip uploads are read from the RxDB chunk store (WebRTC data plane) — never
+    // over HTTP.
+    let source_kind = if !request.source_kind.trim().is_empty() {
+        request.source_kind.trim().to_ascii_lowercase()
+    } else if !request.repo.trim().is_empty() {
+        "github".to_owned()
+    } else if !request.file_id.trim().is_empty() {
+        "zip".to_owned()
+    } else {
+        "url".to_owned()
+    };
+    let (effective_source_path, app_source_base, zip_bytes) = match source_kind.as_str() {
+        "github" => {
+            let repo = validate_github_repo(&request.repo)?;
+            let git_ref = sanitize_git_ref(&request.git_ref)?;
+            let subpath = source_relative_subpath(&request.subpath)?;
+            let url = github_archive_url(&repo, &git_ref);
+            let descriptor = serde_json::json!({
+                "kind": "github",
+                "repo": repo,
+                "ref": git_ref,
+                "subpath": subpath,
+            });
+            (subpath, descriptor, fetch_archive_bytes(&url)?)
+        }
+        "zip" => {
+            let file_id = request.file_id.trim();
+            anyhow::ensure!(!file_id.is_empty(), "file_id is required for a zip install");
+            let subpath = source_relative_subpath(&request.subpath)?;
+            let bytes = load_desktop_file_bytes(root, file_id)?;
+            (
+                subpath,
+                serde_json::json!({ "kind": "zip", "file_id": file_id }),
+                bytes,
             )
-        })?;
-
-    let mut zip_bytes = Vec::new();
-    response
-        .into_reader()
-        .read_to_end(&mut zip_bytes)
-        .with_context(|| "Failed to read zip download stream")?;
+        }
+        "url" | "" => {
+            anyhow::ensure!(
+                !request.download_url.trim().is_empty(),
+                "download_url is required for a url install"
+            );
+            let url = request.download_url.trim().to_owned();
+            (
+                request.source_path.clone(),
+                serde_json::json!({ "kind": "url", "url": url.clone() }),
+                fetch_archive_bytes(&url)?,
+            )
+        }
+        other => anyhow::bail!("unsupported install source kind '{other}'"),
+    };
 
     // Extract ZIP to a temporary directory
     let temp_dir = std::env::temp_dir().join(format!("ctox-app-install-{}", Uuid::new_v4()));
@@ -8014,7 +8786,7 @@ pub fn install_app_module(
     }
 
     // Search recursively for the directory containing module.json
-    let found_dir = find_module_json_dir_for_install(&temp_dir, &module_id, &request.source_path)?
+    let found_dir = find_module_json_dir_for_install(&temp_dir, &module_id, &effective_source_path)?
         .with_context(|| {
             format!(
                 "No module.json for module '{}' found in the downloaded repository archive",
@@ -8063,6 +8835,16 @@ pub fn install_app_module(
     manifest["entry"] = Value::String(format!("installed-modules/{module_id}/index.html"));
     manifest["install_scope"] = Value::String("installed".to_owned());
     manifest["default_installed"] = Value::Bool(false);
+    // Stamp the source provenance. External sources (github/url) are unverified
+    // until a data-access review; they carry no data grants (the `installed`
+    // scope already implies none) and surface an "unverified" badge.
+    {
+        let mut app_source = app_source_base;
+        if let Some(object) = app_source.as_object_mut() {
+            object.insert("verified".to_owned(), Value::Bool(false));
+        }
+        manifest["app_source"] = app_source;
+    }
     ensure_local_icon_manifest_value(&mut manifest, &dest_dir);
     fs::write(
         dest_dir.join("module.json"),
@@ -15405,6 +16187,113 @@ pub fn accept_rxdb_business_command_with_origin(
                 &session,
                 mutation,
             )?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.module.update" => {
+            let request: ModuleUpdateRequest = serde_json::from_value(command.payload.clone())
+                .context("invalid ctox.module.update payload")?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let module_id = source_sanitize_slug(&request.module_id);
+            anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+            let decision = module_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::AppsInstall,
+                &module_id,
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            let app_root = resolve_business_os_app_root(root)?;
+            let installed_app_root = resolve_business_os_installed_app_root(root);
+            let outcome = match update_module_to_catalog(
+                root,
+                &app_root,
+                &installed_app_root,
+                &session,
+                request,
+            ) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    return write_rxdb_failed_control_command_outcome(
+                        root, &command, "update", error,
+                    );
+                }
+            };
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.module.set_visible" => {
+            let request: ModuleSetVisibleRequest = serde_json::from_value(command.payload.clone())
+                .context("invalid ctox.module.set_visible payload")?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let module_id = source_sanitize_slug(&request.module_id);
+            anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+            let decision = scoped_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::AppsInstall,
+                BusinessOsScope::module(module_id.clone(), false),
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            business_os_set_module_visible(root, &module_id, request.visible)?;
+            write_module_catalog_projection_to_rxdb(root)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                serde_json::json!({
+                    "ok": true,
+                    "module_id": module_id,
+                    "visible": request.visible,
+                }),
+            );
+        }
+        "ctox.module.check_updates" => {
+            let request: ModuleCheckUpdatesRequest =
+                serde_json::from_value(command.payload.clone())
+                    .context("invalid ctox.module.check_updates payload")?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let module_id = source_sanitize_slug(&request.module_id);
+            anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+            let decision = module_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::AppsView,
+                &module_id,
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            let installed_app_root = resolve_business_os_installed_app_root(root);
+            let outcome = match check_module_updates(root, &installed_app_root, &module_id) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    return write_rxdb_failed_control_command_outcome(
+                        root,
+                        &command,
+                        "check_updates",
+                        error,
+                    );
+                }
+            };
             return write_rxdb_control_command_outcome(
                 root,
                 &command,
@@ -29422,6 +30311,110 @@ mod tests {
     }
 
     #[test]
+    fn github_source_url_and_validation() {
+        assert_eq!(
+            github_archive_url("acme/widgets", "main"),
+            "https://codeload.github.com/acme/widgets/zip/main"
+        );
+        assert_eq!(
+            validate_github_repo(" acme/widgets/ ").unwrap(),
+            "acme/widgets"
+        );
+        assert!(validate_github_repo("acme").is_err());
+        assert!(validate_github_repo("acme/widgets/extra").is_err());
+        assert!(validate_github_repo("../etc/passwd").is_err());
+        assert!(validate_github_repo("acme/..").is_err());
+        assert_eq!(sanitize_git_ref("").unwrap(), "HEAD");
+        assert_eq!(sanitize_git_ref("v1.2.3").unwrap(), "v1.2.3");
+        assert!(sanitize_git_ref("a b").is_err());
+        assert!(sanitize_git_ref("a/../b").is_err());
+        assert_eq!(source_relative_subpath("/modules/x/").unwrap(), "modules/x");
+        assert!(source_relative_subpath("../x").is_err());
+    }
+
+    #[test]
+    fn instance_visibility_base_then_install() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let _conn = open_store(root)?;
+        let installed_app_root = resolve_business_os_installed_app_root(root);
+
+        // An empty, brand-new instance provisions as the minimal base set.
+        assert_eq!(business_os_provisioning_mode(root, &installed_app_root), "base");
+
+        let mut modules = vec![
+            serde_json::json!({"id": "ctox", "lifecycle": {"runtime_installed": false}}),
+            serde_json::json!({"id": "matching", "lifecycle": {"runtime_installed": false}}),
+        ];
+        augment_modules_with_instance_visibility(root, &installed_app_root, &mut modules);
+        assert_eq!(modules[0]["instance_visible"], Value::Bool(true)); // core base set
+        assert_eq!(modules[1]["instance_visible"], Value::Bool(false)); // non-core, not installed
+
+        // Installing a catalog module as a tab makes it visible.
+        business_os_set_module_visible(root, "matching", true)?;
+        let mut after = vec![serde_json::json!({"id": "matching", "lifecycle": {"runtime_installed": false}})];
+        augment_modules_with_instance_visibility(root, &installed_app_root, &mut after);
+        assert_eq!(after[0]["instance_visible"], Value::Bool(true));
+        Ok(())
+    }
+
+    #[test]
+    fn instance_with_content_stays_legacy() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let conn = open_store(root)?;
+        // A used instance (more than a bootstrap user) must keep every app.
+        conn.execute(
+            "INSERT INTO business_users
+                (user_id, display_name, role, active, created_at_ms, updated_at_ms)
+             VALUES ('a','A','admin',1,1,1), ('b','B','user',1,1,1)",
+            [],
+        )?;
+        let installed_app_root = resolve_business_os_installed_app_root(root);
+        assert_eq!(business_os_provisioning_mode(root, &installed_app_root), "legacy");
+        let mut modules =
+            vec![serde_json::json!({"id": "matching", "lifecycle": {"runtime_installed": false}})];
+        augment_modules_with_instance_visibility(root, &installed_app_root, &mut modules);
+        assert_eq!(modules[0]["instance_visible"], Value::Bool(true));
+        Ok(())
+    }
+
+    #[test]
+    fn github_update_available_from_recorded_remote() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let _conn = open_store(root)?;
+        let app_root = temp.path().join("app");
+        let version_states = serde_json::json!({
+            "extapp": {
+                "baseline_bundle_sha256": "INSTALLED_SHA",
+                "current_bundle_sha256": "INSTALLED_SHA"
+            }
+        });
+        let github_module = || {
+            serde_json::json!({
+                "id": "extapp",
+                "version": "1.0.0",
+                "app_source": { "kind": "github", "repo": "a/b" },
+                "lifecycle": { "runtime_installed": true }
+            })
+        };
+
+        // A newer upstream than the install baseline => update available.
+        business_os_set_module_remote_sha(root, "extapp", "REMOTE_SHA")?;
+        let mut modules = vec![github_module()];
+        augment_modules_with_catalog_update_state(root, &app_root, &mut modules, &version_states);
+        assert_eq!(modules[0]["lifecycle"]["update_available"], Value::Bool(true));
+
+        // Same upstream as installed => no update.
+        business_os_set_module_remote_sha(root, "extapp", "INSTALLED_SHA")?;
+        let mut modules = vec![github_module()];
+        augment_modules_with_catalog_update_state(root, &app_root, &mut modules, &version_states);
+        assert_eq!(modules[0]["lifecycle"]["update_available"], Value::Bool(false));
+        Ok(())
+    }
+
+    #[test]
     fn control_commands_return_structured_policy_denials() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
@@ -29603,6 +30596,17 @@ mod tests {
                     "version_id": "version_1"
                 }),
                 "apps.rollback",
+                "module",
+                Some("inventory"),
+            ),
+            (
+                "cmd_deny_module_update",
+                "ctox.module.update",
+                "inventory",
+                serde_json::json!({
+                    "module_id": "inventory"
+                }),
+                "apps.install",
                 "module",
                 Some("inventory"),
             ),

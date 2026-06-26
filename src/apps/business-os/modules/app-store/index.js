@@ -17,6 +17,12 @@ import {
   buildGlobalCtoxAgentScopeView,
   renderGlobalCtoxAgentScopeHtml,
 } from '../../shared/shell-permissions-ui.js?v=20260623-role-session';
+import {
+  base64ToBytes,
+  sha256Hex,
+  FILE_CONTENT_HASH_SCHEME,
+  FILE_CHUNK_HASH_SCHEME,
+} from '../../shared/file-integrity.js?v=20260603-active-chunk-query2';
 
 const CTOX_REPO = 'metric-space-ai/ctox';
 const CTOX_BRANCH = 'main';
@@ -198,6 +204,14 @@ function wireEvents() {
   state.ctx.host.querySelector('#btn-create-scratch')?.addEventListener('click', () => {
     openCreatorFromStore({ mode: 'scratch' });
   });
+
+  state.ctx.host.querySelector('#btn-install-github')?.addEventListener('click', () => {
+    installFromGithub();
+  });
+
+  state.ctx.host.querySelector('#btn-install-zip')?.addEventListener('click', () => {
+    installFromZip();
+  });
 }
 
 async function triggerCardAction(appId, actionType) {
@@ -205,14 +219,21 @@ async function triggerCardAction(appId, actionType) {
   if (!item || (state.busy && !['details', 'repository'].includes(actionType))) return;
 
   if (actionType === 'install') {
-    await installMarketplaceItem(item);
+    if (isPackagedCatalogTab(item)) {
+      await setModuleVisible(item, true);
+    } else {
+      await installMarketplaceItem(item);
+    }
   } else if (actionType === 'update') {
     if (!canInstallAppStoreItem(state, item)) return;
-    if (item.modification_status === 'modified'
+    const customized = item.modification_status === 'modified' || item.modification_status === 'customized';
+    if (customized
       && !confirm(`${item.title} hat lokale Änderungen. Ein Update überschreibt sie. Vor dem Update wird automatisch eine Wiederherstellungs-Version angelegt – fortfahren?`)) {
       return;
     }
-    await installMarketplaceItem(item, { update: true });
+    await updateInstalledItem(item, { mode: customized ? 'discard' : 'vanilla' });
+  } else if (actionType === 'check-updates') {
+    await checkModuleUpdates(item);
   } else if (actionType === 'versions') {
     await openVersionsDialog(item);
   } else if (actionType === 'open') {
@@ -230,8 +251,12 @@ async function triggerCardAction(appId, actionType) {
     if (!canReleaseAppStoreItem(state, item)) return;
     await openReleaseDialog(item);
   } else if (actionType === 'uninstall') {
-    if (!canUninstallAppStoreItem(state, item)) return;
-    await uninstallInstalledItem(item);
+    if (isPackagedCatalogTab(item)) {
+      await setModuleVisible(item, false);
+    } else {
+      if (!canUninstallAppStoreItem(state, item)) return;
+      await uninstallInstalledItem(item);
+    }
   } else if (actionType === 'repository') {
     if (item.homepage) {
       window.open(item.homepage, '_blank', 'noopener,noreferrer');
@@ -479,8 +504,20 @@ function normalizeItem(item, kind) {
     release_projection: releaseProjection,
     version_state: versionStateFor(id),
     latest_release: release,
+    app_source: (item.app_source && typeof item.app_source === 'object') ? item.app_source : null,
+    instance_visible: item.instance_visible !== false,
     raw: item,
   };
+}
+
+function externalSourceBadgeHtml(item) {
+  const src = item?.app_source;
+  if (!src || typeof src !== 'object') return '';
+  const kind = String(src.kind || '').trim();
+  if (kind !== 'github' && kind !== 'url') return '';
+  if (src.verified === true) return '';
+  const where = kind === 'github' && src.repo ? ` · ${escapeHtml(String(src.repo))}` : '';
+  return `<span class="app-external-source" title="Aus externer Quelle installiert – noch nicht verifiziert. Externe Apps erhalten keine Datenrechte bis zum Data-Access-Review.">Externe Quelle · nicht verifiziert${where}</span>`;
 }
 
 function normalizeDesktopAppItem(item) {
@@ -725,6 +762,7 @@ function renderCard(item) {
       ${item.lifecycle?.runtimeInstalled ? `<span class="app-lifecycle-badge" data-state="${escapeHtml(item.lifecycle.state)}" title="${escapeAttr(item.lifecycle.title)}">${escapeHtml(item.lifecycle.version)} · ${escapeHtml(item.lifecycle.text)}</span>` : ''}
       ${releaseProjectionBadgeHtml(item)}
       <span class="app-mod-state ${escapeHtml(item.modification_status)}">${escapeHtml(item.modification_label)}</span>
+      ${externalSourceBadgeHtml(item)}
     </div>
     ${actionsHtml}
     ${operationHtml}
@@ -882,15 +920,252 @@ async function installMarketplaceItem(item, { update = false } = {}) {
   });
 }
 
-async function installTemplateItem(item) {
+async function installFromGithub() {
+  if (!canInstallBusinessApps(appStorePermissionOptions(state))) {
+    state.status = { kind: 'error', text: 'Du darfst keine Apps installieren.' };
+    render();
+    return;
+  }
+  const repo = (window.prompt('GitHub-Repository (owner/name):', '') || '').trim();
+  if (!repo) return;
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
+    state.status = { kind: 'error', text: `Ungültiges Repository: ${repo} (erwartet owner/name).` };
+    render();
+    return;
+  }
+  const gitRef = (window.prompt('Branch / Tag / Commit (leer = HEAD):', 'main') || '').trim();
+  const subpath = (window.prompt('Pfad zum Modul im Repo (leer = Wurzel):', '') || '').trim();
+  const moduleId = sanitizeId((window.prompt('Modul-ID (muss zur module.json im Repo passen):', '') || '').trim());
+  if (!moduleId) {
+    state.status = { kind: 'error', text: 'Modul-ID ist erforderlich.' };
+    render();
+    return;
+  }
+  if (!window.confirm(`Aus EXTERNER Quelle installieren?\n\nRepo: ${repo}\nRef: ${gitRef || 'HEAD'}\nModul: ${moduleId}\n\nExterne Apps sind zunächst NICHT verifiziert und erhalten keine Datenrechte bis zur Prüfung.`)) {
+    return;
+  }
   await runStoreCommand({
-    label: `Creating ${item.title}...`,
-    success: `${item.title} created from template.`,
-    commandType: 'ctox.module.install_template',
+    label: `Installiere ${moduleId} aus GitHub...`,
+    success: `${moduleId} installiert (externe Quelle – nicht verifiziert).`,
+    commandType: 'ctox.app_store.install',
+    moduleId,
+    payload: {
+      module_id: moduleId,
+      source_kind: 'github',
+      repo,
+      git_ref: gitRef,
+      subpath,
+    },
+  });
+}
+
+function bytesToBase64(bytes) {
+  let binary = '';
+  const block = 0x8000;
+  for (let i = 0; i < bytes.length; i += block) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + block));
+  }
+  return btoa(binary);
+}
+
+// Write an uploaded .zip into the desktop file/chunk store over the RxDB data
+// plane (no HTTP). Mirrors the proven chat-attachment chunk format so the native
+// verified-decode accepts it; the native installer reads it back by file_id.
+async function uploadZipToChunkStore(file) {
+  const db = state.ctx?.db;
+  if (!db?.collection) throw new Error('Datenbank nicht verfügbar.');
+  await state.ctx.sync?.startCollection?.('desktop_files');
+  await state.ctx.sync?.startCollection?.('desktop_file_chunks');
+  const filesColl = db.collection('desktop_files');
+  const chunksColl = db.collection('desktop_file_chunks');
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const base64 = bytesToBase64(bytes);
+  const CHUNK = 16 * 1024;
+  const total = Math.max(1, Math.ceil(base64.length / CHUNK));
+  const now = Date.now();
+  const contentHash = await sha256Hex(base64ToBytes(base64));
+  const fileId = `appzip_${now}_${Math.random().toString(36).slice(2, 10)}`;
+  const generationId = `gen_${now}_${contentHash.slice(0, 12)}`;
+  for (let idx = 0; idx < total; idx += 1) {
+    const data = base64.slice(idx * CHUNK, (idx + 1) * CHUNK);
+    // eslint-disable-next-line no-await-in-loop
+    await chunksColl.upsert({
+      id: `${fileId}_${generationId}_${idx}`,
+      file_id: fileId,
+      generation_id: generationId,
+      content_hash: contentHash,
+      content_hash_scheme: FILE_CONTENT_HASH_SCHEME,
+      idx,
+      total,
+      encoding: 'base64',
+      data,
+      // eslint-disable-next-line no-await-in-loop
+      chunk_hash: await sha256Hex(data),
+      chunk_hash_scheme: FILE_CHUNK_HASH_SCHEME,
+      size_bytes: data.length,
+      created_at_ms: now,
+    });
+  }
+  const virtualPath = `/app-store-uploads/${file.name || 'app.zip'}`;
+  await filesColl.upsert({
+    id: fileId,
+    parent_id: '',
+    path: virtualPath,
+    local_path: '',
+    virtual_path: virtualPath,
+    name: file.name || 'app.zip',
+    kind: 'file',
+    mime_type: file.type || 'application/zip',
+    extension: 'zip',
+    size_bytes: bytes.length,
+    owner_id: '',
+    source: 'app-store-upload',
+    content_ref: fileId,
+    content_state: 'available',
+    content_hash: contentHash,
+    content_hash_scheme: FILE_CONTENT_HASH_SCHEME,
+    content_generation_id: generationId,
+    content_synced_at_ms: now,
+    sort_index: now,
+    is_deleted: false,
+    created_at_ms: now,
+    updated_at_ms: now,
+  });
+  return fileId;
+}
+
+function pickZipFile() {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.zip,application/zip';
+    input.style.display = 'none';
+    input.addEventListener('change', () => {
+      const file = input.files && input.files[0] ? input.files[0] : null;
+      input.remove();
+      resolve(file);
+    }, { once: true });
+    document.body.appendChild(input);
+    input.click();
+  });
+}
+
+async function installFromZip() {
+  if (!canInstallBusinessApps(appStorePermissionOptions(state))) {
+    state.status = { kind: 'error', text: 'Du darfst keine Apps installieren.' };
+    render();
+    return;
+  }
+  const file = await pickZipFile();
+  if (!file) return;
+  const moduleId = sanitizeId((window.prompt('Modul-ID (muss zur module.json im Zip passen):', '') || '').trim());
+  if (!moduleId) {
+    state.status = { kind: 'error', text: 'Modul-ID ist erforderlich.' };
+    render();
+    return;
+  }
+  const subpath = (window.prompt('Pfad zum Modul im Zip (leer = Wurzel):', '') || '').trim();
+  if (!window.confirm(`App aus EXTERNER Zip-Datei installieren?\n\nDatei: ${file.name}\nModul: ${moduleId}\n\nExterne Apps sind zunächst NICHT verifiziert und erhalten keine Datenrechte bis zur Prüfung.`)) {
+    return;
+  }
+  let fileId;
+  try {
+    state.status = { kind: 'info', text: `Lade ${file.name} hoch...` };
+    render();
+    fileId = await uploadZipToChunkStore(file);
+    // Give the chunk store a moment to replicate to the native peer before the
+    // install command tries to read it back.
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+  } catch (err) {
+    state.status = { kind: 'error', text: `Upload fehlgeschlagen: ${err?.message || err}` };
+    render();
+    return;
+  }
+  await runStoreCommand({
+    label: `Installiere ${moduleId} aus Zip...`,
+    success: `${moduleId} installiert (externe Quelle – nicht verifiziert).`,
+    commandType: 'ctox.app_store.install',
+    moduleId,
+    payload: {
+      module_id: moduleId,
+      source_kind: 'zip',
+      file_id: fileId,
+      subpath,
+    },
+  });
+}
+
+function isPackagedCatalogTab(item) {
+  return !item.download_url
+    && !item.repo
+    && !item.app_source
+    && item.kind !== 'installed'
+    && item.kind !== 'marketplace'
+    && item.kind !== 'template'
+    && item.launch_kind !== 'desktop-app';
+}
+
+async function setModuleVisible(item, visible) {
+  if (!canInstallAppStoreItem(state, item)) {
+    state.status = { kind: 'error', text: 'Du darfst diese App nicht installieren oder entfernen.' };
+    render();
+    return;
+  }
+  await runStoreCommand({
+    label: visible ? `Installiere ${item.title}...` : `Entferne ${item.title}...`,
+    success: visible ? `${item.title} als Tab installiert.` : `${item.title} aus den Tabs entfernt.`,
+    commandType: 'ctox.module.set_visible',
+    moduleId: item.id,
+    payload: { module_id: item.id, visible },
+  });
+}
+
+async function checkModuleUpdates(item) {
+  await runStoreCommand({
+    label: `Suche Updates für ${item.title}...`,
+    success: `Update-Prüfung für ${item.title} abgeschlossen.`,
+    commandType: 'ctox.module.check_updates',
+    moduleId: item.id,
+    payload: { module_id: item.id },
+  });
+}
+
+async function updateInstalledItem(item, { mode = 'vanilla' } = {}) {
+  if (!canInstallAppStoreItem(state, item)) {
+    state.status = { kind: 'error', text: 'Du darfst diese App nicht aktualisieren.' };
+    render();
+    return;
+  }
+  // GitHub-sourced apps update by re-installing from their pinned source.
+  const src = item.app_source;
+  if (src && src.kind === 'github' && src.repo) {
+    await runStoreCommand({
+      label: `Aktualisiere ${item.title} aus GitHub...`,
+      success: `${item.title} aus GitHub aktualisiert.`,
+      commandType: 'ctox.app_store.install',
+      moduleId: item.id,
+      payload: {
+        module_id: item.id,
+        source_kind: 'github',
+        repo: src.repo,
+        git_ref: src.ref || '',
+        subpath: src.subpath || '',
+      },
+    });
+    return;
+  }
+  const baseline = item.version_state?.installed_from_bundle_sha256
+    || item.version_state?.baseline_bundle_sha256
+    || '';
+  await runStoreCommand({
+    label: `Updating ${item.title}...`,
+    success: `${item.title} updated.`,
+    commandType: 'ctox.module.update',
     moduleId: item.id,
     payload: {
-      template_id: item.id,
-      title: item.raw.default_title || item.title,
+      module_id: item.id,
+      mode,
+      expected_baseline_sha256: baseline,
     },
   });
 }
@@ -1351,20 +1626,39 @@ function availableVersionLabel(remote, item, kind) {
 }
 
 function updateStateFor(item, remote, kind, moduleClass) {
+  // Primary signal: the server-projected catalog/update diff. The native peer
+  // sets lifecycle.update_available when an installed module's upstream catalog
+  // bundle (modules/<source>) diverges from the bundle this instance installed.
+  // This is the in-repo data path — no out-of-band GitHub fetch.
+  const lifecycle = item?.lifecycle || {};
+  if (lifecycle.update_available === true || item?.update_available === true) {
+    const catalogVersion = String(lifecycle.catalog_version || '').trim();
+    const installedVersion = String(lifecycle.installed_version || item?.version || '').trim();
+    return {
+      available: true,
+      reason: catalogVersion
+        ? `Katalog ${catalogVersion} verfügbar (installiert ${installedVersion || 'unversioniert'}).`
+        : 'Eine neuere Katalog-Version ist verfügbar.',
+    };
+  }
   if (!['installed', 'local', 'starter'].includes(kind)) {
     return { available: false, reason: kind === 'system' ? 'System-Module werden über CTOX selbst aktualisiert.' : '' };
   }
+  // Fork-class apps are developed locally; never offer a destructive
+  // download_url overwrite. (A genuine catalog update is handled by the diff
+  // branch above and is guarded for customized apps.)
   if (moduleClass === 'fork') {
     return { available: false, reason: 'Fork-Apps werden lokal weiterentwickelt. Für Upstream-Patches einen Agent beauftragen oder neu forken.' };
   }
-  if (!remote?.download_url) {
-    return { available: false, reason: 'Keine Marketplace-Quelle für Updates verknüpft.' };
+  // Fallback: an explicitly linked external marketplace remote (non-catalog).
+  if (remote?.download_url) {
+    const comparison = compareVersions(remote.version || '', item.version || '');
+    if (comparison > 0) {
+      return { available: true, reason: `${remote.version} ist verfügbar, lokal ist ${item.version || 'unversioniert'}.` };
+    }
+    return { available: false, reason: 'Kein neueres Marketplace-Release sichtbar.' };
   }
-  const comparison = compareVersions(remote.version || '', item.version || '');
-  if (comparison > 0) {
-    return { available: true, reason: `${remote.version} ist verfügbar, lokal ist ${item.version || 'unversioniert'}.` };
-  }
-  return { available: false, reason: 'Kein neueres Marketplace-Release sichtbar.' };
+  return { available: false, reason: 'Keine Marketplace-Quelle für Updates verknüpft.' };
 }
 
 function modificationStateFor(item, release, kind, resolvedId) {
@@ -1385,7 +1679,7 @@ function modificationStateFor(item, release, kind, resolvedId) {
 
 function actionButtonsForManagedItem(item, permissionState = state) {
   let html = '';
-  if (item.update_available && item.download_url) {
+  if (item.update_available) {
     html += canInstallAppStoreItem(permissionState, item)
       ? `<button type="button" class="card-btn warn" data-card-action="update" aria-label="${escapeHtml(item.title)} aktualisieren">${escapeHtml(state.t('actionUpdate', 'Aktualisieren'))}</button>`
       : disabledActionButtonHtml(
@@ -1393,6 +1687,9 @@ function actionButtonsForManagedItem(item, permissionState = state) {
         appStorePermissionDeniedReason('update'),
         item.title,
       );
+  }
+  if (item.app_source && item.app_source.kind === 'github' && canInstallAppStoreItem(permissionState, item)) {
+    html += `<button type="button" class="card-btn link" data-card-action="check-updates" aria-label="${escapeHtml(item.title)} nach Updates suchen">${escapeHtml(state.t('actionCheckUpdates', 'Nach Updates suchen'))}</button>`;
   }
   if (item.editable && canEditAppStoreItem(permissionState, item)) {
     html += `<button type="button" class="card-btn secondary" data-card-action="edit" aria-label="${escapeHtml(item.title)} bearbeiten">${escapeHtml(state.t('actionEdit', 'Bearbeiten'))}</button>`;
