@@ -973,11 +973,10 @@ function bytesToBase64(bytes) {
 // verified-decode accepts it; the native installer reads it back by file_id.
 async function uploadZipToChunkStore(file) {
   const db = state.ctx?.db;
-  if (!db?.collection) throw new Error('Datenbank nicht verfügbar.');
   await state.ctx.sync?.startCollection?.('desktop_files');
   await state.ctx.sync?.startCollection?.('desktop_file_chunks');
-  const filesColl = db.collection('desktop_files');
-  const chunksColl = db.collection('desktop_file_chunks');
+  const filesColl = resolveDbCollection(db, 'desktop_files');
+  const chunksColl = resolveDbCollection(db, 'desktop_file_chunks');
   const bytes = new Uint8Array(await file.arrayBuffer());
   const base64 = bytesToBase64(bytes);
   const CHUNK = 16 * 1024;
@@ -1032,6 +1031,16 @@ async function uploadZipToChunkStore(file) {
     updated_at_ms: now,
   });
   return fileId;
+}
+
+function resolveDbCollection(db, name) {
+  try {
+    const collection = db.collection(name);
+    if (!collection) throw new Error('missing collection');
+    return collection;
+  } catch {
+    throw new Error('Datenbank nicht verfügbar.');
+  }
 }
 
 function pickZipFile() {
