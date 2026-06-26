@@ -3,7 +3,7 @@ const DRAG_THRESHOLD_PX = 3;
 export function makeIconDraggable(iconEl, {
   surface,
   iconId,
-  grid = { cellW: 96, cellH: 110, offset: 24 },
+  grid = { offset: 24 },
   onSelect,
   onMoved,
   onDragToTopbar,
@@ -14,17 +14,23 @@ export function makeIconDraggable(iconEl, {
   function onMouseDown(downEvent) {
     if (downEvent.button !== 0) return;
     if (downEvent.target.closest('button, a, input, select, textarea')) return;
+    downEvent.preventDefault();
 
     let dragging = false;
     const startX = downEvent.clientX;
     const startY = downEvent.clientY;
     const initialX = iconEl.offsetLeft;
     const initialY = iconEl.offsetTop;
+    const previousUserSelect = document.body.style.userSelect;
+    const previousWebkitUserSelect = document.body.style.webkitUserSelect;
+    document.body.style.userSelect = 'none';
+    document.body.style.webkitUserSelect = 'none';
 
     onSelect?.(iconId, iconEl);
     iconEl.style.zIndex = '1000';
 
     function onMouseMove(moveEvent) {
+      moveEvent.preventDefault();
       const diffX = moveEvent.clientX - startX;
       const diffY = moveEvent.clientY - startY;
       if (!dragging && (Math.abs(diffX) > DRAG_THRESHOLD_PX || Math.abs(diffY) > DRAG_THRESHOLD_PX)) {
@@ -40,6 +46,8 @@ export function makeIconDraggable(iconEl, {
     function onMouseUp(upEvent) {
       document.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('mouseup', onMouseUp);
+      document.body.style.userSelect = previousUserSelect;
+      document.body.style.webkitUserSelect = previousWebkitUserSelect;
       iconEl.style.zIndex = '';
       if (!dragging) return;
       dragging = false;
@@ -69,15 +77,13 @@ export function makeIconDraggable(iconEl, {
       const maxY = (surfaceRect?.height ?? globalThis.innerHeight) - iconEl.offsetHeight - 8;
 
       const offset = grid.offset ?? 24;
-      const cellW = Math.max(40, grid.cellW ?? 96);
-      const cellH = Math.max(40, grid.cellH ?? 110);
       const rawX = iconEl.offsetLeft;
       const rawY = iconEl.offsetTop;
-      const snappedX = Math.max(offset, Math.min(Math.round((rawX - offset) / cellW) * cellW + offset, maxX));
-      const snappedY = Math.max(offset, Math.min(Math.round((rawY - offset) / cellH) * cellH + offset, maxY));
-      iconEl.style.left = `${snappedX}px`;
-      iconEl.style.top = `${snappedY}px`;
-      onMoved?.(iconId, { x: snappedX, y: snappedY }, iconEl);
+      const finalX = Math.max(offset, Math.min(Math.round(rawX), maxX));
+      const finalY = Math.max(offset, Math.min(Math.round(rawY), maxY));
+      iconEl.style.left = `${finalX}px`;
+      iconEl.style.top = `${finalY}px`;
+      onMoved?.(iconId, { x: finalX, y: finalY }, iconEl);
     }
 
     document.addEventListener('mousemove', onMouseMove);

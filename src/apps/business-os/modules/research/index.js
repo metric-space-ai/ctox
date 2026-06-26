@@ -1,11 +1,12 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 
-const BUILD = '20260608-skf-dashboard-sync-refresh1';
+const BUILD = '20260626-skf-dialog-knowledge-v2';
 const DEFAULT_AXIS_X = 'evidence_strength';
 const DEFAULT_AXIS_Y = 'topic_fit';
 const ROW_LIMIT = 5000;
 const COLLECTION_READ_TIMEOUT_MS = 10000;
 const POST_SYNC_REFRESH_LIMIT = 3;
+const KNOWLEDGE_TABLE_EMPTY_RETRY_DELAYS_MS = Object.freeze([250, 750, 1500]);
 const RESEARCH_COLLECTIONS = Object.freeze([
   'business_commands',
   'ctox_queue_tasks',
@@ -340,9 +341,15 @@ export async function mount(ctx) {
   wireRealtime();
   wireSyncDiagnosticsRefresh();
   state.cleanup.push(initResearchContextMenu());
-  startResearchCollections().catch((error) => {
-    console.warn('[research] background sync start failed', error);
-  });
+  startResearchCollections()
+    .then(() => {
+      queueKnowledgeRefreshAfter(300);
+      queueKnowledgeRefreshAfter(2500);
+      queueKnowledgeRefreshAfter(6500);
+    })
+    .catch((error) => {
+      console.warn('[research] background sync start failed', error);
+    });
   await refreshAll({ seed: true });
   schedulePostSyncRefresh(1200);
   return () => {
@@ -488,6 +495,7 @@ async function refreshAll({ seed = false } = {}) {
   }
   await loadDashboardData();
   render();
+  refreshOpenTaskDialogDomainOptions();
   state.diagnostics.reloadFinishedAt = Date.now();
   setStatus(reloadStatusText());
 }
@@ -570,7 +578,17 @@ function scheduleKnowledgeRefresh(delay = 120) {
     }
     await loadDashboardData();
     render();
+    refreshOpenTaskDialogDomainOptions();
   }, delay);
+}
+
+function queueKnowledgeRefreshAfter(delay) {
+  const timer = window.setTimeout(() => {
+    refreshAll({ seed: true }).catch((error) => {
+      console.warn('[research] deferred knowledge refresh failed', error);
+    });
+  }, delay);
+  state.cleanup.push(() => window.clearTimeout(timer));
 }
 
 function isVisibleResearchTask(task) {
@@ -652,7 +670,26 @@ function knowledgeBasesFromTables(tables = []) {
 }
 
 async function loadKnowledgeTables() {
-  return findAll(readableCollection('knowledge_tables'), 'knowledge_tables');
+  const collection = readableCollection('knowledge_tables');
+  const first = await findAll(collection, 'knowledge_tables');
+  if (first.length || !collection?.find) return first;
+  if (!shouldRetryEmptyKnowledgeTables()) return first;
+  for (const delay of KNOWLEDGE_TABLE_EMPTY_RETRY_DELAYS_MS) {
+    await sleep(delay);
+    const retry = await findAll(collection, 'knowledge_tables');
+    if (retry.length) return retry;
+  }
+  return first;
+}
+
+function shouldRetryEmptyKnowledgeTables() {
+  const info = window.ctoxBusinessOsSyncDiagnostics?.collections?.knowledge_tables;
+  if (!info) return true;
+  return info.status === 'connected'
+    || info.status === 'reused'
+    || info.connectionStatus === 'connected'
+    || info.initialReplicationState === 'complete'
+    || info.active === true;
 }
 
 function isResearchKnowledgeBase(base) {
@@ -1884,11 +1921,7 @@ function openTaskDialog(editTask = null) {
   const isEdit = Boolean(editTask?.id);
   const selectedDomain = editTask?.knowledge_domain || selectedTask()?.knowledge_domain || state.knowledgeBases[0]?.domain || '';
   const dimensionsText = formatDimensionLines(scoringDimensionsForTask(editTask));
-  const domainOptions = state.knowledgeBases.map((base) => `
-    <option value="${escapeHtml(base.domain)}" ${base.domain === selectedDomain ? 'selected' : ''}>
-      ${escapeHtml(`${base.title || titleFromDomain(base.domain)} · ${base.domain}`)}
-    </option>
-  `).join('');
+  const domainOptions = knowledgeDomainOptionsMarkup(selectedDomain);
   const overlay = document.createElement('div');
   overlay.className = 'research-modal-backdrop';
   overlay.innerHTML = `
@@ -1960,11 +1993,69 @@ function openTaskDialog(editTask = null) {
   });
   root.append(overlay);
   syncFormState();
+  if (!isEdit && !state.knowledgeBases.length) {
+    refreshTaskDialogKnowledgeOptions().catch((error) => {
+      console.warn('[research] task dialog knowledge refresh failed', error);
+    });
+  }
   requestAnimationFrame(() => overlay.querySelector('input[name="title"]')?.focus());
 }
 
 function closeTaskDialog() {
   state.ctx.host.querySelector('.research-modal-backdrop')?.remove();
+}
+
+function knowledgeDomainOptionsMarkup(selectedDomain = '') {
+  return state.knowledgeBases.map((base) => `
+    <option value="${escapeHtml(base.domain)}" ${base.domain === selectedDomain ? 'selected' : ''}>
+      ${escapeHtml(`${base.title || titleFromDomain(base.domain)} · ${base.domain}`)}
+    </option>
+  `).join('');
+}
+
+function refreshOpenTaskDialogDomainOptions() {
+  const overlay = state.ctx.host.querySelector('.research-modal-backdrop');
+  const form = overlay?.querySelector('[data-research-task-form]');
+  const select = form?.querySelector('select[name="domain"]');
+  if (!overlay || !form || !select) return;
+  const currentValue = select.value || selectedTask()?.knowledge_domain || state.knowledgeBases[0]?.domain || '';
+  const selectedDomain = state.knowledgeBases.some((base) => base.domain === currentValue)
+    ? currentValue
+    : state.knowledgeBases[0]?.domain || '';
+  select.disabled = !state.knowledgeBases.length;
+  select.innerHTML = `
+    <option value="" ${selectedDomain ? '' : 'selected'} disabled>${escapeHtml(state.t('selectKnowledgeDomain', 'Knowledge Domain auswählen'))}</option>
+    ${knowledgeDomainOptionsMarkup(selectedDomain)}
+  `;
+  if (selectedDomain) select.value = selectedDomain;
+  const note = form.querySelector('.research-field-note');
+  if (note) note.textContent = domainSelectionNote(false);
+  const status = form.querySelector('[data-validation-status]');
+  const submit = form.querySelector('button[type="submit"]');
+  const validation = validateResearchTaskInput(formValues(form), state.knowledgeBases, { isEdit: false });
+  if (submit) submit.disabled = !validation.valid;
+  if (status) status.textContent = validation.valid ? '' : validation.message;
+}
+
+async function refreshTaskDialogKnowledgeOptions() {
+  const overlay = state.ctx.host.querySelector('.research-modal-backdrop');
+  if (!overlay || overlay.dataset.knowledgeRefresh === 'running') return;
+  overlay.dataset.knowledgeRefresh = 'running';
+  const note = overlay.querySelector('.research-field-note');
+  if (note) note.textContent = state.t('loadingKnowledge', 'Knowledge wird geladen...');
+  try {
+    const knowledgeBases = await loadKnowledgeBases();
+    if (knowledgeBases.length) {
+      state.knowledgeBases = knowledgeBases;
+      await loadLocalState();
+      await ensureTasksFromKnowledgeBases();
+      refreshOpenTaskDialogDomainOptions();
+      return;
+    }
+    if (note) note.textContent = domainSelectionNote(false);
+  } finally {
+    delete overlay.dataset.knowledgeRefresh;
+  }
 }
 
 async function createTaskFromForm(form) {
@@ -1979,7 +2070,7 @@ async function createTaskFromForm(form) {
   if (!validation.valid) throw new Error(validation.message);
   const rawDomain = String(form.get('domain') || current?.knowledge_domain || '').trim();
   const rawTitle = String(form.get('title') || '').trim();
-  const domain = normalizeResearchDomain(rawDomain || rawTitle || current?.title || 'research');
+  const domain = researchDomainFromFormValue(rawDomain, state.knowledgeBases, rawTitle || current?.title || 'research');
   const base = state.knowledgeBases.find((item) => item.domain === domain);
   const now = Date.now();
   const title = String(rawTitle || base?.title || titleFromDomain(domain) || 'Research').trim();
@@ -2786,6 +2877,10 @@ function withTimeout(promise, timeoutMs, message) {
   });
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function toJson(doc) {
   return typeof doc?.toJSON === 'function' ? doc.toJSON() : { ...(doc || {}) };
 }
@@ -2850,6 +2945,12 @@ function normalizeResearchDomain(value) {
   if (!raw) return 'research/general';
   if (raw.includes('/')) return raw.replace(/^\/+|\/+$/g, '').replace(/\s+/g, '-').toLowerCase();
   return `research/${slugId(raw).replace(/_/g, '-')}`;
+}
+
+function researchDomainFromFormValue(rawDomain, knowledgeBases = [], fallback = 'research') {
+  const selected = String(rawDomain || '').trim();
+  if (selected && knowledgeBases.some((base) => base.domain === selected)) return selected;
+  return normalizeResearchDomain(selected || fallback);
 }
 
 function slugId(value) {
@@ -3319,6 +3420,8 @@ export const __researchTestHooks = {
   disabledTabButton,
   knowledgeBasesFromTables,
   renderNoTaskCenter,
+  researchDomainFromFormValue,
+  shouldRetryEmptyKnowledgeTables,
   validateResearchTaskInput,
   validateSelectedResearchTask,
 };

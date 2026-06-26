@@ -6,16 +6,16 @@
 // associated Parquet files as opaque blobs. No content interpretation,
 // no schema reading, no row access. That is Level 3.
 
+use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
-use anyhow::bail;
 use chrono::Utc;
+use rusqlite::params;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
-use rusqlite::params;
+use serde_json::json;
 use serde_json::Map;
 use serde_json::Value;
-use serde_json::json;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;

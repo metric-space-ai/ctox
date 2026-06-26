@@ -1,11 +1,11 @@
-use anyhow::{Context, Result, anyhow, bail};
-use base64::Engine as _;
+use anyhow::{anyhow, bail, Context, Result};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use mailparse::{DispositionType, MailHeaderMap, ParsedMail, parse_mail};
+use base64::Engine as _;
+use mailparse::{parse_mail, DispositionType, MailHeaderMap, ParsedMail};
 use native_tls::{TlsConnector, TlsStream};
 use roxmltree::Document;
 use rusqlite::{Connection, OptionalExtension};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -19,13 +19,13 @@ use crate::communication::adapters::{
 };
 use crate::communication::attachments::{load_outbound_attachments, refs_for_paths};
 use crate::communication::microsoft_graph_auth::{
-    ROPC_PUBLIC_CLIENT_ID, acquire_app_token, acquire_ropc_token,
+    acquire_app_token, acquire_ropc_token, ROPC_PUBLIC_CLIENT_ID,
 };
 use crate::communication::runtime as communication_runtime;
 use crate::mission::channels::{
-    CommunicationSyncRun, UpsertMessage, ensure_account, ensure_routing_rows_for_inbound,
-    now_iso_string, open_channel_db, preview_text, record_communication_sync_run, refresh_thread,
-    stable_digest, upsert_communication_message,
+    ensure_account, ensure_routing_rows_for_inbound, now_iso_string, open_channel_db, preview_text,
+    record_communication_sync_run, refresh_thread, stable_digest, upsert_communication_message,
+    CommunicationSyncRun, UpsertMessage,
 };
 
 const DEFAULT_IMAP_HOST: &str = "imap.one.com";
@@ -1245,9 +1245,9 @@ fn verify_imap_inbox_delivery(
     imap.login(&options.email, &options.password)?;
     imap.select("INBOX")?;
     for attempt in 0..attempts {
-        for uid in latest_imap_uids(imap.search_all_uids()?, 25) {
-            let fetched = imap.fetch_raw(&uid)?;
-            let parsed = parse_rfc822_message(&fetched.raw)?;
+        for uid in latest_imap_uids(imap.search_message_id_uids(message_id)?, 25) {
+            let headers = imap.fetch_message_id_headers(&uid)?;
+            let parsed = parse_rfc822_headers(&headers)?;
             if parsed.message_id.trim() != message_id.trim() {
                 continue;
             }
@@ -1282,6 +1282,11 @@ fn verify_imap_inbox_delivery(
         thread_key: None,
         observed_at: None,
     })
+}
+
+struct ParsedEmailHeaders {
+    message_id: String,
+    sent_at_iso: Option<String>,
 }
 
 fn resolve_imap_sent_folders(imap: &mut ImapClient) -> Result<Vec<String>> {
@@ -1368,6 +1373,21 @@ fn parse_rfc822_message(raw: &[u8]) -> Result<ParsedEmailMessage> {
         auto_submitted,
         auto_submitted_value,
         auto_response_suppress,
+    })
+}
+
+fn parse_rfc822_headers(raw: &[u8]) -> Result<ParsedEmailHeaders> {
+    let parsed = parse_mail(raw).context("failed to parse RFC822 headers")?;
+    Ok(ParsedEmailHeaders {
+        message_id: parsed
+            .headers
+            .get_first_value("Message-ID")
+            .unwrap_or_default(),
+        sent_at_iso: parsed
+            .headers
+            .get_first_value("Date")
+            .and_then(|value| mailparse::dateparse(&value).ok())
+            .and_then(epoch_seconds_to_iso),
     })
 }
 
@@ -2154,6 +2174,25 @@ impl ImapClient {
             .collect())
     }
 
+    fn search_message_id_uids(&mut self, message_id: &str) -> Result<Vec<String>> {
+        let response = self.command(&imap_search_message_id_command(message_id))?;
+        let text = String::from_utf8_lossy(&response);
+        let match_line = text
+            .lines()
+            .find(|line| line.starts_with("* SEARCH "))
+            .unwrap_or("");
+        Ok(match_line
+            .trim_start_matches("* SEARCH ")
+            .split_whitespace()
+            .map(|value| value.to_string())
+            .collect())
+    }
+
+    fn fetch_message_id_headers(&mut self, uid: &str) -> Result<Vec<u8>> {
+        let response = self.command(&imap_fetch_message_id_headers_command(uid))?;
+        imap_response_literal(&response, "IMAP header FETCH response")
+    }
+
     fn fetch_raw(&mut self, uid: &str) -> Result<ImapFetchedMessage> {
         let response = self.command(&format!("UID FETCH {uid} (UID FLAGS RFC822)"))?;
         let text = String::from_utf8_lossy(&response);
@@ -2172,26 +2211,9 @@ impl ImapClient {
                 )
             })
             .unwrap_or_default();
-        let marker = b"}\r\n";
-        let marker_index = response
-            .windows(marker.len())
-            .position(|window| window == marker)
-            .ok_or_else(|| anyhow!("IMAP FETCH response contained no literal"))?;
-        let size_start = response[..marker_index]
-            .iter()
-            .rposition(|byte| *byte == b'{')
-            .ok_or_else(|| anyhow!("IMAP FETCH response contained no literal length"))?;
-        let literal_size = String::from_utf8_lossy(&response[size_start + 1..marker_index])
-            .parse::<usize>()
-            .context("failed to parse IMAP literal size")?;
-        let literal_start = marker_index + marker.len();
-        let literal_end = literal_start + literal_size;
-        if response.len() < literal_end {
-            bail!("IMAP literal truncated");
-        }
         Ok(ImapFetchedMessage {
             flags,
-            raw: response[literal_start..literal_end].to_vec(),
+            raw: imap_response_literal(&response, "IMAP FETCH response")?,
         })
     }
 
@@ -2202,6 +2224,38 @@ impl ImapClient {
 
 fn imap_quote(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+fn imap_search_message_id_command(message_id: &str) -> String {
+    format!(
+        "UID SEARCH HEADER Message-ID {}",
+        imap_quote(message_id.trim())
+    )
+}
+
+fn imap_fetch_message_id_headers_command(uid: &str) -> String {
+    format!("UID FETCH {uid} (UID BODY.PEEK[HEADER.FIELDS (MESSAGE-ID DATE)])")
+}
+
+fn imap_response_literal(response: &[u8], context: &str) -> Result<Vec<u8>> {
+    let marker = b"}\r\n";
+    let marker_index = response
+        .windows(marker.len())
+        .position(|window| window == marker)
+        .ok_or_else(|| anyhow!("{context} contained no literal"))?;
+    let size_start = response[..marker_index]
+        .iter()
+        .rposition(|byte| *byte == b'{')
+        .ok_or_else(|| anyhow!("{context} contained no literal length"))?;
+    let literal_size = String::from_utf8_lossy(&response[size_start + 1..marker_index])
+        .parse::<usize>()
+        .with_context(|| format!("failed to parse {context} literal size"))?;
+    let literal_start = marker_index + marker.len();
+    let literal_end = literal_start + literal_size;
+    if response.len() < literal_end {
+        bail!("{context} literal truncated");
+    }
+    Ok(response[literal_start..literal_end].to_vec())
 }
 
 fn latest_imap_uids(mut uids: Vec<String>, limit: usize) -> Vec<String> {
@@ -3773,12 +3827,13 @@ fn acquire_graph_access_token(options: &EmailOptions) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        EmailOptions, LATEST_KNOWN_IMAP_UID_SQL, acquire_graph_access_token,
-        build_ews_file_attachments_xml, effective_graph_password, effective_graph_username,
-        extract_address, latest_imap_uids, latest_known_imap_uid, require_provider_credentials,
-        synced_message_direction,
+        acquire_graph_access_token, build_ews_file_attachments_xml, effective_graph_password,
+        effective_graph_username, extract_address, imap_fetch_message_id_headers_command,
+        imap_search_message_id_command, latest_imap_uids, latest_known_imap_uid,
+        parse_rfc822_headers, require_provider_credentials, synced_message_direction, EmailOptions,
+        LATEST_KNOWN_IMAP_UID_SQL,
     };
-    use crate::mission::channels::{UpsertMessage, open_channel_db, upsert_communication_message};
+    use crate::mission::channels::{open_channel_db, upsert_communication_message, UpsertMessage};
     use std::io::Write;
     use std::path::PathBuf;
 
@@ -3869,6 +3924,38 @@ mod tests {
             3,
         );
         assert_eq!(selected, vec!["101", "100", "99"]);
+    }
+
+    #[test]
+    fn imap_inbox_verification_uses_header_only_commands() {
+        let search = imap_search_message_id_command("<ctox-123@example.test>");
+        assert_eq!(
+            search,
+            "UID SEARCH HEADER Message-ID \"<ctox-123@example.test>\""
+        );
+
+        let fetch = imap_fetch_message_id_headers_command("101");
+        assert_eq!(
+            fetch,
+            "UID FETCH 101 (UID BODY.PEEK[HEADER.FIELDS (MESSAGE-ID DATE)])"
+        );
+        assert!(
+            !fetch.contains("RFC822"),
+            "inbox delivery verification must not fetch full message bodies"
+        );
+    }
+
+    #[test]
+    fn imap_inbox_verification_parses_message_id_headers() -> anyhow::Result<()> {
+        let headers =
+            b"Message-ID: <ctox-123@example.test>\r\nDate: Wed, 02 Oct 2002 08:00:00 +0000\r\n\r\n";
+        let parsed = parse_rfc822_headers(headers)?;
+        assert_eq!(parsed.message_id, "<ctox-123@example.test>");
+        assert_eq!(
+            parsed.sent_at_iso.as_deref(),
+            Some("2002-10-02T08:00:00+00:00")
+        );
+        Ok(())
     }
 
     #[test]

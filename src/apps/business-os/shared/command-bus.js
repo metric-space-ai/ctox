@@ -17,7 +17,7 @@ export function createCommandBus({ db, sync = null, session = null } = {}) {
 // we dispatch without it (legacy claimed-actor path) so the UI keeps working.
 let capabilityTokenCache = { token: null, expiresAtMs: 0 };
 
-async function getCapabilityToken() {
+export async function getBusinessOsCapabilityToken() {
   const now = Date.now();
   if (capabilityTokenCache.token && now < capabilityTokenCache.expiresAtMs - 60_000) {
     return capabilityTokenCache.token;
@@ -44,7 +44,7 @@ async function getCapabilityToken() {
 
 async function dispatchRxdbCommand({ db, sync, session, command }) {
   const commandId = command.id || `cmd_${crypto.randomUUID()}`;
-  const capabilityToken = await getCapabilityToken();
+  const capabilityToken = await getBusinessOsCapabilityToken();
   const doc = commandDocument(
     command,
     commandId,
@@ -283,28 +283,42 @@ function commandDependencySyncCollections(command) {
       collections.add(normalized);
     }
   }
-  if (commandUsesDesktopFileAttachments(command)) {
+  if (commandUsesDesktopFileMetadata(command)) {
     collections.add('desktop_files');
+  }
+  if (commandUsesDesktopFileChunks(command)) {
     collections.add('desktop_file_chunks');
   }
   return [...collections];
 }
 
-function commandUsesDesktopFileAttachments(command) {
+function commandUsesDesktopFileMetadata(command) {
   const payload = command?.payload && typeof command.payload === 'object' ? command.payload : {};
-  const attachmentRefs = [
-    ...(Array.isArray(payload.attachments) ? payload.attachments : []),
-    ...(Array.isArray(payload.attachment_refs) ? payload.attachment_refs : []),
-  ];
-  if (attachmentRefs.some((item) => (
-    item
-    && typeof item === 'object'
-    && cleanContextText(item.kind || 'desktop_file') === 'desktop_file'
-    && cleanContextText(item.file_id || item.fileId)
-  ))) {
+  if (desktopFileAttachmentRefs(payload).some((item) => cleanContextText(item.file_id || item.fileId))) {
     return true;
   }
   return Boolean(cleanContextText(payload.source_file_id || payload.file_id));
+}
+
+function commandUsesDesktopFileChunks(command) {
+  const payload = command?.payload && typeof command.payload === 'object' ? command.payload : {};
+  return desktopFileAttachmentRefs(payload).some((item) => (
+    cleanContextText(item.chunk_collection || item.chunkCollection) === 'desktop_file_chunks'
+    || cleanContextText(item.storage_collection || item.storageCollection) === 'desktop_file_chunks'
+    || cleanContextText(item.chunk_id || item.chunkId)
+    || Number(item.chunk_count || item.chunkCount || 0) > 0
+  ));
+}
+
+function desktopFileAttachmentRefs(payload) {
+  return [
+    ...(Array.isArray(payload.attachments) ? payload.attachments : []),
+    ...(Array.isArray(payload.attachment_refs) ? payload.attachment_refs : []),
+  ].filter((item) => (
+    item
+    && typeof item === 'object'
+    && cleanContextText(item.kind || 'desktop_file') === 'desktop_file'
+  ));
 }
 
 async function insertOrPatchCommandDocument(collection, commandId, doc) {

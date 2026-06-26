@@ -286,11 +286,17 @@ export function buildGlobalCtoxContextModes({
     {
       value: 'data',
       label: labels.workData || 'Mit Daten arbeiten',
+      impact: 'data_mutation',
+      impactLabel: labels.impactData || 'Datenarbeit',
+      description: labels.impactDataDescription || 'Kann Daten lesen oder eine Aenderung anstoßen.',
       selected: true,
     },
     {
       value: 'ask',
       label: labels.answer || 'Frage beantworten',
+      impact: 'read_only',
+      impactLabel: labels.impactAsk || 'Nur lesend',
+      description: labels.impactAskDescription || 'Beantwortet eine Frage ohne Daten oder Apps zu veraendern.',
       selected: false,
     },
   ];
@@ -298,6 +304,9 @@ export function buildGlobalCtoxContextModes({
     modes.push({
       value: 'app',
       label: labels.modifyApp || 'App ändern',
+      impact: 'privileged_app_change',
+      impactLabel: labels.impactApp || 'App-Aenderung',
+      description: labels.impactAppDescription || 'Kann App-Verhalten oder Source aendern.',
       selected: false,
     });
   }
@@ -305,16 +314,25 @@ export function buildGlobalCtoxContextModes({
     {
       value: 'note',
       label: labels.note || 'Notiz an User',
+      impact: 'human_note',
+      impactLabel: labels.impactNote || 'Notiz',
+      description: labels.impactNoteDescription || 'Hinterlegt eine Kontextnotiz fuer andere Nutzer.',
       selected: false,
     },
     {
       value: 'mention',
       label: labels.mention || 'User erwähnen',
+      impact: 'human_mention',
+      impactLabel: labels.impactMention || 'Mention',
+      description: labels.impactMentionDescription || 'Holt andere Nutzer in diesen Kontext.',
       selected: false,
     },
     {
       value: 'approval',
       label: labels.approval || 'Freigabe anfragen',
+      impact: 'approval_required',
+      impactLabel: labels.impactApproval || 'Freigabe',
+      description: labels.impactApprovalDescription || 'Erstellt einen CTOX-Auftrag, der erst nach Review laeuft.',
       selected: false,
     },
   );
@@ -324,10 +342,41 @@ export function buildGlobalCtoxContextModes({
 export function renderGlobalCtoxContextModeHtml(options = {}) {
   return buildGlobalCtoxContextModes(options)
     .map((mode) => (
-      `<label${mode.selected ? ' class="is-selected"' : ''}>`
+      `<label${mode.selected ? ' class="is-selected"' : ''} data-impact="${escapeAttr(mode.impact || '')}" title="${escapeAttr(mode.description || '')}">`
         + `<input type="radio" name="contextMode" value="${escapeAttr(mode.value)}"${mode.selected ? ' checked' : ''} style="display:none;" />`
-        + `<span>${escapeHtml(mode.label)}</span>`
+        + '<span class="ctox-context-mode-copy">'
+          + `<span>${escapeHtml(mode.label)}</span>`
+          + `<small>${escapeHtml(mode.impactLabel || '')}</small>`
+        + '</span>'
       + '</label>'
+    ))
+    .join('');
+}
+
+export function buildBusinessUserPickerOptions(users = [], { session = {} } = {}) {
+  const byId = new Map();
+  const addUser = (user = {}) => {
+    const id = cleanText(user.id || user.user_id);
+    if (!id || byId.has(id)) return;
+    if (user.active === false || user.is_deleted === true || user._deleted === true) return;
+    byId.set(id, {
+      id,
+      display_name: cleanText(user.display_name || user.name || id) || id,
+      role: cleanText(user.role || 'user') || 'user',
+    });
+  };
+  (Array.isArray(users) ? users : []).forEach(addUser);
+  addUser(session?.user || {});
+  return [...byId.values()].sort((a, b) => {
+    const byName = a.display_name.localeCompare(b.display_name, undefined, { sensitivity: 'base' });
+    return byName || a.id.localeCompare(b.id);
+  });
+}
+
+export function renderBusinessUserDatalistOptions(users = [], options = {}) {
+  return buildBusinessUserPickerOptions(users, options)
+    .map((user) => (
+      `<option value="${escapeAttr(user.id)}" label="${escapeAttr(`${user.display_name} · ${user.role}`)}"></option>`
     ))
     .join('');
 }

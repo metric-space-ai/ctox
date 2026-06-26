@@ -1,8 +1,8 @@
 use anyhow::Context;
 use anyhow::Result;
+use rusqlite::params;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
-use rusqlite::params;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;

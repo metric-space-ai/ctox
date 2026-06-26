@@ -377,7 +377,6 @@ ipcMain.handle("pairing:rotate", async (_event, instance, rawInvite) => rotatePa
 ipcMain.handle("pairing:revoke", async (_event, instance) => revokePairing(instance));
 ipcMain.handle("local:inspect", async (_event, options) => sourceManager.inspectLocalDaemon(options || {}));
 ipcMain.handle("local:attach", async (_event, options) => sourceManager.attachLocalDaemon(options || {}));
-ipcMain.handle("local:install", async (_event, options) => sourceManager.installLocalBusinessOs(options || {}));
 ipcMain.handle("ssh:inspect-host-key", async (_event, options) => sourceManager.inspectSshHostKey(options || {}));
 ipcMain.handle("ssh:preflight", async (_event, options) => sourceManager.preflightSshManaged(options || {}));
 ipcMain.handle("ssh:attach", async (_event, options) => sourceManager.attachSshManaged(options || {}));

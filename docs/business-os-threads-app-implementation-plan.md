@@ -1,5 +1,7 @@
 # Business OS Threads App Implementation Plan
 
+Related remediation: `docs/business-os-threads-roles-remediation-plan-2026-06-25.md`
+
 ## Purpose
 
 Build a native Business OS `threads` app that gives every signed-in user a

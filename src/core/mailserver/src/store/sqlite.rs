@@ -7,12 +7,17 @@ use rusqlite::{params, Connection};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, UNIX_EPOCH};
 
 thread_local! {
     static SQLITE_STORE_CONNECTIONS: RefCell<HashMap<String, Connection>> =
         RefCell::new(HashMap::new());
 }
+
+#[cfg(test)]
+static SQLITE_STORE_OPEN_COUNTS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct SqliteStoreChangeStamp {
@@ -57,6 +62,7 @@ impl SqliteStore {
     }
 
     fn open_connection(db_path: &str) -> StalwartResult<Connection> {
+        record_open_connection_for_test(db_path);
         let conn = Connection::open(db_path)?;
         conn.busy_timeout(Duration::from_secs(10))?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
@@ -103,13 +109,14 @@ impl SqliteStore {
         dkim_selector: &str,
         dkim_private_key: &str,
     ) -> StalwartResult<()> {
-        let conn = self.connect()?;
-        conn.execute(
-            "INSERT OR REPLACE INTO stalwart_domains (domain_name, dkim_selector, dkim_private_key)
-             VALUES (?1, ?2, ?3)",
-            params![domain_name, dkim_selector, dkim_private_key],
-        )?;
-        Ok(())
+        self.with_connection(|conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO stalwart_domains (domain_name, dkim_selector, dkim_private_key)
+                 VALUES (?1, ?2, ?3)",
+                params![domain_name, dkim_selector, dkim_private_key],
+            )?;
+            Ok(())
+        })
     }
 
     pub fn get_domain_dkim(&self, domain_name: &str) -> StalwartResult<Option<(String, String)>> {
@@ -132,14 +139,15 @@ impl SqliteStore {
 
     pub fn queue_email(&self, from: &str, to: &str, body: &str) -> StalwartResult<String> {
         let id = crate::util::generate_unique_id();
-        let conn = self.connect()?;
         let now = crate::util::now_utc_secs();
-        conn.execute(
-            "INSERT INTO stalwart_smtp_queue (id, from_addr, to_addr, msg_body, retry_count, next_attempt_at, status)
-             VALUES (?1, ?2, ?3, ?4, 0, ?5, 'pending')",
-            params![id, from, to, body, now],
-        )?;
-        Ok(id)
+        self.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO stalwart_smtp_queue (id, from_addr, to_addr, msg_body, retry_count, next_attempt_at, status)
+                 VALUES (?1, ?2, ?3, ?4, 0, ?5, 'pending')",
+                params![id.as_str(), from, to, body, now],
+            )?;
+            Ok(id)
+        })
     }
 
     pub fn get_pending_emails(
@@ -230,92 +238,99 @@ impl SqliteStore {
     // --- CalDAV Operations ---
 
     pub fn create_calendar(&self, id: &str, owner: &str, display_name: &str) -> StalwartResult<()> {
-        let conn = self.connect()?;
-        conn.execute(
-            "INSERT OR IGNORE INTO stalwart_caldav_calendars (id, owner, display_name, description)
-             VALUES (?1, ?2, ?3, '')",
-            params![id, owner, display_name],
-        )?;
-        Ok(())
+        self.with_connection(|conn| {
+            conn.execute(
+                "INSERT OR IGNORE INTO stalwart_caldav_calendars (id, owner, display_name, description)
+                 VALUES (?1, ?2, ?3, '')",
+                params![id, owner, display_name],
+            )?;
+            Ok(())
+        })
     }
 
     pub fn get_calendars(&self, owner: &str) -> StalwartResult<Vec<(String, String, String)>> {
-        let conn = self.connect()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, display_name, COALESCE(description, '') FROM stalwart_caldav_calendars WHERE owner = ?1",
-        )?;
-        let rows = stmt.query_map(params![owner], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })?;
+        self.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, display_name, COALESCE(description, '') FROM stalwart_caldav_calendars WHERE owner = ?1",
+            )?;
+            let rows = stmt.query_map(params![owner], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?;
 
-        let mut res = Vec::new();
-        for r in rows {
-            res.push(r?);
-        }
-        Ok(res)
+            let mut res = Vec::new();
+            for r in rows {
+                res.push(r?);
+            }
+            Ok(res)
+        })
     }
 
     pub fn put_event(&self, calendar_id: &str, uid: &str, ical_data: &str) -> StalwartResult<()> {
-        let conn = self.connect()?;
-        let now = crate::util::now_utc_secs();
-        let id = format!("{}:{}", calendar_id, uid);
-        conn.execute(
-            "INSERT OR REPLACE INTO stalwart_caldav_events (id, calendar_id, uid, ical_data, last_modified)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id, calendar_id, uid, ical_data, now],
-        )?;
-        Ok(())
+        self.with_connection(|conn| {
+            let now = crate::util::now_utc_secs();
+            let id = format!("{}:{}", calendar_id, uid);
+            conn.execute(
+                "INSERT OR REPLACE INTO stalwart_caldav_events (id, calendar_id, uid, ical_data, last_modified)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![id, calendar_id, uid, ical_data, now],
+            )?;
+            Ok(())
+        })
     }
 
     pub fn get_events(
         &self,
         calendar_id: &str,
     ) -> StalwartResult<Vec<(String, String, String, u64)>> {
-        let conn = self.connect()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, uid, ical_data, last_modified FROM stalwart_caldav_events WHERE calendar_id = ?1",
-        )?;
-        let rows = stmt.query_map(params![calendar_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, u64>(3)?,
-            ))
-        })?;
+        self.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, uid, ical_data, last_modified FROM stalwart_caldav_events WHERE calendar_id = ?1",
+            )?;
+            let rows = stmt.query_map(params![calendar_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, u64>(3)?,
+                ))
+            })?;
 
-        let mut res = Vec::new();
-        for r in rows {
-            res.push(r?);
-        }
-        Ok(res)
+            let mut res = Vec::new();
+            for r in rows {
+                res.push(r?);
+            }
+            Ok(res)
+        })
     }
 
     pub fn get_event(&self, calendar_id: &str, uid: &str) -> StalwartResult<Option<(String, u64)>> {
-        let conn = self.connect()?;
-        let id = format!("{}:{}", calendar_id, uid);
-        let mut stmt = conn
-            .prepare("SELECT ical_data, last_modified FROM stalwart_caldav_events WHERE id = ?1")?;
-        let mut rows = stmt.query(params![id])?;
-        if let Some(row) = rows.next()? {
-            Ok(Some((row.get(0)?, row.get(1)?)))
-        } else {
-            Ok(None)
-        }
+        self.with_connection(|conn| {
+            let id = format!("{}:{}", calendar_id, uid);
+            let mut stmt = conn.prepare(
+                "SELECT ical_data, last_modified FROM stalwart_caldav_events WHERE id = ?1",
+            )?;
+            let mut rows = stmt.query(params![id])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some((row.get(0)?, row.get(1)?)))
+            } else {
+                Ok(None)
+            }
+        })
     }
 
     pub fn delete_event(&self, calendar_id: &str, uid: &str) -> StalwartResult<()> {
-        let conn = self.connect()?;
-        let id = format!("{}:{}", calendar_id, uid);
-        conn.execute(
-            "DELETE FROM stalwart_caldav_events WHERE id = ?1",
-            params![id],
-        )?;
-        Ok(())
+        self.with_connection(|conn| {
+            let id = format!("{}:{}", calendar_id, uid);
+            conn.execute(
+                "DELETE FROM stalwart_caldav_events WHERE id = ?1",
+                params![id],
+            )?;
+            Ok(())
+        })
     }
 
     // --- CardDAV Operations ---
@@ -326,33 +341,35 @@ impl SqliteStore {
         owner: &str,
         display_name: &str,
     ) -> StalwartResult<()> {
-        let conn = self.connect()?;
-        conn.execute(
-            "INSERT OR IGNORE INTO stalwart_carddav_addressbooks (id, owner, display_name, description)
-             VALUES (?1, ?2, ?3, '')",
-            params![id, owner, display_name],
-        )?;
-        Ok(())
+        self.with_connection(|conn| {
+            conn.execute(
+                "INSERT OR IGNORE INTO stalwart_carddav_addressbooks (id, owner, display_name, description)
+                 VALUES (?1, ?2, ?3, '')",
+                params![id, owner, display_name],
+            )?;
+            Ok(())
+        })
     }
 
     pub fn get_addressbooks(&self, owner: &str) -> StalwartResult<Vec<(String, String, String)>> {
-        let conn = self.connect()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, display_name, COALESCE(description, '') FROM stalwart_carddav_addressbooks WHERE owner = ?1",
-        )?;
-        let rows = stmt.query_map(params![owner], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })?;
+        self.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, display_name, COALESCE(description, '') FROM stalwart_carddav_addressbooks WHERE owner = ?1",
+            )?;
+            let rows = stmt.query_map(params![owner], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?;
 
-        let mut res = Vec::new();
-        for r in rows {
-            res.push(r?);
-        }
-        Ok(res)
+            let mut res = Vec::new();
+            for r in rows {
+                res.push(r?);
+            }
+            Ok(res)
+        })
     }
 
     pub fn put_contact(
@@ -361,90 +378,95 @@ impl SqliteStore {
         uid: &str,
         vcard_data: &str,
     ) -> StalwartResult<()> {
-        let conn = self.connect()?;
-        let now = crate::util::now_utc_secs();
-        let id = format!("{}:{}", addressbook_id, uid);
-        conn.execute(
-            "INSERT OR REPLACE INTO stalwart_carddav_contacts (id, addressbook_id, uid, vcard_data, last_modified)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id, addressbook_id, uid, vcard_data, now],
-        )?;
-        Ok(())
+        self.with_connection(|conn| {
+            let now = crate::util::now_utc_secs();
+            let id = format!("{}:{}", addressbook_id, uid);
+            conn.execute(
+                "INSERT OR REPLACE INTO stalwart_carddav_contacts (id, addressbook_id, uid, vcard_data, last_modified)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![id, addressbook_id, uid, vcard_data, now],
+            )?;
+            Ok(())
+        })
     }
 
     pub fn get_contacts(
         &self,
         addressbook_id: &str,
     ) -> StalwartResult<Vec<(String, String, String, u64)>> {
-        let conn = self.connect()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, uid, vcard_data, last_modified FROM stalwart_carddav_contacts WHERE addressbook_id = ?1",
-        )?;
-        let rows = stmt.query_map(params![addressbook_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, u64>(3)?,
-            ))
-        })?;
+        self.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, uid, vcard_data, last_modified FROM stalwart_carddav_contacts WHERE addressbook_id = ?1",
+            )?;
+            let rows = stmt.query_map(params![addressbook_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, u64>(3)?,
+                ))
+            })?;
 
-        let mut res = Vec::new();
-        for r in rows {
-            res.push(r?);
-        }
-        Ok(res)
+            let mut res = Vec::new();
+            for r in rows {
+                res.push(r?);
+            }
+            Ok(res)
+        })
     }
 
     pub fn delete_contact(&self, addressbook_id: &str, uid: &str) -> StalwartResult<()> {
-        let conn = self.connect()?;
-        let id = format!("{}:{}", addressbook_id, uid);
-        conn.execute(
-            "DELETE FROM stalwart_carddav_contacts WHERE id = ?1",
-            params![id],
-        )?;
-        Ok(())
+        self.with_connection(|conn| {
+            let id = format!("{}:{}", addressbook_id, uid);
+            conn.execute(
+                "DELETE FROM stalwart_carddav_contacts WHERE id = ?1",
+                params![id],
+            )?;
+            Ok(())
+        })
     }
 
     // --- User & Mailbox Operations ---
 
     pub fn add_user(&self, username: &str, password_hash: &str) -> StalwartResult<()> {
-        let conn = self.connect()?;
-        let now = crate::util::now_utc_secs();
-        conn.execute(
-            "INSERT OR REPLACE INTO stalwart_users (username, password_hash, created_at) VALUES (?1, ?2, ?3)",
-            params![username, password_hash, now],
-        )?;
-        // Auto-create standard mailboxes for the user
-        let inbox_id = format!("{}_inbox", username.replace("@", "_"));
-        let sent_id = format!("{}_sent", username.replace("@", "_"));
-        let trash_id = format!("{}_trash", username.replace("@", "_"));
-        conn.execute(
-            "INSERT OR IGNORE INTO stalwart_mailboxes (id, owner, name) VALUES (?1, ?2, 'INBOX')",
-            params![inbox_id, username],
-        )?;
-        conn.execute(
-            "INSERT OR IGNORE INTO stalwart_mailboxes (id, owner, name) VALUES (?1, ?2, 'Sent')",
-            params![sent_id, username],
-        )?;
-        conn.execute(
-            "INSERT OR IGNORE INTO stalwart_mailboxes (id, owner, name) VALUES (?1, ?2, 'Trash')",
-            params![trash_id, username],
-        )?;
-        Ok(())
+        self.with_connection(|conn| {
+            let now = crate::util::now_utc_secs();
+            conn.execute(
+                "INSERT OR REPLACE INTO stalwart_users (username, password_hash, created_at) VALUES (?1, ?2, ?3)",
+                params![username, password_hash, now],
+            )?;
+            // Auto-create standard mailboxes for the user
+            let inbox_id = format!("{}_inbox", username.replace("@", "_"));
+            let sent_id = format!("{}_sent", username.replace("@", "_"));
+            let trash_id = format!("{}_trash", username.replace("@", "_"));
+            conn.execute(
+                "INSERT OR IGNORE INTO stalwart_mailboxes (id, owner, name) VALUES (?1, ?2, 'INBOX')",
+                params![inbox_id, username],
+            )?;
+            conn.execute(
+                "INSERT OR IGNORE INTO stalwart_mailboxes (id, owner, name) VALUES (?1, ?2, 'Sent')",
+                params![sent_id, username],
+            )?;
+            conn.execute(
+                "INSERT OR IGNORE INTO stalwart_mailboxes (id, owner, name) VALUES (?1, ?2, 'Trash')",
+                params![trash_id, username],
+            )?;
+            Ok(())
+        })
     }
 
     pub fn authenticate_user(&self, username: &str, password_hash: &str) -> StalwartResult<bool> {
-        let conn = self.connect()?;
-        let mut stmt =
-            conn.prepare("SELECT password_hash FROM stalwart_users WHERE username = ?1")?;
-        let mut rows = stmt.query(params![username])?;
-        if let Some(row) = rows.next()? {
-            let db_pass: String = row.get(0)?;
-            Ok(db_pass == password_hash)
-        } else {
-            Ok(false)
-        }
+        self.with_connection(|conn| {
+            let mut stmt =
+                conn.prepare("SELECT password_hash FROM stalwart_users WHERE username = ?1")?;
+            let mut rows = stmt.query(params![username])?;
+            if let Some(row) = rows.next()? {
+                let db_pass: String = row.get(0)?;
+                Ok(db_pass == password_hash)
+            } else {
+                Ok(false)
+            }
+        })
     }
 
     pub fn user_exists(&self, username: &str) -> StalwartResult<bool> {
@@ -456,28 +478,31 @@ impl SqliteStore {
     }
 
     pub fn get_mailboxes(&self, owner: &str) -> StalwartResult<Vec<(String, String)>> {
-        let conn = self.connect()?;
-        let mut stmt = conn.prepare("SELECT id, name FROM stalwart_mailboxes WHERE owner = ?1")?;
-        let rows = stmt.query_map(params![owner], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        let mut res = Vec::new();
-        for r in rows {
-            res.push(r?);
-        }
-        Ok(res)
+        self.with_connection(|conn| {
+            let mut stmt =
+                conn.prepare("SELECT id, name FROM stalwart_mailboxes WHERE owner = ?1")?;
+            let rows = stmt.query_map(params![owner], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            let mut res = Vec::new();
+            for r in rows {
+                res.push(r?);
+            }
+            Ok(res)
+        })
     }
 
     pub fn get_mailbox_id(&self, owner: &str, name: &str) -> StalwartResult<Option<String>> {
-        let conn = self.connect()?;
-        let mut stmt =
-            conn.prepare("SELECT id FROM stalwart_mailboxes WHERE owner = ?1 AND name = ?2")?;
-        let mut rows = stmt.query(params![owner, name])?;
-        if let Some(row) = rows.next()? {
-            Ok(Some(row.get(0)?))
-        } else {
-            Ok(None)
-        }
+        self.with_connection(|conn| {
+            let mut stmt =
+                conn.prepare("SELECT id FROM stalwart_mailboxes WHERE owner = ?1 AND name = ?2")?;
+            let mut rows = stmt.query(params![owner, name])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some(row.get(0)?))
+            } else {
+                Ok(None)
+            }
+        })
     }
 
     // --- Message Operations ---
@@ -491,15 +516,16 @@ impl SqliteStore {
         body: &str,
         headers: Option<&str>,
     ) -> StalwartResult<String> {
-        let conn = self.connect()?;
         let id = crate::util::generate_unique_id();
         let now = crate::util::now_utc_secs();
-        conn.execute(
-            "INSERT INTO stalwart_messages (id, mailbox_id, from_addr, to_addr, subject, body, headers, is_read, received_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8)",
-            params![id, mailbox_id, from_addr, to_addr, subject, body, headers, now],
-        )?;
-        Ok(id)
+        self.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO stalwart_messages (id, mailbox_id, from_addr, to_addr, subject, body, headers, is_read, received_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8)",
+                params![id.as_str(), mailbox_id, from_addr, to_addr, subject, body, headers, now],
+            )?;
+            Ok(id)
+        })
     }
 
     pub fn get_messages(
@@ -517,29 +543,30 @@ impl SqliteStore {
             u64,
         )>,
     > {
-        let conn = self.connect()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, from_addr, to_addr, subject, body, headers, is_read, received_at 
-             FROM stalwart_messages WHERE mailbox_id = ?1 ORDER BY received_at DESC",
-        )?;
-        let rows = stmt.query_map(params![mailbox_id], |row| {
-            let is_read_int: i32 = row.get(6)?;
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                is_read_int != 0,
-                row.get::<_, u64>(7)?,
-            ))
-        })?;
-        let mut res = Vec::new();
-        for r in rows {
-            res.push(r?);
-        }
-        Ok(res)
+        self.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, from_addr, to_addr, subject, body, headers, is_read, received_at
+                 FROM stalwart_messages WHERE mailbox_id = ?1 ORDER BY received_at DESC",
+            )?;
+            let rows = stmt.query_map(params![mailbox_id], |row| {
+                let is_read_int: i32 = row.get(6)?;
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    is_read_int != 0,
+                    row.get::<_, u64>(7)?,
+                ))
+            })?;
+            let mut res = Vec::new();
+            for r in rows {
+                res.push(r?);
+            }
+            Ok(res)
+        })
     }
 
     pub fn count_messages(&self, mailbox_id: &str) -> StalwartResult<usize> {
@@ -597,19 +624,21 @@ impl SqliteStore {
     }
 
     pub fn update_message_flags(&self, id: &str, is_read: bool) -> StalwartResult<()> {
-        let conn = self.connect()?;
-        let is_read_int = if is_read { 1 } else { 0 };
-        conn.execute(
-            "UPDATE stalwart_messages SET is_read = ?2 WHERE id = ?1",
-            params![id, is_read_int],
-        )?;
-        Ok(())
+        self.with_connection(|conn| {
+            let is_read_int = if is_read { 1 } else { 0 };
+            conn.execute(
+                "UPDATE stalwart_messages SET is_read = ?2 WHERE id = ?1",
+                params![id, is_read_int],
+            )?;
+            Ok(())
+        })
     }
 
     pub fn delete_message(&self, id: &str) -> StalwartResult<()> {
-        let conn = self.connect()?;
-        conn.execute("DELETE FROM stalwart_messages WHERE id = ?1", params![id])?;
-        Ok(())
+        self.with_connection(|conn| {
+            conn.execute("DELETE FROM stalwart_messages WHERE id = ?1", params![id])?;
+            Ok(())
+        })
     }
 
     pub fn check_greylist(&self, ip: &str, sender: &str, recipient: &str) -> StalwartResult<bool> {
@@ -617,26 +646,27 @@ impl SqliteStore {
             return Ok(true);
         }
 
-        let conn = self.connect()?;
-        let now = crate::util::now_utc_secs();
-        let mut stmt = conn.prepare(
-            "SELECT first_seen_at FROM stalwart_greylist WHERE ip = ?1 AND sender = ?2 AND recipient = ?3",
-        )?;
-        let mut rows = stmt.query(params![ip, sender, recipient])?;
-        if let Some(row) = rows.next()? {
-            let first_seen_at: u64 = row.get(0)?;
-            if now >= first_seen_at + 300 {
-                Ok(true)
+        self.with_connection(|conn| {
+            let now = crate::util::now_utc_secs();
+            let mut stmt = conn.prepare(
+                "SELECT first_seen_at FROM stalwart_greylist WHERE ip = ?1 AND sender = ?2 AND recipient = ?3",
+            )?;
+            let mut rows = stmt.query(params![ip, sender, recipient])?;
+            if let Some(row) = rows.next()? {
+                let first_seen_at: u64 = row.get(0)?;
+                if now >= first_seen_at + 300 {
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
             } else {
+                conn.execute(
+                    "INSERT INTO stalwart_greylist (ip, sender, recipient, first_seen_at) VALUES (?1, ?2, ?3, ?4)",
+                    params![ip, sender, recipient, now],
+                )?;
                 Ok(false)
             }
-        } else {
-            conn.execute(
-                "INSERT INTO stalwart_greylist (ip, sender, recipient, first_seen_at) VALUES (?1, ?2, ?3, ?4)",
-                params![ip, sender, recipient, now],
-            )?;
-            Ok(false)
-        }
+        })
     }
 }
 
@@ -675,6 +705,46 @@ fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
 }
 
 #[cfg(test)]
+fn record_open_connection_for_test(db_path: &str) {
+    let counts = SQLITE_STORE_OPEN_COUNTS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut counts = counts.lock().unwrap_or_else(|err| err.into_inner());
+    *counts.entry(db_path.to_string()).or_insert(0) += 1;
+}
+
+#[cfg(not(test))]
+fn record_open_connection_for_test(_db_path: &str) {}
+
+#[cfg(test)]
+fn clear_connection_cache_for_test(db_path: &str) {
+    SQLITE_STORE_CONNECTIONS.with(|connections| {
+        connections.borrow_mut().remove(db_path);
+    });
+}
+
+#[cfg(test)]
+fn reset_open_count_for_test(db_path: &str) {
+    let counts = SQLITE_STORE_OPEN_COUNTS.get_or_init(|| Mutex::new(HashMap::new()));
+    counts
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .remove(db_path);
+}
+
+#[cfg(test)]
+fn open_count_for_test(db_path: &str) -> usize {
+    SQLITE_STORE_OPEN_COUNTS
+        .get()
+        .and_then(|counts| {
+            counts
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .get(db_path)
+                .copied()
+        })
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
@@ -689,6 +759,132 @@ mod tests {
             .get_mailbox_id("alice@example.test", "INBOX")?
             .expect("inbox mailbox");
         Ok((temp, store, inbox))
+    }
+
+    #[test]
+    fn imap_select_reuses_cached_connection_for_mailbox_and_count() -> StalwartResult<()> {
+        let (_temp, store, _inbox) = test_store()?;
+        clear_connection_cache_for_test(&store.db_path);
+        reset_open_count_for_test(&store.db_path);
+
+        let inbox = store
+            .get_mailbox_id("alice@example.test", "INBOX")?
+            .expect("inbox mailbox");
+        assert_eq!(store.count_messages(&inbox)?, 0);
+
+        assert_eq!(
+            open_count_for_test(&store.db_path),
+            1,
+            "IMAP SELECT-style mailbox lookup plus message count should reuse one SQLite connection"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn imap_fetch_and_store_hot_path_reuses_cached_connection() -> StalwartResult<()> {
+        let (_temp, store, inbox) = test_store()?;
+        clear_connection_cache_for_test(&store.db_path);
+        reset_open_count_for_test(&store.db_path);
+
+        for index in 0..3 {
+            store.put_message(
+                &inbox,
+                "sender@example.test",
+                "alice@example.test",
+                Some(&format!("message {index}")),
+                &format!("body {index}"),
+                Some("From: sender@example.test\r\nTo: alice@example.test"),
+            )?;
+        }
+
+        let summaries = store.get_message_summaries(&inbox)?;
+        assert_eq!(summaries.len(), 3);
+        for summary in &summaries {
+            let content = store
+                .get_message_content(&summary.id)?
+                .expect("message content");
+            assert!(content.body.starts_with("body "));
+            store.update_message_flags(&summary.id, true)?;
+        }
+        store.delete_message(&summaries[0].id)?;
+        assert_eq!(store.count_messages(&inbox)?, 2);
+
+        assert_eq!(
+            open_count_for_test(&store.db_path),
+            1,
+            "FETCH/STORE-style summary, content, flag, delete, and count operations should share one SQLite connection"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn smtp_calendar_contact_and_greylist_hot_paths_reuse_cached_connection() -> StalwartResult<()>
+    {
+        let (_temp, store, _inbox) = test_store()?;
+        clear_connection_cache_for_test(&store.db_path);
+        reset_open_count_for_test(&store.db_path);
+
+        store.add_domain("example.test", "selector1", "private-key")?;
+        assert_eq!(
+            store.get_domain_dkim("example.test")?,
+            Some(("selector1".to_string(), "private-key".to_string()))
+        );
+
+        let email_id = store.queue_email(
+            "sender@example.test",
+            "recipient@example.test",
+            "Subject: queued\r\n\r\nbody",
+        )?;
+        assert!(store.next_pending_email_attempt_at()?.is_some());
+        let pending = store.get_pending_emails()?;
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].0, email_id);
+        store.update_email_status(
+            &email_id,
+            "pending",
+            crate::util::now_utc_secs(),
+            pending[0].4 + 1,
+        )?;
+        store.record_delivery_outcome(
+            &email_id,
+            "sender@example.test",
+            "recipient@example.test",
+            "success",
+            None,
+            crate::util::now_utc_secs() as i64,
+        )?;
+        store.delete_email(&email_id)?;
+
+        store.create_calendar("calendar-1", "alice@example.test", "Calendar")?;
+        assert_eq!(store.get_calendars("alice@example.test")?.len(), 1);
+        store.put_event("calendar-1", "event-1", "BEGIN:VCALENDAR\r\nEND:VCALENDAR")?;
+        assert!(store.get_event("calendar-1", "event-1")?.is_some());
+        assert_eq!(store.get_events("calendar-1")?.len(), 1);
+        store.delete_event("calendar-1", "event-1")?;
+
+        store.create_addressbook("addressbook-1", "alice@example.test", "Contacts")?;
+        assert_eq!(store.get_addressbooks("alice@example.test")?.len(), 1);
+        store.put_contact("addressbook-1", "contact-1", "BEGIN:VCARD\r\nEND:VCARD")?;
+        assert_eq!(store.get_contacts("addressbook-1")?.len(), 1);
+        store.delete_contact("addressbook-1", "contact-1")?;
+
+        assert!(!store.check_greylist(
+            "203.0.113.10",
+            "sender@example.test",
+            "recipient@example.test"
+        )?);
+        assert!(!store.check_greylist(
+            "203.0.113.10",
+            "sender@example.test",
+            "recipient@example.test"
+        )?);
+
+        assert_eq!(
+            open_count_for_test(&store.db_path),
+            1,
+            "SMTP, CalDAV, CardDAV, and greylist store operations should share one SQLite connection"
+        );
+        Ok(())
     }
 
     #[test]

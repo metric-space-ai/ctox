@@ -10,6 +10,8 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 
 static API_COST_SCHEMA_READY: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+#[cfg(test)]
+static API_COST_DB_OPEN_COUNTS: OnceLock<Mutex<BTreeMap<PathBuf, u64>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ApiTokenUsage {
@@ -26,6 +28,15 @@ pub struct ApiCallTelemetry {
     pub turn_elapsed_ms: Option<i64>,
     pub output_tokens_per_second: Option<f64>,
     pub total_tokens_per_second: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ApiCostUsageRecord {
+    pub provider: String,
+    pub model: String,
+    pub turn_id: Option<String>,
+    pub usage: ApiTokenUsage,
+    pub telemetry: Option<ApiCallTelemetry>,
 }
 
 impl ApiTokenUsage {
@@ -159,6 +170,7 @@ pub fn today_day() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
+#[allow(dead_code)]
 pub fn record_api_model_usage(
     root: &Path,
     provider: &str,
@@ -169,8 +181,64 @@ pub fn record_api_model_usage(
     record_api_model_usage_with_telemetry(root, provider, model, turn_id, usage, None)
 }
 
+#[allow(dead_code)]
 pub fn record_api_model_usage_with_telemetry(
     root: &Path,
+    provider: &str,
+    model: &str,
+    turn_id: Option<&str>,
+    usage: ApiTokenUsage,
+    telemetry: Option<ApiCallTelemetry>,
+) -> Result<()> {
+    let record = ApiCostUsageRecord {
+        provider: provider.to_string(),
+        model: model.to_string(),
+        turn_id: turn_id.map(ToOwned::to_owned),
+        usage,
+        telemetry,
+    };
+    record_api_model_usage_batch(root, &[record])?;
+    Ok(())
+}
+
+pub fn record_api_model_usage_batch(root: &Path, records: &[ApiCostUsageRecord]) -> Result<usize> {
+    let records = records
+        .iter()
+        .filter(|record| {
+            !record.provider.trim().is_empty()
+                && !record.model.trim().is_empty()
+                && !record.usage.is_zero()
+        })
+        .collect::<Vec<_>>();
+    if records.is_empty() {
+        return Ok(0);
+    }
+    let mut conn = open_cost_db(root)?;
+    let tx = conn.transaction()?;
+    let now = chrono::Local::now();
+    let created_at = now.to_rfc3339();
+    let day = now.format("%Y-%m-%d").to_string();
+    for record in records.iter() {
+        insert_api_model_usage_event(
+            &tx,
+            &created_at,
+            &day,
+            &record.provider,
+            &record.model,
+            record.turn_id.as_deref(),
+            record.usage,
+            record.telemetry,
+        )?;
+    }
+    tx.commit()
+        .context("failed to commit API model cost event batch")?;
+    Ok(records.len())
+}
+
+fn insert_api_model_usage_event(
+    conn: &Connection,
+    created_at: &str,
+    day: &str,
     provider: &str,
     model: &str,
     turn_id: Option<&str>,
@@ -180,10 +248,6 @@ pub fn record_api_model_usage_with_telemetry(
     if provider.trim().is_empty() || model.trim().is_empty() || usage.is_zero() {
         return Ok(());
     }
-    let conn = open_cost_db(root)?;
-    let now = chrono::Local::now();
-    let created_at = now.to_rfc3339();
-    let day = now.format("%Y-%m-%d").to_string();
     let provider = normalize_provider(provider);
     let telemetry = telemetry.unwrap_or_default();
     conn.execute(
@@ -930,11 +994,45 @@ fn open_cost_db(root: &Path) -> Result<Connection> {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
+    #[cfg(test)]
+    record_api_cost_db_open_for_tests(&path);
     let conn = Connection::open(&path)
         .with_context(|| format!("failed to open cost database {}", path.display()))?;
     conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
     ensure_schema_once(&path, &conn)?;
     Ok(conn)
+}
+
+#[cfg(test)]
+fn record_api_cost_db_open_for_tests(path: &Path) {
+    let counts = API_COST_DB_OPEN_COUNTS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut counts = counts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *counts.entry(path.to_path_buf()).or_insert(0) += 1;
+}
+
+#[cfg(test)]
+fn reset_api_cost_db_open_count_for_tests(root: &Path) {
+    if let Some(counts) = API_COST_DB_OPEN_COUNTS.get() {
+        counts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&crate::paths::core_db(root));
+    }
+}
+
+#[cfg(test)]
+fn api_cost_db_open_count_for_tests(root: &Path) -> u64 {
+    let Some(counts) = API_COST_DB_OPEN_COUNTS.get() else {
+        return 0;
+    };
+    counts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&crate::paths::core_db(root))
+        .copied()
+        .unwrap_or(0)
 }
 
 fn ensure_schema_once(path: &Path, conn: &Connection) -> Result<()> {
@@ -1161,6 +1259,79 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         assert!(ready.contains(&key));
+        Ok(())
+    }
+
+    #[test]
+    fn batch_recording_uses_one_db_open_for_multiple_events() -> Result<()> {
+        let tmp = TempDir::new()?;
+
+        reset_api_cost_db_open_count_for_tests(tmp.path());
+        let skipped = record_api_model_usage_batch(
+            tmp.path(),
+            &[ApiCostUsageRecord {
+                provider: "openai".to_string(),
+                model: "gpt-test".to_string(),
+                turn_id: Some("turn-zero".to_string()),
+                usage: ApiTokenUsage {
+                    input_tokens: 0,
+                    cached_input_tokens: 0,
+                    output_tokens: 0,
+                    reasoning_output_tokens: 0,
+                    total_tokens: 0,
+                },
+                telemetry: None,
+            }],
+        )?;
+        assert_eq!(skipped, 0);
+        assert_eq!(api_cost_db_open_count_for_tests(tmp.path()), 0);
+
+        let usage = ApiTokenUsage {
+            input_tokens: 100,
+            cached_input_tokens: 10,
+            output_tokens: 20,
+            reasoning_output_tokens: 5,
+            total_tokens: 120,
+        };
+        reset_api_cost_db_open_count_for_tests(tmp.path());
+        let written = record_api_model_usage_batch(
+            tmp.path(),
+            &[
+                ApiCostUsageRecord {
+                    provider: "openai".to_string(),
+                    model: "gpt-test".to_string(),
+                    turn_id: Some("turn-batch".to_string()),
+                    usage,
+                    telemetry: None,
+                },
+                ApiCostUsageRecord {
+                    provider: "openai".to_string(),
+                    model: "gpt-test".to_string(),
+                    turn_id: Some("turn-batch".to_string()),
+                    usage,
+                    telemetry: Some(ApiCallTelemetry {
+                        elapsed_ms: Some(1_000),
+                        turn_elapsed_ms: Some(2_000),
+                        output_tokens_per_second: Some(20.0),
+                        total_tokens_per_second: Some(120.0),
+                    }),
+                },
+                ApiCostUsageRecord {
+                    provider: "anthropic".to_string(),
+                    model: "claude-test".to_string(),
+                    turn_id: Some("turn-batch".to_string()),
+                    usage,
+                    telemetry: None,
+                },
+            ],
+        )?;
+        assert_eq!(written, 3);
+        assert_eq!(api_cost_db_open_count_for_tests(tmp.path()), 1);
+
+        let summary = summary_for_day(tmp.path(), &today_day())?;
+        assert_eq!(summary.events, 3);
+        assert_eq!(summary.total_tokens, 360);
+        assert_eq!(summary.unpriced_events, 3);
         Ok(())
     }
 

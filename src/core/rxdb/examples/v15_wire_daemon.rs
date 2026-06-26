@@ -235,8 +235,10 @@ async fn main() {
         rx_schema,
     );
     let query_registry = Arc::new(QueryFetchRegistry::new(8));
+    query_registry.set_auth_check(Arc::new(|_peer_identity, collection| collection == "demo"));
     query_registry.register(Arc::clone(&collection));
     let file_registry = Arc::new(FileFetchRegistry::new(8));
+    file_registry.set_auth_check(Arc::new(|_peer_identity, collection| collection == "demo"));
     file_registry.register_source(
         "demo",
         Arc::new(|_c, file_id, _r| {

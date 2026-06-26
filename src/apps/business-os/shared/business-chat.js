@@ -21,6 +21,7 @@ const CHAT_ATTACHMENT_CHUNK_SIZE = 16 * 1024;
 const CHAT_ATTACHMENT_ROOT_ID = 'fs_business_os_chat_attachments';
 const CHAT_ATTACHMENT_ROOT_PATH = '/Business OS Chat';
 const CHAT_DELETE_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const ACTIVE_TRACKING_SYNC_INTERVAL_MS = 4000;
 
 export function initBusinessChat({
   session,
@@ -36,6 +37,7 @@ export function initBusinessChat({
   root.className = 'ctox-chat-root';
   root.dataset.ctoxChatRoot = 'true';
   root.__ctoxChatSync = syncFacade || null;
+  root.__ctoxChatOnTrackingStateChanged = null;
   document.body.append(root);
 
   const handleRootClick = (event) => {
@@ -91,14 +93,48 @@ export function initBusinessChat({
     });
   };
 
+  let trackingSyncTimer = null;
+  let trackingSyncRunning = false;
+  let trackingSyncRerun = false;
+  let trackingWatch = null;
 
-
-  const sync = () => {
-    captureDrafts(root, state);
-    syncTrackedMessages({ state, db }).then((changed) => {
+  const runTrackedMessageSync = async () => {
+    if (trackingSyncRunning) {
+      trackingSyncRerun = true;
+      return;
+    }
+    trackingSyncRunning = true;
+    try {
+      captureDrafts(root, state);
+      const changed = await syncTrackedMessages({ state, db });
       if (changed) persistChatState({ state, db });
       if (changed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
-    }).catch(() => {});
+    } finally {
+      trackingSyncRunning = false;
+      trackingWatch?.refresh?.();
+      if (trackingSyncRerun && hasActiveTrackedMessages(state)) {
+        trackingSyncRerun = false;
+        scheduleTrackedMessageSync(75);
+      } else {
+        trackingSyncRerun = false;
+      }
+    }
+  };
+
+  const scheduleTrackedMessageSync = (delayMs = 75) => {
+    if (trackingSyncTimer) return;
+    trackingSyncTimer = window.setTimeout(() => {
+      trackingSyncTimer = null;
+      runTrackedMessageSync().catch(() => {});
+    }, Math.max(0, delayMs));
+  };
+
+  const sync = () => {
+    scheduleTrackedMessageSync();
+  };
+
+  const syncAfterSubmit = () => {
+    if (trackingWatch?.refresh?.()) scheduleTrackedMessageSync(0);
   };
 
   const syncChats = () => {
@@ -137,10 +173,7 @@ export function initBusinessChat({
     });
     await persistChatState({ state, db });
     renderChatRoot({ root, state, commandBus, db, getActiveModule });
-    syncTrackedMessages({ state, db }).then((changed) => {
-      if (changed) persistChatState({ state, db });
-      if (changed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
-    }).catch(() => {});
+    syncAfterSubmit();
   };
 
   const handleExternalOpen = async (event) => {
@@ -174,8 +207,14 @@ export function initBusinessChat({
   };
 
   hydrateChatsFromRxDb({ state, db, session })
-    .then(() => renderChatRoot({ root, state, commandBus, db, getActiveModule }))
-    .catch(() => renderChatRoot({ root, state, commandBus, db, getActiveModule }));
+    .then(() => {
+      renderChatRoot({ root, state, commandBus, db, getActiveModule });
+      trackingWatch?.refresh?.({ schedule: true });
+    })
+    .catch(() => {
+      renderChatRoot({ root, state, commandBus, db, getActiveModule });
+      trackingWatch?.refresh?.({ schedule: true });
+    });
 
   let scrollTimeout = null;
   const handleScroll = (event) => {
@@ -283,9 +322,13 @@ export function initBusinessChat({
   root.addEventListener('click', handleCaptureClick, true);
 
   const businessChatsSub = db?.raw?.[CHAT_COLLECTION]?.$?.subscribe?.(syncChats) || null;
-  const businessCommandsSub = db?.raw?.business_commands?.$?.subscribe?.(sync) || null;
-  const queueTasksSub = db?.raw?.ctox_queue_tasks?.$?.subscribe?.(sync) || null;
-  const timer = window.setInterval(sync, 4000);
+  trackingWatch = createTrackedMessageWatch({
+    state,
+    db,
+    scheduleSync: sync,
+  });
+  root.__ctoxChatOnTrackingStateChanged = () => trackingWatch?.refresh?.({ schedule: true });
+  trackingWatch.refresh({ schedule: true });
 
   root.__ctoxChatCleanup = () => {
     root.removeEventListener('click', handleRootClick, true);
@@ -299,9 +342,60 @@ export function initBusinessChat({
     window.removeEventListener('mouseup', handleMouseUp);
     root.removeEventListener('click', handleCaptureClick, true);
     businessChatsSub?.unsubscribe?.();
+    trackingWatch?.stop?.();
+    root.__ctoxChatOnTrackingStateChanged = null;
+    if (trackingSyncTimer) window.clearTimeout(trackingSyncTimer);
+    clearSchedulerLoop(root);
+  };
+}
+
+function createTrackedMessageWatch({
+  state,
+  db,
+  scheduleSync,
+  timerWindow = typeof window !== 'undefined' ? window : globalThis,
+} = {}) {
+  let businessCommandsSub = null;
+  let queueTasksSub = null;
+  let timer = null;
+  const notify = () => {
+    if (hasActiveTrackedMessages(state)) {
+      scheduleSync?.();
+    } else {
+      stopActiveWatch();
+    }
+  };
+  const startActiveWatch = () => {
+    if (businessCommandsSub || queueTasksSub || timer) return;
+    businessCommandsSub = db?.raw?.business_commands?.$?.subscribe?.(notify) || null;
+    queueTasksSub = db?.raw?.ctox_queue_tasks?.$?.subscribe?.(notify) || null;
+    if (typeof timerWindow?.setInterval === 'function') {
+      timer = timerWindow.setInterval(notify, ACTIVE_TRACKING_SYNC_INTERVAL_MS);
+    }
+  };
+  const stopActiveWatch = () => {
     businessCommandsSub?.unsubscribe?.();
     queueTasksSub?.unsubscribe?.();
-    window.clearInterval(timer);
+    businessCommandsSub = null;
+    queueTasksSub = null;
+    if (timer && typeof timerWindow?.clearInterval === 'function') {
+      timerWindow.clearInterval(timer);
+    }
+    timer = null;
+  };
+  const refresh = ({ schedule = false } = {}) => {
+    if (!hasActiveTrackedMessages(state)) {
+      stopActiveWatch();
+      return false;
+    }
+    startActiveWatch();
+    if (schedule) scheduleSync?.();
+    return true;
+  };
+  return {
+    refresh,
+    stop: stopActiveWatch,
+    isWatching: () => Boolean(businessCommandsSub || queueTasksSub || timer),
   };
 }
 
@@ -470,7 +564,15 @@ function setWindowInteractiveState(win, isActive) {
 
 function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   const syncFacade = root.__ctoxChatSync || null;
-  initSchedulerLoop({ root, state, commandBus, db, sync: syncFacade, getActiveModule });
+  initSchedulerLoop({
+    root,
+    state,
+    commandBus,
+    db,
+    sync: syncFacade,
+    getActiveModule,
+    onTrackingStateChanged: root.__ctoxChatOnTrackingStateChanged || null,
+  });
 
   const selectedDate = state.selectedDate || getLocalDateString(Date.now());
   const chatsOfSelectedDate = state.chats.filter((chat) => getLocalDateString(chat.createdAt) === selectedDate);
@@ -1050,15 +1152,13 @@ async function submitChatForm({ root, state, chat, node, commandBus, db, sync, g
       onPending: async () => {
         await persistChatState({ state, db });
         renderChatRoot({ root, state, commandBus, db, getActiveModule });
+        trackingWatch?.refresh?.();
       },
     });
     if (delivered) chat.attachments = [];
     await persistChatState({ state, db });
     renderChatRoot({ root, state, commandBus, db, getActiveModule });
-    syncTrackedMessages({ state, db }).then((changed) => {
-      if (changed) persistChatState({ state, db });
-      if (changed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
-    }).catch(() => {});
+    syncAfterSubmit();
   } finally {
     delete chat.__submitting;
   }
@@ -2135,13 +2235,36 @@ async function syncTrackedMessages({ state, db }) {
   const commands = db?.raw?.business_commands;
   const queue = db?.raw?.ctox_queue_tasks;
   if (!commands && !queue) return false;
+
+  const tracked = collectTrackedMessages(state);
+  if (!tracked.length) return false;
+
+  const commandIds = new Set();
+  const taskIds = new Set();
+  for (const { message } of tracked) {
+    const commandId = trackingIdFromMessage(message, 'command');
+    const taskId = trackingIdFromMessage(message, 'task');
+    if (commandId) commandIds.add(commandId);
+    if (taskId) taskIds.add(taskId);
+  }
+
+  const commandDocs = await findDocsByIds(commands, commandIds);
+  for (const commandDoc of commandDocs.values()) {
+    const taskId = String(commandDoc?.task_id || commandDoc?.taskId || '').trim();
+    if (taskId) taskIds.add(taskId);
+  }
+  const taskDocs = await findDocsByIds(queue, taskIds);
+
   for (const chat of state.chats) {
     let chatChanged = false;
     for (const message of chat.messages) {
       if (!message.commandId && !message.taskId) continue;
-      const commandDoc = message.commandId && commands ? await findDoc(commands, message.commandId) : null;
-      const taskDoc = (message.taskId || commandDoc?.task_id) && queue ? await findDoc(queue, message.taskId || commandDoc.task_id) : null;
-      const nextTaskId = message.taskId || commandDoc?.task_id || taskDoc?.id || '';
+      const commandId = trackingIdFromMessage(message, 'command');
+      const taskId = trackingIdFromMessage(message, 'task');
+      const commandDoc = commandId ? commandDocs.get(commandId) || null : null;
+      const resolvedTaskId = taskId || String(commandDoc?.task_id || commandDoc?.taskId || '').trim();
+      const taskDoc = resolvedTaskId ? taskDocs.get(resolvedTaskId) || null : null;
+      const nextTaskId = taskId || resolvedTaskId || taskDoc?.id || '';
       const orphanedTracking = !commandDoc && !taskDoc && isActiveTrackingStatus(message.status) && trackingMessageAgeMs(message) > 10 * 60 * 1000;
       const nextStatus = orphanedTracking ? 'failed' : preferredTrackingStatus(commandDoc, taskDoc, message.status);
       if (orphanedTracking && message.trackable !== false) {
@@ -2196,6 +2319,58 @@ async function syncTrackedMessages({ state, db }) {
     if (chatChanged) applyChatTrackingSummary(chat);
   }
   return changed;
+}
+
+function hasActiveTrackedMessages(state) {
+  return collectTrackedMessages(state).some(({ message }) => isActiveTrackingStatus(message.status || 'queued'));
+}
+
+function collectTrackedMessages(state) {
+  const tracked = [];
+  for (const chat of Array.isArray(state?.chats) ? state.chats : []) {
+    for (const message of Array.isArray(chat?.messages) ? chat.messages : []) {
+      if (trackingIdFromMessage(message, 'command') || trackingIdFromMessage(message, 'task')) {
+        tracked.push({ chat, message });
+      }
+    }
+  }
+  return tracked;
+}
+
+function trackingIdFromMessage(message, kind) {
+  if (!message || typeof message !== 'object') return '';
+  const value = kind === 'command'
+    ? message.commandId || message.command_id
+    : message.taskId || message.task_id;
+  return String(value || '').trim();
+}
+
+async function findDocsByIds(collection, ids) {
+  const uniqueIds = Array.from(ids || [])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean);
+  const unique = Array.from(new Set(uniqueIds));
+  const byId = new Map();
+  if (!collection || !unique.length) return byId;
+  if (typeof collection.find === 'function') {
+    try {
+      const docs = await collection
+        .find({ selector: { id: { $in: unique } }, limit: unique.length })
+        .exec();
+      for (const doc of Array.isArray(docs) ? docs : []) {
+        const json = doc?.toJSON?.() || doc;
+        const id = String(json?.id || '').trim();
+        if (id) byId.set(id, json);
+      }
+      return byId;
+    } catch {}
+  }
+  if (typeof collection.findOne !== 'function') return byId;
+  await Promise.all(unique.map(async (id) => {
+    const doc = await findDoc(collection, id);
+    if (doc?.id) byId.set(String(doc.id), doc);
+  }));
+  return byId;
 }
 
 async function findDoc(collection, id) {
@@ -4824,25 +4999,29 @@ async function stageChatAttachments({ db, sync, chat, commandId, messageId, atta
   const staged = Array.isArray(attachments) ? attachments.filter(Boolean) : [];
   if (!staged.length) return [];
   await prepareAttachmentSync(sync);
-  const files = db?.collection?.('desktop_files') || db?.raw?.desktop_files;
-  const chunks = db?.collection?.('desktop_file_chunks') || db?.raw?.desktop_file_chunks;
-  if (!files || !chunks) {
-    throw new Error('Business-OS Dateiablage ist nicht verfügbar.');
+  try {
+    const files = db?.collection?.('desktop_files') || db?.raw?.desktop_files;
+    const chunks = db?.collection?.('desktop_file_chunks') || db?.raw?.desktop_file_chunks;
+    if (!files || !chunks) {
+      throw new Error('Business-OS Dateiablage ist nicht verfügbar.');
+    }
+    await ensureChatAttachmentRoot(files);
+    const refs = [];
+    for (const attachment of staged) {
+      refs.push(await stageChatAttachment({
+        files,
+        chunks,
+        chat,
+        commandId,
+        messageId,
+        attachment,
+      }));
+    }
+    await flushAttachmentSync(sync);
+    return refs;
+  } finally {
+    await releaseAttachmentChunkSync(sync);
   }
-  await ensureChatAttachmentRoot(files);
-  const refs = [];
-  for (const attachment of staged) {
-    refs.push(await stageChatAttachment({
-      files,
-      chunks,
-      chat,
-      commandId,
-      messageId,
-      attachment,
-    }));
-  }
-  await flushAttachmentSync(sync);
-  return refs;
 }
 
 async function prepareAttachmentSync(sync) {
@@ -4861,15 +5040,28 @@ async function flushAttachmentSync(sync) {
   ]);
 }
 
+async function releaseAttachmentChunkSync(sync) {
+  if (typeof sync?.stopCollection !== 'function') return;
+  await sync.stopCollection('desktop_file_chunks').catch(() => null);
+}
+
 async function waitForSyncBridgeReady(bridge, timeoutMs = 10000) {
   const state = bridge?.state;
   if (!state) return;
-  await Promise.race([
-    Promise.resolve()
-      .then(() => state.awaitInSync?.() || state.awaitInitialReplication?.())
-      .catch(() => {}),
-    new Promise((resolve) => setTimeout(resolve, timeoutMs)),
-  ]);
+  let timer = null;
+  try {
+    await Promise.race([
+      Promise.resolve()
+        .then(() => state.awaitInSync?.() || state.awaitInitialReplication?.())
+        .catch(() => {}),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+        timer?.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function ensureChatAttachmentRoot(files) {
@@ -5037,150 +5229,238 @@ function getCountdownText(timestamp) {
   return `${hh}:${mm}:${ss}`;
 }
 
-function initSchedulerLoop({ root, state, commandBus, db, sync, getActiveModule }) {
-  if (window._ctoxChatSchedulerInterval) return;
-  
-  window._ctoxChatSchedulerInterval = setInterval(async () => {
-    // 1. Update countdown displays in DOM
-    const timerEls = root.querySelectorAll('[data-countdown-timer]');
-    timerEls.forEach(el => {
-      const chatId = el.dataset.countdownTimer;
-      const chat = state.chats.find(c => c.id === chatId);
-      if (chat) {
-        el.textContent = getCountdownText(chat.createdAt);
-      }
+function initSchedulerLoop({ root, state, commandBus, db, sync, getActiveModule, onTrackingStateChanged = null }) {
+  clearLegacyChatSchedulerInterval();
+
+  const scheduledEntries = collectScheduledChatEntries(state);
+  if (!scheduledEntries.length) {
+    clearSchedulerLoop(root);
+    return;
+  }
+
+  const scheduler = root.__ctoxChatScheduler || {
+    running: false,
+    timer: null,
+    rerun: false,
+  };
+  scheduler.args = { root, state, commandBus, db, sync, getActiveModule, onTrackingStateChanged };
+  root.__ctoxChatScheduler = scheduler;
+  scheduleSchedulerTick(root, schedulerDelayMs({ root, state, entries: scheduledEntries }));
+}
+
+function clearLegacyChatSchedulerInterval() {
+  if (!window._ctoxChatSchedulerInterval) return;
+  window.clearInterval(window._ctoxChatSchedulerInterval);
+  delete window._ctoxChatSchedulerInterval;
+}
+
+function clearSchedulerLoop(root) {
+  clearLegacyChatSchedulerInterval();
+  const scheduler = root?.__ctoxChatScheduler;
+  if (scheduler?.timer) window.clearTimeout(scheduler.timer);
+  if (root) delete root.__ctoxChatScheduler;
+}
+
+function scheduleSchedulerTick(root, delayMs) {
+  const scheduler = root?.__ctoxChatScheduler;
+  if (!scheduler) return;
+  if (scheduler.timer) window.clearTimeout(scheduler.timer);
+  scheduler.timer = window.setTimeout(() => {
+    scheduler.timer = null;
+    runScheduledChatTick(root).catch((error) => {
+      console.warn('[business-chat] scheduled chat tick failed', error);
+      initSchedulerLoop(scheduler.args);
     });
-    
-    // 2. Check for scheduled chats whose time has arrived
-    const nowMs = Date.now();
-    let stateChanged = false;
-    
-    for (const chat of state.chats) {
-      const scheduledMsgIdx = Array.isArray(chat.messages) 
-        ? chat.messages.findIndex(m => m.status === 'scheduled') 
-        : -1;
-        
-      if (scheduledMsgIdx >= 0 && chat.createdAt <= nowMs) {
-        const scheduledMsg = chat.messages[scheduledMsgIdx];
-        console.log(`[business-chat] Executing scheduled chat task for chat ${chat.id}`);
-        
-        scheduledMsg.status = 'waiting';
-        const commandId = scheduledMsg.commandId || `cmd_${crypto.randomUUID()}`;
-        chat.lastTrackingId = commandId;
-        scheduledMsg.commandId = commandId;
-        
-        stateChanged = true;
-        
-        const originalUserMessage = scheduledMsg.userMessageId
-          ? chat.messages.find((message) => message.id === scheduledMsg.userMessageId)
-          : null;
-        const text = scheduledMsg.promptText || scheduledMsg.prompt_text || originalUserMessage?.text || scheduledMsg.text || '';
-        const userMessageId = scheduledMsg.userMessageId || originalUserMessage?.id || scheduledMsg.id;
-        const now = Date.now();
-        const scheduledAttachments = chat.scheduledAttachmentsByCommand?.[commandId] || [];
-        const chatClientContext = chat.contextMeta?.client_context && typeof chat.contextMeta.client_context === 'object'
-          ? chat.contextMeta.client_context
-          : {};
-        let attachmentRefs = [];
-        const command = {
-          id: commandId,
-          module: chat.contextMeta?.module || 'ctox',
-          type: chat.contextMeta?.command_type || 'business_os.chat.task',
-          record_id: chat.id,
-          inbound_channel: CHAT_CHANNEL,
-          payload: {
-            title: titleFromText(text),
-            instruction: text,
-            prompt: text,
-            chat_id: chat.id,
-            message_id: userMessageId,
-            conversation: compactConversation(chat.messages),
-            attachments: attachmentRefs,
-            attachment_refs: attachmentRefs,
-            inbound_channel: CHAT_CHANNEL,
-            outbound_channel: 'business_os_chat',
-            response_channel: 'business_os_chat',
-            reply_to: chat.id,
-            thread_key: `business-os/chat/${chat.id}`,
-            priority: 'normal',
-            source_module: chat.contextMeta?.module || 'ctox',
-          },
-          client_context: {
-            ...chatClientContext,
-            source: 'business-os-chat',
-            module: chat.contextMeta?.module || 'ctox',
-            source_module: chat.contextMeta?.module || 'ctox',
-            source_title: chat.contextMeta?.source_title || 'CTOX',
-            inbound_channel: CHAT_CHANNEL,
-            outbound_channel: 'business_os_chat',
-            chat_id: chat.id,
-            message_id: userMessageId,
-            attachment_count: attachmentRefs.length,
-            attachment_storage: attachmentRefs.length ? 'desktop_files' : '',
-            url: location.href,
-            language: document.documentElement.lang || 'de',
-            created_at: new Date(now).toISOString(),
-          },
-        };
-        
-        (async () => {
-          try {
-            attachmentRefs = await stageChatAttachments({
-              db,
-              sync,
-              chat,
-              commandId,
-              messageId: userMessageId,
-              attachments: scheduledAttachments,
-            });
-            command.payload.attachments = attachmentRefs;
-            command.payload.attachment_refs = attachmentRefs;
-            command.client_context.attachment_count = attachmentRefs.length;
-            command.client_context.attachment_storage = attachmentRefs.length ? 'desktop_files' : '';
-            const result = await commandBus.dispatch(command);
-            const taskId = result.task_id || '';
-            const acceptedCommandId = result.command_id || commandId;
-            if (!taskId) {
-              throw new Error('CTOX hat keine echte Queue-ID zurueckprojiziert.');
-            }
-            chat.lastTrackingId = taskId || acceptedCommandId;
-            
-            const statusMsg = chat.messages.find(m => m.id === `status_${commandId}`);
-            if (statusMsg) {
-              statusMsg.text = 'Task angelegt und in der CTOX Queue. Antwort erscheint hier, sobald der CTOX Service ihn verarbeitet.';
-              statusMsg.commandId = acceptedCommandId;
-              statusMsg.taskId = taskId;
-              statusMsg.status = result.task_status || result.status || 'queued';
-            }
-            if (chat.scheduledAttachmentsByCommand) {
-              delete chat.scheduledAttachmentsByCommand[commandId];
-            }
-          } catch (error) {
-            const failedCommandId = error?.command_id || error?.commandId || commandId;
-            const statusMsg = chat.messages.find(m => m.id === `status_${commandId}`);
-            if (statusMsg) {
-              statusMsg.text = error?.message || String(error);
-              statusMsg.commandId = failedCommandId;
-              statusMsg.status = error?.status || 'failed';
-            }
-          }
-          
-          await persistChatState({ state, db });
-          renderChatRoot({ root, state, commandBus, db, getActiveModule });
-          
-          syncTrackedMessages({ state, db }).then((changed) => {
-            if (changed) persistChatState({ state, db });
-            if (changed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
-          }).catch(() => {});
-        })();
-      }
+  }, Math.max(0, delayMs));
+}
+
+async function runScheduledChatTick(root) {
+  const scheduler = root?.__ctoxChatScheduler;
+  if (!scheduler?.args) return;
+  if (scheduler.running) {
+    scheduler.rerun = true;
+    return;
+  }
+  scheduler.running = true;
+  try {
+    await processScheduledChats(scheduler.args);
+  } finally {
+    const args = scheduler.args;
+    const rerun = scheduler.rerun;
+    scheduler.running = false;
+    scheduler.rerun = false;
+    if (rerun) {
+      scheduleSchedulerTick(root, 0);
+    } else {
+      initSchedulerLoop(args);
     }
-    
-    if (stateChanged) {
-      await persistChatState({ state, db });
-      renderChatRoot({ root, state, commandBus, db, getActiveModule });
+  }
+}
+
+function collectScheduledChatEntries(state) {
+  const entries = [];
+  for (const chat of state?.chats || []) {
+    const messages = Array.isArray(chat.messages) ? chat.messages : [];
+    messages.forEach((message, messageIndex) => {
+      if (message?.status !== 'scheduled') return;
+      entries.push({
+        chat,
+        message,
+        messageIndex,
+        dueAt: Number(chat.createdAt) || Date.now(),
+      });
+    });
+  }
+  return entries;
+}
+
+function schedulerDelayMs({ root, state, entries = collectScheduledChatEntries(state) }) {
+  if (!entries.length) return null;
+  const nowMs = Date.now();
+  const nextDueMs = Math.min(...entries.map((entry) => entry.dueAt));
+  if (nextDueMs <= nowMs) return 0;
+  const hasVisibleCountdown = Boolean(root?.querySelectorAll?.('[data-countdown-timer]')?.length);
+  if (hasVisibleCountdown) return Math.min(1000, Math.max(100, nextDueMs - nowMs));
+  return Math.min(nextDueMs - nowMs, 2_147_483_647);
+}
+
+async function processScheduledChats({ root, state, commandBus, db, sync, getActiveModule, onTrackingStateChanged = null }) {
+  const timerEls = root.querySelectorAll('[data-countdown-timer]');
+  timerEls.forEach(el => {
+    const chatId = el.dataset.countdownTimer;
+    const chat = state.chats.find(c => c.id === chatId);
+    if (chat) {
+      el.textContent = getCountdownText(chat.createdAt);
     }
-  }, 1000);
+  });
+
+  const nowMs = Date.now();
+  const dueEntries = collectScheduledChatEntries(state).filter((entry) => entry.dueAt <= nowMs);
+  if (!dueEntries.length) return;
+
+  for (const { chat, message: scheduledMsg } of dueEntries) {
+    console.log(`[business-chat] Executing scheduled chat task for chat ${chat.id}`);
+
+    scheduledMsg.status = 'waiting';
+    const commandId = scheduledMsg.commandId || `cmd_${crypto.randomUUID()}`;
+    chat.lastTrackingId = commandId;
+    scheduledMsg.commandId = commandId;
+    touchChats(state, [chat]);
+  }
+
+  await persistChatState({ state, db });
+  renderChatRoot({ root, state, commandBus, db, getActiveModule });
+  onTrackingStateChanged?.();
+
+  for (const { chat, message: scheduledMsg } of dueEntries) {
+    await dispatchScheduledChat({ chat, scheduledMsg, commandBus, db, sync });
+  }
+
+  await persistChatState({ state, db });
+  renderChatRoot({ root, state, commandBus, db, getActiveModule });
+  onTrackingStateChanged?.();
+
+  syncTrackedMessages({ state, db }).then((changed) => {
+    if (changed) persistChatState({ state, db });
+    if (changed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
+    onTrackingStateChanged?.();
+  }).catch(() => {});
+}
+
+async function dispatchScheduledChat({ chat, scheduledMsg, commandBus, db, sync }) {
+  const commandId = scheduledMsg.commandId || `cmd_${crypto.randomUUID()}`;
+  const originalUserMessage = scheduledMsg.userMessageId
+    ? chat.messages.find((message) => message.id === scheduledMsg.userMessageId)
+    : null;
+  const text = scheduledMsg.promptText || scheduledMsg.prompt_text || originalUserMessage?.text || scheduledMsg.text || '';
+  const userMessageId = scheduledMsg.userMessageId || originalUserMessage?.id || scheduledMsg.id;
+  const now = Date.now();
+  const scheduledAttachments = chat.scheduledAttachmentsByCommand?.[commandId] || [];
+  const chatClientContext = chat.contextMeta?.client_context && typeof chat.contextMeta.client_context === 'object'
+    ? chat.contextMeta.client_context
+    : {};
+  let attachmentRefs = [];
+  const command = {
+    id: commandId,
+    module: chat.contextMeta?.module || 'ctox',
+    type: chat.contextMeta?.command_type || 'business_os.chat.task',
+    record_id: chat.id,
+    inbound_channel: CHAT_CHANNEL,
+    payload: {
+      title: titleFromText(text),
+      instruction: text,
+      prompt: text,
+      chat_id: chat.id,
+      message_id: userMessageId,
+      conversation: compactConversation(chat.messages),
+      attachments: attachmentRefs,
+      attachment_refs: attachmentRefs,
+      inbound_channel: CHAT_CHANNEL,
+      outbound_channel: 'business_os_chat',
+      response_channel: 'business_os_chat',
+      reply_to: chat.id,
+      thread_key: `business-os/chat/${chat.id}`,
+      priority: 'normal',
+      source_module: chat.contextMeta?.module || 'ctox',
+    },
+    client_context: {
+      ...chatClientContext,
+      source: 'business-os-chat',
+      module: chat.contextMeta?.module || 'ctox',
+      source_module: chat.contextMeta?.module || 'ctox',
+      source_title: chat.contextMeta?.source_title || 'CTOX',
+      inbound_channel: CHAT_CHANNEL,
+      outbound_channel: 'business_os_chat',
+      chat_id: chat.id,
+      message_id: userMessageId,
+      attachment_count: attachmentRefs.length,
+      attachment_storage: attachmentRefs.length ? 'desktop_files' : '',
+      url: location.href,
+      language: document.documentElement.lang || 'de',
+      created_at: new Date(now).toISOString(),
+    },
+  };
+
+  try {
+    attachmentRefs = await stageChatAttachments({
+      db,
+      sync,
+      chat,
+      commandId,
+      messageId: userMessageId,
+      attachments: scheduledAttachments,
+    });
+    command.payload.attachments = attachmentRefs;
+    command.payload.attachment_refs = attachmentRefs;
+    command.client_context.attachment_count = attachmentRefs.length;
+    command.client_context.attachment_storage = attachmentRefs.length ? 'desktop_files' : '';
+    const result = await commandBus.dispatch(command);
+    const taskId = result.task_id || '';
+    const acceptedCommandId = result.command_id || commandId;
+    if (!taskId) {
+      throw new Error('CTOX hat keine echte Queue-ID zurueckprojiziert.');
+    }
+    chat.lastTrackingId = taskId || acceptedCommandId;
+
+    const statusMsg = chat.messages.find(m => m.id === `status_${commandId}`);
+    if (statusMsg) {
+      statusMsg.text = 'Task angelegt und in der CTOX Queue. Antwort erscheint hier, sobald der CTOX Service ihn verarbeitet.';
+      statusMsg.commandId = acceptedCommandId;
+      statusMsg.taskId = taskId;
+      statusMsg.status = result.task_status || result.status || 'queued';
+    }
+    if (chat.scheduledAttachmentsByCommand) {
+      delete chat.scheduledAttachmentsByCommand[commandId];
+    }
+  } catch (error) {
+    const failedCommandId = error?.command_id || error?.commandId || commandId;
+    const statusMsg = chat.messages.find(m => m.id === `status_${commandId}`);
+    if (statusMsg) {
+      statusMsg.text = error?.message || String(error);
+      statusMsg.commandId = failedCommandId;
+      statusMsg.status = error?.status || 'failed';
+    }
+  }
 }
 
 async function cancelScheduledChat(state, chat, db, root, commandBus, getActiveModule) {
@@ -5204,3 +5484,16 @@ async function cancelScheduledChat(state, chat, db, root, commandBus, getActiveM
   await persistChatState({ state, db });
   renderChatRoot({ root, state, commandBus, db, getActiveModule });
 }
+
+export const __businessChatTestInternals = Object.freeze({
+  clearSchedulerLoop,
+  collectScheduledChatEntries,
+  collectTrackedMessages,
+  createTrackedMessageWatch,
+  findDocsByIds,
+  hasActiveTrackedMessages,
+  initSchedulerLoop,
+  schedulerDelayMs,
+  stageChatAttachments,
+  syncTrackedMessages,
+});

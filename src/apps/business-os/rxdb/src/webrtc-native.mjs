@@ -50,7 +50,7 @@ const SEND_PRIORITIES = ['high', 'normal', 'low'];
 // redesign lands; it is not the end state.
 const MAX_GLOBAL_RTC_PEER_CONNECTIONS = 64;
 const RTC_CONNECTION_QUEUE_TIMEOUT_MS = 45_000;
-const RTC_HANDSHAKE_TIMEOUT_MS = 15_000;
+const RTC_HANDSHAKE_TIMEOUT_MS = 60_000;
 const GLOBAL_RTC_CONNECTION_POOL_KEY = Symbol.for('ctox.rxdb.webrtc-rtc-pool.v1');
 const RECENT_RTC_EVENT_LIMIT = 40;
 // Grace window for transient ICE 'disconnected' before tearing the
@@ -1045,6 +1045,7 @@ export class CtoxWebRtcNativePeer {
         received: new Map(),
         createdAt: Date.now(),
         attempt: Number(payload.attempt || 0),
+        contiguousSeq: -1,
         nextAckSeq: Math.min(FRAME_ACK_WINDOW - 1, totalFrames - 1),
       });
       this.completedFrameAcks.delete(transferId);
@@ -1073,12 +1074,11 @@ export class CtoxWebRtcNativePeer {
       }
       const entry = this.incomingFrames.get(transferId);
       if (entry && entry.peerId === peerId) {
-        const ackSeq = highestContiguousSeq(entry.received, entry.totalFrames);
         this.send(peerId, {
           ctoxFrame: CTOX_FRAME_PROTOCOL,
           kind: 'ack',
           transferId,
-          ackSeq,
+          ackSeq: Number(entry.contiguousSeq ?? -1),
           receivedFrames: entry.received.size,
           final: false,
           resume: true,
@@ -1120,8 +1120,7 @@ export class CtoxWebRtcNativePeer {
       });
       return;
     }
-    entry.received.set(seq, String(payload.data || ''));
-    const contiguousSeq = highestContiguousSeq(entry.received, entry.totalFrames);
+    const contiguousSeq = recordReceivedFrame(entry, seq, String(payload.data || ''));
     if (entry.received.size !== entry.totalFrames) {
       if (contiguousSeq >= entry.nextAckSeq && contiguousSeq < entry.totalFrames - 1) {
         this.send(peerId, {
@@ -1413,19 +1412,27 @@ export class CtoxWebRtcNativePeer {
     });
   }
 
-  getTransportStatus() {
-    return {
+  getTransportStatus({ includeDiagnostics = false } = {}) {
+    const base = {
       ...this.transportStats,
+      collection: collectionNameFromTopic(this.options.room),
+      topic: this.options.room,
+      activePeerCount: this.connections.size,
       pendingAcks: this.pendingFrameAcks.size,
       pendingRequests: this.pending.size,
-      pendingRequestMethods: [...this.pending.values()].map((pending) => pending.method || '').filter(Boolean).slice(-20),
-      observedRequestMethods: [...this.observedRequests.keys()].map((key) => String(key).split('|').slice(1).join('|')).slice(-20),
       incomingTransfers: this.incomingFrames.size,
       completedAckCacheSize: this.completedFrameAcks.size,
+      connectionCount: this.connections.size,
+      rtcConnectionPool: rtcPeerConnectionPoolCounters(),
+    };
+    if (!includeDiagnostics) return base;
+    return {
+      ...base,
+      pendingRequestMethods: [...this.pending.values()].map((pending) => pending.method || '').filter(Boolean).slice(-20),
+      observedRequestMethods: [...this.observedRequests.keys()].map((key) => String(key).split('|').slice(1).join('|')).slice(-20),
       rtcConnectionPool: rtcPeerConnectionPoolSnapshot(),
       rtcConnections: [...this.connections.values()].map((connection) => peerConnectionSnapshot(connection)),
       recentRtcEvents: this.recentConnectionEvents.slice(-RECENT_RTC_EVENT_LIMIT),
-      connectionCount: this.connections.size,
       connectionStates: [...this.connections.values()].map((connection) => ({
         peerId: connection.remotePeerId,
         peerConnectionState: connection.peer?.connectionState || '',
@@ -1846,6 +1853,26 @@ function rtcPeerConnectionPoolSnapshot() {
   };
 }
 
+function rtcPeerConnectionPoolCounters() {
+  const pool = getRtcPeerConnectionPool();
+  const active = pool.active.size;
+  const queued = pool.queue.length;
+  const activeCritical = activeCriticalRtcPeerConnectionCount(pool);
+  const queuedCritical = queuedCriticalRtcPeerConnectionNames(pool).length;
+  return {
+    maxActive: pool.maxActive,
+    active,
+    queued,
+    activeCritical,
+    queuedCritical,
+    maxConnections: pool.maxActive,
+    activeConnections: active,
+    queuedConnections: queued,
+    criticalActiveConnections: activeCritical,
+    criticalQueuedConnections: queuedCritical,
+  };
+}
+
 function rtcPeerConnectionOwnerKey(owner, remotePeerId) {
   return `${String(owner?.options?.room || '')}|${String(owner?.options?.clientId || '')}|${String(remotePeerId || '')}`;
 }
@@ -2123,7 +2150,31 @@ function requestObservationKey(peerId, method) {
 }
 
 function encodedSize(value) {
-  return new TextEncoder().encode(String(value || '')).byteLength;
+  return utf8ByteLength(String(value || ''));
+}
+
+function utf8ByteLength(text) {
+  let bytes = 0;
+  const value = String(text || '');
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x7f) {
+      bytes += 1;
+    } else if (code <= 0x7ff) {
+      bytes += 2;
+    } else if (code >= 0xd800 && code <= 0xdbff) {
+      const next = index + 1 < value.length ? value.charCodeAt(index + 1) : 0;
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        bytes += 4;
+        index += 1;
+      } else {
+        bytes += 3;
+      }
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
 }
 
 // Mirrors Rust `split_chunks_for_frame` (connection_handler_rs.rs): budget
@@ -2172,6 +2223,9 @@ function splitFrameChunks(text, transferId) {
 export const webrtcNativeTestInternals = Object.freeze({
   splitFrameChunks,
   jsonEscapedCharLen,
+  encodedSize,
+  utf8ByteLength,
+  recordReceivedFrame,
   MAX_SERIALIZED_FRAME_BYTES,
 });
 
@@ -2189,13 +2243,18 @@ function jsonEscapedCharLen(ch) {
   return 4;
 }
 
-function highestContiguousSeq(received, totalFrames) {
-  let seq = -1;
-  for (let index = 0; index < totalFrames; index += 1) {
-    if (!received.has(index)) break;
-    seq = index;
+function recordReceivedFrame(entry, seq, data) {
+  const hadFrame = entry.received.has(seq);
+  entry.received.set(seq, data);
+  if (!hadFrame && seq === Number(entry.contiguousSeq ?? -1) + 1) {
+    while (
+      entry.contiguousSeq + 1 < entry.totalFrames
+      && entry.received.has(entry.contiguousSeq + 1)
+    ) {
+      entry.contiguousSeq += 1;
+    }
   }
-  return seq;
+  return Number(entry.contiguousSeq ?? -1);
 }
 
 function createSendQueue() {

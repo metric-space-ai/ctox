@@ -2,6 +2,25 @@
   "collections": {
     "business_chats": {
       "additionalProperties": true,
+      "indexes": [
+        "owner_user_id",
+        "lastTrackingId",
+        "tracking_active",
+        "tracking_status",
+        "tracking_id",
+        "tracking_command_id",
+        "tracking_task_id",
+        "updated_at_ms",
+        [
+          "tracking_active",
+          "updated_at_ms"
+        ],
+        [
+          "tracking_active",
+          "tracking_status",
+          "updated_at_ms"
+        ]
+      ],
       "primaryKey": "id",
       "properties": {
         "createdAt": {
@@ -36,6 +55,24 @@
         "title": {
           "type": "string"
         },
+        "tracking_active": {
+          "type": "boolean"
+        },
+        "tracking_command_id": {
+          "type": "string"
+        },
+        "tracking_id": {
+          "type": "string"
+        },
+        "tracking_message_id": {
+          "type": "string"
+        },
+        "tracking_status": {
+          "type": "string"
+        },
+        "tracking_task_id": {
+          "type": "string"
+        },
         "updated_at_ms": {
           "type": "number"
         }
@@ -50,6 +87,20 @@
     },
     "business_commands": {
       "additionalProperties": true,
+      "indexes": [
+        "status",
+        "command_id",
+        [
+          "status",
+          "updated_at_ms"
+        ],
+        [
+          "module",
+          "command_type",
+          "status",
+          "updated_at_ms"
+        ]
+      ],
       "primaryKey": "id",
       "properties": {
         "client_context": {
@@ -426,8 +477,27 @@
     },
     "ctox_queue_tasks": {
       "additionalProperties": true,
+      "indexes": [
+        "status",
+        "command_id",
+        "updated_at_ms",
+        [
+          "status",
+          "updated_at_ms"
+        ],
+        [
+          "command_id",
+          "status"
+        ]
+      ],
       "primaryKey": "id",
       "properties": {
+        "command_id": {
+          "type": "string"
+        },
+        "command_type": {
+          "type": "string"
+        },
         "id": {
           "maxLength": 128,
           "type": "string"

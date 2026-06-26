@@ -1801,40 +1801,27 @@ fn invoices_list_due_invoices(
         .get("state")
         .and_then(Value::as_str)
         .unwrap_or("overdue");
-    let mut stmt = conn.prepare(
-        "SELECT record_id, payload_json
-         FROM business_records
-         WHERE collection = ?1
-           AND deleted = 0
-           AND payload_json LIKE ?2",
-    )?;
-    let pattern = format!("%\"state\":\"{target_state}\"%");
+    let mut stmt = conn.prepare(INVOICES_DUE_INVOICES_SQL)?;
     let rows = stmt.query_map(
-        rusqlite::params!["accounting_invoices", pattern.as_str()],
-        |row| {
-            let record_id: String = row.get(0)?;
-            let payload_json: String = row.get(1)?;
-            Ok((record_id, payload_json))
-        },
+        rusqlite::params![target_state, now_ms_value, min_open_cents],
+        |row| row.get::<_, String>(0),
     )?;
-    let mut result: Vec<String> = Vec::new();
-    for row in rows {
-        let (record_id, payload_json) = row?;
-        let payload: Value = serde_json::from_str(&payload_json)?;
-        let open_cents = payload
-            .get("open_cents")
-            .and_then(Value::as_i64)
-            .unwrap_or(0);
-        let due_date_ms = payload
-            .get("due_date_ms")
-            .and_then(Value::as_i64)
-            .unwrap_or(now_ms_value);
-        if open_cents > min_open_cents && due_date_ms < now_ms_value {
-            result.push(record_id);
-        }
-    }
-    Ok(result)
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
+
+const INVOICES_DUE_INVOICES_SQL: &str = "
+    SELECT record_id
+    FROM business_records
+    WHERE collection = 'accounting_invoices'
+      AND deleted = 0
+      AND json_extract(payload_json, '$.state') = ?1
+      AND CAST(COALESCE(json_extract(payload_json, '$.due_date_ms'), 9223372036854775807) AS INTEGER) < ?2
+      AND CAST(COALESCE(json_extract(payload_json, '$.open_cents'), 0) AS INTEGER) > ?3
+    ORDER BY
+      CAST(COALESCE(json_extract(payload_json, '$.due_date_ms'), 9223372036854775807) AS INTEGER) ASC,
+      record_id ASC
+";
 
 fn invoices_recurring_create_stub(_command: &BusinessCommand) -> anyhow::Result<Value> {
     anyhow::bail!(
@@ -2367,6 +2354,29 @@ mod tests {
         assert_eq!(dup["status"], json!("completed"));
         // The cached outcome carries the run record from the first call.
         assert_eq!(dup["result"]["run"]["id"], json!("dunning_1"));
+    }
+
+    #[test]
+    fn due_invoice_query_uses_partial_invoice_index() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let conn = open_business_os_store(root.path()).expect("store");
+        let now = now_ms() as i64;
+        let mut stmt = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {INVOICES_DUE_INVOICES_SQL}"))
+            .expect("prepare explain");
+        let details = stmt
+            .query_map(rusqlite::params!["overdue", now, 0i64], |row| {
+                row.get::<_, String>(3)
+            })
+            .expect("explain rows")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("collect explain rows");
+        assert!(
+            details
+                .iter()
+                .any(|detail| { detail.contains("idx_business_records_accounting_invoices_due") }),
+            "due invoice query should use partial invoice index, got {details:?}"
+        );
     }
 
     #[test]

@@ -38,7 +38,7 @@ use crate::plugins::utils::utils_time::now;
 use crate::rx_error::{new_rx_error, RxResult};
 use crate::rx_schema_helper::get_primary_field_of_primary_key;
 use crate::rx_storage_helper::categorize_bulk_write_rows;
-use crate::rxjs_compat::{RxStream, RxSubject};
+use crate::rxjs_compat::{RxStream, RxSubject, DEFAULT_SUBJECT_BUFFER};
 use crate::types::{
     BulkWriteRow, EventBulk, RxJsonSchema, RxStorageBulkWriteResponse,
     RxStorageChangedDocumentsSinceResult, RxStorageCountResult, RxStorageInstance,
@@ -168,142 +168,19 @@ impl RxStorageInstance for RxStorageInstanceMemory {
 
     // ref: rxdb/src/plugins/storage-memory/rx-storage-instance-memory.ts:268-365
     async fn query(&self, prepared_query: &Value) -> RxResult<RxStorageQueryResult> {
-        use crate::plugins::storage_memory::binary_search_bounds::{bound_le, bound_lt};
-        use crate::plugins::storage_memory::memory_types::DocWithIndexString;
-        use crate::rx_query_helper::{get_query_matcher, get_sort_comparator};
-        use crate::types::{FilledMangoQuery, RxQueryPlan};
+        self.query_sync(prepared_query)
+    }
 
-        let query_plan: RxQueryPlan = serde_json::from_value(
-            prepared_query
-                .get("queryPlan")
-                .cloned()
-                .unwrap_or(Value::Null),
-        )
-        .map_err(|e| {
-            new_rx_error(
-                "STO20",
-                Some(json!({ "message": format!("invalid prepared_query.queryPlan: {e}") })),
-            )
-        })?;
-        let query: FilledMangoQuery =
-            serde_json::from_value(prepared_query.get("query").cloned().unwrap_or(Value::Null))
-                .map_err(|e| {
-                    new_rx_error(
-                        "STO20",
-                        Some(json!({ "message": format!("invalid prepared_query.query: {e}") })),
-                    )
-                })?;
-
-        let skip = query.skip.unwrap_or(0) as usize;
-        let limit = query.limit.map(|l| l as usize).unwrap_or(usize::MAX);
-        let skip_plus_limit = skip.saturating_add(limit);
-
-        let query_matcher = if !query_plan.selector_satisfied_by_index {
-            Some(get_query_matcher(&self.schema, &query))
-        } else {
-            None
-        };
-
-        let must_manually_resort = !query_plan.sort_satisfied_by_index;
-        let index = &query_plan.index;
-        let lower_bound_string =
-            get_start_index_string_from_lower_bound(&self.schema, index, &query_plan.start_keys)?;
-        let upper_bound_string = crate::custom_index::get_start_index_string_from_upper_bound(
-            &self.schema,
-            index,
-            &query_plan.end_keys,
-        )?;
-        let index_name = get_memory_index_name(index);
-
-        // Snapshot the docs_with_index slice under the lock, then release.
-        let docs_with_index: Vec<DocWithIndexString> = {
-            let internals = self.internals.lock();
-            let by_index = internals.by_index.get(&index_name).ok_or_else(|| {
-                new_rx_error(
-                    "STO21",
-                    Some(json!({
-                        "message": format!("memory index does not exist: {index_name}")
-                    })),
-                )
-            })?;
-            by_index.docs_with_index.clone()
-        };
-
-        let lower_probe = DocWithIndexString {
-            index_string: lower_bound_string,
-            document: Value::Null,
-            id: String::new(),
-        };
-        let upper_probe = DocWithIndexString {
-            index_string: upper_bound_string,
-            document: Value::Null,
-            id: String::new(),
-        };
-        let mut index_of_lower = if query_plan.inclusive_start {
-            crate::plugins::storage_memory::binary_search_bounds::bound_ge(
-                &docs_with_index,
-                &lower_probe,
-                &compare_docs_with_index,
-                None,
-                None,
-            )
-        } else {
-            bound_gt(
-                &docs_with_index,
-                &lower_probe,
-                &compare_docs_with_index,
-                None,
-                None,
-            )
-        };
-        let index_of_upper = if query_plan.inclusive_end {
-            bound_le(
-                &docs_with_index,
-                &upper_probe,
-                &compare_docs_with_index,
-                None,
-                None,
-            )
-        } else {
-            bound_lt(
-                &docs_with_index,
-                &upper_probe,
-                &compare_docs_with_index,
-                None,
-                None,
-            )
-        };
-
-        let mut rows: Vec<Value> = Vec::new();
-        while index_of_lower <= index_of_upper && (index_of_lower as usize) < docs_with_index.len()
-        {
-            let current = &docs_with_index[index_of_lower as usize];
-            let doc = &current.document;
-            let matches = match &query_matcher {
-                Some(m) => m(doc),
-                None => true,
-            };
-            if matches {
-                rows.push(doc.clone());
-            }
-            if rows.len() >= skip_plus_limit && !must_manually_resort {
-                break;
-            }
-            index_of_lower += 1;
-        }
-
-        if must_manually_resort {
-            let cmp = get_sort_comparator(&self.schema, &query);
-            rows.sort_by(|a, b| cmp(a, b));
-        }
-
-        // Apply skip + limit.
-        let len = rows.len();
-        let start = skip.min(len);
-        let end = skip_plus_limit.min(len);
-        rows = rows[start..end].to_vec();
-
-        Ok(RxStorageQueryResult { documents: rows })
+    fn query_stream_into_blocking(
+        &self,
+        prepared_query: &Value,
+        chunk_size: usize,
+        on_batch: &mut (dyn FnMut(Vec<Value>) -> Result<bool, crate::rx_error::RxError> + Send),
+    ) -> Option<Result<(), crate::rx_error::RxError>> {
+        let result = self.query_sync(prepared_query);
+        Some(stream_query_result_into_batches(
+            result, chunk_size, on_batch,
+        ))
     }
 
     async fn count(&self, prepared_query: &Value) -> RxResult<RxStorageCountResult> {
@@ -497,10 +374,164 @@ impl RxStorageInstanceMemory {
         internals.ref_count = internals.ref_count.saturating_sub(1);
     }
 
+    fn query_sync(&self, prepared_query: &Value) -> RxResult<RxStorageQueryResult> {
+        use crate::plugins::storage_memory::binary_search_bounds::{bound_le, bound_lt};
+        use crate::plugins::storage_memory::memory_types::DocWithIndexString;
+        use crate::rx_query_helper::{get_query_matcher, get_sort_comparator};
+        use crate::types::{FilledMangoQuery, RxQueryPlan};
+
+        let query_plan: RxQueryPlan = serde_json::from_value(
+            prepared_query
+                .get("queryPlan")
+                .cloned()
+                .unwrap_or(Value::Null),
+        )
+        .map_err(|e| {
+            new_rx_error(
+                "STO20",
+                Some(json!({ "message": format!("invalid prepared_query.queryPlan: {e}") })),
+            )
+        })?;
+        let query: FilledMangoQuery =
+            serde_json::from_value(prepared_query.get("query").cloned().unwrap_or(Value::Null))
+                .map_err(|e| {
+                    new_rx_error(
+                        "STO20",
+                        Some(json!({ "message": format!("invalid prepared_query.query: {e}") })),
+                    )
+                })?;
+
+        let skip = query.skip.unwrap_or(0) as usize;
+        let limit = query.limit.map(|l| l as usize).unwrap_or(usize::MAX);
+        let skip_plus_limit = skip.saturating_add(limit);
+
+        let query_matcher = if !query_plan.selector_satisfied_by_index {
+            Some(get_query_matcher(&self.schema, &query))
+        } else {
+            None
+        };
+
+        let must_manually_resort = !query_plan.sort_satisfied_by_index;
+        let index = &query_plan.index;
+        let lower_bound_string =
+            get_start_index_string_from_lower_bound(&self.schema, index, &query_plan.start_keys)?;
+        let upper_bound_string = crate::custom_index::get_start_index_string_from_upper_bound(
+            &self.schema,
+            index,
+            &query_plan.end_keys,
+        )?;
+        let index_name = get_memory_index_name(index);
+
+        let docs_with_index: Vec<DocWithIndexString> = {
+            let internals = self.internals.lock();
+            let by_index = internals.by_index.get(&index_name).ok_or_else(|| {
+                new_rx_error(
+                    "STO21",
+                    Some(json!({
+                        "message": format!("memory index does not exist: {index_name}")
+                    })),
+                )
+            })?;
+            by_index.docs_with_index.clone()
+        };
+
+        let lower_probe = DocWithIndexString {
+            index_string: lower_bound_string,
+            document: Value::Null,
+            id: String::new(),
+        };
+        let upper_probe = DocWithIndexString {
+            index_string: upper_bound_string,
+            document: Value::Null,
+            id: String::new(),
+        };
+        let mut index_of_lower = if query_plan.inclusive_start {
+            crate::plugins::storage_memory::binary_search_bounds::bound_ge(
+                &docs_with_index,
+                &lower_probe,
+                &compare_docs_with_index,
+                None,
+                None,
+            )
+        } else {
+            bound_gt(
+                &docs_with_index,
+                &lower_probe,
+                &compare_docs_with_index,
+                None,
+                None,
+            )
+        };
+        let index_of_upper = if query_plan.inclusive_end {
+            bound_le(
+                &docs_with_index,
+                &upper_probe,
+                &compare_docs_with_index,
+                None,
+                None,
+            )
+        } else {
+            bound_lt(
+                &docs_with_index,
+                &upper_probe,
+                &compare_docs_with_index,
+                None,
+                None,
+            )
+        };
+
+        let mut rows: Vec<Value> = Vec::new();
+        while index_of_lower <= index_of_upper && (index_of_lower as usize) < docs_with_index.len()
+        {
+            let current = &docs_with_index[index_of_lower as usize];
+            let doc = &current.document;
+            let matches = match &query_matcher {
+                Some(m) => m(doc),
+                None => true,
+            };
+            if matches {
+                rows.push(doc.clone());
+            }
+            if rows.len() >= skip_plus_limit && !must_manually_resort {
+                break;
+            }
+            index_of_lower += 1;
+        }
+
+        if must_manually_resort {
+            let cmp = get_sort_comparator(&self.schema, &query);
+            rows.sort_by(|a, b| cmp(a, b));
+        }
+
+        let len = rows.len();
+        let start = skip.min(len);
+        let end = skip_plus_limit.min(len);
+        rows = rows[start..end].to_vec();
+
+        Ok(RxStorageQueryResult { documents: rows })
+    }
+
     // Used to keep a strongly-typed handle in CTOX glue.
     fn _zero_use(&self) {
         let _ = (&self._settings, &self._options);
     }
+}
+
+fn stream_query_result_into_batches(
+    result: RxResult<RxStorageQueryResult>,
+    chunk_size: usize,
+    on_batch: &mut (dyn FnMut(Vec<Value>) -> Result<bool, crate::rx_error::RxError> + Send),
+) -> Result<(), crate::rx_error::RxError> {
+    let mut buffer = result?.documents;
+    let chunk = chunk_size.max(1);
+    while !buffer.is_empty() {
+        let take = buffer.len().min(chunk);
+        let batch: Vec<Value> = buffer.drain(..take).collect();
+        if !on_batch(batch)? {
+            return Ok(());
+        }
+    }
+    Ok(())
 }
 
 /// Hot-path put helper that bridges into the mutable borrows we need.
@@ -669,7 +700,10 @@ impl RxStorageMemory {
                     documents: HashMap::new(),
                     attachments: HashMap::new(),
                     by_index: HashMap::new(),
-                    changes_subject: RxSubject::new(),
+                    changes_subject: RxSubject::with_lag_signal(
+                        DEFAULT_SUBJECT_BUFFER,
+                        |skipped| Some(EventBulk::rxsubject_lagged(skipped)),
+                    ),
                 };
                 add_indexes_to_internals_state(&mut state, &params.schema)?;
                 let shared: SharedMemoryStorageInternals = Arc::new(Mutex::new(state));

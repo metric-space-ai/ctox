@@ -1,6 +1,7 @@
 use anyhow::Context;
 use anyhow::Result;
 use rusqlite::params;
+use rusqlite::params_from_iter;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
 use serde::Deserialize;
@@ -8,8 +9,13 @@ use serde::Serialize;
 use serde_json::json;
 use sha2::Digest;
 use sha2::Sha256;
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
+#[cfg(test)]
+use std::sync::Mutex;
+#[cfg(test)]
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use crate::channels;
@@ -29,6 +35,8 @@ const SPILL_RESTORE_TITLE_PREFIX: &str = "spill restore: ";
 const QUEUE_REPAIR_TIMEOUT_SECS: u64 = 300;
 const QUEUE_REPAIR_SKILL_RELATIVE_PATH: &str =
     "skills/system/mission_orchestration/queue-cleanup/SKILL.md";
+const QUEUE_SPILL_CANDIDATE_LOOKUP_CHUNK_SIZE: usize = 500;
+const QUEUE_METADATA_LOOKUP_CHUNK_SIZE: usize = 500;
 const QUEUE_ADD_USAGE: &str = "usage: ctox queue add --title <label> --prompt <text> [--thread-key <key>] [--workspace-root <path>] [--skill <name>] [--priority <urgent|high|normal|low>] [--parent-message-key <key>]";
 const QUEUE_USAGE: &str = "usage:
   ctox queue add --title <label> --prompt <text> [--thread-key <key>] [--workspace-root <path>] [--skill <name>] [--priority <urgent|high|normal|low>] [--parent-message-key <key>]
@@ -114,6 +122,13 @@ EVIDENCE:
 HANDOFF:
 - <only when another verification pass should continue; otherwise write "none">
 "#;
+
+#[cfg(test)]
+static QUEUE_BRIDGE_DB_OPEN_COUNTS: OnceLock<Mutex<HashMap<std::path::PathBuf, u64>>> =
+    OnceLock::new();
+#[cfg(test)]
+static QUEUE_METADATA_DB_OPEN_COUNTS: OnceLock<Mutex<HashMap<std::path::PathBuf, u64>>> =
+    OnceLock::new();
 
 #[derive(Debug, Clone, Serialize)]
 struct QueueTicketBridgeView {
@@ -586,13 +601,21 @@ fn cleanup_queue_scope(root: &Path, args: &[String]) -> Result<QueueCleanupScope
         "cleanup-scope requires at least one selector or --all-open"
     );
     let tasks = channels::list_queue_tasks(root, &options.statuses, options.limit)?;
+    let message_keys = tasks
+        .iter()
+        .map(|task| task.message_key.clone())
+        .collect::<Vec<_>>();
+    let metadata_by_message_key = load_queue_task_metadata_by_message_key(root, &message_keys)?;
     let mut status_counts = std::collections::BTreeMap::new();
     let mut plans = Vec::new();
     let mut mutated_count = 0usize;
 
     for task in tasks.iter() {
         *status_counts.entry(task.route_status.clone()).or_insert(0) += 1;
-        let metadata = load_queue_task_metadata(root, &task.message_key)?;
+        let metadata = metadata_by_message_key
+            .get(&task.message_key)
+            .cloned()
+            .unwrap_or_else(|| json!({}));
         if !queue_task_matches_cleanup_selector(task, &metadata, &options.selector) {
             continue;
         }
@@ -677,11 +700,19 @@ fn assert_clean_queue_scope(root: &Path, args: &[String]) -> Result<QueueAssertC
         "assert-clean-scope requires selectors, --all-open, or --empty"
     );
     let tasks = channels::list_queue_tasks(root, &options.statuses, options.limit)?;
+    let message_keys = tasks
+        .iter()
+        .map(|task| task.message_key.clone())
+        .collect::<Vec<_>>();
+    let metadata_by_message_key = load_queue_task_metadata_by_message_key(root, &message_keys)?;
     let mut matching = Vec::new();
     let mut non_matching = Vec::new();
 
     for task in tasks.iter() {
-        let metadata = load_queue_task_metadata(root, &task.message_key)?;
+        let metadata = metadata_by_message_key
+            .get(&task.message_key)
+            .cloned()
+            .unwrap_or_else(|| json!({}));
         let is_match = queue_task_matches_cleanup_selector(task, &metadata, &options.selector);
         let plan = queue_cleanup_task_plan(task, "assert", false);
         if is_match {
@@ -903,19 +934,85 @@ fn json_contains_text(value: &serde_json::Value, needle: &str) -> bool {
     }
 }
 
-fn load_queue_task_metadata(root: &Path, message_key: &str) -> Result<serde_json::Value> {
+fn load_queue_task_metadata_by_message_key(
+    root: &Path,
+    message_keys: &[String],
+) -> Result<HashMap<String, serde_json::Value>> {
+    let mut metadata_by_message_key = HashMap::new();
+    if message_keys.is_empty() {
+        return Ok(metadata_by_message_key);
+    }
     let db_path = crate::paths::core_db(&root);
+    #[cfg(test)]
+    record_queue_metadata_db_open_for_tests(&db_path);
     let conn = Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
         .with_context(|| format!("failed to open queue metadata db {}", db_path.display()))?;
-    let raw = conn
-        .query_row(
-            "SELECT metadata_json FROM communication_messages WHERE message_key = ?1 LIMIT 1",
-            params![message_key],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?
-        .unwrap_or_else(|| "{}".to_string());
-    Ok(serde_json::from_str(&raw).unwrap_or_else(|_| json!({"raw_metadata": raw})))
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    let mut unique_keys = message_keys
+        .iter()
+        .map(|key| key.trim())
+        .filter(|key| !key.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    unique_keys.sort();
+    unique_keys.dedup();
+    for chunk in unique_keys.chunks(QUEUE_METADATA_LOOKUP_CHUNK_SIZE) {
+        let placeholders = std::iter::repeat("?")
+            .take(chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            r#"
+            SELECT message_key, metadata_json
+            FROM communication_messages
+            WHERE message_key IN ({placeholders})
+            "#
+        );
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement.query_map(params_from_iter(chunk.iter()), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (message_key, raw) = row?;
+            let parsed =
+                serde_json::from_str(&raw).unwrap_or_else(|_| json!({"raw_metadata": raw}));
+            metadata_by_message_key.insert(message_key, parsed);
+        }
+    }
+    Ok(metadata_by_message_key)
+}
+
+#[cfg(test)]
+fn queue_metadata_db_open_counts_for_tests() -> &'static Mutex<HashMap<std::path::PathBuf, u64>> {
+    QUEUE_METADATA_DB_OPEN_COUNTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[cfg(test)]
+fn record_queue_metadata_db_open_for_tests(path: &Path) {
+    let mut counts = queue_metadata_db_open_counts_for_tests()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *counts.entry(path.to_path_buf()).or_insert(0) += 1;
+}
+
+#[cfg(test)]
+fn reset_queue_metadata_db_open_count_for_tests(root: &Path) {
+    let path = crate::paths::core_db(root);
+    queue_metadata_db_open_counts_for_tests()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&path);
+}
+
+#[cfg(test)]
+fn queue_metadata_db_open_count_for_tests(root: &Path) -> u64 {
+    let path = crate::paths::core_db(root);
+    queue_metadata_db_open_counts_for_tests()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&path)
+        .copied()
+        .unwrap_or(0)
 }
 
 fn finalize_cancelled_queue_task_scope(
@@ -1979,6 +2076,8 @@ fn queue_bridge_db_path(root: &Path) -> std::path::PathBuf {
 
 fn open_queue_bridge_db(root: &Path) -> Result<Connection> {
     let path = queue_bridge_db_path(root);
+    #[cfg(test)]
+    record_queue_bridge_db_open_for_tests(&path);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -1987,6 +2086,39 @@ fn open_queue_bridge_db(root: &Path) -> Result<Connection> {
     conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
     ensure_queue_bridge_schema(&conn)?;
     Ok(conn)
+}
+
+#[cfg(test)]
+fn queue_bridge_db_open_counts_for_tests() -> &'static Mutex<HashMap<std::path::PathBuf, u64>> {
+    QUEUE_BRIDGE_DB_OPEN_COUNTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[cfg(test)]
+fn record_queue_bridge_db_open_for_tests(path: &Path) {
+    let mut counts = queue_bridge_db_open_counts_for_tests()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *counts.entry(path.to_path_buf()).or_insert(0) += 1;
+}
+
+#[cfg(test)]
+fn reset_queue_bridge_db_open_count_for_tests(root: &Path) {
+    let path = queue_bridge_db_path(root);
+    queue_bridge_db_open_counts_for_tests()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&path);
+}
+
+#[cfg(test)]
+fn queue_bridge_db_open_count_for_tests(root: &Path) -> u64 {
+    let path = queue_bridge_db_path(root);
+    queue_bridge_db_open_counts_for_tests()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&path)
+        .copied()
+        .unwrap_or(0)
 }
 
 fn ensure_queue_bridge_schema(conn: &Connection) -> Result<()> {
@@ -2070,6 +2202,45 @@ fn load_queue_ticket_bridge(
     .map_err(anyhow::Error::from)
 }
 
+fn load_queue_ticket_bridges_by_message_key(
+    conn: &Connection,
+    message_keys: &[String],
+) -> Result<HashMap<String, QueueTicketBridgeRecord>> {
+    let mut records = HashMap::new();
+    if message_keys.is_empty() {
+        return Ok(records);
+    }
+    for chunk in message_keys.chunks(QUEUE_SPILL_CANDIDATE_LOOKUP_CHUNK_SIZE) {
+        let placeholders = std::iter::repeat("?")
+            .take(chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            r#"
+            SELECT message_key, work_id, ticket_system, bridge_state, spilled_at, restored_at
+            FROM queue_ticket_spills
+            WHERE message_key IN ({placeholders})
+            "#
+        );
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement.query_map(params_from_iter(chunk.iter()), |row| {
+            Ok(QueueTicketBridgeRecord {
+                message_key: row.get(0)?,
+                work_id: row.get(1)?,
+                ticket_system: row.get(2)?,
+                bridge_state: row.get(3)?,
+                spilled_at: row.get(4)?,
+                restored_at: row.get(5)?,
+            })
+        })?;
+        for row in rows {
+            let record = row?;
+            records.insert(record.message_key.clone(), record);
+        }
+    }
+    Ok(records)
+}
+
 fn list_queue_ticket_bridges(
     root: &Path,
     state: Option<&str>,
@@ -2095,11 +2266,26 @@ fn list_queue_ticket_bridges(
             restored_at: row.get(5)?,
         })
     })?;
+    let bridges = rows
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(anyhow::Error::from)?;
+    drop(statement);
+    let message_keys = bridges
+        .iter()
+        .map(|bridge| bridge.message_key.clone())
+        .collect::<Vec<_>>();
+    let work_ids = bridges
+        .iter()
+        .map(|bridge| bridge.work_id.clone())
+        .collect::<Vec<_>>();
+    let tasks_by_message_key =
+        channels::load_queue_tasks_by_message_key_from_conn(&conn, &message_keys)?;
+    let tickets_by_work_id =
+        tickets::load_ticket_self_work_items_by_work_id_from_conn(&conn, &work_ids)?;
     let mut items = Vec::new();
-    for row in rows {
-        let bridge = row?;
-        let task = channels::load_queue_task(root, &bridge.message_key)?;
-        let ticket = tickets::load_ticket_self_work_item(root, &bridge.work_id)?;
+    for bridge in bridges {
+        let task = tasks_by_message_key.get(&bridge.message_key).cloned();
+        let ticket = tickets_by_work_id.get(&bridge.work_id).cloned();
         items.push(QueueTicketBridgeListItem {
             message_key: bridge.message_key,
             work_id: bridge.work_id,
@@ -2120,9 +2306,25 @@ fn list_queue_spill_candidates(root: &Path, limit: usize) -> Result<Vec<QueueSpi
         &["pending".to_string(), "blocked".to_string()],
         10_000,
     )?;
+    let message_keys = tasks
+        .iter()
+        .map(|task| task.message_key.clone())
+        .collect::<Vec<_>>();
+    let evidence_conn = open_queue_bridge_db(root)?;
+    let bridges_by_message_key =
+        load_queue_ticket_bridges_by_message_key(&evidence_conn, &message_keys)?;
+    let failure_signatures_by_message_key =
+        distinct_failure_signature_counts_from_conn(&evidence_conn, &message_keys)?;
     let mut candidates = Vec::new();
     for task in tasks {
-        if let Some(candidate) = score_queue_spill_candidate(root, task)? {
+        let failure_signatures = failure_signatures_by_message_key
+            .get(&task.message_key)
+            .copied()
+            .unwrap_or(0);
+        let existing_bridge = bridges_by_message_key.get(&task.message_key);
+        if let Some(candidate) =
+            score_queue_spill_candidate_with_evidence(task, existing_bridge, failure_signatures)
+        {
             candidates.push(candidate);
         }
     }
@@ -2141,13 +2343,28 @@ fn score_queue_spill_candidate(
     root: &Path,
     task: channels::QueueTaskView,
 ) -> Result<Option<QueueSpillCandidateView>> {
-    if let Some(existing) = load_queue_ticket_bridge(root, &task.message_key)? {
-        if existing.bridge_state == "spilled" {
-            return Ok(None);
-        }
+    let existing_bridge = load_queue_ticket_bridge(root, &task.message_key)?;
+    let failure_signatures = distinct_failure_signature_count(root, &task.message_key)?;
+    Ok(score_queue_spill_candidate_with_evidence(
+        task,
+        existing_bridge.as_ref(),
+        failure_signatures,
+    ))
+}
+
+fn score_queue_spill_candidate_with_evidence(
+    task: channels::QueueTaskView,
+    existing_bridge: Option<&QueueTicketBridgeRecord>,
+    failure_signatures: i64,
+) -> Option<QueueSpillCandidateView> {
+    if existing_bridge
+        .map(|existing| existing.bridge_state == "spilled")
+        .unwrap_or(false)
+    {
+        return None;
     }
     if matches!(task.route_status.as_str(), "handled" | "cancelled") {
-        return Ok(None);
+        return None;
     }
 
     let mut score = 0i64;
@@ -2174,7 +2391,7 @@ fn score_queue_spill_candidate(
             reasons.push(
                 "priority is urgent, so it should normally stay in the hot queue".to_string(),
             );
-            return Ok(None);
+            return None;
         }
         _ => {
             score += 1;
@@ -2222,7 +2439,6 @@ fn score_queue_spill_candidate(
     // to keep failing. Capped so a noisy task cannot dominate the ranking, and
     // framed as distinct signatures (not a raw attempt tally) so retries of the
     // same failure do not inflate the score.
-    let failure_signatures = distinct_failure_signature_count(root, &task.message_key)?;
     if failure_signatures > 0 {
         let bonus = failure_signatures.min(3);
         score += bonus;
@@ -2232,7 +2448,7 @@ fn score_queue_spill_candidate(
     }
 
     if score <= 0 {
-        return Ok(None);
+        return None;
     }
 
     let recommendation = if task.route_status == "blocked" {
@@ -2243,7 +2459,7 @@ fn score_queue_spill_candidate(
         "spill only if pressure remains high".to_string()
     };
 
-    Ok(Some(QueueSpillCandidateView {
+    Some(QueueSpillCandidateView {
         message_key: task.message_key,
         priority: task.priority,
         route_status: task.route_status,
@@ -2254,13 +2470,11 @@ fn score_queue_spill_candidate(
         candidate_score: score,
         recommendation,
         reasons,
-    }))
+    })
 }
 
 /// Count distinct durable failure signatures recorded for this queue task in
-/// the accepted core-transition proofs. The proofs table (`ctox_core_transition_proofs`)
-/// lives in the CORE db (`paths::core_db`), not the queue-bridge db, so this
-/// opens the core db directly. Queue tasks are recorded with
+/// the accepted core-transition proofs. Queue tasks are recorded with
 /// `entity_type = 'QueueItem'` and `entity_id = <message_key>`, and
 /// `entity_type`/`to_state` are persisted via `format!("{:?}", ..)` (PascalCase)
 /// by `core_transition_guard`. `request_json` distinguishes one failure
@@ -2271,6 +2485,21 @@ fn distinct_failure_signature_count(root: &Path, message_key: &str) -> Result<i6
     let conn = Connection::open(crate::paths::core_db(root))
         .with_context(|| "failed to open core db for failure-signature count")?;
     conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    Ok(
+        distinct_failure_signature_counts_from_conn(&conn, &[message_key.to_string()])?
+            .remove(message_key)
+            .unwrap_or(0),
+    )
+}
+
+fn distinct_failure_signature_counts_from_conn(
+    conn: &Connection,
+    message_keys: &[String],
+) -> Result<HashMap<String, i64>> {
+    let mut counts = HashMap::new();
+    if message_keys.is_empty() {
+        return Ok(counts);
+    }
     let table_exists: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='ctox_core_transition_proofs'",
@@ -2279,24 +2508,34 @@ fn distinct_failure_signature_count(root: &Path, message_key: &str) -> Result<i6
         )
         .unwrap_or(0);
     if table_exists == 0 {
-        return Ok(0);
+        return Ok(counts);
     }
-    let count: i64 = conn
-        .query_row(
+    for chunk in message_keys.chunks(QUEUE_SPILL_CANDIDATE_LOOKUP_CHUNK_SIZE) {
+        let placeholders = std::iter::repeat("?")
+            .take(chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
             r#"
-            SELECT COUNT(DISTINCT request_json)
+            SELECT entity_id, COUNT(DISTINCT request_json)
             FROM ctox_core_transition_proofs
             WHERE entity_type = 'QueueItem'
-              AND entity_id = ?1
               AND to_state = 'Failed'
               AND accepted = 1
-            "#,
-            params![message_key],
-            |row| row.get(0),
-        )
-        .optional()?
-        .unwrap_or(0);
-    Ok(count)
+              AND entity_id IN ({placeholders})
+            GROUP BY entity_id
+            "#
+        );
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement.query_map(params_from_iter(chunk.iter()), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        for row in rows {
+            let (message_key, count) = row?;
+            counts.insert(message_key, count);
+        }
+    }
+    Ok(counts)
 }
 
 fn now_iso_string() -> String {
@@ -2588,11 +2827,11 @@ mod tests {
             );
             "#,
         )?;
-        let mut insert = |proof_id: &str,
-                          entity_id: &str,
-                          to_state: &str,
-                          accepted: i64,
-                          request_json: &str|
+        let insert = |proof_id: &str,
+                      entity_id: &str,
+                      to_state: &str,
+                      accepted: i64,
+                      request_json: &str|
          -> Result<()> {
             conn.execute(
                 r#"INSERT INTO ctox_core_transition_proofs
@@ -2638,6 +2877,149 @@ mod tests {
             "expected a distinct-failure-signature reason, got: {:?}",
             scored.reasons
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn queue_ticket_bridge_list_batch_hydrates_tasks_and_tickets() -> Result<()> {
+        let root = temp_root("bridge-list-batch-hydration");
+        std::fs::create_dir_all(&root)?;
+        for index in 0..2 {
+            let task = channels::create_queue_task(
+                &root,
+                channels::QueueTaskCreateRequest {
+                    title: format!("Bridge hydration task {index}"),
+                    prompt: "Move this queue item to ticket tracking.".to_string(),
+                    thread_key: format!("queue/bridge-hydration-{index}"),
+                    workspace_root: Some(format!("/tmp/bridge-hydration-{index}")),
+                    priority: "normal".to_string(),
+                    suggested_skill: Some("queue-cleanup".to_string()),
+                    parent_message_key: None,
+                    extra_metadata: None,
+                },
+            )?;
+            let _ = spill_queue_task_to_ticket(
+                &root,
+                &task.message_key,
+                DEFAULT_TICKET_SYSTEM,
+                Some("batch hydrate bridge list"),
+                None,
+                false,
+            )?;
+        }
+
+        let db_path = crate::paths::core_db(&root);
+        reset_queue_bridge_db_open_count_for_tests(&root);
+        channels::reset_channel_db_open_count_for_tests(&db_path);
+        tickets::reset_ticket_db_open_call_count_for_tests(&db_path);
+
+        let bridges = list_queue_ticket_bridges(&root, Some("spilled"), 10)?;
+
+        assert_eq!(bridges.len(), 2);
+        assert!(bridges.iter().all(|bridge| bridge.task.is_some()));
+        assert!(bridges.iter().all(|bridge| bridge.ticket.is_some()));
+        assert_eq!(queue_bridge_db_open_count_for_tests(&root), 1);
+        assert_eq!(channels::channel_db_open_count_for_tests(&db_path), 0);
+        assert_eq!(tickets::ticket_db_open_call_count_for_tests(&db_path), 0);
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn spill_candidates_batch_bridge_and_failure_signature_evidence() -> Result<()> {
+        let root = temp_root("spill-candidates-batch-evidence");
+        std::fs::create_dir_all(&root)?;
+
+        let candidate = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Failure weighted task".to_string(),
+                prompt: "Keep retrying a noisy task.".to_string(),
+                thread_key: "queue/failure-weighted".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )?;
+        let already_spilled = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Already spilled task".to_string(),
+                prompt: "This should not show in candidates.".to_string(),
+                thread_key: "queue/already-spilled".to_string(),
+                workspace_root: None,
+                priority: "low".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )?;
+
+        let conn = open_queue_bridge_db(&root)?;
+        conn.execute(
+            r#"
+            INSERT INTO queue_ticket_spills (
+                message_key, work_id, ticket_system, bridge_state, spilled_at, restored_at, updated_at
+            ) VALUES (?1, ?2, ?3, 'spilled', ?4, NULL, ?4)
+            "#,
+            params![
+                &already_spilled.message_key,
+                "work_already_spilled",
+                DEFAULT_TICKET_SYSTEM,
+                now_iso_string()
+            ],
+        )?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS ctox_core_transition_proofs (
+                proof_id TEXT PRIMARY KEY,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                lane TEXT NOT NULL,
+                from_state TEXT NOT NULL,
+                to_state TEXT NOT NULL,
+                core_event TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                accepted INTEGER NOT NULL,
+                violation_codes_json TEXT NOT NULL DEFAULT '[]',
+                request_json TEXT NOT NULL DEFAULT '{}',
+                report_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            "#,
+        )?;
+        conn.execute(
+            r#"INSERT INTO ctox_core_transition_proofs
+                (proof_id, entity_type, entity_id, lane, from_state, to_state,
+                 core_event, actor, accepted, request_json, report_json, created_at, updated_at)
+               VALUES ('batch-p1', 'QueueItem', ?1, 'P2MissionDelivery', 'Running', 'Failed',
+                       'Fail', 'worker', 1, '{"err":"timeout"}', '{}',
+                       '2026-06-13T00:00:00.000Z', '2026-06-13T00:00:00.000Z')"#,
+            params![&candidate.message_key],
+        )?;
+        drop(conn);
+
+        reset_queue_bridge_db_open_count_for_tests(&root);
+        let candidates = list_queue_spill_candidates(&root, 10)?;
+
+        assert_eq!(queue_bridge_db_open_count_for_tests(&root), 1);
+        let scored = candidates
+            .iter()
+            .find(|item| item.message_key == candidate.message_key)
+            .expect("failure-weighted task should be listed");
+        assert!(scored
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("distinct durable failure signature")));
+        assert!(!candidates
+            .iter()
+            .any(|item| item.message_key == already_spilled.message_key));
 
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
@@ -2935,6 +3317,64 @@ mod tests {
         assert_eq!(report.mutated_count, 0);
         let current = channels::load_queue_task(&root, &task.message_key)?.unwrap();
         assert_eq!(current.route_status, "pending");
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn cleanup_scope_batches_metadata_reads_for_scanned_tasks() -> Result<()> {
+        let root = temp_root("cleanup-metadata-batch");
+        std::fs::create_dir_all(&root)?;
+
+        for index in 0..3 {
+            let run_id = format!("metadata-batch-{index}");
+            let _ = channels::create_queue_task(
+                &root,
+                channels::QueueTaskCreateRequest {
+                    title: format!("Metadata batch task {index}"),
+                    prompt: format!("Run scoped work for {run_id}."),
+                    thread_key: format!("queue/{run_id}"),
+                    workspace_root: Some(format!("/tmp/{run_id}")),
+                    priority: "normal".to_string(),
+                    suggested_skill: None,
+                    parent_message_key: None,
+                    extra_metadata: Some(json!({
+                        "run_id": run_id,
+                        "source_label": "metadata-batch"
+                    })),
+                },
+            )?;
+        }
+
+        reset_queue_metadata_db_open_count_for_tests(&root);
+        let report = cleanup_queue_scope(
+            &root,
+            &[
+                "cleanup-scope".to_string(),
+                "--all-open".to_string(),
+                "--dry-run".to_string(),
+                "--limit".to_string(),
+                "10".to_string(),
+            ],
+        )?;
+        assert_eq!(report.scanned_count, 3);
+        assert_eq!(report.matched_count, 3);
+        assert_eq!(queue_metadata_db_open_count_for_tests(&root), 1);
+
+        reset_queue_metadata_db_open_count_for_tests(&root);
+        let report = assert_clean_queue_scope(
+            &root,
+            &[
+                "assert-clean-scope".to_string(),
+                "--all-open".to_string(),
+                "--limit".to_string(),
+                "10".to_string(),
+            ],
+        )?;
+        assert!(report.ok);
+        assert_eq!(report.open_total, 3);
+        assert_eq!(queue_metadata_db_open_count_for_tests(&root), 1);
 
         let _ = std::fs::remove_dir_all(&root);
         Ok(())

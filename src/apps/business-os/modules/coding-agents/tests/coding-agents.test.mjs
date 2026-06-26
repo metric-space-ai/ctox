@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { __codingAgentsTestHooks as hooks } from '../index.js';
 
@@ -104,6 +105,27 @@ test('typed agent commands carry provider and structured payloads', () => {
     10 * 60 * 1000
   );
   assert.equal(hooks.codingAgentCommandWaitTimeoutMs('ctox.coding_agent.status'), undefined);
+});
+
+test('diagnostics status refresh does not create idle polling command traffic', () => {
+  let scheduledIntervals = 0;
+  let refreshCalls = 0;
+  const handle = hooks.startDiagnosticsAutoRefresh({
+    setIntervalFn: () => {
+      scheduledIntervals += 1;
+      return { id: 'unexpected-interval' };
+    },
+    refresh: () => {
+      refreshCalls += 1;
+    }
+  });
+
+  assert.equal(handle, null);
+  assert.equal(scheduledIntervals, 0);
+  assert.equal(refreshCalls, 0);
+
+  const source = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+  assert.equal(source.includes('setInterval('), false);
 });
 
 test('structured command outcomes avoid stdout parsing where available', () => {

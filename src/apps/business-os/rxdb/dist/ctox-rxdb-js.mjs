@@ -55,8 +55,8 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   accounting_number_series: "5fe7fda57fb6df74e86432afebd2672ec233140d2de7181a62889d82f8e08bce",
   accounting_receipts: "f0995e7532ead4def819aa6bc554d53c4abbaccc8bee0db89272c0a11a5e43a0",
   applications: "ef7b52e117777575029346888b1c17412e2f4bda0ef9ca6c5a5e89c54a310e00",
-  browser_frames: "89e1c1392d90d9f0ec826ced384f883092ce525f846e4d1c4383047a96673519",
-  browser_input_events: "dc79706396f8c59865dc4187947fe925f4b1a1fae6669c4fd7d7d0e507a4dff7",
+  browser_frames: "3718321ed3853a1dff93aaedd5650e2487bb65795f761611a017e66f998635ed",
+  browser_input_events: "5733148e341550c1166db59b9b93c7975dc7aa4753451da9dd876b4cbe3d0875",
   browser_sessions: "8f9d925480b6fa11755bb0800e47da9d4b8dca59f510fb5c6bfb3d84cec212d3",
   browser_tabs: "3387a8373cad98f4651b15173cf920568970ad2afa7f14758bbfffe9d77d5004",
   business_chats: "0e52de33b4ea565122debb0e46296b44cdbe13f60190b9d9d06259f3719918d7",
@@ -614,16 +614,70 @@ var CtoxIndexedDbCollection = class {
     this.events = new CtoxEventEmitter();
   }
   observe(listener) {
-    return this.events.on("change", listener);
+    return this.events.on("change", (event) => listener(event?.detail || event));
   }
   async upsert(doc) {
     const id = documentId(doc);
     if (!id) {
       throw new Error(`Cannot upsert ${this.name} document without primary key`);
     }
-    const previous = await this.findOne(id);
-    await this.bulkWrite([{ previous, document: { ...previous || {}, ...doc } }]);
-    return this.findOne(id, { withDeleted: true });
+    const { success } = await this.bulkUpsert([doc]);
+    return success[id] || null;
+  }
+  async bulkUpsert(docs, { now = Date.now(), replicationOrigin = null } = {}) {
+    if (!Array.isArray(docs)) {
+      throw new TypeError("bulkUpsert docs must be an array");
+    }
+    const tx = this.db.transaction(DOCUMENT_STORE, "readwrite");
+    const done = idbTransactionDone(tx);
+    const store = tx.objectStore(DOCUMENT_STORE);
+    const success = {};
+    const error = [];
+    let localWriteLwtFloor = null;
+    if (!replicationOrigin?.role) {
+      localWriteLwtFloor = await latestCollectionLwtInTransaction(store, this.name) + 1;
+    }
+    for (const doc of docs) {
+      const id = documentId(doc);
+      if (!id) {
+        error.push({ document: doc, error: "missing primary key" });
+        continue;
+      }
+      const previous = await idbRequest(store.get([this.name, id]));
+      const nextDocument = { ...previous?.doc || {}, ...doc };
+      let lwt = documentLwt(nextDocument, now);
+      if (localWriteLwtFloor !== null) {
+        lwt = Math.max(lwt, localWriteLwtFloor);
+        localWriteLwtFloor = lwt + 1;
+      }
+      if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin)) {
+        if (previous?.doc) success[id] = previous.doc;
+        continue;
+      }
+      if (replicationOrigin?.role && previous && Number(previous.lwt || 0) >= lwt) {
+        lwt = Number(previous.lwt) + 1;
+      }
+      const stored = storedRecordForWrite({
+        collection: this.name,
+        id,
+        doc: nextDocument,
+        lwt,
+        indexes: this.indexes,
+        indexSignature: this.indexSignature,
+        replicationOrigin
+      });
+      await idbRequest(store.put(stored));
+      success[id] = stored.doc;
+    }
+    await done;
+    if (Object.keys(success).length) {
+      this.events.emit("change", {
+        collection: this.name,
+        success,
+        at: now
+      });
+    }
+    return { success, error };
   }
   async bulkWrite(rows, { now = Date.now(), replicationOrigin = null } = {}) {
     if (!Array.isArray(rows)) {
@@ -657,16 +711,15 @@ var CtoxIndexedDbCollection = class {
       if (replicationOrigin?.role && previous && Number(previous.lwt || 0) >= lwt) {
         lwt = Number(previous.lwt) + 1;
       }
-      const stored = {
+      const stored = storedRecordForWrite({
         collection: this.name,
         id,
+        doc,
         lwt,
-        deleted: Boolean(doc._deleted),
-        indexValues: indexValuesFor(this.indexes, doc),
-        schemaIndexSignature: this.indexSignature,
-        schemaIndexEntries: schemaIndexEntriesFor(this.indexes, doc, id, this.name),
-        doc: normalizeDocument(doc, lwt, replicationOrigin)
-      };
+        indexes: this.indexes,
+        indexSignature: this.indexSignature,
+        replicationOrigin
+      });
       await idbRequest(store.put(stored));
       success[id] = stored.doc;
     }
@@ -1052,6 +1105,18 @@ function normalizeDocument(doc, lwt, replicationOrigin = null) {
   }
   normalized._deleted = Boolean(normalized._deleted);
   return normalized;
+}
+function storedRecordForWrite({ collection, id, doc, lwt, indexes, indexSignature, replicationOrigin = null }) {
+  return {
+    collection,
+    id,
+    lwt,
+    deleted: Boolean(doc._deleted),
+    indexValues: indexValuesFor(indexes, doc),
+    schemaIndexSignature: indexSignature,
+    schemaIndexEntries: schemaIndexEntriesFor(indexes, doc, id, collection),
+    doc: normalizeDocument(doc, lwt, replicationOrigin)
+  };
 }
 function shouldAcceptDocumentWrite(existingRecord, incomingLwt, replicationOrigin = null) {
   if (!existingRecord) return true;
@@ -1454,7 +1519,7 @@ var COMPLETED_FRAME_ACK_TTL_MS = 6e4;
 var SEND_PRIORITIES = ["high", "normal", "low"];
 var MAX_GLOBAL_RTC_PEER_CONNECTIONS = 64;
 var RTC_CONNECTION_QUEUE_TIMEOUT_MS = 45e3;
-var RTC_HANDSHAKE_TIMEOUT_MS = 15e3;
+var RTC_HANDSHAKE_TIMEOUT_MS = 6e4;
 var GLOBAL_RTC_CONNECTION_POOL_KEY = /* @__PURE__ */ Symbol.for("ctox.rxdb.webrtc-rtc-pool.v1");
 var RECENT_RTC_EVENT_LIMIT = 40;
 var ICE_DISCONNECTED_GRACE_MS = 8e3;
@@ -2366,6 +2431,7 @@ var CtoxWebRtcNativePeer = class {
         received: /* @__PURE__ */ new Map(),
         createdAt: Date.now(),
         attempt: Number(payload.attempt || 0),
+        contiguousSeq: -1,
         nextAckSeq: Math.min(FRAME_ACK_WINDOW - 1, totalFrames - 1)
       });
       this.completedFrameAcks.delete(transferId2);
@@ -2393,12 +2459,11 @@ var CtoxWebRtcNativePeer = class {
       }
       const entry2 = this.incomingFrames.get(transferId2);
       if (entry2 && entry2.peerId === peerId) {
-        const ackSeq = highestContiguousSeq(entry2.received, entry2.totalFrames);
         this.send(peerId, {
           ctoxFrame: CTOX_FRAME_PROTOCOL,
           kind: "ack",
           transferId: transferId2,
-          ackSeq,
+          ackSeq: Number(entry2.contiguousSeq ?? -1),
           receivedFrames: entry2.received.size,
           final: false,
           resume: true
@@ -2439,8 +2504,7 @@ var CtoxWebRtcNativePeer = class {
       });
       return;
     }
-    entry.received.set(seq, String(payload.data || ""));
-    const contiguousSeq = highestContiguousSeq(entry.received, entry.totalFrames);
+    const contiguousSeq = recordReceivedFrame(entry, seq, String(payload.data || ""));
     if (entry.received.size !== entry.totalFrames) {
       if (contiguousSeq >= entry.nextAckSeq && contiguousSeq < entry.totalFrames - 1) {
         this.send(peerId, {
@@ -3351,7 +3415,30 @@ function requestObservationKey(peerId, method) {
   return `${peerId || ""}|${method || ""}`;
 }
 function encodedSize(value) {
-  return new TextEncoder().encode(String(value || "")).byteLength;
+  return utf8ByteLength(String(value || ""));
+}
+function utf8ByteLength(text) {
+  let bytes = 0;
+  const value = String(text || "");
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 127) {
+      bytes += 1;
+    } else if (code <= 2047) {
+      bytes += 2;
+    } else if (code >= 55296 && code <= 56319) {
+      const next = index + 1 < value.length ? value.charCodeAt(index + 1) : 0;
+      if (next >= 56320 && next <= 57343) {
+        bytes += 4;
+        index += 1;
+      } else {
+        bytes += 3;
+      }
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
 }
 function splitFrameChunks(text, transferId) {
   const envelope = JSON.stringify({
@@ -3385,6 +3472,9 @@ function splitFrameChunks(text, transferId) {
 var webrtcNativeTestInternals = Object.freeze({
   splitFrameChunks,
   jsonEscapedCharLen,
+  encodedSize,
+  utf8ByteLength,
+  recordReceivedFrame,
   MAX_SERIALIZED_FRAME_BYTES
 });
 function jsonEscapedCharLen(ch) {
@@ -3398,13 +3488,15 @@ function jsonEscapedCharLen(ch) {
   if (code <= 65535) return 3;
   return 4;
 }
-function highestContiguousSeq(received, totalFrames) {
-  let seq = -1;
-  for (let index = 0; index < totalFrames; index += 1) {
-    if (!received.has(index)) break;
-    seq = index;
+function recordReceivedFrame(entry, seq, data) {
+  const hadFrame = entry.received.has(seq);
+  entry.received.set(seq, data);
+  if (!hadFrame && seq === Number(entry.contiguousSeq ?? -1) + 1) {
+    while (entry.contiguousSeq + 1 < entry.totalFrames && entry.received.has(entry.contiguousSeq + 1)) {
+      entry.contiguousSeq += 1;
+    }
   }
-  return seq;
+  return Number(entry.contiguousSeq ?? -1);
 }
 function createSendQueue() {
   return {
@@ -5223,6 +5315,7 @@ var ActiveCollectionRegistry = class {
         }
       }
     }, ACTIVE_NOTIFY_DEBOUNCE_MS);
+    this.notifyTimer.unref?.();
   }
   scheduleExpiryNotify() {
     if (this.expiryTimer != null) {
@@ -5242,6 +5335,7 @@ var ActiveCollectionRegistry = class {
       this.scheduleNotify();
       this.scheduleExpiryNotify();
     }, delayMs);
+    this.expiryTimer.unref?.();
   }
 };
 var SINGLETON = null;
@@ -5256,6 +5350,7 @@ function createActiveCollectionRegistry(options = {}) {
 // src/apps/business-os/rxdb/src/replication-webrtc.mjs
 var ACTIVE_COLLECTIONS_METHOD = "rxdb.activeCollections";
 var DEFAULT_QUERY_META_BUDGET_BYTES = 128 * 1024 * 1024;
+var LOCAL_WRITE_PUSH_DEBOUNCE_MS = 50;
 var BROWSER_CAPABILITIES = [
   "ctox-rxdb-browser-v1",
   "ctox-file-chunks-v1",
@@ -5282,6 +5377,7 @@ function getConnectionHandlerSimplePeer({ signalingServerUrl, config } = {}) {
 var SHARED_ROOM_PEERS = /* @__PURE__ */ new Map();
 var SHARED_HANDSHAKE_TIMEOUT_MS = 6e4;
 var SHARED_PEER_OPEN_WAIT_MS = 6e4;
+var SHARED_PROTOCOL_COLLECTION_CONCURRENCY = 8;
 var VOLATILE_SIGNALING_QUERY_PARAMS = /* @__PURE__ */ new Set([
   "client",
   "role",
@@ -5562,10 +5658,9 @@ var SharedRoomPeer = class {
   // Build `{ collectionName -> { schemaVersion, schemaHash, schemaHashSource } }`
   // across every registered collection on this shared connection.
   async collectCollectionSchemas() {
-    const map = {};
-    for (const [name, registration] of this.collections.entries()) {
+    return this.collectCollectionMap(async (name, registration) => {
       const state = registration.state;
-      if (!state) continue;
+      if (!state) return null;
       let hash = state.schemaHashValue;
       if (!hash) {
         try {
@@ -5574,19 +5669,17 @@ var SharedRoomPeer = class {
           hash = null;
         }
       }
-      map[name] = {
+      return [name, {
         schemaVersion: state.collection?.schema?.version ?? null,
         schemaHash: hash || null,
         schemaHashSource: schemaHashSource(name)
-      };
-    }
-    return map;
+      }];
+    });
   }
   async collectCollectionCheckpoints() {
-    const map = {};
-    for (const [name, registration] of this.collections.entries()) {
+    return this.collectCollectionMap(async (name, registration) => {
       const state = registration.state;
-      if (!state) continue;
+      if (!state) return null;
       let hash = state.schemaHashValue;
       if (!hash) {
         try {
@@ -5598,13 +5691,33 @@ var SharedRoomPeer = class {
       try {
         const checkpoint = await state.collection.storageCollection.replicationCheckpointStatus(hash || null);
         if (checkpoint && typeof checkpoint === "object") {
-          map[name] = {
+          return [name, {
             ...checkpoint,
             collection: checkpoint.collection || name
-          };
+          }];
         }
       } catch {
       }
+      return null;
+    });
+  }
+  async collectCollectionMap(mapper) {
+    const entries = [...this.collections.entries()];
+    const results = new Array(entries.length);
+    let nextIndex = 0;
+    const workerCount = Math.min(SHARED_PROTOCOL_COLLECTION_CONCURRENCY, entries.length);
+    await Promise.all(Array.from({ length: workerCount }, async () => {
+      while (nextIndex < entries.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        const [name, registration] = entries[index];
+        results[index] = await mapper(name, registration);
+      }
+    }));
+    const map = {};
+    for (const result of results) {
+      if (!Array.isArray(result) || !result[0]) continue;
+      map[result[0]] = result[1];
     }
     return map;
   }
@@ -5803,6 +5916,7 @@ var CtoxWebRtcReplicationState = class {
     this.pushAgainAfterCurrent = false;
     this.pullRetryTimer = null;
     this.pushRetryTimer = null;
+    this.localPushTimer = null;
     this.retainedCheckpoints = null;
     this.activeRemotePeerId = null;
     this.demandLoaderActive = false;
@@ -5831,7 +5945,7 @@ var CtoxWebRtcReplicationState = class {
       if (changeEventHasOnlyReplicationOriginWrites(event)) {
         return;
       }
-      this.pushToRemotePeers().catch((error) => this.error$.next(error));
+      this.scheduleLocalWritePush();
     });
     const periodicPushMs = this.periodicPushIntervalMs();
     if (periodicPushMs > 0) {
@@ -6003,6 +6117,15 @@ var CtoxWebRtcReplicationState = class {
         this.schedulePushRetry();
       });
     }, Math.max(1e3, Number(this.retryTime) || 5e3));
+  }
+  scheduleLocalWritePush() {
+    if (this.cancelled || !this.push || this.localPushTimer) return;
+    this.localPushTimer = setTimeout(() => {
+      this.localPushTimer = null;
+      if (this.cancelled) return;
+      this.pushToRemotePeers().catch((error) => this.error$.next(error));
+    }, LOCAL_WRITE_PUSH_DEBOUNCE_MS);
+    this.localPushTimer.unref?.();
   }
   async pullFromPeer(peerId) {
     const batchSize = Number(this.pull?.batchSize || 10);
@@ -6184,6 +6307,10 @@ var CtoxWebRtcReplicationState = class {
     if (this.pushRetryTimer) {
       clearTimeout(this.pushRetryTimer);
       this.pushRetryTimer = null;
+    }
+    if (this.localPushTimer) {
+      clearTimeout(this.localPushTimer);
+      this.localPushTimer = null;
     }
     const shared = this.shared;
     this.shared = null;
@@ -6712,11 +6839,10 @@ var CtoxRxCollection = class {
     if (!Array.isArray(docs)) {
       throw new TypeError("bulkUpsert expects an array of documents");
     }
-    const written = [];
-    for (const doc of docs) {
-      written.push(await this.upsert(doc));
-    }
-    return written;
+    const normalized = docs.map((doc) => normalizeDoc(doc, this.schema.primaryPath));
+    const result = typeof this.storageCollection.bulkUpsert === "function" ? await this.storageCollection.bulkUpsert(normalized) : await this.storageCollection.bulkWrite(normalized);
+    const success = result?.success || {};
+    return normalized.map((doc) => new CtoxRxDocument(this, success[doc.id] || doc));
   }
   find(query = {}) {
     return new CtoxRxQuery(this, query, false);
@@ -6761,9 +6887,28 @@ var CtoxRxCollection = class {
         const registry = getActiveCollectionRegistry();
         registry.subscriptionStarted(this.name);
         let pendingTimer = null;
+        let initialized = false;
+        let pendingSuccess = {};
+        const documentsById = /* @__PURE__ */ new Map();
         const debounceMs = OBSERVABLE_DEBOUNCE_MS;
-        const flushEmit = async () => {
-          pendingTimer = null;
+        const emitSnapshot = () => {
+          listener({
+            collectionName: this.name,
+            documents: Array.from(documentsById.values())
+          });
+        };
+        const applySuccess = (success = {}) => {
+          for (const rawDoc of Object.values(success || {})) {
+            const id = documentIdFromDoc(rawDoc);
+            if (!id) continue;
+            if (rawDoc?._deleted) {
+              documentsById.delete(id);
+            } else {
+              documentsById.set(id, new CtoxRxDocument(this, rawDoc));
+            }
+          }
+        };
+        const flushInitial = async () => {
           if (!active) return;
           let documents;
           try {
@@ -6772,13 +6917,34 @@ var CtoxRxCollection = class {
             if (isIndexedDbConnectionClosingError(error)) return;
             throw error;
           }
-          if (active) listener({ collectionName: this.name, documents });
+          if (!active) return;
+          documentsById.clear();
+          for (const doc of documents) {
+            const id = documentIdFromDoc(doc);
+            if (id) documentsById.set(id, doc);
+          }
+          applySuccess(pendingSuccess);
+          pendingSuccess = {};
+          initialized = true;
+          emitSnapshot();
         };
-        const emit = () => {
+        const flushDelta = () => {
+          pendingTimer = null;
+          if (!active || !initialized) return;
+          applySuccess(pendingSuccess);
+          pendingSuccess = {};
+          emitSnapshot();
+        };
+        const emit = (event) => {
+          pendingSuccess = {
+            ...pendingSuccess,
+            ...successPayloadFromChangeEvent(event)
+          };
+          if (!initialized) return;
           if (pendingTimer != null) return;
-          pendingTimer = setTimeout(flushEmit, debounceMs);
+          pendingTimer = setTimeout(flushDelta, debounceMs);
         };
-        flushEmit();
+        flushInitial();
         const unsubscribe = this.observe(emit);
         return {
           unsubscribe: () => {
@@ -6811,15 +6977,42 @@ var CtoxRxQuery = class _CtoxRxQuery {
         const registry = getActiveCollectionRegistry();
         registry.subscriptionStarted(this.collection.name);
         let pendingTimer = null;
+        let initialized = false;
+        let pendingPrimaryDoc = void 0;
+        const primaryId = this.single ? singlePrimaryKeyCandidateId(this.query, this.collection.schema.primaryPath) : "";
+        const canApplyPrimaryDelta = Boolean(primaryId);
         const flushEmit = () => {
           pendingTimer = null;
           if (!active) return;
           this.exec().then((value) => {
-            if (active) listener(value);
+            if (!active) return;
+            initialized = true;
+            if (pendingPrimaryDoc !== void 0 && canApplyPrimaryDelta) {
+              listener(wrapPrimaryDeltaDocument(this.collection, pendingPrimaryDoc));
+              pendingPrimaryDoc = void 0;
+              return;
+            }
+            listener(value);
           }).catch(() => {
           });
         };
-        const emit = () => {
+        const flushPrimaryDelta = () => {
+          pendingTimer = null;
+          if (!active || !initialized || !canApplyPrimaryDelta || pendingPrimaryDoc === void 0) return;
+          const next = pendingPrimaryDoc;
+          pendingPrimaryDoc = void 0;
+          listener(wrapPrimaryDeltaDocument(this.collection, next));
+        };
+        const emit = (event) => {
+          if (canApplyPrimaryDelta) {
+            const success = successPayloadFromChangeEvent(event);
+            if (!Object.prototype.hasOwnProperty.call(success, primaryId)) return;
+            pendingPrimaryDoc = success[primaryId] || null;
+            if (!initialized) return;
+            if (pendingTimer != null) return;
+            pendingTimer = setTimeout(flushPrimaryDelta, 50);
+            return;
+          }
           if (pendingTimer != null) return;
           pendingTimer = setTimeout(flushEmit, 50);
         };
@@ -7050,6 +7243,29 @@ function normalizePositiveInteger(value, name) {
     throw new TypeError(`${name} must be a positive number`);
   }
   return Math.floor(parsed);
+}
+function successPayloadFromChangeEvent(event) {
+  return event?.success && typeof event.success === "object" ? event.success : event?.detail?.success && typeof event.detail.success === "object" ? event.detail.success : {};
+}
+function documentIdFromDoc(doc) {
+  return String(doc?.id || doc?._id || doc?.document_id || doc?.documentId || "").trim();
+}
+function singlePrimaryKeyCandidateId(query = {}, primaryPath = "id") {
+  const selector = query?.selector || {};
+  for (const field of ["id", "_id", primaryPath].filter(Boolean)) {
+    if (!Object.prototype.hasOwnProperty.call(selector, field)) continue;
+    const value = selector[field];
+    if (typeof value === "string" || typeof value === "number") return String(value);
+    if (value && typeof value === "object" && !Array.isArray(value) && "$eq" in value && value.$eq != null) {
+      return String(value.$eq);
+    }
+    return "";
+  }
+  return "";
+}
+function wrapPrimaryDeltaDocument(collection, doc) {
+  if (!doc || doc._deleted) return null;
+  return new CtoxRxDocument(collection, doc);
 }
 function isInOperatorMatch(actual, candidates) {
   const values = Array.isArray(candidates) ? candidates : [candidates];

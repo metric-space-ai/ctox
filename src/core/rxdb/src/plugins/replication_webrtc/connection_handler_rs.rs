@@ -12,8 +12,8 @@
 mod frame_contract_generated;
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
@@ -23,9 +23,9 @@ use serde_json::Value;
 use tokio_stream::StreamExt;
 use webrtc::data_channel::{DataChannel, DataChannelEvent};
 use webrtc::peer_connection::{
-    MediaEngine, PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler,
-    RTCConfigurationBuilder, RTCIceCandidateInit, RTCIceServer, RTCPeerConnectionState,
-    RTCSessionDescription, Registry, SettingEngine, register_default_interceptors,
+    register_default_interceptors, MediaEngine, PeerConnection, PeerConnectionBuilder,
+    PeerConnectionEventHandler, RTCConfigurationBuilder, RTCIceCandidateInit, RTCIceServer,
+    RTCPeerConnectionState, RTCSessionDescription, Registry, SettingEngine,
 };
 use webrtc::runtime::default_runtime;
 
@@ -35,7 +35,7 @@ use crate::plugins::replication_webrtc::webrtc_types::{
     PeerWithMessage, PeerWithResponse, WebRTCConnectionHandler, WebRTCMessage, WebRTCResponse,
     WebRTCWireFrame,
 };
-use crate::rx_error::{RxError, RxResult, new_rx_error};
+use crate::rx_error::{new_rx_error, RxError, RxResult};
 use crate::rxjs_compat::{RxStream, RxSubject};
 use frame_contract_generated::{
     CTOX_FRAME_PROTOCOL, FRAME_ACK_WINDOW, MAX_CHUNK_BYTES, MAX_FRAME_RETRIES,
@@ -53,9 +53,9 @@ const SEND_FRAME_PAUSE: Duration = Duration::from_millis(1);
 // DataChannel when a large transfer (e.g. documents + blob chunks) is sent.
 const DATA_CHANNEL_BUFFERED_HIGH_WATER: u32 = 1024 * 1024; // 1 MiB
 const DATA_CHANNEL_BUFFERED_LOW_WATER: u32 = 256 * 1024; // 256 KiB
-// Upper bound on how long a sender waits for the buffer to drain below the low
-// watermark before giving up (matches the ack timeout so a wedged peer fails
-// rather than hanging forever).
+                                                         // Upper bound on how long a sender waits for the buffer to drain below the low
+                                                         // watermark before giving up (matches the ack timeout so a wedged peer fails
+                                                         // rather than hanging forever).
 const SEND_CAPACITY_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 // Phase 1 hard size invariant: the SCTP message ceiling for an RTCDataChannel is
 // 16 KiB. A single `send_text` larger than this is dropped by / kills the channel
@@ -2410,11 +2410,9 @@ mod tests {
         let handler = WebRTCRsConnectionHandler::new();
         let peer = "peer-1".to_string();
         assert!(handler.is_collection_write_authorized_for_peer(&peer, "user_threads"));
-        assert!(
-            handler
-                .document_filter_for_peer(&peer, "user_threads")
-                .is_none()
-        );
+        assert!(handler
+            .document_filter_for_peer(&peer, "user_threads")
+            .is_none());
 
         handler.set_collection_write_authz(Some(Arc::new(|token: &str, collection: &str| {
             token == "tok-abc" && collection == "business_commands"
@@ -2828,11 +2826,9 @@ mod tests {
             collection: None,
         };
 
-        assert!(
-            handler
-                .apply_active_collections(&peer, &report(serde_json::json!(["business_commands"])))
-                .is_empty()
-        );
+        assert!(handler
+            .apply_active_collections(&peer, &report(serde_json::json!(["business_commands"])))
+            .is_empty());
         // Re-activation after a reported set without the collection: resync.
         let activated = handler.apply_active_collections(
             &peer,
@@ -2840,20 +2836,16 @@ mod tests {
         );
         assert_eq!(activated, vec!["desktop_files".to_string()]);
         // Unchanged set: idempotent no-op.
-        assert!(
-            handler
-                .apply_active_collections(
-                    &peer,
-                    &report(serde_json::json!(["business_commands", "desktop_files"])),
-                )
-                .is_empty()
-        );
+        assert!(handler
+            .apply_active_collections(
+                &peer,
+                &report(serde_json::json!(["business_commands", "desktop_files"])),
+            )
+            .is_empty());
         // Dropping a collection re-activates nothing.
-        assert!(
-            handler
-                .apply_active_collections(&peer, &report(serde_json::json!(["desktop_files"])))
-                .is_empty()
-        );
+        assert!(handler
+            .apply_active_collections(&peer, &report(serde_json::json!(["desktop_files"])))
+            .is_empty());
         // ...but bringing it back resyncs it.
         let reactivated = handler.apply_active_collections(
             &peer,

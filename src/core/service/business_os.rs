@@ -22,15 +22,6 @@ use crate::mission::channels;
 use crate::persistence;
 use crate::skill_store;
 
-const BUSINESS_STACK_SKILL_CANDIDATES: &[&str] = &[
-    "src/skills/system/product_engineering/business-stack/SKILL.md",
-    "skills/system/product_engineering/business-stack/SKILL.md",
-];
-const BUSINESS_STACK_INSTALLER_CANDIDATES: &[&str] = &[
-    "skills/system/product_engineering/business-stack/scripts/install_business_stack.py",
-    "src/skills/system/product_engineering/business-stack/scripts/install_business_stack.py",
-];
-const BUSINESS_STACK_TEMPLATE: &str = "templates/business-basic";
 const BUSINESS_OS_APP_CANDIDATES: &[&str] = &["src/apps/business-os", "business-os"];
 const ACTIVATION_PAYLOAD_KEY: &str = "business_os.skill_activation.v1";
 const MCP_POLICY_KEYS: &[&str] = &[
@@ -326,7 +317,6 @@ pub fn handle_business_os_command(root: &Path, args: &[String]) -> anyhow::Resul
         Some("app") => handle_business_os_app(root, &args[1..]),
         Some("repair") => handle_business_os_repair(root, &args[1..]),
         Some("backup") => handle_business_os_backup(root, &args[1..]),
-        Some("install") => install_business_os(root, &args[1..]),
         Some("commands") => handle_business_os_commands(root, &args[1..]),
         Some("auth") => handle_business_os_auth(root, &args[1..]),
         Some("desktop") => handle_business_os_desktop(root, &args[1..]),
@@ -508,41 +498,24 @@ fn handle_business_os_repair(root: &Path, args: &[String]) -> anyhow::Result<()>
 }
 
 pub fn business_os_status_text(root: &Path) -> String {
-    let skill = existing_file_path(root, BUSINESS_STACK_SKILL_CANDIDATES);
-    let installer = existing_file_path(root, BUSINESS_STACK_INSTALLER_CANDIDATES);
-    let template = root.join(BUSINESS_STACK_TEMPLATE);
-    let manifest = template.join("ctox-business.json");
     let native_app = existing_dir_path(root, BUSINESS_OS_APP_CANDIDATES);
 
     format!(
         "CTOX Business OS\n\
-         Source skill: {skill_status}  {skill}\n\
-         Installer:    {installer_status}  {installer}\n\
-         Template:     {template_status}  {template}\n\
-         Manifest:     {manifest_status}  {manifest}\n\n\
-         Native app:   {native_app_status}  {native_app}\n\
+         Native app:   {native_app}\n\
          Native store: {native_store}\n\n\
          Serve the native no-build Business OS:\n\
            ctox business-os serve --addr 127.0.0.1:8765\n\n\
-         Install into a separate customer-owned repository:\n\
-           ctox business-os install --target <empty-dir> --init-git\n\n\
-         Preview first:\n\
-           ctox business-os install --target <empty-dir> --dry-run\n\n\
+         Create or modify runtime-installed Business OS apps:\n\
+           ctox business-os app create --instruction <text> [--module-id <id>]\n\
+           ctox business-os app modify <module-id> --instruction <text>\n\n\
          Runtime contract:\n\
-           - Web deploy can host the RxDB Business OS app shell.\n\
-           - CTOX core runs as the outbound RxDB/WebRTC peer.\n\
+           - Business OS apps are runtime-installed vanilla HTML/CSS/JS modules.\n\
+           - Dynamic apps live under runtime/business-os/installed-modules/<module-id>.\n\
+           - CTOX core runs as the outbound CTOX DB/WebRTC peer.\n\
            - SQLite state, commands, module manifests, and files sync over RxDB.\n\
            - Only system Business OS apps are installed by default.\n\
            - Non-system apps are installed through the app store only.\n",
-        skill_status = exists_label(skill.is_file()),
-        installer_status = exists_label(installer.is_file()),
-        template_status = exists_label(template.is_dir()),
-        manifest_status = exists_label(manifest.is_file()),
-        native_app_status = exists_label(native_app.join("index.html").is_file()),
-        skill = skill.display(),
-        installer = installer.display(),
-        template = template.display(),
-        manifest = manifest.display(),
         native_app = native_app.display(),
         native_store = root.join("runtime/business-os.sqlite3").display(),
     )
@@ -2851,44 +2824,6 @@ fn handle_business_os_skills(root: &Path, args: &[String]) -> anyhow::Result<()>
     }
 }
 
-fn install_business_os(root: &Path, args: &[String]) -> anyhow::Result<()> {
-    let target = flag_value(args, "--target")
-        .or_else(|| args.first().filter(|value| !value.starts_with("--")).map(String::as_str))
-        .map(PathBuf::from)
-        .context("usage: ctox business-os install --target <empty-dir> [--init-git] [--dry-run] [--no-copy-env]")?;
-
-    let installer = existing_file_path(root, BUSINESS_STACK_INSTALLER_CANDIDATES);
-    if !installer.is_file() {
-        anyhow::bail!("Business OS installer is missing: {}", installer.display());
-    }
-
-    let mut command = Command::new("python3");
-    command
-        .arg(&installer)
-        .arg("--ctox-repo")
-        .arg(root)
-        .arg("--target")
-        .arg(target);
-
-    if args.iter().any(|arg| arg == "--init-git") {
-        command.arg("--init-git");
-    }
-    if args.iter().any(|arg| arg == "--dry-run") {
-        command.arg("--dry-run");
-    }
-    if args.iter().any(|arg| arg == "--no-copy-env") {
-        command.arg("--no-copy-env");
-    }
-
-    let status = command
-        .status()
-        .context("failed to run CTOX Business OS installer with python3")?;
-    if !status.success() {
-        anyhow::bail!("CTOX Business OS installer failed with status {status}");
-    }
-    Ok(())
-}
-
 fn print_business_os_help() {
     println!("{}", business_os_usage());
     println!();
@@ -2899,7 +2834,7 @@ fn business_os_usage() -> String {
     business_os_usage_base()
         .replace(
             "  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]",
-            "  ctox business-os app create --instruction <text> [--module-id <id>]\n  ctox business-os app modify <module-id> --instruction <text>\n  ctox business-os app references [--query <text>] [--json]\n  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]\n  ctox business-os app smoke <module-id> [--installed|--source] [--url <business-os-url>] [--json] [--timeout-ms <n>] [--output <path>] [--screenshot <path>]\n  ctox business-os app e2e <module-id> [--installed|--source] [--url <business-os-url>] [--json] [--timeout-ms <n>] [--output <path>] [--screenshot <path>] [--marker <value>]",
+            "  ctox business-os app references [--query <text>] [--json]\n  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]\n  ctox business-os app smoke <module-id> [--installed|--source] [--url <business-os-url>] [--json] [--timeout-ms <n>] [--output <path>] [--screenshot <path>]\n  ctox business-os app e2e <module-id> [--installed|--source] [--url <business-os-url>] [--json] [--timeout-ms <n>] [--output <path>] [--screenshot <path>] [--marker <value>]",
         )
         .replace(
             "  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]",
@@ -2916,23 +2851,7 @@ fn business_os_usage() -> String {
 }
 
 fn business_os_usage_base() -> &'static str {
-    "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os mcp status\n  ctox business-os mcp tools\n  ctox business-os mcp policy\n  ctox business-os mcp policy keys\n  ctox business-os mcp policy set [--enabled true|false] [--allow-reads true|false] [--allow-writes true|false] [--allow-approvals true|false] [--allow-external-effects true|false] [--rate-limit-per-minute <n>] [--audit-retention-days <n>] [--allow-actor <id>]... [--allow-workspace <id>]... [--allow-module <id>]... [--allow-collection <name>]... [--deny-tool business_os.<tool>]... [--clear-deny-tools]\n  ctox business-os mcp call <tool-name> [--args <json>]\n  ctox business-os mcp audit [--limit <n>] [--format json|jsonl] [--output <path>] [--prune]\n  ctox business-os mcp serve [--addr 127.0.0.1:8788]\n  ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id> [--token <token>] [--once] [--max-reconnect-delay-ms <n>] [--heartbeat-interval-ms <n>] [--max-connection-age-ms <n>]\n  ctox business-os mcp gateway-status --url https://mcp.ctox.dev/status/<instance-id> [--token <token>]\n  ctox business-os peer status\n  ctox business-os peer rotate\n  ctox business-os peer start\n  ctox business-os desktop invite [--display-name <name>] [--ttl-hours <n> | --expires-at <rfc3339>] [--format json|link] [--output <path>]\n  ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]\n  ctox business-os app create --instruction <text> [--module-id <id>]\n  ctox business-os app modify <module-id> --instruction <text>\n  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]\n  ctox business-os app finalize <module-id> --task-id <queue-task-id> [--installed|--source] [--reason <text>]\n  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]\n  ctox business-os repair queue-projections (--dry-run | --apply)\n  ctox business-os backup restore-drill [--module <module-id>]\n  ctox business-os backup prune-drills [--dry-run]\n  ctox business-os install --target <empty-dir> [--init-git] [--dry-run] [--no-copy-env]\n  ctox business-os commands process <command-id>\n  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os web-stack person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--auto-auth-assist] [--task-id <id>] [--workspace <path>] [--no-workspace]\n  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-status --session-id <id>\n  ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]\n  ctox business-os web-stack context-extract --session-id <id> [--source-id <id>] [--capture-script <id>] [--task-id <id>]\n  ctox business-os web-stack redaction-audit --canary <value> [--canary <value>]... [--path <path>]...\n  ctox business-os web-stack browser-doctor [--dir <path>]\n  ctox business-os files sync <path>\n  ctox business-os files sync-workspace <path>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
-}
-
-fn exists_label(exists: bool) -> &'static str {
-    if exists {
-        "ok"
-    } else {
-        "missing"
-    }
-}
-
-fn existing_file_path(root: &Path, candidates: &[&str]) -> PathBuf {
-    candidates
-        .iter()
-        .map(|candidate| root.join(candidate))
-        .find(|path| path.is_file())
-        .unwrap_or_else(|| root.join(candidates[0]))
+    "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os mcp status\n  ctox business-os mcp tools\n  ctox business-os mcp policy\n  ctox business-os mcp policy keys\n  ctox business-os mcp policy set [--enabled true|false] [--allow-reads true|false] [--allow-writes true|false] [--allow-approvals true|false] [--allow-external-effects true|false] [--rate-limit-per-minute <n>] [--audit-retention-days <n>] [--allow-actor <id>]... [--allow-workspace <id>]... [--allow-module <id>]... [--allow-collection <name>]... [--deny-tool business_os.<tool>]... [--clear-deny-tools]\n  ctox business-os mcp call <tool-name> [--args <json>]\n  ctox business-os mcp audit [--limit <n>] [--format json|jsonl] [--output <path>] [--prune]\n  ctox business-os mcp serve [--addr 127.0.0.1:8788]\n  ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id> [--token <token>] [--once] [--max-reconnect-delay-ms <n>] [--heartbeat-interval-ms <n>] [--max-connection-age-ms <n>]\n  ctox business-os mcp gateway-status --url https://mcp.ctox.dev/status/<instance-id> [--token <token>]\n  ctox business-os peer status\n  ctox business-os peer rotate\n  ctox business-os peer start\n  ctox business-os desktop invite [--display-name <name>] [--ttl-hours <n> | --expires-at <rfc3339>] [--format json|link] [--output <path>]\n  ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]\n  ctox business-os app create --instruction <text> [--module-id <id>]\n  ctox business-os app modify <module-id> --instruction <text>\n  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]\n  ctox business-os app finalize <module-id> --task-id <queue-task-id> [--installed|--source] [--reason <text>]\n  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]\n  ctox business-os repair queue-projections (--dry-run | --apply)\n  ctox business-os backup restore-drill [--module <module-id>]\n  ctox business-os backup prune-drills [--dry-run]\n  ctox business-os commands process <command-id>\n  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os web-stack person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--auto-auth-assist] [--task-id <id>] [--workspace <path>] [--no-workspace]\n  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-status --session-id <id>\n  ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]\n  ctox business-os web-stack context-extract --session-id <id> [--source-id <id>] [--capture-script <id>] [--task-id <id>]\n  ctox business-os web-stack redaction-audit --canary <value> [--canary <value>]... [--path <path>]...\n  ctox business-os web-stack browser-doctor [--dir <path>]\n  ctox business-os files sync <path>\n  ctox business-os files sync-workspace <path>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
 }
 
 fn existing_dir_path(root: &Path, candidates: &[&str]) -> PathBuf {

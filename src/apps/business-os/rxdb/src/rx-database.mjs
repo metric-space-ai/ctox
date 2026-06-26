@@ -164,11 +164,12 @@ class CtoxRxCollection {
     if (!Array.isArray(docs)) {
       throw new TypeError('bulkUpsert expects an array of documents');
     }
-    const written = [];
-    for (const doc of docs) {
-      written.push(await this.upsert(doc));
-    }
-    return written;
+    const normalized = docs.map((doc) => normalizeDoc(doc, this.schema.primaryPath));
+    const result = typeof this.storageCollection.bulkUpsert === 'function'
+      ? await this.storageCollection.bulkUpsert(normalized)
+      : await this.storageCollection.bulkWrite(normalized);
+    const success = result?.success || {};
+    return normalized.map((doc) => new CtoxRxDocument(this, success[doc.id] || doc));
   }
 
   find(query = {}) {
@@ -181,7 +182,16 @@ class CtoxRxCollection {
 
   count(query = {}) {
     return {
-      exec: async () => (await this.find(query).exec()).length,
+      exec: async () => {
+        const normalized = normalizeQuery(query, this.schema.primaryPath);
+        if (typeof this.storageCollection.countDocuments === 'function') {
+          return this.storageCollection.countDocuments(normalized, {
+            matchesSelector,
+            sortDocuments,
+          });
+        }
+        return (await this.find(query).exec()).length;
+      },
     };
   }
 
@@ -218,9 +228,28 @@ class CtoxRxCollection {
         // emissions per second. The 50 ms window collapses burst writes
         // into one re-evaluation. See docs/rxdb_on-demand-load.md Wave 3.
         let pendingTimer = null;
+        let initialized = false;
+        let pendingSuccess = {};
+        const documentsById = new Map();
         const debounceMs = OBSERVABLE_DEBOUNCE_MS;
-        const flushEmit = async () => {
-          pendingTimer = null;
+        const emitSnapshot = () => {
+          listener({
+            collectionName: this.name,
+            documents: Array.from(documentsById.values()),
+          });
+        };
+        const applySuccess = (success = {}) => {
+          for (const rawDoc of Object.values(success || {})) {
+            const id = documentIdFromDoc(rawDoc);
+            if (!id) continue;
+            if (rawDoc?._deleted) {
+              documentsById.delete(id);
+            } else {
+              documentsById.set(id, new CtoxRxDocument(this, rawDoc));
+            }
+          }
+        };
+        const flushInitial = async () => {
           if (!active) return;
           let documents;
           try {
@@ -229,13 +258,34 @@ class CtoxRxCollection {
             if (isIndexedDbConnectionClosingError(error)) return;
             throw error;
           }
-          if (active) listener({ collectionName: this.name, documents });
+          if (!active) return;
+          documentsById.clear();
+          for (const doc of documents) {
+            const id = documentIdFromDoc(doc);
+            if (id) documentsById.set(id, doc);
+          }
+          applySuccess(pendingSuccess);
+          pendingSuccess = {};
+          initialized = true;
+          emitSnapshot();
         };
-        const emit = () => {
+        const flushDelta = () => {
+          pendingTimer = null;
+          if (!active || !initialized) return;
+          applySuccess(pendingSuccess);
+          pendingSuccess = {};
+          emitSnapshot();
+        };
+        const emit = (event) => {
+          pendingSuccess = {
+            ...pendingSuccess,
+            ...successPayloadFromChangeEvent(event),
+          };
+          if (!initialized) return;
           if (pendingTimer != null) return;
-          pendingTimer = setTimeout(flushEmit, debounceMs);
+          pendingTimer = setTimeout(flushDelta, debounceMs);
         };
-        flushEmit(); // initial emission is immediate, not debounced
+        flushInitial(); // initial emission is immediate, not debounced
         const unsubscribe = this.observe(emit);
         return {
           unsubscribe: () => {
@@ -273,14 +323,45 @@ class CtoxRxQuery {
         const registry = getActiveCollectionRegistry();
         registry.subscriptionStarted(this.collection.name);
         let pendingTimer = null;
+        let initialized = false;
+        let pendingPrimaryDoc = undefined;
+        const primaryId = this.single
+          ? singlePrimaryKeyCandidateId(this.query, this.collection.schema.primaryPath)
+          : '';
+        const canApplyPrimaryDelta = Boolean(primaryId);
         const flushEmit = () => {
           pendingTimer = null;
           if (!active) return;
           this.exec()
-            .then((value) => { if (active) listener(value); })
+            .then((value) => {
+              if (!active) return;
+              initialized = true;
+              if (pendingPrimaryDoc !== undefined && canApplyPrimaryDelta) {
+                listener(wrapPrimaryDeltaDocument(this.collection, pendingPrimaryDoc));
+                pendingPrimaryDoc = undefined;
+                return;
+              }
+              listener(value);
+            })
             .catch(() => {});
         };
-        const emit = () => {
+        const flushPrimaryDelta = () => {
+          pendingTimer = null;
+          if (!active || !initialized || !canApplyPrimaryDelta || pendingPrimaryDoc === undefined) return;
+          const next = pendingPrimaryDoc;
+          pendingPrimaryDoc = undefined;
+          listener(wrapPrimaryDeltaDocument(this.collection, next));
+        };
+        const emit = (event) => {
+          if (canApplyPrimaryDelta) {
+            const success = successPayloadFromChangeEvent(event);
+            if (!Object.prototype.hasOwnProperty.call(success, primaryId)) return;
+            pendingPrimaryDoc = success[primaryId] || null;
+            if (!initialized) return;
+            if (pendingTimer != null) return;
+            pendingTimer = setTimeout(flushPrimaryDelta, 50);
+            return;
+          }
           if (pendingTimer != null) return;
           pendingTimer = setTimeout(flushEmit, 50);
         };
@@ -540,6 +621,37 @@ function normalizePositiveInteger(value, name) {
     throw new TypeError(`${name} must be a positive number`);
   }
   return Math.floor(parsed);
+}
+
+function successPayloadFromChangeEvent(event) {
+  return event?.success && typeof event.success === 'object'
+    ? event.success
+    : event?.detail?.success && typeof event.detail.success === 'object'
+      ? event.detail.success
+      : {};
+}
+
+function documentIdFromDoc(doc) {
+  return String(doc?.id || doc?._id || doc?.document_id || doc?.documentId || '').trim();
+}
+
+function singlePrimaryKeyCandidateId(query = {}, primaryPath = 'id') {
+  const selector = query?.selector || {};
+  for (const field of ['id', '_id', primaryPath].filter(Boolean)) {
+    if (!Object.prototype.hasOwnProperty.call(selector, field)) continue;
+    const value = selector[field];
+    if (typeof value === 'string' || typeof value === 'number') return String(value);
+    if (value && typeof value === 'object' && !Array.isArray(value) && '$eq' in value && value.$eq != null) {
+      return String(value.$eq);
+    }
+    return '';
+  }
+  return '';
+}
+
+function wrapPrimaryDeltaDocument(collection, doc) {
+  if (!doc || doc._deleted) return null;
+  return new CtoxRxDocument(collection, doc);
 }
 
 function isInOperatorMatch(actual, candidates) {

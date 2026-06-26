@@ -501,11 +501,15 @@ async function submitApprovalRequest() {
 
 async function decideApproval(approvalId, decision) {
   if (!approvalId) return;
+  const approval = approvalById(approvalId);
+  const expectedUpdatedAt = Number(approval?.updated_at_ms || 0);
+  if (!expectedUpdatedAt) throw new Error('Approval version unavailable.');
   const note = decision === 'reject' ? window.prompt('Begründung oder Änderungswunsch:') || '' : '';
   await dispatchThreadsCommand(
     decision === 'approve' ? 'threads.ctox_approval.approve' : 'threads.ctox_approval.reject',
     {
       approval_request_id: approvalId,
+      expected_updated_at_ms: expectedUpdatedAt,
       decision_note: note,
     },
     {
@@ -518,11 +522,14 @@ async function decideApproval(approvalId, decision) {
 
 async function editApproval(approvalId) {
   if (!approvalId) return;
-  const approval = state.data.approvals.find((item) => item.id === approvalId);
+  const approval = approvalById(approvalId);
+  const expectedUpdatedAt = Number(approval?.updated_at_ms || 0);
+  if (!expectedUpdatedAt) throw new Error('Approval version unavailable.');
   const prompt = window.prompt('Finaler CTOX Prompt:', approval?.prompt || '');
   if (!prompt || !prompt.trim()) return;
   await dispatchThreadsCommand('threads.ctox_approval.edit', {
     approval_request_id: approvalId,
+    expected_updated_at_ms: expectedUpdatedAt,
     prompt: prompt.trim(),
     instruction: prompt.trim(),
   }, {
@@ -633,6 +640,10 @@ function showError(error) {
 
 function selectedThread() {
   return state.data.threads.find((item) => item.id === state.selectedId) || null;
+}
+
+function approvalById(approvalId) {
+  return state.data.approvals.find((item) => item.id === approvalId || item.approval_request_id === approvalId) || null;
 }
 
 function setThreadActionState(thread) {

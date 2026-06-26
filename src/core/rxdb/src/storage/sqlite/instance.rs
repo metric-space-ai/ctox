@@ -1,6 +1,7 @@
 //! SQLite [`crate::types::RxStorageInstance`] implementation.
 
 use std::collections::HashMap;
+use std::ops::{Deref, DerefMut};
 use std::path::Path;
 #[cfg(test)]
 use std::sync::atomic::AtomicUsize;
@@ -8,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use parking_lot::Mutex;
@@ -23,7 +24,7 @@ use crate::rx_query_helper::{
     get_query_matcher, get_sort_comparator, DeterministicSortComparator, QueryMatcher,
 };
 use crate::rx_schema_helper::get_primary_field_of_primary_key;
-use crate::rxjs_compat::{RxStream, RxSubject};
+use crate::rxjs_compat::{RxStream, RxSubject, DEFAULT_SUBJECT_BUFFER};
 use crate::types::{
     BulkWriteRow, EventBulk, FilledMangoQuery, RxJsonSchema, RxStorageBulkWriteResponse,
     RxStorageChangedDocumentsSinceResult, RxStorageCountResult, RxStorageInstance,
@@ -63,6 +64,17 @@ static SQLITE_QUERY_STREAM_RESULTS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_QUERY_STREAM_UNSUPPORTED_CALLS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_READ_ONLY_OPEN_FAILURES: AtomicU64 = AtomicU64::new(0);
 static SQLITE_WRITER_FALLBACKS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_STATEMENTS_EXECUTED: AtomicU64 = AtomicU64::new(0);
+static SQLITE_WRITE_TRANSACTIONS_STARTED: AtomicU64 = AtomicU64::new(0);
+static SQLITE_WRITE_TRANSACTIONS_COMMITTED: AtomicU64 = AtomicU64::new(0);
+static SQLITE_WRITE_TRANSACTIONS_FAILED: AtomicU64 = AtomicU64::new(0);
+static SQLITE_WRITER_LOCK_ACQUIRE_CALLS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_WRITER_LOCK_WAIT_NS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static SQLITE_WRITER_LOCK_WAIT_NS_MAX: AtomicU64 = AtomicU64::new(0);
+static SQLITE_WRITER_LOCK_HELD_NS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static SQLITE_WRITER_LOCK_HELD_NS_MAX: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_DATA_VERSION_READS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_CHANGED_TABLE_READS: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
 static CHANGED_DOCUMENTS_SINCE_TABLE_CALLS: OnceLock<StdMutex<HashMap<String, usize>>> =
     OnceLock::new();
@@ -119,7 +131,95 @@ pub fn sqlite_runtime_counters_snapshot() -> Value {
         "query_stream_unsupported_calls": SQLITE_QUERY_STREAM_UNSUPPORTED_CALLS.load(Ordering::Relaxed),
         "read_only_open_failures": SQLITE_READ_ONLY_OPEN_FAILURES.load(Ordering::Relaxed),
         "writer_fallbacks": SQLITE_WRITER_FALLBACKS.load(Ordering::Relaxed),
+        "statements_executed": SQLITE_STATEMENTS_EXECUTED.load(Ordering::Relaxed),
+        "write_transactions_started": SQLITE_WRITE_TRANSACTIONS_STARTED.load(Ordering::Relaxed),
+        "write_transactions_committed": SQLITE_WRITE_TRANSACTIONS_COMMITTED.load(Ordering::Relaxed),
+        "write_transactions_failed": SQLITE_WRITE_TRANSACTIONS_FAILED.load(Ordering::Relaxed),
+        "writer_lock_acquire_calls": SQLITE_WRITER_LOCK_ACQUIRE_CALLS.load(Ordering::Relaxed),
+        "writer_lock_wait_ns_total": SQLITE_WRITER_LOCK_WAIT_NS_TOTAL.load(Ordering::Relaxed),
+        "writer_lock_wait_ns_max": SQLITE_WRITER_LOCK_WAIT_NS_MAX.load(Ordering::Relaxed),
+        "writer_lock_held_ns_total": SQLITE_WRITER_LOCK_HELD_NS_TOTAL.load(Ordering::Relaxed),
+        "writer_lock_held_ns_max": SQLITE_WRITER_LOCK_HELD_NS_MAX.load(Ordering::Relaxed),
+        "external_poll_data_version_reads": SQLITE_EXTERNAL_POLL_DATA_VERSION_READS.load(Ordering::Relaxed),
+        "external_poll_changed_table_reads": SQLITE_EXTERNAL_POLL_CHANGED_TABLE_READS.load(Ordering::Relaxed),
     })
+}
+
+pub(crate) fn record_sqlite_statement_executed(count: u64) {
+    SQLITE_STATEMENTS_EXECUTED.fetch_add(count, Ordering::Relaxed);
+}
+
+pub(crate) fn record_sqlite_external_poll_data_version_read() {
+    SQLITE_EXTERNAL_POLL_DATA_VERSION_READS.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_sqlite_external_poll_changed_table_read() {
+    SQLITE_EXTERNAL_POLL_CHANGED_TABLE_READS.fetch_add(1, Ordering::Relaxed);
+}
+
+fn record_sqlite_writer_lock_wait(elapsed: Duration) {
+    let elapsed_ns = duration_ns(elapsed);
+    SQLITE_WRITER_LOCK_WAIT_NS_TOTAL.fetch_add(elapsed_ns, Ordering::Relaxed);
+    update_atomic_max(&SQLITE_WRITER_LOCK_WAIT_NS_MAX, elapsed_ns);
+}
+
+fn record_sqlite_writer_lock_held(elapsed: Duration) {
+    let elapsed_ns = duration_ns(elapsed);
+    SQLITE_WRITER_LOCK_HELD_NS_TOTAL.fetch_add(elapsed_ns, Ordering::Relaxed);
+    update_atomic_max(&SQLITE_WRITER_LOCK_HELD_NS_MAX, elapsed_ns);
+}
+
+fn duration_ns(duration: Duration) -> u64 {
+    duration.as_nanos().min(u128::from(u64::MAX)) as u64
+}
+
+fn update_atomic_max(value: &AtomicU64, candidate: u64) {
+    let mut current = value.load(Ordering::Relaxed);
+    while candidate > current {
+        match value.compare_exchange_weak(current, candidate, Ordering::Relaxed, Ordering::Relaxed)
+        {
+            Ok(_) => break,
+            Err(next_current) => current = next_current,
+        }
+    }
+}
+
+pub(crate) struct TimedSqliteWriterGuard<'a> {
+    guard: parking_lot::MutexGuard<'a, rusqlite::Connection>,
+    held_started: Instant,
+}
+
+impl Deref for TimedSqliteWriterGuard<'_> {
+    type Target = rusqlite::Connection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.guard
+    }
+}
+
+impl DerefMut for TimedSqliteWriterGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.guard
+    }
+}
+
+impl Drop for TimedSqliteWriterGuard<'_> {
+    fn drop(&mut self) {
+        record_sqlite_writer_lock_held(self.held_started.elapsed());
+    }
+}
+
+pub(crate) fn lock_sqlite_writer(
+    connection: &SharedSqliteConnection,
+) -> TimedSqliteWriterGuard<'_> {
+    SQLITE_WRITER_LOCK_ACQUIRE_CALLS.fetch_add(1, Ordering::Relaxed);
+    let lock_wait_started = Instant::now();
+    let guard = connection.lock();
+    record_sqlite_writer_lock_wait(lock_wait_started.elapsed());
+    TimedSqliteWriterGuard {
+        guard,
+        held_started: Instant::now(),
+    }
 }
 
 /// FIX 1: map a `tokio::task::JoinError` (blocking task panicked or was
@@ -279,10 +379,12 @@ impl RxStorageInstanceSqlite {
     ) -> Self {
         let primary_path = get_primary_field_of_primary_key(&params.schema.primary_key);
         let database_key = database_key_for_path(&database_path);
-        let changes = RxSubject::new();
+        let changes = RxSubject::with_lag_signal(DEFAULT_SUBJECT_BUFFER, |skipped| {
+            Some(EventBulk::rxsubject_lagged(skipped))
+        });
         let closed = Arc::new(AtomicBool::new(false));
         let external_checkpoint = Arc::new(Mutex::new({
-            let conn = connection.lock();
+            let conn = lock_sqlite_writer(&connection);
             latest_checkpoint(&conn, &table_name).unwrap_or_else(|| json!({ "id": "", "lwt": 0 }))
         }));
 
@@ -346,7 +448,7 @@ fn checkpoint_status_snapshot(
     collection_name: &str,
     schema: &RxJsonSchema,
 ) -> Value {
-    let conn = connection.lock();
+    let conn = lock_sqlite_writer(connection);
     let checkpoint =
         latest_checkpoint(&conn, table_name).unwrap_or_else(|| json!({ "id": "", "lwt": 0 }));
     let latest_id = checkpoint
@@ -640,6 +742,7 @@ fn drain_external_changed_documents_since(
 }
 
 fn latest_checkpoint(conn: &rusqlite::Connection, table_name: &str) -> Option<Value> {
+    record_sqlite_statement_executed(1);
     conn.query_row(
         &format!(
             "SELECT id, lastWriteTime FROM {} ORDER BY lastWriteTime DESC, id DESC LIMIT 1",
@@ -696,6 +799,7 @@ fn changed_documents_since(
         .unwrap_or_default()
         .to_string();
 
+    record_sqlite_statement_executed(1);
     let mut stmt = conn
         .prepare(&format!(
             "SELECT data FROM {} WHERE lastWriteTime > ? OR (lastWriteTime = ? AND id > ?) ORDER BY lastWriteTime ASC, id ASC LIMIT ?",
@@ -780,113 +884,121 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
             Option<EventBulk>,
             Option<Value>,
         ) = tokio::task::spawn_blocking(move || -> RxResult<_> {
-            let mut conn = connection.lock();
-            let tx = conn
-                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-                .map_err(sqlite_error)?;
+            let mut conn = lock_sqlite_writer(&connection);
+            let result = (|| -> RxResult<_> {
+                SQLITE_WRITE_TRANSACTIONS_STARTED.fetch_add(1, Ordering::Relaxed);
+                let tx = conn
+                    .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                    .map_err(sqlite_error)?;
 
-            // Production write-path validation: reject clearly-corrupt peer
-            // documents with a 422 instead of persisting them. Conservative by
-            // design (see rx_schema::validate_write_document) so conforming data is
-            // never rejected. Invalid rows are dropped from this batch; valid rows
-            // proceed through the normal categorize/conflict path unchanged.
-            let mut validation_errors: Vec<crate::types::RxStorageWriteError> = Vec::new();
-            let mut document_writes = document_writes;
-            if document_writes.iter().any(|w| {
-                crate::rx_schema::validate_write_document(&json_schema, &primary_path, &w.document)
-                    .is_err()
-            }) {
-                let mut kept = Vec::with_capacity(document_writes.len());
-                for write in document_writes.drain(..) {
-                    match crate::rx_schema::validate_write_document(
-                        &json_schema,
-                        &primary_path,
-                        &write.document,
-                    ) {
-                        Ok(()) => kept.push(write),
-                        Err(message) => {
-                            let document_id = write
-                                .document
-                                .get(&primary_path)
-                                .and_then(Value::as_str)
-                                .unwrap_or_default()
-                                .to_string();
-                            validation_errors.push(crate::types::RxStorageWriteError {
-                                status: 422,
-                                is_error: true,
-                                document_id,
-                                write_row: write,
-                                document_in_db: None,
-                                validation_errors: vec![json!({ "message": message })],
-                                schema: None,
-                                attachment_id: None,
-                            });
+                // Production write-path validation: reject clearly-corrupt peer
+                // documents with a 422 instead of persisting them. Conservative by
+                // design (see rx_schema::validate_write_document) so conforming data is
+                // never rejected. Invalid rows are dropped from this batch; valid rows
+                // proceed through the normal categorize/conflict path unchanged.
+                let mut validation_errors: Vec<crate::types::RxStorageWriteError> = Vec::new();
+                let mut document_writes = document_writes;
+                if document_writes.iter().any(|w| {
+                    crate::rx_schema::validate_write_document(&json_schema, &primary_path, &w.document)
+                        .is_err()
+                }) {
+                    let mut kept = Vec::with_capacity(document_writes.len());
+                    for write in document_writes.drain(..) {
+                        match crate::rx_schema::validate_write_document(
+                            &json_schema,
+                            &primary_path,
+                            &write.document,
+                        ) {
+                            Ok(()) => kept.push(write),
+                            Err(message) => {
+                                let document_id = write
+                                    .document
+                                    .get(&primary_path)
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_string();
+                                validation_errors.push(crate::types::RxStorageWriteError {
+                                    status: 422,
+                                    is_error: true,
+                                    document_id,
+                                    write_row: write,
+                                    document_in_db: None,
+                                    validation_errors: vec![json!({ "message": message })],
+                                    schema: None,
+                                    attachment_id: None,
+                                });
+                            }
+                        }
+                    }
+                    document_writes = kept;
+                }
+
+                let mut docs_in_db = HashMap::new();
+                {
+                    // Only load the documents we are actually writing, not the whole
+                    // table. `categorize_bulk_write_rows` looks up the current DB state
+                    // per write id, so a full-table scan made every bulk_write O(N) in
+                    // collection size (O(N^2) over a replication run, all under the
+                    // global write mutex), the dominant scaling risk for large
+                    // collections (documents, blob chunks). Fetch by id via the
+                    // primary-key index instead.
+                    let mut ids: Vec<String> = Vec::with_capacity(document_writes.len());
+                    for write in &document_writes {
+                        if let Some(id) = write.document.get(&primary_path).and_then(Value::as_str) {
+                            ids.push(id.to_string());
+                        }
+                    }
+                    ids.sort_unstable();
+                    ids.dedup();
+                    for doc in documents_by_ids(&tx, &table_name, &ids, true)? {
+                        if let Some(id) = doc.get(&primary_path).and_then(Value::as_str) {
+                            docs_in_db.insert(id.to_string(), doc);
                         }
                     }
                 }
-                document_writes = kept;
-            }
+                let categorized = crate::rx_storage_helper::categorize_bulk_write_rows(
+                    schema_has_attachments,
+                    &primary_path,
+                    &docs_in_db,
+                    &document_writes,
+                    &context,
+                );
+                let mut error = categorized.errors;
+                error.extend(validation_errors);
 
-            let mut docs_in_db = HashMap::new();
-            {
-                // Only load the documents we are actually writing, not the whole
-                // table. `categorize_bulk_write_rows` looks up the current DB state
-                // per write id, so a full-table scan made every bulk_write O(N) in
-                // collection size (O(N^2) over a replication run, all under the
-                // global write mutex), the dominant scaling risk for large
-                // collections (documents, blob chunks). Fetch by id via the
-                // primary-key index instead.
-                let mut ids: Vec<String> = Vec::with_capacity(document_writes.len());
-                for write in &document_writes {
-                    if let Some(id) = write.document.get(&primary_path).and_then(Value::as_str) {
-                        ids.push(id.to_string());
+                for row in categorized.bulk_insert_docs.iter() {
+                    insert_document(&tx, &table_name, &primary_path, &row.document)?;
+                }
+                for row in categorized.bulk_update_docs.iter() {
+                    update_document(&tx, &table_name, &primary_path, row)?;
+                }
+                tx.commit().map_err(sqlite_error)?;
+                SQLITE_WRITE_TRANSACTIONS_COMMITTED.fetch_add(1, Ordering::Relaxed);
+
+                let mut event_bulk: Option<EventBulk> = None;
+                let mut checkpoint: Option<Value> = None;
+                if !categorized.event_bulk.events.is_empty() {
+                    if let Some(newest) = categorized.newest_row.as_ref() {
+                        checkpoint = Some(json!({
+                            "id": newest.document.get(&primary_path).cloned().unwrap_or(Value::Null),
+                            "lwt": newest
+                                .document
+                                .get("_meta")
+                                .and_then(|meta| meta.get("lwt"))
+                                .cloned()
+                                .unwrap_or(json!(0)),
+                        }));
                     }
+                    let mut bulk = categorized.event_bulk;
+                    bulk.checkpoint = checkpoint.clone();
+                    event_bulk = Some(bulk);
                 }
-                ids.sort_unstable();
-                ids.dedup();
-                for doc in documents_by_ids(&tx, &table_name, &ids, true)? {
-                    if let Some(id) = doc.get(&primary_path).and_then(Value::as_str) {
-                        docs_in_db.insert(id.to_string(), doc);
-                    }
-                }
+                Ok((error, event_bulk, checkpoint))
+            })();
+            if result.is_err() {
+                SQLITE_WRITE_TRANSACTIONS_FAILED.fetch_add(1, Ordering::Relaxed);
             }
-            let categorized = crate::rx_storage_helper::categorize_bulk_write_rows(
-                schema_has_attachments,
-                &primary_path,
-                &docs_in_db,
-                &document_writes,
-                &context,
-            );
-            let mut error = categorized.errors;
-            error.extend(validation_errors);
-
-            for row in categorized.bulk_insert_docs.iter() {
-                insert_document(&tx, &table_name, &primary_path, &row.document)?;
-            }
-            for row in categorized.bulk_update_docs.iter() {
-                update_document(&tx, &table_name, &primary_path, row)?;
-            }
-            tx.commit().map_err(sqlite_error)?;
-
-            let mut event_bulk: Option<EventBulk> = None;
-            let mut checkpoint: Option<Value> = None;
-            if !categorized.event_bulk.events.is_empty() {
-                if let Some(newest) = categorized.newest_row.as_ref() {
-                    checkpoint = Some(json!({
-                        "id": newest.document.get(&primary_path).cloned().unwrap_or(Value::Null),
-                        "lwt": newest
-                            .document
-                            .get("_meta")
-                            .and_then(|meta| meta.get("lwt"))
-                            .cloned()
-                            .unwrap_or(json!(0)),
-                    }));
-                }
-                let mut bulk = categorized.event_bulk;
-                bulk.checkpoint = checkpoint.clone();
-                event_bulk = Some(bulk);
-            }
-            Ok((error, event_bulk, checkpoint))
+            result
         })
         .await
         .map_err(join_error)??;
@@ -933,7 +1045,7 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         // storage must stay off the shared writer mutex for this read path.
         let connection = Arc::clone(&self.connection);
         let documents = tokio::task::spawn_blocking(move || -> RxResult<Vec<Value>> {
-            let conn = connection.lock();
+            let conn = lock_sqlite_writer(&connection);
             documents_by_ids(&conn, &table_name, &ids, with_deleted)
         })
         .await
@@ -1019,7 +1131,7 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         // complex Rust matcher fallbacks that cannot be compiled into SQL.
         let connection = Arc::clone(&self.connection);
         let documents = tokio::task::spawn_blocking(move || -> RxResult<Vec<Value>> {
-            let conn = connection.lock();
+            let conn = lock_sqlite_writer(&connection);
             execute_query_documents(
                 &conn,
                 &table_name,
@@ -1064,7 +1176,7 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
             SQLITE_WRITER_FALLBACKS.fetch_add(1, Ordering::Relaxed);
             let connection = Arc::clone(&self.connection);
             let count = tokio::task::spawn_blocking(move || -> RxResult<u64> {
-                let conn = connection.lock();
+                let conn = lock_sqlite_writer(&connection);
                 count_with_compiled_sql(&conn, &compiled)
             })
             .await
@@ -1113,7 +1225,7 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         let connection = Arc::clone(&self.connection);
         tokio::task::spawn_blocking(
             move || -> Result<RxStorageChangedDocumentsSinceResult, RxError> {
-                let conn = connection.lock();
+                let conn = lock_sqlite_writer(&connection);
                 changed_documents_since(
                     &conn,
                     &table_name,
@@ -1149,7 +1261,7 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         let connection = Arc::clone(&self.connection);
         let table_name = self.table_name.clone();
         tokio::task::spawn_blocking(move || -> RxResult<()> {
-            let conn = connection.lock();
+            let conn = lock_sqlite_writer(&connection);
             drop_table(&conn, &table_name)
         })
         .await

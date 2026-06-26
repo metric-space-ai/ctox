@@ -14,74 +14,125 @@
 //! | `obs.pipe(map(f))`    | `stream.map(f)`                                               |
 
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use futures::Stream;
-use parking_lot::Mutex;
-use tokio::sync::{mpsc, watch};
-use tokio_stream::wrappers::{UnboundedReceiverStream, WatchStream};
+use tokio::sync::{broadcast, watch};
+use tokio_stream::wrappers::WatchStream;
 use tokio_stream::StreamExt;
 
 /// Boxed-stream alias mirroring upstream `Observable<T>`.
 pub type RxStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
 
-/// Retained for API compatibility with callers that pass a capacity hint to
-/// [`RxSubject::with_capacity`]. The subject now buffers per-subscriber and
-/// unbounded, so there is no shared ring whose size this would set.
+/// Default shared ring size for [`RxSubject`].
 pub const DEFAULT_SUBJECT_BUFFER: usize = 256;
+
+/// Context marker emitted in storage change streams when a bounded subject
+/// detects that a subscriber lagged behind the shared ring. Consumers that can
+/// replay from checkpoints should treat this as "drop incremental assumptions
+/// and resync".
+pub const RX_SUBJECT_LAGGED_CONTEXT: &str = "ctox_rxsubject_lagged_resync";
+
+static RX_SUBJECT_LAGGED_ITEMS_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+type LagSignal<T> = Arc<dyn Fn(u64) -> Option<T> + Send + Sync>;
 
 /// Multi-consumer subject (RxJS `Subject<T>` analogue).
 ///
-/// Each `subscribe()` returns an independent stream backed by its OWN unbounded
-/// channel. Items emitted via `next` after the subscription are observed; items
+/// Each `subscribe()` returns a stream backed by a shared bounded broadcast
+/// ring. Items emitted via `next` after the subscription are observed; items
 /// emitted before are not (matches `Subject`, not `ReplaySubject`).
 ///
-/// This was previously a single `tokio::sync::broadcast` ring of capacity 256
-/// whose stream silently discarded `RecvError::Lagged` — so a momentarily-slow
-/// consumer (e.g. the replication change-stream or the multiplexed transport
-/// response stream under an initial-sync burst) would lose master-change events
-/// and method responses with no error, leaving collections under-synced. Per the
-/// module's stated goal ("unbounded buffering until consumed") `RxSubject` now
-/// fans out to per-subscriber unbounded `mpsc` channels: no shared ring to
-/// overflow, no silent drops, and memory is driven by real backlog exactly as a
-/// RxJS `Subject` would be.
+/// The subject used to fan out through per-subscriber unbounded queues. That
+/// preserved every item for stalled consumers but let a background daemon grow
+/// memory and CPU work without bound. The bounded ring records lag explicitly;
+/// callers that can recover from checkpoints can install a lag signal via
+/// [`RxSubject::with_lag_signal`].
 pub struct RxSubject<T: Clone + Send + 'static> {
-    subscribers: Arc<Mutex<Vec<mpsc::UnboundedSender<T>>>>,
+    sender: broadcast::Sender<T>,
+    lag_signal: Option<LagSignal<T>>,
+    lagged_items: Arc<AtomicU64>,
 }
 
 impl<T: Clone + Send + 'static> RxSubject<T> {
     pub fn new() -> Self {
+        Self::with_capacity(DEFAULT_SUBJECT_BUFFER)
+    }
+
+    pub fn with_capacity(buffer: usize) -> Self {
+        let (sender, _) = broadcast::channel(buffer.max(1));
         Self {
-            subscribers: Arc::new(Mutex::new(Vec::new())),
+            sender,
+            lag_signal: None,
+            lagged_items: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    /// Retained for API compatibility; the capacity hint is unused because the
-    /// subject is now per-subscriber unbounded (nothing to size).
-    pub fn with_capacity(_buffer: usize) -> Self {
-        Self::new()
+    /// Create a bounded subject that emits a recovery value when a subscriber
+    /// lags behind the ring. Storage change streams use this to turn missed
+    /// incremental events into checkpoint-based resync work.
+    pub fn with_lag_signal<F>(buffer: usize, lag_signal: F) -> Self
+    where
+        F: Fn(u64) -> Option<T> + Send + Sync + 'static,
+    {
+        let (sender, _) = broadcast::channel(buffer.max(1));
+        Self {
+            sender,
+            lag_signal: Some(Arc::new(lag_signal)),
+            lagged_items: Arc::new(AtomicU64::new(0)),
+        }
     }
 
     /// RxJS `subject.next(value)`. Fans the value out to every active subscriber
     /// and prunes any whose receiver has been dropped. With no subscribers the
     /// value is dropped (RxJS cold-observable semantics).
     pub fn next(&self, value: T) {
-        let mut subscribers = self.subscribers.lock();
-        subscribers.retain(|tx| tx.send(value.clone()).is_ok());
+        let _ = self.sender.send(value);
     }
 
-    /// RxJS `subject.subscribe()`. Returns an owned stream backed by an unbounded
-    /// channel, so a momentarily-slow consumer never loses items.
+    /// RxJS `subject.subscribe()`. Returns an owned stream over the bounded ring.
     pub fn subscribe(&self) -> RxStream<T> {
-        let (tx, rx) = mpsc::unbounded_channel();
-        self.subscribers.lock().push(tx);
-        Box::pin(UnboundedReceiverStream::new(rx))
+        let receiver = self.sender.subscribe();
+        let lag_signal = self.lag_signal.clone();
+        let lagged_items = Arc::clone(&self.lagged_items);
+        Box::pin(futures::stream::unfold(
+            (receiver, lag_signal, lagged_items),
+            |(mut receiver, lag_signal, lagged_items)| async move {
+                loop {
+                    match receiver.recv().await {
+                        Ok(value) => return Some((value, (receiver, lag_signal, lagged_items))),
+                        Err(broadcast::error::RecvError::Closed) => return None,
+                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                            lagged_items.fetch_add(skipped, Ordering::Relaxed);
+                            RX_SUBJECT_LAGGED_ITEMS_TOTAL.fetch_add(skipped, Ordering::Relaxed);
+                            if let Some(signal) =
+                                lag_signal.as_ref().and_then(|factory| factory(skipped))
+                            {
+                                return Some((signal, (receiver, lag_signal, lagged_items)));
+                            }
+                        }
+                    }
+                }
+            },
+        ))
     }
 
     /// Number of currently active subscribers.
     pub fn receiver_count(&self) -> usize {
-        self.subscribers.lock().len()
+        self.sender.receiver_count()
     }
+
+    /// Total number of ring entries skipped by lagging subscribers.
+    pub fn lagged_items(&self) -> u64 {
+        self.lagged_items.load(Ordering::Relaxed)
+    }
+}
+
+/// Total number of ring entries skipped by lagging [`RxSubject`] subscribers
+/// across the current process.
+pub fn rx_subject_lagged_items_total() -> u64 {
+    RX_SUBJECT_LAGGED_ITEMS_TOTAL.load(Ordering::Relaxed)
 }
 
 impl<T: Clone + Send + 'static> Default for RxSubject<T> {
@@ -93,7 +144,9 @@ impl<T: Clone + Send + 'static> Default for RxSubject<T> {
 impl<T: Clone + Send + 'static> Clone for RxSubject<T> {
     fn clone(&self) -> Self {
         Self {
-            subscribers: Arc::clone(&self.subscribers),
+            sender: self.sender.clone(),
+            lag_signal: self.lag_signal.clone(),
+            lagged_items: Arc::clone(&self.lagged_items),
         }
     }
 }
@@ -183,30 +236,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn subject_does_not_drop_items_under_backlog() {
-        // The previous broadcast(256) ring silently dropped everything beyond 256
-        // un-drained items. A per-subscriber unbounded fan-out must lose nothing,
-        // in order, even when the consumer drains long after a large burst.
-        let s = RxSubject::<usize>::new();
+    async fn subject_bounds_backlog_and_reports_lag() {
+        let s = RxSubject::<usize>::with_capacity(4);
         let mut sub = s.subscribe();
-        const N: usize = 5000;
+        let global_before = rx_subject_lagged_items_total();
+        const N: usize = 16;
         for i in 0..N {
             s.next(i);
         }
-        let mut received = Vec::with_capacity(N);
-        for _ in 0..N {
-            received.push(sub.next().await.expect("no item should be dropped"));
+        let mut received = Vec::new();
+        while let Ok(Some(value)) =
+            tokio::time::timeout(std::time::Duration::from_millis(10), sub.next()).await
+        {
+            received.push(value);
         }
-        assert_eq!(received.len(), N);
-        assert_eq!(received.first(), Some(&0));
+        assert!(
+            received.len() <= 4,
+            "bounded ring leaked backlog: {received:?}"
+        );
         assert_eq!(received.last(), Some(&(N - 1)));
-        // Strictly increasing => order preserved, nothing skipped.
+        let lagged_items = s.lagged_items();
+        assert!(lagged_items > 0);
+        assert!(rx_subject_lagged_items_total() >= global_before + lagged_items);
         assert!(received.windows(2).all(|w| w[1] == w[0] + 1));
     }
 
     #[tokio::test]
-    async fn subject_fans_out_to_multiple_subscribers_without_drops() {
-        let s = RxSubject::<usize>::new();
+    async fn subject_emits_lag_signal_for_recoverable_streams() {
+        let s = RxSubject::with_lag_signal(2, |skipped| Some(format!("RESYNC:{skipped}")));
+        let mut sub = s.subscribe();
+        for i in 0..8 {
+            s.next(i.to_string());
+        }
+        let first = sub.next().await;
+        assert_eq!(first, Some("RESYNC:6".to_string()));
+        assert_eq!(sub.next().await, Some("6".to_string()));
+        assert_eq!(sub.next().await, Some("7".to_string()));
+    }
+
+    #[tokio::test]
+    async fn subject_fans_out_to_multiple_subscribers_within_capacity() {
+        let s = RxSubject::<usize>::with_capacity(1000);
         let mut a = s.subscribe();
         let mut b = s.subscribe();
         for i in 0..1000 {

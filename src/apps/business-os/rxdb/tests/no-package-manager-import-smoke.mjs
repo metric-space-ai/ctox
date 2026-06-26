@@ -91,6 +91,7 @@ const payload = buildProtocolPayload({
   checkpoint: { state: 'advertised', epoch: 'epoch-1' },
   peerSessionId: 'session-1',
   peerGeneration: 1,
+  capabilityToken: 'capability-token-1',
 });
 if (payload.collection?.name !== 'business_commands' || payload.collection?.schemaHash !== 'abc' || payload.peerSession?.role !== 'browser') {
   throw new Error('protocol payload mismatch');
@@ -100,6 +101,9 @@ if (payload.collection?.schemaHashSource !== 'business-os-schema-hash-registry-v
 }
 if (payload.checkpoint?.epoch !== 'epoch-1' || payload.collection?.checkpoint?.epoch !== 'epoch-1') {
   throw new Error('checkpoint evidence must be exposed both top-level and under collection');
+}
+if (payload.peerSession?.capabilityToken !== 'capability-token-1') {
+  throw new Error('protocol payload must carry the Business OS capability token in peerSession');
 }
 const customPayload = buildProtocolPayload({
   collectionName: 'custom_local_collection',

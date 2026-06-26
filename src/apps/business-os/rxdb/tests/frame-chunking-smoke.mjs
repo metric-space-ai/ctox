@@ -6,9 +6,21 @@
 // Chunking now budgets the JSON-ESCAPED byte length per chunk, mirroring the
 // Rust splitter (split_chunks_for_frame in connection_handler_rs.rs).
 
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { webrtcNativeTestInternals } from '../src/webrtc-native.mjs';
 
-const { splitFrameChunks, jsonEscapedCharLen, MAX_SERIALIZED_FRAME_BYTES } = webrtcNativeTestInternals;
+const testDir = dirname(fileURLToPath(import.meta.url));
+const source = readFileSync(resolve(testDir, '../src/webrtc-native.mjs'), 'utf8');
+const {
+  splitFrameChunks,
+  jsonEscapedCharLen,
+  encodedSize,
+  recordReceivedFrame,
+  MAX_SERIALIZED_FRAME_BYTES,
+} = webrtcNativeTestInternals;
 const transferId = 'client-with-a-rather-long-id|frame|1760000000000|42';
 
 const CASES = [
@@ -60,7 +72,66 @@ for (const [label, text] of CASES) {
   }
 }
 
-// 4. Escaped-length parity spot checks against JSON.stringify ground truth.
+// 4. Raw UTF-8 byte length parity without allocating a TextEncoder buffer in
+// the production hot path.
+for (const text of [
+  '',
+  'plain ascii',
+  'äöüßÄÖÜéèê',
+  '€',
+  '👩‍💻🚀😀',
+  'mixed "quotes"\n\tcontrol \u0001 and \\backslash\\',
+  '\ud800',
+  '\udc00',
+]) {
+  const expected = new TextEncoder().encode(text).byteLength;
+  assert(
+    encodedSize(text) === expected,
+    `encodedSize(${JSON.stringify(text)}): got ${encodedSize(text)}, TextEncoder says ${expected}`,
+  );
+}
+
+{
+  const OriginalTextEncoder = globalThis.TextEncoder;
+  globalThis.TextEncoder = class {
+    constructor() {
+      throw new Error('encodedSize hot path must not allocate TextEncoder buffers');
+    }
+  };
+  try {
+    assert(encodedSize('ä👩‍💻') === 13, 'encodedSize works without TextEncoder');
+  } finally {
+    globalThis.TextEncoder = OriginalTextEncoder;
+  }
+}
+
+const encodedSizeSource = source.match(/function encodedSize[\s\S]*?\n}\n/)?.[0] || '';
+assert(
+  !encodedSizeSource.includes('TextEncoder'),
+  'encodedSize implementation must stay allocation-free',
+);
+
+// 5. Reassembly ACK bookkeeping must advance incrementally instead of scanning
+// from frame 0 on every received chunk.
+{
+  const entry = {
+    totalFrames: 8,
+    received: new Map(),
+    contiguousSeq: -1,
+  };
+  assert(recordReceivedFrame(entry, 3, 'd') === -1, 'out-of-order frame leaves contiguous sequence unchanged');
+  assert(recordReceivedFrame(entry, 1, 'b') === -1, 'gap at frame 0 keeps contiguous sequence at -1');
+  assert(recordReceivedFrame(entry, 0, 'a') === 1, 'receiving frame 0 advances over already received frame 1');
+  assert(recordReceivedFrame(entry, 2, 'c') === 3, 'receiving the gap advances over already received frame 3');
+  assert(recordReceivedFrame(entry, 3, 'd2') === 3, 'duplicate frame does not rescan or advance');
+}
+
+assert(
+  !source.includes('highestContiguousSeq'),
+  'frame reassembly must not recompute contiguous ACK state by rescanning received chunks',
+);
+
+// 6. Escaped-length parity spot checks against JSON.stringify ground truth.
 for (const ch of ['a', '"', '\\', '\n', '', 'ä', '€', '👩', '\ud800']) {
   const expected = new TextEncoder().encode(JSON.stringify(ch)).byteLength - 2; // minus quotes
   const got = [...ch].reduce((sum, c) => sum + jsonEscapedCharLen(c), 0);

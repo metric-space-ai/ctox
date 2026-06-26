@@ -852,6 +852,57 @@ body.is-knowledge-col-resizing * {
   text-align: left;
 }
 
+.knowledge-module .dataframe-table th .column-label {
+  vertical-align: middle;
+}
+
+.knowledge-module .dataframe-table th .column-help {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 6px;
+  border: 1px solid color-mix(in srgb, var(--knowledge-accent) 44%, var(--knowledge-line));
+  border-radius: 50%;
+  color: var(--knowledge-accent);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  cursor: help;
+}
+
+.knowledge-module .dataframe-table th .column-help::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  width: min(320px, 64vw);
+  max-width: max-content;
+  padding: 9px 10px;
+  border: 1px solid var(--knowledge-line);
+  border-radius: 8px;
+  background: var(--knowledge-text);
+  color: var(--knowledge-bg);
+  box-shadow: var(--knowledge-shadow);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.35;
+  opacity: 0;
+  pointer-events: none;
+  text-align: left;
+  transform: translate(-50%, 4px);
+  transition: opacity 120ms ease, transform 120ms ease;
+  white-space: normal;
+}
+
+.knowledge-module .dataframe-table th .column-help:hover::after,
+.knowledge-module .dataframe-table th .column-help:focus-visible::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
 .knowledge-config-list {
   display: grid;
   gap: 8px;

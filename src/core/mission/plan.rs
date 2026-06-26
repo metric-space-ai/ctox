@@ -11,6 +11,7 @@ use serde::Serialize;
 use serde_json::json;
 use sha2::Digest;
 use sha2::Sha256;
+use std::collections::HashMap;
 use std::collections::HashSet;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -32,12 +33,14 @@ const DEFAULT_RESULT_EXCERPT_CHARS: usize = 420;
 const PLAN_STATE_STAMP_RELATIVE_PATH: &str = "runtime/mission/plan-state.stamp";
 
 static PLAN_SCHEMA_READY: OnceLock<Mutex<HashSet<PlanDbKey>>> = OnceLock::new();
-static EMIT_DUE_STEPS_GATE: OnceLock<Mutex<Option<EmitDueStepsGateState>>> = OnceLock::new();
+static EMIT_DUE_STEPS_GATE: OnceLock<Mutex<HashMap<PathBuf, EmitDueStepsGateState>>> =
+    OnceLock::new();
 static PLAN_STATE_STAMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static PLAN_DB_OPEN_COUNTS: OnceLock<Mutex<HashMap<PathBuf, u64>>> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 struct EmitDueStepsGateState {
-    db_path: PathBuf,
     stamp: PlanStateChangeStamp,
     next_due_at: Option<DateTime<Utc>>,
 }
@@ -377,7 +380,7 @@ pub fn emit_due_steps(root: &Path) -> Result<EmitDuePlansSummary> {
     }
     let mut summary = EmitDuePlansSummary::default();
     for goal_id in goals {
-        if let Some(emitted) = emit_next_step_for_goal(root, &goal_id)? {
+        if let Some(emitted) = emit_next_step_for_goal_with_conn(root, &conn, &goal_id)? {
             summary.emitted_count += 1;
             summary.emitted_steps.push(emitted);
         }
@@ -684,6 +687,14 @@ fn load_goal_with_steps(root: &Path, goal_id: &str) -> Result<Option<GoalWithSte
 
 pub fn emit_next_step_for_goal(root: &Path, goal_id: &str) -> Result<Option<EmittedPlanStepView>> {
     let conn = open_plan_db(root)?;
+    emit_next_step_for_goal_with_conn(root, &conn, goal_id)
+}
+
+fn emit_next_step_for_goal_with_conn(
+    root: &Path,
+    conn: &Connection,
+    goal_id: &str,
+) -> Result<Option<EmittedPlanStepView>> {
     let Some(pending) = prepare_next_step_emission(root, &conn, goal_id)? else {
         return Ok(None);
     };
@@ -1263,12 +1274,12 @@ fn load_next_due_step_at(conn: &Connection, now: &DateTime<Utc>) -> Result<Optio
 fn should_skip_emit_due_step_scan(root: &Path, now: &DateTime<Utc>) -> bool {
     let db_path = resolve_db_path(root);
     let stamp = plan_state_change_stamp(root);
-    let gate = EMIT_DUE_STEPS_GATE.get_or_init(|| Mutex::new(None));
+    let gate = EMIT_DUE_STEPS_GATE.get_or_init(|| Mutex::new(HashMap::new()));
     let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let Some(previous) = guard.as_ref() else {
+    let Some(previous) = guard.get(&db_path) else {
         return false;
     };
-    if previous.db_path != db_path || previous.stamp != stamp {
+    if previous.stamp != stamp {
         return false;
     }
     if previous
@@ -1285,13 +1296,9 @@ fn should_skip_emit_due_step_scan(root: &Path, now: &DateTime<Utc>) -> bool {
 fn mark_emit_due_step_scan(root: &Path, next_due_at: Option<DateTime<Utc>>) {
     let db_path = resolve_db_path(root);
     let stamp = plan_state_change_stamp(root);
-    let gate = EMIT_DUE_STEPS_GATE.get_or_init(|| Mutex::new(None));
+    let gate = EMIT_DUE_STEPS_GATE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    *guard = Some(EmitDueStepsGateState {
-        db_path,
-        stamp,
-        next_due_at,
-    });
+    guard.insert(db_path, EmitDueStepsGateState { stamp, next_due_at });
 }
 
 fn touch_plan_state_stamp(root: &Path) -> Result<()> {
@@ -1307,19 +1314,15 @@ fn touch_plan_state_stamp(root: &Path) -> Result<()> {
     let sequence = PLAN_STATE_STAMP_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1;
     std::fs::write(&path, format!("{}\n{sequence}\n", now_iso_string()))
         .with_context(|| format!("failed to write plan state stamp {}", path.display()))?;
-    clear_emit_due_step_scan_gate();
+    clear_emit_due_step_scan_gate(root);
     Ok(())
 }
 
-#[cfg(test)]
-fn clear_emit_due_step_scan_gate_for_tests() {
-    clear_emit_due_step_scan_gate();
-}
-
-fn clear_emit_due_step_scan_gate() {
+fn clear_emit_due_step_scan_gate(root: &Path) {
     if let Some(gate) = EMIT_DUE_STEPS_GATE.get() {
+        let db_path = resolve_db_path(root);
         let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        *guard = None;
+        guard.remove(&db_path);
     }
 }
 
@@ -1715,6 +1718,8 @@ fn map_step_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PlannedStepView> {
 }
 
 fn open_plan_db(root: &Path) -> Result<Connection> {
+    #[cfg(test)]
+    record_plan_db_open_for_tests(root);
     let path = resolve_db_path(root);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -1726,6 +1731,40 @@ fn open_plan_db(root: &Path) -> Result<Connection> {
         .context("failed to configure SQLite busy_timeout for plans")?;
     ensure_plan_schema_once(&path, &conn)?;
     Ok(conn)
+}
+
+#[cfg(test)]
+fn plan_db_open_counts_for_tests() -> &'static Mutex<HashMap<PathBuf, u64>> {
+    PLAN_DB_OPEN_COUNTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[cfg(test)]
+fn record_plan_db_open_for_tests(root: &Path) {
+    let path = resolve_db_path(root);
+    let mut counts = plan_db_open_counts_for_tests()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *counts.entry(path).or_insert(0) += 1;
+}
+
+#[cfg(test)]
+fn reset_plan_db_open_count_for_tests(root: &Path) {
+    let path = resolve_db_path(root);
+    plan_db_open_counts_for_tests()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&path);
+}
+
+#[cfg(test)]
+fn plan_db_open_count_for_tests(root: &Path) -> u64 {
+    let path = resolve_db_path(root);
+    plan_db_open_counts_for_tests()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&path)
+        .copied()
+        .unwrap_or(0)
 }
 
 fn ensure_plan_schema_once(path: &Path, conn: &Connection) -> Result<()> {
@@ -1991,7 +2030,6 @@ mod tests {
 
     #[test]
     fn emit_due_step_scan_gate_ignores_core_db_noise_until_plan_state_or_due_time_changes() {
-        clear_emit_due_step_scan_gate_for_tests();
         let root = temp_plan_root("idle-gate");
         let now = now_utc();
         let future_due = (now + Duration::minutes(5)).to_rfc3339();
@@ -2064,6 +2102,42 @@ mod tests {
         assert!(!should_skip_emit_due_step_scan(&root, &now_utc()));
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn emit_due_steps_reuses_plan_db_connection_across_due_goals() -> Result<()> {
+        let root = temp_plan_root("due-goal-open-count");
+        ingest_goal(
+            &root,
+            PlanIngestRequest {
+                title: "First due goal".to_string(),
+                prompt: "- inspect first scope\n- finish first scope".to_string(),
+                thread_key: Some("plan/due-open-count/first".to_string()),
+                skill: None,
+                auto_advance: true,
+                emit_now: false,
+            },
+        )?;
+        ingest_goal(
+            &root,
+            PlanIngestRequest {
+                title: "Second due goal".to_string(),
+                prompt: "- inspect second scope\n- finish second scope".to_string(),
+                thread_key: Some("plan/due-open-count/second".to_string()),
+                skill: None,
+                auto_advance: true,
+                emit_now: false,
+            },
+        )?;
+
+        reset_plan_db_open_count_for_tests(&root);
+        let summary = emit_due_steps(&root)?;
+
+        assert_eq!(summary.emitted_count, 2);
+        assert_eq!(plan_db_open_count_for_tests(&root), 1);
+
+        let _ = std::fs::remove_dir_all(root);
+        Ok(())
     }
 
     #[test]

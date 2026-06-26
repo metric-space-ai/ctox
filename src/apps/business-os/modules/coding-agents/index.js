@@ -102,15 +102,10 @@ export async function mount(ctx) {
   // backend is unreachable.
   startInitialLoadWithTimeout();
 
-  // Polling loop for active diagnostic status
-  const intervalId = setInterval(() => {
-    if (!state.isAutomating && !state.isRefreshing) {
-      refreshDiagnosticsSilently();
-    }
-  }, 10000);
+  const diagnosticsAutoRefresh = startDiagnosticsAutoRefresh();
 
   return () => {
-    clearInterval(intervalId);
+    diagnosticsAutoRefresh?.stop?.();
     if (state.initialLoadTimer) clearTimeout(state.initialLoadTimer);
     clearProjectionTimers();
     projectionSubscriptions.forEach((subscription) => {
@@ -122,6 +117,12 @@ export async function mount(ctx) {
 }
 
 const INITIAL_LOAD_TIMEOUT_MS = 10000;
+
+function startDiagnosticsAutoRefresh(_options = {}) {
+  // Provider status checks are persisted commands. Keeping this module open must
+  // not create recurring business_commands/ctox_queue_tasks writes while idle.
+  return null;
+}
 
 function startInitialLoadWithTimeout() {
   state.initialLoadDone = false;
@@ -1668,6 +1669,7 @@ export const __codingAgentsTestHooks = {
   workspaceLoadErrorFromResult,
   buildAgyCommandArgs,
   buildCodingAgentCommand,
+  startDiagnosticsAutoRefresh,
   codingAgentCommandWaitTimeoutMs,
   diagnosticsFromOutcome,
   grantsFromOutcome,

@@ -13,7 +13,7 @@
 // with a mock collection; network-level methods are stubbed per instance so
 // the class logic under test runs unmodified.
 
-import { replicateWebRTC } from '../src/replication-webrtc.mjs';
+import { replicateWebRTC, replicationWebRtcTestInternals } from '../src/replication-webrtc.mjs';
 
 function mockCollection(name) {
   return {
@@ -49,6 +49,28 @@ async function makeState(name) {
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// --- 0. remote-origin-only changes must not trigger local push scans -------
+{
+  assert(
+    replicationWebRtcTestInternals.changeEventHasOnlyReplicationOriginWrites({
+      success: {
+        a: { id: 'a', _meta: { ctoxReplicationOrigin: { role: 'ctox_instance' } } },
+        b: { id: 'b', _meta: { ctoxReplicationOrigin: { role: 'ctox_instance' } } },
+      },
+    }),
+    'remote-origin-only writes should not trigger a push scan',
+  );
+  assert(
+    !replicationWebRtcTestInternals.changeEventHasOnlyReplicationOriginWrites({
+      success: {
+        a: { id: 'a', _meta: { ctoxReplicationOrigin: { role: 'ctox_instance' } } },
+        local: { id: 'local', _meta: { lwt: 5 } },
+      },
+    }),
+    'mixed remote/local writes must still trigger a push scan',
+  );
+}
+
 // --- 1. push re-run flag ----------------------------------------------------
 {
   const state = await makeState('push-rerun');
@@ -70,7 +92,61 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   await state.cancel();
 }
 
-// --- 2. pull retry via retryTime ---------------------------------------------
+// --- 1b. local write bursts coalesce into one push scan ----------------------
+{
+  const state = await makeState('push-coalesce');
+  let pushPasses = 0;
+  state.pushToRemotePeers = async () => {
+    pushPasses += 1;
+  };
+  state.scheduleLocalWritePush();
+  state.scheduleLocalWritePush();
+  state.scheduleLocalWritePush();
+  assert(state.localPushTimer, 'local write push debounce timer must be armed');
+  await delay(80);
+  assert(pushPasses === 1, `local write burst should run one push pass, got ${pushPasses}`);
+  assert(!state.localPushTimer, 'local write push debounce timer must clear after firing');
+  await state.cancel();
+}
+
+// --- 2. push scan continues after empty scan-limit batches ------------------
+{
+  const state = await makeState('push-scan-limit');
+  const reads = [
+    {
+      documents: [],
+      checkpoint: { lwt: 100, id: 'remote-only' },
+      scanLimitReached: true,
+    },
+    {
+      documents: [{ id: 'local-doc', _meta: { lwt: 101 } }],
+      checkpoint: { lwt: 101, id: 'local-doc' },
+      scanLimitReached: false,
+    },
+    {
+      documents: [],
+      checkpoint: { lwt: 101, id: 'local-doc' },
+      scanLimitReached: false,
+    },
+  ];
+  let readCalls = 0;
+  let writeCalls = 0;
+  state.collection.storageCollection.getChangedDocumentsSince = async () => reads[readCalls++] || reads.at(-1);
+  state.shared.peer = {
+    request: async (_peerId, method, params) => {
+      assert(method === 'masterWrite', `expected masterWrite, got ${method}`);
+      assert(params[0][0].newDocumentState.id === 'local-doc', 'local doc must be pushed after remote-only scan page');
+      writeCalls += 1;
+      return [];
+    },
+  };
+  await state.pushToPeer('p1');
+  assert(readCalls >= 2, `push scan must continue past empty scan-limit page (reads=${readCalls})`);
+  assert(writeCalls === 1, `exactly one local batch should be pushed (writes=${writeCalls})`);
+  await state.cancel();
+}
+
+// --- 3. pull retry via retryTime ---------------------------------------------
 {
   const state = await makeState('pull-retry');
   let pullAttempts = 0;
@@ -89,7 +165,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   assert(!state.pullRetryTimer, 'pull retry: cancel clears the retry timer');
 }
 
-// --- 3. checkpoint retention across reconnects -------------------------------
+// --- 4. checkpoint retention across reconnects -------------------------------
 {
   const state = await makeState('checkpoints');
   const protoSameGeneration = {
@@ -137,7 +213,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   await state.cancel();
 }
 
-// --- 4. transient 'disconnected' keeps the replication peer state ----------
+// --- 5. transient 'disconnected' keeps the replication peer state ----------
 {
   const state = await makeState('disconnected-grace');
   const removed = [];

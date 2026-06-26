@@ -15,9 +15,9 @@
 //! drive ICE/SDP exchange with webrtc-rs.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Once;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
@@ -27,13 +27,13 @@ use tokio::sync::Mutex as TokioMutex;
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
+use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use url::Url;
 
 use crate::plugins::replication_webrtc::signaling_protocol::{
-    ClientToServer, PeerId, RoomId, SIMPLE_PEER_PING_INTERVAL_MS, ServerToClient,
+    ClientToServer, PeerId, RoomId, ServerToClient, SIMPLE_PEER_PING_INTERVAL_MS,
 };
-use crate::rx_error::{RxError, new_rx_error};
+use crate::rx_error::{new_rx_error, RxError};
 use crate::rxjs_compat::{RxBehaviorSubject, RxStream, RxSubject};
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;

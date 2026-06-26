@@ -93,6 +93,8 @@ static BUSINESS_RECORDS_LOOP_METRICS: NativePeerLoopMetrics =
     NativePeerLoopMetrics::new("business_records");
 static BUSINESS_COMMANDS_LOOP_METRICS: NativePeerLoopMetrics =
     NativePeerLoopMetrics::new("business_commands");
+static BROWSER_RUNTIME_LOOP_METRICS: NativePeerLoopMetrics =
+    NativePeerLoopMetrics::new("browser_runtime");
 
 /// Supervision backoff bounds for respawning the native peer after a
 /// non-intentional exit (bring-up failure, watchdog-stale heartbeat,
@@ -174,6 +176,10 @@ const THREADS_APP_RELEVANCE_SINCE_KEY_PREFIX: &str = "__threads_app_relevance_";
 const TICKET_STATE_SYNC_LIMIT: usize = 500;
 const BROWSER_RUNTIME_ACTIVE_MAINTENANCE_INTERVAL_MS: u64 = 300;
 const BROWSER_RUNTIME_IDLE_MAINTENANCE_INTERVAL_SECS: u64 = 10;
+const BROWSER_RUNTIME_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
+const BROWSER_FRAME_GC_LIMIT: usize = 256;
+const BROWSER_INPUT_EVENT_GC_LIMIT: usize = 512;
+const BROWSER_INPUT_EVENT_RETENTION_SECS: u64 = 60 * 60;
 const BUSINESS_OS_CHANNEL_IDS: &[&str] = &[
     "whatsapp",
     "jami",
@@ -585,8 +591,13 @@ fn native_peer_performance_snapshot() -> Value {
             "knowledge_tables": KNOWLEDGE_TABLES_LOOP_METRICS.snapshot(),
             "business_records": BUSINESS_RECORDS_LOOP_METRICS.snapshot(),
             "business_commands": BUSINESS_COMMANDS_LOOP_METRICS.snapshot(),
+            "browser_runtime": BROWSER_RUNTIME_LOOP_METRICS.snapshot(),
         },
         "rxdb_sqlite": rxdb::storage::sqlite::instance::sqlite_runtime_counters_snapshot(),
+        "rxdb_subjects": {
+            "schema": "ctox.rxdb.subjects.runtime_counters.v1",
+            "lagged_items_total": rxdb::rxjs_compat::rx_subject_lagged_items_total(),
+        },
     })
 }
 
@@ -4315,38 +4326,85 @@ async fn browser_runtime_maintenance_loop(
     database: Arc<RxDatabase>,
     database_write_lock: Arc<AsyncMutex<()>>,
 ) {
-    let _ = root;
+    let mut consecutive_idle_rounds = 0u32;
     loop {
         if browser_runtime_manager().active_session_ids().is_empty() {
+            consecutive_idle_rounds = 0;
             tokio::time::sleep(Duration::from_secs(
                 BROWSER_RUNTIME_IDLE_MAINTENANCE_INTERVAL_SECS,
             ))
             .await;
             continue;
         }
-        {
+        let did_work = {
             let _guard = database_write_lock.lock().await;
             let _browser_guard = BROWSER_RUNTIME_COMMAND_LOCK.lock().await;
-            if let Err(err) = run_browser_runtime_maintenance(&database).await {
-                eprintln!("[business-os] browser runtime maintenance failed: {err:#}");
+            let started = Instant::now();
+            let result = run_browser_runtime_maintenance(&database).await;
+            record_native_peer_loop_result(&BROWSER_RUNTIME_LOOP_METRICS, &result, started.elapsed());
+            match result {
+                Ok(rows) => rows > 0,
+                Err(err) => {
+                    eprintln!("[business-os] browser runtime maintenance failed: {err:#}");
+                    true
+                }
             }
+        };
+        if did_work {
+            consecutive_idle_rounds = 0;
+        } else {
+            consecutive_idle_rounds = consecutive_idle_rounds.saturating_add(1);
         }
-        tokio::time::sleep(Duration::from_millis(
-            BROWSER_RUNTIME_ACTIVE_MAINTENANCE_INTERVAL_MS,
-        ))
-        .await;
+        wait_for_browser_runtime_maintenance_wake(&root, consecutive_idle_rounds).await;
     }
 }
 
-async fn run_browser_runtime_maintenance(database: &Arc<RxDatabase>) -> anyhow::Result<()> {
+fn browser_runtime_maintenance_sleep(consecutive_idle_rounds: u32) -> Duration {
+    if consecutive_idle_rounds >= BROWSER_RUNTIME_IDLE_BACKOFF_AFTER_TICKS {
+        Duration::from_secs(BROWSER_RUNTIME_IDLE_MAINTENANCE_INTERVAL_SECS)
+    } else {
+        Duration::from_millis(BROWSER_RUNTIME_ACTIVE_MAINTENANCE_INTERVAL_MS)
+    }
+}
+
+async fn wait_for_browser_runtime_maintenance_wake(root: &Path, consecutive_idle_rounds: u32) {
+    let sleep_for = browser_runtime_maintenance_sleep(consecutive_idle_rounds);
+    if consecutive_idle_rounds < BROWSER_RUNTIME_IDLE_BACKOFF_AFTER_TICKS {
+        tokio::time::sleep(sleep_for).await;
+        return;
+    }
+    let table_name = rxdb_collection_version_table_name("browser_input_events", 0);
+    let database_path = store::rxdb_store_path(root);
+    let seen_generation = rxdb::storage::sqlite::instance::table_change_generation_for_path(
+        &database_path,
+        &table_name,
+    )
+    .unwrap_or(0);
+    rxdb::storage::sqlite::instance::wait_for_table_change_for_path(
+        &database_path,
+        &table_name,
+        seen_generation,
+        sleep_for,
+    )
+    .await;
+}
+
+async fn run_browser_runtime_maintenance(database: &Arc<RxDatabase>) -> anyhow::Result<usize> {
     let manager = browser_runtime_manager();
+    let mut rows_touched = 0usize;
     for session_id in manager.active_session_ids() {
-        if let Err(err) = drain_browser_session_inputs(database, &session_id).await {
-            eprintln!("[business-os] browser input drain failed for {session_id}: {err:#}");
+        match drain_browser_session_inputs(database, &session_id).await {
+            Ok(session_rows) => {
+                rows_touched = rows_touched.saturating_add(session_rows);
+            }
+            Err(err) => {
+                eprintln!("[business-os] browser input drain failed for {session_id}: {err:#}");
+            }
         }
     }
-    gc_expired_browser_frames(database).await?;
-    Ok(())
+    rows_touched = rows_touched.saturating_add(gc_expired_browser_frames(database).await?);
+    rows_touched = rows_touched.saturating_add(gc_consumed_browser_input_events(database).await?);
+    Ok(rows_touched)
 }
 
 /// Replay all pending `browser_input_events` for one session against its live
@@ -4354,10 +4412,10 @@ async fn run_browser_runtime_maintenance(database: &Arc<RxDatabase>) -> anyhow::
 async fn drain_browser_session_inputs(
     database: &Arc<RxDatabase>,
     session_id: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<usize> {
     let manager = browser_runtime_manager();
     let Some(session) = manager.get(session_id) else {
-        return Ok(());
+        return Ok(0);
     };
 
     let events_collection = database
@@ -4380,11 +4438,12 @@ async fn drain_browser_session_inputs(
         .await
         .map_err(|err| anyhow::anyhow!("exec pending browser_input_events query: {err}"))?;
     let Some(rows) = pending.as_array() else {
-        return Ok(());
+        return Ok(0);
     };
     if rows.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
+    let touched_rows = rows.len();
 
     let mut events = Vec::with_capacity(rows.len());
     let mut max_seq = 0u64;
@@ -4447,7 +4506,7 @@ async fn drain_browser_session_inputs(
                 &format!("{err:#}"),
             )
             .await?;
-            return Ok(());
+            return Ok(touched_rows);
         }
     };
 
@@ -4485,7 +4544,7 @@ async fn drain_browser_session_inputs(
         capture_and_store_browser_frame(database, &session, session_id, Some(&nav)).await?;
         update_browser_session_input_state(database, session_id, max_seq).await?;
     }
-    Ok(())
+    Ok(touched_rows)
 }
 
 /// Capture a fresh frame from the live page and persist it plus the derived
@@ -4617,19 +4676,18 @@ async fn update_browser_session_input_state(
         .collection("browser_input_events")
         .context("browser_input_events collection is not registered")?;
     let pending = events_collection
-        .find(Some(MangoQuery {
+        .count(Some(MangoQuery {
             selector: Some(json!({
                 "session_id": { "$eq": session_id },
                 "status": { "$eq": "pending" }
             })),
-            limit: Some(512),
             ..Default::default()
         }))
         .map_err(|err| anyhow::anyhow!("count pending browser_input_events: {err}"))?
         .exec(false)
         .await
         .map_err(|err| anyhow::anyhow!("exec count pending browser_input_events: {err}"))?;
-    let pending_count = pending.as_array().map(|rows| rows.len()).unwrap_or(0) as u64;
+    let pending_count = pending.as_u64().unwrap_or(0);
 
     let sessions = database
         .collection("browser_sessions")
@@ -4664,7 +4722,7 @@ async fn update_browser_session_input_state(
 }
 
 /// Remove expired frames so `browser_frames` does not grow without bound.
-async fn gc_expired_browser_frames(database: &Arc<RxDatabase>) -> anyhow::Result<()> {
+async fn gc_expired_browser_frames(database: &Arc<RxDatabase>) -> anyhow::Result<usize> {
     let now = now_ms() as u64;
     let frames = database
         .collection("browser_frames")
@@ -4672,7 +4730,7 @@ async fn gc_expired_browser_frames(database: &Arc<RxDatabase>) -> anyhow::Result
     let expired = frames
         .find(Some(MangoQuery {
             selector: Some(json!({ "expires_at_ms": { "$lt": now } })),
-            limit: Some(256),
+            limit: Some(BROWSER_FRAME_GC_LIMIT),
             ..Default::default()
         }))
         .map_err(|err| anyhow::anyhow!("query expired browser_frames: {err}"))?
@@ -4680,7 +4738,7 @@ async fn gc_expired_browser_frames(database: &Arc<RxDatabase>) -> anyhow::Result
         .await
         .map_err(|err| anyhow::anyhow!("exec expired browser_frames query: {err}"))?;
     let Some(rows) = expired.as_array() else {
-        return Ok(());
+        return Ok(0);
     };
     let ids: Vec<String> = rows
         .iter()
@@ -4688,13 +4746,82 @@ async fn gc_expired_browser_frames(database: &Arc<RxDatabase>) -> anyhow::Result
         .map(str::to_string)
         .collect();
     if ids.is_empty() {
-        return Ok(());
+        return Ok(0);
+    }
+    let redacted = rows
+        .iter()
+        .filter_map(redacted_expired_browser_frame)
+        .collect::<Vec<_>>();
+    if !redacted.is_empty() {
+        frames
+            .bulk_upsert(redacted)
+            .await
+            .map_err(|err| anyhow::anyhow!("redact expired browser_frames: {err}"))?;
     }
     frames
         .bulk_remove_by_ids(ids)
         .await
         .map_err(|err| anyhow::anyhow!("remove expired browser_frames: {err}"))?;
-    Ok(())
+    Ok(rows.len())
+}
+
+fn redacted_expired_browser_frame(row: &Value) -> Option<Value> {
+    let mut next = row.clone();
+    let obj = next.as_object_mut()?;
+    obj.remove("_rev");
+    obj.remove("_meta");
+    obj.insert("data".to_string(), Value::String(String::new()));
+    obj.insert("encoding".to_string(), Value::String("redacted".to_string()));
+    obj.insert("size_bytes".to_string(), Value::from(0));
+    obj.insert("frame_hash".to_string(), Value::String(String::new()));
+    obj.insert("updated_at_ms".to_string(), Value::from(now_ms() as u64));
+    Some(next)
+}
+
+/// Drop consumed/failed input events after a retention window. Pending events
+/// stay until drained, and the bounded query keeps active browser maintenance
+/// from repeatedly touching old input-event history while idle.
+async fn gc_consumed_browser_input_events(database: &Arc<RxDatabase>) -> anyhow::Result<usize> {
+    let cutoff = (now_ms() as u64).saturating_sub(BROWSER_INPUT_EVENT_RETENTION_SECS * 1_000);
+    let events = database
+        .collection("browser_input_events")
+        .context("browser_input_events collection is not registered")?;
+    let mut removed = 0usize;
+    for status in ["consumed", "failed"] {
+        let stale = events
+            .find(Some(MangoQuery {
+                selector: Some(json!({
+                    "status": { "$eq": status },
+                    "created_at_ms": { "$lt": cutoff }
+                })),
+                sort: Some(vec![[("created_at_ms".to_string(), "asc".to_string())]
+                    .into_iter()
+                    .collect()]),
+                limit: Some(BROWSER_INPUT_EVENT_GC_LIMIT),
+                ..Default::default()
+            }))
+            .map_err(|err| anyhow::anyhow!("query stale browser_input_events: {err}"))?
+            .exec(false)
+            .await
+            .map_err(|err| anyhow::anyhow!("exec stale browser_input_events query: {err}"))?;
+        let Some(rows) = stale.as_array() else {
+            continue;
+        };
+        let ids = rows
+            .iter()
+            .filter_map(|row| row.get("id").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        if ids.is_empty() {
+            continue;
+        }
+        events
+            .bulk_remove_by_ids(ids)
+            .await
+            .map_err(|err| anyhow::anyhow!("remove stale browser_input_events: {err}"))?;
+        removed = removed.saturating_add(rows.len());
+    }
+    Ok(removed)
 }
 
 /// On peer startup, no live processes exist yet. Any session row left `active`
@@ -10657,6 +10784,22 @@ mod tests {
     }
 
     #[test]
+    fn browser_runtime_maintenance_sleep_backs_off_after_idle_round() {
+        assert_eq!(
+            browser_runtime_maintenance_sleep(0),
+            Duration::from_millis(BROWSER_RUNTIME_ACTIVE_MAINTENANCE_INTERVAL_MS)
+        );
+        assert_eq!(
+            browser_runtime_maintenance_sleep(1),
+            Duration::from_secs(BROWSER_RUNTIME_IDLE_MAINTENANCE_INTERVAL_SECS)
+        );
+        assert_eq!(
+            browser_runtime_maintenance_sleep(u32::MAX),
+            Duration::from_secs(BROWSER_RUNTIME_IDLE_MAINTENANCE_INTERVAL_SECS)
+        );
+    }
+
+    #[test]
     fn business_command_idle_gate_skips_when_no_pending_commands() {
         let root = tempfile::tempdir().expect("temp root");
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -11038,6 +11181,16 @@ mod tests {
                 .and_then(Value::as_str),
             Some("ctox.rxdb.sqlite.runtime_counters.v1")
         );
+        assert_eq!(
+            status
+                .pointer("/performance/rxdb_subjects/schema")
+                .and_then(Value::as_str),
+            Some("ctox.rxdb.subjects.runtime_counters.v1")
+        );
+        assert!(status
+            .pointer("/performance/rxdb_subjects/lagged_items_total")
+            .and_then(Value::as_u64)
+            .is_some());
         assert!(is_native_peer_running_for_root(root.path()));
     }
 

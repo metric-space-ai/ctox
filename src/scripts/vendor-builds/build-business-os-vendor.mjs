@@ -7,7 +7,17 @@ const srcRoot = path.resolve(scriptDir, '..', '..');
 const repoRoot = path.resolve(srcRoot, '..');
 const businessOsRoot = path.join(srcRoot, 'apps', 'business-os');
 const vendorRoot = path.join(businessOsRoot, 'vendor');
-const archivedBusinessBasicRoot = path.join(repoRoot, 'archive', 'reorg-review', 'templates', 'business-basic');
+const archivedWordPortRoot = path.join(
+  repoRoot,
+  'archive',
+  'reorg-review',
+  'templates',
+  'business-basic',
+  'apps',
+  'web',
+  'lib',
+  'word-port',
+);
 const archivedGeneratedNodeModules = path.join(
   repoRoot,
   'archive',
@@ -41,7 +51,7 @@ async function buildDocumentFormat() {
     mainFields: ['browser', 'module', 'main'],
     conditions: ['browser', 'import', 'default'],
     nodePaths: [archivedGeneratedNodeModules],
-    plugins: [businessBasicArchiveResolver()],
+    plugins: [wordPortArchiveResolver()],
   });
   await report(outfile);
 }
@@ -118,16 +128,16 @@ async function fileExists(file) {
   }
 }
 
-function businessBasicArchiveResolver() {
-  const wordPortEntry = path.join(archivedBusinessBasicRoot, 'apps', 'web', 'lib', 'word-port', 'index.ts');
+function wordPortArchiveResolver() {
+  const wordPortEntry = path.join(archivedWordPortRoot, 'index.ts');
   const packageAliases = new Map([
     ['fast-xml-parser', path.join(archivedGeneratedNodeModules, '.pnpm', 'fast-xml-parser@5.8.0', 'node_modules', 'fast-xml-parser', 'lib', 'fxp.cjs')],
     ['jszip', path.join(archivedGeneratedNodeModules, '.pnpm', 'jszip@3.10.1', 'node_modules', 'jszip', 'dist', 'jszip.min.js')],
   ]);
   return {
-    name: 'business-basic-archive-resolver',
+    name: 'word-port-archive-resolver',
     setup(build) {
-      build.onResolve({ filter: /templates\/business-basic\/apps\/web\/lib\/word-port$/ }, () => ({
+      build.onResolve({ filter: /^@ctox-word-port-archive$/ }, () => ({
         path: wordPortEntry,
       }));
       build.onResolve({ filter: /^(fast-xml-parser|jszip)$/ }, (args) => ({
@@ -148,7 +158,6 @@ async function loadEsbuild() {
   } catch {}
 
   const pnpmRoots = [
-    path.join(repoRoot, 'templates', 'business-basic', 'node_modules', '.pnpm'),
     path.join(repoRoot, 'archive', '2026-05-18-cleanup', 'generated', 'templates', 'business-basic', 'node_modules', '.pnpm'),
   ];
 
@@ -168,7 +177,7 @@ async function loadEsbuild() {
     }
   }
 
-  throw new Error('esbuild is not available. Install it or set up templates/business-basic/node_modules first.');
+  throw new Error('esbuild is not available. Install it or restore the archived generated node_modules bundle first.');
 }
 
 function comparePackageVersions(left, right) {

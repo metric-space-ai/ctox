@@ -337,8 +337,11 @@ pub fn ensure_process_mining_schema(conn: &Connection, db_path: &Path) -> Result
 
 pub fn attach_sqlite_access_recorder(conn: &Connection, db_path: &Path) {
     let db_path_text = db_path.to_string_lossy().to_string();
+    let record_read_events = sqlite_access_read_recording_enabled();
     conn.authorizer(Some(move |ctx: AuthContext<'_>| {
-        if let Some(record) = sqlite_access_record_from_auth_context(ctx, &db_path_text) {
+        if let Some(record) =
+            sqlite_access_record_from_auth_context(ctx, &db_path_text, record_read_events)
+        {
             if let Ok(mut records) = SQLITE_ACCESS_BUFFER
                 .get_or_init(|| Mutex::new(Vec::new()))
                 .lock()
@@ -1816,13 +1819,14 @@ fn install_process_mining_views(conn: &Connection) -> Result<()> {
 fn sqlite_access_record_from_auth_context(
     ctx: AuthContext<'_>,
     db_path: &str,
+    record_read_events: bool,
 ) -> Option<SqliteAccessRecord> {
     let (operation, table_name, column_name, action) = match ctx.action {
         AuthAction::Read {
             table_name,
             column_name,
         } => {
-            if !sqlite_access_read_recording_enabled() {
+            if !record_read_events {
                 return None;
             }
             if is_ignored_access_table(table_name) {

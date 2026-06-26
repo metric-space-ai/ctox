@@ -2,8 +2,9 @@
 // call to any backend method triggers `indexedDB.open`. The primary documents
 // database (ctox_business_os_js_v1) is NOT touched here.
 
-const SIDECAR_DB_VERSION = 1;
+const SIDECAR_DB_VERSION = 2;
 const STORE_QUERY_WINDOWS = 'queryWindows';
+const STORE_QUERY_WINDOW_REFS = 'queryWindowRefs';
 const STORE_DOCUMENT_ACCESS = 'documentAccess';
 const STORE_CACHE_STATS = 'cacheStats';
 const OPEN_TIMEOUT_MS = 4000;
@@ -38,6 +39,7 @@ export function createIndexedDbMetaBackend({ databaseName }) {
     },
     async deleteQueryWindow(key) {
       const db = await open();
+      await deleteQueryWindowRefs(db, stringKey(parseQueryWindowKey(key)));
       await runRequest(
         db
           .transaction(STORE_QUERY_WINDOWS, 'readwrite')
@@ -53,6 +55,28 @@ export function createIndexedDbMetaBackend({ databaseName }) {
           .objectStore(STORE_QUERY_WINDOWS)
           .getAll(),
       );
+    },
+    async replaceQueryWindowDocumentRefs(record) {
+      const db = await open();
+      const windowKey = queryWindowKey(record);
+      await deleteQueryWindowRefs(db, windowKey);
+      await putQueryWindowRefs(db, record);
+    },
+    async getQueryWindowKeysByDocumentIds(collection, ids) {
+      const normalizedIds = normalizeDocumentIds(ids);
+      if (!normalizedIds.length) return [];
+      const db = await open();
+      const tx = db.transaction(STORE_QUERY_WINDOW_REFS, 'readonly');
+      const index = tx.objectStore(STORE_QUERY_WINDOW_REFS).index('collection_documentId');
+      const requests = normalizedIds.map((id) => runRequest(index.getAll([collection, id])));
+      const rowsByDocument = await Promise.all(requests);
+      const keys = new Set();
+      for (const rows of rowsByDocument) {
+        for (const row of rows || []) {
+          if (row?.windowKey) keys.add(row.windowKey);
+        }
+      }
+      return Array.from(keys);
     },
     async putDocumentAccess(record) {
       const db = await open();
@@ -110,7 +134,7 @@ export function createIndexedDbMetaBackend({ databaseName }) {
     },
     async clear() {
       const db = await open();
-      for (const name of [STORE_QUERY_WINDOWS, STORE_DOCUMENT_ACCESS, STORE_CACHE_STATS]) {
+      for (const name of [STORE_QUERY_WINDOWS, STORE_QUERY_WINDOW_REFS, STORE_DOCUMENT_ACCESS, STORE_CACHE_STATS]) {
         await runRequest(db.transaction(name, 'readwrite').objectStore(name).clear());
       }
     },
@@ -143,6 +167,15 @@ function openSidecarDatabase(databaseName) {
         store.createIndex('collection_lastAccessedAt', ['collection', 'lastAccessedAt'], {
           unique: false,
         });
+      }
+      if (!db.objectStoreNames.contains(STORE_QUERY_WINDOW_REFS)) {
+        const store = db.createObjectStore(STORE_QUERY_WINDOW_REFS, {
+          keyPath: ['collection', 'documentId', 'windowKey'],
+        });
+        store.createIndex('collection_documentId', ['collection', 'documentId'], {
+          unique: false,
+        });
+        store.createIndex('windowKey', 'windowKey', { unique: false });
       }
       if (!db.objectStoreNames.contains(STORE_DOCUMENT_ACCESS)) {
         const store = db.createObjectStore(STORE_DOCUMENT_ACCESS, {
@@ -186,5 +219,70 @@ function runRequest(request) {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
+  });
+}
+
+function queryWindowKey(record) {
+  return [record.collection, record.queryFingerprint, record.offset, record.limit].join('|');
+}
+
+function stringKey(key) {
+  if (Array.isArray(key)) return key.join('|');
+  if (typeof key === 'string') return key;
+  throw new TypeError('query window key must be array or string');
+}
+
+function normalizeDocumentIds(ids) {
+  if (!Array.isArray(ids)) return [];
+  return Array.from(new Set(ids.map((id) => String(id || '')).filter(Boolean)));
+}
+
+async function putQueryWindowRefs(db, record) {
+  const documentIds = normalizeDocumentIds(record.documentIds);
+  if (!documentIds.length) return;
+  const windowKey = queryWindowKey(record);
+  await runTransaction(
+    db.transaction(STORE_QUERY_WINDOW_REFS, 'readwrite'),
+    (tx) => {
+      const store = tx.objectStore(STORE_QUERY_WINDOW_REFS);
+      for (const documentId of documentIds) {
+        store.put({
+          collection: record.collection,
+          documentId,
+          windowKey,
+        });
+      }
+    },
+  );
+}
+
+async function deleteQueryWindowRefs(db, windowKey) {
+  await runTransaction(
+    db.transaction(STORE_QUERY_WINDOW_REFS, 'readwrite'),
+    (tx) => {
+      const index = tx.objectStore(STORE_QUERY_WINDOW_REFS).index('windowKey');
+      const range = globalThis.IDBKeyRange.only(windowKey);
+      const request = index.openCursor(range);
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        cursor.delete();
+        cursor.continue();
+      };
+    },
+  );
+}
+
+function runTransaction(tx, schedule) {
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error('IndexedDB transaction aborted'));
+    try {
+      schedule(tx);
+    } catch (error) {
+      try { tx.abort(); } catch {}
+      reject(error);
+    }
   });
 }

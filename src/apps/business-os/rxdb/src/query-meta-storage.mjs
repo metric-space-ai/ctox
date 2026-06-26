@@ -61,6 +61,7 @@ export class QueryMetaStorage {
       lastAccessedAt: now,
     };
     await this.backend.putQueryWindow(record);
+    await this.backend.replaceQueryWindowDocumentRefs?.(record);
     return record;
   }
 
@@ -186,6 +187,49 @@ export class QueryMetaStorage {
     await this.backend.clear();
   }
 
+  async invalidateQueryWindowsForDocuments(collection, ids) {
+    const normalizedIds = normalizeDocumentIds(ids);
+    if (!collection || !normalizedIds.length) return 0;
+    const windowKeys = typeof this.backend.getQueryWindowKeysByDocumentIds === 'function'
+      ? await this.backend.getQueryWindowKeysByDocumentIds(collection, normalizedIds)
+      : await this.scanQueryWindowKeysForDocuments(collection, normalizedIds);
+    let invalidated = 0;
+    const seen = new Set();
+    for (const key of windowKeys) {
+      const stringified = stringKey(key);
+      if (seen.has(stringified)) continue;
+      seen.add(stringified);
+      const window = await this.backend.getQueryWindow(stringified);
+      if (!window || window.collection !== collection) continue;
+      await this.invalidateQueryWindow([
+        window.collection,
+        window.queryFingerprint,
+        window.offset,
+        window.limit,
+      ]);
+      invalidated += 1;
+    }
+    return invalidated;
+  }
+
+  async scanQueryWindowKeysForDocuments(collection, ids) {
+    const idSet = new Set(ids);
+    const all = await this.backend.scanQueryWindows();
+    const keys = [];
+    for (const window of all) {
+      if (window.collection !== collection) continue;
+      const documentIds = Array.isArray(window.documentIds) ? window.documentIds : [];
+      if (!documentIds.some((id) => idSet.has(String(id || '')))) continue;
+      keys.push([
+        window.collection,
+        window.queryFingerprint,
+        window.offset,
+        window.limit,
+      ]);
+    }
+    return keys;
+  }
+
   async close() {
     await this.backend.close();
   }
@@ -193,17 +237,24 @@ export class QueryMetaStorage {
   /// Evicts LRU document access entries until the working set fits the budget.
   /// Skips dirty docs and unexpired recently-read pins. Returns the number of
   /// document records removed.
-  async runEvictionIfOverBudget() {
+  async runEvictionIfOverBudget({ forceRecount = false } = {}) {
     const stats = await this.getCacheStats();
-    const workingSetBytes = await this.estimateWorkingSetBytes();
+    if (!stats.budgetBytes) {
+      return 0;
+    }
+    if (!forceRecount && (stats.estimatedBytes || 0) <= stats.budgetBytes) {
+      return 0;
+    }
+
+    const all = await this.backend.scanDocumentAccess();
+    const workingSetBytes = sumEstimatedDocumentAccessBytes(all);
     if (stats.estimatedBytes !== workingSetBytes) {
       stats.estimatedBytes = workingSetBytes;
       await this.backend.putCacheStats(stats);
     }
-    if (!stats.budgetBytes || workingSetBytes <= stats.budgetBytes) {
+    if (workingSetBytes <= stats.budgetBytes) {
       return 0;
     }
-    const all = await this.backend.scanDocumentAccess();
     const now = this.clock();
     // Sort oldest access first; skip dirty/pinned.
     const candidates = all
@@ -254,7 +305,7 @@ export class QueryMetaStorage {
       // Force aggressive eviction: target half of current budget.
       const tighten = Math.max(1024, Math.floor((stats.budgetBytes || stats.estimatedBytes || 65536) / 2));
       await this.setBudgetBytes(tighten);
-      await this.runEvictionIfOverBudget();
+      await this.runEvictionIfOverBudget({ forceRecount: true });
       try {
         return await writeFn();
       } catch (retryErr) {
@@ -313,6 +364,18 @@ export class QueryMetaStorage {
 function normalizeEstimatedBytes(estimatedBytes) {
   const bytes = Math.max(0, Number(estimatedBytes) || 0);
   return bytes > 0 ? Math.max(1, Math.ceil(bytes)) : 0;
+}
+
+function sumEstimatedDocumentAccessBytes(records) {
+  return (Array.isArray(records) ? records : []).reduce(
+    (sum, record) => sum + (record.estimatedBytes || 0),
+    0,
+  );
+}
+
+function normalizeDocumentIds(ids) {
+  if (!Array.isArray(ids)) return [];
+  return Array.from(new Set(ids.map((id) => String(id || '')).filter(Boolean)));
 }
 
 function isQuotaExceeded(err) {

@@ -310,7 +310,6 @@ class LocalDaemonInstanceSource extends RegistryBackedSource {
     super("local_daemon", registryProvider, registrySaver, secretStore, options);
     this.runStatusCommand = options.runStatusCommand || options.runCommand || runLocalPeerStatusCommand;
     this.runEnsureCommand = options.runEnsureCommand || options.runCommand || runLocalPeerEnsureCommand;
-    this.runInstallCommand = options.runInstallCommand || runLocalBusinessOsInstallCommand;
   }
 
   async attachLocalDaemon(options = {}) {
@@ -351,10 +350,6 @@ class LocalDaemonInstanceSource extends RegistryBackedSource {
     } catch (error) {
       return localDaemonInspectionError(error, profile);
     }
-  }
-
-  async installLocalBusinessOs(options = {}) {
-    return this.runInstallCommand(normalizeLocalProfile(options), normalizeLocalInstallOptions(options));
   }
 
   async getLaunchConfig(instanceId) {
@@ -544,19 +539,6 @@ async function runLocalPeerEnsureCommand(profile) {
   return runLocalPeerStatusCommand(profile);
 }
 
-async function runLocalBusinessOsInstallCommand(profile, install) {
-  const { stdout, stderr } = await execFileAsync(profile.ctoxBinary, buildLocalInstallArgs(install), {
-    ...buildLocalCommandOptions(profile, install.dryRun ? 30000 : 120000),
-  });
-  return {
-    ok: true,
-    target: install.target,
-    dryRun: install.dryRun,
-    stdout: stdout.trim(),
-    stderr: stderr.trim(),
-  };
-}
-
 function buildLocalCommandOptions(profile, timeout) {
   const options = {
     timeout,
@@ -588,14 +570,6 @@ function assertLocalCtoxRoot(ctoxRoot) {
 function buildLocalPeerArgs(command) {
   if (!["status", "ensure"].includes(command)) throw new Error(`unsupported local peer command: ${command}`);
   return ["business-os", "peer", command];
-}
-
-function buildLocalInstallArgs(install) {
-  const args = ["business-os", "install", "--target", install.target];
-  if (install.initGit) args.push("--init-git");
-  if (install.noCopyEnv) args.push("--no-copy-env");
-  if (install.dryRun) args.push("--dry-run");
-  return args;
 }
 
 async function runSshPeerStatusCommand(profile) {
@@ -1058,18 +1032,6 @@ function isExecutableFile(filePath) {
   }
 }
 
-function normalizeLocalInstallOptions(options = {}) {
-  const target = String(options.target || "").trim();
-  if (!target) throw new Error("local install target is required");
-  if (/[\0\r\n]/.test(target)) throw new Error("local install target contains unsupported characters");
-  return {
-    target,
-    initGit: Boolean(options.initGit),
-    noCopyEnv: Boolean(options.noCopyEnv),
-    dryRun: Boolean(options.dryRun),
-  };
-}
-
 function localDaemonInspectionError(error, profile) {
   if (error?.code === "ENOENT") {
     return {
@@ -1431,15 +1393,12 @@ module.exports = {
   normalizeLocalProfile,
   resolveLocalCtoxBinary,
   localCtoxBinaryCandidates,
-  normalizeLocalInstallOptions,
   buildLocalPeerArgs,
-  buildLocalInstallArgs,
   buildLocalCommandOptions,
   assertLocalCtoxRoot,
   buildSshPeerRemoteCommand,
   runLocalPeerStatusCommand,
   runLocalPeerEnsureCommand,
-  runLocalBusinessOsInstallCommand,
   runSshPeerStatusCommand,
   runSshPeerEnsureCommand,
   runSshPreflightCommand,

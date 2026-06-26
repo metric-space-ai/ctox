@@ -292,8 +292,10 @@ ctox business-os mcp serve [--addr 127.0.0.1:8788]
 CTOX_BUSINESS_OS_MCP_CONNECT_TOKEN=<token> \
   ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id>
 
-# Install a standalone Business OS repository to an empty directory
-ctox business-os install --target <empty-dir> [--init-git]
+# Create or modify runtime-installed Business OS apps
+ctox business-os app create --instruction <text> [--module-id <id>]
+ctox business-os app modify <module-id> --instruction <text>
+ctox business-os app validate <module-id> --installed
 
 # List and manage optional skill-app modules
 ctox business-os modules list

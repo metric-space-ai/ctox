@@ -6,24 +6,24 @@
 //! that already has chunks 0..49 can resume from 50.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
-use crate::rx_error::{RxError, RxResult, new_rx_error};
+use crate::rx_error::{new_rx_error, RxResult};
 
 use super::protocol_contract_generated::{
     CTOX_FILE_MAX_BYTES_PER_CHUNK, CTOX_FILE_RPC_CANCEL, CTOX_FILE_RPC_CHUNK, CTOX_FILE_RPC_ERROR,
     CTOX_FILE_RPC_FETCH, CTOX_QUERY_MAX_RUNTIME_MS,
 };
 use super::webrtc_types::{
-    WEBRTC_BUFFERED_HIGH_WATER, WebRTCConnectionHandler, WebRTCMessage, WebRTCResponse,
-    WebRTCWireFrame,
+    WebRTCConnectionHandler, WebRTCMessage, WebRTCResponse, WebRTCWireFrame,
+    WEBRTC_BUFFERED_HIGH_WATER,
 };
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -83,6 +83,7 @@ pub type FileSourceFn = dyn Fn(&str, &str, Option<&FileRange>) -> RxResult<Vec<u
 pub type FileChunkStreamFn = dyn Fn(&str, &str, Option<&FileRange>, &mut dyn FnMut(&[u8]) -> RxResult<bool>) -> RxResult<()>
     + Send
     + Sync;
+pub type FileAuthCheckFn = dyn Fn(&str, &str) -> bool + Send + Sync;
 
 enum FileSource {
     Buffer(Arc<FileSourceFn>),
@@ -95,6 +96,7 @@ pub struct FileFetchRegistry {
     inflight_count: AtomicU64,
     max_inflight: u64,
     feature_enabled: AtomicBool,
+    auth_check: Mutex<Option<Arc<FileAuthCheckFn>>>,
 }
 
 impl FileFetchRegistry {
@@ -105,6 +107,7 @@ impl FileFetchRegistry {
             inflight_count: AtomicU64::new(0),
             max_inflight,
             feature_enabled: AtomicBool::new(true),
+            auth_check: Mutex::new(None),
         }
     }
 
@@ -130,6 +133,19 @@ impl FileFetchRegistry {
 
     pub fn is_feature_enabled(&self) -> bool {
         self.feature_enabled.load(Ordering::SeqCst)
+    }
+
+    /// Install a peer-identity -> collection authorization callback. Without
+    /// a callback the registry denies file-fetch requests.
+    pub fn set_auth_check(&self, check: Arc<FileAuthCheckFn>) {
+        *self.auth_check.lock() = Some(check);
+    }
+
+    fn check_authorized(&self, peer_identity: &str, collection: &str) -> bool {
+        match self.auth_check.lock().as_ref() {
+            Some(cb) => cb(peer_identity, collection),
+            None => false,
+        }
     }
 
     fn get_source(&self, collection: &str) -> Option<FileSource> {
@@ -230,6 +246,22 @@ pub async fn run_file_fetch<H: WebRTCConnectionHandler>(
         }
     };
 
+    if !registry.check_authorized(&peer_identity, &request.collection_name)
+        || !handler.is_collection_authorized_for_peer(&peer, &request.collection_name)
+    {
+        send_file_error(
+            handler.as_ref(),
+            &peer,
+            &message.id,
+            &request.request_id,
+            FILE_FETCH_ERROR_UNAUTHORIZED,
+            "peer is not authorized for this collection",
+            false,
+        )
+        .await;
+        return Ok(());
+    }
+
     let source = match registry.get_source(&request.collection_name) {
         Some(s) => s,
         None => {
@@ -288,87 +320,93 @@ async fn stream_file<H: WebRTCConnectionHandler>(
     let chunk_size = CTOX_FILE_MAX_BYTES_PER_CHUNK as usize;
     let known: std::collections::HashSet<u32> = request.known_sequences.iter().copied().collect();
 
-    // Collected segments to emit. With FileSource::Stream this stays bounded
-    // to one in-flight chunk at a time; with FileSource::Buffer we accept
-    // the legacy O(file_size) memory cost.
-    enum Step<'a> {
-        Slice(&'a [u8]),
-    }
-    let _ = std::marker::PhantomData::<Step>;
-
     match source {
         FileSource::Stream(stream_fn) => {
-            // The stream source emits chunks via the callback; we wrap the
-            // callback to inject cancel / timeout / backpressure / known-
-            // sequence skip / completion bookkeeping. Bounded memory:
-            // exactly one chunk_size buffer is in flight at any moment
-            // (held by the stream source's read buffer).
+            // The stream source is synchronous because it owns the file/DB
+            // read loop. Run it on a blocking worker and bridge chunks through
+            // a bounded channel so async transport sends, cancellation, and
+            // backpressure are driven by this dispatcher without blocking a
+            // Tokio runtime worker.
             let mut sequence: u32 = 0u32;
             let mut sent_any = false;
-            let mut total_emitted_bytes: u64 = 0;
             let mut stop_with_error: Option<&'static str> = None;
-            // We need to call .await inside the callback but the callback
-            // is sync. Trick: build a tokio runtime handle to block_on the
-            // send. We're already inside a tokio task, so we use
-            // `tokio::task::block_in_place` + `Handle::current().block_on`.
-            let send_res = (stream_fn)(
-                &request.collection_name,
-                &request.file_id,
-                request.range.as_ref(),
-                &mut |bytes: &[u8]| -> RxResult<bool> {
-                    if cancel_flag.load(Ordering::SeqCst) {
-                        // signal a cancelled terminal chunk
-                        let req = request.clone();
-                        let h_peer = peer.clone();
-                        let _ = futures::executor::block_on(send_file_chunk(
-                            handler,
-                            &h_peer,
-                            &req,
-                            sequence,
-                            &[],
-                            true,
-                            true,
-                        ));
-                        return Ok(false);
-                    }
-                    if Instant::now() >= runtime_deadline {
-                        stop_with_error = Some("timeout");
-                        return Ok(false);
-                    }
-                    // Backpressure: yield in a sync-friendly way. We use a
-                    // short busy wait checked-against-the-deadline. The
-                    // dispatcher task itself is already async; the stream
-                    // source closure is sync (because it must own a file
-                    // handle), so we accept this small inefficiency for
-                    // bounded memory.
+            let mut stream_cancelled = false;
+            let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
+            let producer_stop = Arc::new(AtomicBool::new(false));
+            let producer_stop_for_source = Arc::clone(&producer_stop);
+            let source_request = request.clone();
+            let source_fn = Arc::clone(stream_fn);
+            let producer = tokio::task::spawn_blocking(move || {
+                (source_fn)(
+                    &source_request.collection_name,
+                    &source_request.file_id,
+                    source_request.range.as_ref(),
+                    &mut |bytes: &[u8]| -> RxResult<bool> {
+                        if producer_stop_for_source.load(Ordering::SeqCst) {
+                            return Ok(false);
+                        }
+                        match chunk_tx.blocking_send(bytes.to_vec()) {
+                            Ok(()) => Ok(true),
+                            Err(_) => Ok(false),
+                        }
+                    },
+                )
+            });
+
+            while let Some(bytes) = chunk_rx.recv().await {
+                if cancel_flag.load(Ordering::SeqCst) {
+                    producer_stop.store(true, Ordering::SeqCst);
+                    send_file_chunk(handler, peer, request, sequence, &[], true, true).await;
+                    stream_cancelled = true;
+                    break;
+                }
+                if Instant::now() >= runtime_deadline {
+                    producer_stop.store(true, Ordering::SeqCst);
+                    stop_with_error = Some("timeout");
+                    break;
+                }
+
+                if !known.contains(&sequence) {
+                    let mut backoff_ms = 4u64;
                     while handler.buffered_bytes(peer) > WEBRTC_BUFFERED_HIGH_WATER {
                         if cancel_flag.load(Ordering::SeqCst) {
-                            return Ok(false);
+                            producer_stop.store(true, Ordering::SeqCst);
+                            send_file_chunk(handler, peer, request, sequence, &[], true, true)
+                                .await;
+                            stream_cancelled = true;
+                            break;
                         }
                         if Instant::now() >= runtime_deadline {
+                            producer_stop.store(true, Ordering::SeqCst);
                             stop_with_error = Some("timeout-backpressure");
-                            return Ok(false);
+                            break;
                         }
-                        std::thread::sleep(Duration::from_millis(8));
+                        tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                        backoff_ms = (backoff_ms * 2).min(64);
+                    }
+                    if stream_cancelled || stop_with_error.is_some() {
+                        break;
                     }
                     // The closure may pass a smaller slice than chunk_size,
-                    // which is fine — chunk_size is a max, not a min. The
+                    // which is fine: chunk_size is a max, not a min. The
                     // sequence number advances per emitted chunk.
-                    if !known.contains(&sequence) {
-                        let req = request.clone();
-                        let h_peer = peer.clone();
-                        // complete flag is set later; for now non-final
-                        let _ = futures::executor::block_on(send_file_chunk(
-                            handler, &h_peer, &req, sequence, bytes, false, false,
-                        ));
-                        sent_any = true;
-                        total_emitted_bytes =
-                            total_emitted_bytes.saturating_add(bytes.len() as u64);
-                    }
-                    sequence += 1;
-                    Ok(true)
-                },
-            );
+                    send_file_chunk(handler, peer, request, sequence, &bytes, false, false).await;
+                    sent_any = true;
+                }
+                sequence += 1;
+            }
+            drop(chunk_rx);
+
+            let source_result = producer.await.map_err(|err| {
+                new_rx_error(
+                    "FILE_FETCH_STREAM",
+                    Some(json!({ "message": format!("file stream worker failed: {err}") })),
+                )
+            });
+
+            if stream_cancelled {
+                return Ok(());
+            }
             if let Some(reason) = stop_with_error {
                 send_file_error(
                     handler,
@@ -382,7 +420,7 @@ async fn stream_file<H: WebRTCConnectionHandler>(
                 .await;
                 return Ok(());
             }
-            if let Err(err) = send_res {
+            if let Err(err) = source_result.and_then(|result| result) {
                 send_file_error(
                     handler,
                     peer,
@@ -397,7 +435,6 @@ async fn stream_file<H: WebRTCConnectionHandler>(
             }
             // Emit terminal complete-chunk. If nothing was sent (all known),
             // still emit one to resolve the JS promise.
-            let _ = total_emitted_bytes;
             if !sent_any {
                 send_file_chunk(handler, peer, request, sequence, &[], true, false).await;
             } else {
@@ -505,17 +542,15 @@ async fn send_file_chunk<H: WebRTCConnectionHandler>(
     let frame = WebRTCMessage {
         id: format!("{}-f{}", request.request_id, sequence),
         method: CTOX_FILE_RPC_CHUNK.to_string(),
-        params: vec![
-            serde_json::to_value(FileFetchChunk {
-                request_id: request.request_id.clone(),
-                sequence,
-                bytes_base64: b64,
-                hash: Some(hash),
-                complete,
-                cancelled: if cancelled { Some(true) } else { None },
-            })
-            .unwrap_or(Value::Null),
-        ],
+        params: vec![serde_json::to_value(FileFetchChunk {
+            request_id: request.request_id.clone(),
+            sequence,
+            bytes_base64: b64,
+            hash: Some(hash),
+            complete,
+            cancelled: if cancelled { Some(true) } else { None },
+        })
+        .unwrap_or(Value::Null)],
         collection: Some(request.collection_name.clone()),
     };
     let _ = handler.send(peer, WebRTCWireFrame::Message(frame)).await;
@@ -574,6 +609,7 @@ pub fn file_cancel_method() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rx_error::RxError;
     use crate::rxjs_compat::{RxStream, RxSubject};
     use async_trait::async_trait;
     use parking_lot::Mutex as TokioMutex;
@@ -598,13 +634,20 @@ mod tests {
     struct MockHandler {
         sent: Arc<TokioMutex<Vec<WebRTCWireFrame>>>,
         buffered: Arc<AtomicUsize>,
+        collection_authorized: Arc<AtomicBool>,
     }
     impl MockHandler {
         fn new() -> Self {
             Self {
                 sent: Arc::new(TokioMutex::new(Vec::new())),
                 buffered: Arc::new(AtomicUsize::new(0)),
+                collection_authorized: Arc::new(AtomicBool::new(true)),
             }
+        }
+
+        fn set_collection_authorized(&self, authorized: bool) {
+            self.collection_authorized
+                .store(authorized, Ordering::SeqCst);
         }
     }
     #[async_trait]
@@ -638,6 +681,9 @@ mod tests {
         fn peer_identity(&self, peer: &Self::Peer) -> String {
             peer.0.to_string()
         }
+        fn is_collection_authorized_for_peer(&self, _peer: &Self::Peer, _collection: &str) -> bool {
+            self.collection_authorized.load(Ordering::SeqCst)
+        }
     }
 
     fn make_request(id: &str, collection: &str, file_id: &str, known: Vec<u32>) -> WebRTCMessage {
@@ -654,9 +700,62 @@ mod tests {
         }
     }
 
+    fn authorized_file_registry(max_inflight: u64) -> Arc<FileFetchRegistry> {
+        let registry = Arc::new(FileFetchRegistry::new(max_inflight));
+        registry.set_auth_check(Arc::new(|_peer, _collection| true));
+        registry
+    }
+
+    fn error_code_emitted(frames: &[WebRTCWireFrame], expected: &str) -> bool {
+        frames.iter().any(|f| {
+            matches!(
+                f,
+                WebRTCWireFrame::Message(m) if m.method == CTOX_FILE_RPC_ERROR
+                    && m.params[0].get("code").and_then(Value::as_str) == Some(expected)
+            )
+        })
+    }
+
+    #[tokio::test]
+    async fn file_fetch_without_auth_callback_is_denied() {
+        let registry = Arc::new(FileFetchRegistry::new(4));
+        registry.register_source("desktop_files", Arc::new(|_c, _f, _r| Ok(vec![42u8; 8])));
+        let handler = Arc::new(MockHandler::new());
+        run_file_fetch(
+            registry,
+            Arc::clone(&handler),
+            MockPeer("p1"),
+            "p1".into(),
+            make_request("auth-missing", "desktop_files", "file-1", vec![]),
+        )
+        .await
+        .unwrap();
+        let frames = handler.sent.lock();
+        assert!(error_code_emitted(&frames, FILE_FETCH_ERROR_UNAUTHORIZED));
+    }
+
+    #[tokio::test]
+    async fn file_fetch_uses_handler_collection_authorization() {
+        let registry = authorized_file_registry(4);
+        registry.register_source("desktop_files", Arc::new(|_c, _f, _r| Ok(vec![42u8; 8])));
+        let handler = Arc::new(MockHandler::new());
+        handler.set_collection_authorized(false);
+        run_file_fetch(
+            registry,
+            Arc::clone(&handler),
+            MockPeer("p1"),
+            "p1".into(),
+            make_request("handler-deny", "desktop_files", "file-1", vec![]),
+        )
+        .await
+        .unwrap();
+        let frames = handler.sent.lock();
+        assert!(error_code_emitted(&frames, FILE_FETCH_ERROR_UNAUTHORIZED));
+    }
+
     #[tokio::test]
     async fn streams_file_as_chunks_with_hash() {
-        let registry = Arc::new(FileFetchRegistry::new(4));
+        let registry = authorized_file_registry(4);
         registry.register_source(
             "desktop_files",
             Arc::new(|_c, _f, _r| Ok(vec![42u8; 800_000])), // ~800 KB → multiple chunks
@@ -695,7 +794,7 @@ mod tests {
 
     #[tokio::test]
     async fn known_sequences_skipped() {
-        let registry = Arc::new(FileFetchRegistry::new(4));
+        let registry = authorized_file_registry(4);
         registry.register_source(
             "desktop_files",
             Arc::new(|_c, _f, _r| Ok(vec![1u8; 800_000])),
@@ -740,7 +839,7 @@ mod tests {
         let peak_in_flight = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let emit_calls_clone = Arc::clone(&emit_calls);
         let peak_in_flight_clone = Arc::clone(&peak_in_flight);
-        let registry = Arc::new(FileFetchRegistry::new(4));
+        let registry = authorized_file_registry(4);
         registry.register_stream_source(
             "desktop_files",
             Arc::new(move |_collection, _file_id, _range, emit| {
@@ -816,8 +915,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stream_source_waits_for_async_backpressure() {
+        const N_CHUNKS: usize = 3;
+        let emit_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let emit_calls_clone = Arc::clone(&emit_calls);
+        let registry = authorized_file_registry(4);
+        registry.register_stream_source(
+            "desktop_files",
+            Arc::new(move |_collection, _file_id, _range, emit| {
+                for i in 0..N_CHUNKS {
+                    let buf = vec![i as u8; 8];
+                    emit_calls_clone.fetch_add(1, Ordering::SeqCst);
+                    if !emit(&buf)? {
+                        break;
+                    }
+                }
+                Ok(())
+            }),
+        );
+        let handler = Arc::new(MockHandler::new());
+        handler.buffered.store(
+            WEBRTC_BUFFERED_HIGH_WATER.saturating_add(1),
+            Ordering::SeqCst,
+        );
+
+        let task = tokio::spawn({
+            let registry = Arc::clone(&registry);
+            let handler = Arc::clone(&handler);
+            async move {
+                run_file_fetch(
+                    registry,
+                    handler,
+                    MockPeer("p1"),
+                    "p1".into(),
+                    make_request("stream-backpressure", "desktop_files", "big-file", vec![]),
+                )
+                .await
+            }
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        {
+            let frames = handler.sent.lock();
+            assert!(
+                frames.iter().all(|frame| !matches!(
+                    frame,
+                    WebRTCWireFrame::Message(message)
+                        if message.method == CTOX_FILE_RPC_CHUNK
+                )),
+                "backpressure should pause file chunk sends"
+            );
+        }
+
+        handler.buffered.store(0, Ordering::SeqCst);
+        tokio::time::timeout(std::time::Duration::from_secs(1), task)
+            .await
+            .expect("file fetch should finish after backpressure clears")
+            .expect("file fetch task should not panic")
+            .expect("file fetch should succeed");
+
+        let frames = handler.sent.lock();
+        let chunks: Vec<_> = frames
+            .iter()
+            .filter_map(|frame| match frame {
+                WebRTCWireFrame::Message(message) if message.method == CTOX_FILE_RPC_CHUNK => {
+                    serde_json::from_value::<FileFetchChunk>(message.params[0].clone()).ok()
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            chunks.len(),
+            N_CHUNKS + 1,
+            "payload chunks plus terminal completion frame should be sent"
+        );
+        assert!(
+            chunks.last().is_some_and(|chunk| chunk.complete),
+            "terminal chunk must mark completion"
+        );
+        assert_eq!(
+            emit_calls.load(Ordering::SeqCst),
+            N_CHUNKS,
+            "producer should resume after async backpressure clears"
+        );
+    }
+
+    #[tokio::test]
     async fn unregistered_collection_returns_not_found() {
-        let registry = Arc::new(FileFetchRegistry::new(4));
+        let registry = authorized_file_registry(4);
         let handler = Arc::new(MockHandler::new());
         run_file_fetch(
             registry,

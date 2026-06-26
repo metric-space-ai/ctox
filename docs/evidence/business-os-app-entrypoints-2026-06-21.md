@@ -76,7 +76,6 @@ These are one implementation family, but each module owns its context menu code,
 | Plain inbound Teams/Jami/WhatsApp/email/TUI message | not currently an app-create/modify path by itself | Inbound skill inference does not route generic "build an app" text to `ctox.business_os.app.create`; app creation must enter through typed Business OS command, UI, CLI, or MCP. |
 | Desktop app `creator` wrapper | not separate | It mounts the same App Creator module; evidence is covered by UI-01/UI-03. |
 | Direct filesystem edits under `runtime/business-os/installed-modules` | not an official CTOX path | Official modification is Source Editor / `ctox.source.save` or app-create/modify tasks, so source snapshots, permissions, and projections stay intact. |
-| `ctox business-os install --target ...` | not app creation | Installs Business OS into a customer-owned repository; it does not create an app module. |
 
 ## Source Anchors Checked
 

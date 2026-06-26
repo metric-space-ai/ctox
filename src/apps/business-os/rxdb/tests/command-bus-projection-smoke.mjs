@@ -12,6 +12,8 @@
 //    materialize from the file viewer failed that way (rxdb-soak
 //    workspace-large-file-viewer-rust-to-browser).
 // 3. status 'failed' rejects with the command error.
+// 4. ctox.file.materialize uses desktop_files demand-fetch metadata, not
+//    browser-origin desktop_file_chunks upload sync.
 //
 // Runs the REAL createCommandBus with mock collections; no network.
 
@@ -106,7 +108,34 @@ const assert = (condition, message) => {
   assert(result.result.outcome.data.grants[0] === '/tmp/project', 'control command: structured result preserved');
 }
 
-// --- 3. failed command rejects with the command error ----------------------
+// --- 3. direct control command with file_id does not wake chunks -----------
+{
+  const events = [];
+  const db = makeDb({
+    events,
+    commandAck: {
+      status: 'completed',
+      task_id: '',
+      task_status: 'completed',
+      result: { outcome: { ok: true } },
+    },
+  });
+  const bus = createCommandBus({ db, sync: makeSync(events) });
+  const result = await bus.dispatch({
+    type: 'ctox.file.materialize',
+    module: 'desktop',
+    payload: {
+      file_id: 'desktop_file_existing',
+    },
+  });
+  assert(result.ok === true, 'materialize command: completed ack is success');
+  assert(events.includes('start:desktop_files'), 'materialize command: desktop_files started');
+  assert(events.includes('flush:desktop_files'), 'materialize command: desktop_files flushed');
+  assert(!events.includes('start:desktop_file_chunks'), 'materialize command: desktop_file_chunks not started');
+  assert(!events.includes('flush:desktop_file_chunks'), 'materialize command: desktop_file_chunks not flushed');
+}
+
+// --- 4. direct coding-agent status outcome is success ---------------------
 {
   const db = makeDb({
     commandAck: {
@@ -123,7 +152,7 @@ const assert = (condition, message) => {
   assert(result.result.outcome.data.provider === 'codex', 'coding-agent direct outcome: structured data preserved');
 }
 
-// --- 4. file-backed commands flush dependencies before command insert ------
+// --- 5. file-backed commands flush dependencies before command insert ------
 {
   const events = [];
   const db = makeDb({
@@ -158,7 +187,7 @@ const assert = (condition, message) => {
   );
 }
 
-// --- 5. failed command rejects with the command error ----------------------
+// --- 6. failed command rejects with the command error ----------------------
 {
   const db = makeDb({
     commandAck: {

@@ -62,18 +62,18 @@ wieder testbar:
   wieder die volle Breite. Details/Verwaltung bleiben in nativen Desktop-
   Flaechen erreichbar; managed Instanzen zeigen ctox.dev-Verwaltung statt
   lokaler Loeschung, unmanaged Instanzen koennen lokal entfernt werden.
-- Local-Daemon-Quelle kann `ctox business-os peer status`, `peer ensure` und
-  `business-os install --target` auf CLI-Contract-Ebene nutzen.
+- Local-Daemon-Quelle kann `ctox business-os peer status` und `peer ensure`
+  auf CLI-Contract-Ebene nutzen.
 - Lokale unmanaged Instanzen ueberleben einen App-Neustart ohne ctox.dev
   Account: Registry wird neu geladen, SecretStore-Referenzen bleiben extern,
   und der Launch bleibt WebRTC-only.
 - Local-Daemon-Kommandos binden einen ausgewaehlten `ctoxRoot` fail-closed an
-  den Child-Prozess. Ein Business-OS-Kundenrepo aus `business-os install` wird
-  nicht mehr stillschweigend als CTOX Runtime-Root akzeptiert und kann dadurch
-  nicht versehentlich die globale CTOX-Installation steuern.
+  den Child-Prozess. Nicht-CTOX-Runtime-Roots werden nicht mehr
+  stillschweigend akzeptiert und koennen dadurch nicht versehentlich die
+  globale CTOX-Installation steuern.
 - `npm run smoke:local-runtime` validiert einen echten lokalen Runtime-Flow
-  gegen ein reales `ctox` Binary und ein frisches Desktop-Profil: Business OS
-  wird in ein Temp-Ziel installiert, dieses Ziel wird als Runtime-Root korrekt
+  gegen ein reales `ctox` Binary und ein frisches Desktop-Profil: ein
+  Nicht-Runtime-Root wird als Runtime-Root korrekt
   abgelehnt, `peer ensure` laeuft gegen einen validen CTOX Runtime-Root, die
   Desktop-Quelle attached lokal, Secrets bleiben im SecretStore und der Launch
   bleibt WebRTC-only.
@@ -599,10 +599,10 @@ Aufgaben:
 
 - [x] Lokales CTOX erkennen auf CLI-Contract-Ebene.
 - [x] `ctox business-os peer status` / `peer ensure` anbinden.
-- [x] Lokale Installation per `ctox business-os install --target` delegieren.
+- [x] Lokale Daemon-Pruefung und Attach per Business-OS Peer-CLI delegieren.
 - [x] App-Restart-Smoke fuer persistierte lokale Instanz ohne ctox.dev Account.
-- [x] Runtime-Smoke mit realem lokalem `ctox` Binary: echte Installation in ein
-  Temp-Ziel, `peer ensure`, Desktop-Attach und WebRTC-only Launch.
+- [x] Runtime-Smoke mit realem lokalem `ctox` Binary: Nicht-Runtime-Root
+  abweisen, `peer ensure`, Desktop-Attach und WebRTC-only Launch.
 - [x] `ctoxRoot` wird fail-closed an Child-Prozesse gebunden; Nicht-Runtime-
   Roots werden abgelehnt statt heimlich auf die globale Installation
   zurueckzufallen.
@@ -612,15 +612,15 @@ Aufgaben:
   App-Resources, wenn kein explizites `ctoxBinary` gesetzt ist; ein
   vorhandenes explizites Binary gewinnt weiterhin.
 - [x] Fresh-Desktop-Profile-Smoke ohne ctox.dev Account, ohne `ctoxRoot` und
-  ohne explizites `ctoxBinary`: Installation, Inspect, Attach, App-Neustart und
+  ohne explizites `ctoxBinary`: Inspect, Attach, App-Neustart und
   WebRTC-only Launch laufen ueber den gebuendelten Helper-Vertrag.
 - [x] Release-Workflow baut vor `electron-builder` einen plattformpassenden
   CTOX-Helper und legt ihn in `resources/ctox`; die Builder-Konfiguration
   paketiert diesen Pfad als externe App-Resource.
 - [x] Lokaler Packaged-App-Smoke baut eine unpacked macOS `.app`, prueft den
-  gebuendelten Helper im tatsaechlichen App-Resource-Pfad und fuehrt
-  Installation, Inspect, Attach, Neustart und WebRTC-only Launch aus einem
-  frischen Desktop-Profil ueber genau diesen verpackten Helper aus.
+  gebuendelten Helper im tatsaechlichen App-Resource-Pfad und fuehrt Inspect,
+  Attach, Neustart und WebRTC-only Launch aus einem frischen Desktop-Profil
+  ueber genau diesen verpackten Helper aus.
 - [ ] Signierter Release-/Fresh-Machine-Smoke mit echtem, gebuendeltem
   CTOX-Helper und ohne vorhandenes globales CTOX-Binary.
 
@@ -629,9 +629,8 @@ Tests:
 - [x] Desktop-JS-Test: lokale Instanz attachen, Registry auf Platte schreiben,
   App/Source neu laden, ohne ctox.dev Account listen und WebRTC-Launch mit
   SecretStore-Referenz bauen.
-- [x] `npm run smoke:local-runtime`: reales `ctox business-os install --target`
-  in ein Temp-Ziel, Ablehnung dieses Business-OS-Kundenroots als Runtime-Root,
-  anschliessend `peer ensure`, Attach ueber `SourceManager` in einem frischen
+- [x] `npm run smoke:local-runtime`: Ablehnung eines Nicht-Runtime-Roots als
+  Runtime-Root, anschliessend `peer ensure`, Attach ueber `SourceManager` in einem frischen
   Desktop-Profil, ctox.dev 401 ohne managed Instanzen, Registry secret-frei,
   simulierter Neustart und Launch `transport=webrtc` /
   `http_bridge_available=false`.

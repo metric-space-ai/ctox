@@ -31,6 +31,19 @@ test('create dialog validation requires title, local domain, and task prompt', (
   assert.equal(hooks.validateResearchTaskInput({ title: 'Vendor Research', domain: bases[0].domain, prompt: 'Analyse vendors' }, bases).valid, true);
 });
 
+test('create task preserves selected local knowledge domain ids', () => {
+  const knowledgeBases = [{ domain: 'drone_bearing_design', title: 'Drone Bearing Design' }];
+
+  assert.equal(
+    hooks.researchDomainFromFormValue('drone_bearing_design', knowledgeBases, 'Fallback Research'),
+    'drone_bearing_design',
+  );
+  assert.equal(
+    hooks.researchDomainFromFormValue('Vendor Research', knowledgeBases, 'Fallback Research'),
+    'research/vendor-research',
+  );
+});
+
 test('run button validation requires a selected task with a loaded knowledge domain', () => {
   assert.equal(hooks.validateSelectedResearchTask(null, bases).valid, false);
   assert.equal(hooks.validateSelectedResearchTask({ id: 'task-1', title: 'Vendor Research', knowledge_domain: '' }, bases).valid, false);
@@ -73,6 +86,26 @@ test('knowledge base grouping ignores legacy parquet docs without domain and tab
 
   assert.deepEqual(grouped.map((base) => base.domain), ['drone_bearing_design']);
   assert.equal(grouped[0].tables.length, 1);
+});
+
+test('empty knowledge read retries only when knowledge_tables sync is live', () => {
+  const previousWindow = globalThis.window;
+  try {
+    globalThis.window = { ctoxBusinessOsSyncDiagnostics: { collections: {} } };
+    assert.equal(hooks.shouldRetryEmptyKnowledgeTables(), true);
+
+    globalThis.window.ctoxBusinessOsSyncDiagnostics.collections.knowledge_tables = { status: 'connected' };
+    assert.equal(hooks.shouldRetryEmptyKnowledgeTables(), true);
+
+    globalThis.window.ctoxBusinessOsSyncDiagnostics.collections.knowledge_tables = { initialReplicationState: 'complete' };
+    assert.equal(hooks.shouldRetryEmptyKnowledgeTables(), true);
+  } finally {
+    if (previousWindow === undefined) {
+      delete globalThis.window;
+    } else {
+      globalThis.window = previousWindow;
+    }
+  }
 });
 
 test('empty dashboard keeps standard header and disabled workbench controls', () => {

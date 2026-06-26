@@ -14,7 +14,7 @@ use serde_json::json;
 use serde_json::Value;
 
 use crate::rx_error::RxError;
-use crate::rxjs_compat::RxStream;
+use crate::rxjs_compat::{RxStream, RX_SUBJECT_LAGGED_CONTEXT};
 use crate::types::{FilledMangoQuery, RxJsonSchema};
 
 // ref: rxdb/src/types/rx-attachment.d.ts RxAttachmentData
@@ -197,6 +197,21 @@ pub struct EventBulk {
     pub context: Option<String>,
 }
 
+impl EventBulk {
+    pub fn rxsubject_lagged(skipped: u64) -> Self {
+        Self {
+            id: format!("rxsubject-lagged-{skipped}"),
+            events: Vec::new(),
+            checkpoint: None,
+            context: Some(RX_SUBJECT_LAGGED_CONTEXT.to_string()),
+        }
+    }
+
+    pub fn is_rxsubject_lagged(&self) -> bool {
+        self.context.as_deref() == Some(RX_SUBJECT_LAGGED_CONTEXT)
+    }
+}
+
 // ref: rxdb/src/types/rx-storage.d.ts RxStorageQueryResult<RxDocType>
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct RxStorageQueryResult {
@@ -296,6 +311,19 @@ pub trait RxStorageInstance: Send + Sync {
             }
         }
         Ok(())
+    }
+
+    /// Synchronous counterpart for dispatchers that must run a blocking
+    /// cursor on Tokio's blocking pool. Backends with a native sync cursor
+    /// return `Some(result)`; wrappers may delegate. The default `None`
+    /// keeps async-only storages on the existing `query_stream_into` path.
+    fn query_stream_into_blocking(
+        &self,
+        _prepared_query: &Value,
+        _chunk_size: usize,
+        _on_batch: &mut (dyn FnMut(Vec<Value>) -> Result<bool, RxError> + Send),
+    ) -> Option<Result<(), RxError>> {
+        None
     }
 
     async fn count(&self, prepared_query: &Value) -> Result<RxStorageCountResult, RxError>;

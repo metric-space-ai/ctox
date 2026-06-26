@@ -56,9 +56,9 @@ Legend: `fixed`, `partial`, `open`.
 | Finding | Status | Current assessment |
 | --- | --- | --- |
 | H1 native RxDB non-PK scans | partial | Common selectors compile to SQL, but SQLite does not fully use `query_planner.rs`; unsupported normal queries/counts can still scan. |
-| H2 WebRTC status per frame | fixed | Status is throttled/coalesced and heavy diagnostics are opt-in. |
-| H3 IMAP FETCH/STORE body overfetch | fixed | Exact mailbox summary/body split is implemented. |
-| H4 business chat tracked-message N+1 | open | `syncTrackedMessages` still performs serial per-message lookups and a 4 second fallback interval. |
+| H2 WebRTC status per frame | fixed for exact path | Status is throttled/coalesced and heavy diagnostics are opt-in; release probes still need emit/fanout counters. |
+| H3 IMAP FETCH/STORE body overfetch | fixed for exact body path | Exact mailbox summary/body split is implemented; large-mailbox sequence pagination remains under mail follow-up work. |
+| H4 business chat tracked-message N+1 | fixed for exact path | Browser `syncTrackedMessages` batches command/task reads into one query per collection, coalesces subscription-triggered sync, and command/queue tracking watchers only run while active tracking exists; broader Chat DOM/layout/listener cleanup remains. |
 | H5 Matching per-keystroke recompute | open | Maps, cached haystacks, debounce, and DOM reconciliation remain. |
 | H6 Outbound per-row pipeline recompute | open | Memoized pipeline and `pipelineByCompanyId` remain. |
 | M1 RxDB count materializes docs | partial | SQL counts exist for expressible paths; fallback counts can still scan/materialize. |
@@ -68,38 +68,39 @@ Legend: `fixed`, `partial`, `open`.
 | M5 desktop chunk prune full scan | fixed for exact native prune | PK/range prune is guarded; broader retention remains. |
 | M6 chunk writes one transaction per chunk | partial | Native eager writes use bulk upsert; browser chunk uploads remain sequential. |
 | M7 demand-cache window scans | mostly fixed | Reverse refs and batch invalidation exist; remaining eviction/local-write work stays open. |
-| M8 browser upsert transaction overhead | open | `upsert()` still reads before and after `bulkWrite`. |
-| M9 subscriptions full re-query | open | `collection.$` and query subscriptions still re-run full queries. |
+| M8 browser upsert transaction overhead | fixed | `storage-indexeddb.upsert()` now reads the existing row once inside one readwrite transaction, writes once, returns the written document, and is guarded by a dist-level storage smoke. |
+| M9 subscriptions full re-query | partial | `collection.$` now applies change payloads to an in-memory snapshot and `findOne(primary).$` ignores unrelated changed IDs; complex query subscriptions still re-run full queries. |
 | M10 browser `allDocuments()` fallback | partial | Primary-key/schema-index/bounded paths exist; non-indexed fallbacks remain. |
 | M11 inference arena overhead | open | Persistent descriptor arenas remain. |
 | M12 inference graph rebuild | open | Graph/context reuse remains. |
-| M13 streamed event clone/deserialize | open | Event kind is still not filtered before clone/parse in all hot paths. |
+| M13 streamed event clone/deserialize | fixed for stream delta/no-op path | Direct session now inspects the method/payload event kind before cloning payloads, drops high-frequency delta/no-op events before deserialization, and keeps consumed agent-message parsing covered by tests. Cost telemetry batching and broader transcript-copy work remain separate execution-tail work. |
 | M14 blocking file-fetch stream | fixed | File-fetch no longer parks a tokio worker with `block_on`/sleep. |
-| M15 unbounded RxSubject fanout | open | Bounded channel plus lagged checkpoint resync remains. |
+| M15 unbounded RxSubject fanout | fixed for native RxSubject fanout | Native `RxSubject` uses bounded broadcast fanout, lag counters, storage lag markers, query-buffer invalidation, replication `RESYNC` mapping, native peer/perf-probe surfacing for process-wide lag totals, and targeted slow-peer checkpoint-recovery coverage. Installed/integration slow-peer soak evidence remains release work. |
 | M16 mailbox index | fixed | Mailbox/received index and query-plan guard exist. |
 | M17 mailserver connection reuse | open | Broad hot-path `with_connection` reuse remains. |
 | M18 send-verification body fetch | fixed | Header search/header fetch replaces full RFC822 polling. |
 | M19 email full UID scans | partial | UID watermarks reduce steady state; first import, UIDVALIDITY, IDLE, provider delta tokens remain. |
-| M20 ticket assignment N+1 | open | Assignment hydration remains. |
-| M21 ticket projection DB reopens | open | Connection-threaded list helpers remain. |
-| M22 chat full DOM rebuild | open | Signature/append-only reconcile remains. |
+| M20 ticket assignment N+1 | partial | Self-work list/projection hydration batches latest assignment lookup; single-load and broader ticket/queue bridge paths remain. |
+| M21 ticket projection DB reopens | fixed for direct projection | Direct Business OS ticket projection buckets now reuse one ticket DB connection, including control bundles; non-projection ticket/queue helper audits remain separate. |
+| M22 chat full DOM rebuild | partial | Some in-place paths exist, but no-op sync can still build message HTML and compare serialized `innerHTML`; signature/append-only reconcile remains. |
 | M23 forced reflow in drag | open | Geometry read/write batching remains. |
-| M24 sync diagnostics fanout | fixed for exact finding | Diagnostics are coalesced, but per-collection status propagation can still be optimized. |
+| M24 sync diagnostics fanout | partial | Diagnostics are coalesced, but transport status still enters sanitize/record/fanout logic and needs observer/fanout counters. |
 | M25 spreadsheet HyperFormula rebuild | open | Persistent engine and changed-cell updates remain. |
 | M26 matching requirements scans | open | Maps/debounce/DOM reconcile remain. |
 | M27 Buchhaltung joins per render | open | Pre-aggregated maps and targeted reloads remain. |
 | M28 customers search full render | open | Debounced center-only render and shared summaries remain. |
 | M29 projection writer reopen/table_info | partial | Cached writer covers repair/fanout paths; direct command/status paths remain. |
-| M30 synchronous=NORMAL | fixed | Checked central stores set `synchronous=NORMAL`. |
-| M31 status ps/proc scan | partial | Normal process scan is cached; residual status/cache costs remain. |
+| M30 synchronous=NORMAL | fixed for checked central stores | `open_store_connection` and core persistence set `synchronous=NORMAL`; keep a guard for future direct SQLite helpers. |
+| M31 status ps/proc scan | fixed for status idle path | Normal process scan is cached; explicit lifecycle/probe scans remain intentional. |
 
 Low findings are only partially reduced. Remaining important low buckets:
 
-- `push_collection_records` transaction batching and counters;
-- invoice/due-date and `pull_collection_record` keyed lookups;
+- `push_collection_records` command-path batching and production counters;
 - process-mining authorizer env lookup;
 - working-hours canonicalization;
-- browser `encodedSize`, local-write push coalescing, chunk reassembly;
+- browser `encodedSize`, browser chunk upload batching, chunk reassembly, and
+  local push scan/fallback counters after the completed local-write trigger
+  coalescing;
 - mission/report N+1 and DB reopen cleanup;
 - UI shell idle schedulers and module full reloads.
 
@@ -353,7 +354,7 @@ Plan:
    - `upsert_rxdb_collection_record`;
    - `push_collection_records`;
    - command outcome projection paths.
-3. Batch `push_collection_records` in transactions where semantics allow.
+3. Batch remaining `push_collection_records` command paths where semantics allow.
 4. Add a 100-row regression proving O(tables) metadata loads and O(1) DB opens
    per projection pass.
 
@@ -366,16 +367,22 @@ Acceptance:
 
 Current problem:
 
-- `RxSubject` still uses unbounded per-subscriber channels.
-- Under bursty sync or a slow subscriber, memory growth is bounded only by RAM.
+- The native unbounded per-subscriber channel implementation is fixed.
+- Remaining release work is proving `rxdb_subjects.lagged_items_total` stays
+  quiet in normal idle and running an installed/integration slow-peer soak over
+  the checkpoint resync path.
 
 Plan:
 
-1. Replace high-volume subjects with bounded queues.
-2. On overflow, emit a lagged signal that forces checkpoint resync.
-3. Preserve unbounded behavior only for low-volume control subjects with an
-   explicit reason.
-4. Add soak coverage with a deliberately slow peer.
+1. Done on 2026-06-26: replace native `RxSubject` fanout with bounded broadcast
+   queues.
+2. Done on 2026-06-26: storage overflow emits a lagged signal that forces query
+   buffer invalidation and replication checkpoint resync.
+3. Done on 2026-06-26: surface native lag counters in peer performance
+   snapshots and `ctox_perf_probe.py --assert-idle`.
+4. Done on 2026-06-26: add targeted slow-peer coverage proving a lagged
+   master-change subscriber receives `RESYNC` and recovers all missed docs via
+   `master_changes_since`. Installed/integration soak evidence remains.
 
 Acceptance:
 
@@ -386,22 +393,32 @@ Acceptance:
 
 Current problem:
 
-- `storage-indexeddb.upsert()` still performs read/write/read.
-- `collection.$` and query subscriptions still re-run `find().exec()`.
+- `storage-indexeddb.upsert()` no longer performs read/write/read.
+- `bulkUpsert()` no longer loops through per-document facade `upsert()` calls.
+- Complex query subscriptions still re-run `find().exec()`. `collection.$` and
+  primary-key `findOne().$` now apply changed-ID deltas.
 - Several modules keep broad active collection sets.
+- Local-write push trigger bursts are now debounced/coalesced before
+  `pushToRemotePeers()`; broader browser chunk upload batching and explicit
+  local push scan/fallback counters remain.
 - `encodedSize()` and chunk reassembly still allocate or recompute.
 
 Plan:
 
-1. Collapse browser `upsert()` into one readwrite transaction and return the
-   written doc.
-2. Make `bulkUpsert()` a real batch path.
-3. Add changed-id subscription APIs and use them in shell/modules.
+1. Done on 2026-06-26: collapse browser `upsert()` into one readwrite
+   transaction and return the written doc.
+2. Done on 2026-06-26: make `bulkUpsert()` a real batch path through storage
+   `bulkUpsert()` with one readwrite transaction and one coalesced change
+   event.
+3. Partially done on 2026-06-26: `collection.$` and primary-key
+   `findOne().$` apply changed-ID deltas. Add indexed-window/full-refresh
+   semantics for complex query subscriptions and use them in shell/modules.
 4. Add perf spies that fail on unexpected:
    - `allDocuments()`;
    - full live-query re-exec;
    - broad `desktop_file_chunks.find().exec()`;
-   - local-write scan bursts.
+   - local-write scan bursts and fallback floors beyond the debounced trigger
+     path.
 5. Reuse `TextEncoder` or avoid full encode just for byte counts.
 6. Track chunk contiguous sequence incrementally.
 7. Coalesce room transport status once per room instead of fanout-heavy
@@ -437,7 +454,9 @@ Priority modules from the review and subagents:
    - lazy-load detail data;
    - replace full `loadAll` with collection-specific partial refresh.
 5. Shell idle schedulers
-   - arm only when visible work exists;
+   - Done on 2026-06-26 for scheduled Chat messages: the scheduler now arms
+     only while scheduled messages exist and clears the previous global
+     1 second interval.
    - coalesce layout reads/writes behind one animation frame;
    - remove duplicate high-frequency activity listeners.
 
@@ -460,7 +479,8 @@ Tasks:
    - add UIDVALIDITY-aware watermarks;
    - add provider IDLE/delta-token paths where available.
 2. Execution gateway:
-   - inspect stream event kind before clone/deserialize;
+   - Done on 2026-06-26: direct session inspects stream event kind before
+     clone/deserialization and drops high-frequency delta/no-op events early;
    - accumulate API cost rows and write once per turn;
    - reuse tokenize preflight results;
    - avoid provider transcript clone/parse/re-serialize loops.
@@ -485,6 +505,8 @@ node src/apps/business-os/rxdb/tests/run-all.mjs
 CARGO_TARGET_DIR=/tmp/ctox-perf-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox idle_gate -- --nocapture
 CARGO_TARGET_DIR=/tmp/ctox-perf-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox reconcile_ctox_queue_task_projections -- --nocapture
 CARGO_TARGET_DIR=/tmp/ctox-perf-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox desktop_file -- --nocapture
+CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox direct_session -- --nocapture
+CARGO_TARGET_DIR=/tmp/ctox-rxdb-m15-target cargo test --manifest-path src/core/rxdb/Cargo.toml -- --test-threads=1 --nocapture
 python3 -m py_compile src/tools/perf/ctox_perf_probe.py
 ```
 
@@ -501,25 +523,37 @@ Installed release evidence:
 ```sh
 git push origin main
 ctox upgrade --dev
-python3 src/tools/perf/ctox_perf_probe.py --pretty --cpu-samples 600 --cpu-interval 1 > runtime/build/ctox-idle-10min.json
+python3 src/tools/perf/ctox_perf_probe.py --assert-idle --pretty --cpu-samples 600 --cpu-interval 1 > runtime/build/ctox-idle-10min.json
 ```
 
-The last command is illustrative until the probe has assert/fail mode. The
-release gate must fail automatically when the budget is exceeded.
+The release gate must fail automatically when CPU, status latency, DB growth,
+SQLite/runtime heartbeat deltas, or `rxdb_subjects.lagged_items_total` exceed
+the configured idle budget.
 
 ## Immediate Implementation Order
 
 1. Run the assert-enabled perf probe against the installed dev daemon and keep
    the JSON artifact with the release evidence.
-2. Replace queue/chat aggregate stamps with changed-id/high-water repair
-   cursors.
-3. Add native SQLite fallback counters and reject/guard large unsupported
+2. Done on 2026-06-26 for the direct Coding Agents provider status poller:
+   the module no longer schedules a 10 second diagnostics interval; keep
+   checking other recurring browser command producers.
+3. Done on 2026-06-26 for the direct native browser-runtime 300 ms
+   active-session DB poller: after one empty maintenance pass it waits on
+   `browser_input_events` table changes or the slow idle timeout. Remaining
+   work is installed idle evidence and loop counters for input queries, timeout
+   wakes, and expired-frame GC.
+4. Replace queue/chat aggregate stamps with changed-id/high-water repair
+   cursors, and batch active queue repair command/task lookups.
+5. Add native SQLite fallback counters and reject/guard large unsupported
    fallback queries.
-4. Implement RxSubject bounded/lagged checkpoint resync.
-5. Make file demand fetch range-aware and add DB growth/retention diagnostics.
-6. Collapse browser IndexedDB upsert/bulkUpsert and add subscription deltas.
-7. Batch browser chunk uploads and coalesce local push scans.
-8. Work through UI/module, mailserver, execution, inference, and mission
+6. Done on 2026-06-26: implement RxSubject bounded/lagged checkpoint resync
+   and expose `rxdb_subjects.lagged_items_total` through peer/perf-probe
+   evidence.
+7. Make file demand fetch range-aware and add DB growth/retention diagnostics.
+8. Finish browser IndexedDB complex-query subscription deltas.
+9. Batch browser chunk uploads and add local push scan/fallback counters; the
+   immediate local-write trigger burst path is already debounced/coalesced.
+10. Work through UI/module, mailserver, execution, inference, and mission
     residuals with targeted perf tests.
 
 ## Completion Criteria

@@ -1296,6 +1296,14 @@
     },
     "desktop_file_chunks": {
       "additionalProperties": true,
+      "indexes": [
+        "file_id",
+        [
+          "file_id",
+          "generation_id",
+          "idx"
+        ]
+      ],
       "primaryKey": "id",
       "properties": {
         "chunk_hash": {

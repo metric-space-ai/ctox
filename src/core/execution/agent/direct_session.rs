@@ -10,6 +10,8 @@ use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -56,6 +58,8 @@ const DIRECT_SESSION_MIDTASK_COMPACT_TIMEOUT_SECS: u64 = 90;
 const DIRECT_SESSION_INTERRUPT_TIMEOUT_SECS: u64 = 2;
 const EXACT_PROMPT_SAFE_INPUT_BUDGET_NUMERATOR: i64 = 3;
 const EXACT_PROMPT_SAFE_INPUT_BUDGET_DENOMINATOR: i64 = 4;
+#[cfg(test)]
+static DIRECT_SESSION_EVENT_DESERIALIZE_CALLS: AtomicUsize = AtomicUsize::new(0);
 const CTOX_DIRECT_SESSION_BASE_INSTRUCTIONS: &str = r#"You are an agent working inside CTOX.
 
 Complete a work step only when the required durable outcome exists in CTOX runtime state. A final answer, summary, note file, or statement such as "sent", "done", or "closed" is not evidence by itself.
@@ -63,6 +67,8 @@ Complete a work step only when the required durable outcome exists in CTOX runti
 When the request requires filesystem changes, command execution, runtime inspection, benchmark execution, ticket/state updates, or artifact verification, use the available terminal/shell tools to do the work. Do not substitute a code block, plan, or textual description for executing the step.
 
 If the work requires an artifact, verify the artifact before finishing. For proactive outbound email, produce the final send-ready body first and do not run reviewed-send before review feedback. When a reviewed-send continuation prompt provides the exact approved body and command, execute only that command and verify the accepted outbound row. Do not create review rows or approval digests manually.
+
+Do not create review-driven internal work.
 
 If an API, provider, tool, or runtime call fails or is rate-limited, do not claim completion. Retry only when appropriate; otherwise keep the work open with the blocker recorded.
 
@@ -90,6 +96,17 @@ pub(crate) fn exact_prompt_token_count(
     root: &Path,
     text: &str,
 ) -> Result<Option<ExactPromptTokenCount>> {
+    exact_prompt_token_count_with_precomputed(root, text, None)
+}
+
+fn exact_prompt_token_count_with_precomputed(
+    root: &Path,
+    text: &str,
+    precomputed: Option<&ExactPromptTokenCount>,
+) -> Result<Option<ExactPromptTokenCount>> {
+    if let Some(precomputed) = precomputed {
+        return Ok(Some(precomputed.clone()));
+    }
     let kernel = runtime_kernel::InferenceRuntimeKernel::resolve(root)
         .context("failed to resolve runtime kernel for exact token preflight")?;
     if !kernel.state.source.is_local() {
@@ -541,13 +558,14 @@ impl PersistentSession {
         _include_apply_patch_tool: Option<bool>,
         _conversation_id: i64,
     ) -> Result<String> {
-        self.run_turn_inner(prompt, timeout)
+        self.run_turn_inner(prompt, timeout, None)
     }
 
     pub(crate) fn run_turn_inner(
         &mut self,
         prompt: &str,
         timeout: Option<Duration>,
+        exact_prompt_preflight: Option<ExactPromptTokenCount>,
     ) -> Result<String> {
         let client = self
             .client
@@ -591,6 +609,7 @@ impl PersistentSession {
                 &mut self.ctx_log,
                 disable_active_tools,
                 read_only_sandbox,
+                exact_prompt_preflight,
             )
             .await
         });
@@ -916,6 +935,7 @@ impl PersistentSession {
         ctx_log: &mut ContextLogger,
         disable_active_tools: bool,
         read_only_sandbox: bool,
+        exact_prompt_preflight: Option<ExactPromptTokenCount>,
     ) -> Result<String> {
         // Reuse the session's thread across turns. The previous fresh-thread-
         // per-turn workaround ("the thread may not accept new TurnStart
@@ -930,7 +950,11 @@ impl PersistentSession {
         let thread_id = session_thread_id.clone();
 
         let preflight_text = format!("{base_instructions}\n\n{prompt}");
-        if let Some(count) = exact_prompt_token_count(root, &preflight_text)? {
+        if let Some(count) = exact_prompt_token_count_with_precomputed(
+            root,
+            &preflight_text,
+            exact_prompt_preflight.as_ref(),
+        )? {
             let safe_budget = exact_prompt_safe_input_budget(count.context_limit);
             ctx_log.log(
                 "exact_prompt_preflight",
@@ -1037,6 +1061,7 @@ impl PersistentSession {
         let turn_started_at = Instant::now();
         let mut last_usage_event_at = turn_started_at;
         let mut last_recorded_cumulative_usage: Option<ApiTokenUsage> = None;
+        let mut pending_api_cost_records = Vec::new();
         let deadline = timeout.map(|d| tokio::time::Instant::now() + d);
 
         loop {
@@ -1102,19 +1127,18 @@ impl PersistentSession {
                                 let turn_elapsed_ms =
                                     duration_millis_i64(now.duration_since(turn_started_at));
                                 last_usage_event_at = now;
-                                let result = api_costs::record_api_model_usage_with_telemetry(
-                                    root,
-                                    provider,
-                                    model,
-                                    Some(&turn_id),
-                                    ApiTokenUsage {
+                                pending_api_cost_records.push(api_costs::ApiCostUsageRecord {
+                                    provider: provider.to_string(),
+                                    model: model.to_string(),
+                                    turn_id: Some(turn_id.to_string()),
+                                    usage: ApiTokenUsage {
                                         input_tokens: usage.input_tokens,
                                         cached_input_tokens: usage.cached_input_tokens,
                                         output_tokens: usage.output_tokens,
                                         reasoning_output_tokens: usage.reasoning_output_tokens,
                                         total_tokens: usage.total_tokens,
                                     },
-                                    Some(ApiCallTelemetry {
+                                    telemetry: Some(ApiCallTelemetry {
                                         elapsed_ms: Some(elapsed_ms),
                                         turn_elapsed_ms: Some(turn_elapsed_ms),
                                         output_tokens_per_second: tokens_per_second(
@@ -1126,10 +1150,7 @@ impl PersistentSession {
                                             elapsed_ms,
                                         ),
                                     }),
-                                );
-                                if let Err(err) = result {
-                                    eprintln!("[ctox direct-session] cost tracking failed: {err}");
-                                }
+                                });
                             }
                         }
 
@@ -1285,6 +1306,14 @@ impl PersistentSession {
             }
         }
 
+        if !pending_api_cost_records.is_empty() {
+            if let Err(err) =
+                api_costs::record_api_model_usage_batch(root, &pending_api_cost_records)
+            {
+                eprintln!("[ctox direct-session] cost tracking failed: {err}");
+            }
+        }
+
         ctx_log.log(
             "turn_end",
             &format!(
@@ -1407,6 +1436,24 @@ mod tests {
         assert_eq!(exact_prompt_safe_input_budget(131_072), 98_304);
         assert_eq!(exact_prompt_safe_input_budget(1), 1);
         assert_eq!(exact_prompt_safe_input_budget(0), 1);
+    }
+
+    #[test]
+    fn exact_prompt_preflight_reuses_precomputed_count() {
+        let precomputed = ExactPromptTokenCount {
+            tokens: 123,
+            context_limit: 456,
+            source: "test-preflight".to_string(),
+        };
+        let count = exact_prompt_token_count_with_precomputed(
+            std::path::Path::new("/definitely/not/a/ctox/runtime/root"),
+            "the prompt text should not be tokenized again",
+            Some(&precomputed),
+        )
+        .expect("precomputed exact prompt count should be accepted")
+        .expect("precomputed exact prompt count should be returned");
+
+        assert_eq!(count, precomputed);
     }
 
     #[test]
@@ -1538,6 +1585,46 @@ mod tests {
                 > direct_session_control_request_timeout(None)
         );
     }
+
+    #[test]
+    fn direct_session_ignores_stream_delta_events_before_deserialize() {
+        let before = DIRECT_SESSION_EVENT_DESERIALIZE_CALLS.load(AtomicOrdering::Relaxed);
+        let notif = JSONRPCNotification {
+            method: "codex/event/agent_message_delta".to_string(),
+            params: Some(serde_json::json!({
+                "msg": {
+                    "delta": "token"
+                }
+            })),
+        };
+
+        assert!(try_extract_event_msg(&notif).is_none());
+        assert_eq!(
+            DIRECT_SESSION_EVENT_DESERIALIZE_CALLS.load(AtomicOrdering::Relaxed),
+            before,
+            "ignored stream deltas must not clone into serde deserialization"
+        );
+    }
+
+    #[test]
+    fn direct_session_extracts_agent_message_events() {
+        let before = DIRECT_SESSION_EVENT_DESERIALIZE_CALLS.load(AtomicOrdering::Relaxed);
+        let notif = JSONRPCNotification {
+            method: "codex/event/agent_message".to_string(),
+            params: Some(serde_json::json!({
+                "msg": {
+                    "message": "done"
+                }
+            })),
+        };
+
+        let msg = try_extract_event_msg(&notif).expect("agent message should parse");
+        assert!(matches!(msg, EventMsg::AgentMessage(ref event) if event.message == "done"));
+        assert_eq!(
+            DIRECT_SESSION_EVENT_DESERIALIZE_CALLS.load(AtomicOrdering::Relaxed),
+            before + 1
+        );
+    }
 }
 
 impl Drop for PersistentSession {
@@ -1580,25 +1667,53 @@ impl RequestIdSeq {
 }
 
 fn try_extract_event_msg(notif: &JSONRPCNotification) -> Option<EventMsg> {
-    let method = notif
-        .method
-        .strip_prefix("codex/event/")
-        .unwrap_or(&notif.method)
-        .to_string();
-    let value = notif.params.clone()?;
-    let serde_json::Value::Object(mut obj) = value else {
+    let method_event_type = notif.method.strip_prefix("codex/event/");
+    let method = method_event_type.unwrap_or(&notif.method);
+    let value = notif.params.as_ref()?;
+    let obj = value.as_object()?;
+    let params_event_type = direct_session_params_event_type(obj);
+    let event_type = method_event_type.or(params_event_type).unwrap_or(method);
+    if direct_session_ignored_event_type(event_type) {
         return None;
-    };
+    }
     let mut payload = if let Some(serde_json::Value::Object(msg_obj)) = obj.get("msg") {
         serde_json::Value::Object(msg_obj.clone())
     } else {
+        let mut obj = obj.clone();
         obj.remove("conversationId");
         serde_json::Value::Object(obj)
     };
     if let serde_json::Value::Object(ref mut map) = payload {
-        map.insert("type".to_string(), serde_json::Value::String(method));
+        map.insert(
+            "type".to_string(),
+            serde_json::Value::String(event_type.to_string()),
+        );
     }
+    #[cfg(test)]
+    DIRECT_SESSION_EVENT_DESERIALIZE_CALLS.fetch_add(1, AtomicOrdering::Relaxed);
     serde_json::from_value(payload).ok()
+}
+
+fn direct_session_params_event_type(
+    obj: &serde_json::Map<String, serde_json::Value>,
+) -> Option<&str> {
+    obj.get("msg")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|msg| msg.get("type"))
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| obj.get("type").and_then(serde_json::Value::as_str))
+}
+
+fn direct_session_ignored_event_type(event_type: &str) -> bool {
+    matches!(
+        event_type,
+        "agent_message_delta"
+            | "agent_reasoning_delta"
+            | "agent_reasoning_raw_content_delta"
+            | "exec_command_output_delta"
+            | "terminal_interaction"
+            | "realtime_conversation_realtime"
+    )
 }
 
 fn duration_millis_i64(duration: Duration) -> i64 {

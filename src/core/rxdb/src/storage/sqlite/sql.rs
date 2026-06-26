@@ -79,6 +79,7 @@ pub fn ensure_collection_table(conn: &Connection, table: &str) -> RxResult<()> {
     let insert_trigger = quote_identifier(&format!("{table}__rxdb_changed_insert"));
     let update_trigger = quote_identifier(&format!("{table}__rxdb_changed_update"));
     let delete_trigger = quote_identifier(&format!("{table}__rxdb_changed_delete"));
+    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
     conn.execute_batch(&format!(
         r#"
         CREATE TABLE IF NOT EXISTS {quoted}(
@@ -171,6 +172,7 @@ fn ensure_schema_index(
         table,
         sanitize_index_name(&index_key)
     ));
+    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
     conn.execute_batch(&format!(
         "CREATE INDEX IF NOT EXISTS {index_name}
          ON {quoted_table}({});",
@@ -299,6 +301,7 @@ pub fn for_each_document_with_compiled_sql<F>(
 where
     F: FnMut(Value) -> RxResult<bool>,
 {
+    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
     let mut statement = conn.prepare(&compiled.sql).map_err(sqlite_error)?;
     let rows = statement
         .query_map(params_from_iter(compiled.params.iter()), |row| {
@@ -316,6 +319,7 @@ where
 }
 
 pub fn count_with_compiled_sql(conn: &Connection, compiled: &CompiledSqliteQuery) -> RxResult<u64> {
+    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
     let count: i64 = conn
         .query_row(
             &compiled.sql,
@@ -494,6 +498,7 @@ pub fn insert_document(
             Some(serde_json::json!({ "message": err.to_string() })),
         )
     })?;
+    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
     conn.execute(
         &format!(
             "INSERT INTO {} (id, revision, deleted, lastWriteTime, data) VALUES (?, ?, ?, ?, ?)",
@@ -528,6 +533,7 @@ pub fn update_document(
             Some(serde_json::json!({ "message": err.to_string() })),
         )
     })?;
+    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
     conn.execute(
         &format!(
             "UPDATE {} SET revision = ?, deleted = ?, lastWriteTime = ?, data = ? WHERE id = ?",
@@ -556,6 +562,7 @@ pub fn for_each_document<F>(conn: &Connection, table: &str, mut visit: F) -> RxR
 where
     F: FnMut(Value) -> RxResult<bool>,
 {
+    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
     let mut stmt = conn
         .prepare(&format!("SELECT data FROM {}", quote_identifier(table)))
         .map_err(sqlite_error)?;
@@ -573,6 +580,7 @@ where
 pub fn document_by_id(conn: &Connection, table: &str, id: &str) -> RxResult<Option<Value>> {
     #[cfg(test)]
     SQLITE_DOCUMENT_BY_ID_CALL_COUNT.fetch_add(1, Ordering::SeqCst);
+    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
     let data: Option<String> = conn
         .query_row(
             &format!("SELECT data FROM {} WHERE id = ?", quote_identifier(table)),
@@ -610,6 +618,7 @@ pub fn documents_by_ids(
                 "SELECT id, data FROM {quoted_table} WHERE id IN ({placeholders}) AND deleted = 0"
             )
         };
+        crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
         let mut statement = conn.prepare(&sql).map_err(sqlite_error)?;
         let rows = statement
             .query_map(params_from_iter(chunk.iter().map(String::as_str)), |row| {
@@ -627,6 +636,7 @@ pub fn documents_by_ids(
 }
 
 pub fn drop_table(conn: &Connection, table: &str) -> RxResult<()> {
+    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
     conn.execute_batch(&format!("DROP TABLE IF EXISTS {}", quote_identifier(table)))
         .map_err(sqlite_error)
 }

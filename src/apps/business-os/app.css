@@ -4449,12 +4449,12 @@ body[data-auth-state="locked"] .topbar {
 
 .ctox-context-mode label {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   min-width: 0;
-  min-height: 32px;
+  min-height: 46px;
   box-sizing: border-box;
-  padding: 0 10px;
+  padding: 6px 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-2);
@@ -4470,16 +4470,30 @@ body[data-auth-state="locked"] .topbar {
   flex: 0 0 auto;
   width: 10px;
   height: 10px;
+  margin-top: 4px;
   border: 1px solid currentColor;
   border-radius: 999px;
   opacity: 0.72;
 }
 
-.ctox-context-mode label span {
+.ctox-context-mode-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.ctox-context-mode-copy span,
+.ctox-context-mode-copy small {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ctox-context-mode-copy small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 680;
 }
 
 .ctox-context-mode label.is-selected {

@@ -43,18 +43,18 @@ mod parquet_io;
 mod search;
 mod skill;
 
-pub use data::KnowledgeTablesProjectionSourceStamp;
 pub use data::knowledge_tables_projection_source_stamp;
 /// Build the `knowledge_tables` RxDB documents (with parquet rows embedded in
 /// the doc payload) that the Business OS native peer syncs to browser surfaces
 /// over RxDB/WebRTC. See [`data::knowledge_tables_rxdb_documents`] for the
 /// projection contract (path re-resolution, row embedding, row cap).
 pub use data::knowledge_tables_rxdb_documents;
+pub use data::KnowledgeTablesProjectionSourceStamp;
 
 use anyhow::Context;
 use anyhow::Result;
-use serde_json::Value;
 use serde_json::json;
+use serde_json::Value;
 use std::cell::RefCell;
 use std::io::Write;
 use std::path::Path;

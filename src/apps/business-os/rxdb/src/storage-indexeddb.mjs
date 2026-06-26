@@ -1,12 +1,14 @@
 import { CtoxEventEmitter } from './event-target.mjs';
 import { sha256Hex } from './schema.mjs';
 
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const DOCUMENT_STORE = 'documents';
+const SCHEMA_INDEX_ENTRIES = 'schemaIndexEntries';
 const OPEN_DATABASE_TIMEOUT_MS = 4000;
 const REPLICATION_SCAN_MULTIPLIER = 50;
-const REPLICATION_MIN_SCAN_LIMIT = 500;
+const REPLICATION_MIN_SCAN_LIMIT = 1;
 const REPLICATION_MAX_SCAN_LIMIT = 5000;
+const INDEX_HIGH_KEY = '\uffff';
 
 export async function openCtoxIndexedDbStorage({ databaseName = 'ctox_business_os_js_v1' } = {}) {
   if (!globalThis.indexedDB) {
@@ -38,12 +40,15 @@ export class CtoxIndexedDbCollection {
     this.db = db;
     this.name = name;
     this.schema = schema || {};
-    this.indexes = normalizeSchemaIndexes(schema);
+    this.primaryPath = primaryPathFromSchema(schema);
+    this.indexes = normalizeSchemaIndexes(schema, this.primaryPath);
+    this.indexSignature = schemaIndexSignature(this.indexes);
+    this.schemaIndexReady = null;
     this.events = new CtoxEventEmitter();
   }
 
   observe(listener) {
-    return this.events.on('change', listener);
+    return this.events.on('change', (event) => listener(event?.detail || event));
   }
 
   async upsert(doc) {
@@ -51,9 +56,66 @@ export class CtoxIndexedDbCollection {
     if (!id) {
       throw new Error(`Cannot upsert ${this.name} document without primary key`);
     }
-    const previous = await this.findOne(id);
-    await this.bulkWrite([{ previous, document: { ...(previous || {}), ...doc } }]);
-    return this.findOne(id, { withDeleted: true });
+    const { success } = await this.bulkUpsert([doc]);
+    return success[id] || null;
+  }
+
+  async bulkUpsert(docs, { now = Date.now(), replicationOrigin = null } = {}) {
+    if (!Array.isArray(docs)) {
+      throw new TypeError('bulkUpsert docs must be an array');
+    }
+    const tx = this.db.transaction(DOCUMENT_STORE, 'readwrite');
+    const done = idbTransactionDone(tx);
+    const store = tx.objectStore(DOCUMENT_STORE);
+    const success = {};
+    const error = [];
+    let localWriteLwtFloor = null;
+    if (!replicationOrigin?.role) {
+      localWriteLwtFloor = await latestCollectionLwtInTransaction(store, this.name) + 1;
+    }
+
+    for (const doc of docs) {
+      const id = documentId(doc);
+      if (!id) {
+        error.push({ document: doc, error: 'missing primary key' });
+        continue;
+      }
+      const previous = await idbRequest(store.get([this.name, id]));
+      const nextDocument = { ...(previous?.doc || {}), ...doc };
+      let lwt = documentLwt(nextDocument, now);
+      if (localWriteLwtFloor !== null) {
+        lwt = Math.max(lwt, localWriteLwtFloor);
+        localWriteLwtFloor = lwt + 1;
+      }
+      if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin)) {
+        if (previous?.doc) success[id] = previous.doc;
+        continue;
+      }
+      if (replicationOrigin?.role && previous && Number(previous.lwt || 0) >= lwt) {
+        lwt = Number(previous.lwt) + 1;
+      }
+      const stored = storedRecordForWrite({
+        collection: this.name,
+        id,
+        doc: nextDocument,
+        lwt,
+        indexes: this.indexes,
+        indexSignature: this.indexSignature,
+        replicationOrigin,
+      });
+      await idbRequest(store.put(stored));
+      success[id] = stored.doc;
+    }
+
+    await done;
+    if (Object.keys(success).length) {
+      this.events.emit('change', {
+        collection: this.name,
+        success,
+        at: now,
+      });
+    }
+    return { success, error };
   }
 
   async bulkWrite(rows, { now = Date.now(), replicationOrigin = null } = {}) {
@@ -92,14 +154,15 @@ export class CtoxIndexedDbCollection {
         // (change feed, LWW comparisons) never see this row move backwards.
         lwt = Number(previous.lwt) + 1;
       }
-      const stored = {
+      const stored = storedRecordForWrite({
         collection: this.name,
         id,
+        doc,
         lwt,
-        deleted: Boolean(doc._deleted),
-        indexValues: indexValuesFor(this.indexes, doc),
-        doc: normalizeDocument(doc, lwt, replicationOrigin),
-      };
+        indexes: this.indexes,
+        indexSignature: this.indexSignature,
+        replicationOrigin,
+      });
       await idbRequest(store.put(stored));
       success[id] = stored.doc;
     }
@@ -170,11 +233,89 @@ export class CtoxIndexedDbCollection {
   }
 
   async queryDocuments(query = {}, helpers = {}) {
+    const primaryIds = primaryKeyCandidateIds(query, this.primaryPath);
+    if (primaryIds) {
+      const byId = await this.findDocumentsById(primaryIds);
+      const docs = primaryIds.map((id) => byId[id]).filter(Boolean);
+      return applyQueryToDocuments(docs, query, helpers);
+    }
+    const schemaIndexPlan = schemaIndexQueryPlanFor(query, this.indexes);
+    if (schemaIndexPlan) {
+      return this.queryDocumentsBySchemaIndex(schemaIndexPlan, query, helpers);
+    }
     if (canUseCollectionLwtQuery(query)) {
       return this.queryDocumentsByLwt(query, helpers);
     }
+    if (canUseBoundedCollectionCursor(query)) {
+      return this.queryDocumentsByCollectionCursor(query, helpers);
+    }
     const docs = await this.allDocuments();
     return applyQueryToDocuments(docs, query, helpers);
+  }
+
+  async queryDocumentsBySchemaIndex(plan, query = {}, helpers = {}) {
+    await this.ensureSchemaIndexEntries();
+    const { matchesSelector = () => true, sortDocuments = (docs) => docs } = helpers || {};
+    const selector = query?.selector || {};
+    const skip = Number.isFinite(query?.skip) && query.skip > 0 ? query.skip : 0;
+    const limit = Number.isFinite(query?.limit) ? query.limit : Number.POSITIVE_INFINITY;
+    const maxMatches = plan.canStopAtLimit && Number.isFinite(limit)
+      ? skip + limit
+      : Number.POSITIVE_INFINITY;
+    const documents = [];
+    const seen = new Set();
+    for (const entryRange of plan.ranges) {
+      const tx = this.db.transaction(DOCUMENT_STORE, 'readonly');
+      const index = tx.objectStore(DOCUMENT_STORE).index(SCHEMA_INDEX_ENTRIES);
+      const range = IDBKeyRange.bound(
+        [this.name, plan.index.name, ...entryRange.lower],
+        [this.name, plan.index.name, ...entryRange.upper],
+        Boolean(entryRange.lowerOpen),
+        Boolean(entryRange.upperOpen),
+      );
+      await iterateCursor(index.openCursor(range, plan.direction), (cursor) => {
+        if (!cursor || documents.length >= maxMatches) return false;
+        const record = cursor.value;
+        if (!record || seen.has(record.id)) return true;
+        seen.add(record.id);
+        if (!record.deleted && matchesSelector(record.doc, selector)) {
+          documents.push(record.doc);
+        }
+        return documents.length < maxMatches;
+      });
+      await idbTransactionDone(tx);
+      if (documents.length >= maxMatches) break;
+    }
+    let sorted = plan.sortCovered ? documents : sortDocuments(documents, query?.sort || []);
+    if (skip > 0) sorted = sorted.slice(skip);
+    if (Number.isFinite(limit)) sorted = sorted.slice(0, limit);
+    return sorted;
+  }
+
+  async queryDocumentsByCollectionCursor(query = {}, helpers = {}) {
+    const { matchesSelector = () => true } = helpers || {};
+    const selector = query?.selector || {};
+    const skip = Number.isFinite(query?.skip) && query.skip > 0 ? query.skip : 0;
+    const limit = Number.isFinite(query?.limit) ? query.limit : Number.POSITIVE_INFINITY;
+    const tx = this.db.transaction(DOCUMENT_STORE, 'readonly');
+    const index = tx.objectStore(DOCUMENT_STORE).index('collection');
+    const range = IDBKeyRange.only(this.name);
+    const documents = [];
+    let skipped = 0;
+    await iterateCursor(index.openCursor(range), (cursor) => {
+      if (!cursor || documents.length >= limit) return false;
+      const record = cursor.value;
+      if (!record.deleted && matchesSelector(record.doc, selector)) {
+        if (skipped < skip) {
+          skipped += 1;
+        } else {
+          documents.push(record.doc);
+        }
+      }
+      return documents.length < limit;
+    });
+    await idbTransactionDone(tx);
+    return documents;
   }
 
   async queryDocumentsByLwt(query = {}, helpers = {}) {
@@ -207,6 +348,44 @@ export class CtoxIndexedDbCollection {
     return sorted;
   }
 
+  async countDocuments(query = {}, helpers = {}) {
+    const primaryIds = primaryKeyCandidateIds(query, this.primaryPath);
+    if (primaryIds) {
+      const byId = await this.findDocumentsById(primaryIds);
+      const docs = primaryIds.map((id) => byId[id]).filter(Boolean);
+      return applyQueryToDocuments(docs, query, helpers).length;
+    }
+    const schemaIndexPlan = schemaIndexQueryPlanFor(query, this.indexes);
+    if (schemaIndexPlan) {
+      return (await this.queryDocumentsBySchemaIndex(schemaIndexPlan, query, helpers)).length;
+    }
+    if (canUseCollectionLwtQuery(query)) {
+      return (await this.queryDocumentsByLwt(query, helpers)).length;
+    }
+    const { matchesSelector = () => true } = helpers || {};
+    const skip = Number.isFinite(query?.skip) && query.skip > 0 ? query.skip : 0;
+    const limit = Number.isFinite(query?.limit) ? query.limit : Number.POSITIVE_INFINITY;
+    const tx = this.db.transaction(DOCUMENT_STORE, 'readonly');
+    const index = tx.objectStore(DOCUMENT_STORE).index('collection');
+    const range = IDBKeyRange.only(this.name);
+    let skipped = 0;
+    let count = 0;
+    await iterateCursor(index.openCursor(range), (cursor) => {
+      if (!cursor || count >= limit) return false;
+      const record = cursor.value;
+      if (!record.deleted && matchesSelector(record.doc, query?.selector || {})) {
+        if (skipped < skip) {
+          skipped += 1;
+        } else {
+          count += 1;
+        }
+      }
+      return count < limit;
+    });
+    await idbTransactionDone(tx);
+    return count;
+  }
+
   async getChangedDocumentsSince(checkpoint = null, limit = 100, options = {}) {
     const fromLwt = Number(checkpoint?.lwt || 0);
     const fromId = String(checkpoint?.id || '');
@@ -232,7 +411,13 @@ export class CtoxIndexedDbCollection {
       return true;
     });
     await idbTransactionDone(tx);
-    return { documents, checkpoint: nextCheckpoint };
+    return {
+      documents,
+      checkpoint: nextCheckpoint,
+      scanned,
+      scanLimit,
+      scanLimitReached: scanned >= scanLimit,
+    };
   }
 
   async replicationCheckpointStatus(schemaHash = null) {
@@ -271,14 +456,60 @@ export class CtoxIndexedDbCollection {
   queryPlanFor(query = {}) {
     const selectorFields = Object.keys(query?.selector || {}).filter((field) => !field.startsWith('$'));
     const sortFields = normalizeSortFields(query?.sort);
-    const selectedIndex = selectBestIndex(this.indexes, selectorFields, sortFields);
+    const schemaIndexPlan = schemaIndexQueryPlanFor(query, this.indexes);
+    const primaryIds = primaryKeyCandidateIds(query, this.primaryPath);
+    const strategy = primaryIds
+      ? 'primary-key'
+      : schemaIndexPlan
+        ? 'schema-index'
+        : canUseCollectionLwtQuery(query)
+          ? 'collection-lwt'
+          : canUseBoundedCollectionCursor(query)
+            ? 'bounded-collection'
+            : 'all-documents';
     return {
       collection: this.name,
       selectorFields,
       sortFields,
-      selectedIndex,
-      indexed: Boolean(selectedIndex),
+      selectedIndex: schemaIndexPlan?.index || null,
+      candidateIndex: schemaIndexPlan ? null : selectBestIndex(this.indexes, selectorFields, sortFields),
+      strategy,
+      indexed: strategy === 'primary-key' || strategy === 'schema-index' || strategy === 'collection-lwt',
+      schemaIndexed: Boolean(schemaIndexPlan),
+      sortCovered: Boolean(schemaIndexPlan?.sortCovered),
     };
+  }
+
+  ensureSchemaIndexEntries() {
+    if (!this.indexes.length) return Promise.resolve(0);
+    if (!this.schemaIndexReady) {
+      this.schemaIndexReady = this.rebuildMissingSchemaIndexEntries();
+    }
+    return this.schemaIndexReady;
+  }
+
+  async rebuildMissingSchemaIndexEntries() {
+    const tx = this.db.transaction(DOCUMENT_STORE, 'readwrite');
+    const index = tx.objectStore(DOCUMENT_STORE).index('collection');
+    const range = IDBKeyRange.only(this.name);
+    let updated = 0;
+    await iterateCursor(index.openCursor(range), (cursor) => {
+      if (!cursor) return false;
+      const record = cursor.value;
+      if (record?.schemaIndexSignature !== this.indexSignature) {
+        const next = {
+          ...record,
+          indexValues: indexValuesFor(this.indexes, record.doc || {}),
+          schemaIndexSignature: this.indexSignature,
+          schemaIndexEntries: schemaIndexEntriesFor(this.indexes, record.doc || {}, record.id, this.name),
+        };
+        cursor.update(next);
+        updated += 1;
+      }
+      return true;
+    });
+    await idbTransactionDone(tx);
+    return updated;
   }
 }
 
@@ -298,10 +529,19 @@ function openDatabase(databaseName) {
     const request = indexedDB.open(databaseName, DB_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
+      let store = null;
       if (!db.objectStoreNames.contains(DOCUMENT_STORE)) {
-        const store = db.createObjectStore(DOCUMENT_STORE, { keyPath: ['collection', 'id'] });
+        store = db.createObjectStore(DOCUMENT_STORE, { keyPath: ['collection', 'id'] });
         store.createIndex('collection', 'collection', { unique: false });
         store.createIndex('collectionLwtId', ['collection', 'lwt', 'id'], { unique: false });
+      } else {
+        store = request.transaction.objectStore(DOCUMENT_STORE);
+      }
+      if (store && !store.indexNames.contains(SCHEMA_INDEX_ENTRIES)) {
+        store.createIndex(SCHEMA_INDEX_ENTRIES, SCHEMA_INDEX_ENTRIES, {
+          unique: false,
+          multiEntry: true,
+        });
       }
     };
     request.onsuccess = () => {
@@ -335,6 +575,19 @@ function normalizeDocument(doc, lwt, replicationOrigin = null) {
   }
   normalized._deleted = Boolean(normalized._deleted);
   return normalized;
+}
+
+function storedRecordForWrite({ collection, id, doc, lwt, indexes, indexSignature, replicationOrigin = null }) {
+  return {
+    collection,
+    id,
+    lwt,
+    deleted: Boolean(doc._deleted),
+    indexValues: indexValuesFor(indexes, doc),
+    schemaIndexSignature: indexSignature,
+    schemaIndexEntries: schemaIndexEntriesFor(indexes, doc, id, collection),
+    doc: normalizeDocument(doc, lwt, replicationOrigin),
+  };
 }
 
 function shouldAcceptDocumentWrite(existingRecord, incomingLwt, replicationOrigin = null) {
@@ -403,17 +656,62 @@ function replicationScanLimit(limit) {
   );
 }
 
-function normalizeSchemaIndexes(schema = {}) {
+function primaryPathFromSchema(schema = {}) {
+  const primary = schema?.primaryKey;
+  if (typeof primary === 'string') return primary;
+  if (primary?.key) return primary.key;
+  return 'id';
+}
+
+function normalizeSchemaIndexes(schema = {}, primaryPath = primaryPathFromSchema(schema)) {
   const indexes = Array.isArray(schema?.indexes) ? schema.indexes : [];
-  return indexes.map((index, position) => {
-    const fields = Array.isArray(index) ? index : [index];
-    const normalizedFields = fields
-      .map((field) => String(field || '').trim())
-      .filter(Boolean);
-    return normalizedFields.length
-      ? { name: `idx_${position}_${normalizedFields.join('_')}`, fields: normalizedFields }
-      : null;
+  const normalized = indexes.map((index) => normalizeSchemaIndexFields(index, primaryPath));
+  if (!normalized.length) normalized.push(['_deleted', primaryPath]);
+  normalized.push(['_meta.lwt', primaryPath]);
+  if (Array.isArray(schema?.internalIndexes)) {
+    for (const index of schema.internalIndexes) {
+      normalized.push(normalizeSchemaIndexFields(index, primaryPath, { preservePrefix: true }));
+    }
+  }
+  const seen = new Set();
+  return normalized.map((fields, position) => {
+    const key = fields.join(',');
+    if (seen.has(key)) return null;
+    seen.add(key);
+    return { name: `idx_${position}_${fields.join('_')}`, fields };
   }).filter(Boolean);
+}
+
+function normalizeSchemaIndexFields(index, primaryPath, { preservePrefix = false } = {}) {
+  const fields = Array.isArray(index) ? index : [index];
+  const normalizedFields = fields
+    .map((field) => String(field || '').trim())
+    .filter(Boolean);
+  if (!normalizedFields.length) return ['_deleted', primaryPath];
+  const next = normalizedFields.slice();
+  if (!next.includes(primaryPath)) next.push(primaryPath);
+  if (!preservePrefix && next[0] !== '_deleted') next.unshift('_deleted');
+  return next;
+}
+
+function primaryKeyCandidateIds(query = {}, primaryPath = 'id') {
+  const selector = query?.selector || {};
+  for (const field of ['id', '_id', primaryPath].filter(Boolean)) {
+    if (!Object.prototype.hasOwnProperty.call(selector, field)) continue;
+    const value = selector[field];
+    if (value == null) return [];
+    if (typeof value === 'string' || typeof value === 'number') {
+      return [String(value)];
+    }
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      if ('$eq' in value && value.$eq != null) return [String(value.$eq)];
+      if ('$in' in value && Array.isArray(value.$in)) {
+        return [...new Set(value.$in.filter((id) => id != null).map((id) => String(id)))];
+      }
+    }
+    return null;
+  }
+  return null;
 }
 
 function indexValuesFor(indexes, doc) {
@@ -424,6 +722,30 @@ function indexValuesFor(indexes, doc) {
   return values;
 }
 
+function schemaIndexEntriesFor(indexes, doc, id, collection) {
+  const entries = [];
+  for (const index of indexes || []) {
+    const components = [];
+    let usable = true;
+    for (const field of index.fields) {
+      const encoded = encodeIndexValue(valueAtPath(doc, field));
+      if (!encoded) {
+        usable = false;
+        break;
+      }
+      components.push(...encoded);
+    }
+    if (usable) {
+      entries.push([collection, index.name, ...components, String(id || documentId(doc))]);
+    }
+  }
+  return entries;
+}
+
+function schemaIndexSignature(indexes = []) {
+  return indexes.map((index) => `${index.name}:${index.fields.join(',')}`).join('|');
+}
+
 function selectBestIndex(indexes, selectorFields = [], sortFields = []) {
   const wanted = [...selectorFields, ...sortFields].filter(Boolean);
   if (!wanted.length) return null;
@@ -431,7 +753,8 @@ function selectBestIndex(indexes, selectorFields = [], sortFields = []) {
   let bestScore = 0;
   for (const index of indexes || []) {
     let score = 0;
-    for (const field of index.fields) {
+    const fields = index.fields[0] === '_deleted' ? index.fields.slice(1) : index.fields;
+    for (const field of fields) {
       if (wanted.includes(field)) score += 1;
       else break;
     }
@@ -441,6 +764,177 @@ function selectBestIndex(indexes, selectorFields = [], sortFields = []) {
     }
   }
   return best ? { ...best, fields: [...best.fields], matchedFields: bestScore } : null;
+}
+
+function schemaIndexQueryPlanFor(query = {}, indexes = []) {
+  const selector = query?.selector || {};
+  if (Object.keys(selector).some((field) => field.startsWith('$'))) return null;
+  const sortEntries = normalizeSortEntries(query?.sort);
+  let best = null;
+  let bestScore = 0;
+  for (const index of indexes || []) {
+    const plan = schemaIndexPlanForIndex(index, selector, sortEntries, query);
+    if (!plan) continue;
+    const score = (plan.constrainedFields * 10)
+      + (plan.sortCovered ? 4 : 0)
+      + (plan.canStopAtLimit ? 2 : 0)
+      - Math.max(0, plan.ranges.length - 1);
+    if (score > bestScore) {
+      best = plan;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+function schemaIndexPlanForIndex(index, selector, sortEntries, query) {
+  if (!index?.fields?.length) return null;
+  let ranges = [{ lower: [], upper: [], upperComplete: false }];
+  let constrainedFields = 0;
+  let lastEqualityFieldIndex = -1;
+  let rangeFieldIndex = -1;
+  let stoppedAtFieldIndex = index.fields.length;
+
+  for (let fieldIndex = 0; fieldIndex < index.fields.length; fieldIndex += 1) {
+    const field = index.fields[fieldIndex];
+    const constraint = field === '_deleted'
+      ? { kind: 'eq', values: [false], implicit: true }
+      : selectorConstraintFor(selector, field);
+    if (constraint.kind === 'none') {
+      stoppedAtFieldIndex = fieldIndex;
+      break;
+    }
+    if (constraint.kind === 'unsupported') return null;
+    if (constraint.kind === 'eq') {
+      const encodedValues = constraint.values
+        .map((value) => encodeIndexValue(value))
+        .filter(Boolean);
+      if (!encodedValues.length || encodedValues.length !== constraint.values.length) return null;
+      if (encodedValues.length > 32) return null;
+      ranges = ranges.flatMap((range) => encodedValues.map((encoded) => ({
+        lower: [...range.lower, ...encoded],
+        upper: [...range.upper, ...encoded],
+        upperComplete: false,
+      })));
+      if (!constraint.implicit) constrainedFields += 1;
+      lastEqualityFieldIndex = fieldIndex;
+      continue;
+    }
+    if (constraint.kind === 'range') {
+      const lowerEncoded = constraint.lower !== undefined ? encodeIndexValue(constraint.lower) : null;
+      const upperEncoded = constraint.upper !== undefined ? encodeIndexValue(constraint.upper) : null;
+      if ((constraint.lower !== undefined && !lowerEncoded) || (constraint.upper !== undefined && !upperEncoded)) {
+        return null;
+      }
+      ranges = ranges.map((range) => ({
+        lower: lowerEncoded
+          ? [...range.lower, ...lowerEncoded, ...(constraint.lowerOpen ? [INDEX_HIGH_KEY] : [])]
+          : [...range.lower],
+        upper: upperEncoded
+          ? [...range.upper, ...upperEncoded, ...(constraint.upperOpen ? [] : [INDEX_HIGH_KEY])]
+          : [...range.upper, INDEX_HIGH_KEY],
+        upperComplete: true,
+      }));
+      constrainedFields += 1;
+      rangeFieldIndex = fieldIndex;
+      stoppedAtFieldIndex = fieldIndex + 1;
+      break;
+    }
+  }
+
+  const hasSelectorConstraint = constrainedFields > 0;
+  const orderStart = Math.max(
+    0,
+    rangeFieldIndex >= 0 ? rangeFieldIndex : lastEqualityFieldIndex + 1,
+  );
+  const sortCovered = isSortCoveredByIndex(index.fields, orderStart, sortEntries);
+  const hasSortOnlyPlan = !hasSelectorConstraint
+    && sortEntries.length > 0
+    && sortCovered
+    && Number.isFinite(query?.limit);
+  if (!hasSelectorConstraint && !hasSortOnlyPlan) return null;
+  if (sortEntries.length && !sortCovered && !hasSelectorConstraint) return null;
+
+  ranges = ranges.map((range) => ({
+    lower: range.lower,
+    upper: range.upperComplete || range.upper.length > range.lower.length
+      ? range.upper
+      : [...range.upper, INDEX_HIGH_KEY],
+  }));
+  const direction = sortCovered && sortEntries[0]?.direction === 'desc' ? 'prev' : 'next';
+  return {
+    index,
+    ranges,
+    direction,
+    sortCovered,
+    canStopAtLimit: sortCovered,
+    constrainedFields,
+    stoppedAtFieldIndex,
+  };
+}
+
+function selectorConstraintFor(selector, field) {
+  if (!Object.prototype.hasOwnProperty.call(selector, field)) return { kind: 'none' };
+  const value = selector[field];
+  if (isIndexComparableValue(value)) return { kind: 'eq', values: [value] };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { kind: 'unsupported' };
+  const keys = Object.keys(value);
+  if (keys.length === 1 && keys[0] === '$eq' && isIndexComparableValue(value.$eq)) {
+    return { kind: 'eq', values: [value.$eq] };
+  }
+  if (keys.length === 1 && keys[0] === '$in' && Array.isArray(value.$in)) {
+    const values = [...new Set(value.$in.filter(isIndexComparableValue))];
+    return values.length === value.$in.length ? { kind: 'eq', values } : { kind: 'unsupported' };
+  }
+  const rangeKeys = new Set(['$gt', '$gte', '$lt', '$lte']);
+  if (keys.length && keys.every((key) => rangeKeys.has(key))) {
+    const lower = '$gt' in value ? value.$gt : value.$gte;
+    const upper = '$lt' in value ? value.$lt : value.$lte;
+    if ((lower !== undefined && !isIndexComparableValue(lower))
+      || (upper !== undefined && !isIndexComparableValue(upper))) {
+      return { kind: 'unsupported' };
+    }
+    return {
+      kind: 'range',
+      lower,
+      upper,
+      lowerOpen: '$gt' in value,
+      upperOpen: '$lt' in value,
+    };
+  }
+  return { kind: 'unsupported' };
+}
+
+function isSortCoveredByIndex(indexFields, orderStart, sortEntries) {
+  if (!sortEntries.length) return true;
+  const directions = new Set(sortEntries.map((entry) => entry.direction));
+  if (directions.size > 1) return false;
+  const orderedFields = indexFields.slice(orderStart).filter((field) => field !== '_deleted');
+  return sortEntries.every((entry, offset) => orderedFields[offset] === entry.field);
+}
+
+function normalizeSortEntries(sort = []) {
+  if (!sort) return [];
+  const entries = typeof sort === 'string' ? [sort] : Array.isArray(sort) ? sort : [];
+  return entries.map((entry) => {
+    if (typeof entry === 'string') return { field: entry, direction: 'asc' };
+    const [field, rawDirection] = Object.entries(entry || {})[0] || [];
+    if (!field) return null;
+    const direction = rawDirection === -1 || String(rawDirection).toLowerCase() === 'desc' ? 'desc' : 'asc';
+    return { field, direction };
+  }).filter(Boolean);
+}
+
+function encodeIndexValue(value) {
+  if (typeof value === 'boolean') return ['b', value ? 1 : 0];
+  if (typeof value === 'number' && Number.isFinite(value)) return ['n', value];
+  if (typeof value === 'string') return ['s', value];
+  if (value instanceof Date && Number.isFinite(value.getTime())) return ['n', value.getTime()];
+  return null;
+}
+
+function isIndexComparableValue(value) {
+  return Boolean(encodeIndexValue(value));
 }
 
 function canUseCollectionLwtQuery(query = {}) {
@@ -454,6 +948,11 @@ function canUseCollectionLwtQuery(query = {}) {
     ? 'asc'
     : String(Object.values(firstSortEntry || {})[0] || '').toLowerCase();
   return ['desc', '-1'].includes(direction);
+}
+
+function canUseBoundedCollectionCursor(query = {}) {
+  if (!Number.isFinite(query?.limit)) return false;
+  return normalizeSortFields(query?.sort).length === 0;
 }
 
 function applyQueryToDocuments(docs = [], query = {}, helpers = {}) {
@@ -527,7 +1026,12 @@ export const ctoxIndexedDbStorageTestInternals = {
   indexValuesFor,
   normalizeDocument,
   normalizeSchemaIndexes,
+  canUseBoundedCollectionCursor,
+  encodeIndexValue,
+  primaryKeyCandidateIds,
   replicationScanLimit,
+  schemaIndexEntriesFor,
+  schemaIndexQueryPlanFor,
   selectBestIndex,
   shouldAcceptDocumentWrite,
 };

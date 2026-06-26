@@ -33,6 +33,32 @@ now = 1_001_000;
 const fetched = await storage.getQueryWindow([collection, fingerprint, 0, 200]);
 assert(fetched.lastAccessedAt === 1_001_000, 'getQueryWindow updates lastAccessedAt');
 
+let scanCount = 0;
+const originalScanQueryWindows = storage.backend.scanQueryWindows.bind(storage.backend);
+storage.backend.scanQueryWindows = async () => {
+  scanCount += 1;
+  return originalScanQueryWindows();
+};
+const invalidatedByDocument = await storage.invalidateQueryWindowsForDocuments(collection, ['b']);
+assert(invalidatedByDocument === 1, 'document-index invalidation finds matching window');
+assert(scanCount === 0, 'document-index invalidation must not scan all query windows');
+const invalidatedByIndex = await storage.getQueryWindow([collection, fingerprint, 0, 200]);
+assert(invalidatedByIndex.complete === false, 'document-index invalidation clears complete flag');
+
+await storage.upsertQueryWindow({
+  collection,
+  queryFingerprint: fingerprint,
+  offset: 0,
+  limit: 200,
+  documentIds: ['c'],
+  complete: true,
+  authoritativeRevision: 'rev-2',
+});
+const invalidatedByRemovedRef = await storage.invalidateQueryWindowsForDocuments(collection, ['b']);
+assert(invalidatedByRemovedRef === 0, 'replaced window refs remove stale document links');
+const stillComplete = await storage.getQueryWindow([collection, fingerprint, 0, 200]);
+assert(stillComplete.complete === true, 'stale document ref must not invalidate replaced window');
+
 await storage.touchDocuments(collection, ['a', 'b'], { estimatedBytes: 4096 });
 const accessA = await storage.getDocumentAccess(collection, 'a');
 assert(accessA.lastAccessedAt === 1_001_000, 'access time set');

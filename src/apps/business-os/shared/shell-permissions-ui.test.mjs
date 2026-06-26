@@ -7,11 +7,13 @@ import {
   canViewBusinessModuleSource,
 } from './permissions.js';
 import {
+  buildBusinessUserPickerOptions,
   buildGlobalCtoxAgentScopeView,
   buildGlobalCtoxContextModes,
   buildLifecyclePermissionView,
   buildModuleWhyDiagnosticsView,
   buildModuleTargetContextItems,
+  renderBusinessUserDatalistOptions,
   renderGlobalCtoxAgentScopeHtml,
   renderGlobalCtoxContextModeHtml,
   renderModuleWhyDiagnosticsHtml,
@@ -340,6 +342,36 @@ test('global CTOX context modes default to human-in-the-loop actions', () => {
   assert.equal(modes.find((mode) => mode.value === 'note')?.label, 'Notiz an User');
   assert.equal(modes.find((mode) => mode.value === 'mention')?.label, 'User erwähnen');
   assert.equal(modes.find((mode) => mode.value === 'approval')?.label, 'Freigabe anfragen');
+  assert.deepEqual(
+    modes.map((mode) => mode.impact),
+    ['data_mutation', 'read_only', 'human_note', 'human_mention', 'approval_required']
+  );
+
+  const html = renderGlobalCtoxContextModeHtml({ canModify: false });
+  assert.match(html, /data-impact="read_only"/);
+  assert.match(html, /Nur lesend/);
+  assert.match(html, /data-impact="approval_required"/);
+});
+
+test('global CTOX user picker keeps active users and escapes datalist labels', () => {
+  const users = buildBusinessUserPickerOptions([
+    { id: 'inactive', display_name: 'Inactive', active: false },
+    { id: 'deleted', display_name: 'Deleted', is_deleted: true },
+    { user_id: 'reviewer', display_name: 'Reviewer <Lead>', role: 'admin', active: true },
+    { id: 'note_target', display_name: 'Note Target', role: 'user', active: true },
+  ], {
+    session: { user: { id: 'current_user', display_name: 'Current User', role: 'user' } },
+  });
+
+  assert.deepEqual(
+    users.map((user) => user.id),
+    ['current_user', 'note_target', 'reviewer']
+  );
+
+  const html = renderBusinessUserDatalistOptions(users);
+  assert.match(html, /value="reviewer"/);
+  assert.match(html, /Reviewer &lt;Lead&gt; · admin/);
+  assert.doesNotMatch(html, /inactive|deleted|<Lead>/);
 });
 
 test('global CTOX agent scope view exposes actor app data and external boundaries', () => {

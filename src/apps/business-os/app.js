@@ -23,7 +23,7 @@ import {
   renderGlobalCtoxAgentScopeHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260625-threads-hub-v1';
+} from './shared/shell-permissions-ui.js?v=20260626-skf-dialog-knowledge-v2';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -36,7 +36,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260626-chat-tracking-index-v1';
+const APP_BUILD = '20260626-skf-dialog-knowledge-v2';
 
 ensureShellStylesheets();
 
@@ -1598,137 +1598,12 @@ function wireShellActions() {
   setupSyncToast();
 }
 
-// Shell-owned sync toast. Watches the existing `ctox-business-os-sync-diagnostics`
-// snapshot and shows a bottom-right progress toast while the active module's
-// collections replicate. Fully automatic — modules contribute nothing beyond the
-// `collections` they already declare in module.json.
+// The old floating sync toast is intentionally disabled. Sync state is surfaced
+// inline by product surfaces such as the Desktop status widget, while the shell
+// still emits `ctox-business-os-sync-diagnostics` for those views.
 function setupSyncToast() {
-  if (!syncToastWatchdog) {
-    syncToastWatchdog = window.setInterval(() => {
-      const currentToast = document.querySelector('[data-sync-toast]');
-      if (currentToast && !window.ctoxBusinessOsSyncDiagnostics) currentToast.hidden = true;
-    }, 250);
-  }
-  if (document.querySelector('[data-sync-toast]')) return;
-  const toast = document.createElement('div');
-  toast.className = 'sync-toast';
-  toast.dataset.syncToast = '';
-  toast.hidden = true;
-  toast.setAttribute('role', 'status');
-  toast.setAttribute('aria-live', 'polite');
-  toast.innerHTML = `
-    <div class="sync-toast-row">
-      <span class="sync-toast-spinner" aria-hidden="true"></span>
-      <div class="sync-toast-body">
-        <strong class="sync-toast-label"></strong>
-        <span class="sync-toast-count"></span>
-      </div>
-      <button type="button" class="sync-toast-dismiss" aria-label="">×</button>
-    </div>
-    <div class="sync-toast-bar"><i></i></div>
-  `;
-  document.body.append(toast);
-
-  const labelEl = toast.querySelector('.sync-toast-label');
-  const countEl = toast.querySelector('.sync-toast-count');
-  const barEl = toast.querySelector('.sync-toast-bar > i');
-  const dismissEl = toast.querySelector('.sync-toast-dismiss');
-
-  let hideTimer = 0;
-  let stallTimer = 0;
-  let dismissedModuleKey = '';
-  let lastReady = -1;
-  let lastModuleKey = '';
-
-  const activeModuleKey = () => state.activeModule?.id || '';
-
-  function hide() {
-    if (hideTimer) { clearTimeout(hideTimer); hideTimer = 0; }
-    if (stallTimer) { clearTimeout(stallTimer); stallTimer = 0; }
-    toast.hidden = true;
-    toast.classList.remove('is-complete');
-  }
-
-  function computeProgress() {
-    const mod = state.activeModule;
-    const diag = state.syncDiagnostics;
-    if (!window.ctoxBusinessOsSyncDiagnostics) return null;
-    if (!mod || !diag || diag.mode !== 'webrtc') return null;
-    const collections = Array.isArray(mod.collections) ? mod.collections : [];
-    if (!collections.length) return null;
-    let ready = 0;
-    let observed = 0;
-    for (const name of collections) {
-      const c = diag.collections?.[name];
-      if (!c) continue;
-      observed += 1;
-      const status = c.connectionStatus || c.status || '';
-      if (c.initialReplicationAt || ['connected', 'running', 'reused'].includes(status)) ready += 1;
-    }
-    if (!observed) return null;
-    return { ready, total: collections.length };
-  }
-
-  function refresh() {
-    const progress = computeProgress();
-    if (!progress) { hide(); return; }
-    const { ready, total } = progress;
-
-    if (ready >= total) {
-      // Complete: briefly confirm, then auto-hide. Never flash a completion
-      // toast for content that was already in sync when the module opened.
-      if (toast.hidden) return;
-      if (stallTimer) { clearTimeout(stallTimer); stallTimer = 0; }
-      labelEl.textContent = shellText('syncComplete');
-      countEl.textContent = `${total}/${total}`;
-      barEl.style.width = '100%';
-      toast.classList.add('is-complete');
-      if (!hideTimer) hideTimer = window.setTimeout(hide, 1600);
-      return;
-    }
-
-    if (dismissedModuleKey === activeModuleKey()) return;
-
-    if (hideTimer) { clearTimeout(hideTimer); hideTimer = 0; }
-    toast.classList.remove('is-complete');
-    labelEl.textContent = shellText('syncingContent');
-    countEl.textContent = `${ready}/${total}`;
-    barEl.style.width = `${Math.round((ready / total) * 100)}%`;
-    dismissEl.setAttribute('aria-label', shellText('syncDismiss'));
-    toast.hidden = false;
-
-    // Stall guard: if progress stops for a while (likely no peer / offline), fade
-    // out so we never leave a permanent toast. Reset whenever progress advances.
-    if (ready !== lastReady) {
-      lastReady = ready;
-      if (stallTimer) clearTimeout(stallTimer);
-      stallTimer = window.setTimeout(() => {
-        if (!toast.classList.contains('is-complete')) hide();
-      }, 30000);
-    }
-  }
-
-  dismissEl.addEventListener('click', () => {
-    dismissedModuleKey = activeModuleKey();
-    hide();
-  });
-
-  // Called on module switch: reset per-module state, then refresh.
-  syncToastRefresh = () => {
-    const key = activeModuleKey();
-    if (key !== lastModuleKey) {
-      lastModuleKey = key;
-      dismissedModuleKey = '';
-      lastReady = -1;
-      hide();
-    }
-    refresh();
-  };
-
-  window.addEventListener('ctox-business-os-sync-diagnostics', refresh);
-  window.setInterval(() => {
-    if (!toast.hidden) refresh();
-  }, 1000);
+  document.querySelector('[data-sync-toast]')?.remove();
+  syncToastRefresh = () => {};
 }
 
 function teardownModuleResizers() {
@@ -7310,7 +7185,7 @@ function getOfflineFallbackCatalog() {
       {
         "id": "creator",
         "title": "App Creator",
-        "description": "Native standalone code-generator & harness workbench to visualize and test custom Business-OS modules.",
+        "description": "CTOX-native workspace for requesting, tracking, validating, and refining Business OS app modules.",
         "entry": "modules/creator/index.html",
         "collections": [
           "business_commands"
@@ -7322,8 +7197,8 @@ function getOfflineFallbackCatalog() {
         "layout": {
           "shell": "full-workspace",
           "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-creator\"><defs><linearGradient id=\"grad-creator\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#06b6d4\" /><stop offset=\"100%\" stop-color=\"#0891b2\" /></linearGradient></defs><polyline points=\"7 8 3 12 7 16\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polyline><polyline points=\"17 8 21 12 17 16\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polyline><line x1=\"14\" y1=\"6\" x2=\"10\" y2=\"18\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><path d=\"M18 4l.5 1.5L20 6l-1.5.5L18 8l-.5-1.5L16 6l1.5-.5z\" fill=\"url(#grad-creator)\"></path><path d=\"M6 18l.25.75L7 19l-.75.25L6 20l-.25-.75L5 19l.75-.25z\" fill=\"url(#grad-creator)\"></path></svg>",
-          "left": "Harness configuration and parameter inputs",
-          "center": "Architectural simulation flow, visual graphs, and code projections"
+          "left": "App request, module target, and task controls",
+          "center": "Queued app work, validation evidence, and review state"
         }
       },
       {
@@ -7512,12 +7387,20 @@ async function waitForCommandProjection(db, commandId, timeoutMs = 45000, genera
 async function waitForSyncBridgeReady(bridge, timeoutMs = 15000) {
   const state = bridge?.state;
   if (!state) return;
-  await Promise.race([
-    Promise.resolve()
-      .then(() => state.awaitInSync?.() || state.awaitInitialReplication?.())
-      .catch(() => {}),
-    delay(timeoutMs),
-  ]);
+  let timer = null;
+  try {
+    await Promise.race([
+      Promise.resolve()
+        .then(() => state.awaitInSync?.() || state.awaitInitialReplication?.())
+        .catch(() => {}),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+        timer?.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function isStaleDataPlaneGeneration(generation) {

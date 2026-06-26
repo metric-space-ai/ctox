@@ -1,3 +1,5 @@
+import { readStoredFileFromDemandChunks } from '../../shared/file-integrity.js?v=20260624-demand-file-fetch1';
+
 const BUILD = '20260625-cv-print-parser-v18';
 const MODULE_ID = 'cv-print-builder';
 const PROFILE_MIME = 'application/vnd.ctox.cv-print-profile+json';
@@ -8,10 +10,12 @@ const REQUIRED_COLLECTIONS = [
   'documents',
   'document_versions',
   'desktop_files',
-  'desktop_file_chunks',
   'business_chats',
   'business_commands',
   'ctox_queue_tasks',
+];
+const LIVE_COLLECTIONS = [
+  ...REQUIRED_COLLECTIONS,
 ];
 
 const TEMPLATES = [
@@ -175,12 +179,11 @@ function subscribeToCollections(state) {
     clearTimeout(state.refreshTimer);
     state.refreshTimer = setTimeout(() => refresh(state), 80);
   };
-  ['documents', 'document_versions', 'desktop_files', 'desktop_file_chunks', 'business_chats', 'business_commands', 'ctox_queue_tasks']
-    .forEach((name) => {
-      const col = getCollection(state.ctx, name);
-      const sub = col?.$?.subscribe?.(schedule);
-      if (sub?.unsubscribe) state.disposers.push(() => sub.unsubscribe());
-    });
+  LIVE_COLLECTIONS.forEach((name) => {
+    const col = getCollection(state.ctx, name);
+    const sub = col?.$?.subscribe?.(schedule);
+    if (sub?.unsubscribe) state.disposers.push(() => sub.unsubscribe());
+  });
 }
 
 function setModuleBusy(state, busy) {
@@ -1559,6 +1562,7 @@ async function ensureParseSourceReady(state, item) {
     fileId,
     generationId,
     sizeBytes: Number(source.size_bytes || 0),
+    contentHash: source.sha256 || '',
   });
   await flushFileCollectionsForDispatch(state.ctx, 45000);
 }
@@ -1637,99 +1641,60 @@ async function waitForSyncBridgeReady(bridge, timeoutMs = 10000, options = {}) {
   }
 }
 
-async function normalizeLegacyDesktopFileHashScheme(ctx, fileId) {
-  if (!fileId) return;
-  const fileDoc = await getCollection(ctx, 'desktop_files').findOne(fileId).exec();
-  if (fileDoc?.incrementalPatch) {
-    const file = fileDoc.toJSON();
-    if (!file.content_hash_scheme || file.content_hash_scheme === 'sha256') {
-      await fileDoc.incrementalPatch({
-        content_hash_scheme: CONTENT_HASH_SCHEME,
-        updated_at_ms: Date.now(),
-      });
-    }
-  }
-
-  let chunkDocs = await getCollection(ctx, 'desktop_file_chunks')
-    .find({ selector: { file_id: fileId } })
-    .exec()
-    .catch(() => []);
-  if (chunkDocs.length === 0) {
-    chunkDocs = await getCollection(ctx, 'desktop_file_chunks')
-      .find()
-      .exec()
-      .then((docs) => docs.filter((doc) => doc?.toJSON?.().file_id === fileId))
-      .catch(() => []);
-  }
-  const expectedTotal = chunkDocs.length;
-  for (const chunkDoc of chunkDocs) {
-    if (!chunkDoc?.incrementalPatch) continue;
-    const chunk = chunkDoc.toJSON();
-    const patch = {};
-    if (expectedTotal > 0 && chunk.total !== expectedTotal) {
-      patch.total = expectedTotal;
-    }
-    if (!chunk.content_hash_scheme || chunk.content_hash_scheme === 'sha256') {
-      patch.content_hash_scheme = CONTENT_HASH_SCHEME;
-    }
-    if (!chunk.chunk_hash_scheme) {
-      patch.chunk_hash_scheme = CHUNK_HASH_SCHEME;
-    }
-    if (Object.keys(patch).length > 0) {
-      await chunkDoc.incrementalPatch(patch);
-    }
-  }
-}
-
-async function ensureCanonicalDesktopFileChunks(ctx, { fileId, generationId, sizeBytes = 0 }) {
+async function ensureCanonicalDesktopFileChunks(ctx, { fileId, generationId, sizeBytes = 0, contentHash = '' }) {
   const chunksCol = getCollection(ctx, 'desktop_file_chunks');
-  let allChunkDocs = await chunksCol.find({ selector: { file_id: fileId } })
-    .exec()
-    .catch(() => []);
-  if (allChunkDocs.length === 0) {
-    allChunkDocs = await chunksCol.find()
-      .exec()
-      .then((docs) => docs.filter((doc) => doc?.toJSON?.().file_id === fileId))
-      .catch(() => []);
-  }
-  const chunks = allChunkDocs.map((doc) => doc.toJSON()).filter((chunk) => !chunk._deleted);
-  const activeChunks = chunks
-    .filter((chunk) => chunk.generation_id === generationId)
-    .sort((a, b) => Number(a.idx || 0) - Number(b.idx || 0));
-  const expectedTotal = activeChunks[0]?.total || expectedDesktopFileChunkTotal(sizeBytes);
-  const canonicalById = new Set(chunks.map((chunk) => chunk.id || ''));
-  const hasCanonicalSet = activeChunks.length > 0
-    && activeChunks.every((chunk) => (
-      chunk.id === canonicalDesktopFileChunkId(fileId, generationId, Number(chunk.idx || 0))
-    ));
-  if (hasCanonicalSet && activeChunks.length >= expectedTotal) return;
+  const expectedTotal = expectedDesktopFileChunkTotal(sizeBytes);
+  const existingCanonical = await findCanonicalChunkDocs(chunksCol, fileId, generationId, expectedTotal);
+  if (existingCanonical.length >= expectedTotal) return;
 
-  const legacyByIdx = new Map();
-  for (const chunk of chunks) {
-    if (chunk.generation_id === generationId || chunk.generation_id === '' || chunk.generation_id == null) {
-      legacyByIdx.set(Number(chunk.idx || 0), chunk);
-    }
-  }
-  for (const chunk of activeChunks) {
-    legacyByIdx.set(Number(chunk.idx || 0), chunk);
-  }
-  if (!legacyByIdx.size) {
-    throw new Error(`PDF-Daten sind noch nicht lokal verfügbar: ${fileId}`);
-  }
-  for (const [idx, chunk] of [...legacyByIdx.entries()].sort((a, b) => a[0] - b[0])) {
+  const demandChunks = await fetchDesktopFileDemandChunks(ctx, fileId);
+  await readStoredFileFromDemandChunks(demandChunks, 'application/pdf', {
+    contentHash,
+    contentHashScheme: contentHash ? CONTENT_HASH_SCHEME : '',
+  });
+  const ordered = demandChunks
+    .filter((chunk) => chunk && typeof chunk === 'object' && chunk.cancelled !== true)
+    .sort((a, b) => Number(a.sequence) - Number(b.sequence));
+  if (!ordered.length) throw new Error(`PDF-Daten sind noch nicht lokal verfügbar: ${fileId}`);
+
+  const total = ordered.length;
+  for (const chunk of ordered) {
+    const idx = Number(chunk.sequence || 0);
     const canonicalId = canonicalDesktopFileChunkId(fileId, generationId, idx);
-    if (canonicalById.has(canonicalId)) continue;
+    const existing = await chunksCol.findOne(canonicalId).exec().catch(() => null);
+    if (existing) continue;
+    const data = String(chunk.bytesBase64 ?? chunk.bytes_base64 ?? '');
     await chunksCol.insert({
-      ...chunk,
       id: canonicalId,
       file_id: fileId,
       generation_id: generationId,
       idx,
-      total: chunk.total || expectedTotal,
-      created_at_ms: chunk.created_at_ms || Date.now(),
+      total,
+      encoding: 'base64',
+      data,
+      content_hash: contentHash,
+      content_hash_scheme: contentHash ? CONTENT_HASH_SCHEME : '',
+      chunk_hash: await sha256Hex(new TextEncoder().encode(data)),
+      chunk_hash_scheme: CHUNK_HASH_SCHEME,
+      size_bytes: data.length,
+      created_at_ms: Date.now(),
     });
-    canonicalById.add(canonicalId);
   }
+}
+
+async function findCanonicalChunkDocs(chunksCol, fileId, generationId, expectedTotal) {
+  const docs = [];
+  for (let idx = 0; idx < expectedTotal; idx += 1) {
+    const doc = await chunksCol
+      .findOne(canonicalDesktopFileChunkId(fileId, generationId, idx))
+      .exec()
+      .catch(() => null);
+    if (!doc) break;
+    const chunk = doc.toJSON ? doc.toJSON() : doc;
+    if (chunk?._deleted) break;
+    docs.push(chunk);
+  }
+  return docs;
 }
 
 function canonicalDesktopFileChunkId(fileId, generationId, idx) {
@@ -1739,13 +1704,6 @@ function canonicalDesktopFileChunkId(fileId, generationId, idx) {
 function expectedDesktopFileChunkTotal(sizeBytes) {
   const base64Length = Math.ceil(Math.max(0, Number(sizeBytes || 0)) / 3) * 4;
   return Math.max(1, Math.ceil(base64Length / CHUNK_SIZE));
-}
-
-async function shouldNormalizeLegacyDesktopFileHashScheme(ctx, fileId) {
-  if (!fileId) return false;
-  const fileDoc = await getCollection(ctx, 'desktop_files').findOne(fileId).exec().catch(() => null);
-  const file = fileDoc?.toJSON?.();
-  return Boolean(file && (!file.content_hash_scheme || file.content_hash_scheme === 'sha256'));
 }
 
 function delay(ms) {
@@ -1854,37 +1812,37 @@ async function upsertBusinessChat(ctx, input) {
   });
 }
 
+async function readDesktopFileFromDemand(ctx, fileId, mimeType = 'application/octet-stream', options = {}) {
+  const chunks = await fetchDesktopFileDemandChunks(ctx, fileId);
+  return readStoredFileFromDemandChunks(chunks, mimeType, options);
+}
+
+async function fetchDesktopFileDemandChunks(ctx, fileId) {
+  const loader = await fileDemandLoaderFor(ctx).catch(() => null);
+  if (!loader?.fetchFile) {
+    throw new Error('PDF-Daten sind noch nicht über den Sync-Demand-Pfad verfügbar.');
+  }
+  return loader.fetchFile(fileId);
+}
+
+async function fileDemandLoaderFor(ctx) {
+  if (!ctx?.sync?.startCollection) return null;
+  const bridge = await ctx.sync.startCollection('desktop_files');
+  await waitForSyncBridgeReady(bridge, 15000);
+  return bridge?.state?.demandFileLoader || null;
+}
+
 async function ensureOriginalUrl(state, item) {
   const fileId = item.model.source?.desktop_file_id;
   const generationId = item.model.source?.generation_id || '';
   if (!fileId || state.originalUrls.has(fileId)) return;
-  const chunks = await findAll(state.ctx, 'desktop_file_chunks');
-  const matchingChunks = chunks.filter((chunk) => (
-    chunk.file_id === fileId
-    && (!generationId || chunk.generation_id === generationId)
-  ));
-  const fileChunks = dedupeChunksByIndex(matchingChunks.length
-    ? matchingChunks
-    : chunks.filter((chunk) => chunk.file_id === fileId))
-    .filter((chunk) => chunk.file_id === fileId)
-    .sort((a, b) => (a.idx || 0) - (b.idx || 0));
-  if (!fileChunks.length) return;
-  const base64 = fileChunks.map((chunk) => chunk.data || '').join('');
-  const bytes = base64ToUint8(base64);
-  const blob = new Blob([bytes], { type: 'application/pdf' });
+  const source = item.model.source || {};
+  const blob = await readDesktopFileFromDemand(state.ctx, fileId, 'application/pdf', {
+    contentGenerationId: generationId,
+    contentHash: source.sha256 || '',
+    contentHashScheme: source.sha256 ? CONTENT_HASH_SCHEME : '',
+  });
   state.originalUrls.set(fileId, URL.createObjectURL(blob));
-}
-
-function dedupeChunksByIndex(chunks) {
-  const byIndex = new Map();
-  for (const chunk of chunks || []) {
-    const idx = Number(chunk.idx || 0);
-    const current = byIndex.get(idx);
-    if (!current || String(chunk.id || '').length > String(current.id || '').length) {
-      byIndex.set(idx, chunk);
-    }
-  }
-  return [...byIndex.values()];
 }
 
 async function patchSelectedModel(state, updater, options = {}) {
@@ -2315,12 +2273,6 @@ function uint8ToBase64(bytes) {
   return btoa(binary);
 }
 
-function base64ToUint8(base64) {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
 
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {

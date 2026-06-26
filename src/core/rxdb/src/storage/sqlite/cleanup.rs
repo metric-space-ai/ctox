@@ -14,7 +14,8 @@ pub fn cleanup_deleted_documents(
     minimum_deleted_time: i64,
 ) -> RxResult<bool> {
     let max_deletion_time = now() - minimum_deleted_time as f64;
-    let conn = connection.lock();
+    let conn = crate::storage::sqlite::instance::lock_sqlite_writer(connection);
+    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
     conn.execute(
         &format!(
             "DELETE FROM {} WHERE deleted = 1 AND lastWriteTime < ?",

@@ -6,10 +6,10 @@ use super::store::{
     self, BusinessCommand, BusinessOsSession, BusinessOsSessionUser, CommandOrigin,
 };
 use anyhow::Context;
-use rusqlite::Connection;
+use rusqlite::{params, Connection, OptionalExtension};
+use serde_json::json;
 use serde_json::Map;
 use serde_json::Value;
-use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::SystemTime;
@@ -396,6 +396,7 @@ fn create_note(
         .filter(|kind| matches!(kind.as_str(), "note" | "mention"))
         .unwrap_or_else(|| "note".to_owned());
     let thread_id = thread_id_for_command(command, &source);
+    ensure_existing_thread_participant_or_admin(root, session, &thread_id)?;
     let title = first_string_field(&command.payload, &["title", "subject"])
         .or_else(|| source_string(&source, "label"))
         .unwrap_or_else(|| "Notiz".to_owned());
@@ -571,7 +572,9 @@ fn create_message(
     let body = required_string(&command.payload, &["body", "message", "note"])?;
     let target_user_ids = target_user_ids(&command.payload);
     let actor = actor_id(session);
-    let thread = load_record(root, "user_threads", &thread_id)?.unwrap_or_else(|| json!({}));
+    let thread = load_record(root, "user_threads", &thread_id)?
+        .with_context(|| format!("thread {thread_id} not found"))?;
+    ensure_thread_participant_or_admin(session, &thread)?;
     let source = thread_source_context(&thread).unwrap_or_else(|| source_context(command));
     ensure_source_context_read_policy(root, session, &source)?;
     let title = thread
@@ -647,9 +650,11 @@ fn request_approval(
     let now = now_ms();
     let prompt = required_string(&command.payload, &["prompt", "instruction", "body"])?;
     let reviewer_user_id = required_string(&command.payload, &["reviewer_user_id", "reviewer"])?;
+    let reviewer_display_name = active_business_user_display_name(root, &reviewer_user_id)?;
     let source = source_context(command);
     ensure_source_context_read_policy(root, session, &source)?;
     let thread_id = thread_id_for_command(command, &source);
+    ensure_existing_thread_participant_or_admin(root, session, &thread_id)?;
     let approval_id = first_string_field(&command.payload, &["approval_request_id", "id"])
         .unwrap_or_else(|| format!("approval_{}", Uuid::new_v4()));
     let message_id = format!("msg_{}", Uuid::new_v4());
@@ -657,6 +662,16 @@ fn request_approval(
         .or_else(|| source_string(&source, "label"))
         .unwrap_or_else(|| "CTOX Freigabe".to_owned());
     let actor = actor_id(session);
+    let self_approval_override = command
+        .payload
+        .get("allow_self_approval_admin_override")
+        .and_then(Value::as_bool)
+        == Some(true)
+        && is_admin_session(session);
+    anyhow::ensure!(
+        reviewer_user_id != actor || self_approval_override,
+        "requester cannot assign themselves as approval reviewer"
+    );
     let participants = participant_set(
         root,
         &thread_id,
@@ -690,7 +705,7 @@ fn request_approval(
         "pending",
         session,
         &reviewer_user_id,
-        "",
+        &reviewer_display_name,
         "",
         command,
         &source,
@@ -756,7 +771,9 @@ fn edit_approval(
     let approval = load_record(root, "ctox_task_approval_requests", &approval_id)?
         .with_context(|| format!("approval request {approval_id} not found"))?;
     ensure_pending_approval(&approval)?;
+    ensure_approval_version(command, &approval)?;
     ensure_approval_editor(session, &approval)?;
+    ensure_approval_target_unchanged(command, &approval)?;
 
     let mut next = approval.clone();
     let prompt = first_string_field(&command.payload, &["prompt", "instruction", "body"])
@@ -767,22 +784,6 @@ fn edit_approval(
         "instruction",
         &first_string_field(&command.payload, &["instruction"]).unwrap_or_else(|| prompt.clone()),
     );
-    if let Some(command_type) = first_string_field(&command.payload, &["target_command_type"]) {
-        set_object_string(&mut next, "target_command_type", &command_type);
-    }
-    if let Some(target_module) = first_string_field(&command.payload, &["target_module"]) {
-        set_object_string(&mut next, "target_module", &target_module);
-    }
-    if let Some(target_record_id) = first_string_field(&command.payload, &["target_record_id"]) {
-        set_object_string(&mut next, "target_record_id", &target_record_id);
-    }
-    if let Some(target_payload) = command
-        .payload
-        .get("target_payload")
-        .filter(|value| value.is_object())
-    {
-        set_object_value(&mut next, "target_payload", target_payload.clone());
-    }
     set_object_i64(&mut next, "updated_at_ms", now);
 
     let thread_id = value_string(&approval, "thread_id");
@@ -874,6 +875,7 @@ fn approve_approval(
     let approval = load_record(root, "ctox_task_approval_requests", &approval_id)?
         .with_context(|| format!("approval request {approval_id} not found"))?;
     ensure_pending_approval(&approval)?;
+    ensure_approval_version(command, &approval)?;
     ensure_reviewer_or_admin(session, &approval)?;
     ensure_approval_target_policy(root, session, &approval)?;
 
@@ -1009,6 +1011,7 @@ fn decide_without_queue(
     let approval = load_record(root, "ctox_task_approval_requests", &approval_id)?
         .with_context(|| format!("approval request {approval_id} not found"))?;
     ensure_pending_approval(&approval)?;
+    ensure_approval_version(command, &approval)?;
     if status == "rejected" {
         ensure_reviewer_or_admin(session, &approval)?;
     }
@@ -2122,27 +2125,68 @@ fn enqueue_approved_ctox_command(
     client_context.insert("module_id".to_owned(), Value::String(module.clone()));
     client_context.insert("app_id".to_owned(), Value::String(module.clone()));
 
-    let accepted = store::record_command(
+    let approved_command = json!({
+        "id": approved_command_id,
+        "command_id": approved_command_id,
+        "module": module,
+        "command_type": command_type,
+        "record_id": record_id,
+        "status": "pending_sync",
+        "payload": Value::Object(payload),
+        "client_context": Value::Object(client_context),
+    });
+
+    let outcome = store::accept_rxdb_business_command_with_origin(
         root,
-        BusinessCommand {
-            origin: CommandOrigin::TrustedLocal,
-            id: Some(approved_command_id),
-            module,
-            command_type,
-            record_id: if record_id.is_empty() {
-                None
-            } else {
-                Some(record_id)
-            },
-            payload: Value::Object(payload),
-            client_context: Value::Object(client_context),
-        },
+        approved_command,
+        CommandOrigin::TrustedLocal,
     )?;
+    let status = outcome
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let ok = outcome
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(status != "failed");
     anyhow::ensure!(
-        accepted.ok,
-        "approved CTOX command was rejected before queue creation"
+        ok && status != "failed",
+        "approved CTOX command was rejected by central policy: {}",
+        serde_json::to_string(&outcome).unwrap_or_else(|_| status.to_owned())
     );
-    Ok(accepted)
+    let command_id = outcome
+        .get("command_id")
+        .or_else(|| outcome.get("id"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    anyhow::ensure!(
+        !command_id.is_empty(),
+        "approved CTOX command did not return command id"
+    );
+    let task_id = outcome
+        .get("task_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let task_status = outcome
+        .get("task_status")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    Ok(store::CommandAccepted {
+        ok: true,
+        command_id,
+        status: if status == "completed" {
+            "completed"
+        } else {
+            "accepted"
+        },
+        task_id,
+        task_status,
+    })
 }
 
 fn approval_record(
@@ -2901,9 +2945,76 @@ fn approval_id_from_command(command: &BusinessCommand) -> anyhow::Result<String>
         .context("approval_request_id is required")
 }
 
+fn active_business_user_display_name(root: &Path, user_id: &str) -> anyhow::Result<String> {
+    let user_id = user_id.trim();
+    anyhow::ensure!(!user_id.is_empty(), "reviewer_user_id is required");
+    let conn = store::open_store(root)?;
+    let user: Option<(String, i64)> = conn
+        .query_row(
+            "SELECT display_name, active FROM business_users WHERE user_id = ?1",
+            params![user_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    match user {
+        Some((display_name, active)) if active != 0 => {
+            let display_name = display_name.trim();
+            Ok(if display_name.is_empty() {
+                user_id.to_owned()
+            } else {
+                display_name.to_owned()
+            })
+        }
+        Some(_) => anyhow::bail!("approval reviewer `{user_id}` is inactive"),
+        None => anyhow::bail!("approval reviewer `{user_id}` is not an active Business OS user"),
+    }
+}
+
 fn ensure_pending_approval(approval: &Value) -> anyhow::Result<()> {
     let status = value_string(approval, "status");
     anyhow::ensure!(status == "pending", "approval request is not pending");
+    Ok(())
+}
+
+fn ensure_approval_version(command: &BusinessCommand, approval: &Value) -> anyhow::Result<()> {
+    let expected = command
+        .payload
+        .get("expected_updated_at_ms")
+        .or_else(|| command.payload.get("expected_version"))
+        .and_then(Value::as_i64)
+        .context("expected_updated_at_ms is required")?;
+    let current = approval
+        .get("updated_at_ms")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    anyhow::ensure!(
+        expected == current,
+        "approval request changed; reload before deciding"
+    );
+    Ok(())
+}
+
+fn ensure_approval_target_unchanged(
+    command: &BusinessCommand,
+    approval: &Value,
+) -> anyhow::Result<()> {
+    for key in ["target_command_type", "target_module", "target_record_id"] {
+        if let Some(next) = first_string_field(&command.payload, &[key]) {
+            let current = value_string(approval, key);
+            anyhow::ensure!(
+                next == current,
+                "approval target cannot be edited after request"
+            );
+        }
+    }
+    if let Some(next_payload) = command.payload.get("target_payload") {
+        let null_payload = Value::Null;
+        let current_payload = approval.get("target_payload").unwrap_or(&null_payload);
+        anyhow::ensure!(
+            next_payload == current_payload,
+            "approval target payload cannot be edited after request"
+        );
+    }
     Ok(())
 }
 
@@ -3083,6 +3194,18 @@ fn ensure_thread_participant_or_admin(
         "only participants or admins can update this thread"
     );
     Ok(())
+}
+
+fn ensure_existing_thread_participant_or_admin(
+    root: &Path,
+    session: &BusinessOsSession,
+    thread_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    let thread = load_record(root, "user_threads", thread_id)?;
+    if let Some(thread) = thread.as_ref() {
+        ensure_thread_participant_or_admin(session, thread)?;
+    }
+    Ok(thread)
 }
 
 fn ensure_message_author_or_admin(
@@ -3500,6 +3623,58 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    fn seed_threads_user(
+        root: &Path,
+        user_id: &str,
+        display_name: &str,
+        role: &str,
+    ) -> anyhow::Result<()> {
+        let _ = store::issue_business_os_capability_token_for_managed_user(
+            root,
+            user_id,
+            display_name,
+            role,
+            now_ms(),
+        )?;
+        Ok(())
+    }
+
+    fn seed_threads_permission_grant(
+        root: &Path,
+        grant_id: &str,
+        user_id: &str,
+        permission: BusinessOsPermission,
+        scope_type: &str,
+        scope_id: &str,
+    ) -> anyhow::Result<()> {
+        let conn = store::open_store(root)?;
+        let now = now_ms();
+        conn.execute(
+            "INSERT INTO business_permission_grants
+                (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
+                 active, reason, created_by, created_at_ms, updated_at_ms)
+             VALUES (?1, 'user', ?2, ?3, ?4, ?5, 1, 'test grant', 'threads-test', ?6, ?6)",
+            params![
+                grant_id,
+                user_id,
+                permission.as_str(),
+                scope_type,
+                scope_id,
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn approval_updated_at(root: &Path, approval_id: &str) -> anyhow::Result<i64> {
+        let approval = load_record(root, "ctox_task_approval_requests", approval_id)?
+            .with_context(|| format!("approval request {approval_id} not found"))?;
+        approval
+            .get("updated_at_ms")
+            .and_then(Value::as_i64)
+            .context("approval updated_at_ms")
+    }
+
     #[test]
     fn threads_command_allowlist_is_explicit() {
         assert!(is_threads_command("threads.note.create"));
@@ -3518,8 +3693,8 @@ mod tests {
     }
 
     #[test]
-    fn peer_write_gate_allows_command_admission_but_blocks_native_owned_records()
-    -> anyhow::Result<()> {
+    fn peer_write_gate_allows_command_admission_but_blocks_native_owned_records(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         assert!(may_accept_peer_write(temp.path(), "", "business_commands"));
         assert!(!may_accept_peer_write(temp.path(), "", "user_threads"));
@@ -3562,6 +3737,69 @@ mod tests {
             .context("projected threads command")?;
         assert_eq!(value_string(&command, "task_id"), "");
         assert_eq!(value_string(&command, "record_id"), "case-1");
+        Ok(())
+    }
+
+    #[test]
+    fn non_participant_cannot_write_existing_thread() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        seed_threads_user(temp.path(), "alice", "Alice", "user")?;
+        seed_threads_user(temp.path(), "bob", "Bob", "user")?;
+
+        store::accept_rxdb_business_command(
+            temp.path(),
+            json!({
+                "id": "cmd-thread-alice-note",
+                "module": "threads",
+                "command_type": "threads.note.create",
+                "record_id": "shared-thread",
+                "payload": {
+                    "thread_id": "shared-thread",
+                    "body": "Nur Alice ist Teilnehmerin.",
+                    "source_context": {
+                        "module": "threads",
+                        "record_type": "thread",
+                        "record_id": "shared-thread"
+                    }
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "alice",
+                        "display_name": "Alice",
+                        "role": "user"
+                    }
+                }
+            }),
+        )?;
+
+        let denied = store::accept_rxdb_business_command(
+            temp.path(),
+            json!({
+                "id": "cmd-thread-bob-message",
+                "module": "threads",
+                "command_type": "threads.message.create",
+                "record_id": "shared-thread",
+                "payload": {
+                    "thread_id": "shared-thread",
+                    "body": "Bob darf nicht in fremde Threads schreiben."
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "bob",
+                        "display_name": "Bob",
+                        "role": "user"
+                    }
+                }
+            }),
+        );
+
+        assert!(denied.is_err(), "non-participant write must be rejected");
+        let thread =
+            load_record(temp.path(), "user_threads", "shared-thread")?.context("thread")?;
+        assert_eq!(
+            array_strings(thread.get("participant_ids")),
+            vec!["alice".to_owned()]
+        );
         Ok(())
     }
 
@@ -3617,6 +3855,8 @@ mod tests {
     #[test]
     fn approval_request_is_not_a_queue_task_until_reviewed() -> anyhow::Result<()> {
         let temp = tempdir()?;
+        seed_threads_user(temp.path(), "junior", "Junior", "user")?;
+        seed_threads_user(temp.path(), "lead", "Lead", "user")?;
         let outcome = store::accept_rxdb_business_command(
             temp.path(),
             json!({
@@ -3665,6 +3905,7 @@ mod tests {
         assert_eq!(value_string(&approval, "status"), "pending");
         assert_eq!(value_string(&approval, "requester_user_id"), "junior");
         assert_eq!(value_string(&approval, "reviewer_user_id"), "lead");
+        assert_eq!(value_string(&approval, "reviewer_display_name"), "Lead");
         assert_eq!(
             approval
                 .get("source_context")
@@ -3677,8 +3918,79 @@ mod tests {
     }
 
     #[test]
+    fn approval_request_requires_active_reviewer_and_blocks_self_review() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        seed_threads_user(temp.path(), "junior", "Junior", "user")?;
+
+        let unknown_reviewer = store::accept_rxdb_business_command(
+            temp.path(),
+            json!({
+                "id": "cmd-approval-unknown-reviewer",
+                "module": "threads",
+                "command_type": "threads.ctox_approval.request",
+                "record_id": "case-reviewer",
+                "payload": {
+                    "approval_request_id": "approval-unknown-reviewer",
+                    "prompt": "CTOX soll den Fall bearbeiten.",
+                    "reviewer_user_id": "ghost",
+                    "source_context": {
+                        "module": "threads",
+                        "record_type": "case",
+                        "record_id": "case-reviewer"
+                    }
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "junior",
+                        "display_name": "Junior",
+                        "role": "user"
+                    }
+                }
+            }),
+        );
+        assert!(unknown_reviewer.is_err());
+        assert!(load_record(
+            temp.path(),
+            "ctox_task_approval_requests",
+            "approval-unknown-reviewer"
+        )?
+        .is_none());
+
+        let self_review = store::accept_rxdb_business_command(
+            temp.path(),
+            json!({
+                "id": "cmd-approval-self-reviewer",
+                "module": "threads",
+                "command_type": "threads.ctox_approval.request",
+                "record_id": "case-self-reviewer",
+                "payload": {
+                    "approval_request_id": "approval-self-reviewer",
+                    "prompt": "CTOX soll den Fall bearbeiten.",
+                    "reviewer_user_id": "junior",
+                    "source_context": {
+                        "module": "threads",
+                        "record_type": "case",
+                        "record_id": "case-self-reviewer"
+                    }
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "junior",
+                        "display_name": "Junior",
+                        "role": "user"
+                    }
+                }
+            }),
+        );
+        assert!(self_review.is_err());
+        Ok(())
+    }
+
+    #[test]
     fn rejected_approval_creates_no_queue_task() -> anyhow::Result<()> {
         let temp = tempdir()?;
+        seed_threads_user(temp.path(), "junior", "Junior", "user")?;
+        seed_threads_user(temp.path(), "lead", "Lead", "user")?;
         store::accept_rxdb_business_command(
             temp.path(),
             json!({
@@ -3705,6 +4017,7 @@ mod tests {
                 }
             }),
         )?;
+        let expected_updated_at = approval_updated_at(temp.path(), "approval-reject-1")?;
 
         let rejected = store::accept_rxdb_business_command(
             temp.path(),
@@ -3715,6 +4028,7 @@ mod tests {
                 "record_id": "approval-reject-1",
                 "payload": {
                     "approval_request_id": "approval-reject-1",
+                    "expected_updated_at_ms": expected_updated_at,
                     "decision_note": "Kontext reicht nicht."
                 },
                 "client_context": {
@@ -3748,6 +4062,9 @@ mod tests {
     #[test]
     fn approved_request_creates_command_task_and_audit_linkage() -> anyhow::Result<()> {
         let temp = tempdir()?;
+        seed_threads_user(temp.path(), "junior", "Junior", "user")?;
+        seed_threads_user(temp.path(), "lead", "Lead", "user")?;
+        seed_threads_user(temp.path(), "admin", "Admin", "admin")?;
         store::accept_rxdb_business_command(
             temp.path(),
             json!({
@@ -3782,6 +4099,7 @@ mod tests {
                 }
             }),
         )?;
+        let expected_updated_at = approval_updated_at(temp.path(), "approval-approve-1")?;
 
         let approved = store::accept_rxdb_business_command(
             temp.path(),
@@ -3792,6 +4110,7 @@ mod tests {
                 "record_id": "approval-approve-1",
                 "payload": {
                     "approval_request_id": "approval-approve-1",
+                    "expected_updated_at_ms": expected_updated_at,
                     "decision_note": "Passt."
                 },
                 "client_context": {
@@ -3900,6 +4219,233 @@ mod tests {
             Some(approved_task_id)
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn stale_approval_decision_is_rejected() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        seed_threads_user(temp.path(), "junior", "Junior", "user")?;
+        seed_threads_user(temp.path(), "lead", "Lead", "user")?;
+        store::accept_rxdb_business_command(
+            temp.path(),
+            json!({
+                "id": "cmd-stale-request",
+                "module": "threads",
+                "command_type": "threads.ctox_approval.request",
+                "record_id": "case-stale",
+                "payload": {
+                    "approval_request_id": "approval-stale-1",
+                    "prompt": "CTOX soll den Fall bearbeiten.",
+                    "reviewer_user_id": "lead",
+                    "source_context": {
+                        "module": "threads",
+                        "record_type": "case",
+                        "record_id": "case-stale"
+                    }
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "junior",
+                        "display_name": "Junior",
+                        "role": "user"
+                    }
+                }
+            }),
+        )?;
+        let current = approval_updated_at(temp.path(), "approval-stale-1")?;
+        let denied = store::accept_rxdb_business_command(
+            temp.path(),
+            json!({
+                "id": "cmd-stale-decision",
+                "module": "threads",
+                "command_type": "threads.ctox_approval.reject",
+                "record_id": "approval-stale-1",
+                "payload": {
+                    "approval_request_id": "approval-stale-1",
+                    "expected_updated_at_ms": current.saturating_sub(1),
+                    "decision_note": "Stale."
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "lead",
+                        "display_name": "Lead",
+                        "role": "user"
+                    }
+                }
+            }),
+        );
+        assert!(denied.is_err());
+        let approval = load_record(
+            temp.path(),
+            "ctox_task_approval_requests",
+            "approval-stale-1",
+        )?
+        .context("approval")?;
+        assert_eq!(value_string(&approval, "status"), "pending");
+        Ok(())
+    }
+
+    #[test]
+    fn approval_edit_cannot_change_target() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        seed_threads_user(temp.path(), "junior", "Junior", "user")?;
+        seed_threads_user(temp.path(), "lead", "Lead", "user")?;
+        store::accept_rxdb_business_command(
+            temp.path(),
+            json!({
+                "id": "cmd-target-request",
+                "module": "threads",
+                "command_type": "threads.ctox_approval.request",
+                "record_id": "case-target",
+                "payload": {
+                    "approval_request_id": "approval-target-1",
+                    "prompt": "CTOX soll lesen.",
+                    "reviewer_user_id": "lead",
+                    "target_module": "ctox",
+                    "target_record_id": "case-target",
+                    "target_command_type": "business_os.chat.task",
+                    "target_payload": {
+                        "mode": "read"
+                    },
+                    "source_context": {
+                        "module": "threads",
+                        "record_type": "case",
+                        "record_id": "case-target"
+                    }
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "junior",
+                        "display_name": "Junior",
+                        "role": "user"
+                    }
+                }
+            }),
+        )?;
+        let expected_updated_at = approval_updated_at(temp.path(), "approval-target-1")?;
+
+        let denied = store::accept_rxdb_business_command(
+            temp.path(),
+            json!({
+                "id": "cmd-target-edit",
+                "module": "threads",
+                "command_type": "threads.ctox_approval.edit",
+                "record_id": "approval-target-1",
+                "payload": {
+                    "approval_request_id": "approval-target-1",
+                    "expected_updated_at_ms": expected_updated_at,
+                    "prompt": "CTOX soll die App umbauen.",
+                    "target_command_type": "ctox.business_os.app.modify"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "junior",
+                        "display_name": "Junior",
+                        "role": "user"
+                    }
+                }
+            }),
+        );
+        assert!(denied.is_err());
+        let approval = load_record(
+            temp.path(),
+            "ctox_task_approval_requests",
+            "approval-target-1",
+        )?
+        .context("approval")?;
+        assert_eq!(
+            value_string(&approval, "target_command_type"),
+            "business_os.chat.task"
+        );
+        assert_eq!(value_string(&approval, "prompt"), "CTOX soll lesen.");
+        Ok(())
+    }
+
+    #[test]
+    fn approval_execution_uses_central_command_policy() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        seed_threads_user(temp.path(), "junior", "Junior", "user")?;
+        seed_threads_user(temp.path(), "lead", "Lead", "user")?;
+        seed_threads_permission_grant(
+            temp.path(),
+            "grant_lead_ctox_data_write",
+            "lead",
+            BusinessOsPermission::DataWrite,
+            "module",
+            "ctox",
+        )?;
+        store::accept_rxdb_business_command(
+            temp.path(),
+            json!({
+                "id": "cmd-central-policy-request",
+                "module": "threads",
+                "command_type": "threads.ctox_approval.request",
+                "record_id": "case-central-policy",
+                "payload": {
+                    "approval_request_id": "approval-central-policy",
+                    "prompt": "Starte Coding Agent.",
+                    "reviewer_user_id": "lead",
+                    "target_module": "ctox",
+                    "target_record_id": "case-central-policy",
+                    "target_command_type": "ctox.coding_agent.execute",
+                    "target_payload": {
+                        "args": ["status"]
+                    },
+                    "source_context": {
+                        "module": "threads",
+                        "record_type": "case",
+                        "record_id": "case-central-policy"
+                    }
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "junior",
+                        "display_name": "Junior",
+                        "role": "user"
+                    }
+                }
+            }),
+        )?;
+        let expected_updated_at = approval_updated_at(temp.path(), "approval-central-policy")?;
+
+        let denied = store::accept_rxdb_business_command(
+            temp.path(),
+            json!({
+                "id": "cmd-central-policy-approve",
+                "module": "threads",
+                "command_type": "threads.ctox_approval.approve",
+                "record_id": "approval-central-policy",
+                "payload": {
+                    "approval_request_id": "approval-central-policy",
+                    "expected_updated_at_ms": expected_updated_at,
+                    "decision_note": "Freigabe trotz fehlender Agent-Rechte."
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "lead",
+                        "display_name": "Lead",
+                        "role": "user"
+                    }
+                }
+            }),
+        );
+        assert!(
+            denied
+                .as_ref()
+                .err()
+                .map(|error| error.to_string().contains("central policy"))
+                .unwrap_or(false),
+            "approval must fail through central dispatcher, got {denied:?}"
+        );
+        let approval = load_record(
+            temp.path(),
+            "ctox_task_approval_requests",
+            "approval-central-policy",
+        )?
+        .context("approval")?;
+        assert_eq!(value_string(&approval, "status"), "pending");
+        assert_eq!(value_string(&approval, "approved_command_id"), "");
         Ok(())
     }
 
@@ -4044,14 +4590,12 @@ mod tests {
         assert!(outcome.projections.iter().any(|(collection, record_id)| {
             *collection == "user_threads" && record_id == "thread_support_command_case-1"
         }));
-        assert!(
-            load_record(
-                temp.path(),
-                "user_threads",
-                "thread_support_queue_task_case-1"
-            )?
-            .is_none()
-        );
+        assert!(load_record(
+            temp.path(),
+            "user_threads",
+            "thread_support_queue_task_case-1"
+        )?
+        .is_none());
 
         let thread = load_record(temp.path(), "user_threads", "thread_support_command_case-1")?
             .context("projected relevance thread")?;
@@ -4153,14 +4697,12 @@ mod tests {
             "approval_requested"
         );
         assert_eq!(value_string(&notification, "user_id"), "alice");
-        assert!(
-            load_record(
-                temp.path(),
-                "user_notifications",
-                "notif_app_needs_review_ctox_ticket_approvals_approval-1_bob",
-            )?
-            .is_none()
-        );
+        assert!(load_record(
+            temp.path(),
+            "user_notifications",
+            "notif_app_needs_review_ctox_ticket_approvals_approval-1_bob",
+        )?
+        .is_none());
 
         Ok(())
     }
@@ -4188,14 +4730,12 @@ mod tests {
         let outcome = project_app_relevance(temp.path(), &[("support_conversations", 0)], 50)?;
 
         assert_eq!(outcome.changed_count, 0);
-        assert!(
-            load_record(
-                temp.path(),
-                "user_threads",
-                "thread_support_conversation_conv-public",
-            )?
-            .is_none()
-        );
+        assert!(load_record(
+            temp.path(),
+            "user_threads",
+            "thread_support_conversation_conv-public",
+        )?
+        .is_none());
         Ok(())
     }
 

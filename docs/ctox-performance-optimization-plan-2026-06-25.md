@@ -111,7 +111,7 @@ against source:
   schema-index equality/range cursors, browser `count()`, CTOX-origin
   push-scan suppression, and sync diagnostic fanout are now reduced. The
   remaining browser risks are non-indexed `allDocuments()` fallback, full
-  re-query subscriptions, remaining local-write push debounce/coalescing,
+  re-query subscriptions, remaining local push scan counters,
   per-chunk browser uploads, and chunk bookkeeping.
 
 Additional read-only subagent review on 2026-06-26 rechecked the remaining
@@ -154,10 +154,11 @@ against the 2026-06-24 review and the current source:
 - Plan specificity gaps were added for bounded `RxSubject`
   backpressure/lagged-resync semantics, native `bulk_write` current-state
   batching, LCM/status read caching, provider-adapter transcript clone
-  reduction, removal/justification of the Business Chat 4 second tracker
-  interval, UI performance guards, and cleanup of the orphaned report module
-  island noted by the original review. The native `bulk_write` batching gap is
-  now closed; the rest remain tracked below.
+  reduction, Business Chat active-collection lifecycle and DOM/Layout guards,
+  UI performance guards, and cleanup of the orphaned report module island noted
+  by the original review. The native `bulk_write` batching gap and the fixed
+  Business Chat 4 second idle tracker are now closed; the rest remain tracked
+  below.
 
 Final comprehensive subagent review on 2026-06-26 after the native
 external-write idle patch confirmed the updated priority stack:
@@ -178,10 +179,12 @@ external-write idle patch confirmed the updated priority stack:
   `upsert_rxdb_collection_record` still opens/reads RxDB and rechecks table
   metadata; command/file/release acceptance paths can multiply that pattern.
 - Browser-side remaining P1/P2 risks are non-indexed `allDocuments()` fallback,
-  default-window demand `find().exec()` semantics, read-before-write
-  `upsert()`/sequential `bulkUpsert()`, full live-query re-exec, chunk
-  reassembly, `encodedSize()` allocation, and the fixed 30 second sidecar stat
-  timers if they show up in a real browser idle profile.
+  default-window demand `find().exec()` semantics, full live-query re-exec,
+  local-write push coalescing, browser chunk uploads, and the fixed 30 second
+  sidecar stat timers if they show up in a real browser idle profile.
+  Single-document `upsert()`, facade/storage `bulkUpsert()`, WebRTC
+  `encodedSize()` allocation, and frame ACK reassembly bookkeeping are now
+  fixed and guarded by dist-level smokes.
 - A local read-only perf probe on 2026-06-26 measured
   `runtime/business-os-rxdb.sqlite3` at 276,918,272 bytes, with
   `desktop_file_chunks` holding 6,404 rows and about 99.8 MB of JSON payload,
@@ -233,7 +236,8 @@ These old review findings are no longer accurate as written:
   File:
   - `src/core/rxdb/src/plugins/replication_webrtc/query_fetch_handler.rs`
 
-- `M30` SQLite fsync pressure: fixed for the checked central paths.
+- `M30` SQLite fsync pressure: fixed for the checked central paths, broader
+  direct-open helper hardening remains.
   `PRAGMA synchronous=NORMAL` is now set for the Business OS store and core
   persistence.
   Files:
@@ -443,6 +447,15 @@ These old review findings are no longer accurate as written:
   - `src/core/mailserver/src/store/sqlite.rs`
   - `src/core/mailserver/src/store/sqlite_schema.rs`
 
+- Mailserver SQLite hot-path connection churn: fixed. All public SQLite store
+  hot paths now use the thread-local cached store connection instead of opening
+  a fresh SQLite connection per operation; `init()` remains the direct-open
+  schema bootstrap path. Regression counters prove IMAP SELECT/FETCH/STORE and
+  a broad SMTP queue, CalDAV, CardDAV, and greylist sequence stay at one SQLite
+  open after setup.
+  File:
+  - `src/core/mailserver/src/store/sqlite.rs`
+
 ## Still Open Or Only Partially Fixed
 
 ### Native RxDB And SQLite
@@ -548,9 +561,10 @@ These old review findings are no longer accurate as written:
   keyed canonical chunk lookup.
 - Demand-cache invalidation now uses a reverse `docId -> windowKey` sidecar
   index and invalidates once per remote-write batch.
-- Browser local-write push still needs fuller debounce/coalescing, but
-  CTOX-origin-only replication writes no longer trigger a push scan, and
-  chunk-sized push batches no longer inherit the fixed 500-entry scan floor.
+- Browser local-write push events are now debounced/coalesced before running
+  `pushToRemotePeers()`. CTOX-origin-only replication writes no longer trigger
+  a push scan, and chunk-sized push batches no longer inherit the fixed
+  500-entry scan floor.
 - Demand-cache sidecar eviction now has an under-budget no-scan path. Remaining
   risk is fixed per-collection idle timers over many demand-loaded collections;
   shared/write-triggered scheduling remains open.
@@ -560,10 +574,12 @@ These old review findings are no longer accurate as written:
   still need streaming/range APIs to avoid full-file materialization.
 - Transport status is skinny by default and sync-layer diagnostic snapshots are
   coalesced; full transport snapshots require explicit diagnostic requests.
-- Encoded size and chunk reassembly paths still contain avoidable allocation or
-  repeated work.
-- Collection subscriptions still tend toward full re-query/re-render patterns
-  instead of changed-ID deltas.
+- WebRTC `encodedSize()` no longer allocates `TextEncoder` buffers per frame,
+  and incoming frame ACK bookkeeping now advances a stored contiguous sequence
+  instead of rescanning received chunks for every frame.
+- `collection.$` and primary-key `findOne().$` now apply changed-ID deltas
+  without full re-query. Complex query subscriptions still tend toward full
+  re-query/re-render patterns.
 
 ### Projection Writers And DB Growth
 
@@ -606,8 +622,8 @@ These old review findings are no longer accurate as written:
 | --- | --- | --- |
 | H1 native RxDB non-PK full scans | Partial | Simple selectors/count/query-fetch compile to SQL; browser schema-index cursor plans exist; broader native/browser fallback guards remain. |
 | H2 WebRTC status per frame | Fixed for exact finding | Native status is skinny by default and sync-layer diagnostic snapshots are coalesced instead of emitted per collection/frame. |
-| H3 IMAP FETCH/STORE full body load | Fixed for exact finding | SELECT uses COUNT and FETCH/STORE sequence resolution uses body-free summaries. Broader mail residuals remain under M17/M19. |
-| H4 chat tracked message N+1 | Partial | Native Chat tracking repair now uses an indexed top-level active-tracking signal and batches active command/task lookups per repair pass; browser subscription debounce remains. |
+| H3 IMAP FETCH/STORE full body load | Fixed for exact finding | SELECT uses COUNT and FETCH/STORE sequence resolution uses body-free summaries. Broader mail residuals remain under M19. |
+| H4 chat tracked message N+1 | Partial | Native Chat tracking repair uses indexed top-level active-tracking metadata and batched command/task lookups. Browser `syncTrackedMessages` now batches tracked command/task reads into one query per collection, coalesces subscription-triggered sync, and only keeps command/queue subscriptions plus the 4 second fallback active while active tracked messages exist. Chat attachments now release `desktop_file_chunks` after flush. Broader Chat DOM/layout work remains. |
 | H5 matching per-keystroke recompute | Open | Needs Maps, cached haystacks, debounce, representative tests. |
 | H6 outbound per-row pipeline recompute | Open | Needs memoized pipeline and by-company index. |
 | M1 RxDB count materializes docs | Partial | Native fixed for expressible selectors; browser `count()` now delegates to `countDocuments()` instead of `find().exec()`, but non-indexed browser selector counts still cursor-scan. |
@@ -617,20 +633,20 @@ These old review findings are no longer accurate as written:
 | M5 desktop chunk prune by file_id | Fixed for exact native prune | Stale-generation cleanup now uses read-only SQLite primary-key range selection with an `EXPLAIN` guard; broader chunk retention/browser consumer work remains separate. |
 | M6 chunk writes one transaction per chunk | Partial | Native eager chunk generation and stale-generation redaction now use collection bulk upsert; remaining chunk write/prune paths still need deeper batching/direct SQL. |
 | M7 demand-cache full sidecar scans | Fixed | Sidecar metadata keeps reverse document-to-window refs, and WebRTC pull/master-write batches invalidate once after materializing remote writes. |
-| M8 browser upsert transaction overhead | Open | Needs collapsed read/write transaction path. |
-| M9 subscriptions full find on change | Open | Needs changed-ID deltas or targeted windows. |
+| M8 browser upsert transaction overhead | Fixed | `storage-indexeddb.upsert()` now reads once inside one readwrite transaction, writes once, returns the written document, and has a dist-level request-count smoke. |
+| M9 subscriptions full find on change | Partial | `collection.$` applies change payloads to an in-memory snapshot and `findOne(primary).$` ignores unrelated changed IDs; complex query subscriptions still need targeted windows or explicit full-refresh counters. |
 | M10 browser allDocuments fallback | Partial | Primary-key equality/`$in`, schema-index equality/range/sort shapes, and finite unsorted limits are bounded; non-indexed selectors and subscription re-query paths can still fall back broadly. |
 | M11 inference arena overhead | Open | Needs long-lived descriptor arenas or persistent contexts where shape permits. |
 | M12 inference graph rebuild overhead | Open | Needs graph/context reuse investigation for fixed decode shapes. |
-| M13 streamed event clone/deserialize | Open | Needs method inspection before clone/parse. |
+| M13 streamed event clone/deserialize | Fixed for stream delta/no-op path | Direct session now inspects method/payload event kind before cloning payloads and drops high-frequency delta/no-op events before deserialization; telemetry batching and broader transcript-copy work remain. |
 | M14 blocking file stream closure | Fixed for exact stream path | `file_fetch_handler.rs` now bridges sync sources through a bounded channel, runs them on a blocking worker, and performs send/backpressure asynchronously; native demand sources use direct read-only SQLite instead of async RxDB `block_on`. |
-| M15 unbounded RxSubject fanout | Open | Needs bounded/backpressure strategy. |
+| M15 unbounded RxSubject fanout | Fixed for native RxSubject fanout | Native `RxSubject` now uses a bounded broadcast ring, records lagged items, emits storage lag markers for recoverable change streams, invalidates incremental query buffers on lag, maps storage lag to replication `RESYNC`, exposes process-wide lag totals through native peer performance/`ctox_perf_probe --assert-idle`, and has targeted slow-peer checkpoint-recovery coverage. Installed/integration slow-peer soak evidence remains. |
 | M16 `stalwart_messages` mailbox index | Fixed for exact finding | Mailbox summary/count paths have the mailbox/received index and query-plan guard. |
-| M17 mailserver hot-path connection reuse | Open | Message/mailbox methods still need broad `with_connection` reuse. |
+| M17 mailserver hot-path connection reuse | Fixed | SQLiteStore hot paths now reuse the thread-local cached connection across IMAP message/mailbox methods plus SMTP queue, CalDAV, CardDAV, and greylist operations; only schema `init()` directly opens a connection. |
 | M18 send-verification full body fetches | Fixed for exact finding | Verification now uses `UID SEARCH HEADER Message-ID` and header-only `BODY.PEEK[...]`. |
 | M19 email sync full UID scans | Partial | Configured IMAP sync uses UID watermarks after the first import; first import, UIDVALIDITY, IDLE, and provider delta tokens remain. |
-| M20 ticket work-item assignment N+1 | Open | Business OS ticket idle projection loop is source-stamped; assignment hydration still needs batched queries. |
-| M21 ticket projection DB reopens | Open | Projection still needs connection-threaded list helpers. |
+| M20 ticket work-item assignment N+1 | Partial | Self-work list/projection hydration now batches latest assignment lookup in one query; single-load and broader ticket/queue bridge paths still need batching. |
+| M21 ticket projection DB reopens | Fixed for direct projection | Direct Business OS ticket projection buckets now reuse one ticket DB connection, including control bundles; non-projection ticket/queue helper audits remain separate. |
 | M22 chat full message HTML rebuild | Open | Needs signatures/append-only DOM reconcile. |
 | M23 window drag forced reflow | Open | Needs geometry-read/write batching behind one rAF. |
 | M24 sync.js transport diagnostics fanout | Fixed for exact finding | `sync.js` coalesces diagnostic snapshot publication and emits immediately only for real error/lifecycle transitions. |
@@ -639,7 +655,7 @@ These old review findings are no longer accurate as written:
 | M27 Buchhaltung journal joins per render | Open | Needs pre-aggregated Maps and targeted reloads. |
 | M28 customers search full pane re-render | Open | Needs debounced center-only render and shared summary/index. |
 | M29 projection writer reopen/table_info | Partial | Repair projection paths now use a cached RxDB writer with one table metadata load per collection per pass; broader command-acceptance fanout paths and open/statement counters remain. |
-| M30 synchronous=NORMAL | Fixed | Business OS store and persistence set it. |
+| M30 synchronous=NORMAL | Partial | Business OS store and persistence set it on checked central paths; direct SQLite open helpers still need unification so new hot paths cannot omit it. |
 | M31 status ps/proc scan | Partial | Cached on normal path; explicit lifecycle/shutdown scans remain by design. |
 
 ## Current Critical Blockers From Subagent Review
@@ -729,10 +745,11 @@ is no longer the original file-share/browser `allDocuments()` burn path.
    require explicit finite pagination for demand-loaded collections or provide
    a real paged cursor API; file pickers must query indexed windows rather than
    rely on a partial 200-row default.
-8. Browser IndexedDB `upsert()`, `bulkUpsert()`, chunk writes, and collection
-   subscriptions still do redundant reads/full re-queries. Collapse
-   single-document writes to one transaction, implement real batch upserts, and
-   apply changed-ID deltas where possible.
+8. Browser IndexedDB single-document `upsert()` and `bulkUpsert()` are now
+   collapsed to batched readwrite transactions and guarded by dist-level
+   storage smokes. `collection.$` and primary-key `findOne().$` now apply
+   changed-ID deltas. Remaining browser storage work is chunk writes and
+   complex query subscriptions that still do redundant reads/full re-queries.
 9. `rxdb.file.fetch` transport is demand-based and non-blocking, but the file
    path is not end-to-end streaming. Native indexing still builds whole-file
    chunk payloads, the native demand source still gathers chunk metadata before
@@ -1615,10 +1632,15 @@ Implementation status:
   regression test opens 12 collections, shortens the safety interval to 25 ms,
   waits past multiple old safety windows, and proves zero
   `changed_documents_since` calls after startup.
-- Still open: bounded `RxSubject` overflow semantics and production
-  loop-budget counters for the DB-wide watcher. The dispatcher should remain
-  centralized around SQLite file-level change detection and must not re-add
-  per-collection idle scans.
+- Done on 2026-06-26 for native `RxSubject` fanout: subjects now use a bounded
+  broadcast ring instead of per-subscriber unbounded `mpsc` queues, record
+  skipped ring entries, and support explicit lag signals. SQLite and memory
+  storage change streams emit a lag marker; query change-event buffers treat it
+  as an invalidation that forces full re-execution, and storage-backed master
+  change streams map it to replication `RESYNC`.
+- Still open: production loop-budget counters for the DB-wide watcher. The
+  dispatcher should remain centralized around SQLite file-level change detection
+  and must not re-add per-collection idle scans.
 
 Validation:
 
@@ -1634,6 +1656,23 @@ Validation:
   passed: 1 test, 0 failures.
 - `CARGO_TARGET_DIR=/tmp/ctox-rxdb-target cargo test --manifest-path src/core/rxdb/Cargo.toml storage::sqlite::instance -- --nocapture`
   passed: 24 tests, 0 failures.
+- `CARGO_TARGET_DIR=/tmp/ctox-rxdb-m15-target cargo test --manifest-path src/core/rxdb/Cargo.toml rxjs_compat::tests -- --nocapture`
+  passed on 2026-06-26: 8 tests, 0 failures, including process-wide
+  `RxSubject` lag counters.
+- `CARGO_TARGET_DIR=/tmp/ctox-rxdb-m15-target cargo test --manifest-path src/core/rxdb/Cargo.toml change_event_buffer::tests::lagged_marker_invalidates_incremental_buffer -- --nocapture`
+  passed on 2026-06-26: 1 test, 0 failures.
+- `CARGO_TARGET_DIR=/tmp/ctox-rxdb-m15-target cargo test --manifest-path src/core/rxdb/Cargo.toml replication_protocol::index_mod::tests::storage_master_change_stream_lag_maps_to_resync -- --nocapture`
+  passed on 2026-06-26: 1 test, 0 failures.
+- `CARGO_TARGET_DIR=/tmp/ctox-rxdb-m15-target cargo test --manifest-path src/core/rxdb/Cargo.toml replication_protocol::index_mod::tests -- --nocapture`
+  passed on 2026-06-26: 4 tests, 0 failures, including slow master-change
+  peer checkpoint recovery after lag.
+- `CARGO_TARGET_DIR=/tmp/ctox-rxdb-m15-target cargo test --manifest-path src/core/rxdb/Cargo.toml -- --test-threads=1 --nocapture`
+  passed on 2026-06-26: 271 unit tests and 30 conformance tests.
+- `cargo fmt --check --manifest-path src/core/rxdb/Cargo.toml`
+  passed on 2026-06-26.
+- `node src/apps/business-os/rxdb/tests/run-all.mjs`
+  passed on 2026-06-26 after the native `RxSubject` change: 47 passed,
+  0 failed, 2 skipped because the wire daemon was not built.
 
 Acceptance:
 
@@ -1880,10 +1919,14 @@ Implementation status:
   `getChangedDocumentsSince()` advances through excluded remote-origin rows and
   hits its scan budget without local documents, the push loop continues from
   the advanced checkpoint instead of stopping until a future write/timer.
-- Still open: broader local-write debounce/coalescing for real local writes
-  and bulk browser chunk uploads. Sidecar eviction still uses per-collection
-  fixed timers; if idle profiles show the cached-stat wakeups are still visible,
-  move it to shared/write-triggered scheduling.
+- Done on 2026-06-26 for local-write push bursts: local collection change
+  events schedule a short coalesced push timer instead of calling
+  `pushToRemotePeers()` immediately for every write. A recovery smoke proves
+  three local write triggers produce one push pass while the existing in-flight
+  push re-run flag remains covered.
+- Still open: bulk browser chunk uploads. Sidecar eviction still uses
+  per-collection fixed timers; if idle profiles show the cached-stat wakeups
+  are still visible, move it to shared/write-triggered scheduling.
 
 Validation:
 
@@ -1908,12 +1951,21 @@ Finish the transport-status cleanup:
 - keep counters cheap and live;
 - lazily build heavy snapshots only when observers/diagnostics UI need them;
 - reduce per-collection diagnostic fanout;
-- optimize `encodedSize` and chunk reassembly bookkeeping.
+- Done on 2026-06-26: `encodedSize()` now computes UTF-8 byte length without
+  allocating `TextEncoder` buffers and keeps byte-parity coverage for ASCII,
+  multibyte, emoji, and lone-surrogate strings.
+- Done on 2026-06-26: incoming frame reassembly now keeps an incremental
+  `contiguousSeq` per transfer. ACK/resume bookkeeping no longer rescans the
+  received chunk map from frame 0 on each chunk; final payload assembly remains
+  one O(n) pass when all chunks have arrived.
 - expose file-fetch chunk streams/ranges to browser consumers so large previews,
   hashing, imports, and integrity checks do not materialize the entire file in
   memory unless the caller explicitly requests a full blob.
-- batch or parallelize `collection_checkpoints_payload` work during
-  reconnect/handshake across many collections.
+- Done on 2026-06-26: multiplexed protocol handshakes collect per-collection
+  schema/checkpoint maps with bounded parallelism instead of awaiting each
+  collection serially. The concurrency cap prevents a reconnect from launching
+  unbounded IndexedDB/storage reads while removing the one-await-per-collection
+  fanout.
 - enforce/cap `rxdb.query.fetch` request windows before query execution.
   Done on 2026-06-25.
 - stream/send `rxdb.query.fetch` frames from stream-capable storage paths as
@@ -1976,6 +2028,24 @@ Validation:
   passed on 2026-06-26: 265 unit tests and 30 conformance tests, 0 failures.
 - `node src/apps/business-os/rxdb/tests/run-all.mjs` passed on 2026-06-26:
   49 tests, 0 failures, 0 skipped.
+- `node src/apps/business-os/rxdb/tests/frame-chunking-smoke.mjs` passed on
+  2026-06-26 after adding allocation-free `encodedSize()` parity coverage.
+- `node src/apps/business-os/rxdb/tests/run-all.mjs` passed on 2026-06-26 after
+  the `encodedSize()` change: 47 tests passed, 0 failed, 2 skipped because the
+  wire daemon was not built in this target path.
+- `node src/apps/business-os/rxdb/tests/frame-chunking-smoke.mjs` passed on
+  2026-06-26 after adding incremental frame ACK bookkeeping coverage.
+- `node src/apps/business-os/rxdb/tests/no-package-manager-import-smoke.mjs`
+  passed on 2026-06-26 after exercising large framed transfer reassembly through
+  `createCtoxWebRtcNativePeer`.
+- `node src/apps/business-os/rxdb/tests/run-all.mjs` passed on 2026-06-26 after
+  the frame hot-path changes: 47 tests passed, 0 failed, 2 skipped because the
+  wire daemon was not built in this target path.
+- `node src/apps/business-os/rxdb/tests/handshake-checkpoints-parallel-smoke.mjs`
+  passed on 2026-06-26.
+- `node src/apps/business-os/rxdb/tests/run-all.mjs` passed on 2026-06-26 after
+  the checkpoint fanout change: 48 tests passed, 0 failed, 2 skipped because the
+  wire daemon was not built in this target path.
 
 Acceptance:
 
@@ -2046,11 +2116,19 @@ Status on 2026-06-26:
   `upsert_command_projection_from_queue_status`, and
   `repair_inline_payload_artifacts` now use the cached writer path.
 - `push_collection_records` now reuses one Business OS core-store connection
-  for non-command documents in one incoming batch.
+  and one SQLite transaction for non-command documents in one incoming batch.
+- `pull_collection_record` now uses keyed single-record lookups for the
+  Business OS core store, the RxDB-table fallback, and the `communication_*`
+  projection collections. It no longer loads a 2,000-row window and searches
+  it in-process for those paths.
+- `invoices_list_due_invoices` now reads due invoice IDs through a partial
+  expression index over `accounting_invoices` state, due date, open cents, and
+  record ID. The Dunning run no longer performs a broad invoice payload scan
+  and post-query JSON deserialization for due-invoice filtering.
 - Remaining work: thread the cached writer through broader command-acceptance
-  fanout paths, add explicit SQLite open/statement counters, transaction-batch
-  `push_collection_records`, and keep a larger 100-row O(tables) guard for
-  release.
+  fanout paths, add explicit SQLite open/statement counters, add command-path
+  batching where semantics allow, and keep a larger 100-row O(tables) guard
+  for release.
 
 Validation:
 
@@ -2059,6 +2137,11 @@ Validation:
 - `CARGO_TARGET_DIR=/tmp/ctox-store-perf-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox rxdb_projection_writer_cache_reuses_table_metadata_for_batch -- --nocapture`
 - `CARGO_TARGET_DIR=/tmp/ctox-store-perf-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox module_lifecycle_projection_repair -- --nocapture`
 - `CARGO_TARGET_DIR=/tmp/ctox-store-perf-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox repair_queue_projections_ -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/ctox-store-perf-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox push_collection_records_batches_non_command_store_writes_in_one_transaction -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/ctox-store-perf-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox pull_collection_record_uses_keyed_rxdb_fallback_without_scan_window -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/ctox-store-perf-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox communication_record_projection_uses_keyed_lookup -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/ctox-store-perf-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox due_invoice_query_uses_partial_invoice_index -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/ctox-store-perf-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox dunning_run_creates_letters_for_overdue_invoices -- --nocapture`
 
 Acceptance:
 
@@ -2128,11 +2211,16 @@ Current measurement:
 
 Tasks:
 
-1. Batch `syncTrackedMessages` lookups and debounce command/queue triggers.
-2. Remove the fixed 4 second `syncTrackedMessages` polling interval, or
-   justify it as a bounded slow fallback that is disarmed when there are no
-   tracked command/task messages.
-3. Arm chat scheduler intervals only when scheduled messages/countdowns exist.
+1. Done on 2026-06-26: batch `syncTrackedMessages` lookups and debounce
+   command/queue triggers. A shared JS regression seeds 40 tracked messages and
+   asserts one `find()` against `business_commands`, one `find()` against
+   `ctox_queue_tasks`, and zero `findOne()` fallback calls.
+2. Done on 2026-06-26 for the fixed 4 second `syncTrackedMessages` polling
+   interval: it is now disarmed unless active tracked messages exist, while
+   command/queue subscriptions are coalesced into one in-flight sync.
+3. Done on 2026-06-26: arm chat scheduler intervals only when scheduled
+   messages/countdowns exist, and clear the previous global 1 second interval
+   during scheduler init/cleanup.
 4. Move layout reads/writes behind one `requestAnimationFrame`.
 5. Add Map indexes, cached search haystacks, and debounced search inputs for:
    - Matching;
@@ -2168,13 +2256,25 @@ Communication:
   split work outside the already-fixed native IMAP command path;
 - use UIDVALIDITY-aware watermarks, provider delta tokens, and IMAP IDLE where
   appropriate;
-- reuse SQLite store connections.
+- Done on 2026-06-26: SQLiteStore hot paths reuse the thread-local cached
+  connection across IMAP message/mailbox methods plus SMTP queue, CalDAV,
+  CardDAV, and greylist operations; only schema `init()` directly opens a
+  connection.
 
 Execution gateway:
 
-- inspect event kind before cloning/deserializing;
-- accumulate API cost usage and write once per turn;
-- reuse tokenization preflight results.
+- Done on 2026-06-26: direct session inspects event kind before cloning or
+  deserializing, and drops high-frequency stream delta/no-op events early;
+- Done on 2026-06-26: direct-session `TokenCount` API cost usage is accumulated
+  per turn and written through one batch transaction instead of opening the DB
+  and inserting per event;
+- Done on 2026-06-26: turn-loop exact tokenization preflight results are passed
+  into the direct session, so the main worker turn does not run the same
+  blocking local `/tokenize` HTTP preflight twice; continuity/review turns
+  still use the internal preflight when no caller-provided count exists.
+  Validation:
+  `cargo test --bin ctox exact_prompt_preflight_reuses_precomputed_count`,
+  `cargo test --bin ctox exact_prompt`, and `cargo check --bin ctox`.
 - avoid provider-adapter transcript clone/parse/re-serialize work when the
   transcript is already in the internal array representation.
 
@@ -2189,19 +2289,50 @@ Mission/report:
 
 - batch ticket assignment hydration;
 - thread one DB connection through projection helpers;
-- remove redundant sorts and per-row DB opens.
-- cache or precompute spill-candidate scoring inputs;
-- make queue-scope cleanup keyed/batched rather than repeated broad scans.
+- Done on 2026-06-26: `report/runs.rs::list_runs` no longer re-sorts rows in
+  Rust after SQL already returned `ORDER BY updated_at DESC`;
+- remove remaining per-row DB opens.
+- Done on 2026-06-26: `queue spill-candidates` batches queue-ticket bridge
+  state and distinct failure-signature counts through one core DB connection
+  instead of reopening/counting per candidate;
+- Done on 2026-06-26: `emit_due_steps` reuses one opened plan DB connection
+  across due goals, and the due-step idle gate is keyed by plan DB path instead
+  of one global slot.
+- Done on 2026-06-26: `list_queue_ticket_bridges` hydrates queue tasks and
+  ticket self-work items in set-based batches using the already-open core DB
+  connection instead of reopening channel/ticket DBs per bridge row.
+- Done on 2026-06-26: `cleanup_queue_scope` and `assert_clean_queue_scope`
+  batch-load scanned queue-task metadata through one read-only Core DB
+  connection instead of reopening the DB per task.
 
 Process/runtime utilities:
 
-- remove per-call process-mining SQLite authorizer env-var allocation;
-- canonicalize working-hours cache keys once and avoid repeated filesystem
-  canonicalization.
-- cache or keep a long-lived read path for LCM/status row reads so residual
-  status polling does not reopen SQLite on the UI cadence.
+- Done on 2026-06-26: process-mining SQLite authorizer read-recording policy is
+  captured when the authorizer is attached, so column-read callbacks no longer
+  call `std::env::var`.
+- Done on 2026-06-26: absolute working-hours root cache keys are canonicalized
+  once per root and reused across snapshot/cache-hit calls.
+- Done on 2026-06-26: live daemon status polls keep a stamp-backed durable
+  status snapshot keyed by Core DB and ticket-store change stamps; unchanged
+  status stores now reuse the cached queue/ticket/LCM outcome snapshot even
+  after the short TTL instead of reopening SQLite on UI cadence.
 - track the orphaned `report/{scoring,claims,...}` module island as cleanup so
   dead code does not keep reappearing in performance audits.
+
+Validation:
+
+- `CARGO_TARGET_DIR=/tmp/ctox-phase7-low-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox sqlite_authorizer_skips_read_events_by_default -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/ctox-phase7-low-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox work_hours_cache_key_reuses_absolute_root_resolution -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/ctox-phase7-low-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox emit_due -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/ctox-phase7-low-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox spill_ -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/ctox-phase7-low-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox queue_ticket_bridge_list_batch_hydrates_tasks_and_tickets -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/ctox-phase7-low-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox cleanup_scope_batches_metadata_reads_for_scanned_tasks -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/ctox-phase7-low-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox api_costs::tests -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/ctox-phase7-low-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox durable_status_snapshot_reuses_unchanged_store_after_ttl -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/ctox-phase7-low-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox service_status -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/ctox-mailserver-m17-target cargo test --manifest-path src/core/mailserver/Cargo.toml store::sqlite -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/ctox-mailserver-m17-target cargo test --manifest-path src/core/mailserver/Cargo.toml imap -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/ctox-mailserver-m17-target cargo test --manifest-path src/core/mailserver/Cargo.toml -- --nocapture`
 
 Acceptance:
 
@@ -2223,8 +2354,8 @@ finding.
 | Severity | Rows tracked here | Fixed | Partial | Open | Deferred | Rejected/Missing |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | High named findings | 6 | 2 | 1 | 3 | 0 | 0 |
-| Medium | 31 | 8 | 7 | 16 | 0 | 0 |
-| Low | 35 | 3 | 6 | 26 | 0 | 0 |
+| Medium | 31 | 10 | 7 | 14 | 0 | 0 |
+| Low | 35 | 21 | 4 | 10 | 0 | 0 |
 
 ### High And Medium Coverage
 
@@ -2232,8 +2363,8 @@ finding.
 | --- | --- | --- | --- |
 | H1 | partial | Simple/native SQL selectors, count, capped query-fetch windows, read-only reads, and native query-fetch fallback rejection are reduced; broader planner/index guards remain. | Phase 2, P0 |
 | H2 | fixed | Native WebRTC status is skinny and sync-layer diagnostics are coalesced. | Phase 3.3 |
-| H3 | fixed | Exact IMAP server FETCH/STORE full-body overfetch is fixed with summaries/body-on-demand. Broader mail work is tracked by M17/M19. | Phase 1.5 |
-| H4 | open | `syncTrackedMessages` still needs batched lookups and debounced triggers. | Phase 6 |
+| H3 | fixed | Exact IMAP server FETCH/STORE full-body overfetch is fixed with summaries/body-on-demand. Broader mail sync work is tracked by M19. | Phase 1.5 |
+| H4 | partial | Browser `syncTrackedMessages` now batches command/task lookups and coalesces triggers; the scheduled-chat timer only arms while scheduled messages exist. Remaining Chat work is DOM reconciliation, layout batching, and listener cleanup. | Phase 6 |
 | H5 | open | Matching search/scoring still needs Maps, cached haystacks, debounce, and tests. | Phase 6 |
 | H6 | open | Outbound table still needs memoized pipeline and `pipelineByCompanyId`. | Phase 6 |
 | M1 | partial | Native expressible selector counts use SQL; browser non-indexed selector counts still cursor-scan. | Phase 2.1, Phase 3.1 |
@@ -2243,64 +2374,64 @@ finding.
 | M5 | fixed | Native stale desktop chunk prune uses deterministic primary-key range selection with query-plan guard. | Phase 2.4 |
 | M6 | partial | Native eager chunk generation/redaction uses bulk upserts; large payload materialization and browser chunk writes remain. | Phase 2.4, Phase 3.2 |
 | M7 | fixed | Demand-cache invalidation uses reverse document-to-window refs and WebRTC remote-write batches invalidate once. | Phase 3.2 |
-| M8 | open | Browser single-document writes still do redundant read/write/read work. | Phase 3.4 |
-| M9 | open | Collection subscriptions still re-run full queries instead of applying changed-ID deltas. | Phase 3.4 |
+| M8 | fixed | Browser `storage-indexeddb.upsert()` no longer does read/write/read; `bulkUpsert` now uses one storage batch path and one IndexedDB transaction. Complex subscription deltas remain separate M9 work. | Phase 3.4 |
+| M9 | partial | Collection subscriptions and primary-key `findOne().$` apply changed-ID deltas; complex query subscriptions still re-run full queries. | Phase 3.4 |
 | M10 | partial | Primary-key equality/`$in`, schema-index equality/range/sort shapes, and finite unsorted limits are bounded; non-indexed selectors and subscription re-query paths remain. | Phase 3.1 |
 | M11 | open | Inference descriptor arena reuse remains. | Phase 7 |
 | M12 | open | Inference graph/context reuse remains. | Phase 7 |
-| M13 | open | Stream event parsing still clones/deserializes before filtering high-frequency no-op events. | Phase 7 |
+| M13 | fixed for stream delta/no-op path | Direct session now filters high-frequency stream delta/no-op events before payload clone/deserialization and keeps consumed agent-message parsing covered by tests. | Phase 7 |
 | M14 | fixed | Native file-fetch stream no longer parks runtime workers with `block_on`/`thread::sleep`. | Phase 3.3 |
-| M15 | open | `RxSubject` backpressure/lagged-resync strategy remains. | Phase 2.3.1 |
+| M15 | fixed for native RxSubject fanout | Native `RxSubject` uses a bounded ring with lag counters; recoverable storage change streams emit lag markers that invalidate incremental query buffers and map to replication `RESYNC`; process-wide lag totals are surfaced through native peer performance and idle-probe assertions; targeted slow-peer checkpoint-recovery coverage exists. Installed/integration slow-peer soak evidence remains. | Phase 2.3.1 |
 | M16 | fixed | Mailbox/received index and summary/count query-plan guard exist. | Phase 1.5 |
-| M17 | open | Mailserver store hot paths still need shared connection reuse. | Phase 7 |
+| M17 | fixed | SQLiteStore hot paths now reuse the thread-local cached connection across IMAP message/mailbox methods plus SMTP queue, CalDAV, CardDAV, and greylist operations; only schema `init()` directly opens a connection. | Phase 7 |
 | M18 | fixed | Send verification uses header search/header fetch instead of full `RFC822` polling. | Phase 1.5 |
 | M19 | partial | UID watermarks reduce steady scans after first import; IDLE, UIDVALIDITY, delta tokens, and first-import behavior remain. | Phase 1.5 |
-| M20 | open | Ticket work-item assignment hydration remains N+1. | Phase 7 |
-| M21 | open | Ticket projection still needs connection-threaded list helpers. | Phase 7 |
+| M20 | partial | Self-work list/projection assignment hydration is set-based; broader ticket/queue paths remain. | Phase 7 |
+| M21 | fixed for direct projection | Direct Business OS ticket projection buckets reuse one ticket DB connection, including control bundles; non-projection ticket/queue helper audits remain separate. | Phase 7 |
 | M22 | open | Chat message DOM rebuild/signature work remains. | Phase 6 |
 | M23 | open | Window drag geometry read/write batching remains. | Phase 6 |
-| M24 | fixed | Sync-layer diagnostic snapshots are coalesced and urgent-only immediate. | Phase 3.3 |
+| M24 | partial | Sync-layer diagnostic snapshots are coalesced, but observer/fanout counters and remaining transport-status sanitize/record cost still need release evidence. | Phase 3.3 |
 | M25 | open | Spreadsheet HyperFormula lifecycle remains. | Phase 6 |
 | M26 | open | Matching requirements Maps/reconcile work remains. | Phase 6 |
 | M27 | open | Buchhaltung pre-aggregation and targeted reloads remain. | Phase 6 |
 | M28 | open | Customers debounced center-only render/shared summaries remain. | Phase 6 |
 | M29 | partial | Cached projection writer covers repair/fanout paths; broader command-acceptance fanout paths and open/statement counters remain. | Phase 4, P1 |
-| M30 | fixed | `synchronous=NORMAL` is set in checked central stores. | Phase 0/1 |
-| M31 | partial | Normal status path process scans are cached; residual status DB/cache and utility costs remain. | Phase 7 |
+| M30 | fixed for checked central stores | `synchronous=NORMAL` is set in checked central stores; direct helper guard work remains. | Phase 0/1 |
+| M31 | fixed for status idle path | Normal status path process scans are cached; explicit lifecycle/probe scans remain intentional. | Phase 7 |
 
 ### Low Coverage
 
 | ID | Review finding | Status | Plan owner |
 | --- | --- | --- | --- |
-| L-store-1 | `push_collection_records` opens SQLite per document | partial | One incoming non-command batch now reuses one core-store connection; transaction batching and counters remain. |
+| L-store-1 | `push_collection_records` opens SQLite per document | partial | One incoming non-command batch now reuses one core-store connection and one transaction; command-path batching and production open/statement counters remain. |
 | L-store-2 | `complete_ready_documents_report_commands` command scan | partial | Phase 1.4, Phase 4 |
 | L-store-3 | `find_queue_task_for_command` substring scan | partial | Phase 1.4 |
-| L-store-4 | `invoices_list_due_invoices` broad invoice scan | open | Phase 4 |
-| L-store-5 | `pull_collection_record` loads 2000 docs then linear-scans | open | Phase 4 |
-| L-service-1 | Status poll opens fresh LCM SQLite connection | partial | Phase 7 |
+| L-store-4 | `invoices_list_due_invoices` broad invoice scan | fixed | Dunning due-invoice lookup now uses a partial `accounting_invoices` expression index over state, due date, open cents, and record ID; a query-plan test guards index use. |
+| L-store-5 | `pull_collection_record` loads 2000 docs then linear-scans | fixed | Core-store lookup was already keyed; RxDB fallback and `communication_*` projection single-record paths now use keyed primary-key lookups, with regression tests for records beyond the old 2,000-row window and communication records. |
+| L-service-1 | Status poll opens fresh LCM SQLite connection | fixed for live daemon status path | Live status polls now reuse a stamp-backed durable status snapshot across unchanged Core DB and ticket stores, with regression coverage proving unchanged polls do not reload the durable snapshot or reopen LCM outcome reads after TTL. |
 | L-service-2 | `count_queue_tasks` opens fresh DB on status poll | fixed | Phase 1.4 |
 | L-service-3 | Business OS app recovery scan on idle status poll | fixed | Phase 1.1 |
-| L-service-4 | Process-mining SQLite authorizer reads env per column | open | Phase 7 |
-| L-service-5 | `working_hours` canonicalizes cache-hit path | open | Phase 7 |
+| L-service-4 | Process-mining SQLite authorizer reads env per column | fixed | Read-recording policy is captured once in the authorizer closure at attach time; read callbacks no longer call `std::env::var`. |
+| L-service-5 | `working_hours` canonicalizes cache-hit path | fixed | Absolute working-hours root canonicalization is cached per root; a regression test covers stable reuse. |
 | L-rxdb-native-1 | Business command consumer status scan | fixed | Phase 1.4 |
 | L-rxdb-native-2 | `bulk_write` per-id current-state point query | fixed | Phase 2.3 |
-| L-browser-1 | `encodedSize()` allocates/encodes per frame | open | Phase 3.3 |
-| L-browser-2 | Local writes push immediately with scan multiplier | partial | Phase 3.2 |
-| L-browser-3 | Chunk reassembly recomputes contiguous sequence O(n^2) | open | Phase 3.3 |
+| L-browser-1 | `encodedSize()` allocates/encodes per frame | fixed | WebRTC `encodedSize()` now computes UTF-8 byte length without allocating `TextEncoder` buffers; frame-chunking smoke covers byte parity and bundle rebuild reproducibility. |
+| L-browser-2 | Local writes push immediately with scan multiplier | fixed for immediate-push burst path | Phase 3.2 |
+| L-browser-3 | Chunk reassembly recomputes contiguous sequence O(n^2) | fixed | Incoming frame reassembly keeps incremental `contiguousSeq` ACK state per transfer instead of rescanning received chunks on every frame; final payload assembly is one pass at completion. |
 | L-infer-1 | Metal dispatch string key + locked linear PSO lookup | open | Phase 7 |
 | L-infer-2 | Host argmax over full vocab per slot | open | Phase 7 |
 | L-infer-3 | CPU token embedding dequant per decode step | open | Phase 7 |
-| L-exec-1 | API cost recording opens DB/inserts per TokenCount event | open | Phase 7 |
-| L-exec-2 | Tokenize preflight runs blocking HTTP twice | open | Phase 7 |
+| L-exec-1 | API cost recording opens DB/inserts per TokenCount event | fixed for direct-session TokenCount path | Direct-session `TokenCount` events now accumulate API cost records in memory for the turn and flush them through `record_api_model_usage_batch` with one DB open and one transaction; regression coverage asserts multiple records use one DB open and zero-token records use none. |
+| L-exec-2 | Tokenize preflight runs blocking HTTP twice | fixed | Turn-loop exact preflight counts are now reused by the direct-session main turn, and regression coverage proves a precomputed count bypasses the runtime/tokenizer path. |
 | L-exec-3 | Runtime-env entry points bypass cache | partial | Phase 1.2, Phase 7 |
 | L-exec-4 | Provider adapters clone/parse/re-serialize transcript | open | Phase 7 |
-| L-async-1 | `collection_checkpoints_payload` sequential checkpoint awaits | open | Phase 3.3 |
-| L-mission-1 | Spill-candidate scoring fresh DB/count per task | open | Phase 7 |
-| L-mission-2 | `emit_due_steps` reopens plan DB per due goal | open | Phase 7 |
-| L-mission-3 | `list_queue_ticket_bridges` reopens DBs per row | open | Phase 7 |
-| L-mission-4 | `cleanup_queue_scope` re-queries metadata per task | open | Phase 7 |
-| L-mission-5 | `list_runs` re-sorts after SQL order | open | Phase 7 |
-| L-shell-1 | Chat scheduler fixed 1 s interval | open | Phase 6 |
+| L-async-1 | `collection_checkpoints_payload` sequential checkpoint awaits | fixed | Multiplexed protocol handshakes collect per-collection schema/checkpoint maps with bounded parallelism; the new smoke proves slow checkpoint reads start concurrently. |
+| L-mission-1 | Spill-candidate scoring fresh DB/count per task | fixed | `queue spill-candidates` now batches bridge-state lookup and distinct failure-signature counts through one core DB connection, with a regression test asserting one bridge/core DB open for the candidate scan. |
+| L-mission-2 | `emit_due_steps` reopens plan DB per due goal | fixed | `emit_due_steps` now reuses one plan DB connection across due goals; the due-step scan gate is keyed per plan DB path and has regression coverage for multi-goal emission plus idle-gate isolation. |
+| L-mission-3 | `list_queue_ticket_bridges` reopens DBs per row | fixed | Bridge listing now uses the open core DB connection to batch-load queue tasks and ticket self-work items, with regression coverage proving no extra channel/ticket DB opens during list hydration. |
+| L-mission-4 | `cleanup_queue_scope` re-queries metadata per task | fixed | `cleanup_queue_scope` and `assert_clean_queue_scope` now batch-load scanned queue-task metadata through one read-only Core DB connection, with regression coverage asserting one metadata DB open for multiple scanned tasks. |
+| L-mission-5 | `list_runs` re-sorts after SQL order | fixed | `report/runs.rs::list_runs` now returns the SQL `ORDER BY updated_at DESC` result directly. |
+| L-shell-1 | Chat scheduler fixed 1 s interval | fixed | Phase 6 |
 | L-shell-2 | Chat scroll/resize/drag unthrottled layout work | open | Phase 6 |
 | L-shell-3 | Reporter duplicate high-frequency activity listeners | open | Phase 6 |
 | L-shell-4 | Startup progress 16 ms interval creep | open | Phase 6 |
@@ -2377,21 +2508,21 @@ The performance problem is structurally fixed only when:
    explicit browser spies for unexpected non-indexed `allDocuments()` fallback,
    demand-loaded unbounded query/paged cursor semantics, Advanced Status
    representative query guards, shared/write-triggered sidecar eviction
-   scheduling if cached-stat timer wakes still show up, remaining local-write
-   debounce/coalescing, subscription changed-ID deltas, chunk-stream/range
+   scheduling if cached-stat timer wakes still show up, remaining local push
+   scan/fallback counters, complex subscription deltas, chunk-stream/range
    file-fetch consumers, chunk bookkeeping, and bulk browser chunk uploads.
 5. Fix remaining projection-writer and DB-growth fundamentals:
    thread the cached RxDB projection writer through broader command-acceptance
-   fanout helpers, add open/statement counters, transaction-batch
-   `push_collection_records`,
+   fanout helpers, add open/statement counters, finish command-path batching,
    define replication-horizon-safe tombstone/chunk retention, add attachment
    reference retention, define WAL/freelist maintenance with operator-facing
    DB-size diagnostics, and prove the current `desktop_files` tombstone /
    `desktop_file_chunks` payload footprint shrinks after a documented idle
    maintenance window without breaking offline browser reconnect.
 6. Keep the remaining 2026-06-24 review work explicit:
-   Business Chat 4 second tracking interval, module/UI keystroke guards,
-   mailserver connection reuse, provider transcript clone reduction,
+   Business Chat active-collection lifecycle and DOM render guards,
+   module/UI keystroke guards,
+   remaining mailserver UID/IDLE/delta-token work, provider transcript clone reduction,
    LCM/status read caching, ticket assignment hydration, and the orphaned
    report module cleanup must not be treated as implicitly covered by the
    lower-level RxDB work.

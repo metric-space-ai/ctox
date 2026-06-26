@@ -23,11 +23,18 @@ pub(crate) enum CommunicationAdapterBackend {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommunicationAdapterKind {
+    Discord,
     Email,
+    GoogleChat,
     Jami,
+    Matrix,
+    Mattermost,
     Meeting,
+    Slack,
     Teams,
+    Telegram,
     Whatsapp,
+    Zulip,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -106,34 +113,145 @@ const WHATSAPP_RUNTIME_ENV_KEYS: &[&str] = &[
     "CTO_WHATSAPP_HISTORY_SYNC_ENABLED",
 ];
 
+const SLACK_RUNTIME_ENV_KEYS: &[&str] = &[
+    "CTO_SLACK_API_BASE_URL",
+    "CTO_SLACK_BOT_TOKEN",
+    "CTO_SLACK_APP_TOKEN",
+    "CTO_SLACK_SIGNING_SECRET",
+    "CTO_SLACK_WORKSPACE_ID",
+    "CTO_SLACK_BOT_USER_ID",
+    "CTO_SLACK_CHANNEL_ID",
+    "CTO_SLACK_CHANNEL_IDS",
+    "CTO_SLACK_LIMIT",
+];
+
+const DISCORD_RUNTIME_ENV_KEYS: &[&str] = &[
+    "CTO_DISCORD_API_BASE_URL",
+    "CTO_DISCORD_BOT_TOKEN",
+    "CTO_DISCORD_APPLICATION_ID",
+    "CTO_DISCORD_BOT_USER_ID",
+    "CTO_DISCORD_GUILD_ID",
+    "CTO_DISCORD_GUILD_IDS",
+    "CTO_DISCORD_CHANNEL_ID",
+    "CTO_DISCORD_CHANNEL_IDS",
+    "CTO_DISCORD_LIMIT",
+];
+
+const TELEGRAM_RUNTIME_ENV_KEYS: &[&str] = &[
+    "CTO_TELEGRAM_API_BASE_URL",
+    "CTO_TELEGRAM_BOT_TOKEN",
+    "CTO_TELEGRAM_BOT_USERNAME",
+    "CTO_TELEGRAM_CHAT_ID",
+    "CTO_TELEGRAM_CHAT_IDS",
+    "CTO_TELEGRAM_LIMIT",
+];
+
+const MATRIX_RUNTIME_ENV_KEYS: &[&str] = &[
+    "CTO_MATRIX_HOMESERVER_URL",
+    "CTO_MATRIX_ACCESS_TOKEN",
+    "CTO_MATRIX_USER_ID",
+    "CTO_MATRIX_ROOM_ID",
+    "CTO_MATRIX_ROOM_IDS",
+    "CTO_MATRIX_LIMIT",
+];
+
+const MATTERMOST_RUNTIME_ENV_KEYS: &[&str] = &[
+    "CTO_MATTERMOST_SERVER_URL",
+    "CTO_MATTERMOST_API_BASE_URL",
+    "CTO_MATTERMOST_BOT_TOKEN",
+    "CTO_MATTERMOST_ACCESS_TOKEN",
+    "CTO_MATTERMOST_BOT_USERNAME",
+    "CTO_MATTERMOST_BOT_USER_ID",
+    "CTO_MATTERMOST_TEAM_ID",
+    "CTO_MATTERMOST_CHANNEL_ID",
+    "CTO_MATTERMOST_CHANNEL_IDS",
+    "CTO_MATTERMOST_LIMIT",
+];
+
+const ZULIP_RUNTIME_ENV_KEYS: &[&str] = &[
+    "CTO_ZULIP_REALM_URL",
+    "CTO_ZULIP_BOT_EMAIL",
+    "CTO_ZULIP_EMAIL",
+    "CTO_ZULIP_API_KEY",
+    "CTO_ZULIP_STREAM",
+    "CTO_ZULIP_STREAMS",
+    "CTO_ZULIP_TOPIC",
+    "CTO_ZULIP_LIMIT",
+];
+
+const GOOGLE_CHAT_RUNTIME_ENV_KEYS: &[&str] = &[
+    "CTO_GOOGLE_CHAT_API_BASE_URL",
+    "CTO_GOOGLE_CHAT_ACCESS_TOKEN",
+    "CTO_GOOGLE_CHAT_USER",
+    "CTO_GOOGLE_CHAT_APP_ID",
+    "CTO_GOOGLE_CHAT_SPACE_NAME",
+    "CTO_GOOGLE_CHAT_SPACE_NAMES",
+    "CTO_GOOGLE_CHAT_LIMIT",
+];
+
 impl CommunicationAdapterKind {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn spec(self) -> CommunicationAdapterSpec {
         match self {
+            Self::Discord => CommunicationAdapterSpec {
+                kind: self,
+                backend: CommunicationAdapterBackend::NativeRust,
+                runtime_env_keys: DISCORD_RUNTIME_ENV_KEYS,
+            },
             Self::Email => CommunicationAdapterSpec {
                 kind: self,
                 backend: CommunicationAdapterBackend::NativeRust,
                 runtime_env_keys: EMAIL_RUNTIME_ENV_KEYS,
+            },
+            Self::GoogleChat => CommunicationAdapterSpec {
+                kind: self,
+                backend: CommunicationAdapterBackend::NativeRust,
+                runtime_env_keys: GOOGLE_CHAT_RUNTIME_ENV_KEYS,
             },
             Self::Jami => CommunicationAdapterSpec {
                 kind: self,
                 backend: CommunicationAdapterBackend::NativeRust,
                 runtime_env_keys: JAMI_RUNTIME_ENV_KEYS,
             },
+            Self::Matrix => CommunicationAdapterSpec {
+                kind: self,
+                backend: CommunicationAdapterBackend::NativeRust,
+                runtime_env_keys: MATRIX_RUNTIME_ENV_KEYS,
+            },
+            Self::Mattermost => CommunicationAdapterSpec {
+                kind: self,
+                backend: CommunicationAdapterBackend::NativeRust,
+                runtime_env_keys: MATTERMOST_RUNTIME_ENV_KEYS,
+            },
             Self::Meeting => CommunicationAdapterSpec {
                 kind: self,
                 backend: CommunicationAdapterBackend::NativeRust,
                 runtime_env_keys: MEETING_RUNTIME_ENV_KEYS,
+            },
+            Self::Slack => CommunicationAdapterSpec {
+                kind: self,
+                backend: CommunicationAdapterBackend::NativeRust,
+                runtime_env_keys: SLACK_RUNTIME_ENV_KEYS,
             },
             Self::Teams => CommunicationAdapterSpec {
                 kind: self,
                 backend: CommunicationAdapterBackend::NativeRust,
                 runtime_env_keys: TEAMS_RUNTIME_ENV_KEYS,
             },
+            Self::Telegram => CommunicationAdapterSpec {
+                kind: self,
+                backend: CommunicationAdapterBackend::NativeRust,
+                runtime_env_keys: TELEGRAM_RUNTIME_ENV_KEYS,
+            },
             Self::Whatsapp => CommunicationAdapterSpec {
                 kind: self,
                 backend: CommunicationAdapterBackend::NativeRust,
                 runtime_env_keys: WHATSAPP_RUNTIME_ENV_KEYS,
+            },
+            Self::Zulip => CommunicationAdapterSpec {
+                kind: self,
+                backend: CommunicationAdapterBackend::NativeRust,
+                runtime_env_keys: ZULIP_RUNTIME_ENV_KEYS,
             },
         }
     }
@@ -528,6 +646,39 @@ mod tests {
             CommunicationAdapterKind::Whatsapp.spec().backend,
             CommunicationAdapterBackend::NativeRust
         );
+    }
+
+    #[test]
+    fn new_chat_adapter_specs_do_not_add_runtime_feature_toggles() {
+        let new_chat_adapters = [
+            CommunicationAdapterKind::Slack,
+            CommunicationAdapterKind::Discord,
+            CommunicationAdapterKind::Telegram,
+            CommunicationAdapterKind::Matrix,
+            CommunicationAdapterKind::Mattermost,
+            CommunicationAdapterKind::Zulip,
+            CommunicationAdapterKind::GoogleChat,
+        ];
+        let forbidden_suffixes = [
+            "_ENABLED",
+            "_DISABLED",
+            "_ENABLE",
+            "_DISABLE",
+            "_FEATURE",
+            "_FEATURE_FLAG",
+            "_FLAG",
+            "_TOGGLE",
+        ];
+        for kind in new_chat_adapters {
+            for key in kind.spec().runtime_env_keys {
+                assert!(
+                    !forbidden_suffixes
+                        .iter()
+                        .any(|suffix| key.ends_with(suffix)),
+                    "{kind:?} runtime key {key} must stay credential/config data, not a production feature toggle"
+                );
+            }
+        }
     }
 
     #[test]

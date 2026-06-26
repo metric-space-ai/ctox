@@ -882,19 +882,6 @@ async function installMarketplaceItem(item, { update = false } = {}) {
   });
 }
 
-async function installTemplateItem(item) {
-  await runStoreCommand({
-    label: `Creating ${item.title}...`,
-    success: `${item.title} created from template.`,
-    commandType: 'ctox.module.install_template',
-    moduleId: item.id,
-    payload: {
-      template_id: item.id,
-      title: item.raw.default_title || item.title,
-    },
-  });
-}
-
 async function uninstallInstalledItem(item) {
   if (!canUninstallAppStoreItem(state, item)) {
     state.status = { kind: 'error', text: 'Du darfst diese App nicht entfernen.' };

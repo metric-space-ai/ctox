@@ -124,6 +124,7 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
   const stopAllBridges = async () => {
     const bridgePromises = [...bridges.values()];
     bridges.clear();
+    activeCollections.clear();
     const states = await Promise.allSettled(bridgePromises);
     for (const state of states) {
       if (state.status === 'fulfilled') {
@@ -312,6 +313,7 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
       }
     },
     async stopCollection(collection) {
+      activeCollections.delete(collection);
       const bridgePromise = bridges.get(collection);
       bridges.delete(collection);
       if (!bridgePromise) return false;
@@ -580,7 +582,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     recordCollection?.(collection, { status: 'pending', reason: 'collection-not-registered' });
     return { mode: 'pending', collection, reason: 'collection-not-registered' };
   }
-  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260626-chat-tracking-index-v1');
+  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260626-browser-runtime-retention-v1');
   if (typeof rxdb?.replicateWebRTC !== 'function' || typeof rxdb?.getConnectionHandlerSimplePeer !== 'function') {
     throw new Error('RxDB WebRTC bundle is missing replicateWebRTC/getConnectionHandlerSimplePeer');
   }

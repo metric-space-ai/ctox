@@ -404,6 +404,10 @@ fn mcp_auth_token(root: &Path) -> anyhow::Result<String> {
     Ok(value)
 }
 
+pub fn mcp_operator_auth_token(root: &Path) -> anyhow::Result<String> {
+    mcp_auth_token(root)
+}
+
 fn request_bearer_token(request: &Request) -> Option<String> {
     request
         .headers()

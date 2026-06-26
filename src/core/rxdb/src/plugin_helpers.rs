@@ -434,6 +434,16 @@ impl RxStorageInstance for ValidatingInstance {
         self.inner.query(prepared_query).await
     }
 
+    fn query_stream_into_blocking(
+        &self,
+        prepared_query: &Value,
+        chunk_size: usize,
+        on_batch: &mut (dyn FnMut(Vec<Value>) -> Result<bool, RxError> + Send),
+    ) -> Option<Result<(), RxError>> {
+        self.inner
+            .query_stream_into_blocking(prepared_query, chunk_size, on_batch)
+    }
+
     async fn count(&self, prepared_query: &Value) -> Result<RxStorageCountResult, RxError> {
         self.inner.count(prepared_query).await
     }

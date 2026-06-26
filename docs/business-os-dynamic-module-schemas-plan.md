@@ -202,7 +202,7 @@ Work:
 
 - Add a loader under `src/core/business_os/` that scans:
   `src/apps/business-os/modules/*/collections.schema.json` and
-  `src/apps/business-os/installed-modules/*/collections.schema.json`.
+  `runtime/business-os/installed-modules/*/collections.schema.json`.
 - Validate collection names, primary keys, indexes, schema versions, and JSON
   shape before registering.
 - Merge core and module collection creators.

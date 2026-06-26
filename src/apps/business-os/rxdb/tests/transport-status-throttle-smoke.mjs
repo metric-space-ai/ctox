@@ -48,7 +48,17 @@ assert(
   emissions.length === 3,
   `expected metadata burst to coalesce into one delayed emission, got ${emissions.length}`,
 );
-assert(emissions.at(-1).recentMessages.length === 20, 'coalesced metadata emission should retain recent messages');
+assert(
+  emissions.at(-1).recentMessages === undefined,
+  'default transport-status emissions must stay skinny and omit recent messages',
+);
+assert(
+  peer.getTransportStatus().rtcConnections === undefined,
+  'default getTransportStatus() must not build RTC connection snapshots',
+);
+const diagnostics = peer.getTransportStatus({ includeDiagnostics: true });
+assert(diagnostics.recentMessages.length === 20, 'explicit diagnostics snapshot should retain recent messages');
+assert(Array.isArray(diagnostics.rtcConnections), 'explicit diagnostics snapshot should include RTC connection snapshots');
 
 peer.close();
 

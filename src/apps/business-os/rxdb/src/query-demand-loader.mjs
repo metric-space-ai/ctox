@@ -167,22 +167,10 @@ export function createQueryDemandLoader({
     // ids is marked incomplete so the next exec triggers a remote refresh.
     async invalidateDocumentChange(changedDocumentIds = []) {
       if (!changedDocumentIds.length) return 0;
-      const all = await sidecar.backend.scanQueryWindows();
-      const ids = new Set(changedDocumentIds);
-      let invalidated = 0;
-      for (const window of all) {
-        if (window.collection !== collectionName) continue;
-        if (window.documentIds.some((id) => ids.has(id))) {
-          await sidecar.invalidateQueryWindow([
-            window.collection,
-            window.queryFingerprint,
-            window.offset,
-            window.limit,
-          ]);
-          invalidated += 1;
-        }
+      if (typeof sidecar.invalidateQueryWindowsForDocuments === 'function') {
+        return sidecar.invalidateQueryWindowsForDocuments(collectionName, changedDocumentIds);
       }
-      return invalidated;
+      return invalidateByScanningQueryWindows(sidecar, collectionName, changedDocumentIds);
     },
 
     // Wave 7 + production hardening: reconnect-cancel. Aborts all in-flight
@@ -258,6 +246,26 @@ export function createQueryDemandLoader({
       await multiTabBroker.release(windowKey);
     },
   };
+}
+
+async function invalidateByScanningQueryWindows(sidecar, collectionName, changedDocumentIds) {
+  const all = await sidecar.backend.scanQueryWindows();
+  const ids = new Set(changedDocumentIds.map((id) => String(id || '')).filter(Boolean));
+  let invalidated = 0;
+  for (const window of all) {
+    if (window.collection !== collectionName) continue;
+    const documentIds = Array.isArray(window.documentIds) ? window.documentIds : [];
+    if (documentIds.some((id) => ids.has(String(id || '')))) {
+      await sidecar.invalidateQueryWindow([
+        window.collection,
+        window.queryFingerprint,
+        window.offset,
+        window.limit,
+      ]);
+      invalidated += 1;
+    }
+  }
+  return invalidated;
 }
 
 function normalizeWindow(window, query) {

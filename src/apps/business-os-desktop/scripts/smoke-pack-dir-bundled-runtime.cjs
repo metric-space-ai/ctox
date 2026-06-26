@@ -66,10 +66,8 @@ function assertPackagedHelper(helperPath) {
 
 async function exercisePackagedHelper(helperPath) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ctox-business-os-desktop-packaged-runtime-"));
-  const target = path.join(tempRoot, "business-os");
   const desktopProfile = path.join(tempRoot, "desktop-profile");
   const registryPath = path.join(desktopProfile, "instances.json");
-  fs.mkdirSync(target, { recursive: true });
   fs.mkdirSync(desktopProfile, { recursive: true });
   const secrets = new Map();
   let registry = loadRegistry(registryPath);
@@ -94,15 +92,6 @@ async function exercisePackagedHelper(helperPath) {
     bundledCtoxCandidates: [helperPath],
   };
   try {
-    const install = await sourceManager().installLocalBusinessOs({
-      ...bundledOptions,
-      target,
-      noCopyEnv: true,
-    });
-    assert.equal(install.ok, true);
-    assert.equal(install.target, target);
-    assertFreshBusinessOsTarget(target);
-
     const inspect = await sourceManager().inspectLocalDaemon(bundledOptions);
     assert.equal(inspect.status, "available");
     assert.equal(inspect.ctoxBinary, helperPath);
@@ -139,16 +128,6 @@ function writeBundledCtoxHelper(helperPath) {
     "const fs = require('node:fs');",
     "const path = require('node:path');",
     "const args = process.argv.slice(2);",
-    "if (args[0] === 'business-os' && args[1] === 'install') {",
-    "  const targetIndex = args.indexOf('--target');",
-    "  const target = targetIndex >= 0 ? args[targetIndex + 1] : '';",
-    "  if (!target) { console.error('target required'); process.exit(2); }",
-    "  fs.mkdirSync(target, { recursive: true });",
-    "  fs.writeFileSync(path.join(target, 'ctox-business.json'), '{}\\n');",
-    "  fs.writeFileSync(path.join(target, '.ctox-business-install.json'), '{}\\n');",
-    "  console.log(JSON.stringify({ ok: true, target }));",
-    "  process.exit(0);",
-    "}",
     "if (args[0] === 'business-os' && args[1] === 'peer' && args[2] === 'ensure') {",
     "  process.exit(0);",
     "}",
@@ -167,13 +146,6 @@ function writeBundledCtoxHelper(helperPath) {
     "",
   ].join("\n");
   fs.writeFileSync(helperPath, body, { mode: 0o700 });
-}
-
-function assertFreshBusinessOsTarget(dir) {
-  assert.ok(fs.existsSync(path.join(dir, "ctox-business.json")), "ctox-business.json missing from install target");
-  assert.ok(fs.existsSync(path.join(dir, ".ctox-business-install.json")), "install manifest missing from install target");
-  assert.ok(!fs.existsSync(path.join(dir, ".env")), "fresh install target must not copy .env in desktop smoke");
-  assert.ok(!fs.existsSync(path.join(dir, "node_modules")), "fresh install target must not include node_modules");
 }
 
 main().catch((error) => {

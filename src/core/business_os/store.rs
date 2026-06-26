@@ -143,6 +143,9 @@ static BUSINESS_OS_STORE_SCHEMA_READY: OnceLock<Mutex<HashSet<BusinessOsStoreDbK
 static RXDB_TABLE_COLUMN_LOADS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
 #[cfg(test)]
 static RXDB_COLLECTION_WRITER_OPENS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+#[cfg(test)]
+static PUSH_COLLECTION_RECORDS_STORE_TRANSACTIONS: OnceLock<Mutex<HashMap<String, usize>>> =
+    OnceLock::new();
 
 #[cfg(test)]
 fn rxdb_table_column_counter_key(db_path: &Path, table: &str) -> String {
@@ -192,6 +195,41 @@ fn rxdb_collection_writer_open_count(root: &Path, collection: &str) -> usize {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     counts.get(&key).copied().unwrap_or(0)
+}
+
+#[cfg(test)]
+fn push_collection_records_transaction_counter_key(root: &Path, collection: &str) -> String {
+    format!("{}::{collection}", business_os_store_path(root).display())
+}
+
+#[cfg(test)]
+fn reset_push_collection_records_store_transaction_count(root: &Path, collection: &str) {
+    let key = push_collection_records_transaction_counter_key(root, collection);
+    let mut counts = PUSH_COLLECTION_RECORDS_STORE_TRANSACTIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    counts.insert(key, 0);
+}
+
+#[cfg(test)]
+fn push_collection_records_store_transaction_count(root: &Path, collection: &str) -> usize {
+    let key = push_collection_records_transaction_counter_key(root, collection);
+    let counts = PUSH_COLLECTION_RECORDS_STORE_TRANSACTIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    counts.get(&key).copied().unwrap_or(0)
+}
+
+#[cfg(test)]
+fn record_push_collection_records_store_transaction(root: &Path, collection: &str) {
+    let key = push_collection_records_transaction_counter_key(root, collection);
+    let mut counts = PUSH_COLLECTION_RECORDS_STORE_TRANSACTIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *counts.entry(key).or_insert(0) += 1;
 }
 
 thread_local! {
@@ -3824,6 +3862,7 @@ fn build_runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
     };
     let harness_flow = harness_flow_projection(root);
     let queue_health = harness_queue_health(root);
+    let communication_channels = communication_channel_health(root);
     let web_stack = web_stack_projection(root, &env_map);
     let updated_at_ms = now_ms() as u64;
     Ok(serde_json::json!({
@@ -3833,6 +3872,7 @@ fn build_runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         "updated_at_ms": updated_at_ms,
         "harness_flow": harness_flow,
         "queue_health": queue_health,
+        "communication_channels": communication_channels,
         "web_stack": web_stack,
         "runtime": {
             "source": source,
@@ -3983,6 +4023,181 @@ fn harness_queue_health(root: &Path) -> Value {
             "error": err.to_string()
         }),
     }
+}
+
+#[derive(Default)]
+struct CommunicationChannelHealthSummary {
+    accounts: usize,
+    ok: usize,
+    warn: usize,
+    bad: usize,
+}
+
+fn communication_channel_health(root: &Path) -> Value {
+    match channels::pull_communication_accounts_for_business_os(root, Some(0), Some(2_000)) {
+        Ok(pulled) => {
+            let documents = pulled
+                .get("documents")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let mut by_channel = BTreeMap::<String, CommunicationChannelHealthSummary>::new();
+            let mut issue_rows = Vec::new();
+            let mut rate_limited = 0usize;
+            let mut deauthorized = 0usize;
+            let mut missing_scope = 0usize;
+            let mut missing_permission = 0usize;
+            let mut missing_intent = 0usize;
+            let mut realtime_not_implemented = 0usize;
+            let mut realtime_not_configured = 0usize;
+            let now = now_ms();
+
+            for document in &documents {
+                let channel = document
+                    .get("channel")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string();
+                let account_key = document
+                    .get("account_key")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let adapter_status = communication_account_adapter_status(document);
+                let state = communication_account_health_state(&adapter_status, now);
+                let kind = adapter_status
+                    .get("provider_error_kind")
+                    .and_then(Value::as_str)
+                    .unwrap_or("none");
+                let realtime_supervision_state = adapter_status
+                    .get("realtime_supervision_state")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let summary = by_channel.entry(channel.clone()).or_default();
+                summary.accounts += 1;
+                match state {
+                    "ok" => summary.ok += 1,
+                    "warn" => summary.warn += 1,
+                    _ => summary.bad += 1,
+                }
+                match kind {
+                    "rate_limited" => rate_limited += 1,
+                    "deauthorized" => deauthorized += 1,
+                    "missing_scope" => missing_scope += 1,
+                    "missing_permission" => missing_permission += 1,
+                    "missing_intent" => missing_intent += 1,
+                    _ => {}
+                }
+                match realtime_supervision_state {
+                    "not_implemented" => realtime_not_implemented += 1,
+                    "not_configured" => realtime_not_configured += 1,
+                    _ => {}
+                }
+                if state != "ok" && issue_rows.len() < 20 {
+                    issue_rows.push(serde_json::json!({
+                        "account_key": account_key,
+                        "channel": channel,
+                        "state": state,
+                        "provider_error_kind": kind,
+                        "auth_state": adapter_status.get("auth_state").and_then(Value::as_str).unwrap_or_default(),
+                        "sync_state": adapter_status.get("sync_state").and_then(Value::as_str).unwrap_or_default(),
+                        "realtime_supervision_state": realtime_supervision_state,
+                        "remediation": adapter_status.get("provider_remediation").and_then(Value::as_str).unwrap_or_default(),
+                    }));
+                }
+            }
+
+            let channel_rows: serde_json::Map<String, Value> = by_channel
+                .into_iter()
+                .map(|(channel, summary)| {
+                    (
+                        channel,
+                        serde_json::json!({
+                            "accounts": summary.accounts,
+                            "ok": summary.ok,
+                            "warn": summary.warn,
+                            "bad": summary.bad,
+                        }),
+                    )
+                })
+                .collect();
+            let total = documents.len();
+            let bad = channel_rows
+                .values()
+                .filter_map(|row| row.get("bad").and_then(Value::as_u64))
+                .sum::<u64>();
+            let warn = channel_rows
+                .values()
+                .filter_map(|row| row.get("warn").and_then(Value::as_u64))
+                .sum::<u64>();
+
+            serde_json::json!({
+                "ok": bad == 0,
+                "total_accounts": total,
+                "warn_accounts": warn,
+                "bad_accounts": bad,
+                "rate_limited_accounts": rate_limited,
+                "deauthorized_accounts": deauthorized,
+                "missing_scope_accounts": missing_scope,
+                "missing_permission_accounts": missing_permission,
+                "missing_intent_accounts": missing_intent,
+                "realtime_not_implemented_accounts": realtime_not_implemented,
+                "realtime_not_configured_accounts": realtime_not_configured,
+                "by_channel": channel_rows,
+                "issues": issue_rows,
+            })
+        }
+        Err(err) => serde_json::json!({
+            "ok": false,
+            "error": err.to_string(),
+        }),
+    }
+}
+
+fn communication_account_adapter_status(account: &Value) -> Value {
+    let profile = account
+        .get("profile_json")
+        .or_else(|| account.get("profile"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    match profile {
+        Value::Object(mut object) => object
+            .remove("adapterStatus")
+            .or_else(|| object.remove("adapter_status"))
+            .unwrap_or(Value::Null),
+        Value::String(raw) => serde_json::from_str::<Value>(&raw)
+            .ok()
+            .and_then(|value| match value {
+                Value::Object(mut object) => object
+                    .remove("adapterStatus")
+                    .or_else(|| object.remove("adapter_status")),
+                _ => None,
+            })
+            .unwrap_or(Value::Null),
+        _ => Value::Null,
+    }
+}
+
+fn communication_account_health_state(adapter_status: &Value, now_ms: u128) -> &'static str {
+    let auth_state = adapter_status
+        .get("auth_state")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let sync_state = adapter_status
+        .get("sync_state")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if matches!(auth_state, "failed" | "deauthorized") || sync_state == "failed" {
+        return "bad";
+    }
+    if adapter_status
+        .get("rate_limited_until_ms")
+        .and_then(Value::as_i64)
+        .is_some_and(|until| until > 0 && (until as u128) > now_ms)
+    {
+        return "warn";
+    }
+    "ok"
 }
 
 fn web_stack_projection(root: &Path, env_map: &BTreeMap<String, String>) -> Value {
@@ -12997,6 +13212,15 @@ pub fn complete_business_command_from_queue_reply(
             queue_task.as_ref(),
             Some(reply_text),
         )?
+    } else if is_systematic_research_command(&command) {
+        process_systematic_research_command(
+            root,
+            &conn,
+            &command_id,
+            &command,
+            queue_task.as_ref(),
+            reply_text,
+        )?
     } else if is_cv_print_parse_command(&command) {
         process_cv_print_parse_command(
             root,
@@ -13556,17 +13780,9 @@ pub fn pull_collection_record(
             return Ok(Some(runtime_settings_for_rxdb(root)?));
         }
         "communication_accounts" | "communication_threads" | "communication_messages" => {
-            let pulled = pull_collection_records(root, collection, None, Some(2_000))?;
-            return Ok(pulled
-                .get("documents")
-                .and_then(Value::as_array)
-                .and_then(|items| {
-                    items.iter().find(|item| {
-                        item.get("id").and_then(Value::as_str) == Some(record_id)
-                            || item.get("record_id").and_then(Value::as_str) == Some(record_id)
-                    })
-                })
-                .cloned());
+            return channels::pull_communication_record_for_business_os(
+                root, collection, record_id,
+            );
         }
         _ => {}
     }
@@ -13590,19 +13806,7 @@ pub fn pull_collection_record(
         }
         return Ok(Some(payload));
     }
-    if let Some(rxdb_projection) = pull_rxdb_collection_table_records(root, collection, 0, 2_000)? {
-        return Ok(rxdb_projection
-            .get("documents")
-            .and_then(Value::as_array)
-            .and_then(|items| {
-                items.iter().find(|item| {
-                    item.get("id").and_then(Value::as_str) == Some(record_id)
-                        || item.get("record_id").and_then(Value::as_str) == Some(record_id)
-                })
-            })
-            .cloned());
-    }
-    Ok(None)
+    load_rxdb_collection_record(root, collection, record_id)
 }
 
 fn pull_runtime_settings_records(
@@ -14210,6 +14414,55 @@ fn load_rxdb_collection_record(
     Ok(Some(record))
 }
 
+fn find_rxdb_collection_record_by_string_field(
+    root: &Path,
+    collection: &str,
+    field: &str,
+    expected: &str,
+) -> anyhow::Result<Option<(String, Value)>> {
+    if !is_safe_rxdb_collection_name(collection) {
+        anyhow::bail!("invalid collection name `{collection}`");
+    }
+    if !field
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        anyhow::bail!("invalid RxDB JSON field `{field}`");
+    }
+    let path = rxdb_store_path(root);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let conn = Connection::open(&path)?;
+    let Some(table) = rxdb_collection_table_name(&path, &conn, collection) else {
+        return Ok(None);
+    };
+    let json_path = format!("$.{field}");
+    let row = conn
+        .query_row(
+            &format!(
+                "SELECT id, data
+                 FROM {table}
+                 WHERE json_extract(data, ?1) = ?2
+                 ORDER BY CAST(COALESCE(json_extract(data, '$.updated_at_ms'), 0) AS INTEGER) DESC, id DESC
+                 LIMIT 1"
+            ),
+            params![json_path, expected],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    let Some((id, raw)) = row else {
+        return Ok(None);
+    };
+    let mut record: Value = serde_json::from_str(&raw)?;
+    if let Some(object) = record.as_object_mut() {
+        object
+            .entry("id".to_string())
+            .or_insert_with(|| Value::String(id.clone()));
+    }
+    Ok(Some((id, record)))
+}
+
 fn upsert_rxdb_collection_record(
     root: &Path,
     collection: &str,
@@ -14389,6 +14642,8 @@ fn rxdb_table_columns_for_path(
     db_path: &Path,
     table: &str,
 ) -> anyhow::Result<HashSet<String>> {
+    #[cfg(not(test))]
+    let _ = db_path;
     #[cfg(test)]
     let counter_key = rxdb_table_column_counter_key(db_path, table);
     #[cfg(not(test))]
@@ -14865,38 +15120,25 @@ pub fn push_collection_records(root: &Path, body: Value) -> anyhow::Result<Value
         .context("documents array is required")?;
     let mut accepted = Vec::new();
     let mut ignored = Vec::new();
-    let mut store_conn: Option<Connection> = None;
-    for document in documents {
-        let record_id = document
-            .get("id")
-            .or_else(|| document.get("command_id"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("unknown")
-            .to_string();
-        if document
-            .get("_deleted")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            if store_conn.is_none() {
-                store_conn = Some(open_store(root)?);
-            }
-            let conn = store_conn.as_ref().expect("store connection initialized");
-            mark_business_record_deleted(conn, collection, &record_id, now_ms() as i64)?;
-            if collection == "notes" {
-                if let Err(e) = delete_note_markdown_file(root, &record_id) {
-                    eprintln!(
-                        "[business-os] failed to delete note file for {}: {}",
-                        record_id, e
-                    );
-                }
-            }
-            accepted.push(serde_json::json!({ "id": record_id, "status": "deleted" }));
-            continue;
-        }
-        if collection == "business_commands" {
+    if documents.is_empty() {
+        return Ok(serde_json::json!({
+            "ok": true,
+            "collection": collection,
+            "accepted": accepted,
+            "ignored": ignored,
+            "count": 0
+        }));
+    }
+    if collection == "business_commands" {
+        for document in documents {
+            let record_id = document
+                .get("id")
+                .or_else(|| document.get("command_id"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("unknown")
+                .to_string();
             match accept_rxdb_business_command(root, document.clone()) {
                 Ok(value) => accepted.push(value),
                 Err(error) => ignored.push(serde_json::json!({
@@ -14904,31 +15146,78 @@ pub fn push_collection_records(root: &Path, body: Value) -> anyhow::Result<Value
                     "error": error.to_string()
                 })),
             }
-        } else {
-            if store_conn.is_none() {
-                store_conn = Some(open_store(root)?);
+        }
+    } else {
+        enum NoteFileAction {
+            Delete(String),
+            Write(String, Value),
+        }
+
+        let mut conn = open_store(root)?;
+        let mut note_file_actions = Vec::new();
+        #[cfg(test)]
+        record_push_collection_records_store_transaction(root, collection);
+        {
+            let tx = conn.transaction()?;
+            for document in documents {
+                let record_id = document
+                    .get("id")
+                    .or_else(|| document.get("command_id"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("unknown")
+                    .to_string();
+                if document
+                    .get("_deleted")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    mark_business_record_deleted(&tx, collection, &record_id, now_ms() as i64)?;
+                    if collection == "notes" {
+                        note_file_actions.push(NoteFileAction::Delete(record_id.clone()));
+                    }
+                    accepted.push(serde_json::json!({ "id": record_id, "status": "deleted" }));
+                    continue;
+                }
+                let updated_at_ms = document
+                    .get("updated_at_ms")
+                    .and_then(Value::as_i64)
+                    .unwrap_or_else(|| now_ms() as i64);
+                upsert_business_record(
+                    &tx,
+                    collection,
+                    &record_id,
+                    updated_at_ms,
+                    document.clone(),
+                )?;
+                if collection == "notes" {
+                    note_file_actions
+                        .push(NoteFileAction::Write(record_id.clone(), document.clone()));
+                }
+                accepted.push(serde_json::json!({ "id": record_id, "status": "stored" }));
             }
-            let conn = store_conn.as_ref().expect("store connection initialized");
-            let updated_at_ms = document
-                .get("updated_at_ms")
-                .and_then(Value::as_i64)
-                .unwrap_or_else(|| now_ms() as i64);
-            upsert_business_record(
-                conn,
-                collection,
-                &record_id,
-                updated_at_ms,
-                document.clone(),
-            )?;
-            if collection == "notes" {
-                if let Err(e) = write_note_markdown_file(root, &record_id, document) {
-                    eprintln!(
-                        "[business-os] failed to write note file for {}: {}",
-                        record_id, e
-                    );
+            tx.commit()?;
+        }
+        for action in note_file_actions {
+            match action {
+                NoteFileAction::Delete(record_id) => {
+                    if let Err(e) = delete_note_markdown_file(root, &record_id) {
+                        eprintln!(
+                            "[business-os] failed to delete note file for {}: {}",
+                            record_id, e
+                        );
+                    }
+                }
+                NoteFileAction::Write(record_id, document) => {
+                    if let Err(e) = write_note_markdown_file(root, &record_id, &document) {
+                        eprintln!(
+                            "[business-os] failed to write note file for {}: {}",
+                            record_id, e
+                        );
+                    }
                 }
             }
-            accepted.push(serde_json::json!({ "id": record_id, "status": "stored" }));
         }
     }
     Ok(serde_json::json!({
@@ -23375,6 +23664,208 @@ fn process_documents_report_command(
     }
 }
 
+fn process_systematic_research_command(
+    root: &Path,
+    conn: &Connection,
+    command_id: &str,
+    command: &BusinessCommand,
+    queue_task: Option<&channels::QueueTaskView>,
+    reply_text: &str,
+) -> anyhow::Result<CommandAccepted> {
+    let completed_at_ms = now_ms() as i64;
+    conn.execute(
+        "UPDATE business_commands SET status = 'completed', observed_at_ms = ?2 WHERE command_id = ?1",
+        params![command_id, completed_at_ms],
+    )?;
+
+    let mut terminal_queue_task = queue_task.cloned();
+    if let Some(task) = queue_task {
+        let status_note = "business-os:terminal-success: systematic research run completed";
+        let _ = channels::update_queue_task(
+            root,
+            channels::QueueTaskUpdateRequest {
+                message_key: task.message_key.clone(),
+                route_status: Some("handled".to_string()),
+                status_note: Some(status_note.to_string()),
+                ..Default::default()
+            },
+        );
+        terminal_queue_task = channels::load_queue_task(root, &task.message_key)
+            .ok()
+            .flatten()
+            .or_else(|| Some(task.clone()));
+    }
+
+    let task_id = command
+        .record_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| first_string_field(&command.payload, &["task_id", "research_task_id"]))
+        .unwrap_or_default();
+    let task_queue_id = terminal_queue_task
+        .as_ref()
+        .map(|task| task.message_key.clone())
+        .or_else(|| find_queue_task_for_command(root, command_id));
+    let knowledge_domain = first_string_field(&command.payload, &["knowledge_domain", "domain"])
+        .or_else(|| first_string_field(&command.client_context, &["knowledge_domain", "domain"]))
+        .unwrap_or_default();
+    let reply_summary = clip_text(reply_text, 1200);
+    let result = serde_json::json!({
+        "summary": reply_summary,
+        "knowledge_domain": knowledge_domain.clone(),
+        "task_id": task_id.clone(),
+        "task_queue_id": task_queue_id.clone(),
+        "completed_at_ms": completed_at_ms
+    });
+
+    if !task_id.is_empty() {
+        let mut task_payload = load_rxdb_collection_record(root, "research_tasks", &task_id)?
+            .unwrap_or_else(|| {
+                serde_json::json!({
+                    "id": task_id,
+                    "title": first_string_field(&command.payload, &["task_title", "title"]).unwrap_or_else(|| command_title(command)),
+                    "status": "ready",
+                    "knowledge_domain": knowledge_domain,
+                    "payload": {},
+                    "created_at_ms": completed_at_ms,
+                    "updated_at_ms": completed_at_ms
+                })
+            });
+        if let Some(object) = task_payload.as_object_mut() {
+            object.insert("status".to_string(), Value::String("ready".to_string()));
+            object.insert("updated_at_ms".to_string(), Value::from(completed_at_ms));
+            object
+                .entry("knowledge_domain".to_string())
+                .or_insert_with(|| Value::String(knowledge_domain.clone()));
+            let payload = object
+                .entry("payload".to_string())
+                .or_insert_with(|| serde_json::json!({}));
+            if let Some(payload_object) = payload.as_object_mut() {
+                payload_object.insert("last_run".to_string(), result.clone());
+            }
+        }
+        upsert_business_record(
+            conn,
+            "research_tasks",
+            &task_id,
+            completed_at_ms,
+            task_payload.clone(),
+        )?;
+        upsert_rxdb_collection_record(
+            root,
+            "research_tasks",
+            &task_id,
+            completed_at_ms,
+            task_payload,
+        )?;
+    }
+
+    let (run_id, mut run_payload) = find_rxdb_collection_record_by_string_field(
+        root,
+        "research_runs",
+        "command_id",
+        command_id,
+    )?
+    .unwrap_or_else(|| {
+        (
+            format!("research_run_{completed_at_ms}"),
+            serde_json::json!({
+                "task_id": task_id.clone(),
+                "status": "queued",
+                "command_id": command_id,
+                "task_queue_id": task_queue_id.clone(),
+                "identified_count": 0,
+                "accepted_count": 0,
+                "used_count": 0,
+                "payload": {},
+                "created_at_ms": completed_at_ms,
+                "updated_at_ms": completed_at_ms
+            }),
+        )
+    });
+    if let Some(object) = run_payload.as_object_mut() {
+        object.insert("id".to_string(), Value::String(run_id.clone()));
+        object.insert("task_id".to_string(), Value::String(task_id.clone()));
+        object.insert("status".to_string(), Value::String("completed".to_string()));
+        object.insert("command_id".to_string(), Value::String(command_id.to_string()));
+        if let Some(task_queue_id) = task_queue_id.as_deref() {
+            object.insert(
+                "task_queue_id".to_string(),
+                Value::String(task_queue_id.to_string()),
+            );
+        }
+        object.insert("updated_at_ms".to_string(), Value::from(completed_at_ms));
+        let payload = object
+            .entry("payload".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        if let Some(payload_object) = payload.as_object_mut() {
+            payload_object.insert("result".to_string(), result.clone());
+        }
+    }
+    upsert_business_record(
+        conn,
+        "research_runs",
+        &run_id,
+        completed_at_ms,
+        run_payload.clone(),
+    )?;
+    upsert_rxdb_collection_record(
+        root,
+        "research_runs",
+        &run_id,
+        completed_at_ms,
+        run_payload,
+    )?;
+
+    let command_payload = serde_json::json!({
+        "id": command_id,
+        "command_id": command_id,
+        "module": command.module.clone(),
+        "command_type": command.command_type.clone(),
+        "record_id": command.record_id.clone().unwrap_or_default(),
+        "status": "completed",
+        "inbound_channel": command_inbound_channel(command),
+        "task_id": task_queue_id,
+        "task_status": "completed",
+        "payload": command.payload.clone(),
+        "client_context": command.client_context.clone(),
+        "result": result,
+        "updated_at_ms": completed_at_ms
+    });
+    upsert_business_record(
+        conn,
+        "business_commands",
+        command_id,
+        completed_at_ms,
+        command_payload.clone(),
+    )?;
+    upsert_rxdb_collection_record(
+        root,
+        "business_commands",
+        command_id,
+        completed_at_ms,
+        command_payload,
+    )?;
+    refresh_queue_task_projection(
+        root,
+        conn,
+        command_id,
+        command,
+        terminal_queue_task.as_ref().or(queue_task),
+        completed_at_ms,
+    )?;
+
+    Ok(CommandAccepted {
+        ok: true,
+        command_id: command_id.to_string(),
+        status: "completed",
+        task_id: task_queue_id,
+        task_status: Some("completed".to_string()),
+    })
+}
+
 pub fn update_ctox_task(
     root: &Path,
     session: &BusinessOsSession,
@@ -24018,6 +24509,10 @@ fn is_documents_report_command(command: &BusinessCommand) -> bool {
             })
             .map(|value| value.eq_ignore_ascii_case("docx"))
             .unwrap_or(false)
+}
+
+fn is_systematic_research_command(command: &BusinessCommand) -> bool {
+    command.module == "research" && command.command_type == "research.systematic.run"
 }
 
 /// A `cv-print-builder` chat task whose `writeback_contract` asks the daemon to
@@ -28509,6 +29004,14 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             ON business_records(collection, record_id, updated_at_ms, deleted);
         CREATE INDEX IF NOT EXISTS idx_business_records_projection_stamp
             ON business_records(collection, record_id, rev, deleted, updated_at_ms);
+        CREATE INDEX IF NOT EXISTS idx_business_records_accounting_invoices_due
+            ON business_records(
+                json_extract(payload_json, '$.state'),
+                CAST(COALESCE(json_extract(payload_json, '$.due_date_ms'), 9223372036854775807) AS INTEGER),
+                CAST(COALESCE(json_extract(payload_json, '$.open_cents'), 0) AS INTEGER),
+                record_id
+            )
+            WHERE collection = 'accounting_invoices' AND deleted = 0;
 
         CREATE TABLE IF NOT EXISTS business_documents (
             document_id TEXT PRIMARY KEY,
@@ -30430,6 +30933,49 @@ mod tests {
             Some("customer_opportunities/opp_1")
         );
         assert_eq!(decision.reason_code, "role_or_scope_denied");
+        Ok(())
+    }
+
+    #[test]
+    fn push_collection_records_batches_non_command_store_writes_in_one_transaction(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        reset_push_collection_records_store_transaction_count(root, "customer_opportunities");
+
+        let documents = (0..5)
+            .map(|idx| {
+                serde_json::json!({
+                    "id": format!("opp_{idx}"),
+                    "name": format!("Opportunity {idx}"),
+                    "updated_at_ms": 1_000 + idx,
+                })
+            })
+            .collect::<Vec<_>>();
+        let response = push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": "customer_opportunities",
+                "documents": documents,
+            }),
+        )?;
+
+        assert_eq!(response.get("count").and_then(Value::as_u64), Some(5));
+        assert_eq!(
+            push_collection_records_store_transaction_count(root, "customer_opportunities"),
+            1,
+            "non-command push batches must not autocommit once per document"
+        );
+        let conn = open_store(root)?;
+        let rows: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM business_records
+             WHERE collection = 'customer_opportunities'
+               AND deleted = 0",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(rows, 5);
         Ok(())
     }
 
@@ -37785,6 +38331,162 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn queue_worker_success_completes_systematic_research_run() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_research_completed",
+                "command_id": "cmd_research_completed",
+                "module": "research",
+                "command_type": "research.systematic.run",
+                "record_id": "research_task_1",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Research - Drone bearings",
+                    "instruction": "Continue systematic research.",
+                    "prompt": "Continue systematic research.",
+                    "knowledge_domain": "drone_bearing_design"
+                },
+                "client_context": {
+                    "source": "business-os-research",
+                    "module": "research",
+                    "knowledge_domain": "drone_bearing_design"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?
+            .to_string();
+
+        channels::lease_queue_task(root, &task_id, "ctox-service")?;
+        let rxdb_conn = create_repair_rxdb_tables(root)?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__ctox_queue_tasks__v0",
+            &task_id,
+            serde_json::json!({
+                "id": task_id,
+                "command_id": "cmd_research_completed",
+                "status": "running",
+                "route_status": "leased",
+                "task_status": "running",
+                "updated_at_ms": 1
+            }),
+        )?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__business_commands__v1",
+            "cmd_research_completed",
+            serde_json::json!({
+                "id": "cmd_research_completed",
+                "command_id": "cmd_research_completed",
+                "status": "accepted",
+                "task_id": task_id,
+                "task_status": "queued",
+                "updated_at_ms": 1
+            }),
+        )?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__research_tasks__v0",
+            "research_task_1",
+            serde_json::json!({
+                "id": "research_task_1",
+                "title": "Drone bearings",
+                "status": "collecting",
+                "knowledge_domain": "drone_bearing_design",
+                "payload": {},
+                "created_at_ms": 1,
+                "updated_at_ms": 1
+            }),
+        )?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__research_runs__v0",
+            "research_run_1",
+            serde_json::json!({
+                "id": "research_run_1",
+                "task_id": "research_task_1",
+                "status": "queued",
+                "command_id": "cmd_research_completed",
+                "task_queue_id": task_id,
+                "identified_count": 0,
+                "accepted_count": 0,
+                "used_count": 0,
+                "payload": {},
+                "created_at_ms": 1,
+                "updated_at_ms": 1
+            }),
+        )?;
+        drop(rxdb_conn);
+
+        let projected = complete_business_command_from_queue_reply(
+            root,
+            &task_id,
+            "Research wrote source_catalog, evidence_points, and evaluation_matrix.",
+        )?
+        .context("expected systematic research command writeback")?;
+        assert_eq!(
+            projected.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+
+        let rxdb_command =
+            load_rxdb_collection_record(root, "business_commands", "cmd_research_completed")?
+                .context("expected active rxdb command row")?;
+        assert_eq!(
+            rxdb_command.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            rxdb_command.get("task_status").and_then(Value::as_str),
+            Some("completed")
+        );
+
+        let rxdb_run = load_rxdb_collection_record(root, "research_runs", "research_run_1")?
+            .context("expected research run row")?;
+        assert_eq!(
+            rxdb_run.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            rxdb_run.get("task_queue_id").and_then(Value::as_str),
+            Some(task_id.as_str())
+        );
+        assert_eq!(
+            rxdb_run.pointer("/payload/result/knowledge_domain").and_then(Value::as_str),
+            Some("drone_bearing_design")
+        );
+
+        let rxdb_task = load_rxdb_collection_record(root, "research_tasks", "research_task_1")?
+            .context("expected research task row")?;
+        assert_eq!(
+            rxdb_task.get("status").and_then(Value::as_str),
+            Some("ready")
+        );
+        assert_eq!(
+            rxdb_task.pointer("/payload/last_run/task_queue_id"),
+            Some(&Value::String(task_id.clone()))
+        );
+
+        let rxdb_queue = load_rxdb_collection_record(root, "ctox_queue_tasks", &task_id)?
+            .context("expected queue projection row")?;
+        assert_eq!(
+            rxdb_queue.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            rxdb_queue.get("route_status").and_then(Value::as_str),
+            Some("handled")
+        );
+        Ok(())
+    }
+
     fn create_repair_rxdb_tables(root: &Path) -> anyhow::Result<Connection> {
         fs::create_dir_all(root.join("runtime"))?;
         let conn = Connection::open(rxdb_store_path(root))?;
@@ -37800,6 +38502,26 @@ mod tests {
         )?;
         conn.execute(
             "CREATE TABLE ctox_business_os__business_commands__v1 (
+                id TEXT PRIMARY KEY NOT NULL,
+                revision TEXT,
+                deleted INTEGER NOT NULL DEFAULT 0,
+                lastWriteTime REAL NOT NULL DEFAULT 0,
+                data TEXT NOT NULL
+            )",
+            [],
+        )?;
+        conn.execute(
+            "CREATE TABLE ctox_business_os__research_tasks__v0 (
+                id TEXT PRIMARY KEY NOT NULL,
+                revision TEXT,
+                deleted INTEGER NOT NULL DEFAULT 0,
+                lastWriteTime REAL NOT NULL DEFAULT 0,
+                data TEXT NOT NULL
+            )",
+            [],
+        )?;
+        conn.execute(
+            "CREATE TABLE ctox_business_os__research_runs__v0 (
                 id TEXT PRIMARY KEY NOT NULL,
                 revision TEXT,
                 deleted INTEGER NOT NULL DEFAULT 0,
@@ -38968,6 +39690,51 @@ mod tests {
                 .pointer("/documents/0/status")
                 .and_then(Value::as_str),
             Some("completed")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pull_collection_record_uses_keyed_rxdb_fallback_without_scan_window() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        let sqlite_path = rxdb_store_path(root);
+        let mut conn = Connection::open(sqlite_path)?;
+        conn.execute(
+            "CREATE TABLE ctox_business_os__business_commands__v1 (id TEXT PRIMARY KEY, data TEXT NOT NULL)",
+            [],
+        )?;
+        let tx = conn.transaction()?;
+        for idx in 0..2_100 {
+            let id = format!("cmd-{idx:04}");
+            tx.execute(
+                "INSERT INTO ctox_business_os__business_commands__v1 (id, data) VALUES (?1, ?2)",
+                params![
+                    id,
+                    serde_json::json!({
+                        "id": id,
+                        "command_type": "ctox.source.list_snapshots",
+                        "status": "completed",
+                        "updated_at_ms": idx,
+                    })
+                    .to_string()
+                ],
+            )?;
+        }
+        tx.commit()?;
+        drop(conn);
+
+        let pulled = pull_collection_record(root, "business_commands", "cmd-2050")?
+            .context("expected keyed RxDB fallback record beyond the old scan window")?;
+        assert_eq!(pulled.get("id").and_then(Value::as_str), Some("cmd-2050"));
+        assert_eq!(
+            pulled.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert!(
+            pull_collection_record(root, "business_commands", "cmd-missing")?.is_none(),
+            "missing records must stay missing without a broad fallback scan"
         );
         Ok(())
     }

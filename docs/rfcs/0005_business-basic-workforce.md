@@ -133,7 +133,6 @@ Jede relevante Karte traegt:
 - `data-context-submodule="workforce"`
 - `data-context-record-type`
 - `data-context-record-id`
-- `data-context-skill="product_engineering/business-basic-module-development"`
 
 Kontextaktionen:
 

@@ -651,7 +651,7 @@ ctox process-mining case case-OPS-204 --limit 200</code></pre>
                 <tr>
                   <td><code>ctox runtime switch &lt;model&gt; &lt;quality|performance&gt;</code></td>
                   <td>Switch the active model/runtime profile.</td>
-                  <td><code>--context 128k|256k</code>, <code>--timeout &lt;secs&gt;</code>.</td>
+                  <td><code>--context 256k</code>, <code>--timeout &lt;secs&gt;</code>.</td>
                 </tr>
                 <tr>
                   <td><code>ctox doctor</code>, <code>ctox version</code></td>
@@ -659,9 +659,9 @@ ctox process-mining case case-OPS-204 --limit 200</code></pre>
                   <td>No required flags.</td>
                 </tr>
                 <tr>
-                  <td><code>ctox business-os status</code>, <code>install</code></td>
-                  <td>Inspect or install the bundled Business OS template into a separate customer-owned repo.</td>
-                  <td><code>install --target &lt;empty-dir&gt;</code>, optional <code>--init-git</code>.</td>
+                  <td><code>ctox business-os status</code>, <code>app create</code>, <code>app modify</code></td>
+                  <td>Inspect Business OS and enqueue runtime-installed app module work.</td>
+                  <td><code>app create --instruction &lt;text&gt;</code>, <code>app modify &lt;id&gt; --instruction &lt;text&gt;</code>.</td>
                 </tr>
                 <tr>
                   <td><code>ctox update ...</code>, <code>ctox upgrade</code></td>
@@ -675,17 +675,17 @@ ctox process-mining case case-OPS-204 --limit 200</code></pre>
 
         <section id="business-os">
           <p class="kicker">Business OS</p>
-          <h2>Installable business workspace</h2>
+          <h2>Runtime-installed business workspace</h2>
           <p>
-            The Business OS commands deliberately create or inspect a separate
-            application repository. Core upgrades should update CTOX runtime and
-            bundled defaults, but they must not overwrite customer-owned
-            Business OS customizations.
+            The Business OS commands inspect the local WebRTC-backed runtime
+            and enqueue app module creation or modification work. Runtime apps
+            are plain HTML/CSS/JavaScript modules installed under the CTOX
+            runtime app directory.
           </p>
           <pre><code>ctox business-os status
-ctox business-os install --target &lt;empty-dir&gt; [--init-git]
-ctox business status
-ctox business install --target &lt;empty-dir&gt; [--init-git]</code></pre>
+ctox business-os app create --instruction &lt;text&gt; [--module-id &lt;id&gt;]
+ctox business-os app modify &lt;module-id&gt; --instruction &lt;text&gt;
+ctox business-os app validate &lt;module-id&gt; --installed</code></pre>
         </section>
 
         <section id="capabilities">
@@ -1088,7 +1088,7 @@ ctox jami-daemon --foreground</code></pre>
           <pre><code>ctox boost status | ctox boost start [--minutes &lt;n&gt;] [--model &lt;id&gt;] [--reason &lt;text&gt;] | ctox boost stop
 ctox browser &lt;subcmd&gt; [args]
 ctox business-os status
-ctox business-os install --target &lt;empty-dir&gt; [--init-git]
+ctox business-os app create --instruction &lt;text&gt; [--module-id &lt;id&gt;]
 ctox channel ack [--db &lt;path&gt;] [--status &lt;status&gt;] &lt;message-key&gt;...
 ctox chat "&lt;instruction&gt;" [--thread-key &lt;key&gt;] [--workspace &lt;path&gt;] [--wait] [--timeout-secs &lt;n&gt;] [--atif-out &lt;path&gt;] [--to &lt;addr&gt; ...] [--cc &lt;addr&gt; ...] [--subject &lt;text&gt;]
 ctox doc &lt;subcmd&gt; [args]
@@ -1142,7 +1142,7 @@ ctox queue show --message-key &lt;key&gt;
 ctox queue spill --message-key &lt;key&gt; [--ticket-system &lt;name&gt;] [--reason &lt;text&gt;] [--skill &lt;name&gt;] [--publish]
 ctox runtime embedding-doctor
 ctox runtime embedding-smoke [--token-id &lt;id&gt;]
-ctox runtime switch &lt;model&gt; &lt;quality|performance&gt; [--context 128k|256k] [--timeout &lt;secs&gt;]
+ctox runtime switch &lt;model&gt; &lt;quality|performance&gt; [--context 256k] [--timeout &lt;secs&gt;]
 ctox runtime stt-doctor
 ctox runtime stt-smoke &lt;wav-path&gt;
 ctox runtime stt-realtime-smoke &lt;wav-path&gt;

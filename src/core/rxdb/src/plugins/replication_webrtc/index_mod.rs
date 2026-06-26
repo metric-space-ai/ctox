@@ -33,9 +33,9 @@ use webrtc::peer_connection::RTCIceServer;
 use crate::plugin::add_rx_plugin;
 use crate::plugins::leader_election::RxDBLeaderElectionPlugin;
 use crate::plugins::replication::{
-    PullHandler, PushHandler, ReplicationOptions, ReplicationPullHandlerResult,
-    ReplicationPullOptions, ReplicationPushOptions, RxReplicationState, StreamFactory,
-    replicate_rx_collection,
+    replicate_rx_collection, PullHandler, PushHandler, ReplicationOptions,
+    ReplicationPullHandlerResult, ReplicationPullOptions, ReplicationPushOptions,
+    RxReplicationState, StreamFactory,
 };
 use crate::plugins::replication_webrtc::connection_handler_rs::{
     CollectionAuthzHook, DocumentReadAuthzHook, WebRTCRsConfig, WebRTCRsConnectionHandler,
@@ -51,7 +51,7 @@ use crate::plugins::replication_webrtc::webrtc_types::{
 use crate::plugins::utils::utils_string::random_token;
 use crate::replication_protocol::index_mod::rx_storage_instance_to_replication_handler;
 use crate::rx_collection::RxCollection;
-use crate::rx_error::{RxError, new_rx_error};
+use crate::rx_error::{new_rx_error, RxError};
 use crate::rxjs_compat::RxSubject;
 use crate::types::{DocumentsWithCheckpoint, RxReplicationHandler, RxReplicationMasterChange};
 use protocol_contract_generated::{
@@ -247,6 +247,8 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         let file_registry = Arc::new(super::file_fetch_handler::FileFetchRegistry::new(
             protocol_contract_generated::CTOX_QUERY_MAX_IN_FLIGHT_STREAMS as u64,
         ));
+        registry.set_auth_check(Arc::new(|_peer_identity, _collection| true));
+        file_registry.set_auth_check(Arc::new(|_peer_identity, _collection| true));
         let mut master_replication_handlers: HashMap<String, Arc<dyn RxReplicationHandler>> =
             HashMap::new();
         let mut collection_map: HashMap<String, Arc<RxCollection>> = HashMap::new();
@@ -1542,7 +1544,11 @@ fn schema_mismatch_error_for(
 }
 
 fn non_empty(value: &str) -> Option<&str> {
-    if value.is_empty() { None } else { Some(value) }
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 fn ctox_protocol_error(
@@ -2097,12 +2103,10 @@ mod tests {
         assert_eq!(result["type"], serde_json::json!("ctoxError"));
         assert_eq!(result["code"], serde_json::json!("RC_PUSH"));
         assert_eq!(result["direction"], serde_json::json!("push"));
-        assert!(
-            result["message"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("masterWrite request decode")
-        );
+        assert!(result["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("masterWrite request decode"));
     }
 
     #[test]
@@ -2133,26 +2137,18 @@ mod tests {
             .get("capabilities")
             .and_then(Value::as_array)
             .expect("capabilities array");
-        assert!(
-            capabilities
-                .iter()
-                .any(|value| value.as_str() == Some("ctox-replication-handshake-v1"))
-        );
-        assert!(
-            capabilities
-                .iter()
-                .any(|value| value.as_str() == Some("ctox-schema-hash-v1"))
-        );
-        assert!(
-            capabilities
-                .iter()
-                .any(|value| value.as_str() == Some("ctox-peer-session-v1"))
-        );
-        assert!(
-            capabilities
-                .iter()
-                .any(|value| value.as_str() == Some("ctox-checkpoint-epoch-v1"))
-        );
+        assert!(capabilities
+            .iter()
+            .any(|value| value.as_str() == Some("ctox-replication-handshake-v1")));
+        assert!(capabilities
+            .iter()
+            .any(|value| value.as_str() == Some("ctox-schema-hash-v1")));
+        assert!(capabilities
+            .iter()
+            .any(|value| value.as_str() == Some("ctox-peer-session-v1")));
+        assert!(capabilities
+            .iter()
+            .any(|value| value.as_str() == Some("ctox-checkpoint-epoch-v1")));
         assert_eq!(
             payload
                 .pointer("/collection/schemaHash")
@@ -2248,11 +2244,9 @@ mod tests {
             .expect("required capabilities");
         assert_eq!(required.len(), CTOX_REQUIRED_PROTOCOL_CAPABILITIES.len());
         for capability in CTOX_REQUIRED_PROTOCOL_CAPABILITIES {
-            assert!(
-                required
-                    .iter()
-                    .any(|item| item.as_str() == Some(*capability))
-            );
+            assert!(required
+                .iter()
+                .any(|item| item.as_str() == Some(*capability)));
         }
         let browser = fixture
             .pointer("/compatible/browser")
@@ -2460,11 +2454,9 @@ mod tests {
             })),
         );
         assert!(multi.get("collectionSchemas").is_some());
-        assert!(
-            multi
-                .pointer("/collectionSchemas/desktop_files/schemaHash")
-                .is_some()
-        );
+        assert!(multi
+            .pointer("/collectionSchemas/desktop_files/schemaHash")
+            .is_some());
         // REGRESSION: under multiplex every collection deriving its protocol
         // from the room handshake must find ITS OWN checkpoint here — the
         // representative-only checkpoint mislabeled every other collection's
