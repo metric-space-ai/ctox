@@ -17,6 +17,12 @@ import {
   buildGlobalCtoxAgentScopeView,
   renderGlobalCtoxAgentScopeHtml,
 } from '../../shared/shell-permissions-ui.js?v=20260623-role-session';
+import {
+  base64ToBytes,
+  sha256Hex,
+  FILE_CONTENT_HASH_SCHEME,
+  FILE_CHUNK_HASH_SCHEME,
+} from '../../shared/file-integrity.js?v=20260603-active-chunk-query2';
 
 const CTOX_REPO = 'metric-space-ai/ctox';
 const CTOX_BRANCH = 'main';
@@ -201,6 +207,10 @@ function wireEvents() {
 
   state.ctx.host.querySelector('#btn-install-github')?.addEventListener('click', () => {
     installFromGithub();
+  });
+
+  state.ctx.host.querySelector('#btn-install-zip')?.addEventListener('click', () => {
+    installFromZip();
   });
 }
 
@@ -944,6 +954,142 @@ async function installFromGithub() {
       source_kind: 'github',
       repo,
       git_ref: gitRef,
+      subpath,
+    },
+  });
+}
+
+function bytesToBase64(bytes) {
+  let binary = '';
+  const block = 0x8000;
+  for (let i = 0; i < bytes.length; i += block) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + block));
+  }
+  return btoa(binary);
+}
+
+// Write an uploaded .zip into the desktop file/chunk store over the RxDB data
+// plane (no HTTP). Mirrors the proven chat-attachment chunk format so the native
+// verified-decode accepts it; the native installer reads it back by file_id.
+async function uploadZipToChunkStore(file) {
+  const db = state.ctx?.db;
+  if (!db?.collection) throw new Error('Datenbank nicht verfügbar.');
+  await state.ctx.sync?.startCollection?.('desktop_files');
+  await state.ctx.sync?.startCollection?.('desktop_file_chunks');
+  const filesColl = db.collection('desktop_files');
+  const chunksColl = db.collection('desktop_file_chunks');
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const base64 = bytesToBase64(bytes);
+  const CHUNK = 16 * 1024;
+  const total = Math.max(1, Math.ceil(base64.length / CHUNK));
+  const now = Date.now();
+  const contentHash = await sha256Hex(base64ToBytes(base64));
+  const fileId = `appzip_${now}_${Math.random().toString(36).slice(2, 10)}`;
+  const generationId = `gen_${now}_${contentHash.slice(0, 12)}`;
+  for (let idx = 0; idx < total; idx += 1) {
+    const data = base64.slice(idx * CHUNK, (idx + 1) * CHUNK);
+    // eslint-disable-next-line no-await-in-loop
+    await chunksColl.upsert({
+      id: `${fileId}_${generationId}_${idx}`,
+      file_id: fileId,
+      generation_id: generationId,
+      content_hash: contentHash,
+      content_hash_scheme: FILE_CONTENT_HASH_SCHEME,
+      idx,
+      total,
+      encoding: 'base64',
+      data,
+      // eslint-disable-next-line no-await-in-loop
+      chunk_hash: await sha256Hex(data),
+      chunk_hash_scheme: FILE_CHUNK_HASH_SCHEME,
+      size_bytes: data.length,
+      created_at_ms: now,
+    });
+  }
+  const virtualPath = `/app-store-uploads/${file.name || 'app.zip'}`;
+  await filesColl.upsert({
+    id: fileId,
+    parent_id: '',
+    path: virtualPath,
+    local_path: '',
+    virtual_path: virtualPath,
+    name: file.name || 'app.zip',
+    kind: 'file',
+    mime_type: file.type || 'application/zip',
+    extension: 'zip',
+    size_bytes: bytes.length,
+    owner_id: '',
+    source: 'app-store-upload',
+    content_ref: fileId,
+    content_state: 'available',
+    content_hash: contentHash,
+    content_hash_scheme: FILE_CONTENT_HASH_SCHEME,
+    content_generation_id: generationId,
+    content_synced_at_ms: now,
+    sort_index: now,
+    is_deleted: false,
+    created_at_ms: now,
+    updated_at_ms: now,
+  });
+  return fileId;
+}
+
+function pickZipFile() {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.zip,application/zip';
+    input.style.display = 'none';
+    input.addEventListener('change', () => {
+      const file = input.files && input.files[0] ? input.files[0] : null;
+      input.remove();
+      resolve(file);
+    }, { once: true });
+    document.body.appendChild(input);
+    input.click();
+  });
+}
+
+async function installFromZip() {
+  if (!canInstallBusinessApps(appStorePermissionOptions(state))) {
+    state.status = { kind: 'error', text: 'Du darfst keine Apps installieren.' };
+    render();
+    return;
+  }
+  const file = await pickZipFile();
+  if (!file) return;
+  const moduleId = sanitizeId((window.prompt('Modul-ID (muss zur module.json im Zip passen):', '') || '').trim());
+  if (!moduleId) {
+    state.status = { kind: 'error', text: 'Modul-ID ist erforderlich.' };
+    render();
+    return;
+  }
+  const subpath = (window.prompt('Pfad zum Modul im Zip (leer = Wurzel):', '') || '').trim();
+  if (!window.confirm(`App aus EXTERNER Zip-Datei installieren?\n\nDatei: ${file.name}\nModul: ${moduleId}\n\nExterne Apps sind zunächst NICHT verifiziert und erhalten keine Datenrechte bis zur Prüfung.`)) {
+    return;
+  }
+  let fileId;
+  try {
+    state.status = { kind: 'info', text: `Lade ${file.name} hoch...` };
+    render();
+    fileId = await uploadZipToChunkStore(file);
+    // Give the chunk store a moment to replicate to the native peer before the
+    // install command tries to read it back.
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+  } catch (err) {
+    state.status = { kind: 'error', text: `Upload fehlgeschlagen: ${err?.message || err}` };
+    render();
+    return;
+  }
+  await runStoreCommand({
+    label: `Installiere ${moduleId} aus Zip...`,
+    success: `${moduleId} installiert (externe Quelle – nicht verifiziert).`,
+    commandType: 'ctox.app_store.install',
+    moduleId,
+    payload: {
+      module_id: moduleId,
+      source_kind: 'zip',
+      file_id: fileId,
       subpath,
     },
   });
