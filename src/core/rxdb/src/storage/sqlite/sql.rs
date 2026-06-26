@@ -1,5 +1,7 @@
 //! SQL helpers for the SQLite storage backend.
 
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -17,16 +19,38 @@ const CHANGED_TABLES_TABLE: &str = "__rxdb_changed_tables";
 const DOCUMENTS_BY_ID_BATCH_SIZE: usize = 500;
 
 #[cfg(test)]
-static SQLITE_JSON_DOCUMENT_DECODE_COUNT: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    static SQLITE_JSON_DOCUMENT_DECODE_COUNT: Cell<usize> = const { Cell::new(0) };
+}
+#[cfg(test)]
+static SQLITE_DOCUMENT_BY_ID_CALL_COUNT: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+static SQLITE_DOCUMENTS_BY_IDS_CALL_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(test)]
 pub fn reset_sqlite_json_document_decode_count() {
-    SQLITE_JSON_DOCUMENT_DECODE_COUNT.store(0, Ordering::SeqCst);
+    SQLITE_JSON_DOCUMENT_DECODE_COUNT.with(|count| count.set(0));
 }
 
 #[cfg(test)]
 pub fn sqlite_json_document_decode_count() -> usize {
-    SQLITE_JSON_DOCUMENT_DECODE_COUNT.load(Ordering::SeqCst)
+    SQLITE_JSON_DOCUMENT_DECODE_COUNT.with(Cell::get)
+}
+
+#[cfg(test)]
+pub fn reset_sqlite_document_lookup_counts() {
+    SQLITE_DOCUMENT_BY_ID_CALL_COUNT.store(0, Ordering::SeqCst);
+    SQLITE_DOCUMENTS_BY_IDS_CALL_COUNT.store(0, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+pub fn sqlite_document_by_id_call_count() -> usize {
+    SQLITE_DOCUMENT_BY_ID_CALL_COUNT.load(Ordering::SeqCst)
+}
+
+#[cfg(test)]
+pub fn sqlite_documents_by_ids_call_count() -> usize {
+    SQLITE_DOCUMENTS_BY_IDS_CALL_COUNT.load(Ordering::SeqCst)
 }
 
 pub fn table_name(database_name: &str, collection_name: &str, schema_version: i32) -> String {
@@ -245,7 +269,7 @@ pub fn compile_count_sql(
 
 fn decode_document_json(data: &str) -> RxResult<Value> {
     #[cfg(test)]
-    SQLITE_JSON_DOCUMENT_DECODE_COUNT.fetch_add(1, Ordering::SeqCst);
+    SQLITE_JSON_DOCUMENT_DECODE_COUNT.with(|count| count.set(count.get() + 1));
 
     serde_json::from_str(data).map_err(|err| {
         new_rx_error(
@@ -547,6 +571,8 @@ where
 }
 
 pub fn document_by_id(conn: &Connection, table: &str, id: &str) -> RxResult<Option<Value>> {
+    #[cfg(test)]
+    SQLITE_DOCUMENT_BY_ID_CALL_COUNT.fetch_add(1, Ordering::SeqCst);
     let data: Option<String> = conn
         .query_row(
             &format!("SELECT data FROM {} WHERE id = ?", quote_identifier(table)),
@@ -564,6 +590,8 @@ pub fn documents_by_ids(
     ids: &[String],
     with_deleted: bool,
 ) -> RxResult<Vec<Value>> {
+    #[cfg(test)]
+    SQLITE_DOCUMENTS_BY_IDS_CALL_COUNT.fetch_add(1, Ordering::SeqCst);
     if ids.is_empty() {
         return Ok(Vec::new());
     }

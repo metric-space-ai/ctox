@@ -1158,6 +1158,39 @@ function getTaskState(chat) {
   return 'idle';
 }
 
+function chatTrackingSummary(chat) {
+  const messages = Array.isArray(chat?.messages) ? chat.messages : [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index] || {};
+    const commandId = String(message.commandId || message.command_id || '').trim();
+    const taskId = String(message.taskId || message.task_id || '').trim();
+    if (!commandId && !taskId) continue;
+    const status = canonicalTrackingStatus(message.status || 'queued') || 'queued';
+    return {
+      tracking_active: message.trackable !== false && isActiveTrackingStatus(status),
+      tracking_status: status,
+      tracking_id: taskId || commandId,
+      tracking_command_id: commandId,
+      tracking_task_id: taskId,
+      tracking_message_id: String(message.id || '').trim(),
+    };
+  }
+  return {
+    tracking_active: false,
+    tracking_status: '',
+    tracking_id: '',
+    tracking_command_id: '',
+    tracking_task_id: '',
+    tracking_message_id: '',
+  };
+}
+
+function applyChatTrackingSummary(chat) {
+  if (!chat || typeof chat !== 'object') return chat;
+  Object.assign(chat, chatTrackingSummary(chat));
+  return chat;
+}
+
 function expandChatOnly(state, activeChat) {
   state.activeChatId = activeChat.id;
   activeChat.open = true;
@@ -1876,6 +1909,7 @@ function touchChats(state, chats) {
     if (!chat) return;
     chat.owner_user_id = chat.owner_user_id || state.ownerUserId || '';
     chat.updated_at_ms = now;
+    applyChatTrackingSummary(chat);
   });
 }
 
@@ -2102,6 +2136,7 @@ async function syncTrackedMessages({ state, db }) {
   const queue = db?.raw?.ctox_queue_tasks;
   if (!commands && !queue) return false;
   for (const chat of state.chats) {
+    let chatChanged = false;
     for (const message of chat.messages) {
       if (!message.commandId && !message.taskId) continue;
       const commandDoc = message.commandId && commands ? await findDoc(commands, message.commandId) : null;
@@ -2112,11 +2147,13 @@ async function syncTrackedMessages({ state, db }) {
       if (orphanedTracking && message.trackable !== false) {
         message.trackable = false;
         changed = true;
+        chatChanged = true;
       }
       if (nextTaskId && nextTaskId !== message.taskId) {
         message.taskId = nextTaskId;
         chat.lastTrackingId = nextTaskId;
         changed = true;
+        chatChanged = true;
       }
       if (nextStatus && nextStatus !== message.status) {
         message.status = nextStatus;
@@ -2124,6 +2161,7 @@ async function syncTrackedMessages({ state, db }) {
           message.text = 'CTOX kann diese ältere Aufgabe nicht mehr verfolgen: kein passender Command oder Queue-Task ist vorhanden.';
         }
         changed = true;
+        chatChanged = true;
       }
       const outbound = extractOutboundText(commandDoc) || extractOutboundText(taskDoc);
       if (outbound && !chat.messages.some((item) => item.replyFor === (message.taskId || message.commandId))) {
@@ -2138,6 +2176,7 @@ async function syncTrackedMessages({ state, db }) {
           createdAt: Date.now(),
         });
         changed = true;
+        chatChanged = true;
       }
       if (isFailureStatus(nextStatus) && !chat.messages.some((item) => item.failureFor === (message.taskId || message.commandId))) {
         chat.messages.push({
@@ -2151,8 +2190,10 @@ async function syncTrackedMessages({ state, db }) {
           createdAt: Date.now(),
         });
         changed = true;
+        chatChanged = true;
       }
     }
+    if (chatChanged) applyChatTrackingSummary(chat);
   }
   return changed;
 }
@@ -2338,7 +2379,7 @@ function ensureChat(state, session = null) {
 function createChat(owner = '', dateStr = '') {
   const targetDateStr = dateStr || getLocalDateString(Date.now());
   const timestamp = createTimestampForDateString(targetDateStr);
-  return {
+  return applyChatTrackingSummary({
     id: `chat_${crypto.randomUUID()}`,
     title: 'CTOX',
     open: true,
@@ -2350,7 +2391,7 @@ function createChat(owner = '', dateStr = '') {
     contextMeta: {},
     createdAt: timestamp,
     updated_at_ms: timestamp,
-  };
+  });
 }
 
 function chatContextMetaFromDetail(detail = {}) {
@@ -2498,12 +2539,13 @@ async function persistChatState({ state, db }) {
   for (const chat of ownedChats) {
     chat.owner_user_id = chat.owner_user_id || state.ownerUserId || '';
     chat.updated_at_ms = now;
+    applyChatTrackingSummary(chat);
   }
   writeChatState(state);
   const collection = db?.raw?.[CHAT_COLLECTION];
   if (!collection) return;
   for (const chat of ownedChats) {
-    const doc = {
+    const doc = applyChatTrackingSummary({
       ...chat,
       messages: Array.isArray(chat.messages) ? chat.messages.slice(-40) : [],
       draft: chat.draft || '',
@@ -2514,7 +2556,7 @@ async function persistChatState({ state, db }) {
       scheduledAttachmentsByCommand: chat.scheduledAttachmentsByCommand && typeof chat.scheduledAttachmentsByCommand === 'object'
         ? chat.scheduledAttachmentsByCommand
         : {},
-    };
+    });
     try {
       const existing = await collection.findOne(chat.id).exec();
       if (existing) await existing.incrementalPatch(doc);
@@ -2603,7 +2645,7 @@ function mergeChatPair(localChat, remoteChat, owner) {
   const localIsNewer = (local.updated_at_ms || 0) >= (remote.updated_at_ms || 0);
   const base = localIsNewer ? local : remote;
   const messages = mergeChatMessages(local.messages, remote.messages);
-  return {
+  return applyChatTrackingSummary({
     ...base,
     title: local.title || remote.title || base.title,
     open: local.open !== false || remote.open !== false,
@@ -2621,7 +2663,7 @@ function mergeChatPair(localChat, remoteChat, owner) {
     },
     showFollowUp: Boolean(local.showFollowUp),
     updated_at_ms: Math.max(local.updated_at_ms || 0, remote.updated_at_ms || 0),
-  };
+  });
 }
 
 function mergeChatMessages(localMessages = [], remoteMessages = []) {
@@ -2667,7 +2709,7 @@ function preferredChatTrackingId(local, remote, messages) {
 }
 
 function normalizeChat(chat) {
-  return {
+  return applyChatTrackingSummary({
     id: chat.id || `chat_${crypto.randomUUID()}`,
     title: chat.title || 'CTOX',
     open: chat.open !== false,
@@ -2685,7 +2727,7 @@ function normalizeChat(chat) {
     scheduledAttachmentsByCommand: chat.scheduledAttachmentsByCommand && typeof chat.scheduledAttachmentsByCommand === 'object'
       ? chat.scheduledAttachmentsByCommand
       : {},
-  };
+  });
 }
 
 function stripDraftsForCompare(chats) {

@@ -32,23 +32,95 @@ use crate::types::{
 
 use super::cleanup::cleanup_deleted_documents;
 use super::sql::{
-    compile_count_sql, compile_query_sql, count_with_compiled_sql, document_by_id,
-    documents_by_ids, drop_table, for_each_document, for_each_document_with_compiled_sql,
-    insert_document, query_documents_with_compiled_sql, quote_identifier, update_document,
-    CompiledSqliteQuery,
+    compile_count_sql, compile_query_sql, count_with_compiled_sql, documents_by_ids, drop_table,
+    for_each_document, for_each_document_with_compiled_sql, insert_document,
+    query_documents_with_compiled_sql, quote_identifier, update_document, CompiledSqliteQuery,
 };
 use super::types::{sqlite_error, SharedSqliteConnection};
 
 const SQLITE_EXTERNAL_POLL_FILE_CHUNK_LIMIT: u64 = 2;
+const SQLITE_EXTERNAL_POLL_DEFAULT_LIMIT: u64 = 50;
+const SQLITE_EXTERNAL_POLL_MAX_BATCHES_PER_WAKE: usize = 32;
 const SQLITE_EXTERNAL_POLL_SAFETY_INTERVAL: Duration = Duration::from_secs(60);
+const SQLITE_QUERY_STREAM_UNSUPPORTED: &str = "SQLITE_QUERY_STREAM_UNSUPPORTED";
 
 static INSTANCE_ID: AtomicU64 = AtomicU64::new(0);
+static SQLITE_BULK_WRITE_CALLS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_BULK_WRITE_ROWS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_FIND_DOCUMENTS_BY_ID_CALLS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_FIND_DOCUMENTS_BY_ID_REQUESTED: AtomicU64 = AtomicU64::new(0);
+static SQLITE_FIND_DOCUMENTS_BY_ID_RESULTS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_CHANGED_DOCUMENTS_SINCE_CALLS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_CHANGED_DOCUMENTS_SINCE_RESULTS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_QUERY_CALLS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_QUERY_RESULTS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_QUERY_FALLBACK_CALLS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_QUERY_FALLBACK_ROWS_VISITED: AtomicU64 = AtomicU64::new(0);
+static SQLITE_COUNT_CALLS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_COUNT_FALLBACK_QUERY_CALLS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_QUERY_STREAM_CALLS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_QUERY_STREAM_RESULTS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_QUERY_STREAM_UNSUPPORTED_CALLS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_READ_ONLY_OPEN_FAILURES: AtomicU64 = AtomicU64::new(0);
+static SQLITE_WRITER_FALLBACKS: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static CHANGED_DOCUMENTS_SINCE_TABLE_CALLS: OnceLock<StdMutex<HashMap<String, usize>>> =
+    OnceLock::new();
 #[cfg(test)]
 static FIND_DOCUMENTS_BY_ID_WRITER_FALLBACKS: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 static CHANGED_DOCUMENTS_SINCE_WRITER_FALLBACKS: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 static QUERY_WRITER_FALLBACKS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+static TEST_EXTERNAL_POLL_SAFETY_INTERVAL_MS: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(test)]
+fn reset_changed_documents_since_table_call_count(table_name: &str) {
+    let mut counts = CHANGED_DOCUMENTS_SINCE_TABLE_CALLS
+        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    counts.insert(table_name.to_string(), 0);
+}
+
+#[cfg(test)]
+fn changed_documents_since_table_call_count(table_name: &str) -> usize {
+    let counts = CHANGED_DOCUMENTS_SINCE_TABLE_CALLS
+        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    counts.get(table_name).copied().unwrap_or(0)
+}
+
+#[cfg(test)]
+fn set_test_external_poll_safety_interval_ms(ms: u64) {
+    TEST_EXTERNAL_POLL_SAFETY_INTERVAL_MS.store(ms, Ordering::SeqCst);
+}
+
+pub fn sqlite_runtime_counters_snapshot() -> Value {
+    json!({
+        "schema": "ctox.rxdb.sqlite.runtime_counters.v1",
+        "bulk_write_calls": SQLITE_BULK_WRITE_CALLS.load(Ordering::Relaxed),
+        "bulk_write_rows": SQLITE_BULK_WRITE_ROWS.load(Ordering::Relaxed),
+        "find_documents_by_id_calls": SQLITE_FIND_DOCUMENTS_BY_ID_CALLS.load(Ordering::Relaxed),
+        "find_documents_by_id_requested": SQLITE_FIND_DOCUMENTS_BY_ID_REQUESTED.load(Ordering::Relaxed),
+        "find_documents_by_id_results": SQLITE_FIND_DOCUMENTS_BY_ID_RESULTS.load(Ordering::Relaxed),
+        "changed_documents_since_calls": SQLITE_CHANGED_DOCUMENTS_SINCE_CALLS.load(Ordering::Relaxed),
+        "changed_documents_since_results": SQLITE_CHANGED_DOCUMENTS_SINCE_RESULTS.load(Ordering::Relaxed),
+        "query_calls": SQLITE_QUERY_CALLS.load(Ordering::Relaxed),
+        "query_results": SQLITE_QUERY_RESULTS.load(Ordering::Relaxed),
+        "query_fallback_calls": SQLITE_QUERY_FALLBACK_CALLS.load(Ordering::Relaxed),
+        "query_fallback_rows_visited": SQLITE_QUERY_FALLBACK_ROWS_VISITED.load(Ordering::Relaxed),
+        "count_calls": SQLITE_COUNT_CALLS.load(Ordering::Relaxed),
+        "count_fallback_query_calls": SQLITE_COUNT_FALLBACK_QUERY_CALLS.load(Ordering::Relaxed),
+        "query_stream_calls": SQLITE_QUERY_STREAM_CALLS.load(Ordering::Relaxed),
+        "query_stream_results": SQLITE_QUERY_STREAM_RESULTS.load(Ordering::Relaxed),
+        "query_stream_unsupported_calls": SQLITE_QUERY_STREAM_UNSUPPORTED_CALLS.load(Ordering::Relaxed),
+        "read_only_open_failures": SQLITE_READ_ONLY_OPEN_FAILURES.load(Ordering::Relaxed),
+        "writer_fallbacks": SQLITE_WRITER_FALLBACKS.load(Ordering::Relaxed),
+    })
+}
 
 /// FIX 1: map a `tokio::task::JoinError` (blocking task panicked or was
 /// cancelled) into an `RxError` so the storage methods can keep their
@@ -127,6 +199,46 @@ pub fn table_change_generation(database_key: &str, table_name: &str) -> Option<u
         .map(|notifier| notifier.generation())
 }
 
+pub fn table_change_generation_for_path(database_path: &Path, table_name: &str) -> Option<u64> {
+    table_change_generation(&database_key_for_path(database_path), table_name)
+}
+
+pub async fn wait_for_table_change_for_path(
+    database_path: &Path,
+    table_name: &str,
+    seen_generation: u64,
+    timeout_duration: Duration,
+) -> u64 {
+    let database_key = database_key_for_path(database_path);
+    let notifier = UPDATE_REGISTRY.get().and_then(|registry| {
+        let map = registry.lock().unwrap();
+        map.get(&registry_key(&database_key, table_name)).cloned()
+    });
+    let Some(notifier) = notifier else {
+        tokio::time::sleep(timeout_duration).await;
+        return table_change_generation(&database_key, table_name).unwrap_or(seen_generation);
+    };
+    loop {
+        let notified = notifier.notify.notified();
+        tokio::pin!(notified);
+        let current_generation = notifier.generation();
+        if current_generation != seen_generation {
+            return current_generation;
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(timeout_duration) => {
+                return notifier.generation();
+            }
+            _ = &mut notified => {
+                let current_generation = notifier.generation();
+                if current_generation != seen_generation {
+                    return current_generation;
+                }
+            }
+        }
+    }
+}
+
 pub fn notify_database_change(database_key: &str) {
     if let Some(registry) = UPDATE_REGISTRY.get() {
         let map = registry.lock().unwrap();
@@ -154,6 +266,7 @@ pub struct RxStorageInstanceSqlite {
     changes: RxSubject<EventBulk>,
     closed: Arc<AtomicBool>,
     external_checkpoint: Arc<Mutex<Value>>,
+    external_notifier: Arc<TableNotifier>,
     instance_id: u64,
 }
 
@@ -181,13 +294,15 @@ impl RxStorageInstanceSqlite {
 
         start_external_write_poll(
             Arc::clone(&connection),
+            database_path.clone(),
             table_name.clone(),
             primary_path.clone(),
             changes.clone(),
             Arc::clone(&closed),
             Arc::clone(&external_checkpoint),
-            notifier,
+            Arc::clone(&notifier),
         );
+        let external_notifier = notifier;
         Self {
             database_name: params.database_name,
             collection_name: params.collection_name,
@@ -200,6 +315,7 @@ impl RxStorageInstanceSqlite {
             changes,
             closed,
             external_checkpoint,
+            external_notifier,
             instance_id: INSTANCE_ID.fetch_add(1, Ordering::SeqCst),
         }
     }
@@ -307,13 +423,17 @@ fn execute_query_documents(
         return query_documents_with_compiled_sql(conn, &compiled);
     }
 
+    SQLITE_QUERY_FALLBACK_CALLS.fetch_add(1, Ordering::Relaxed);
+    let mut visited_rows = 0u64;
     let mut rows: Vec<Value> = Vec::new();
     for_each_document(conn, table_name, |doc| {
+        visited_rows = visited_rows.saturating_add(1);
         if matcher(&doc) {
             rows.push(doc);
         }
         Ok(true)
     })?;
+    SQLITE_QUERY_FALLBACK_ROWS_VISITED.fetch_add(visited_rows, Ordering::Relaxed);
     rows.sort_by(|a, b| comparator(a, b));
     let start = skip.min(rows.len());
     let end = skip_plus_limit.min(rows.len());
@@ -322,6 +442,7 @@ fn execute_query_documents(
 
 fn start_external_write_poll(
     connection: SharedSqliteConnection,
+    database_path: std::path::PathBuf,
     table_name: String,
     primary_path: String,
     changes: RxSubject<EventBulk>,
@@ -332,21 +453,29 @@ fn start_external_write_poll(
     let Ok(_) = tokio::runtime::Handle::try_current() else {
         return;
     };
+    let safety_interval = external_poll_safety_interval_for_path(&database_path);
     tokio::spawn(async move {
         let mut seen_generation = 0;
         loop {
             let mut safety_poll = false;
             if notifier.generation.load(Ordering::SeqCst) == seen_generation {
-                tokio::select! {
-                    _ = tokio::time::sleep(SQLITE_EXTERNAL_POLL_SAFETY_INTERVAL) => {
-                        // Rare rescue path in case an update notification is
-                        // lost or this storage was opened without the
-                        // database-wide external-change watcher.
-                        safety_poll = true;
+                if let Some(safety_interval) = safety_interval {
+                    tokio::select! {
+                        _ = tokio::time::sleep(safety_interval) => {
+                            // Rare rescue path in case an update notification is
+                            // lost or this storage was opened without the
+                            // database-wide external-change watcher.
+                            safety_poll = true;
+                        }
+                        _ = notifier.notify.notified() => {
+                            // Instant notification from SQLite update_hook or the
+                            // database-wide external-change watcher.
+                        }
                     }
-                    _ = notifier.notify.notified() => {
-                        // Instant notification from SQLite update_hook or the
-                        // database-wide external-change watcher.
+                } else {
+                    notifier.notify.notified().await;
+                    if closed.load(Ordering::SeqCst) {
+                        break;
                     }
                 }
             }
@@ -364,61 +493,150 @@ fn start_external_write_poll(
             // starves the heartbeat timer + replication. We move owned clones
             // into `spawn_blocking` and only await the `Send` result here.
             let poll_conn = Arc::clone(&connection);
+            let poll_database_path = database_path.clone();
             let poll_table = table_name.clone();
             let poll_primary = primary_path.clone();
             let poll_checkpoint = checkpoint.lock().clone();
             let result = tokio::task::spawn_blocking(move || {
-                let conn = poll_conn.lock();
-                let poll_limit = if poll_table.contains("desktop_file_chunks") {
-                    SQLITE_EXTERNAL_POLL_FILE_CHUNK_LIMIT
-                } else {
-                    50
-                };
-                changed_documents_since(
+                if sqlite_path_is_in_memory(&poll_database_path) {
+                    let conn = poll_conn.lock();
+                    return drain_external_changed_documents_since(
+                        &conn,
+                        &poll_table,
+                        &poll_primary,
+                        poll_checkpoint,
+                    );
+                }
+                let conn = open_read_only_connection_for_path(&poll_database_path)?;
+                drain_external_changed_documents_since(
                     &conn,
                     &poll_table,
                     &poll_primary,
-                    poll_limit,
-                    Some(&poll_checkpoint),
+                    poll_checkpoint,
                 )
             })
             .await;
-            let Ok(Ok(result)) = result else {
+            let Ok(Ok(drain)) = result else {
                 continue;
             };
-            if result.documents.is_empty() {
-                *checkpoint.lock() = result.checkpoint;
+            if drain.batches.is_empty() {
+                *checkpoint.lock() = drain.checkpoint;
                 continue;
             }
-            let events = result
-                .documents
-                .iter()
-                .filter_map(|doc| {
-                    let id = doc.get(&primary_path).and_then(Value::as_str)?;
-                    let deleted = doc
-                        .get("_deleted")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false);
-                    Some(crate::types::RxStorageChangeEvent {
-                        operation: if deleted { "DELETE" } else { "UPDATE" }.to_string(),
-                        document_id: id.to_string(),
-                        document_data: Some(doc.clone()),
-                        previous_document_data: None,
-                        is_local: false,
+            let drained_to_empty = drain.drained_to_empty;
+            *checkpoint.lock() = drain.checkpoint.clone();
+            for batch in drain.batches {
+                let events = batch
+                    .documents
+                    .iter()
+                    .filter_map(|doc| {
+                        let id = doc.get(&primary_path).and_then(Value::as_str)?;
+                        let deleted = doc
+                            .get("_deleted")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
+                        Some(crate::types::RxStorageChangeEvent {
+                            operation: if deleted { "DELETE" } else { "UPDATE" }.to_string(),
+                            document_id: id.to_string(),
+                            document_data: Some(doc.clone()),
+                            previous_document_data: None,
+                            is_local: false,
+                        })
                     })
-                })
-                .collect::<Vec<_>>();
-            *checkpoint.lock() = result.checkpoint.clone();
-            if !events.is_empty() {
-                changes.next(EventBulk {
-                    id: random_token(Some(10)),
-                    events,
-                    checkpoint: Some(result.checkpoint),
-                    context: Some("sqlite-external-poll".to_string()),
-                });
+                    .collect::<Vec<_>>();
+                if !events.is_empty() {
+                    changes.next(EventBulk {
+                        id: random_token(Some(10)),
+                        events,
+                        checkpoint: Some(batch.checkpoint),
+                        context: Some("sqlite-external-poll".to_string()),
+                    });
+                }
+            }
+            if !drained_to_empty && !closed.load(Ordering::SeqCst) {
+                notifier.signal();
             }
         }
     });
+}
+
+fn external_poll_safety_interval_for_path(database_path: &Path) -> Option<Duration> {
+    if sqlite_path_is_in_memory(database_path) {
+        Some(external_poll_safety_interval())
+    } else {
+        None
+    }
+}
+
+fn external_poll_safety_interval() -> Duration {
+    #[cfg(test)]
+    {
+        let override_ms = TEST_EXTERNAL_POLL_SAFETY_INTERVAL_MS.load(Ordering::SeqCst);
+        if override_ms > 0 {
+            return Duration::from_millis(override_ms);
+        }
+    }
+    SQLITE_EXTERNAL_POLL_SAFETY_INTERVAL
+}
+
+fn sqlite_path_is_in_memory(path: &Path) -> bool {
+    path.to_string_lossy() == ":memory:"
+}
+
+fn open_read_only_connection_for_path(path: &Path) -> RxResult<rusqlite::Connection> {
+    use rusqlite::OpenFlags;
+    let conn = rusqlite::Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(super::types::sqlite_error)?;
+    conn.busy_timeout(std::time::Duration::from_secs(10))
+        .map_err(super::types::sqlite_error)?;
+    Ok(conn)
+}
+
+struct ExternalPollDrain {
+    batches: Vec<RxStorageChangedDocumentsSinceResult>,
+    checkpoint: Value,
+    drained_to_empty: bool,
+}
+
+fn drain_external_changed_documents_since(
+    conn: &rusqlite::Connection,
+    table_name: &str,
+    primary_path: &str,
+    initial_checkpoint: Value,
+) -> RxResult<ExternalPollDrain> {
+    let poll_limit = if table_name.contains("desktop_file_chunks") {
+        SQLITE_EXTERNAL_POLL_FILE_CHUNK_LIMIT
+    } else {
+        SQLITE_EXTERNAL_POLL_DEFAULT_LIMIT
+    };
+    let mut checkpoint = initial_checkpoint;
+    let mut batches = Vec::new();
+    for _ in 0..SQLITE_EXTERNAL_POLL_MAX_BATCHES_PER_WAKE {
+        let result = changed_documents_since(
+            conn,
+            table_name,
+            primary_path,
+            poll_limit,
+            Some(&checkpoint),
+        )?;
+        checkpoint = result.checkpoint.clone();
+        if result.documents.is_empty() {
+            return Ok(ExternalPollDrain {
+                batches,
+                checkpoint,
+                drained_to_empty: true,
+            });
+        }
+        batches.push(result);
+    }
+    Ok(ExternalPollDrain {
+        batches,
+        checkpoint,
+        drained_to_empty: false,
+    })
 }
 
 fn latest_checkpoint(conn: &rusqlite::Connection, table_name: &str) -> Option<Value> {
@@ -458,6 +676,16 @@ fn changed_documents_since(
     limit: u64,
     checkpoint: Option<&Value>,
 ) -> Result<RxStorageChangedDocumentsSinceResult, RxError> {
+    SQLITE_CHANGED_DOCUMENTS_SINCE_CALLS.fetch_add(1, Ordering::Relaxed);
+    #[cfg(test)]
+    {
+        let mut counts = CHANGED_DOCUMENTS_SINCE_TABLE_CALLS
+            .get_or_init(|| StdMutex::new(HashMap::new()))
+            .lock()
+            .unwrap();
+        *counts.entry(table_name.to_string()).or_insert(0) += 1;
+    }
+
     let since_lwt = checkpoint
         .and_then(|checkpoint| checkpoint.get("lwt"))
         .and_then(Value::as_f64)
@@ -501,6 +729,7 @@ fn changed_documents_since(
         })
         .or_else(|| checkpoint.cloned())
         .unwrap_or_else(|| json!({ "id": "", "lwt": 0 }));
+    SQLITE_CHANGED_DOCUMENTS_SINCE_RESULTS.fetch_add(documents.len() as u64, Ordering::Relaxed);
     Ok(RxStorageChangedDocumentsSinceResult {
         documents,
         checkpoint,
@@ -527,6 +756,8 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         context: &str,
     ) -> Result<RxStorageBulkWriteResponse, RxError> {
         self.ensure_open("bulk_write")?;
+        SQLITE_BULK_WRITE_CALLS.fetch_add(1, Ordering::Relaxed);
+        SQLITE_BULK_WRITE_ROWS.fetch_add(document_writes.len() as u64, Ordering::Relaxed);
 
         // FIX 1: run the blocking rusqlite transaction on a dedicated blocking
         // thread instead of a tokio worker. Holding the connection mutex while
@@ -602,7 +833,7 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
                 // table. `categorize_bulk_write_rows` looks up the current DB state
                 // per write id, so a full-table scan made every bulk_write O(N) in
                 // collection size (O(N^2) over a replication run, all under the
-                // global write mutex) — the dominant scaling risk for large
+                // global write mutex), the dominant scaling risk for large
                 // collections (documents, blob chunks). Fetch by id via the
                 // primary-key index instead.
                 let mut ids: Vec<String> = Vec::with_capacity(document_writes.len());
@@ -613,9 +844,9 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
                 }
                 ids.sort_unstable();
                 ids.dedup();
-                for id in ids {
-                    if let Some(doc) = document_by_id(&tx, &table_name, &id)? {
-                        docs_in_db.insert(id, doc);
+                for doc in documents_by_ids(&tx, &table_name, &ids, true)? {
+                    if let Some(id) = doc.get(&primary_path).and_then(Value::as_str) {
+                        docs_in_db.insert(id.to_string(), doc);
                     }
                 }
             }
@@ -677,15 +908,22 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         with_deleted: bool,
     ) -> Result<Vec<Value>, RxError> {
         self.ensure_open("find_documents_by_id")?;
+        SQLITE_FIND_DOCUMENTS_BY_ID_CALLS.fetch_add(1, Ordering::Relaxed);
+        SQLITE_FIND_DOCUMENTS_BY_ID_REQUESTED.fetch_add(ids.len() as u64, Ordering::Relaxed);
         let table_name = self.table_name.clone();
         let ids = ids.to_vec();
         if let Ok(read_conn) = self.open_read_only_connection() {
-            return tokio::task::spawn_blocking(move || -> RxResult<Vec<Value>> {
+            let documents = tokio::task::spawn_blocking(move || -> RxResult<Vec<Value>> {
                 documents_by_ids(&read_conn, &table_name, &ids, with_deleted)
             })
             .await
-            .map_err(join_error)?;
+            .map_err(join_error)??;
+            SQLITE_FIND_DOCUMENTS_BY_ID_RESULTS
+                .fetch_add(documents.len() as u64, Ordering::Relaxed);
+            return Ok(documents);
         }
+        SQLITE_READ_ONLY_OPEN_FAILURES.fetch_add(1, Ordering::Relaxed);
+        SQLITE_WRITER_FALLBACKS.fetch_add(1, Ordering::Relaxed);
 
         #[cfg(test)]
         FIND_DOCUMENTS_BY_ID_WRITER_FALLBACKS.fetch_add(1, Ordering::SeqCst);
@@ -694,12 +932,14 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         // connections. Keep that legacy fallback, but file-backed production
         // storage must stay off the shared writer mutex for this read path.
         let connection = Arc::clone(&self.connection);
-        tokio::task::spawn_blocking(move || -> RxResult<Vec<Value>> {
+        let documents = tokio::task::spawn_blocking(move || -> RxResult<Vec<Value>> {
             let conn = connection.lock();
             documents_by_ids(&conn, &table_name, &ids, with_deleted)
         })
         .await
-        .map_err(join_error)?
+        .map_err(join_error)??;
+        SQLITE_FIND_DOCUMENTS_BY_ID_RESULTS.fetch_add(documents.len() as u64, Ordering::Relaxed);
+        Ok(documents)
     }
 
     async fn query_stream_into(
@@ -714,8 +954,18 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         self.query_stream(prepared_query, chunk_size, |batch| on_batch(batch))
     }
 
+    fn query_stream_into_blocking(
+        &self,
+        prepared_query: &Value,
+        chunk_size: usize,
+        on_batch: &mut (dyn FnMut(Vec<Value>) -> Result<bool, RxError> + Send),
+    ) -> Option<Result<(), RxError>> {
+        Some(self.query_stream(prepared_query, chunk_size, |batch| on_batch(batch)))
+    }
+
     async fn query(&self, prepared_query: &Value) -> Result<RxStorageQueryResult, RxError> {
         self.ensure_open("query")?;
+        SQLITE_QUERY_CALLS.fetch_add(1, Ordering::Relaxed);
         let query: FilledMangoQuery =
             serde_json::from_value(prepared_query.get("query").cloned().unwrap_or(Value::Null))
                 .map_err(|err| {
@@ -755,8 +1005,11 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
             })
             .await
             .map_err(join_error)??;
+            SQLITE_QUERY_RESULTS.fetch_add(documents.len() as u64, Ordering::Relaxed);
             return Ok(RxStorageQueryResult { documents });
         }
+        SQLITE_READ_ONLY_OPEN_FAILURES.fetch_add(1, Ordering::Relaxed);
+        SQLITE_WRITER_FALLBACKS.fetch_add(1, Ordering::Relaxed);
 
         #[cfg(test)]
         QUERY_WRITER_FALLBACKS.fetch_add(1, Ordering::SeqCst);
@@ -780,11 +1033,13 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         })
         .await
         .map_err(join_error)??;
+        SQLITE_QUERY_RESULTS.fetch_add(documents.len() as u64, Ordering::Relaxed);
         Ok(RxStorageQueryResult { documents })
     }
 
     async fn count(&self, prepared_query: &Value) -> Result<RxStorageCountResult, RxError> {
         self.ensure_open("count")?;
+        SQLITE_COUNT_CALLS.fetch_add(1, Ordering::Relaxed);
         let query: FilledMangoQuery =
             serde_json::from_value(prepared_query.get("query").cloned().unwrap_or(Value::Null))
                 .map_err(|err| {
@@ -805,6 +1060,8 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
                     mode: "fast".to_string(),
                 });
             }
+            SQLITE_READ_ONLY_OPEN_FAILURES.fetch_add(1, Ordering::Relaxed);
+            SQLITE_WRITER_FALLBACKS.fetch_add(1, Ordering::Relaxed);
             let connection = Arc::clone(&self.connection);
             let count = tokio::task::spawn_blocking(move || -> RxResult<u64> {
                 let conn = connection.lock();
@@ -817,10 +1074,11 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
                 mode: "fast".to_string(),
             });
         }
+        SQLITE_COUNT_FALLBACK_QUERY_CALLS.fetch_add(1, Ordering::Relaxed);
         let result = self.query(prepared_query).await?;
         Ok(RxStorageCountResult {
             count: result.documents.len() as u64,
-            mode: "fast".to_string(),
+            mode: "slow".to_string(),
         })
     }
 
@@ -897,12 +1155,14 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         .await
         .map_err(join_error)??;
         self.closed.store(true, Ordering::SeqCst);
+        self.external_notifier.signal();
         unregister_table_notifier(&self.database_key, &self.table_name);
         Ok(())
     }
 
     async fn close(&self) -> Result<(), RxError> {
         self.closed.store(true, Ordering::SeqCst);
+        self.external_notifier.signal();
         unregister_table_notifier(&self.database_key, &self.table_name);
         Ok(())
     }
@@ -944,6 +1204,8 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
 
 impl Drop for RxStorageInstanceSqlite {
     fn drop(&mut self) {
+        self.closed.store(true, Ordering::SeqCst);
+        self.external_notifier.signal();
         unregister_table_notifier(&self.database_key, &self.table_name);
     }
 }
@@ -968,6 +1230,7 @@ impl RxStorageInstanceSqlite {
         F: FnMut(Vec<Value>) -> RxResult<bool>,
     {
         self.ensure_open("query_stream")?;
+        SQLITE_QUERY_STREAM_CALLS.fetch_add(1, Ordering::Relaxed);
         let query: FilledMangoQuery =
             serde_json::from_value(prepared_query.get("query").cloned().unwrap_or(Value::Null))
                 .map_err(|err| {
@@ -976,25 +1239,24 @@ impl RxStorageInstanceSqlite {
                         Some(json!({ "message": format!("invalid prepared query: {err}") })),
                     )
                 })?;
-        let limit = query
-            .limit
-            .map(|limit| limit as usize)
-            .unwrap_or(usize::MAX);
-        let skip = query.skip.unwrap_or(0) as usize;
-        let matcher = get_query_matcher(&self.schema, &query);
-        let comparator = get_sort_comparator(&self.schema, &query);
-
         // V1.5 production-hardening: open a DEDICATED read-only connection
         // for this stream. The shared write-connection stays free for other
         // peers, replication, and same-process writes. WAL mode (set in
         // `RxStorageSqlite::connection`) makes concurrent readers cheap.
-        let read_conn = self.open_read_only_connection()?;
+        let read_conn = match self.open_read_only_connection() {
+            Ok(conn) => conn,
+            Err(err) => {
+                SQLITE_READ_ONLY_OPEN_FAILURES.fetch_add(1, Ordering::Relaxed);
+                return Err(err);
+            }
+        };
 
         if let Some(compiled) = compile_query_sql(&self.table_name, &self.primary_path, &query) {
             let chunk = chunk_size.max(1);
             let mut batch = Vec::with_capacity(chunk);
             let mut keep_streaming = true;
             for_each_document_with_compiled_sql(&read_conn, &compiled, |doc| {
+                SQLITE_QUERY_STREAM_RESULTS.fetch_add(1, Ordering::Relaxed);
                 batch.push(doc);
                 if batch.len() >= chunk {
                     let emit = std::mem::take(&mut batch);
@@ -1013,103 +1275,25 @@ impl RxStorageInstanceSqlite {
             return Ok(());
         }
 
-        // Correctness: skip + global sort require us to know the order of
-        // ALL matches before deciding which N to emit. Per-chunk sorting
-        // would mis-page across batches.
-        //
-        // Scalability: when `limit` is set (the V1.5 windowed case), we only
-        // need the top-(skip+limit) matches in global sort order, then we
-        // drop the first `skip` rows. We keep a single bounded, sorted-by-
-        // comparator buffer of capacity `cap = skip+limit` and stream rows
-        // through it: a row that compares >= the current worst-of-top-K is
-        // discarded immediately. Memory is therefore O(skip+limit), not
-        // O(matches). For 1M matches and limit=100, that's 100 docs in RAM
-        // instead of 1M.
-        //
-        // When `limit` is unbounded (rare V1.5 path; mostly replication
-        // pull-all), we fall back to collecting all matches. That mode is
-        // already the right shape for pull-replication callers and will be
-        // addressed separately when limit-less sort gets pushed into SQLite.
-        let cap = skip.saturating_add(limit);
-        let chunk = chunk_size.max(1);
-        if cap < usize::MAX {
-            // Bounded top-K scan. `top` is kept ASC-sorted by the query's
-            // sort order; `top[0]` is the best match, `top[cap-1]` is the
-            // worst element we still keep.
-            let mut top: Vec<Value> = Vec::with_capacity(cap.min(64 * 1024));
-            for_each_document(&read_conn, &self.table_name, |doc| {
-                if !matcher(&doc) {
-                    return Ok(true);
-                }
-                if top.len() < cap {
-                    let pos = top.partition_point(|existing| {
-                        comparator(existing, &doc) != std::cmp::Ordering::Greater
-                    });
-                    top.insert(pos, doc);
-                } else {
-                    // top is full; discard `doc` unless it is strictly better
-                    // than the current worst (=last) element.
-                    let worst = top.last().expect("top is full so non-empty");
-                    if comparator(&doc, worst) == std::cmp::Ordering::Less {
-                        let pos = top.partition_point(|existing| {
-                            comparator(existing, &doc) != std::cmp::Ordering::Greater
-                        });
-                        top.insert(pos, doc);
-                        top.pop();
-                    }
-                }
-                Ok(true)
-            })?;
-            if skip >= top.len() {
-                return Ok(());
-            }
-            let mut window = top.split_off(skip);
-            drop(top);
-            // window.len() <= limit by construction (cap = skip + limit).
-            while !window.is_empty() {
-                let take = window.len().min(chunk);
-                let batch: Vec<Value> = window.drain(..take).collect();
-                if !visit(batch)? {
-                    return Ok(());
-                }
-            }
-            return Ok(());
-        }
-        // Limit-less path (cap == usize::MAX). Collect all matches, global
-        // sort, drop skip, emit. Memory: O(matches).
-        let mut matches: Vec<Value> = Vec::new();
-        for_each_document(&read_conn, &self.table_name, |doc| {
-            if matcher(&doc) {
-                matches.push(doc);
-            }
-            Ok(true)
-        })?;
-        matches.sort_by(|a, b| comparator(a, b));
-        if skip >= matches.len() {
-            return Ok(());
-        }
-        let mut window = matches.split_off(skip);
-        drop(matches);
-        while !window.is_empty() {
-            let take = window.len().min(chunk);
-            let batch: Vec<Value> = window.drain(..take).collect();
-            if !visit(batch)? {
-                return Ok(());
-            }
-        }
-        Ok(())
+        SQLITE_QUERY_STREAM_UNSUPPORTED_CALLS.fetch_add(1, Ordering::Relaxed);
+        Err(new_rx_error(
+            SQLITE_QUERY_STREAM_UNSUPPORTED,
+            Some(json!({
+                "message": "query_stream requires a SQL-compilable Mango query; refusing Rust matcher fallback on the WebRTC query-fetch hot path",
+                "collection": self.collection_name,
+                "table": self.table_name,
+            })),
+        ))
     }
 
     fn open_read_only_connection(&self) -> RxResult<rusqlite::Connection> {
-        use rusqlite::OpenFlags;
         let path = &self.database_path;
-        let path_str = path.to_string_lossy();
         // SQLite supports `:memory:` only for the connection that created
         // it. Memory DBs are used in tests where we don't run concurrent
         // streams against the same instance, so falling back to the shared
         // connection is acceptable. For file-backed DBs, WAL mode gives us
         // a real concurrent reader.
-        if path_str == ":memory:" {
+        if sqlite_path_is_in_memory(path) {
             // Fall back to the shared connection by cloning the connection
             // primitive — but we still need to release it after the stream.
             // The shared lock is held just for this stream; this is the
@@ -1122,14 +1306,7 @@ impl RxStorageInstanceSqlite {
                 })),
             ));
         }
-        let conn = rusqlite::Connection::open_with_flags(
-            path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .map_err(super::types::sqlite_error)?;
-        conn.busy_timeout(std::time::Duration::from_secs(10))
-            .map_err(super::types::sqlite_error)?;
-        Ok(conn)
+        open_read_only_connection_for_path(path)
     }
 }
 
@@ -1142,16 +1319,25 @@ fn _zero_use() {
 mod tests {
     use super::*;
 
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     use crate::rx_query_helper::{normalize_mango_query, prepare_query};
     use crate::storage::sqlite::sql::{
-        reset_sqlite_json_document_decode_count, sqlite_json_document_decode_count,
+        reset_sqlite_document_lookup_counts, reset_sqlite_json_document_decode_count,
+        sqlite_document_by_id_call_count, sqlite_documents_by_ids_call_count,
+        sqlite_json_document_decode_count,
     };
     use crate::storage::sqlite::{
         create_storage_instance, get_rx_storage_sqlite, RxStorageSqliteSettings,
     };
     use crate::types::{JsonSchema, MangoQuery, PrimaryKey, RxStorageInstanceCreationParams};
+
+    fn runtime_counter(name: &str) -> u64 {
+        sqlite_runtime_counters_snapshot()
+            .get(name)
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    }
 
     fn test_schema() -> RxJsonSchema {
         let mut properties = HashMap::new();
@@ -1245,6 +1431,14 @@ mod tests {
             "_meta": { "lwt": lwt },
             "_attachments": {}
         })
+    }
+
+    struct ExternalPollSafetyIntervalReset;
+
+    impl Drop for ExternalPollSafetyIntervalReset {
+        fn drop(&mut self) {
+            set_test_external_poll_safety_interval_ms(0);
+        }
     }
 
     #[tokio::test]
@@ -1381,6 +1575,7 @@ mod tests {
         );
 
         // Valid update (correct previous rev) + a fresh insert.
+        reset_sqlite_document_lookup_counts();
         let resp = instance
             .bulk_write(
                 vec![
@@ -1401,6 +1596,16 @@ mod tests {
             resp.error.is_empty(),
             "valid update+insert must not error: {:?}",
             resp.error
+        );
+        assert_eq!(
+            sqlite_document_by_id_call_count(),
+            0,
+            "bulk_write current-state load must not issue per-id document_by_id calls"
+        );
+        assert_eq!(
+            sqlite_documents_by_ids_call_count(),
+            1,
+            "bulk_write current-state load should use one batched ids lookup"
         );
 
         let got = instance
@@ -1629,11 +1834,13 @@ mod tests {
                 skip: Some(0),
             },
         );
-        let prepared = prepare_query(&schema, filled.clone()).unwrap();
+        let compiled = compile_query_sql(&instance.table_name, &instance.primary_path, &filled)
+            .expect("age selector should compile to SQL");
+        let conn = storage.connection().unwrap();
+        let conn = conn.lock();
         reset_sqlite_json_document_decode_count();
-        let result = instance.query(&prepared).await.unwrap();
-        let ages = result
-            .documents
+        let documents = query_documents_with_compiled_sql(&conn, &compiled).unwrap();
+        let ages = documents
             .iter()
             .map(|doc| doc.get("age").and_then(Value::as_i64).unwrap())
             .collect::<Vec<_>>();
@@ -1655,19 +1862,21 @@ mod tests {
             },
         );
         let count_prepared = prepare_query(&schema, count_filled).unwrap();
+        let count_query: FilledMangoQuery =
+            serde_json::from_value(count_prepared.get("query").cloned().unwrap_or(Value::Null))
+                .unwrap();
+        let count_compiled =
+            compile_count_sql(&instance.table_name, &instance.primary_path, &count_query)
+                .expect("age count should compile to SQL");
         reset_sqlite_json_document_decode_count();
-        let count = instance.count(&count_prepared).await.unwrap();
-        assert_eq!(count.count, 10);
+        let count = count_with_compiled_sql(&conn, &count_compiled).unwrap();
+        assert_eq!(count, 10);
         assert_eq!(
             sqlite_json_document_decode_count(),
             0,
             "compiled COUNT(*) must not deserialize matching documents"
         );
 
-        let compiled = compile_query_sql(&instance.table_name, &instance.primary_path, &filled)
-            .expect("age selector should compile to SQL");
-        let conn = storage.connection().unwrap();
-        let conn = conn.lock();
         let mut statement = conn
             .prepare(&format!("EXPLAIN QUERY PLAN {}", compiled.sql))
             .unwrap();
@@ -1791,6 +2000,8 @@ mod tests {
         .unwrap();
 
         QUERY_WRITER_FALLBACKS.store(0, Ordering::SeqCst);
+        let fallback_calls_before = runtime_counter("query_fallback_calls");
+        let fallback_rows_before = runtime_counter("query_fallback_rows_visited");
         let shared_conn = storage.connection().unwrap();
         let _writer_guard = shared_conn.lock();
 
@@ -1815,6 +2026,59 @@ mod tests {
             QUERY_WRITER_FALLBACKS.load(Ordering::SeqCst),
             0,
             "file-backed query fallback must not use the shared writer connection fallback"
+        );
+        assert!(
+            runtime_counter("query_fallback_calls") > fallback_calls_before,
+            "runtime counters must expose normal query fallback calls"
+        );
+        assert!(
+            runtime_counter("query_fallback_rows_visited") >= fallback_rows_before + 100,
+            "runtime counters must expose rows visited by Rust matcher fallback"
+        );
+    }
+
+    #[tokio::test]
+    async fn count_fallback_reports_slow_mode_and_counter() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("ctox.sqlite3"),
+        });
+        let schema = test_schema();
+        let instance = create_storage_instance(&storage, params(schema.clone()))
+            .await
+            .unwrap();
+        let rows: Vec<BulkWriteRow> = (0..10)
+            .map(|idx| BulkWriteRow {
+                previous: None,
+                document: doc(&format!("doc-{idx:03}"), "1-a", idx, false, idx as f64),
+            })
+            .collect();
+        instance.bulk_write(rows, "seed").await.unwrap();
+
+        let prepared = prepare_query(
+            &schema,
+            normalize_mango_query(
+                &schema,
+                MangoQuery {
+                    selector: Some(json!({ "id": { "$regex": "^doc-00[12]$" } })),
+                    index: None,
+                    limit: None,
+                    skip: Some(0),
+                    ..Default::default()
+                },
+            ),
+        )
+        .unwrap();
+        let fallback_count_before = runtime_counter("count_fallback_query_calls");
+        let result = instance.count(&prepared).await.unwrap();
+        assert_eq!(result.count, 2);
+        assert_eq!(
+            result.mode, "slow",
+            "count fallback must not report fast mode after materializing query results"
+        );
+        assert!(
+            runtime_counter("count_fallback_query_calls") > fallback_count_before,
+            "runtime counters must expose count fallback calls"
         );
     }
 
@@ -2429,6 +2693,182 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn external_write_poll_uses_read_only_connection_while_writer_mutex_is_held() {
+        use tokio::time::timeout;
+        use tokio_stream::StreamExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let database_path = dir.path().join("ctox.sqlite3");
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: database_path.clone(),
+        });
+        let schema = test_schema();
+        let instance = create_storage_instance(&storage, params(schema))
+            .await
+            .unwrap();
+        let mut stream = instance.change_stream();
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        {
+            let conn = rusqlite::Connection::open(&database_path).unwrap();
+            insert_document(
+                &conn,
+                &instance.table_name,
+                &instance.primary_path,
+                &doc("external-readonly", "1-external", 7, false, 10.0),
+            )
+            .unwrap();
+        }
+
+        let shared_conn = storage.connection().unwrap();
+        let _writer_guard = shared_conn.lock();
+        notify_table_change(&database_key_for_path(&database_path), &instance.table_name);
+
+        let bulk = timeout(Duration::from_millis(750), stream.next())
+            .await
+            .expect("external poll should not wait for the shared writer mutex")
+            .expect("change stream should stay open");
+        assert_eq!(bulk.context.as_deref(), Some("sqlite-external-poll"));
+        assert_eq!(bulk.events.len(), 1);
+        assert_eq!(bulk.events[0].document_id, "external-readonly");
+    }
+
+    #[tokio::test]
+    async fn change_stream_drains_multiple_external_batches_per_wake() {
+        use tokio::time::{timeout, Instant};
+        use tokio_stream::StreamExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let database_path = dir.path().join("ctox.sqlite3");
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: database_path.clone(),
+        });
+        let schema = test_schema();
+        let instance = create_storage_instance(&storage, params(schema))
+            .await
+            .unwrap();
+        let mut stream = instance.change_stream();
+
+        let total = SQLITE_EXTERNAL_POLL_DEFAULT_LIMIT as usize * 2 + 7;
+        {
+            let mut conn = rusqlite::Connection::open(&database_path).unwrap();
+            let tx = conn.transaction().unwrap();
+            for idx in 0..total {
+                insert_document(
+                    &tx,
+                    &instance.table_name,
+                    &instance.primary_path,
+                    &doc(
+                        &format!("external-burst-{idx:03}"),
+                        "1-external",
+                        idx as i64,
+                        false,
+                        10.0 + idx as f64,
+                    ),
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+        }
+
+        notify_table_change(&database_key_for_path(&database_path), &instance.table_name);
+
+        let deadline = Instant::now() + Duration::from_millis(750);
+        let mut seen = HashSet::new();
+        let mut bulks = 0usize;
+        while seen.len() < total {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "external poll did not drain burst before the 1s safety poll"
+            );
+            let bulk = timeout(remaining, stream.next())
+                .await
+                .expect("external burst batch should arrive before safety poll")
+                .expect("change stream should stay open");
+            bulks += 1;
+            for event in bulk.events {
+                seen.insert(event.document_id);
+            }
+        }
+
+        assert_eq!(seen.len(), total);
+        assert!(
+            bulks >= 3,
+            "burst should be emitted as multiple bounded batches"
+        );
+    }
+
+    #[tokio::test]
+    async fn change_stream_drains_desktop_file_chunk_batches_per_wake() {
+        use tokio::time::{timeout, Instant};
+        use tokio_stream::StreamExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let database_path = dir.path().join("ctox.sqlite3");
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: database_path.clone(),
+        });
+        let schema = test_schema();
+        let mut creation_params = params(schema);
+        creation_params.collection_name = "desktop_file_chunks".to_string();
+        let instance = create_storage_instance(&storage, creation_params)
+            .await
+            .unwrap();
+        let mut stream = instance.change_stream();
+
+        let total = SQLITE_EXTERNAL_POLL_FILE_CHUNK_LIMIT as usize * 3 + 1;
+        {
+            let mut conn = rusqlite::Connection::open(&database_path).unwrap();
+            let tx = conn.transaction().unwrap();
+            for idx in 0..total {
+                insert_document(
+                    &tx,
+                    &instance.table_name,
+                    &instance.primary_path,
+                    &doc(
+                        &format!("chunk-burst-{idx:03}"),
+                        "1-external",
+                        idx as i64,
+                        false,
+                        20.0 + idx as f64,
+                    ),
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+        }
+
+        notify_table_change(&database_key_for_path(&database_path), &instance.table_name);
+
+        let deadline = Instant::now() + Duration::from_millis(750);
+        let mut seen = HashSet::new();
+        let mut bulks = 0usize;
+        while seen.len() < total {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "desktop_file_chunks catch-up waited for the safety poll"
+            );
+            let bulk = timeout(remaining, stream.next())
+                .await
+                .expect("desktop_file_chunks batch should arrive before safety poll")
+                .expect("change stream should stay open");
+            bulks += 1;
+            for event in bulk.events {
+                seen.insert(event.document_id);
+            }
+        }
+
+        assert_eq!(seen.len(), total);
+        assert!(
+            bulks >= 4,
+            "desktop_file_chunks must catch up through multiple small batches"
+        );
+    }
+
+    #[tokio::test]
     async fn change_stream_emits_other_connection_sqlite_writes() {
         use tokio::time::timeout;
         use tokio_stream::StreamExt;
@@ -2467,6 +2907,61 @@ mod tests {
         assert_eq!(bulk.events.len(), 1);
         assert_eq!(bulk.events[0].document_id, "external-connection");
         assert_eq!(bulk.events[0].operation, "UPDATE");
+    }
+
+    #[tokio::test]
+    async fn file_backed_external_poll_has_no_per_collection_idle_safety_drains() {
+        use tokio::time::Instant;
+
+        set_test_external_poll_safety_interval_ms(25);
+        let _safety_reset = ExternalPollSafetyIntervalReset;
+
+        let dir = tempfile::tempdir().unwrap();
+        let database_path = dir.path().join("ctox.sqlite3");
+        assert!(external_poll_safety_interval_for_path(&database_path).is_none());
+        assert!(external_poll_safety_interval_for_path(Path::new(":memory:")).is_some());
+
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: database_path.clone(),
+        });
+
+        let mut instances = Vec::new();
+        let mut table_names = Vec::new();
+        for idx in 0..12 {
+            let mut creation_params = params(test_schema());
+            creation_params.collection_name = format!("idle_docs_{idx}");
+            let instance = create_storage_instance(&storage, creation_params)
+                .await
+                .unwrap();
+            table_names.push(instance.table_name.clone());
+            instances.push(instance);
+        }
+
+        let startup_deadline = Instant::now() + Duration::from_secs(2);
+        for table_name in &table_names {
+            while changed_documents_since_table_call_count(table_name) == 0 {
+                assert!(
+                    Instant::now() < startup_deadline,
+                    "startup reconciliation did not drain table {table_name}"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            reset_changed_documents_since_table_call_count(table_name);
+        }
+
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        for table_name in &table_names {
+            assert_eq!(
+                changed_documents_since_table_call_count(table_name),
+                0,
+                "file-backed idle table {table_name} was drained without a table notification"
+            );
+        }
+
+        for instance in instances {
+            instance.close().await.unwrap();
+        }
     }
 
     #[tokio::test]

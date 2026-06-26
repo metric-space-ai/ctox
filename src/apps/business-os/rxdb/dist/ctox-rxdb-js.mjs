@@ -59,7 +59,7 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   browser_input_events: "dc79706396f8c59865dc4187947fe925f4b1a1fae6669c4fd7d7d0e507a4dff7",
   browser_sessions: "8f9d925480b6fa11755bb0800e47da9d4b8dca59f510fb5c6bfb3d84cec212d3",
   browser_tabs: "3387a8373cad98f4651b15173cf920568970ad2afa7f14758bbfffe9d77d5004",
-  business_chats: "4f7fc2d29ea54ef9cabef037caa01f0ef2567fc2fa156835c952bef2dd2fd456",
+  business_chats: "0e52de33b4ea565122debb0e46296b44cdbe13f60190b9d9d06259f3719918d7",
   business_commands: "cea41185cea8447fd7ef3684217e5030e7ab25a1fa71d7c1978182d153013357",
   business_consents: "4e0031090f60e466e8d9b2818a73faac41d89adabba5c2f2fd75a4b48cef9d68",
   business_credentials: "5583908188482df5c694d6214ef4f3a250fdcd09d7111a5a859a5976f4a40b7d",
@@ -327,9 +327,19 @@ function buildProtocolPayload({
   // representative collection's checkpoint is not valid for sibling
   // collections when the room reconnects, especially for file chunk stores
   // where stale checkpoint epochs are a data-corruption signal.
-  collectionCheckpoints = null
+  collectionCheckpoints = null,
+  capabilityToken = null
 } = {}) {
   const checkpointEvidence = checkpoint || null;
+  const peerSession = {
+    role,
+    sessionId: peerSessionId || null,
+    generation: Number.isFinite(peerGeneration) ? peerGeneration : null
+  };
+  const cleanCapabilityToken = typeof capabilityToken === "string" ? capabilityToken.trim() : "";
+  if (cleanCapabilityToken) {
+    peerSession.capabilityToken = cleanCapabilityToken;
+  }
   return {
     protocol: CTOX_RXDB_PROTOCOL,
     checkpoint: checkpointEvidence,
@@ -345,11 +355,7 @@ function buildProtocolPayload({
     // collection handshake stays byte-identical.
     collectionSchemas: normalizeCollectionSchemas(collectionSchemas),
     collectionCheckpoints: normalizeCollectionCheckpoints(collectionCheckpoints),
-    peerSession: {
-      role,
-      sessionId: peerSessionId || null,
-      generation: Number.isFinite(peerGeneration) ? peerGeneration : null
-    },
+    peerSession,
     capabilities: Array.from(/* @__PURE__ */ new Set([
       ...CTOX_REQUIRED_PROTOCOL_CAPABILITIES,
       ...capabilities
@@ -567,12 +573,14 @@ function waitForEvent(emitter, type, timeoutMs = 1e4) {
 }
 
 // src/apps/business-os/rxdb/src/storage-indexeddb.mjs
-var DB_VERSION = 1;
+var DB_VERSION = 2;
 var DOCUMENT_STORE = "documents";
+var SCHEMA_INDEX_ENTRIES = "schemaIndexEntries";
 var OPEN_DATABASE_TIMEOUT_MS = 4e3;
 var REPLICATION_SCAN_MULTIPLIER = 50;
-var REPLICATION_MIN_SCAN_LIMIT = 500;
+var REPLICATION_MIN_SCAN_LIMIT = 1;
 var REPLICATION_MAX_SCAN_LIMIT = 5e3;
+var INDEX_HIGH_KEY = "\uFFFF";
 async function openCtoxIndexedDbStorage({ databaseName = "ctox_business_os_js_v1" } = {}) {
   if (!globalThis.indexedDB) {
     throw new Error("indexedDB is required for ctox-rxdb-js storage");
@@ -599,7 +607,10 @@ var CtoxIndexedDbCollection = class {
     this.db = db;
     this.name = name;
     this.schema = schema || {};
-    this.indexes = normalizeSchemaIndexes(schema);
+    this.primaryPath = primaryPathFromSchema(schema);
+    this.indexes = normalizeSchemaIndexes(schema, this.primaryPath);
+    this.indexSignature = schemaIndexSignature(this.indexes);
+    this.schemaIndexReady = null;
     this.events = new CtoxEventEmitter();
   }
   observe(listener) {
@@ -652,6 +663,8 @@ var CtoxIndexedDbCollection = class {
         lwt,
         deleted: Boolean(doc._deleted),
         indexValues: indexValuesFor(this.indexes, doc),
+        schemaIndexSignature: this.indexSignature,
+        schemaIndexEntries: schemaIndexEntriesFor(this.indexes, doc, id, this.name),
         doc: normalizeDocument(doc, lwt, replicationOrigin)
       };
       await idbRequest(store.put(stored));
@@ -718,11 +731,85 @@ var CtoxIndexedDbCollection = class {
     return documents;
   }
   async queryDocuments(query = {}, helpers = {}) {
+    const primaryIds = primaryKeyCandidateIds(query, this.primaryPath);
+    if (primaryIds) {
+      const byId = await this.findDocumentsById(primaryIds);
+      const docs2 = primaryIds.map((id) => byId[id]).filter(Boolean);
+      return applyQueryToDocuments(docs2, query, helpers);
+    }
+    const schemaIndexPlan = schemaIndexQueryPlanFor(query, this.indexes);
+    if (schemaIndexPlan) {
+      return this.queryDocumentsBySchemaIndex(schemaIndexPlan, query, helpers);
+    }
     if (canUseCollectionLwtQuery(query)) {
       return this.queryDocumentsByLwt(query, helpers);
     }
+    if (canUseBoundedCollectionCursor(query)) {
+      return this.queryDocumentsByCollectionCursor(query, helpers);
+    }
     const docs = await this.allDocuments();
     return applyQueryToDocuments(docs, query, helpers);
+  }
+  async queryDocumentsBySchemaIndex(plan, query = {}, helpers = {}) {
+    await this.ensureSchemaIndexEntries();
+    const { matchesSelector: matchesSelector2 = () => true, sortDocuments: sortDocuments2 = (docs) => docs } = helpers || {};
+    const selector = query?.selector || {};
+    const skip = Number.isFinite(query?.skip) && query.skip > 0 ? query.skip : 0;
+    const limit = Number.isFinite(query?.limit) ? query.limit : Number.POSITIVE_INFINITY;
+    const maxMatches = plan.canStopAtLimit && Number.isFinite(limit) ? skip + limit : Number.POSITIVE_INFINITY;
+    const documents = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const entryRange of plan.ranges) {
+      const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
+      const index = tx.objectStore(DOCUMENT_STORE).index(SCHEMA_INDEX_ENTRIES);
+      const range = IDBKeyRange.bound(
+        [this.name, plan.index.name, ...entryRange.lower],
+        [this.name, plan.index.name, ...entryRange.upper],
+        Boolean(entryRange.lowerOpen),
+        Boolean(entryRange.upperOpen)
+      );
+      await iterateCursor(index.openCursor(range, plan.direction), (cursor) => {
+        if (!cursor || documents.length >= maxMatches) return false;
+        const record = cursor.value;
+        if (!record || seen.has(record.id)) return true;
+        seen.add(record.id);
+        if (!record.deleted && matchesSelector2(record.doc, selector)) {
+          documents.push(record.doc);
+        }
+        return documents.length < maxMatches;
+      });
+      await idbTransactionDone(tx);
+      if (documents.length >= maxMatches) break;
+    }
+    let sorted = plan.sortCovered ? documents : sortDocuments2(documents, query?.sort || []);
+    if (skip > 0) sorted = sorted.slice(skip);
+    if (Number.isFinite(limit)) sorted = sorted.slice(0, limit);
+    return sorted;
+  }
+  async queryDocumentsByCollectionCursor(query = {}, helpers = {}) {
+    const { matchesSelector: matchesSelector2 = () => true } = helpers || {};
+    const selector = query?.selector || {};
+    const skip = Number.isFinite(query?.skip) && query.skip > 0 ? query.skip : 0;
+    const limit = Number.isFinite(query?.limit) ? query.limit : Number.POSITIVE_INFINITY;
+    const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
+    const index = tx.objectStore(DOCUMENT_STORE).index("collection");
+    const range = IDBKeyRange.only(this.name);
+    const documents = [];
+    let skipped = 0;
+    await iterateCursor(index.openCursor(range), (cursor) => {
+      if (!cursor || documents.length >= limit) return false;
+      const record = cursor.value;
+      if (!record.deleted && matchesSelector2(record.doc, selector)) {
+        if (skipped < skip) {
+          skipped += 1;
+        } else {
+          documents.push(record.doc);
+        }
+      }
+      return documents.length < limit;
+    });
+    await idbTransactionDone(tx);
+    return documents;
   }
   async queryDocumentsByLwt(query = {}, helpers = {}) {
     const { matchesSelector: matchesSelector2 = () => true, sortDocuments: sortDocuments2 = (docs) => docs } = helpers || {};
@@ -753,6 +840,43 @@ var CtoxIndexedDbCollection = class {
     if (Number.isFinite(limit)) sorted = sorted.slice(0, limit);
     return sorted;
   }
+  async countDocuments(query = {}, helpers = {}) {
+    const primaryIds = primaryKeyCandidateIds(query, this.primaryPath);
+    if (primaryIds) {
+      const byId = await this.findDocumentsById(primaryIds);
+      const docs = primaryIds.map((id) => byId[id]).filter(Boolean);
+      return applyQueryToDocuments(docs, query, helpers).length;
+    }
+    const schemaIndexPlan = schemaIndexQueryPlanFor(query, this.indexes);
+    if (schemaIndexPlan) {
+      return (await this.queryDocumentsBySchemaIndex(schemaIndexPlan, query, helpers)).length;
+    }
+    if (canUseCollectionLwtQuery(query)) {
+      return (await this.queryDocumentsByLwt(query, helpers)).length;
+    }
+    const { matchesSelector: matchesSelector2 = () => true } = helpers || {};
+    const skip = Number.isFinite(query?.skip) && query.skip > 0 ? query.skip : 0;
+    const limit = Number.isFinite(query?.limit) ? query.limit : Number.POSITIVE_INFINITY;
+    const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
+    const index = tx.objectStore(DOCUMENT_STORE).index("collection");
+    const range = IDBKeyRange.only(this.name);
+    let skipped = 0;
+    let count = 0;
+    await iterateCursor(index.openCursor(range), (cursor) => {
+      if (!cursor || count >= limit) return false;
+      const record = cursor.value;
+      if (!record.deleted && matchesSelector2(record.doc, query?.selector || {})) {
+        if (skipped < skip) {
+          skipped += 1;
+        } else {
+          count += 1;
+        }
+      }
+      return count < limit;
+    });
+    await idbTransactionDone(tx);
+    return count;
+  }
   async getChangedDocumentsSince(checkpoint = null, limit = 100, options = {}) {
     const fromLwt = Number(checkpoint?.lwt || 0);
     const fromId = String(checkpoint?.id || "");
@@ -777,7 +901,13 @@ var CtoxIndexedDbCollection = class {
       return true;
     });
     await idbTransactionDone(tx);
-    return { documents, checkpoint: nextCheckpoint };
+    return {
+      documents,
+      checkpoint: nextCheckpoint,
+      scanned,
+      scanLimit,
+      scanLimitReached: scanned >= scanLimit
+    };
   }
   async replicationCheckpointStatus(schemaHash2 = null) {
     const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
@@ -813,14 +943,50 @@ var CtoxIndexedDbCollection = class {
   queryPlanFor(query = {}) {
     const selectorFields = Object.keys(query?.selector || {}).filter((field) => !field.startsWith("$"));
     const sortFields = normalizeSortFields(query?.sort);
-    const selectedIndex = selectBestIndex(this.indexes, selectorFields, sortFields);
+    const schemaIndexPlan = schemaIndexQueryPlanFor(query, this.indexes);
+    const primaryIds = primaryKeyCandidateIds(query, this.primaryPath);
+    const strategy = primaryIds ? "primary-key" : schemaIndexPlan ? "schema-index" : canUseCollectionLwtQuery(query) ? "collection-lwt" : canUseBoundedCollectionCursor(query) ? "bounded-collection" : "all-documents";
     return {
       collection: this.name,
       selectorFields,
       sortFields,
-      selectedIndex,
-      indexed: Boolean(selectedIndex)
+      selectedIndex: schemaIndexPlan?.index || null,
+      candidateIndex: schemaIndexPlan ? null : selectBestIndex(this.indexes, selectorFields, sortFields),
+      strategy,
+      indexed: strategy === "primary-key" || strategy === "schema-index" || strategy === "collection-lwt",
+      schemaIndexed: Boolean(schemaIndexPlan),
+      sortCovered: Boolean(schemaIndexPlan?.sortCovered)
     };
+  }
+  ensureSchemaIndexEntries() {
+    if (!this.indexes.length) return Promise.resolve(0);
+    if (!this.schemaIndexReady) {
+      this.schemaIndexReady = this.rebuildMissingSchemaIndexEntries();
+    }
+    return this.schemaIndexReady;
+  }
+  async rebuildMissingSchemaIndexEntries() {
+    const tx = this.db.transaction(DOCUMENT_STORE, "readwrite");
+    const index = tx.objectStore(DOCUMENT_STORE).index("collection");
+    const range = IDBKeyRange.only(this.name);
+    let updated = 0;
+    await iterateCursor(index.openCursor(range), (cursor) => {
+      if (!cursor) return false;
+      const record = cursor.value;
+      if (record?.schemaIndexSignature !== this.indexSignature) {
+        const next = {
+          ...record,
+          indexValues: indexValuesFor(this.indexes, record.doc || {}),
+          schemaIndexSignature: this.indexSignature,
+          schemaIndexEntries: schemaIndexEntriesFor(this.indexes, record.doc || {}, record.id, this.name)
+        };
+        cursor.update(next);
+        updated += 1;
+      }
+      return true;
+    });
+    await idbTransactionDone(tx);
+    return updated;
   }
 };
 function openDatabase(databaseName) {
@@ -839,10 +1005,19 @@ function openDatabase(databaseName) {
     const request = indexedDB.open(databaseName, DB_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
+      let store = null;
       if (!db.objectStoreNames.contains(DOCUMENT_STORE)) {
-        const store = db.createObjectStore(DOCUMENT_STORE, { keyPath: ["collection", "id"] });
+        store = db.createObjectStore(DOCUMENT_STORE, { keyPath: ["collection", "id"] });
         store.createIndex("collection", "collection", { unique: false });
         store.createIndex("collectionLwtId", ["collection", "lwt", "id"], { unique: false });
+      } else {
+        store = request.transaction.objectStore(DOCUMENT_STORE);
+      }
+      if (store && !store.indexNames.contains(SCHEMA_INDEX_ENTRIES)) {
+        store.createIndex(SCHEMA_INDEX_ENTRIES, SCHEMA_INDEX_ENTRIES, {
+          unique: false,
+          multiEntry: true
+        });
       }
     };
     request.onsuccess = () => {
@@ -929,13 +1104,57 @@ function replicationScanLimit(limit) {
     Math.min(REPLICATION_MAX_SCAN_LIMIT, Math.ceil(batchLimit * REPLICATION_SCAN_MULTIPLIER))
   );
 }
-function normalizeSchemaIndexes(schema = {}) {
+function primaryPathFromSchema(schema = {}) {
+  const primary = schema?.primaryKey;
+  if (typeof primary === "string") return primary;
+  if (primary?.key) return primary.key;
+  return "id";
+}
+function normalizeSchemaIndexes(schema = {}, primaryPath = primaryPathFromSchema(schema)) {
   const indexes = Array.isArray(schema?.indexes) ? schema.indexes : [];
-  return indexes.map((index, position) => {
-    const fields = Array.isArray(index) ? index : [index];
-    const normalizedFields = fields.map((field) => String(field || "").trim()).filter(Boolean);
-    return normalizedFields.length ? { name: `idx_${position}_${normalizedFields.join("_")}`, fields: normalizedFields } : null;
+  const normalized = indexes.map((index) => normalizeSchemaIndexFields(index, primaryPath));
+  if (!normalized.length) normalized.push(["_deleted", primaryPath]);
+  normalized.push(["_meta.lwt", primaryPath]);
+  if (Array.isArray(schema?.internalIndexes)) {
+    for (const index of schema.internalIndexes) {
+      normalized.push(normalizeSchemaIndexFields(index, primaryPath, { preservePrefix: true }));
+    }
+  }
+  const seen = /* @__PURE__ */ new Set();
+  return normalized.map((fields, position) => {
+    const key = fields.join(",");
+    if (seen.has(key)) return null;
+    seen.add(key);
+    return { name: `idx_${position}_${fields.join("_")}`, fields };
   }).filter(Boolean);
+}
+function normalizeSchemaIndexFields(index, primaryPath, { preservePrefix = false } = {}) {
+  const fields = Array.isArray(index) ? index : [index];
+  const normalizedFields = fields.map((field) => String(field || "").trim()).filter(Boolean);
+  if (!normalizedFields.length) return ["_deleted", primaryPath];
+  const next = normalizedFields.slice();
+  if (!next.includes(primaryPath)) next.push(primaryPath);
+  if (!preservePrefix && next[0] !== "_deleted") next.unshift("_deleted");
+  return next;
+}
+function primaryKeyCandidateIds(query = {}, primaryPath = "id") {
+  const selector = query?.selector || {};
+  for (const field of ["id", "_id", primaryPath].filter(Boolean)) {
+    if (!Object.prototype.hasOwnProperty.call(selector, field)) continue;
+    const value = selector[field];
+    if (value == null) return [];
+    if (typeof value === "string" || typeof value === "number") {
+      return [String(value)];
+    }
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      if ("$eq" in value && value.$eq != null) return [String(value.$eq)];
+      if ("$in" in value && Array.isArray(value.$in)) {
+        return [...new Set(value.$in.filter((id) => id != null).map((id) => String(id)))];
+      }
+    }
+    return null;
+  }
+  return null;
 }
 function indexValuesFor(indexes, doc) {
   const values = {};
@@ -944,6 +1163,28 @@ function indexValuesFor(indexes, doc) {
   }
   return values;
 }
+function schemaIndexEntriesFor(indexes, doc, id, collection) {
+  const entries = [];
+  for (const index of indexes || []) {
+    const components = [];
+    let usable = true;
+    for (const field of index.fields) {
+      const encoded = encodeIndexValue(valueAtPath(doc, field));
+      if (!encoded) {
+        usable = false;
+        break;
+      }
+      components.push(...encoded);
+    }
+    if (usable) {
+      entries.push([collection, index.name, ...components, String(id || documentId(doc))]);
+    }
+  }
+  return entries;
+}
+function schemaIndexSignature(indexes = []) {
+  return indexes.map((index) => `${index.name}:${index.fields.join(",")}`).join("|");
+}
 function selectBestIndex(indexes, selectorFields = [], sortFields = []) {
   const wanted = [...selectorFields, ...sortFields].filter(Boolean);
   if (!wanted.length) return null;
@@ -951,7 +1192,8 @@ function selectBestIndex(indexes, selectorFields = [], sortFields = []) {
   let bestScore = 0;
   for (const index of indexes || []) {
     let score = 0;
-    for (const field of index.fields) {
+    const fields = index.fields[0] === "_deleted" ? index.fields.slice(1) : index.fields;
+    for (const field of fields) {
       if (wanted.includes(field)) score += 1;
       else break;
     }
@@ -962,6 +1204,150 @@ function selectBestIndex(indexes, selectorFields = [], sortFields = []) {
   }
   return best ? { ...best, fields: [...best.fields], matchedFields: bestScore } : null;
 }
+function schemaIndexQueryPlanFor(query = {}, indexes = []) {
+  const selector = query?.selector || {};
+  if (Object.keys(selector).some((field) => field.startsWith("$"))) return null;
+  const sortEntries = normalizeSortEntries(query?.sort);
+  let best = null;
+  let bestScore = 0;
+  for (const index of indexes || []) {
+    const plan = schemaIndexPlanForIndex(index, selector, sortEntries, query);
+    if (!plan) continue;
+    const score = plan.constrainedFields * 10 + (plan.sortCovered ? 4 : 0) + (plan.canStopAtLimit ? 2 : 0) - Math.max(0, plan.ranges.length - 1);
+    if (score > bestScore) {
+      best = plan;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+function schemaIndexPlanForIndex(index, selector, sortEntries, query) {
+  if (!index?.fields?.length) return null;
+  let ranges = [{ lower: [], upper: [], upperComplete: false }];
+  let constrainedFields = 0;
+  let lastEqualityFieldIndex = -1;
+  let rangeFieldIndex = -1;
+  let stoppedAtFieldIndex = index.fields.length;
+  for (let fieldIndex = 0; fieldIndex < index.fields.length; fieldIndex += 1) {
+    const field = index.fields[fieldIndex];
+    const constraint = field === "_deleted" ? { kind: "eq", values: [false], implicit: true } : selectorConstraintFor(selector, field);
+    if (constraint.kind === "none") {
+      stoppedAtFieldIndex = fieldIndex;
+      break;
+    }
+    if (constraint.kind === "unsupported") return null;
+    if (constraint.kind === "eq") {
+      const encodedValues = constraint.values.map((value) => encodeIndexValue(value)).filter(Boolean);
+      if (!encodedValues.length || encodedValues.length !== constraint.values.length) return null;
+      if (encodedValues.length > 32) return null;
+      ranges = ranges.flatMap((range) => encodedValues.map((encoded) => ({
+        lower: [...range.lower, ...encoded],
+        upper: [...range.upper, ...encoded],
+        upperComplete: false
+      })));
+      if (!constraint.implicit) constrainedFields += 1;
+      lastEqualityFieldIndex = fieldIndex;
+      continue;
+    }
+    if (constraint.kind === "range") {
+      const lowerEncoded = constraint.lower !== void 0 ? encodeIndexValue(constraint.lower) : null;
+      const upperEncoded = constraint.upper !== void 0 ? encodeIndexValue(constraint.upper) : null;
+      if (constraint.lower !== void 0 && !lowerEncoded || constraint.upper !== void 0 && !upperEncoded) {
+        return null;
+      }
+      ranges = ranges.map((range) => ({
+        lower: lowerEncoded ? [...range.lower, ...lowerEncoded, ...constraint.lowerOpen ? [INDEX_HIGH_KEY] : []] : [...range.lower],
+        upper: upperEncoded ? [...range.upper, ...upperEncoded, ...constraint.upperOpen ? [] : [INDEX_HIGH_KEY]] : [...range.upper, INDEX_HIGH_KEY],
+        upperComplete: true
+      }));
+      constrainedFields += 1;
+      rangeFieldIndex = fieldIndex;
+      stoppedAtFieldIndex = fieldIndex + 1;
+      break;
+    }
+  }
+  const hasSelectorConstraint = constrainedFields > 0;
+  const orderStart = Math.max(
+    0,
+    rangeFieldIndex >= 0 ? rangeFieldIndex : lastEqualityFieldIndex + 1
+  );
+  const sortCovered = isSortCoveredByIndex(index.fields, orderStart, sortEntries);
+  const hasSortOnlyPlan = !hasSelectorConstraint && sortEntries.length > 0 && sortCovered && Number.isFinite(query?.limit);
+  if (!hasSelectorConstraint && !hasSortOnlyPlan) return null;
+  if (sortEntries.length && !sortCovered && !hasSelectorConstraint) return null;
+  ranges = ranges.map((range) => ({
+    lower: range.lower,
+    upper: range.upperComplete || range.upper.length > range.lower.length ? range.upper : [...range.upper, INDEX_HIGH_KEY]
+  }));
+  const direction = sortCovered && sortEntries[0]?.direction === "desc" ? "prev" : "next";
+  return {
+    index,
+    ranges,
+    direction,
+    sortCovered,
+    canStopAtLimit: sortCovered,
+    constrainedFields,
+    stoppedAtFieldIndex
+  };
+}
+function selectorConstraintFor(selector, field) {
+  if (!Object.prototype.hasOwnProperty.call(selector, field)) return { kind: "none" };
+  const value = selector[field];
+  if (isIndexComparableValue(value)) return { kind: "eq", values: [value] };
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { kind: "unsupported" };
+  const keys = Object.keys(value);
+  if (keys.length === 1 && keys[0] === "$eq" && isIndexComparableValue(value.$eq)) {
+    return { kind: "eq", values: [value.$eq] };
+  }
+  if (keys.length === 1 && keys[0] === "$in" && Array.isArray(value.$in)) {
+    const values = [...new Set(value.$in.filter(isIndexComparableValue))];
+    return values.length === value.$in.length ? { kind: "eq", values } : { kind: "unsupported" };
+  }
+  const rangeKeys = /* @__PURE__ */ new Set(["$gt", "$gte", "$lt", "$lte"]);
+  if (keys.length && keys.every((key) => rangeKeys.has(key))) {
+    const lower = "$gt" in value ? value.$gt : value.$gte;
+    const upper = "$lt" in value ? value.$lt : value.$lte;
+    if (lower !== void 0 && !isIndexComparableValue(lower) || upper !== void 0 && !isIndexComparableValue(upper)) {
+      return { kind: "unsupported" };
+    }
+    return {
+      kind: "range",
+      lower,
+      upper,
+      lowerOpen: "$gt" in value,
+      upperOpen: "$lt" in value
+    };
+  }
+  return { kind: "unsupported" };
+}
+function isSortCoveredByIndex(indexFields, orderStart, sortEntries) {
+  if (!sortEntries.length) return true;
+  const directions = new Set(sortEntries.map((entry) => entry.direction));
+  if (directions.size > 1) return false;
+  const orderedFields = indexFields.slice(orderStart).filter((field) => field !== "_deleted");
+  return sortEntries.every((entry, offset) => orderedFields[offset] === entry.field);
+}
+function normalizeSortEntries(sort = []) {
+  if (!sort) return [];
+  const entries = typeof sort === "string" ? [sort] : Array.isArray(sort) ? sort : [];
+  return entries.map((entry) => {
+    if (typeof entry === "string") return { field: entry, direction: "asc" };
+    const [field, rawDirection] = Object.entries(entry || {})[0] || [];
+    if (!field) return null;
+    const direction = rawDirection === -1 || String(rawDirection).toLowerCase() === "desc" ? "desc" : "asc";
+    return { field, direction };
+  }).filter(Boolean);
+}
+function encodeIndexValue(value) {
+  if (typeof value === "boolean") return ["b", value ? 1 : 0];
+  if (typeof value === "number" && Number.isFinite(value)) return ["n", value];
+  if (typeof value === "string") return ["s", value];
+  if (value instanceof Date && Number.isFinite(value.getTime())) return ["n", value.getTime()];
+  return null;
+}
+function isIndexComparableValue(value) {
+  return Boolean(encodeIndexValue(value));
+}
 function canUseCollectionLwtQuery(query = {}) {
   if (!Number.isFinite(query?.limit)) return false;
   const sortFields = normalizeSortFields(query?.sort);
@@ -971,6 +1357,10 @@ function canUseCollectionLwtQuery(query = {}) {
   const firstSortEntry = Array.isArray(query?.sort) ? query.sort[0] : null;
   const direction = typeof firstSortEntry === "string" ? "asc" : String(Object.values(firstSortEntry || {})[0] || "").toLowerCase();
   return ["desc", "-1"].includes(direction);
+}
+function canUseBoundedCollectionCursor(query = {}) {
+  if (!Number.isFinite(query?.limit)) return false;
+  return normalizeSortFields(query?.sort).length === 0;
 }
 function applyQueryToDocuments(docs = [], query = {}, helpers = {}) {
   const { matchesSelector: matchesSelector2 = () => true, sortDocuments: sortDocuments2 = (items) => items } = helpers || {};
@@ -1036,7 +1426,12 @@ var ctoxIndexedDbStorageTestInternals = {
   indexValuesFor,
   normalizeDocument,
   normalizeSchemaIndexes,
+  canUseBoundedCollectionCursor,
+  encodeIndexValue,
+  primaryKeyCandidateIds,
   replicationScanLimit,
+  schemaIndexEntriesFor,
+  schemaIndexQueryPlanFor,
   selectBestIndex,
   shouldAcceptDocumentWrite
 };
@@ -2319,19 +2714,27 @@ var CtoxWebRtcNativePeer = class {
       lowPriorityQueueDepth: 0
     });
   }
-  getTransportStatus() {
-    return {
+  getTransportStatus({ includeDiagnostics = false } = {}) {
+    const base = {
       ...this.transportStats,
+      collection: collectionNameFromTopic(this.options.room),
+      topic: this.options.room,
+      activePeerCount: this.connections.size,
       pendingAcks: this.pendingFrameAcks.size,
       pendingRequests: this.pending.size,
-      pendingRequestMethods: [...this.pending.values()].map((pending) => pending.method || "").filter(Boolean).slice(-20),
-      observedRequestMethods: [...this.observedRequests.keys()].map((key) => String(key).split("|").slice(1).join("|")).slice(-20),
       incomingTransfers: this.incomingFrames.size,
       completedAckCacheSize: this.completedFrameAcks.size,
+      connectionCount: this.connections.size,
+      rtcConnectionPool: rtcPeerConnectionPoolCounters()
+    };
+    if (!includeDiagnostics) return base;
+    return {
+      ...base,
+      pendingRequestMethods: [...this.pending.values()].map((pending) => pending.method || "").filter(Boolean).slice(-20),
+      observedRequestMethods: [...this.observedRequests.keys()].map((key) => String(key).split("|").slice(1).join("|")).slice(-20),
       rtcConnectionPool: rtcPeerConnectionPoolSnapshot(),
       rtcConnections: [...this.connections.values()].map((connection) => peerConnectionSnapshot(connection)),
       recentRtcEvents: this.recentConnectionEvents.slice(-RECENT_RTC_EVENT_LIMIT),
-      connectionCount: this.connections.size,
       connectionStates: [...this.connections.values()].map((connection) => ({
         peerId: connection.remotePeerId,
         peerConnectionState: connection.peer?.connectionState || "",
@@ -2700,6 +3103,25 @@ function rtcPeerConnectionPoolSnapshot() {
       priority: entry.priority,
       queuedForMs: Date.now() - entry.enqueuedAt
     }))
+  };
+}
+function rtcPeerConnectionPoolCounters() {
+  const pool = getRtcPeerConnectionPool();
+  const active = pool.active.size;
+  const queued = pool.queue.length;
+  const activeCritical = activeCriticalRtcPeerConnectionCount(pool);
+  const queuedCritical = queuedCriticalRtcPeerConnectionNames(pool).length;
+  return {
+    maxActive: pool.maxActive,
+    active,
+    queued,
+    activeCritical,
+    queuedCritical,
+    maxConnections: pool.maxActive,
+    activeConnections: active,
+    queuedConnections: queued,
+    criticalActiveConnections: activeCritical,
+    criticalQueuedConnections: queuedCritical
   };
 }
 function rtcPeerConnectionOwnerKey(owner, remotePeerId) {
@@ -3674,22 +4096,10 @@ function createQueryDemandLoader({
     // ids is marked incomplete so the next exec triggers a remote refresh.
     async invalidateDocumentChange(changedDocumentIds = []) {
       if (!changedDocumentIds.length) return 0;
-      const all = await sidecar.backend.scanQueryWindows();
-      const ids = new Set(changedDocumentIds);
-      let invalidated = 0;
-      for (const window2 of all) {
-        if (window2.collection !== collectionName) continue;
-        if (window2.documentIds.some((id) => ids.has(id))) {
-          await sidecar.invalidateQueryWindow([
-            window2.collection,
-            window2.queryFingerprint,
-            window2.offset,
-            window2.limit
-          ]);
-          invalidated += 1;
-        }
+      if (typeof sidecar.invalidateQueryWindowsForDocuments === "function") {
+        return sidecar.invalidateQueryWindowsForDocuments(collectionName, changedDocumentIds);
       }
-      return invalidated;
+      return invalidateByScanningQueryWindows(sidecar, collectionName, changedDocumentIds);
     },
     // Wave 7 + production hardening: reconnect-cancel. Aborts all in-flight
     // fetches and removes any partially-materialized documents from the
@@ -3753,6 +4163,25 @@ function createQueryDemandLoader({
       await multiTabBroker.release(windowKey);
     }
   };
+}
+async function invalidateByScanningQueryWindows(sidecar, collectionName, changedDocumentIds) {
+  const all = await sidecar.backend.scanQueryWindows();
+  const ids = new Set(changedDocumentIds.map((id) => String(id || "")).filter(Boolean));
+  let invalidated = 0;
+  for (const window2 of all) {
+    if (window2.collection !== collectionName) continue;
+    const documentIds = Array.isArray(window2.documentIds) ? window2.documentIds : [];
+    if (documentIds.some((id) => ids.has(String(id || "")))) {
+      await sidecar.invalidateQueryWindow([
+        window2.collection,
+        window2.queryFingerprint,
+        window2.offset,
+        window2.limit
+      ]);
+      invalidated += 1;
+    }
+  }
+  return invalidated;
 }
 function normalizeWindow(window2, query) {
   if (window2 && typeof window2 === "object") {
@@ -4011,6 +4440,8 @@ function dedupeSorted(values) {
 // src/apps/business-os/rxdb/src/query-meta-backend-memory.mjs
 function createMemoryMetaBackend() {
   const queryWindows = /* @__PURE__ */ new Map();
+  const queryWindowRefsByDocument = /* @__PURE__ */ new Map();
+  const queryWindowRefsByWindow = /* @__PURE__ */ new Map();
   const documentAccess = /* @__PURE__ */ new Map();
   const cacheStats = /* @__PURE__ */ new Map();
   return {
@@ -4024,10 +4455,34 @@ function createMemoryMetaBackend() {
       return entry ? { ...entry } : null;
     },
     async deleteQueryWindow(key) {
-      queryWindows.delete(stringKey(key));
+      const normalizedKey = stringKey(key);
+      queryWindows.delete(normalizedKey);
+      deleteQueryWindowRefs2(normalizedKey);
     },
     async scanQueryWindows() {
       return Array.from(queryWindows.values(), (record) => ({ ...record }));
+    },
+    async replaceQueryWindowDocumentRefs(record) {
+      const windowKey = queryWindowKey(record);
+      deleteQueryWindowRefs2(windowKey);
+      const documentKeys = /* @__PURE__ */ new Set();
+      for (const id of normalizeDocumentIds(record.documentIds)) {
+        const documentKey = `${record.collection}|${id}`;
+        documentKeys.add(documentKey);
+        const refs = queryWindowRefsByDocument.get(documentKey) || /* @__PURE__ */ new Set();
+        refs.add(windowKey);
+        queryWindowRefsByDocument.set(documentKey, refs);
+      }
+      queryWindowRefsByWindow.set(windowKey, documentKeys);
+    },
+    async getQueryWindowKeysByDocumentIds(collection, ids) {
+      const keys = /* @__PURE__ */ new Set();
+      for (const id of normalizeDocumentIds(ids)) {
+        const refs = queryWindowRefsByDocument.get(`${collection}|${id}`);
+        if (!refs) continue;
+        for (const key of refs) keys.add(key);
+      }
+      return Array.from(keys);
     },
     async putDocumentAccess(record) {
       documentAccess.set(documentAccessKey(record), { ...record });
@@ -4051,12 +4506,25 @@ function createMemoryMetaBackend() {
     },
     async clear() {
       queryWindows.clear();
+      queryWindowRefsByDocument.clear();
+      queryWindowRefsByWindow.clear();
       documentAccess.clear();
       cacheStats.clear();
     },
     async close() {
     }
   };
+  function deleteQueryWindowRefs2(windowKey) {
+    const documentKeys = queryWindowRefsByWindow.get(windowKey);
+    if (!documentKeys) return;
+    for (const documentKey of documentKeys) {
+      const refs = queryWindowRefsByDocument.get(documentKey);
+      if (!refs) continue;
+      refs.delete(windowKey);
+      if (!refs.size) queryWindowRefsByDocument.delete(documentKey);
+    }
+    queryWindowRefsByWindow.delete(windowKey);
+  }
 }
 function queryWindowKey(record) {
   return [record.collection, record.queryFingerprint, record.offset, record.limit].join("|");
@@ -4068,6 +4536,10 @@ function stringKey(key) {
   if (Array.isArray(key)) return key.join("|");
   if (typeof key === "string") return key;
   throw new TypeError("query window key must be array or string");
+}
+function normalizeDocumentIds(ids) {
+  if (!Array.isArray(ids)) return [];
+  return Array.from(new Set(ids.map((id) => String(id || "")).filter(Boolean)));
 }
 
 // src/apps/business-os/rxdb/src/query-meta-storage.mjs
@@ -4117,6 +4589,7 @@ var QueryMetaStorage = class {
       lastAccessedAt: now
     };
     await this.backend.putQueryWindow(record);
+    await this.backend.replaceQueryWindowDocumentRefs?.(record);
     return record;
   }
   async invalidateQueryWindow(key) {
@@ -4226,23 +4699,68 @@ var QueryMetaStorage = class {
   async clear() {
     await this.backend.clear();
   }
+  async invalidateQueryWindowsForDocuments(collection, ids) {
+    const normalizedIds = normalizeDocumentIds2(ids);
+    if (!collection || !normalizedIds.length) return 0;
+    const windowKeys = typeof this.backend.getQueryWindowKeysByDocumentIds === "function" ? await this.backend.getQueryWindowKeysByDocumentIds(collection, normalizedIds) : await this.scanQueryWindowKeysForDocuments(collection, normalizedIds);
+    let invalidated = 0;
+    const seen = /* @__PURE__ */ new Set();
+    for (const key of windowKeys) {
+      const stringified = stringKey2(key);
+      if (seen.has(stringified)) continue;
+      seen.add(stringified);
+      const window2 = await this.backend.getQueryWindow(stringified);
+      if (!window2 || window2.collection !== collection) continue;
+      await this.invalidateQueryWindow([
+        window2.collection,
+        window2.queryFingerprint,
+        window2.offset,
+        window2.limit
+      ]);
+      invalidated += 1;
+    }
+    return invalidated;
+  }
+  async scanQueryWindowKeysForDocuments(collection, ids) {
+    const idSet = new Set(ids);
+    const all = await this.backend.scanQueryWindows();
+    const keys = [];
+    for (const window2 of all) {
+      if (window2.collection !== collection) continue;
+      const documentIds = Array.isArray(window2.documentIds) ? window2.documentIds : [];
+      if (!documentIds.some((id) => idSet.has(String(id || "")))) continue;
+      keys.push([
+        window2.collection,
+        window2.queryFingerprint,
+        window2.offset,
+        window2.limit
+      ]);
+    }
+    return keys;
+  }
   async close() {
     await this.backend.close();
   }
   /// Evicts LRU document access entries until the working set fits the budget.
   /// Skips dirty docs and unexpired recently-read pins. Returns the number of
   /// document records removed.
-  async runEvictionIfOverBudget() {
+  async runEvictionIfOverBudget({ forceRecount = false } = {}) {
     const stats = await this.getCacheStats();
-    const workingSetBytes = await this.estimateWorkingSetBytes();
+    if (!stats.budgetBytes) {
+      return 0;
+    }
+    if (!forceRecount && (stats.estimatedBytes || 0) <= stats.budgetBytes) {
+      return 0;
+    }
+    const all = await this.backend.scanDocumentAccess();
+    const workingSetBytes = sumEstimatedDocumentAccessBytes(all);
     if (stats.estimatedBytes !== workingSetBytes) {
       stats.estimatedBytes = workingSetBytes;
       await this.backend.putCacheStats(stats);
     }
-    if (!stats.budgetBytes || workingSetBytes <= stats.budgetBytes) {
+    if (workingSetBytes <= stats.budgetBytes) {
       return 0;
     }
-    const all = await this.backend.scanDocumentAccess();
     const now = this.clock();
     const candidates = all.filter((record) => !record.dirty).filter((record) => {
       if (record.pinReason !== "recently-read") return true;
@@ -4286,7 +4804,7 @@ var QueryMetaStorage = class {
       const stats = await this.getCacheStats();
       const tighten = Math.max(1024, Math.floor((stats.budgetBytes || stats.estimatedBytes || 65536) / 2));
       await this.setBudgetBytes(tighten);
-      await this.runEvictionIfOverBudget();
+      await this.runEvictionIfOverBudget({ forceRecount: true });
       try {
         return await writeFn();
       } catch (retryErr) {
@@ -4342,6 +4860,16 @@ function normalizeEstimatedBytes(estimatedBytes) {
   const bytes = Math.max(0, Number(estimatedBytes) || 0);
   return bytes > 0 ? Math.max(1, Math.ceil(bytes)) : 0;
 }
+function sumEstimatedDocumentAccessBytes(records) {
+  return (Array.isArray(records) ? records : []).reduce(
+    (sum, record) => sum + (record.estimatedBytes || 0),
+    0
+  );
+}
+function normalizeDocumentIds2(ids) {
+  if (!Array.isArray(ids)) return [];
+  return Array.from(new Set(ids.map((id) => String(id || "")).filter(Boolean)));
+}
 function isQuotaExceeded(err) {
   if (!err) return false;
   if (err.name === "QuotaExceededError") return true;
@@ -4359,8 +4887,9 @@ function stringKey2(key) {
 }
 
 // src/apps/business-os/rxdb/src/query-meta-backend-indexeddb.mjs
-var SIDECAR_DB_VERSION = 1;
+var SIDECAR_DB_VERSION = 2;
 var STORE_QUERY_WINDOWS = "queryWindows";
+var STORE_QUERY_WINDOW_REFS = "queryWindowRefs";
 var STORE_DOCUMENT_ACCESS = "documentAccess";
 var STORE_CACHE_STATS = "cacheStats";
 var OPEN_TIMEOUT_MS = 4e3;
@@ -4387,6 +4916,7 @@ function createIndexedDbMetaBackend({ databaseName }) {
     },
     async deleteQueryWindow(key) {
       const db = await open();
+      await deleteQueryWindowRefs(db, stringKey3(parseQueryWindowKey(key)));
       await runRequest(
         db.transaction(STORE_QUERY_WINDOWS, "readwrite").objectStore(STORE_QUERY_WINDOWS).delete(parseQueryWindowKey(key))
       );
@@ -4396,6 +4926,28 @@ function createIndexedDbMetaBackend({ databaseName }) {
       return runRequest(
         db.transaction(STORE_QUERY_WINDOWS, "readonly").objectStore(STORE_QUERY_WINDOWS).getAll()
       );
+    },
+    async replaceQueryWindowDocumentRefs(record) {
+      const db = await open();
+      const windowKey = queryWindowKey2(record);
+      await deleteQueryWindowRefs(db, windowKey);
+      await putQueryWindowRefs(db, record);
+    },
+    async getQueryWindowKeysByDocumentIds(collection, ids) {
+      const normalizedIds = normalizeDocumentIds3(ids);
+      if (!normalizedIds.length) return [];
+      const db = await open();
+      const tx = db.transaction(STORE_QUERY_WINDOW_REFS, "readonly");
+      const index = tx.objectStore(STORE_QUERY_WINDOW_REFS).index("collection_documentId");
+      const requests = normalizedIds.map((id) => runRequest(index.getAll([collection, id])));
+      const rowsByDocument = await Promise.all(requests);
+      const keys = /* @__PURE__ */ new Set();
+      for (const rows of rowsByDocument) {
+        for (const row of rows || []) {
+          if (row?.windowKey) keys.add(row.windowKey);
+        }
+      }
+      return Array.from(keys);
     },
     async putDocumentAccess(record) {
       const db = await open();
@@ -4435,7 +4987,7 @@ function createIndexedDbMetaBackend({ databaseName }) {
     },
     async clear() {
       const db = await open();
-      for (const name of [STORE_QUERY_WINDOWS, STORE_DOCUMENT_ACCESS, STORE_CACHE_STATS]) {
+      for (const name of [STORE_QUERY_WINDOWS, STORE_QUERY_WINDOW_REFS, STORE_DOCUMENT_ACCESS, STORE_CACHE_STATS]) {
         await runRequest(db.transaction(name, "readwrite").objectStore(name).clear());
       }
     },
@@ -4467,6 +5019,15 @@ function openSidecarDatabase(databaseName) {
         store.createIndex("collection_lastAccessedAt", ["collection", "lastAccessedAt"], {
           unique: false
         });
+      }
+      if (!db.objectStoreNames.contains(STORE_QUERY_WINDOW_REFS)) {
+        const store = db.createObjectStore(STORE_QUERY_WINDOW_REFS, {
+          keyPath: ["collection", "documentId", "windowKey"]
+        });
+        store.createIndex("collection_documentId", ["collection", "documentId"], {
+          unique: false
+        });
+        store.createIndex("windowKey", "windowKey", { unique: false });
       }
       if (!db.objectStoreNames.contains(STORE_DOCUMENT_ACCESS)) {
         const store = db.createObjectStore(STORE_DOCUMENT_ACCESS, {
@@ -4508,6 +5069,68 @@ function runRequest(request) {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
+  });
+}
+function queryWindowKey2(record) {
+  return [record.collection, record.queryFingerprint, record.offset, record.limit].join("|");
+}
+function stringKey3(key) {
+  if (Array.isArray(key)) return key.join("|");
+  if (typeof key === "string") return key;
+  throw new TypeError("query window key must be array or string");
+}
+function normalizeDocumentIds3(ids) {
+  if (!Array.isArray(ids)) return [];
+  return Array.from(new Set(ids.map((id) => String(id || "")).filter(Boolean)));
+}
+async function putQueryWindowRefs(db, record) {
+  const documentIds = normalizeDocumentIds3(record.documentIds);
+  if (!documentIds.length) return;
+  const windowKey = queryWindowKey2(record);
+  await runTransaction(
+    db.transaction(STORE_QUERY_WINDOW_REFS, "readwrite"),
+    (tx) => {
+      const store = tx.objectStore(STORE_QUERY_WINDOW_REFS);
+      for (const documentId2 of documentIds) {
+        store.put({
+          collection: record.collection,
+          documentId: documentId2,
+          windowKey
+        });
+      }
+    }
+  );
+}
+async function deleteQueryWindowRefs(db, windowKey) {
+  await runTransaction(
+    db.transaction(STORE_QUERY_WINDOW_REFS, "readwrite"),
+    (tx) => {
+      const index = tx.objectStore(STORE_QUERY_WINDOW_REFS).index("windowKey");
+      const range = globalThis.IDBKeyRange.only(windowKey);
+      const request = index.openCursor(range);
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        cursor.delete();
+        cursor.continue();
+      };
+    }
+  );
+}
+function runTransaction(tx, schedule) {
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error("IndexedDB transaction aborted"));
+    try {
+      schedule(tx);
+    } catch (error) {
+      try {
+        tx.abort();
+      } catch {
+      }
+      reject(error);
+    }
   });
 }
 
@@ -4692,6 +5315,7 @@ function stableSignalingUrlKey(signalingUrl) {
   }
 }
 var replicationWebRtcTestInternals = Object.freeze({
+  changeEventHasOnlyReplicationOriginWrites,
   sharedRoomPeerKey,
   stableSignalingUrlKey,
   shouldAttachQueryDemandLoader,
@@ -5203,7 +5827,10 @@ var CtoxWebRtcReplicationState = class {
       state: this
     });
     this.shared.start();
-    this.changeSubscription = this.collection.observe(() => {
+    this.changeSubscription = this.collection.observe((event) => {
+      if (changeEventHasOnlyReplicationOriginWrites(event)) {
+        return;
+      }
       this.pushToRemotePeers().catch((error) => this.error$.next(error));
     });
     const periodicPushMs = this.periodicPushIntervalMs();
@@ -5252,6 +5879,7 @@ var CtoxWebRtcReplicationState = class {
   }
   async buildProtocolPayload() {
     const checkpoint = await this.collection.storageCollection.replicationCheckpointStatus(this.schemaHashValue);
+    const capabilityToken = await resolveCapabilityToken(this.ctox);
     return buildProtocolPayload({
       collectionName: this.collection.name,
       schemaVersion: this.collection.schema.version,
@@ -5261,6 +5889,7 @@ var CtoxWebRtcReplicationState = class {
       peerGeneration: 1,
       checkpoint,
       role: "browser",
+      capabilityToken,
       capabilities: BROWSER_CAPABILITIES
     });
   }
@@ -5385,7 +6014,6 @@ var CtoxWebRtcReplicationState = class {
       const result = response.result || {};
       const documents = Array.isArray(result?.documents) ? result.documents : [];
       if (documents.length) {
-        await this.invalidateDemandCacheForRemoteWrite(documents);
         await this.collection.storageCollection.bulkWrite(documents, {
           replicationOrigin: this.replicationOriginForPeer(activePeerId)
         });
@@ -5463,7 +6091,13 @@ var CtoxWebRtcReplicationState = class {
       );
       const documents = Array.isArray(result?.documents) ? result.documents : [];
       if (!documents.length) {
-        checkpoint = result?.checkpoint || checkpoint;
+        const nextCheckpoint = result?.checkpoint || checkpoint;
+        if (result?.scanLimitReached && nextCheckpoint && checkpointKey(nextCheckpoint) !== checkpointKey(checkpoint)) {
+          checkpoint = nextCheckpoint;
+          this.pushCheckpointsByPeer.set(peerId, checkpoint);
+          continue;
+        }
+        checkpoint = nextCheckpoint;
         this.pushCheckpointsByPeer.set(peerId, checkpoint);
         break;
       }
@@ -5513,7 +6147,6 @@ var CtoxWebRtcReplicationState = class {
     const rows = Array.isArray(params?.[0]) ? params[0] : [];
     const docs = rows.map((row) => row?.newDocumentState || row?.document || row).filter(Boolean);
     if (docs.length) {
-      await this.invalidateDemandCacheForRemoteWrite(docs);
       await this.collection.storageCollection.bulkWrite(docs, {
         replicationOrigin: this.replicationOriginForPeer(peerId)
       });
@@ -5527,8 +6160,8 @@ var CtoxWebRtcReplicationState = class {
   awaitInSync() {
     return Promise.resolve().then(() => this.awaitInitialReplication()).then(() => this.pullFromRemotePeers()).then(() => this.pushToRemotePeers());
   }
-  getTransportStatus() {
-    return this.decorateTransportStatus(this.shared?.getTransportStatus?.() || this.transportStatus$.getValue?.() || {});
+  getTransportStatus(options = {}) {
+    return this.decorateTransportStatus(this.shared?.getTransportStatus?.(options) || this.transportStatus$.getValue?.() || {});
   }
   async cancel() {
     this.cancelled = true;
@@ -5869,6 +6502,26 @@ function documentsByPrimaryPath(documents = [], primaryPath = "id") {
   }
   return map;
 }
+function changeEventHasOnlyReplicationOriginWrites(event) {
+  const docs = Object.values(event?.success || {});
+  return docs.length > 0 && docs.every((doc) => Boolean(doc?._meta?.ctoxReplicationOrigin?.role));
+}
+async function resolveCapabilityToken(ctox = {}) {
+  if (typeof ctox?.capabilityTokenProvider === "function") {
+    try {
+      const token2 = await ctox.capabilityTokenProvider();
+      return typeof token2 === "string" && token2.trim() ? token2.trim() : null;
+    } catch {
+      return null;
+    }
+  }
+  const token = ctox?.capabilityToken;
+  return typeof token === "string" && token.trim() ? token.trim() : null;
+}
+function checkpointKey(checkpoint) {
+  if (!checkpoint) return "";
+  return `${Number(checkpoint.lwt || 0)}\0${String(checkpoint.id || "")}`;
+}
 function primaryValue(doc = {}, primaryPath = "id") {
   if (!doc || typeof doc !== "object") return "";
   if (doc.id != null) return String(doc.id);
@@ -6025,7 +6678,7 @@ var CtoxRxCollection = class {
     this.schema = {
       jsonSchema: schema,
       version: schema?.version || 0,
-      primaryPath: primaryPathFromSchema(schema),
+      primaryPath: primaryPathFromSchema2(schema),
       hash: () => schemaHash(schema, name)
     };
     this.storageCollection = storageCollection;
@@ -6073,7 +6726,16 @@ var CtoxRxCollection = class {
   }
   count(query = {}) {
     return {
-      exec: async () => (await this.find(query).exec()).length
+      exec: async () => {
+        const normalized = normalizeQuery(query, this.schema.primaryPath);
+        if (typeof this.storageCollection.countDocuments === "function") {
+          return this.storageCollection.countDocuments(normalized, {
+            matchesSelector,
+            sortDocuments
+          });
+        }
+        return (await this.find(query).exec()).length;
+      }
     };
   }
   schemaIndexes() {
@@ -6422,7 +7084,7 @@ function setValueAtPath(doc, path, value) {
   }
   target[parts[parts.length - 1]] = value;
 }
-function primaryPathFromSchema(schema) {
+function primaryPathFromSchema2(schema) {
   const primary = schema?.primaryKey;
   if (typeof primary === "string") return primary;
   if (primary?.key) return primary.key;

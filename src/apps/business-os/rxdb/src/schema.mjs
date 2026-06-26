@@ -49,7 +49,7 @@ export const CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   browser_input_events: 'dc79706396f8c59865dc4187947fe925f4b1a1fae6669c4fd7d7d0e507a4dff7',
   browser_sessions: '8f9d925480b6fa11755bb0800e47da9d4b8dca59f510fb5c6bfb3d84cec212d3',
   browser_tabs: '3387a8373cad98f4651b15173cf920568970ad2afa7f14758bbfffe9d77d5004',
-  business_chats: '4f7fc2d29ea54ef9cabef037caa01f0ef2567fc2fa156835c952bef2dd2fd456',
+  business_chats: '0e52de33b4ea565122debb0e46296b44cdbe13f60190b9d9d06259f3719918d7',
   business_commands: 'cea41185cea8447fd7ef3684217e5030e7ab25a1fa71d7c1978182d153013357',
   business_consents: '4e0031090f60e466e8d9b2818a73faac41d89adabba5c2f2fd75a4b48cef9d68',
   business_credentials: '5583908188482df5c694d6214ef4f3a250fdcd09d7111a5a859a5976f4a40b7d',
@@ -341,8 +341,18 @@ export function buildProtocolPayload({
   // collections when the room reconnects, especially for file chunk stores
   // where stale checkpoint epochs are a data-corruption signal.
   collectionCheckpoints = null,
+  capabilityToken = null,
 } = {}) {
   const checkpointEvidence = checkpoint || null;
+  const peerSession = {
+    role,
+    sessionId: peerSessionId || null,
+    generation: Number.isFinite(peerGeneration) ? peerGeneration : null,
+  };
+  const cleanCapabilityToken = typeof capabilityToken === 'string' ? capabilityToken.trim() : '';
+  if (cleanCapabilityToken) {
+    peerSession.capabilityToken = cleanCapabilityToken;
+  }
   return {
     protocol: CTOX_RXDB_PROTOCOL,
     checkpoint: checkpointEvidence,
@@ -358,11 +368,7 @@ export function buildProtocolPayload({
     // collection handshake stays byte-identical.
     collectionSchemas: normalizeCollectionSchemas(collectionSchemas),
     collectionCheckpoints: normalizeCollectionCheckpoints(collectionCheckpoints),
-    peerSession: {
-      role,
-      sessionId: peerSessionId || null,
-      generation: Number.isFinite(peerGeneration) ? peerGeneration : null,
-    },
+    peerSession,
     capabilities: Array.from(new Set([
       ...CTOX_REQUIRED_PROTOCOL_CAPABILITIES,
       ...capabilities,

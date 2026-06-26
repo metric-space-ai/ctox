@@ -18,6 +18,7 @@
 // shared native peer self-heals its transport; this layer only classifies
 // errors and schedules bounded restarts.
 import { batchSizeFor, collectionTopic, nativeRxdbPeerReady } from './sync-contract.js';
+import { getBusinessOsCapabilityToken } from './command-bus.js';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
 const CTOX_BROWSER_CAPABILITIES = [
@@ -31,6 +32,7 @@ const CTOX_BROWSER_CAPABILITIES = [
 const NATIVE_PEER_OPEN_WATCHDOG_MS = 30000;
 const NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS = 30000;
 const NATIVE_PEER_RESTART_STABLE_MS = 1000;
+const SYNC_DIAGNOSTIC_EMIT_MIN_INTERVAL_MS = 250;
 
 const signalingErrorHandlers = new Set();
 let signalingErrorObserverInstalled = false;
@@ -49,13 +51,38 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
   }
   const runtimeMode = 'webrtc';
   const diagnostics = createDiagnostics(config, runtimeMode);
-  const emitDiagnostic = (updates = {}) => {
+  let diagnosticEmitTimer = null;
+  let lastDiagnosticEmitAtMs = 0;
+  const flushDiagnostic = () => {
+    if (!onDiagnostic) return;
+    lastDiagnosticEmitAtMs = Date.now();
+    onDiagnostic(snapshotDiagnostics(diagnostics));
+  };
+  const scheduleDiagnosticEmit = ({ immediate = false } = {}) => {
+    if (!onDiagnostic) return;
+    if (immediate) {
+      if (diagnosticEmitTimer) {
+        clearTimeout(diagnosticEmitTimer);
+        diagnosticEmitTimer = null;
+      }
+      flushDiagnostic();
+      return;
+    }
+    if (diagnosticEmitTimer) return;
+    diagnosticEmitTimer = setTimeout(() => {
+      diagnosticEmitTimer = null;
+      flushDiagnostic();
+    }, SYNC_DIAGNOSTIC_EMIT_MIN_INTERVAL_MS);
+  };
+  const emitDiagnostic = (updates = {}, options = {}) => {
     if (updates.lastError !== undefined) diagnostics.lastError = updates.lastError;
     if (updates.lastLifecycleEvent !== undefined) diagnostics.lastLifecycleEvent = updates.lastLifecycleEvent;
     if (updates.phase) diagnostics.phase = updates.phase;
     if (updates.moduleId) diagnostics.moduleId = updates.moduleId;
     diagnostics.updatedAt = new Date().toISOString();
-    onDiagnostic?.(snapshotDiagnostics(diagnostics));
+    scheduleDiagnosticEmit({
+      immediate: options.immediate === true || isUrgentDiagnosticUpdate(updates),
+    });
   };
   const recordCollection = (collection, update) => {
     const current = diagnostics.collections[collection] || {};
@@ -90,7 +117,9 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
     diagnostics.collections[collection] = {
       ...next,
     };
-    emitDiagnostic({ phase: 'collection-sync' });
+    emitDiagnostic({ phase: 'collection-sync' }, {
+      immediate: isUrgentCollectionDiagnostic(update, nextStatus),
+    });
   };
   const stopAllBridges = async () => {
     const bridgePromises = [...bridges.values()];
@@ -394,11 +423,15 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
       stopped = true;
       if (globalRestartTimer) clearTimeout(globalRestartTimer);
       globalRestartTimer = null;
+      if (diagnosticEmitTimer) {
+        clearTimeout(diagnosticEmitTimer);
+        diagnosticEmitTimer = null;
+      }
       if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
         window.removeEventListener('online', onlineListener);
       }
       await stopAllBridges();
-      emitDiagnostic({ phase: 'stopped' });
+      emitDiagnostic({ phase: 'stopped' }, { immediate: true });
     },
   };
   return syncRuntime;
@@ -547,7 +580,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     recordCollection?.(collection, { status: 'pending', reason: 'collection-not-registered' });
     return { mode: 'pending', collection, reason: 'collection-not-registered' };
   }
-  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260625-perf-indexes-v1');
+  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260626-chat-tracking-index-v1');
   if (typeof rxdb?.replicateWebRTC !== 'function' || typeof rxdb?.getConnectionHandlerSimplePeer !== 'function') {
     throw new Error('RxDB WebRTC bundle is missing replicateWebRTC/getConnectionHandlerSimplePeer');
   }
@@ -606,6 +639,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     push: isReadOnlyProjectionCollection(collection) ? null : { batchSize },
     retryTime: 5000,
     ctox: {
+      capabilityTokenProvider: getBusinessOsCapabilityToken,
       onPeerProtocol(info) {
         const remoteCapabilities = Array.isArray(info?.capabilities) ? info.capabilities : [];
         const remoteCheckpoint = sanitizeRemoteCheckpoint(info?.checkpoint || null);
@@ -1156,6 +1190,16 @@ function snapshotDiagnostics(diagnostics) {
     ...diagnostics,
     collections: { ...diagnostics.collections },
   };
+}
+
+function isUrgentDiagnosticUpdate(updates = {}) {
+  if (updates.lastError != null || updates.lastLifecycleEvent != null) return true;
+  return ['ready', 'failed', 'reconnecting', 'stopped'].includes(String(updates.phase || ''));
+}
+
+function isUrgentCollectionDiagnostic(update = {}, status = '') {
+  if (update.lastError != null || update.lastLifecycleEvent != null) return true;
+  return ['failed', 'error', 'reconnecting', 'stopped'].includes(String(status || ''));
 }
 
 function sanitizedSignalingUrls(config) {

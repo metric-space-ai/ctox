@@ -12,12 +12,12 @@ use ctox_app_server_protocol::AuthMode as ApiAuthMode;
 use ring::aead;
 use ring::hmac;
 use ring::rand::{SecureRandom, SystemRandom};
-use rusqlite::Connection;
-use rusqlite::OpenFlags;
-use rusqlite::OptionalExtension;
 use rusqlite::params;
 use rusqlite::params_from_iter;
 use rusqlite::types::Value as SqlValue;
+use rusqlite::Connection;
+use rusqlite::OpenFlags;
+use rusqlite::OptionalExtension;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -139,6 +139,60 @@ static SYNC_CONNECTION_CONFIG_CACHE: OnceLock<
 > = OnceLock::new();
 static BUSINESS_OS_STORE_SCHEMA_READY: OnceLock<Mutex<HashSet<BusinessOsStoreDbKey>>> =
     OnceLock::new();
+#[cfg(test)]
+static RXDB_TABLE_COLUMN_LOADS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+#[cfg(test)]
+static RXDB_COLLECTION_WRITER_OPENS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+
+#[cfg(test)]
+fn rxdb_table_column_counter_key(db_path: &Path, table: &str) -> String {
+    format!("{}::{table}", db_path.display())
+}
+
+#[cfg(test)]
+fn rxdb_collection_writer_counter_key(root: &Path, collection: &str) -> String {
+    format!("{}::{collection}", rxdb_store_path(root).display())
+}
+
+#[cfg(test)]
+fn reset_rxdb_table_column_load_count(root: &Path, table: &str) {
+    let key = rxdb_table_column_counter_key(&rxdb_store_path(root), table);
+    let mut counts = RXDB_TABLE_COLUMN_LOADS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    counts.insert(key, 0);
+}
+
+#[cfg(test)]
+fn rxdb_table_column_load_count(root: &Path, table: &str) -> usize {
+    let key = rxdb_table_column_counter_key(&rxdb_store_path(root), table);
+    let counts = RXDB_TABLE_COLUMN_LOADS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    counts.get(&key).copied().unwrap_or(0)
+}
+
+#[cfg(test)]
+fn reset_rxdb_collection_writer_open_count(root: &Path, collection: &str) {
+    let key = rxdb_collection_writer_counter_key(root, collection);
+    let mut counts = RXDB_COLLECTION_WRITER_OPENS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    counts.insert(key, 0);
+}
+
+#[cfg(test)]
+fn rxdb_collection_writer_open_count(root: &Path, collection: &str) -> usize {
+    let key = rxdb_collection_writer_counter_key(root, collection);
+    let counts = RXDB_COLLECTION_WRITER_OPENS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    counts.get(&key).copied().unwrap_or(0)
+}
 
 thread_local! {
     static BUSINESS_OS_STORE_DB: RefCell<Option<CachedBusinessOsStoreConnection>> = RefCell::new(None);
@@ -6635,6 +6689,7 @@ pub fn repair_module_lifecycle_projections(
         }
     }
     let mut actions = Vec::new();
+    let mut rxdb_writers = RxdbProjectionWriterCache::new(root);
     for release_id in &release_ids {
         actions.push(serde_json::json!({
             "kind": "business_module_release_projection",
@@ -6645,13 +6700,7 @@ pub fn repair_module_lifecycle_projections(
             if let Some(payload) =
                 outbound_load_record(&conn, "business_module_releases", release_id)?
             {
-                upsert_rxdb_collection_record(
-                    root,
-                    "business_module_releases",
-                    release_id,
-                    now,
-                    payload,
-                )?;
+                rxdb_writers.upsert("business_module_releases", release_id, now, payload)?;
             }
         }
     }
@@ -13741,6 +13790,7 @@ pub fn repair_queue_projections(
     let mut counters: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut actions: Vec<Value> = Vec::new();
     let mut touched_commands = HashSet::new();
+    let mut rxdb_writers = RxdbProjectionWriterCache::new(root);
 
     for (task_id, payload_json, projection_updated_at_ms) in projection_rows {
         let mut payload = serde_json::from_str::<Value>(&payload_json).unwrap_or_else(|_| {
@@ -13900,13 +13950,7 @@ pub fn repair_queue_projections(
                             now,
                             payload.clone(),
                         )?;
-                        upsert_rxdb_collection_record(
-                            root,
-                            "ctox_queue_tasks",
-                            &task_id,
-                            now,
-                            payload,
-                        )?;
+                        rxdb_writers.upsert("ctox_queue_tasks", &task_id, now, payload)?;
                     }
                 }
 
@@ -13918,6 +13962,7 @@ pub fn repair_queue_projections(
                             upsert_command_projection_from_queue_status(
                                 root,
                                 &conn,
+                                Some(&mut rxdb_writers),
                                 command_id,
                                 Some(&task),
                                 &desired_route_status,
@@ -13991,13 +14036,7 @@ pub fn repair_queue_projections(
                                 now,
                                 payload.clone(),
                             )?;
-                            upsert_rxdb_collection_record(
-                                root,
-                                "ctox_queue_tasks",
-                                &task_id,
-                                now,
-                                payload,
-                            )?;
+                            rxdb_writers.upsert("ctox_queue_tasks", &task_id, now, payload)?;
                         }
                     }
                 } else if projection_status_is_active(&projection_status)
@@ -14043,18 +14082,13 @@ pub fn repair_queue_projections(
                             now,
                             payload.clone(),
                         )?;
-                        upsert_rxdb_collection_record(
-                            root,
-                            "ctox_queue_tasks",
-                            &task_id,
-                            now,
-                            payload,
-                        )?;
+                        rxdb_writers.upsert("ctox_queue_tasks", &task_id, now, payload)?;
                         if let Some(command_id) = command_id.as_deref() {
                             touched_commands.insert(command_id.to_string());
                             upsert_command_projection_from_queue_status(
                                 root,
                                 &conn,
+                                Some(&mut rxdb_writers),
                                 command_id,
                                 None,
                                 "failed",
@@ -14181,19 +14215,107 @@ fn upsert_rxdb_collection_record(
     collection: &str,
     record_id: &str,
     updated_at_ms: i64,
+    payload: Value,
+) -> anyhow::Result<()> {
+    if let Some(mut writer) = RxdbCollectionWriter::open(root, collection)? {
+        writer.upsert(record_id, updated_at_ms, payload)?;
+    }
+    Ok(())
+}
+
+struct RxdbProjectionWriterCache {
+    root: PathBuf,
+    writers: HashMap<String, Option<RxdbCollectionWriter>>,
+}
+
+impl RxdbProjectionWriterCache {
+    fn new(root: &Path) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            writers: HashMap::new(),
+        }
+    }
+
+    fn upsert(
+        &mut self,
+        collection: &str,
+        record_id: &str,
+        updated_at_ms: i64,
+        payload: Value,
+    ) -> anyhow::Result<()> {
+        if !self.writers.contains_key(collection) {
+            let writer = RxdbCollectionWriter::open(&self.root, collection)?;
+            self.writers.insert(collection.to_string(), writer);
+        }
+        if let Some(Some(writer)) = self.writers.get_mut(collection) {
+            writer.upsert(record_id, updated_at_ms, payload)?;
+        }
+        Ok(())
+    }
+}
+
+struct RxdbCollectionWriter {
+    conn: Connection,
+    table: String,
+    columns: HashSet<String>,
+}
+
+impl RxdbCollectionWriter {
+    fn open(root: &Path, collection: &str) -> anyhow::Result<Option<Self>> {
+        if !is_safe_rxdb_collection_name(collection) {
+            anyhow::bail!("invalid collection name `{collection}`");
+        }
+        let path = rxdb_store_path(root);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        #[cfg(test)]
+        {
+            let key = rxdb_collection_writer_counter_key(root, collection);
+            let mut counts = RXDB_COLLECTION_WRITER_OPENS
+                .get_or_init(|| Mutex::new(HashMap::new()))
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            *counts.entry(key).or_insert(0) += 1;
+        }
+        let conn = Connection::open(&path)?;
+        conn.busy_timeout(Duration::from_secs(10))?;
+        let Some(table) = rxdb_collection_table_name(&path, &conn, collection) else {
+            return Ok(None);
+        };
+        let columns = rxdb_table_columns_for_path(&conn, &path, &table)?;
+        Ok(Some(Self {
+            conn,
+            table,
+            columns,
+        }))
+    }
+
+    fn upsert(
+        &mut self,
+        record_id: &str,
+        updated_at_ms: i64,
+        payload: Value,
+    ) -> anyhow::Result<()> {
+        upsert_rxdb_collection_record_with_writer(
+            &self.conn,
+            &self.table,
+            &self.columns,
+            record_id,
+            updated_at_ms,
+            payload,
+        )
+    }
+}
+
+fn upsert_rxdb_collection_record_with_writer(
+    conn: &Connection,
+    table: &str,
+    table_columns: &HashSet<String>,
+    record_id: &str,
+    updated_at_ms: i64,
     mut payload: Value,
 ) -> anyhow::Result<()> {
-    if !is_safe_rxdb_collection_name(collection) {
-        anyhow::bail!("invalid collection name `{collection}`");
-    }
-    let path = rxdb_store_path(root);
-    if !path.is_file() {
-        return Ok(());
-    }
-    let conn = Connection::open(&path)?;
-    let Some(table) = rxdb_collection_table_name(&path, &conn, collection) else {
-        return Ok(());
-    };
     if let Some(existing_json) = conn
         .query_row(
             &format!("SELECT data FROM {table} WHERE id = ?1"),
@@ -14221,27 +14343,23 @@ fn upsert_rxdb_collection_record(
         SqlValue::Text(serde_json::to_string(&payload)?),
     ];
     let mut updates = vec!["data = excluded.data".to_string()];
-    if let Some(deleted_column) = ["deleted", "_deleted"].into_iter().find_map(|column| {
-        rxdb_table_has_column(&conn, &table, column)
-            .ok()
-            .filter(|exists| *exists)
-            .map(|_| column)
-    }) {
+    if let Some(deleted_column) = ["deleted", "_deleted"]
+        .into_iter()
+        .find_map(|column| table_columns.contains(column).then_some(column))
+    {
         columns.push(deleted_column.to_string());
         values.push(SqlValue::Integer(0));
         updates.push(format!("{deleted_column} = 0"));
     }
-    if let Some(revision_column) = ["revision", "_rev"].into_iter().find_map(|column| {
-        rxdb_table_has_column(&conn, &table, column)
-            .ok()
-            .filter(|exists| *exists)
-            .map(|_| column)
-    }) {
+    if let Some(revision_column) = ["revision", "_rev"]
+        .into_iter()
+        .find_map(|column| table_columns.contains(column).then_some(column))
+    {
         columns.push(revision_column.to_string());
         values.push(SqlValue::Text(rev));
         updates.push(format!("{revision_column} = excluded.{revision_column}"));
     }
-    if rxdb_table_has_column(&conn, &table, "lastWriteTime")? {
+    if table_columns.contains("lastWriteTime") {
         columns.push("lastWriteTime".to_string());
         values.push(SqlValue::Real(updated_at_ms as f64));
         updates.push("lastWriteTime = excluded.lastWriteTime".to_string());
@@ -14262,6 +14380,46 @@ fn upsert_rxdb_collection_record(
     Ok(())
 }
 
+fn rxdb_table_columns(conn: &Connection, table: &str) -> anyhow::Result<HashSet<String>> {
+    rxdb_table_columns_with_counter_key(conn, table, table.to_string())
+}
+
+fn rxdb_table_columns_for_path(
+    conn: &Connection,
+    db_path: &Path,
+    table: &str,
+) -> anyhow::Result<HashSet<String>> {
+    #[cfg(test)]
+    let counter_key = rxdb_table_column_counter_key(db_path, table);
+    #[cfg(not(test))]
+    let counter_key = table.to_string();
+    rxdb_table_columns_with_counter_key(conn, table, counter_key)
+}
+
+fn rxdb_table_columns_with_counter_key(
+    conn: &Connection,
+    table: &str,
+    counter_key: String,
+) -> anyhow::Result<HashSet<String>> {
+    let _ = &counter_key;
+    #[cfg(test)]
+    {
+        let mut counts = RXDB_TABLE_COLUMN_LOADS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *counts.entry(counter_key).or_insert(0) += 1;
+    }
+
+    let mut statement = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+    let mut columns = HashSet::new();
+    for row in rows {
+        columns.insert(row?);
+    }
+    Ok(columns)
+}
+
 pub fn upsert_projection_record(
     root: &Path,
     collection: &str,
@@ -14275,14 +14433,7 @@ pub fn upsert_projection_record(
 }
 
 fn rxdb_table_has_column(conn: &Connection, table: &str, column: &str) -> anyhow::Result<bool> {
-    let mut statement = conn.prepare(&format!("PRAGMA table_info({table})"))?;
-    let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
-    for row in rows {
-        if row? == column {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    Ok(rxdb_table_columns(conn, table)?.contains(column))
 }
 
 fn merge_json_object_values(target: &mut Value, patch: &Value) {
@@ -14714,6 +14865,7 @@ pub fn push_collection_records(root: &Path, body: Value) -> anyhow::Result<Value
         .context("documents array is required")?;
     let mut accepted = Vec::new();
     let mut ignored = Vec::new();
+    let mut store_conn: Option<Connection> = None;
     for document in documents {
         let record_id = document
             .get("id")
@@ -14728,8 +14880,11 @@ pub fn push_collection_records(root: &Path, body: Value) -> anyhow::Result<Value
             .and_then(Value::as_bool)
             .unwrap_or(false)
         {
-            let conn = open_store(root)?;
-            mark_business_record_deleted(&conn, collection, &record_id, now_ms() as i64)?;
+            if store_conn.is_none() {
+                store_conn = Some(open_store(root)?);
+            }
+            let conn = store_conn.as_ref().expect("store connection initialized");
+            mark_business_record_deleted(conn, collection, &record_id, now_ms() as i64)?;
             if collection == "notes" {
                 if let Err(e) = delete_note_markdown_file(root, &record_id) {
                     eprintln!(
@@ -14750,13 +14905,16 @@ pub fn push_collection_records(root: &Path, body: Value) -> anyhow::Result<Value
                 })),
             }
         } else {
-            let conn = open_store(root)?;
+            if store_conn.is_none() {
+                store_conn = Some(open_store(root)?);
+            }
+            let conn = store_conn.as_ref().expect("store connection initialized");
             let updated_at_ms = document
                 .get("updated_at_ms")
                 .and_then(Value::as_i64)
                 .unwrap_or_else(|| now_ms() as i64);
             upsert_business_record(
-                &conn,
+                conn,
                 collection,
                 &record_id,
                 updated_at_ms,
@@ -15128,6 +15286,54 @@ fn secret_command_safe_command(
             }
         }),
     }
+}
+
+fn mailserver_command_safe_command(
+    command: &BusinessCommand,
+    session: &BusinessOsSession,
+    safe_payload: Value,
+) -> BusinessCommand {
+    BusinessCommand {
+        origin: command.origin,
+        id: command.id.clone(),
+        module: command.module.clone(),
+        command_type: command.command_type.clone(),
+        record_id: command.record_id.clone(),
+        payload: safe_payload,
+        client_context: serde_json::json!({
+            "actor": {
+                "id": session_user_id(session).unwrap_or("rxdb-command"),
+                "display_name": session
+                    .user
+                    .as_ref()
+                    .map(|user| user.display_name.as_str())
+                    .unwrap_or("rxdb-command"),
+                "role": session_role(session),
+            }
+        }),
+    }
+}
+
+fn open_mailserver_store_connection(root: &Path) -> anyhow::Result<Connection> {
+    let db_path = crate::paths::core_db(root);
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create runtime dir {}", parent.display()))?;
+    }
+    let db_path_string = db_path.to_string_lossy().into_owned();
+    ctox_mailserver::store::sqlite::SqliteStore::new(&db_path_string)
+        .init()
+        .context("failed to initialize mailserver SQLite store")?;
+    let conn = Connection::open(&db_path)
+        .with_context(|| format!("failed to open mailserver store {}", db_path.display()))?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .context("failed to configure mailserver SQLite busy_timeout")?;
+    let busy_timeout_ms = crate::persistence::sqlite_busy_timeout_millis();
+    conn.execute_batch(&format!(
+        "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout={busy_timeout_ms};"
+    ))
+    .context("failed to configure mailserver SQLite pragmas")?;
+    Ok(conn)
 }
 
 /// Accept a command that originated in trusted, in-process code (operator CLI,
@@ -15611,6 +15817,15 @@ pub fn accept_rxdb_business_command_with_origin(
         }
         command_type if is_customers_active_command(command_type) => {
             let session = rxdb_authenticated_session(root, &command)?;
+            let decision = module_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::DataWrite,
+                "customers",
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
             match handle_customers_active_command(root, &session, &command) {
                 Ok(outcome) => {
                     return write_rxdb_control_command_outcome(
@@ -15640,6 +15855,15 @@ pub fn accept_rxdb_business_command_with_origin(
         }
         command_type if is_outbound_active_command(command_type) => {
             let session = rxdb_authenticated_session(root, &command)?;
+            let decision = module_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::DataWrite,
+                "outbound",
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
             let outcome = handle_outbound_active_command(root, &session, &command_id, &command)?;
             return write_rxdb_control_command_outcome(
                 root,
@@ -15795,7 +16019,16 @@ pub fn accept_rxdb_business_command_with_origin(
             );
         }
         command_type if command_type.starts_with("ctox.ticket.") => {
-            let _session = rxdb_authenticated_session(root, &command)?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let decision = module_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::SupportTriage,
+                "support",
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
             let outcome = crate::mission::tickets::run_business_os_ticket_command(
                 root,
                 command_type,
@@ -16371,7 +16604,13 @@ pub fn accept_rxdb_business_command_with_origin(
             );
         }
         "ctox.mailserver.get_config" => {
-            let conn = open_store(root)?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let decision =
+                workspace_policy_decision(root, &session, BusinessOsPermission::SecretsManage)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            let conn = open_mailserver_store_connection(root)?;
 
             // Get domains
             let mut stmt = conn.prepare("SELECT domain_name, dkim_selector, dkim_private_key, COALESCE(spf_record, ''), COALESCE(dmarc_record, '') FROM stalwart_domains")?;
@@ -16381,7 +16620,8 @@ pub fn accept_rxdb_business_command_with_origin(
                 Ok(serde_json::json!({
                     "domain_name": row.get::<_, String>(0)?,
                     "dkim_selector": row.get::<_, String>(1)?,
-                    "dkim_private_key": dkim_private_key,
+                    "dkim_private_key_set": !dkim_private_key.trim().is_empty(),
+                    "secret_value_revealed": false,
                     "dkim_public_key": dkim_public_key,
                     "spf_record": row.get::<_, String>(3)?,
                     "dmarc_record": row.get::<_, String>(4)?,
@@ -16446,6 +16686,23 @@ pub fn accept_rxdb_business_command_with_origin(
                 .to_string();
 
             anyhow::ensure!(!domain_name.is_empty(), "domain_name is required");
+            let session = rxdb_authenticated_session(root, &command)?;
+            let safe_command = mailserver_command_safe_command(
+                &command,
+                &session,
+                serde_json::json!({
+                    "domain_name": domain_name,
+                    "dkim_selector": dkim_selector,
+                    "dkim_private_key_provided": !dkim_private_key_opt.is_empty(),
+                    "secret_value_in_payload": false
+                }),
+            );
+            let decision =
+                workspace_policy_decision(root, &session, BusinessOsPermission::SecretsManage)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &safe_command, &decision)?
+            {
+                return Ok(outcome);
+            }
 
             // Generate private key if not provided
             let dkim_private_key = if dkim_private_key_opt.is_empty() {
@@ -16477,7 +16734,7 @@ pub fn accept_rxdb_business_command_with_origin(
             let spf_record = format!("v=spf1 mx a ip4:51.210.246.120 ~all");
             let dmarc_record = format!("v=DMARC1; p=none; rua=mailto:dmarc@{}", domain_name);
 
-            let conn = open_store(root)?;
+            let conn = open_mailserver_store_connection(root)?;
             conn.execute(
                 "INSERT OR REPLACE INTO stalwart_domains (domain_name, dkim_selector, dkim_private_key, spf_record, dmarc_record)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -16491,13 +16748,14 @@ pub fn accept_rxdb_business_command_with_origin(
                 "dkim_selector": dkim_selector,
                 "spf_record": spf_record,
                 "dmarc_record": dmarc_record,
-                "dkim_private_key": dkim_private_key,
+                "dkim_private_key_set": true,
+                "secret_value_revealed": false,
                 "dkim_public_key": dkim_public_key
             });
 
             return write_rxdb_control_command_outcome(
                 root,
-                &command,
+                &safe_command,
                 "completed",
                 None,
                 Some("completed"),
@@ -16513,8 +16771,14 @@ pub fn accept_rxdb_business_command_with_origin(
                 .trim()
                 .to_string();
             anyhow::ensure!(!domain_name.is_empty(), "domain_name is required");
+            let session = rxdb_authenticated_session(root, &command)?;
+            let decision =
+                workspace_policy_decision(root, &session, BusinessOsPermission::SecretsManage)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
 
-            let conn = open_store(root)?;
+            let conn = open_mailserver_store_connection(root)?;
             conn.execute(
                 "DELETE FROM stalwart_domains WHERE domain_name = ?1",
                 params![domain_name],
@@ -16552,12 +16816,26 @@ pub fn accept_rxdb_business_command_with_origin(
 
             anyhow::ensure!(!username.is_empty(), "username is required");
             anyhow::ensure!(!password.is_empty(), "password is required");
+            let session = rxdb_authenticated_session(root, &command)?;
+            let safe_command = mailserver_command_safe_command(
+                &command,
+                &session,
+                serde_json::json!({
+                    "username": username,
+                    "password_set": true,
+                    "secret_value_in_payload": false
+                }),
+            );
+            let decision =
+                workspace_policy_decision(root, &session, BusinessOsPermission::SecretsManage)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &safe_command, &decision)?
+            {
+                return Ok(outcome);
+            }
 
-            let db_path = root
-                .join("runtime/ctox.sqlite3")
-                .to_string_lossy()
-                .into_owned();
+            let db_path = crate::paths::core_db(root).to_string_lossy().into_owned();
             let store = ctox_mailserver::store::sqlite::SqliteStore::new(&db_path);
+            store.init()?;
             store.add_user(&username, &password)?;
 
             let outcome = serde_json::json!({
@@ -16567,7 +16845,7 @@ pub fn accept_rxdb_business_command_with_origin(
 
             return write_rxdb_control_command_outcome(
                 root,
-                &command,
+                &safe_command,
                 "completed",
                 None,
                 Some("completed"),
@@ -16583,8 +16861,14 @@ pub fn accept_rxdb_business_command_with_origin(
                 .trim()
                 .to_string();
             anyhow::ensure!(!username.is_empty(), "username is required");
+            let session = rxdb_authenticated_session(root, &command)?;
+            let decision =
+                workspace_policy_decision(root, &session, BusinessOsPermission::SecretsManage)?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
 
-            let conn = open_store(root)?;
+            let conn = open_mailserver_store_connection(root)?;
             conn.execute(
                 "DELETE FROM stalwart_users WHERE username = ?1",
                 params![username],
@@ -20968,13 +21252,19 @@ pub fn verify_capability_actor(root: &Path, token: &str) -> Option<(String, Stri
 }
 
 /// Whether server-authoritative per-collection sync authorization is enforced.
-/// Default OFF (config-gated via the runtime store, not a new ambient toggle):
-/// enforcement is a deliberate operator-enabled rollout so the browser
-/// token-binding can be verified in a live mesh before it gates any reads.
+/// Default ON: the policy matrix is deny-by-exception for admin-only
+/// collections, and browsers now carry native-signed capability tokens in the
+/// WebRTC handshake. Operators can still opt out through typed runtime config
+/// during legacy rollout, but absence of config must not leave sync fail-open.
 pub fn collection_authz_enabled(root: &Path) -> bool {
-    crate::inference::runtime_env::env_or_config(root, "CTOX_BUSINESS_OS_COLLECTION_AUTHZ")
-        .as_deref()
-        == Some("1")
+    !matches!(
+        crate::inference::runtime_env::env_or_config(root, "CTOX_BUSINESS_OS_COLLECTION_AUTHZ")
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("0" | "false" | "off" | "no")
+    )
 }
 
 /// Issue a capability token for an active Business OS user, binding their id to
@@ -25702,7 +25992,122 @@ fn business_chat_payload(
         messages.drain(0..keep_from);
     }
 
+    update_business_chat_tracking_fields(obj);
     Ok(chat)
+}
+
+fn update_business_chat_tracking_fields(obj: &mut serde_json::Map<String, Value>) {
+    let summary = business_chat_tracking_summary(
+        obj.get("messages")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]),
+    );
+    obj.insert("tracking_active".to_string(), Value::Bool(summary.active));
+    obj.insert("tracking_status".to_string(), Value::String(summary.status));
+    obj.insert(
+        "tracking_id".to_string(),
+        Value::String(summary.tracking_id),
+    );
+    obj.insert(
+        "tracking_command_id".to_string(),
+        Value::String(summary.command_id),
+    );
+    obj.insert(
+        "tracking_task_id".to_string(),
+        Value::String(summary.task_id),
+    );
+    obj.insert(
+        "tracking_message_id".to_string(),
+        Value::String(summary.message_id),
+    );
+}
+
+struct BusinessChatTrackingSummary {
+    active: bool,
+    status: String,
+    tracking_id: String,
+    command_id: String,
+    task_id: String,
+    message_id: String,
+}
+
+fn business_chat_tracking_summary(messages: &[Value]) -> BusinessChatTrackingSummary {
+    for message in messages.iter().rev() {
+        let Some(object) = message.as_object() else {
+            continue;
+        };
+        let trackable = object
+            .get("trackable")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let command_id = object
+            .get("commandId")
+            .or_else(|| object.get("command_id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_default()
+            .to_string();
+        let task_id = object
+            .get("taskId")
+            .or_else(|| object.get("task_id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_default()
+            .to_string();
+        if command_id.is_empty() && task_id.is_empty() {
+            continue;
+        }
+        let status = object
+            .get("status")
+            .and_then(Value::as_str)
+            .map(normalize_business_chat_tracking_status)
+            .unwrap_or_else(|| "queued".to_string());
+        let message_id = object
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_default()
+            .to_string();
+        return BusinessChatTrackingSummary {
+            active: trackable && business_chat_tracking_status_is_active(&status),
+            status,
+            tracking_id: if task_id.is_empty() {
+                command_id.clone()
+            } else {
+                task_id.clone()
+            },
+            command_id,
+            task_id,
+            message_id,
+        };
+    }
+    BusinessChatTrackingSummary {
+        active: false,
+        status: String::new(),
+        tracking_id: String::new(),
+        command_id: String::new(),
+        task_id: String::new(),
+        message_id: String::new(),
+    }
+}
+
+fn normalize_business_chat_tracking_status(status: &str) -> String {
+    match status.trim().to_lowercase().as_str() {
+        "accepted" | "pending" | "pending_sync" | "waiting" => "queued".to_string(),
+        "processing" | "executing" | "active" | "working" | "leased" => "running".to_string(),
+        "success" | "done" | "erledigt" => "completed".to_string(),
+        "error" => "failed".to_string(),
+        value if value.is_empty() => "queued".to_string(),
+        value => value.to_string(),
+    }
+}
+
+fn business_chat_tracking_status_is_active(status: &str) -> bool {
+    matches!(status, "queued" | "running")
 }
 
 fn expected_docx_filename(command: &BusinessCommand) -> Option<String> {
@@ -26305,6 +26710,7 @@ fn apply_queue_projection_status_fields(
 fn upsert_command_projection_from_queue_status(
     root: &Path,
     conn: &Connection,
+    mut rxdb_writers: Option<&mut RxdbProjectionWriterCache>,
     command_id: &str,
     task: Option<&channels::QueueTaskView>,
     route_status: &str,
@@ -26390,13 +26796,17 @@ fn upsert_command_projection_from_queue_status(
         updated_at_ms,
         payload.clone(),
     )?;
-    upsert_rxdb_collection_record(
-        root,
-        "business_commands",
-        command_id,
-        updated_at_ms,
-        payload,
-    )?;
+    if let Some(writers) = rxdb_writers.as_deref_mut() {
+        writers.upsert("business_commands", command_id, updated_at_ms, payload)?;
+    } else {
+        upsert_rxdb_collection_record(
+            root,
+            "business_commands",
+            command_id,
+            updated_at_ms,
+            payload,
+        )?;
+    }
     Ok(())
 }
 
@@ -26453,6 +26863,7 @@ fn repair_inline_payload_artifacts(
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
     let mut changed_count = 0usize;
+    let mut rxdb_writers = RxdbProjectionWriterCache::new(root);
     for (collection, record_id, payload_json) in rows {
         let mut payload = match serde_json::from_str::<Value>(&payload_json) {
             Ok(payload) => payload,
@@ -26480,7 +26891,7 @@ fn repair_inline_payload_artifacts(
                 updated_at_ms,
                 payload.clone(),
             )?;
-            upsert_rxdb_collection_record(root, &collection, &record_id, updated_at_ms, payload)?;
+            rxdb_writers.upsert(&collection, &record_id, updated_at_ms, payload)?;
         }
     }
     Ok(changed_count)
@@ -27476,15 +27887,13 @@ fn cv_print_command_prompt(
 }
 
 const BUSINESS_OS_APP_MODULE_SKILL_NAME: &str = "business-os-app-module-development";
-const BUSINESS_OS_LEGACY_BASIC_MODULE_SKILL_NAME: &str = "business-basic-module-development";
-const BUSINESS_OS_LEGACY_BASIC_MODULE_SKILL_PATH: &str =
-    "product_engineering/business-basic-module-development";
 
 fn required_skill_names(command: &BusinessCommand) -> Vec<String> {
-    let mut names = Vec::new();
     if is_business_os_app_module_command(command) {
-        push_required_skill(&mut names, BUSINESS_OS_APP_MODULE_SKILL_NAME);
+        return vec![BUSINESS_OS_APP_MODULE_SKILL_NAME.to_string()];
     }
+
+    let mut names = Vec::new();
     if let Some(items) = command
         .payload
         .get("required_skills")
@@ -27508,10 +27917,7 @@ fn required_skill_names(command: &BusinessCommand) -> Vec<String> {
 
 fn push_required_skill(names: &mut Vec<String>, raw: &str) {
     let name = raw.trim();
-    if name.is_empty()
-        || name == BUSINESS_OS_LEGACY_BASIC_MODULE_SKILL_NAME
-        || name == BUSINESS_OS_LEGACY_BASIC_MODULE_SKILL_PATH
-    {
+    if name.is_empty() {
         return;
     }
     if !names.iter().any(|existing| existing == name) {
@@ -29312,6 +29718,28 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn collection_authz_is_enabled_by_default_with_explicit_runtime_opt_out() -> anyhow::Result<()>
+    {
+        let root = tempfile::tempdir()?;
+        assert!(
+            collection_authz_enabled(root.path()),
+            "collection authz must be default-on when runtime config is absent"
+        );
+
+        let mut env = std::collections::BTreeMap::new();
+        env.insert(
+            "CTOX_BUSINESS_OS_COLLECTION_AUTHZ".to_string(),
+            "0".to_string(),
+        );
+        crate::inference::runtime_env::save_runtime_env_map(root.path(), &env)?;
+        assert!(
+            !collection_authz_enabled(root.path()),
+            "explicit typed runtime opt-out must disable collection authz"
+        );
+        Ok(())
+    }
+
     // DS-0.2 / H5+H9: command types without a dedicated, already-gated arm
     // (source.parse, matching.*, business_os.chat.task, documents.*) fall
     // through to record_command, which records them AND enqueues server work.
@@ -29402,6 +29830,212 @@ mod tests {
             Some("accepted"),
             "allowed command must be accepted/processed"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn active_app_command_families_require_native_policy_gates() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        seed_business_user(root.path(), "low", "user")?;
+        seed_business_user(root.path(), "customer_writer", "user")?;
+        seed_business_user(root.path(), "outbound_writer", "user")?;
+        seed_business_user(root.path(), "support_writer", "user")?;
+
+        let actor = |id: &str| {
+            serde_json::json!({
+                "actor": {
+                    "id": id,
+                    "display_name": id,
+                    "role": "user"
+                }
+            })
+        };
+        let assert_policy_denied =
+            |outcome: &Value, permission: BusinessOsPermission, scope_id: &str| {
+                assert_eq!(outcome.get("ok").and_then(Value::as_bool), Some(false));
+                assert_eq!(
+                    outcome.get("status").and_then(Value::as_str),
+                    Some("failed")
+                );
+                assert_eq!(
+                    outcome
+                        .pointer("/result/policy_decision/permission")
+                        .and_then(Value::as_str),
+                    Some(permission.as_str())
+                );
+                assert_eq!(
+                    outcome
+                        .pointer("/result/policy_decision/scope_id")
+                        .and_then(Value::as_str),
+                    Some(scope_id)
+                );
+            };
+
+        let denied_customer = accept_rxdb_business_command(
+            root.path(),
+            serde_json::json!({
+                "id": "cmd_customer_policy_denied",
+                "command_id": "cmd_customer_policy_denied",
+                "module": "customers",
+                "command_type": "customers.account.create",
+                "record_id": "acct_policy_denied",
+                "status": "pending_sync",
+                "payload": {
+                    "account_id": "acct_policy_denied",
+                    "name": "Denied GmbH"
+                },
+                "client_context": actor("low")
+            }),
+        )?;
+        assert_policy_denied(
+            &denied_customer,
+            BusinessOsPermission::DataWrite,
+            "customers",
+        );
+        let conn = open_store(root.path())?;
+        assert!(outbound_load_record(&conn, "customer_accounts", "acct_policy_denied")?.is_none());
+        drop(conn);
+
+        seed_permission_grant(
+            root.path(),
+            "grant_customer_writer",
+            "user",
+            "customer_writer",
+            BusinessOsPermission::DataWrite,
+            "module",
+            "customers",
+        )?;
+        let allowed_customer = accept_rxdb_business_command(
+            root.path(),
+            serde_json::json!({
+                "id": "cmd_customer_policy_allowed",
+                "command_id": "cmd_customer_policy_allowed",
+                "module": "customers",
+                "command_type": "customers.account.create",
+                "record_id": "acct_policy_allowed",
+                "status": "pending_sync",
+                "payload": {
+                    "account_id": "acct_policy_allowed",
+                    "name": "Allowed GmbH"
+                },
+                "client_context": actor("customer_writer")
+            }),
+        )?;
+        assert_eq!(
+            allowed_customer.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+
+        let denied_outbound = accept_rxdb_business_command(
+            root.path(),
+            serde_json::json!({
+                "id": "cmd_outbound_policy_denied",
+                "command_id": "cmd_outbound_policy_denied",
+                "module": "outbound",
+                "command_type": "outbound.engagement.create",
+                "record_id": "eng_policy_denied",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_policy_denied",
+                    "campaign_id": "camp_policy"
+                },
+                "client_context": actor("low")
+            }),
+        )?;
+        assert_policy_denied(
+            &denied_outbound,
+            BusinessOsPermission::DataWrite,
+            "outbound",
+        );
+        let conn = open_store(root.path())?;
+        assert!(
+            outbound_load_record(&conn, "outbound_engagements", "eng_policy_denied")?.is_none()
+        );
+        drop(conn);
+
+        seed_permission_grant(
+            root.path(),
+            "grant_outbound_writer",
+            "user",
+            "outbound_writer",
+            BusinessOsPermission::DataWrite,
+            "module",
+            "outbound",
+        )?;
+        let allowed_outbound = accept_rxdb_business_command(
+            root.path(),
+            serde_json::json!({
+                "id": "cmd_outbound_policy_allowed",
+                "command_id": "cmd_outbound_policy_allowed",
+                "module": "outbound",
+                "command_type": "outbound.engagement.create",
+                "record_id": "eng_policy_allowed",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_policy_allowed",
+                    "campaign_id": "camp_policy"
+                },
+                "client_context": actor("outbound_writer")
+            }),
+        )?;
+        assert_eq!(
+            allowed_outbound.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+
+        let denied_ticket = accept_rxdb_business_command(
+            root.path(),
+            serde_json::json!({
+                "id": "cmd_ticket_policy_denied",
+                "command_id": "cmd_ticket_policy_denied",
+                "module": "tickets",
+                "command_type": "ctox.ticket.local.create",
+                "record_id": "ticket_policy_denied",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Denied ticket"
+                },
+                "client_context": actor("low")
+            }),
+        )?;
+        assert_policy_denied(
+            &denied_ticket,
+            BusinessOsPermission::SupportTriage,
+            "support",
+        );
+
+        seed_permission_grant(
+            root.path(),
+            "grant_support_writer",
+            "user",
+            "support_writer",
+            BusinessOsPermission::SupportTriage,
+            "module",
+            "support",
+        )?;
+        let allowed_ticket = accept_rxdb_business_command(
+            root.path(),
+            serde_json::json!({
+                "id": "cmd_ticket_policy_allowed",
+                "command_id": "cmd_ticket_policy_allowed",
+                "module": "tickets",
+                "command_type": "ctox.ticket.local.create",
+                "record_id": "ticket_policy_allowed",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Allowed ticket"
+                },
+                "client_context": actor("support_writer")
+            }),
+        )?;
+        assert_eq!(
+            allowed_ticket.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert!(allowed_ticket
+            .pointer("/result/ticket_key")
+            .and_then(Value::as_str)
+            .is_some());
         Ok(())
     }
 
@@ -30030,13 +30664,11 @@ mod tests {
             granted.get("status").and_then(Value::as_str),
             Some("completed")
         );
-        assert!(
-            granted
-                .pointer("/result/source_file_ids")
-                .and_then(Value::as_array)
-                .map(|ids| !ids.is_empty())
-                .unwrap_or(false)
-        );
+        assert!(granted
+            .pointer("/result/source_file_ids")
+            .and_then(Value::as_array)
+            .map(|ids| !ids.is_empty())
+            .unwrap_or(false));
         let granted_snapshots = accept_rxdb_business_command(
             root,
             serde_json::json!({
@@ -30063,12 +30695,10 @@ mod tests {
             granted_snapshots.get("status").and_then(Value::as_str),
             Some("completed")
         );
-        assert!(
-            granted_snapshots
-                .get("result")
-                .and_then(Value::as_array)
-                .is_some()
-        );
+        assert!(granted_snapshots
+            .get("result")
+            .and_then(Value::as_array)
+            .is_some());
         Ok(())
     }
 
@@ -30484,8 +31114,8 @@ mod tests {
     }
 
     #[test]
-    fn runtime_settings_projection_stamp_ignores_core_db_but_tracks_runtime_config()
-    -> anyhow::Result<()> {
+    fn runtime_settings_projection_stamp_ignores_core_db_but_tracks_runtime_config(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let _ = runtime_settings_for_rxdb(temp.path())?;
         let first = runtime_settings_projection_stamp(temp.path());
@@ -30519,8 +31149,8 @@ mod tests {
     }
 
     #[test]
-    fn runtime_settings_preserves_timestamp_for_semantically_identical_rebuild()
-    -> anyhow::Result<()> {
+    fn runtime_settings_preserves_timestamp_for_semantically_identical_rebuild(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let first = runtime_settings_for_rxdb(temp.path())?;
         let first_updated_at = first.get("updated_at_ms").cloned();
@@ -30554,7 +31184,7 @@ mod tests {
     }
 
     #[test]
-    fn app_modify_queue_prompt_targets_app_module_not_skill_files() {
+    fn app_modify_queue_prompt_ignores_payload_skill_overrides() {
         let command = BusinessCommand {
             origin: CommandOrigin::TrustedLocal,
             id: Some("cmd_app_bench".to_owned()),
@@ -30568,12 +31198,12 @@ mod tests {
                 "mode": "app",
                 "module_id": "subscriptions",
                 "install_target": "runtime-installed-module",
-                "required_skills": ["business-basic-module-development"]
+                "required_skills": ["nextjs-postgres-port"]
             }),
             client_context: serde_json::json!({
                 "source": "business-os-app-creator",
-                "suggested_skill": "business-basic-module-development",
-                "required_skills": ["product_engineering/business-basic-module-development"]
+                "suggested_skill": "nextjs-postgres-port",
+                "required_skills": ["frontend-skill"]
             }),
         };
 
@@ -30592,12 +31222,10 @@ mod tests {
         assert!(prompt.contains("resource.green_checklist:"));
         assert!(prompt.contains("resource.architecture_translation:"));
         assert!(prompt.contains("- reference_catalog: ctox business-os app references --json"));
-        assert!(
-            prompt
-                .contains("- validation: ctox business-os app validate subscriptions --installed")
-        );
-        assert!(!prompt.contains("business-basic-module-development"));
-        assert!(!prompt.contains("product_engineering/business-basic-module-development"));
+        assert!(prompt
+            .contains("- validation: ctox business-os app validate subscriptions --installed"));
+        assert!(!prompt.contains("nextjs-postgres-port"));
+        assert!(!prompt.contains("frontend-skill"));
         assert_eq!(
             suggested_skill_for_command(&command).as_deref(),
             Some(BUSINESS_OS_APP_MODULE_SKILL_NAME)
@@ -30636,9 +31264,7 @@ mod tests {
         assert!(prompt.contains("Business OS app task metadata:"));
         assert!(prompt.contains("- module_id: inventory"));
         assert!(prompt.contains("- install_target: runtime-installed-module"));
-        assert!(
-            prompt.contains("- app_directory: runtime/business-os/installed-modules/inventory")
-        );
+        assert!(prompt.contains("- app_directory: runtime/business-os/installed-modules/inventory"));
         assert!(prompt.contains("- skill: business-os-app-module-development"));
         assert!(prompt.contains("resource.module_contract:"));
         assert!(prompt.contains("- reference_catalog: ctox business-os app references --json"));
@@ -30653,7 +31279,6 @@ mod tests {
         assert!(!prompt.contains("Client context JSON"));
         assert!(!prompt.contains("SECRET_CAPABILITY_TOKEN_SHOULD_NOT_LEAK"));
         assert!(!prompt.contains("capability_token"));
-        assert!(!prompt.contains("business-basic-module-development"));
     }
 
     #[test]
@@ -30985,14 +31610,12 @@ mod tests {
         let catalog =
             load_rxdb_collection_record(root, "business_module_catalog", "module-catalog")?
                 .context("expected module catalog projection")?;
-        assert!(
-            catalog
-                .get("modules")
-                .and_then(Value::as_array)
-                .is_some_and(|modules| modules
-                    .iter()
-                    .any(|module| module.get("id").and_then(Value::as_str) == Some(module_id)))
-        );
+        assert!(catalog
+            .get("modules")
+            .and_then(Value::as_array)
+            .is_some_and(|modules| modules
+                .iter()
+                .any(|module| module.get("id").and_then(Value::as_str) == Some(module_id))));
         Ok(())
     }
 
@@ -31143,13 +31766,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("role_or_scope_denied")
         );
-        assert!(
-            denied
-                .pointer("/result/policy_decision/display_reason")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("not allowed")
-        );
+        assert!(denied
+            .pointer("/result/policy_decision/display_reason")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("not allowed"));
         drop(conn);
 
         let founder_unassigned = accept_rxdb_business_command(
@@ -31797,15 +32418,13 @@ mod tests {
                 && event.pointer("/payload/command_id").and_then(Value::as_str)
                     == Some("cmd_audit_policy_allowed")
         }));
-        assert!(
-            business_event_payloads(
-                &conn,
-                "business_commands",
-                "cmd_activity_allowed_list",
-                "business_os.policy.allowed",
-            )?
-            .is_empty()
-        );
+        assert!(business_event_payloads(
+            &conn,
+            "business_commands",
+            "cmd_activity_allowed_list",
+            "business_os.policy.allowed",
+        )?
+        .is_empty());
 
         Ok(())
     }
@@ -31881,13 +32500,11 @@ mod tests {
             role_change.pointer("/current/role").and_then(Value::as_str),
             Some("founder")
         );
-        assert!(
-            role_change
-                .pointer("/changed_fields")
-                .and_then(Value::as_array)
-                .context("expected changed_fields")?
-                .contains(&Value::String("role".to_owned()))
-        );
+        assert!(role_change
+            .pointer("/changed_fields")
+            .and_then(Value::as_array)
+            .context("expected changed_fields")?
+            .contains(&Value::String("role".to_owned())));
 
         Ok(())
     }
@@ -31961,13 +32578,11 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(false)
         );
-        assert!(
-            deactivation
-                .pointer("/changed_fields")
-                .and_then(Value::as_array)
-                .context("expected changed_fields")?
-                .contains(&Value::String("active".to_owned()))
-        );
+        assert!(deactivation
+            .pointer("/changed_fields")
+            .and_then(Value::as_array)
+            .context("expected changed_fields")?
+            .contains(&Value::String("active".to_owned())));
 
         Ok(())
     }
@@ -32069,16 +32684,12 @@ mod tests {
             .get("business_module_acl_ids")
             .and_then(Value::as_array)
             .context("expected changed ACL ids")?;
-        assert!(
-            changed_ids
-                .iter()
-                .any(|id| id.as_str() == Some("private-app:founder:ops_admin"))
-        );
-        assert!(
-            changed_ids
-                .iter()
-                .any(|id| id.as_str() == Some("private-app:founder:module_owner"))
-        );
+        assert!(changed_ids
+            .iter()
+            .any(|id| id.as_str() == Some("private-app:founder:ops_admin")));
+        assert!(changed_ids
+            .iter()
+            .any(|id| id.as_str() == Some("private-app:founder:module_owner")));
 
         let conn = open_store(root)?;
         let owner_active: i64 = conn.query_row(
@@ -32125,8 +32736,8 @@ mod tests {
     }
 
     #[test]
-    fn user_deactivation_requires_recovery_for_sole_private_app_responsibility()
-    -> anyhow::Result<()> {
+    fn user_deactivation_requires_recovery_for_sole_private_app_responsibility(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -32203,16 +32814,12 @@ mod tests {
             .pointer("/lifecycle/responsible_user_ids")
             .and_then(Value::as_array)
             .context("expected responsible ids")?;
-        assert!(
-            responsible
-                .iter()
-                .any(|user| user.as_str() == Some("ops_admin"))
-        );
-        assert!(
-            !responsible
-                .iter()
-                .any(|user| user.as_str() == Some("module_owner"))
-        );
+        assert!(responsible
+            .iter()
+            .any(|user| user.as_str() == Some("ops_admin")));
+        assert!(!responsible
+            .iter()
+            .any(|user| user.as_str() == Some("module_owner")));
 
         Ok(())
     }
@@ -32258,13 +32865,11 @@ mod tests {
             outcome.pointer("/result/operation").and_then(Value::as_str),
             Some("assign_founder")
         );
-        assert!(
-            outcome
-                .pointer("/result/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("App responsibility")
-        );
+        assert!(outcome
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("App responsibility"));
 
         let conn = open_store(root)?;
         let stored = outbound_load_required(
@@ -32331,13 +32936,11 @@ mod tests {
             outcome.pointer("/result/operation").and_then(Value::as_str),
             Some("user_upsert")
         );
-        assert!(
-            outcome
-                .pointer("/result/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("App responsibility")
-        );
+        assert!(outcome
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("App responsibility"));
 
         let conn = open_store(root)?;
         let stored = outbound_load_required(
@@ -33495,8 +34098,8 @@ mod tests {
     }
 
     #[test]
-    fn backup_manifest_version_compatibility_blocks_cross_version_and_downgrade()
-    -> anyhow::Result<()> {
+    fn backup_manifest_version_compatibility_blocks_cross_version_and_downgrade(
+    ) -> anyhow::Result<()> {
         let current = env!("CARGO_PKG_VERSION");
         let same = business_os_backup_restore_version_compatibility(
             Some(BUSINESS_OS_BACKUP_MANIFEST_SCHEMA_VERSION),
@@ -34000,8 +34603,8 @@ mod tests {
     }
 
     #[test]
-    fn module_release_rollback_command_uses_apps_rollback_without_modify_permission()
-    -> anyhow::Result<()> {
+    fn module_release_rollback_command_uses_apps_rollback_without_modify_permission(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -34227,8 +34830,8 @@ mod tests {
     }
 
     #[test]
-    fn module_source_rollback_version_uses_apps_rollback_without_modify_permission()
-    -> anyhow::Result<()> {
+    fn module_source_rollback_version_uses_apps_rollback_without_modify_permission(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let app_root = root.join("src").join("apps").join("business-os");
@@ -34460,13 +35063,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("failed")
         );
-        assert!(
-            outcome
-                .pointer("/result/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("read_collections")
-        );
+        assert!(outcome
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("read_collections"));
         Ok(())
     }
 
@@ -35402,8 +36003,8 @@ mod tests {
     }
 
     #[test]
-    fn module_lifecycle_projection_repair_assigns_orphan_private_app_responsibility()
-    -> anyhow::Result<()> {
+    fn module_lifecycle_projection_repair_assigns_orphan_private_app_responsibility(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -35554,20 +36155,18 @@ mod tests {
                 })
             })
             .context("expected private orphan app in catalog")?;
-        assert!(
-            private_app
-                .pointer("/lifecycle/responsible_user_ids")
-                .and_then(Value::as_array)
-                .context("expected responsible ids")?
-                .iter()
-                .any(|id| id.as_str() == Some("ops-admin"))
-        );
+        assert!(private_app
+            .pointer("/lifecycle/responsible_user_ids")
+            .and_then(Value::as_array)
+            .context("expected responsible ids")?
+            .iter()
+            .any(|id| id.as_str() == Some("ops-admin")));
         Ok(())
     }
 
     #[test]
-    fn module_release_rejects_stale_source_and_rollback_version_refs_before_manifest_write()
-    -> anyhow::Result<()> {
+    fn module_release_rejects_stale_source_and_rollback_version_refs_before_manifest_write(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_test_business_os_app_root(root)?;
@@ -35627,13 +36226,11 @@ mod tests {
                 outcome.get("status").and_then(Value::as_str),
                 Some("failed")
             );
-            assert!(
-                outcome
-                    .pointer("/result/error")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .contains(field_name)
-            );
+            assert!(outcome
+                .pointer("/result/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains(field_name));
             assert_eq!(fs::read_to_string(&manifest_path)?, original_manifest);
         }
 
@@ -35705,13 +36302,11 @@ mod tests {
             outcome.get("status").and_then(Value::as_str),
             Some("failed")
         );
-        assert!(
-            outcome
-                .pointer("/result/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("injected release insert failure")
-        );
+        assert!(outcome
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("injected release insert failure"));
         assert_eq!(fs::read_to_string(&manifest_path)?, original_manifest);
 
         let conn = open_store(root)?;
@@ -35809,13 +36404,11 @@ mod tests {
             outcome.get("status").and_then(Value::as_str),
             Some("failed")
         );
-        assert!(
-            outcome
-                .pointer("/result/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("injected release status failure")
-        );
+        assert!(outcome
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("injected release status failure"));
         assert_eq!(fs::read_to_string(&manifest_path)?, original_manifest);
 
         let conn = open_store(root)?;
@@ -36098,13 +36691,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("failed")
         );
-        assert!(
-            payload
-                .pointer("/summary/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("explicit Team grant or locked-state behavior")
-        );
+        assert!(payload
+            .pointer("/summary/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("explicit Team grant or locked-state behavior"));
         assert_eq!(
             payload
                 .pointer("/summary/data_access_review/read_collections/0")
@@ -36188,13 +36779,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("missing-release")
         );
-        assert!(
-            payload
-                .pointer("/summary/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("Query returned no rows")
-        );
+        assert!(payload
+            .pointer("/summary/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("Query returned no rows"));
         Ok(())
     }
 
@@ -36245,13 +36834,11 @@ mod tests {
 
         // A brand new source file added after the baseline.
         save_widget_source(root, "extra.js", "export const extra = true;\n")?;
-        assert!(
-            app_root
-                .join("modules")
-                .join("widget")
-                .join("extra.js")
-                .is_file()
-        );
+        assert!(app_root
+            .join("modules")
+            .join("widget")
+            .join("extra.js")
+            .is_file());
         save_widget_source(
             root,
             "module.json",
@@ -36281,13 +36868,11 @@ mod tests {
             restored_manifest, baseline_manifest,
             "module.json must be restored together with source files"
         );
-        assert!(
-            !app_root
-                .join("modules")
-                .join("widget")
-                .join("extra.js")
-                .is_file()
-        );
+        assert!(!app_root
+            .join("modules")
+            .join("widget")
+            .join("extra.js")
+            .is_file());
         assert_eq!(
             baseline_sha,
             compute_module_bundle(&app_root, "widget")?.sha256
@@ -36532,10 +37117,9 @@ mod tests {
         assert!(materialized_path.is_file());
         assert_eq!(fs::read(&materialized_path)?, bytes);
         assert!(task.prompt.contains("Business OS attachments"));
-        assert!(
-            task.prompt
-                .contains(materialized_path.to_string_lossy().as_ref())
-        );
+        assert!(task
+            .prompt
+            .contains(materialized_path.to_string_lossy().as_ref()));
         assert!(task.prompt.contains("desktop_files/chatfile_verified"));
         assert!(task.prompt.contains(&content_hash));
         assert!(
@@ -36614,8 +37198,8 @@ mod tests {
     }
 
     #[test]
-    fn cv_print_queue_prompt_includes_extracted_pdf_text_without_attachment_payload()
-    -> anyhow::Result<()> {
+    fn cv_print_queue_prompt_includes_extracted_pdf_text_without_attachment_payload(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let bytes = simple_text_pdf_bytes(&[
@@ -37344,6 +37928,10 @@ mod tests {
             "dry-run must not mutate active RxDB projection"
         );
 
+        reset_rxdb_table_column_load_count(root, "ctox_business_os__ctox_queue_tasks__v0");
+        reset_rxdb_table_column_load_count(root, "ctox_business_os__business_commands__v1");
+        reset_rxdb_collection_writer_open_count(root, "ctox_queue_tasks");
+        reset_rxdb_collection_writer_open_count(root, "business_commands");
         let applied = repair_queue_projections(root, QueueProjectionRepairOptions { apply: true })?;
         assert_eq!(
             applied
@@ -37416,6 +38004,26 @@ mod tests {
         assert_eq!(
             rxdb_command.get("task_status").and_then(Value::as_str),
             Some("failed")
+        );
+        assert_eq!(
+            rxdb_table_column_load_count(root, "ctox_business_os__ctox_queue_tasks__v0"),
+            1,
+            "queue repair must cache ctox_queue_tasks table metadata"
+        );
+        assert_eq!(
+            rxdb_table_column_load_count(root, "ctox_business_os__business_commands__v1"),
+            1,
+            "queue repair must cache business_commands table metadata"
+        );
+        assert_eq!(
+            rxdb_collection_writer_open_count(root, "ctox_queue_tasks"),
+            1,
+            "queue repair must reuse one ctox_queue_tasks writer"
+        );
+        assert_eq!(
+            rxdb_collection_writer_open_count(root, "business_commands"),
+            1,
+            "queue repair must reuse one business_commands writer"
         );
         Ok(())
     }
@@ -37646,8 +38254,8 @@ mod tests {
     }
 
     #[test]
-    fn repair_queue_projections_redacts_inline_report_artifacts_and_counts_legacy_records()
-    -> anyhow::Result<()> {
+    fn repair_queue_projections_redacts_inline_report_artifacts_and_counts_legacy_records(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let conn = open_store(root)?;
@@ -37985,8 +38593,8 @@ mod tests {
     }
 
     #[test]
-    fn customers_invalid_command_writes_failed_projection_without_partial_record()
-    -> anyhow::Result<()> {
+    fn customers_invalid_command_writes_failed_projection_without_partial_record(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let actor = serde_json::json!({
@@ -38025,13 +38633,11 @@ mod tests {
             outbound_string(&command, &["status"]).as_deref(),
             Some("failed")
         );
-        assert!(
-            command
-                .pointer("/result/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("health_status")
-        );
+        assert!(command
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("health_status"));
         Ok(())
     }
 
@@ -38257,6 +38863,67 @@ mod tests {
                 .and_then(Value::as_str),
             Some("ctox_business_os__business_commands__v1")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn rxdb_projection_writer_cache_reuses_table_metadata_for_batch() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        let table = "ctox_business_os__writer_probe__v0";
+        let sqlite_path = rxdb_store_path(root);
+        let conn = Connection::open(sqlite_path)?;
+        conn.execute(
+            &format!(
+                "CREATE TABLE {table} (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    revision TEXT,
+                    deleted INTEGER NOT NULL DEFAULT 0,
+                    lastWriteTime REAL NOT NULL DEFAULT 0,
+                    data TEXT NOT NULL
+                )"
+            ),
+            [],
+        )?;
+        drop(conn);
+
+        reset_rxdb_table_column_load_count(root, table);
+        reset_rxdb_collection_writer_open_count(root, "writer_probe");
+        let mut writers = RxdbProjectionWriterCache::new(root);
+        for idx in 0..5 {
+            writers.upsert(
+                "writer_probe",
+                &format!("probe-{idx}"),
+                1_000 + idx,
+                serde_json::json!({
+                    "id": format!("probe-{idx}"),
+                    "name": format!("Probe {idx}")
+                }),
+            )?;
+        }
+
+        assert_eq!(
+            rxdb_table_column_load_count(root, table),
+            1,
+            "projection writer cache must not run PRAGMA table_info per upsert"
+        );
+        assert_eq!(
+            rxdb_collection_writer_open_count(root, "writer_probe"),
+            1,
+            "projection writer cache must not reopen SQLite per upsert"
+        );
+        let conn = Connection::open(rxdb_store_path(root))?;
+        let count: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })?;
+        assert_eq!(count, 5);
+        let last_write_time: f64 = conn.query_row(
+            &format!("SELECT lastWriteTime FROM {table} WHERE id = 'probe-4'"),
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(last_write_time, 1_004.0);
         Ok(())
     }
 
@@ -40082,11 +40749,9 @@ mod tests {
             !backbone.is_empty(),
             "message drafting skillbook must have a real workflow backbone"
         );
-        assert!(
-            backbone
-                .iter()
-                .any(|step| { outbound_string(step, &["step"]).as_deref() == Some("writeback") })
-        );
+        assert!(backbone
+            .iter()
+            .any(|step| { outbound_string(step, &["step"]).as_deref() == Some("writeback") }));
         let routing = drafting
             .get("routing_taxonomy")
             .and_then(Value::as_array)
@@ -40836,8 +41501,8 @@ mod tests {
     }
 
     #[test]
-    fn outbound_active_engagement_keeps_sequence_version_until_explicit_reapply()
-    -> anyhow::Result<()> {
+    fn outbound_active_engagement_keeps_sequence_version_until_explicit_reapply(
+    ) -> anyhow::Result<()> {
         // Welle 4 (367): a live campaign sequence change must not silently
         // re-version active engagements. Each engagement stays pinned to the
         // sequence snapshot it captured until an explicit reapply flow runs.
@@ -41174,11 +41839,10 @@ mod tests {
                 .and_then(Value::as_str),
             Some("manual_physical_letter_marked_sent")
         );
-        assert!(
-            send.pointer("/result/physical_sent_at_ms")
-                .and_then(Value::as_i64)
-                .is_some()
-        );
+        assert!(send
+            .pointer("/result/physical_sent_at_ms")
+            .and_then(Value::as_i64)
+            .is_some());
         // Idempotency: replaying send_approved must not re-mark.
         let send_again = accept_rxdb_business_command(
             root,
@@ -42917,11 +43581,9 @@ mod tests {
             .pointer("/result/projections")
             .and_then(Value::as_array)
             .expect("asset upsert reports projections");
-        assert!(
-            projections
-                .iter()
-                .any(|p| p["collection"] == "iot_assets" && p["id"] == "asset-iot-bc-1")
-        );
+        assert!(projections
+            .iter()
+            .any(|p| p["collection"] == "iot_assets" && p["id"] == "asset-iot-bc-1"));
 
         let write = accept_rxdb_business_command(
             root,
@@ -43300,11 +43962,9 @@ mod tests {
             .get("modules")
             .and_then(Value::as_array)
             .context("catalog modules")?;
-        assert!(
-            modules
-                .iter()
-                .any(|module| module.get("id").and_then(Value::as_str) == Some("research"))
-        );
+        assert!(modules
+            .iter()
+            .any(|module| module.get("id").and_then(Value::as_str) == Some("research")));
         Ok(())
     }
 
@@ -43458,30 +44118,24 @@ mod tests {
                 .and_then(Value::as_str),
             Some("creator-user")
         );
-        assert!(
-            module("private-zero")
-                .pointer("/lifecycle/responsible_user_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|user| user.as_str() == Some("app-owner"))
-        );
-        assert!(
-            module("private-zero")
-                .pointer("/lifecycle/preview_grant_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|grant| grant.as_str() == Some("grant_preview_private_zero"))
-        );
-        assert!(
-            module("private-zero")
-                .pointer("/lifecycle/preview_user_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|user| user.as_str() == Some("preview-user"))
-        );
+        assert!(module("private-zero")
+            .pointer("/lifecycle/responsible_user_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|user| user.as_str() == Some("app-owner")));
+        assert!(module("private-zero")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|grant| grant.as_str() == Some("grant_preview_private_zero")));
+        assert!(module("private-zero")
+            .pointer("/lifecycle/preview_user_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|user| user.as_str() == Some("preview-user")));
         let legacy_preview_grant_id =
             legacy_preview_audience_grant_id("legacy-preview-zero", "legacy-preview-user");
         assert_eq!(
@@ -43490,14 +44144,12 @@ mod tests {
                 .and_then(Value::as_str),
             Some("preview")
         );
-        assert!(
-            module("legacy-preview-zero")
-                .pointer("/lifecycle/preview_grant_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|grant| grant.as_str() == Some(legacy_preview_grant_id.as_str()))
-        );
+        assert!(module("legacy-preview-zero")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|grant| grant.as_str() == Some(legacy_preview_grant_id.as_str())));
         assert_eq!(
             module("legacy-preview-zero")
                 .pointer("/lifecycle/preview_user_ids")
@@ -43508,42 +44160,34 @@ mod tests {
                 .count(),
             1
         );
-        assert!(
-            module("legacy-preview-zero")
-                .pointer("/lifecycle/preview_user_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|user| user.as_str() == Some("legacy-pregranted-user"))
-        );
-        assert!(
-            module("legacy-preview-zero")
-                .pointer("/lifecycle/preview_grant_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|grant| grant.as_str() == Some("grant_existing_legacy_preview"))
-        );
+        assert!(module("legacy-preview-zero")
+            .pointer("/lifecycle/preview_user_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|user| user.as_str() == Some("legacy-pregranted-user")));
+        assert!(module("legacy-preview-zero")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|grant| grant.as_str() == Some("grant_existing_legacy_preview")));
         assert_eq!(
             module("modify-only-zero")
                 .pointer("/lifecycle/visibility_state")
                 .and_then(Value::as_str),
             Some("private")
         );
-        assert!(
-            module("modify-only-zero")
-                .pointer("/lifecycle/preview_grant_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            module("modify-only-zero")
-                .pointer("/lifecycle/preview_user_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(module("modify-only-zero")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .is_empty());
+        assert!(module("modify-only-zero")
+            .pointer("/lifecycle/preview_user_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .is_empty());
         assert_eq!(
             module("team-one")
                 .pointer("/lifecycle/visibility_state")
@@ -43574,13 +44218,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("invalid_semver")
         );
-        assert!(
-            module("missing-version")
-                .pointer("/lifecycle/preview_grant_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(module("missing-version")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .is_empty());
         assert_eq!(
             module("invalid-semver")
                 .pointer("/lifecycle/visibility_state")
@@ -43597,13 +44239,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("invalid_semver")
         );
-        assert!(
-            module("invalid-semver")
-                .pointer("/lifecycle/preview_grant_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(module("invalid-semver")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .is_empty());
         assert_eq!(
             module("restricted-team")
                 .pointer("/lifecycle/visibility_state")
@@ -43618,14 +44258,12 @@ mod tests {
         );
         let restricted_preview_grant_id =
             legacy_preview_audience_grant_id("restricted-team", "restricted-preview-user");
-        assert!(
-            module("restricted-team")
-                .pointer("/lifecycle/preview_grant_ids")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|grant| grant.as_str() == Some(restricted_preview_grant_id.as_str()))
-        );
+        assert!(module("restricted-team")
+            .pointer("/lifecycle/preview_grant_ids")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|grant| grant.as_str() == Some(restricted_preview_grant_id.as_str())));
         assert_eq!(
             catalog
                 .pointer("/governance/lifecycle/team-one/visibility_state")
@@ -44009,6 +44647,196 @@ mod tests {
             crate::secrets::credential_scope(),
             "OPENAI_API_KEY"
         )?);
+        Ok(())
+    }
+
+    #[test]
+    fn mailserver_commands_require_secrets_manage_and_redact_payload_secrets() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        fs::create_dir_all(root.join("runtime"))?;
+        let db_path = root
+            .join("runtime/ctox.sqlite3")
+            .to_string_lossy()
+            .into_owned();
+        ctox_mailserver::store::sqlite::SqliteStore::new(&db_path).init()?;
+        seed_business_user(root, "global_admin", "admin")?;
+        seed_business_user(root, "qa", "user")?;
+
+        let denied_password = "DO_NOT_LEAK_MAIL_PASSWORD_DENIED";
+        let denied_user = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_mailserver_user_denied",
+                "module": "mailserver",
+                "type": "ctox.mailserver.save_user",
+                "payload": {
+                    "username": "denied@example.test",
+                    "password": denied_password
+                },
+                "client_context": {
+                    "actor": { "id": "qa", "display_name": "QA" }
+                }
+            }),
+        )?;
+        assert_policy_denied(&denied_user, "secrets.manage", "workspace", None);
+        assert!(
+            !serde_json::to_string(&denied_user)?.contains(denied_password),
+            "denied mailserver user command leaked the password into the outcome"
+        );
+        let conn = open_store(root)?;
+        let denied_stored = outbound_load_required(
+            &conn,
+            "business_commands",
+            "cmd_mailserver_user_denied",
+            "command",
+        )?;
+        drop(conn);
+        assert!(
+            !serde_json::to_string(&denied_stored)?.contains(denied_password),
+            "denied mailserver user command leaked the password into business_commands"
+        );
+
+        let admin_password = "DO_NOT_LEAK_MAIL_PASSWORD_ADMIN";
+        let saved_user = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_mailserver_user_admin",
+                "module": "mailserver",
+                "type": "ctox.mailserver.save_user",
+                "payload": {
+                    "username": "admin@example.test",
+                    "password": admin_password
+                },
+                "client_context": {
+                    "actor": { "id": "global_admin", "display_name": "Global Admin" }
+                }
+            }),
+        )?;
+        assert_eq!(
+            saved_user.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert!(
+            !serde_json::to_string(&saved_user)?.contains(admin_password),
+            "completed mailserver user command leaked the password into the outcome"
+        );
+        let conn = open_store(root)?;
+        let stored_user = outbound_load_required(
+            &conn,
+            "business_commands",
+            "cmd_mailserver_user_admin",
+            "command",
+        )?;
+        drop(conn);
+        assert!(
+            !serde_json::to_string(&stored_user)?.contains(admin_password),
+            "completed mailserver user command leaked the password into business_commands"
+        );
+
+        let private_key = "DO_NOT_LEAK_DKIM_PRIVATE_KEY";
+        let saved_domain = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_mailserver_domain_admin",
+                "module": "mailserver",
+                "type": "ctox.mailserver.save_domain",
+                "payload": {
+                    "domain_name": "example.test",
+                    "dkim_selector": "default",
+                    "dkim_private_key": private_key
+                },
+                "client_context": {
+                    "actor": { "id": "global_admin", "display_name": "Global Admin" }
+                }
+            }),
+        )?;
+        assert_eq!(
+            saved_domain.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            saved_domain
+                .pointer("/result/dkim_private_key_set")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            saved_domain
+                .pointer("/result/secret_value_revealed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(saved_domain.pointer("/result/dkim_private_key").is_none());
+        assert!(
+            !serde_json::to_string(&saved_domain)?.contains(private_key),
+            "completed mailserver domain command leaked the DKIM private key into the outcome"
+        );
+        let conn = open_store(root)?;
+        let stored_domain = outbound_load_required(
+            &conn,
+            "business_commands",
+            "cmd_mailserver_domain_admin",
+            "command",
+        )?;
+        drop(conn);
+        assert!(
+            !serde_json::to_string(&stored_domain)?.contains(private_key),
+            "completed mailserver domain command leaked the DKIM private key into business_commands"
+        );
+
+        let config = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_mailserver_get_config_admin",
+                "module": "mailserver",
+                "type": "ctox.mailserver.get_config",
+                "payload": {},
+                "client_context": {
+                    "actor": { "id": "global_admin", "display_name": "Global Admin" }
+                }
+            }),
+        )?;
+        assert_eq!(
+            config.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        let config_text = serde_json::to_string(&config)?;
+        assert!(
+            !config_text.contains(private_key) && !config_text.contains(admin_password),
+            "mailserver config leaked persisted secrets"
+        );
+        assert_eq!(
+            config
+                .pointer("/result/domains/0/dkim_private_key_set")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            config
+                .pointer("/result/domains/0/secret_value_revealed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(config
+            .pointer("/result/domains/0/dkim_private_key")
+            .is_none());
+
+        let denied_config = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_mailserver_get_config_denied",
+                "module": "mailserver",
+                "type": "ctox.mailserver.get_config",
+                "payload": {},
+                "client_context": {
+                    "actor": { "id": "qa", "display_name": "QA" }
+                }
+            }),
+        )?;
+        assert_policy_denied(&denied_config, "secrets.manage", "workspace", None);
         Ok(())
     }
 

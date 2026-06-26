@@ -18,11 +18,12 @@ import {
   buildGlobalCtoxAgentScopeView,
   buildModuleWhyDiagnosticsView,
   buildModuleTargetContextItems,
+  renderBusinessUserDatalistOptions,
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxAgentScopeHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260623-role-session';
+} from './shared/shell-permissions-ui.js?v=20260625-threads-hub-v1';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -35,7 +36,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260625-rightclick-agent-context-v19';
+const APP_BUILD = '20260626-chat-tracking-index-v1';
 
 ensureShellStylesheets();
 
@@ -8704,6 +8705,7 @@ function showGlobalCtoxContextMenu(context, x, y) {
   const userInputLabel = lang === 'de' ? 'User' : 'User';
   const noteUserPlaceholder = lang === 'de' ? 'user-id, mehrere mit Komma' : 'user-id, comma separated';
   const reviewerPlaceholder = lang === 'de' ? 'reviewer-user-id' : 'reviewer-user-id';
+  const initialUserOptions = renderBusinessUserDatalistOptions([], { session: state.session });
 
   const subtitle = context.label || shellText('moduleTitles')?.[mod.id] || mod.title || mod.id;
 
@@ -8732,7 +8734,8 @@ function showGlobalCtoxContextMenu(context, x, y) {
       ${renderGlobalCtoxAgentScopeHtml({ view: agentScope })}
       <label class="ctox-context-user-row" hidden style="display: grid; gap: 5px; color: var(--text-muted, var(--muted, #64747c)); font-size: 11.5px; font-weight: 700;">
         <span class="ctox-context-user-label">${escapeHtml(userInputLabel)}</span>
-        <input class="ctox-context-user-input" type="text" autocomplete="off" placeholder="${escapeHtml(noteUserPlaceholder)}" style="width: 100%; box-sizing: border-box; height: 32px; border: 1px solid var(--line, #d8e1e5); border-radius: 8px; background: var(--surface-2, #eef3f7); color: var(--text, #18222d); font-family: inherit; font-size: 12.5px; padding: 0 10px; outline: none;">
+        <input class="ctox-context-user-input" type="text" autocomplete="off" list="ctox-context-user-options" placeholder="${escapeHtml(noteUserPlaceholder)}" style="width: 100%; box-sizing: border-box; height: 32px; border: 1px solid var(--line, #d8e1e5); border-radius: 8px; background: var(--surface-2, #eef3f7); color: var(--text, #18222d); font-family: inherit; font-size: 12.5px; padding: 0 10px; outline: none;">
+        <datalist id="ctox-context-user-options" data-ctox-context-user-options>${initialUserOptions}</datalist>
       </label>
       <textarea class="ctox-context-textarea" placeholder="${escapeHtml(placeholderText)}" style="width: 100%; box-sizing: border-box; min-height: 96px; max-height: 180px; border: 1px solid var(--line, #d8e1e5); border-radius: 8px; background: var(--surface-2, #eef3f7); color: var(--text, #18222d); font-family: inherit; font-size: 12.5px; line-height: 1.4; padding: 10px; resize: vertical; outline: none; transition: border-color 0.2s ease;"></textarea>
       <footer style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
@@ -8757,6 +8760,7 @@ function showGlobalCtoxContextMenu(context, x, y) {
   const textarea = globalCtoxContextMenuEl.querySelector('.ctox-context-textarea');
   const userRow = globalCtoxContextMenuEl.querySelector('.ctox-context-user-row');
   const userInput = globalCtoxContextMenuEl.querySelector('.ctox-context-user-input');
+  const userOptionsEl = globalCtoxContextMenuEl.querySelector('[data-ctox-context-user-options]');
   const userLabel = globalCtoxContextMenuEl.querySelector('.ctox-context-user-label');
   const statusEl = globalCtoxContextMenuEl.querySelector('.ctox-context-status');
   const closeBtn = globalCtoxContextMenuEl.querySelector('.ctox-context-close-btn');
@@ -8802,6 +8806,9 @@ function showGlobalCtoxContextMenu(context, x, y) {
     });
   });
   syncModeInputs();
+  populateGlobalCtoxUserOptions(userOptionsEl).catch((error) => {
+    console.warn('[business-os] failed to populate context user picker:', error);
+  });
 
   const closeBtnHover = () => { closeBtn.style.color = 'var(--text-strong)'; };
   const closeBtnOut = () => { closeBtn.style.color = 'var(--text-muted)'; };
@@ -8988,6 +8995,26 @@ function showGlobalCtoxContextMenu(context, x, y) {
 function hideGlobalCtoxContextMenu() {
   if (globalCtoxContextMenuEl) {
     globalCtoxContextMenuEl.hidden = true;
+  }
+}
+
+async function populateGlobalCtoxUserOptions(datalistEl) {
+  if (!datalistEl) return;
+  const users = await loadGlobalCtoxContextUsers();
+  datalistEl.innerHTML = renderBusinessUserDatalistOptions(users, { session: state.session });
+}
+
+async function loadGlobalCtoxContextUsers() {
+  const sessionUser = state.session?.user ? [state.session.user] : [];
+  try {
+    await state.sync?.startCollection?.('business_users')?.catch?.(() => null);
+    const coll = state.db?.collection?.('business_users');
+    if (!coll?.find) return sessionUser;
+    const docs = await coll.find().exec();
+    return docs.map((doc) => doc.toJSON?.() || doc).filter(Boolean);
+  } catch (error) {
+    console.warn('[business-os] business_users picker fallback:', error);
+    return sessionUser;
   }
 }
 
