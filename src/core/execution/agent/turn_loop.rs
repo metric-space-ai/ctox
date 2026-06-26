@@ -1291,7 +1291,11 @@ pub fn conversation_id_for_thread_key(thread_key: Option<&str>) -> i64 {
     let mut bytes = [0u8; 8];
     bytes.copy_from_slice(&digest[..8]);
     let value = (u64::from_be_bytes(bytes) & 0x3fff_ffff_ffff_ffff) as i64;
-    if value < 2 { 2 } else { value }
+    if value < 2 {
+        2
+    } else {
+        value
+    }
 }
 
 fn responses_api_base_url(base_url: &str) -> String {
@@ -1898,13 +1902,11 @@ mod tests {
         assert!(run(vec![warning("recent_user_turn_repeated", Critical)]).is_ok());
         assert!(run(vec![warning("blocked_status_loop", Critical)]).is_ok());
         // NEGATIVE: both present but only Warning severity -> still invocable.
-        assert!(
-            run(vec![
-                warning("recent_user_turn_repeated", Warning),
-                warning("blocked_status_loop", Warning),
-            ])
-            .is_ok()
-        );
+        assert!(run(vec![
+            warning("recent_user_turn_repeated", Warning),
+            warning("blocked_status_loop", Warning),
+        ])
+        .is_ok());
 
         // The marker cools down like the other context bails (60s).
         assert_eq!(

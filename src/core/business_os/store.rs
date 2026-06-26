@@ -1328,7 +1328,8 @@ fn instance_is_fresh(root: &Path, installed_app_root: &Path) -> bool {
 /// tabs (only meaningful in `"base"` mode; core modules are always tabs).
 fn business_os_visible_modules(root: &Path) -> std::collections::BTreeSet<String> {
     let mut set = std::collections::BTreeSet::new();
-    if let Some(raw) = crate::inference::runtime_env::get_runtime_env_value(root, VISIBLE_MODULES_KEY)
+    if let Some(raw) =
+        crate::inference::runtime_env::get_runtime_env_value(root, VISIBLE_MODULES_KEY)
     {
         for id in raw.split([',', ';', '\n', '\t', ' ']) {
             let id = id.trim();
@@ -1402,7 +1403,11 @@ fn business_os_module_remote_sha(root: &Path, module_id: &str) -> Option<String>
         .filter(|value| !value.is_empty())
 }
 
-fn business_os_set_module_remote_sha(root: &Path, module_id: &str, sha: &str) -> anyhow::Result<()> {
+fn business_os_set_module_remote_sha(
+    root: &Path,
+    module_id: &str,
+    sha: &str,
+) -> anyhow::Result<()> {
     let key = format!("CTOX_BUSINESS_OS_REMOTE_SHA__{module_id}");
     crate::inference::runtime_env::set_runtime_env_value(root, &key, sha)?;
     Ok(())
@@ -3908,7 +3913,8 @@ pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         },
     )?;
     let version_states = module_version_states(root, &app_root).unwrap_or(Value::Null);
-    let (mut modules, lifecycle) = modules_with_projected_lifecycle(root, modules, &version_states)?;
+    let (mut modules, lifecycle) =
+        modules_with_projected_lifecycle(root, modules, &version_states)?;
     augment_modules_with_catalog_update_state(root, &app_root, &mut modules, &version_states);
     augment_modules_with_instance_visibility(root, &installed_app_root, &mut modules);
     if let Some(object) = governance.as_object_mut() {
@@ -4861,8 +4867,14 @@ fn check_module_updates(
         kind == "github",
         "update check is only supported for github-sourced apps"
     );
-    let repo = app_source.get("repo").and_then(Value::as_str).unwrap_or_default();
-    let git_ref = app_source.get("ref").and_then(Value::as_str).unwrap_or_default();
+    let repo = app_source
+        .get("repo")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let git_ref = app_source
+        .get("ref")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let subpath = app_source
         .get("subpath")
         .and_then(Value::as_str)
@@ -4961,7 +4973,10 @@ pub fn update_module_to_catalog(
     let staged_manifest_path = staging.join("module.json");
     let mut staged: Value = serde_json::from_str(&fs::read_to_string(&staged_manifest_path)?)?;
     staged["id"] = Value::String(module_id.clone());
-    if let Some(title) = installed_manifest.get("title").filter(|value| value.is_string()) {
+    if let Some(title) = installed_manifest
+        .get("title")
+        .filter(|value| value.is_string())
+    {
         staged["title"] = title.clone();
     }
     staged["entry"] = Value::String(format!("installed-modules/{module_id}/index.html"));
@@ -8636,10 +8651,7 @@ fn installed_module_app_source(installed_app_root: &Path, module_id: &str) -> Op
         .join(module_id)
         .join("module.json");
     let manifest: Value = serde_json::from_str(&fs::read_to_string(path).ok()?).ok()?;
-    manifest
-        .get("app_source")
-        .cloned()
-        .filter(Value::is_object)
+    manifest.get("app_source").cloned().filter(Value::is_object)
 }
 
 /// Fetch a github archive (SSRF-guarded) and compute the bundle hash of the
@@ -8786,13 +8798,14 @@ pub fn install_app_module(
     }
 
     // Search recursively for the directory containing module.json
-    let found_dir = find_module_json_dir_for_install(&temp_dir, &module_id, &effective_source_path)?
-        .with_context(|| {
-            format!(
-                "No module.json for module '{}' found in the downloaded repository archive",
-                module_id
-            )
-        })?;
+    let found_dir =
+        find_module_json_dir_for_install(&temp_dir, &module_id, &effective_source_path)?
+            .with_context(|| {
+                format!(
+                    "No module.json for module '{}' found in the downloaded repository archive",
+                    module_id
+                )
+            })?;
 
     // Read and parse module.json to ensure it's a valid manifest
     let manifest_path = found_dir.join("module.json");
@@ -16273,12 +16286,8 @@ pub fn accept_rxdb_business_command_with_origin(
             let session = rxdb_authenticated_session(root, &command)?;
             let module_id = source_sanitize_slug(&request.module_id);
             anyhow::ensure!(!module_id.is_empty(), "module_id is required");
-            let decision = module_policy_decision(
-                root,
-                &session,
-                BusinessOsPermission::AppsView,
-                &module_id,
-            )?;
+            let decision =
+                module_policy_decision(root, &session, BusinessOsPermission::AppsView, &module_id)?;
             if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
                 return Ok(outcome);
             }
@@ -30340,7 +30349,10 @@ mod tests {
         let installed_app_root = resolve_business_os_installed_app_root(root);
 
         // An empty, brand-new instance provisions as the minimal base set.
-        assert_eq!(business_os_provisioning_mode(root, &installed_app_root), "base");
+        assert_eq!(
+            business_os_provisioning_mode(root, &installed_app_root),
+            "base"
+        );
 
         let mut modules = vec![
             serde_json::json!({"id": "ctox", "lifecycle": {"runtime_installed": false}}),
@@ -30352,7 +30364,8 @@ mod tests {
 
         // Installing a catalog module as a tab makes it visible.
         business_os_set_module_visible(root, "matching", true)?;
-        let mut after = vec![serde_json::json!({"id": "matching", "lifecycle": {"runtime_installed": false}})];
+        let mut after =
+            vec![serde_json::json!({"id": "matching", "lifecycle": {"runtime_installed": false}})];
         augment_modules_with_instance_visibility(root, &installed_app_root, &mut after);
         assert_eq!(after[0]["instance_visible"], Value::Bool(true));
         Ok(())
@@ -30371,7 +30384,10 @@ mod tests {
             [],
         )?;
         let installed_app_root = resolve_business_os_installed_app_root(root);
-        assert_eq!(business_os_provisioning_mode(root, &installed_app_root), "legacy");
+        assert_eq!(
+            business_os_provisioning_mode(root, &installed_app_root),
+            "legacy"
+        );
         let mut modules =
             vec![serde_json::json!({"id": "matching", "lifecycle": {"runtime_installed": false}})];
         augment_modules_with_instance_visibility(root, &installed_app_root, &mut modules);
@@ -30404,13 +30420,19 @@ mod tests {
         business_os_set_module_remote_sha(root, "extapp", "REMOTE_SHA")?;
         let mut modules = vec![github_module()];
         augment_modules_with_catalog_update_state(root, &app_root, &mut modules, &version_states);
-        assert_eq!(modules[0]["lifecycle"]["update_available"], Value::Bool(true));
+        assert_eq!(
+            modules[0]["lifecycle"]["update_available"],
+            Value::Bool(true)
+        );
 
         // Same upstream as installed => no update.
         business_os_set_module_remote_sha(root, "extapp", "INSTALLED_SHA")?;
         let mut modules = vec![github_module()];
         augment_modules_with_catalog_update_state(root, &app_root, &mut modules, &version_states);
-        assert_eq!(modules[0]["lifecycle"]["update_available"], Value::Bool(false));
+        assert_eq!(
+            modules[0]["lifecycle"]["update_available"],
+            Value::Bool(false)
+        );
         Ok(())
     }
 

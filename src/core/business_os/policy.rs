@@ -385,7 +385,10 @@ mod tests {
         for collection in ADMIN_ONLY_COLLECTIONS {
             assert!(role_may_read_collection(BusinessOsRole::Chef, collection));
             assert!(role_may_read_collection(BusinessOsRole::Admin, collection));
-            assert!(!role_may_read_collection(BusinessOsRole::Founder, collection));
+            assert!(!role_may_read_collection(
+                BusinessOsRole::Founder,
+                collection
+            ));
             assert!(!role_may_read_collection(BusinessOsRole::User, collection));
         }
         // Ordinary business data is readable by every role (deny-by-exception).

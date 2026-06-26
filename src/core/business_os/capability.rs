@@ -46,8 +46,7 @@ pub fn issue_capability_token(
         "iat": issued_at_ms,
         "exp": expires_at_ms,
     });
-    let payload_b64 =
-        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap_or_default());
+    let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap_or_default());
     let key = hmac::Key::new(hmac::HMAC_SHA256, secret);
     let sig = hmac::sign(&key, payload_b64.as_bytes());
     let sig_b64 = URL_SAFE_NO_PAD.encode(sig.as_ref());
@@ -57,7 +56,11 @@ pub fn issue_capability_token(
 /// Verify a capability token against `secret` at `now_ms`. Returns the claims
 /// only when the signature is valid (constant-time) and the token has not
 /// expired. Any malformed / tampered / expired token returns `None`.
-pub fn verify_capability_token(secret: &[u8], token: &str, now_ms: i64) -> Option<CapabilityClaims> {
+pub fn verify_capability_token(
+    secret: &[u8],
+    token: &str,
+    now_ms: i64,
+) -> Option<CapabilityClaims> {
     let (payload_b64, sig_b64) = token.split_once('.')?;
     let sig = URL_SAFE_NO_PAD.decode(sig_b64).ok()?;
     let key = hmac::Key::new(hmac::HMAC_SHA256, secret);
