@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; base-uri 'none'; object-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; frame-src https://sweeper.ctox.dev; connect-src 'self'; form-action 'self';"
+      content="default-src 'self'; base-uri 'none'; object-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'self'; frame-src https://sweeper.ctox.dev; connect-src 'self'; form-action 'self';"
     />
     <meta
       name="description"
@@ -350,6 +350,7 @@
           </div>
           <div class="frame-shell">
             <iframe
+              id="sweeper-frame"
               class="sweeper-frame"
               title="CTOX Sweeper dashboard"
               src="https://sweeper.ctox.dev/"
@@ -369,5 +370,6 @@
         <span>metric-space-ai/ctox</span>
       </div>
     </footer>
+    <script src="assets/maintainers.js"></script>
   </body>
 </html>
