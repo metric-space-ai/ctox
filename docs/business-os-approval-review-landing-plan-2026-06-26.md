@@ -64,9 +64,16 @@ Workstream:
   `rejected_approval_creates_no_queue_task`, `approval_execution_uses_central_command_policy`,
   and the policy `data.write` gate.
 - [x] RxDB JS data-plane suite **GREEN: 48 passed, 0 failed, 2 skipped**.
-- [~] Live browser e2e of the full flow — attempting via a local release build+install
-  (test deploy of the in-flight code, NOT an origin push) + a 2nd business user so an
-  admin can approve a request assigned to another reviewer.
+- [x] **Live browser e2e of the delegation steering — GREEN 7/7** (headless, against the
+  running instance via a temporary shell overlay + restricted-session route-intercept,
+  restored after): a `user`-role actor gets `[ask, note, mention, approval]` with
+  **data/app hidden, approval pre-selected, hint "Nur Freigabe möglich – wähle einen
+  Reviewer."**; an `admin` gets `[data, ask, app, …]` with data selected. Confirms the
+  multi-user delegation guardrail end-to-end in a real browser. Script:
+  `scratchpad/delegation-e2e.mjs`.
+- [~] Full-flow live e2e (request → reviewer-in-Threads → approve → `business_commands`):
+  the native half is proven by the `cargo test` suite (26/0); a live click-through needs
+  the native foundation deployed — runs at the coordinated deploy below.
 - [blocked] Land on `origin/main` — coordinate decision stands: parallel agent pushes its
   foundation stack; this session's commits land with/after it. Green build de-risks it.
 
@@ -74,7 +81,11 @@ Progress log:
 
 - 2026-06-26 (cont.): i18n done (`6c995005`); cargo check green; policy data.write gate
   test (`f69b6d50`) + rxdb_peer test-build fix (`8f9a48a9`); native approval tests 26/0;
-  RxDB suite 48/0/2. Remaining: live e2e (local test-deploy in progress) + coordinated landing.
+  RxDB suite 48/0/2.
+- 2026-06-26 (cont. 2): live browser e2e of the delegation steering GREEN 7/7 (overlay +
+  restricted-session intercept, install restored after). Implementation + every test level
+  (browser 12/0, native 26/0, data-plane 48/0, build 0-err, live steering 7/7) is GREEN.
+  Only the coordinated origin landing + the post-deploy full-flow click-through remain.
 - [ ] 6 release follow-ups (from the remediation plan).
 
 Progress log:
