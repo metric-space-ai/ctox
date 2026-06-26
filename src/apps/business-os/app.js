@@ -37,7 +37,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260626-cv-print-data-fix-v1';
+const APP_BUILD = '20260626-skf-dialog-knowledge-v2';
 
 ensureShellStylesheets();
 
@@ -3391,6 +3391,7 @@ function moduleAppearsInSwitcher(mod) {
     && mod.id !== 'desktop'
     && mod.id !== 'notizen'
     && mod.install_scope !== 'internal'
+    && mod.instance_visible !== false
     && canSeeModuleForAppVersion(mod)
     && !moduleLaunchesAsDesktopApp(mod);
 }
@@ -8241,15 +8242,19 @@ function renderStartMenuLifecycleBadge(target) {
   });
   if (!lifecycle?.runtimeInstalled) return '';
   const title = target.title || target.id;
+  const updateDot = lifecycle.updateAvailable
+    ? `<i class="start-menu-update-dot" aria-hidden="true"></i>`
+    : '';
   return `
     <button
-      class="start-menu-lifecycle-badge"
+      class="start-menu-lifecycle-badge${lifecycle.updateAvailable ? ' has-update' : ''}"
       type="button"
       data-module-lifecycle="${escapeHtml(target.id)}"
       data-state="${escapeHtml(lifecycle.state)}"
       title="${escapeHtml(lifecycle.title)}"
       aria-label="${escapeHtml(lifecycleBadgeAriaLabel(title, lifecycle))}"
     >
+      ${updateDot}
       ${lifecycle.version ? `<b>${escapeHtml(lifecycle.version)}</b>` : ''}
       <span>${escapeHtml(lifecycle.text || lifecycle.label || '')}</span>
     </button>

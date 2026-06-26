@@ -301,13 +301,31 @@ export function canSeeModuleForAppVersion(moduleLike, options = {}) {
   return lifecycle.canAccessNonPublic;
 }
 
+export function appUpdateState(moduleLike) {
+  const projected = moduleLike?.lifecycle || {};
+  const available = projected.update_available === true || moduleLike?.update_available === true;
+  return {
+    available,
+    modificationState: String(projected.modification_state || '').trim(),
+    catalogVersion: String(projected.catalog_version || '').trim(),
+    installedVersion: String(projected.installed_version || '').trim(),
+  };
+}
+
 export function appLifecycleBadge(moduleLike, options = {}) {
   const lifecycle = appLifecycleState(moduleLike, options);
   const version = lifecycle.versionLabel || '';
   const label = lifecycle.label || '';
+  const update = appUpdateState(moduleLike);
   return {
     ...lifecycle,
-    title: [version, label, lifecycle.reason].filter(Boolean).join(' · '),
+    updateAvailable: update.available,
+    modificationState: update.modificationState,
+    catalogVersion: update.catalogVersion,
+    installedVersion: update.installedVersion,
+    title: [version, label, update.available ? 'Update verfügbar' : '', lifecycle.reason]
+      .filter(Boolean)
+      .join(' · '),
     text: label,
     version,
   };

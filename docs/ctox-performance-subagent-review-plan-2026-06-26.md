@@ -319,8 +319,12 @@ Tasks:
    query demand loading.
 3. Make `removePeer()` reject all in-flight query/file demand streams owned by
    that peer and free slots/counters.
-4. Add scoped or ref-counted collection bridge leases for
-   `desktop_file_chunks`.
+4. Done on 2026-06-27 for central chunk bridge ownership: direct
+   `startCollection()` calls for `desktop_file_chunks`, `document_blob_chunks`,
+   and `spreadsheet_blob_chunks` now fail with
+   `DEMAND_ONLY_COLLECTION_REQUIRES_LEASE` unless a scoped lease already owns
+   the collection start. `startModule()` skips those collections, and
+   `leaseCollection()` remains the activating/releasing path.
 5. Ensure command bus, CV Builder, imports, and future upload surfaces release
    chunk bridges after `awaitInSync`/dispatch.
 6. Move large schema-index backfills into idle slices or an explicit upgrade
@@ -333,6 +337,8 @@ Acceptance:
 - Peer-close during file/query demand fails fast and leaves zero in-flight
   collectors.
 - Attachment dispatch does not leave `desktop_file_chunks` active after flush.
+- Direct module/runtime `startCollection()` cannot activate large chunk
+  collections without an explicit scoped lease.
 - Backfill CPU is bounded and observable after upgrade.
 
 ### P1 - Business OS Projection And Repair Delta Windows
@@ -480,7 +486,9 @@ Run that gate for the P0 scenarios listed above, not only a fresh daemon.
    thresholds.
 2. Add browser-runtime retention/indexes for `browser_frames` and
    `browser_input_events`.
-3. Fix Browser demand-stream abort on peer loss and chunk-bridge scoped release.
+3. Done for Browser demand-stream abort on peer loss and central demand-only
+   chunk-bridge scoped ownership; remaining browser work is complex query
+   re-exec/fallback counters and future upload/import guard coverage.
 4. Move checkpoint status off the shared writer mutex.
 5. Replace projection aggregate stamps/repair sweeps with changed-id cursors.
 6. Add chunk physical DB-growth reporting and safe maintenance policy.

@@ -39,6 +39,16 @@ fn reasoning_summaries_override_false_is_noop_when_model_is_false() {
 }
 
 #[test]
+fn minimax_fallback_model_metadata_uses_function_apply_patch() {
+    let model = model_info_from_slug("MiniMax-M3");
+
+    assert_eq!(
+        model.apply_patch_tool_type,
+        Some(ApplyPatchToolType::Function)
+    );
+}
+
+#[test]
 fn model_context_window_override_is_authoritative() {
     let mut model = model_info_from_slug("unknown-model");
     model.context_window = Some(272_000);

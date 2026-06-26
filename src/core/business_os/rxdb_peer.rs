@@ -115,6 +115,8 @@ enum NativePeerExit {
     WatchdogStale,
     /// The persisted sync room/signaling config changed: respawn with fresh config.
     ConfigChanged,
+    /// Runtime-installed module schemas changed: respawn so new collections are registered.
+    RuntimeSchemaChanged,
     /// Another process holds the peer lock: retry later (standby takeover).
     LockHeldElsewhere,
 }
@@ -1029,6 +1031,13 @@ pub fn spawn_native_peer(
                     Ok(NativePeerExit::ConfigChanged) => {
                         eprintln!(
                             "[business-os] native rxdb peer sync config changed; \
+                             respawning in {}s",
+                            delay.as_secs()
+                        );
+                    }
+                    Ok(NativePeerExit::RuntimeSchemaChanged) => {
+                        eprintln!(
+                            "[business-os] native rxdb peer runtime app schemas changed; \
                              respawning in {}s",
                             delay.as_secs()
                         );
@@ -1975,6 +1984,7 @@ async fn run_native_peer(
         return Ok(NativePeerExit::LockHeldElsewhere);
     };
     let configured_signaling_urls = signaling_urls.clone();
+    let runtime_schema_fingerprint = runtime_installed_module_schema_fingerprint(&root)?;
     let signaling_base_url = signaling_urls
         .into_iter()
         .find(|url| !url.trim().is_empty())
@@ -2367,6 +2377,25 @@ async fn run_native_peer(
                         );
                     }
                 }
+                match native_peer_runtime_installed_schemas_changed(
+                    &root,
+                    &runtime_schema_fingerprint,
+                ) {
+                    Ok(true) => {
+                        eprintln!(
+                            "[business-os] native rxdb peer watchdog: runtime app schemas changed; \
+                             shutting down for a supervised respawn"
+                        );
+                        exit = NativePeerExit::RuntimeSchemaChanged;
+                        break;
+                    }
+                    Ok(false) => {}
+                    Err(err) => {
+                        eprintln!(
+                            "[business-os] native rxdb peer watchdog: runtime app schema check failed: {err:#}"
+                        );
+                    }
+                }
             }
         }
     }
@@ -2446,6 +2475,53 @@ fn native_peer_sync_config_changed(
         || config.signaling_room_password != active_signaling_room_password
         || normalized_signaling_urls(&config.signaling_urls)
             != normalized_signaling_urls(active_signaling_urls))
+}
+
+fn native_peer_runtime_installed_schemas_changed(
+    root: &Path,
+    active_fingerprint: &str,
+) -> anyhow::Result<bool> {
+    Ok(runtime_installed_module_schema_fingerprint(root)? != active_fingerprint)
+}
+
+fn runtime_installed_module_schema_fingerprint(root: &Path) -> anyhow::Result<String> {
+    let modules_root =
+        resolve_business_os_installed_app_root_for_native_peer(root).join("installed-modules");
+    let mut files = BTreeSet::new();
+    if modules_root.is_dir() {
+        for entry in fs::read_dir(&modules_root).with_context(|| {
+            format!(
+                "failed to read runtime-installed module root {}",
+                modules_root.display()
+            )
+        })? {
+            let entry = entry?;
+            let module_dir = entry.path();
+            if !module_dir.is_dir() {
+                continue;
+            }
+            for file_name in ["module.json", "collections.schema.json"] {
+                let path = module_dir.join(file_name);
+                if path.is_file() {
+                    files.insert(path);
+                }
+            }
+        }
+    }
+
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(b"ctox-runtime-installed-module-schemas-v1");
+    for path in files {
+        let rel = path.strip_prefix(&modules_root).unwrap_or(&path);
+        hasher.update(rel.to_string_lossy().as_bytes());
+        hasher.update([0]);
+        let bytes = fs::read(&path)
+            .with_context(|| format!("failed to read runtime app schema {}", path.display()))?;
+        hasher.update((bytes.len() as u64).to_le_bytes());
+        hasher.update(bytes);
+        hasher.update([0xff]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn normalized_signaling_urls(values: &[String]) -> Vec<String> {
@@ -11257,6 +11333,69 @@ mod tests {
         assert_eq!(schema.version, 0);
         assert_eq!(schema.primary_key.primary_field(), "id");
         assert_eq!(schema.schema_type, "object");
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_installed_module_schema_fingerprint_changes_with_schema_files() -> anyhow::Result<()>
+    {
+        let temp = tempfile::tempdir()?;
+        let module_dir = temp
+            .path()
+            .join("runtime/business-os/installed-modules/subscriptions");
+        fs::create_dir_all(&module_dir)?;
+        fs::write(
+            module_dir.join("module.json"),
+            serde_json::to_vec_pretty(&json!({
+                "id": "subscriptions",
+                "entry": "installed-modules/subscriptions/index.html",
+                "install_scope": "installed",
+                "collections": ["subscriptions_records"]
+            }))?,
+        )?;
+        fs::write(
+            module_dir.join("collections.schema.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schema_format": "ctox-business-os-module-collections-v1",
+                "collections": {
+                    "subscriptions_records": {
+                        "primaryKey": "id",
+                        "properties": {
+                            "id": { "type": "string", "maxLength": 120 },
+                            "title": { "type": "string" }
+                        },
+                        "required": ["id", "title"]
+                    }
+                }
+            }))?,
+        )?;
+
+        let first = runtime_installed_module_schema_fingerprint(temp.path())?;
+        assert!(
+            !native_peer_runtime_installed_schemas_changed(temp.path(), &first)?,
+            "unchanged runtime app schemas must not force a respawn"
+        );
+        fs::write(
+            module_dir.join("collections.schema.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schema_format": "ctox-business-os-module-collections-v1",
+                "collections": {
+                    "subscriptions_records": {
+                        "primaryKey": "id",
+                        "properties": {
+                            "id": { "type": "string", "maxLength": 120 },
+                            "title": { "type": "string" },
+                            "renewal_date": { "type": "string" }
+                        },
+                        "required": ["id", "title"]
+                    }
+                }
+            }))?,
+        )?;
+        assert!(
+            native_peer_runtime_installed_schemas_changed(temp.path(), &first)?,
+            "runtime app schema edits must force a native peer respawn"
+        );
         Ok(())
     }
 

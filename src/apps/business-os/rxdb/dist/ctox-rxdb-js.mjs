@@ -315,6 +315,10 @@ function buildProtocolPayload({
   checkpoint,
   role = "browser",
   capabilities = [],
+  // #12c: the browser's CTOX capability token, so the native (master) peer can
+  // bind this peer to its server-authenticated role and authorize per-collection
+  // reads. Omitted when absent so the legacy handshake stays byte-identical.
+  capabilityToken = null,
   // Phase 3 schema-validation hardening: the per-collection schema-hash map
   // for EVERY collection multiplexed on this one connection. Keyed by
   // collection name. The room handshake runs once off a single representative
@@ -327,8 +331,7 @@ function buildProtocolPayload({
   // representative collection's checkpoint is not valid for sibling
   // collections when the room reconnects, especially for file chunk stores
   // where stale checkpoint epochs are a data-corruption signal.
-  collectionCheckpoints = null,
-  capabilityToken = null
+  collectionCheckpoints = null
 } = {}) {
   const checkpointEvidence = checkpoint || null;
   const peerSession = {
@@ -6004,7 +6007,8 @@ var CtoxWebRtcReplicationState = class {
       checkpoint,
       role: "browser",
       capabilityToken,
-      capabilities: BROWSER_CAPABILITIES
+      capabilities: BROWSER_CAPABILITIES,
+      capabilityToken: typeof capabilityToken === "string" ? capabilityToken : null
     });
   }
   async onPeerReady(peerId, normalizedRemoteProtocol, queryFetchCapable) {
@@ -6636,14 +6640,22 @@ function changeEventHasOnlyReplicationOriginWrites(event) {
 async function resolveCapabilityToken(ctox = {}) {
   if (typeof ctox?.capabilityTokenProvider === "function") {
     try {
-      const token2 = await ctox.capabilityTokenProvider();
-      return typeof token2 === "string" && token2.trim() ? token2.trim() : null;
+      const token = await ctox.capabilityTokenProvider();
+      return typeof token === "string" && token.trim() ? token.trim() : null;
     } catch {
       return null;
     }
   }
-  const token = ctox?.capabilityToken;
-  return typeof token === "string" && token.trim() ? token.trim() : null;
+  const source = ctox?.capabilityToken;
+  if (typeof source === "function") {
+    try {
+      const token = await source();
+      return typeof token === "string" && token.trim() ? token.trim() : null;
+    } catch {
+      return null;
+    }
+  }
+  return typeof source === "string" && source.trim() ? source.trim() : null;
 }
 function checkpointKey(checkpoint) {
   if (!checkpoint) return "";

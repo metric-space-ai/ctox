@@ -19,21 +19,45 @@ This file is a resource index. Use the linked contracts and checklists as the wo
   templates.
 - App workers build or modify the app themselves, using the resources below and
   the three chosen reference apps.
+- Use the agent's structured file-edit tool for app files. In CTOX Codex runs
+  this is `apply_patch`; keep shell commands for inspection, validation, and
+  tests.
 - During app creation or modification, do not run `ctox stop`, `ctox start`,
   `ctox upgrade`, `launchctl`, `systemctl`, or service lifecycle commands. The
   running CTOX service is the required runtime for validation and browser proof.
 
 ## Resource Index
 
-- `references/module-contract.md`: file layout, manifest, schema, mount contract, persistence contract, automation contract.
+- `references/module-contract.md`: file layout, manifest, schema, mount contract, persistence contract, automation contract, agent right-click context.
 - `references/dos-and-donts.md`: short rules for correct Business OS app implementation.
 - `references/green-checklist.md`: finalization checklist before a task can be considered done.
 - `references/architecture-translation.md`: mapping from familiar web app patterns to CTOX Business OS app patterns.
 
+## Required Agent Context (Right-Click)
+
+Mandatory for every app and every record -- not optional, not deferrable. The
+shell, not the app, owns the right-click menu; the app's job is to label its
+records so the agent knows what was clicked.
+
+- Put `data-context-record-id`, `data-context-record-type`, and
+  `data-context-label` on the outermost element of every record (list row, card,
+  table row, tree node). The shell's global "Chat to CTOX" right-click menu reads
+  them and tells the agent which record the user clicked. Without them the agent
+  gets only loose text and cannot act on the record.
+- Always set the explicit trio. The shell will also resolve a bare `data-*-id` as
+  a safety net (deriving the type from the attribute name and guessing a label),
+  but that is NOT a substitute -- do not skip the trio just because a `data-*-id`
+  already exists on the element.
+- Mark side panes with a `*-left` / `*-right` / `*-sidebar` class or
+  `data-left-content` / `data-right-content` so the agent learns the column.
+- Do not build a per-app context menu or app-owned right-click event bridge for
+  this; the shell handles it. Full contract and shell internals:
+  `references/module-contract.md` ("Agent Context (Right-Click)").
+
 ## Required Context
 
 - Inspect three existing shipped Business OS apps selected for similar workflow, data model, and UI shape.
-- Use `ctox business-os app references --json` when a local reference catalog is needed.
+- Use `ctox business-os app references --query "<workflow data keywords>" --json --limit 8` when a local reference catalog is needed.
 - Runtime-created apps live in `runtime/business-os/installed-modules/<module-id>/`.
 - Source apps live in `src/apps/business-os/modules/<module-id>/` only when the task explicitly targets checked-in source.
 

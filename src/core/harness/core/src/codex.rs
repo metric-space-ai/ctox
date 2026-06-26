@@ -887,6 +887,7 @@ impl TurnContext {
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_ctox_web_stack_enabled(self.tools_config.ctox_web_stack_enabled)
         .with_ctox_doc_stack_enabled(self.tools_config.ctox_doc_stack_enabled)
+        .with_lean_tool_surface(self.tools_config.lean_tool_surface)
         .with_allow_login_shell(self.tools_config.allow_login_shell)
         .with_agent_roles(config.agent_roles.clone());
 
@@ -1328,6 +1329,7 @@ impl Session {
         .with_web_search_config(per_turn_config.web_search_config.clone())
         .with_ctox_web_stack_enabled(per_turn_config.ctox_web_stack_enabled)
         .with_ctox_doc_stack_enabled(per_turn_config.ctox_doc_stack_enabled)
+        .with_lean_tool_surface(per_turn_config.disable_mcp_servers)
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
         .with_agent_roles(per_turn_config.agent_roles.clone());
 

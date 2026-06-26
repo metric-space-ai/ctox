@@ -69,6 +69,7 @@ fn test_openrouter_model_client(session_source: SessionSource) -> ModelClient {
         env_key_instructions: None,
         experimental_bearer_token: None,
         wire_api: crate::model_provider_info::WireApi::Responses,
+        requires_full_responses_history: false,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -102,6 +103,41 @@ fn test_minimax_model_client(session_source: SessionSource) -> ModelClient {
         env_key_instructions: None,
         experimental_bearer_token: None,
         wire_api: crate::model_provider_info::WireApi::Responses,
+        requires_full_responses_history: false,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        supports_websockets: false,
+    };
+    ModelClient::new(
+        None,
+        ThreadId::new(),
+        provider,
+        session_source,
+        None,
+        false,
+        false,
+        false,
+        None,
+    )
+}
+
+fn test_minimax_proxy_model_client(session_source: SessionSource) -> ModelClient {
+    let provider = crate::model_provider_info::ModelProviderInfo {
+        name: "ctox-core-api".to_string(),
+        base_url: Some("https://llm.ctox.dev/v1".to_string()),
+        transport_endpoint: None,
+        socket_transport_required: false,
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        wire_api: crate::model_provider_info::WireApi::Responses,
+        requires_full_responses_history: false,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -135,6 +171,7 @@ fn test_local_ipc_model_client(session_source: SessionSource) -> ModelClient {
         env_key_instructions: None,
         experimental_bearer_token: None,
         wire_api: crate::model_provider_info::WireApi::Responses,
+        requires_full_responses_history: false,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -309,6 +346,34 @@ fn http_request_keeps_full_history_for_minimax_responses() {
 
     assert_eq!(wire_request.previous_response_id, None);
     assert_eq!(wire_request.input, next_request.input);
+}
+
+#[test]
+fn http_request_uses_previous_response_id_for_minimax_proxy_responses() {
+    let client = test_minimax_proxy_model_client(SessionSource::Cli);
+    let mut session = client.new_session();
+    let initial_user = test_user_message("initial");
+    let assistant = test_assistant_message("done");
+    let next_user = test_user_message("next");
+    let previous_request = test_responses_request(vec![initial_user.clone()]);
+    let next_request =
+        test_responses_request(vec![initial_user, assistant.clone(), next_user.clone()]);
+    let (tx, rx) = oneshot::channel();
+    tx.send(LastResponse {
+        response_id: "resp_previous".to_string(),
+        items_added: vec![assistant],
+    })
+    .expect("last response receiver should be open");
+    session.websocket_session.last_request = Some(previous_request);
+    session.websocket_session.last_response_rx = Some(rx);
+
+    let wire_request = session.prepare_http_request(&next_request);
+
+    assert_eq!(
+        wire_request.previous_response_id.as_deref(),
+        Some("resp_previous")
+    );
+    assert_eq!(wire_request.input, vec![next_user]);
 }
 
 #[test]
@@ -582,6 +647,7 @@ fn managed_local_responses_max_output_tokens_reads_runtime_state_override() {
         env_key_instructions: None,
         experimental_bearer_token: None,
         wire_api: crate::model_provider_info::WireApi::Responses,
+        requires_full_responses_history: false,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -621,6 +687,7 @@ fn managed_local_responses_max_output_tokens_does_not_use_process_env_fallback()
         env_key_instructions: None,
         experimental_bearer_token: None,
         wire_api: crate::model_provider_info::WireApi::Responses,
+        requires_full_responses_history: false,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -678,6 +745,7 @@ fn managed_local_responses_max_output_tokens_defaults_to_realized_context_budget
         env_key_instructions: None,
         experimental_bearer_token: None,
         wire_api: crate::model_provider_info::WireApi::Responses,
+        requires_full_responses_history: false,
         query_params: None,
         http_headers: None,
         env_http_headers: None,

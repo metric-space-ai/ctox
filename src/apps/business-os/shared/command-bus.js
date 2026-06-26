@@ -42,6 +42,8 @@ export async function getBusinessOsCapabilityToken() {
   return null;
 }
 
+export const getCapabilityToken = getBusinessOsCapabilityToken;
+
 async function dispatchRxdbCommand({ db, sync, session, command }) {
   const commandId = command.id || `cmd_${crypto.randomUUID()}`;
   const capabilityToken = await getBusinessOsCapabilityToken();

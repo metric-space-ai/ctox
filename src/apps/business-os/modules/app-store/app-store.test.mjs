@@ -491,6 +491,25 @@ test('fork-class apps do not offer destructive upstream updates', () => {
   assert.equal(maintained.available, true);
 });
 
+test('server-projected catalog diff offers an in-repo update', () => {
+  const catalog = hooks.updateStateFor(
+    { version: '1.0.0', lifecycle: { update_available: true, catalog_version: 'v2', installed_version: 'v1' } },
+    null,
+    'installed',
+    'maintained'
+  );
+  assert.equal(catalog.available, true);
+  assert.match(catalog.reason, /Katalog v2/);
+
+  const current = hooks.updateStateFor(
+    { version: '1.0.0', lifecycle: { update_available: false } },
+    null,
+    'installed',
+    'maintained'
+  );
+  assert.equal(current.available, false);
+});
+
 test('versions button reflects the recorded timeline', () => {
   assert.equal(hooks.versionsButtonHtml({ title: 'X' }), '');
   assert.equal(hooks.versionsButtonHtml({ title: 'X', version_state: { version_count: 0 } }), '');

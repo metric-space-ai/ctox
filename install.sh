@@ -1754,13 +1754,29 @@ build_ctox() {
 resolve_ctox_binary_path() {
   local source_root="$1"
   local candidate
-  for candidate in \
-    "$source_root/runtime/build/cargo-target/release/ctox" \
-    "$source_root/runtime/build/cargo-target/debug/ctox" \
-    "$source_root/target/release/ctox" \
-    "$source_root/target/debug/ctox" \
-    "$source_root/bin/ctox"
-  do
+  local -a candidates=()
+  case "$source_root" in
+    "$INSTALL_ROOT"/releases/*)
+      # Managed releases have runtime/ linked to persistent tenant state. Never
+      # select runtime/build here; it may contain an older binary from a previous
+      # install and would silently publish stale code into the new release.
+      candidates=(
+        "$source_root/target/release/ctox"
+        "$source_root/target/debug/ctox"
+        "$source_root/bin/ctox"
+      )
+      ;;
+    *)
+      candidates=(
+        "$source_root/runtime/build/cargo-target/release/ctox"
+        "$source_root/runtime/build/cargo-target/debug/ctox"
+        "$source_root/target/release/ctox"
+        "$source_root/target/debug/ctox"
+        "$source_root/bin/ctox"
+      )
+      ;;
+  esac
+  for candidate in "${candidates[@]}"; do
     [[ -x "$candidate" ]] && { printf '%s\n' "$candidate"; return 0; }
   done
   return 1
@@ -1769,15 +1785,30 @@ resolve_ctox_binary_path() {
 resolve_ctox_desktop_host_binary_path() {
   local source_root="$1"
   local candidate
-  for candidate in \
-    "$source_root/runtime/build/cargo-target/release/ctox-desktop-host" \
-    "$source_root/runtime/build/cargo-target/debug/ctox-desktop-host" \
-    "$source_root/target/release/ctox-desktop-host" \
-    "$source_root/target/debug/ctox-desktop-host" \
-    "$source_root/src/apps/desktop/target/release/ctox-desktop-host" \
-    "$source_root/src/apps/desktop/target/debug/ctox-desktop-host" \
-    "$source_root/bin/ctox-desktop-host"
-  do
+  local -a candidates=()
+  case "$source_root" in
+    "$INSTALL_ROOT"/releases/*)
+      candidates=(
+        "$source_root/target/release/ctox-desktop-host"
+        "$source_root/target/debug/ctox-desktop-host"
+        "$source_root/src/apps/desktop/target/release/ctox-desktop-host"
+        "$source_root/src/apps/desktop/target/debug/ctox-desktop-host"
+        "$source_root/bin/ctox-desktop-host"
+      )
+      ;;
+    *)
+      candidates=(
+        "$source_root/runtime/build/cargo-target/release/ctox-desktop-host"
+        "$source_root/runtime/build/cargo-target/debug/ctox-desktop-host"
+        "$source_root/target/release/ctox-desktop-host"
+        "$source_root/target/debug/ctox-desktop-host"
+        "$source_root/src/apps/desktop/target/release/ctox-desktop-host"
+        "$source_root/src/apps/desktop/target/debug/ctox-desktop-host"
+        "$source_root/bin/ctox-desktop-host"
+      )
+      ;;
+  esac
+  for candidate in "${candidates[@]}"; do
     [[ -x "$candidate" ]] && { printf '%s\n' "$candidate"; return 0; }
   done
   return 1

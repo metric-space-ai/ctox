@@ -106,6 +106,12 @@ pub struct ModelProviderInfo {
     #[serde(default)]
     pub wire_api: WireApi,
 
+    /// Whether this Responses-shaped provider edge is stateless and therefore
+    /// requires the client to send the full materialized conversation instead
+    /// of using `previous_response_id`.
+    #[serde(default)]
+    pub requires_full_responses_history: bool,
+
     /// Optional query parameters to append to the base URL.
     pub query_params: Option<HashMap<String, String>>,
 
@@ -261,6 +267,7 @@ impl ModelProviderInfo {
             env_key_instructions: None,
             experimental_bearer_token: None,
             wire_api: WireApi::Responses,
+            requires_full_responses_history: false,
             query_params: None,
             http_headers: Some(
                 [("version".to_string(), env!("CARGO_PKG_VERSION").to_string())]
@@ -345,6 +352,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         env_key_instructions: None,
         experimental_bearer_token: None,
         wire_api,
+        requires_full_responses_history: false,
         query_params: None,
         http_headers: None,
         env_http_headers: None,

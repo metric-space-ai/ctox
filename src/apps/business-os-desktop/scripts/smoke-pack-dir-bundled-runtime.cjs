@@ -125,8 +125,6 @@ function writeBundledCtoxHelper(helperPath) {
   const body = [
     "#!/usr/bin/env node",
     "\"use strict\";",
-    "const fs = require('node:fs');",
-    "const path = require('node:path');",
     "const args = process.argv.slice(2);",
     "if (args[0] === 'business-os' && args[1] === 'peer' && args[2] === 'ensure') {",
     "  process.exit(0);",

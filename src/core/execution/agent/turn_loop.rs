@@ -41,6 +41,14 @@ fn turn_counters() -> &'static Mutex<HashMap<i64, RefreshState>> {
     COUNTERS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ChatTurnSessionOptions {
+    pub(crate) disable_mcp_servers: bool,
+    pub(crate) base_instructions: Option<String>,
+    pub(crate) plain_prompt: bool,
+    pub(crate) turn_timeout_secs_override: Option<u64>,
+}
+
 /// Decide whether the current turn should run a continuity refresh.
 ///
 /// New adaptive model — two passive triggers plus one hard safety net:
@@ -324,6 +332,7 @@ pub(crate) struct ApiModelProviderSpec {
     /// CTOX itself remains canonical Responses internally; adapters normalize
     /// into provider-native forms only at this outer boundary.
     pub(crate) wire_api: &'static str,
+    pub(crate) requires_full_responses_history: bool,
 }
 
 impl ApiModelProviderSpec {
@@ -344,6 +353,13 @@ impl ApiModelProviderSpec {
             (
                 format!("model_providers.{}.requires_openai_auth", self.provider_id),
                 TomlValue::Boolean(false),
+            ),
+            (
+                format!(
+                    "model_providers.{}.requires_full_responses_history",
+                    self.provider_id
+                ),
+                TomlValue::Boolean(self.requires_full_responses_history),
             ),
         ]
     }
@@ -420,7 +436,36 @@ pub(crate) fn run_chat_turn_with_events_extended_guarded<F>(
     conversation_id: i64,
     suggested_skill: Option<&str>,
     force_continuity_refresh: bool,
+    session: Option<&mut PersistentSession>,
+    emit: F,
+) -> Result<String>
+where
+    F: FnMut(&str),
+{
+    run_chat_turn_with_events_extended_guarded_with_options(
+        root,
+        db_path,
+        prompt,
+        _workspace_root,
+        conversation_id,
+        suggested_skill,
+        force_continuity_refresh,
+        session,
+        ChatTurnSessionOptions::default(),
+        emit,
+    )
+}
+
+pub(crate) fn run_chat_turn_with_events_extended_guarded_with_options<F>(
+    root: &Path,
+    db_path: &Path,
+    prompt: &str,
+    _workspace_root: Option<&Path>,
+    conversation_id: i64,
+    suggested_skill: Option<&str>,
+    force_continuity_refresh: bool,
     mut session: Option<&mut PersistentSession>,
+    options: ChatTurnSessionOptions,
     mut emit: F,
 ) -> Result<String>
 where
@@ -437,7 +482,18 @@ where
     let operator_settings = runtime_env::effective_operator_env_map(root).unwrap_or_default();
     emit("session-start");
     let mut owned_session = if session.is_none() {
-        Some(PersistentSession::start(root, &operator_settings)?)
+        if options.disable_mcp_servers || options.base_instructions.is_some() {
+            emit("session-mcp-servers-disabled");
+            Some(
+                PersistentSession::start_without_mcp_servers_with_instructions(
+                    root,
+                    &operator_settings,
+                    options.base_instructions.as_deref(),
+                )?,
+            )
+        } else {
+            Some(PersistentSession::start(root, &operator_settings)?)
+        }
     } else {
         None
     };
@@ -447,13 +503,16 @@ where
     } else {
         DEFAULT_REMOTE_CHAT_TURN_TIMEOUT_SECS
     };
+    let configured_turn_timeout_secs = read_usize_setting(
+        &operator_settings,
+        "CTOX_CHAT_TURN_TIMEOUT_SECS",
+        default_turn_timeout_secs as usize,
+    ) as u64;
     let config = turn_engine::ChatTurnConfig {
         max_context_tokens: runtime.turn_context_tokens(),
-        turn_timeout_secs: read_usize_setting(
-            &operator_settings,
-            "CTOX_CHAT_TURN_TIMEOUT_SECS",
-            default_turn_timeout_secs as usize,
-        ) as u64,
+        turn_timeout_secs: options
+            .turn_timeout_secs_override
+            .unwrap_or(configured_turn_timeout_secs),
     };
     emit("lcm-open");
     let engine = lcm::LcmEngine::open(db_path, lcm::LcmConfig::default())?;
@@ -461,6 +520,55 @@ where
     emit("persist-user-turn");
     persist_lcm_message_with_retry(db_path, conversation_id, "user", prompt, &mut emit)
         .context("failed to persist user message into LCM")?;
+    if options.plain_prompt {
+        emit("plain-prompt-context");
+        let preflight_base_instructions = session
+            .as_deref()
+            .or(owned_session.as_ref())
+            .map(|sess| sess.base_instructions().to_string())
+            .unwrap_or_default();
+        if !runtime.state.source.is_local() {
+            let heuristic_text = format!("{preflight_base_instructions}\n\n{prompt}");
+            let estimated_tokens = lcm::estimate_tokens(&heuristic_text) as i64;
+            let context_limit = config.max_context_tokens.max(1);
+            let heuristic_budget = context_limit
+                .saturating_mul(95)
+                .checked_div(100)
+                .unwrap_or(1)
+                .max(1);
+            emit(&format!(
+                "heuristic-token-preflight tokens={} budget={} context={} source=plain-heuristic-api",
+                estimated_tokens, heuristic_budget, context_limit
+            ));
+            if estimated_tokens > heuristic_budget {
+                anyhow::bail!(
+                    "context_preflight_heuristic_overflow: estimated plain prompt tokens {} exceed heuristic input budget {} for context window {} via plain-heuristic-api",
+                    estimated_tokens,
+                    heuristic_budget,
+                    context_limit
+                );
+            }
+        }
+        emit("invoke-model");
+        let reply = match session.as_deref_mut() {
+            Some(sess) => {
+                sess.run_turn_inner(prompt, Some(Duration::from_secs(config.turn_timeout_secs)), None)?
+            }
+            None => owned_session
+                .as_mut()
+                .expect("owned persistent session should exist when no session was supplied")
+                .run_turn_inner(prompt, Some(Duration::from_secs(config.turn_timeout_secs)), None)?,
+        };
+        emit("persist-assistant-turn");
+        persist_lcm_message_with_retry(db_path, conversation_id, "assistant", &reply, &mut emit)?;
+        emit("continuity-refresh-skipped");
+        emit(&format!(
+            "turn-outcome stage=complete health=plain score=100 reply_chars={} continuity_updates=0 continuity_skips=1 omitted=0",
+            reply.chars().count()
+        ));
+        emit("turn-complete");
+        return Ok(reply);
+    }
     emit("turn-plan");
     let plan = turn_engine::build_turn_plan(&engine, conversation_id, config.clone())?;
     emit(&format!(
@@ -930,7 +1038,9 @@ fn ensure_rendered_prompt_is_invocable(
             && warning.severity == context_health::WarningSeverity::Critical
     });
     if exact_duplicate_user_turn && structured_failure_loop {
-        emit("context-selection context_loop_short_circuit critical_duplicate_user_turn critical_blocked_status_loop");
+        emit(
+            "context-selection context_loop_short_circuit critical_duplicate_user_turn critical_blocked_status_loop",
+        );
         anyhow::bail!(
             "context_loop_short_circuit: exact-duplicate user turn re-entering an N-deep structured-failure loop with no new evidence"
         );
@@ -1185,11 +1295,7 @@ pub fn conversation_id_for_thread_key(thread_key: Option<&str>) -> i64 {
     let mut bytes = [0u8; 8];
     bytes.copy_from_slice(&digest[..8]);
     let value = (u64::from_be_bytes(bytes) & 0x3fff_ffff_ffff_ffff) as i64;
-    if value < 2 {
-        2
-    } else {
-        value
-    }
+    if value < 2 { 2 } else { value }
 }
 
 fn responses_api_base_url(base_url: &str) -> String {
@@ -1233,18 +1339,25 @@ pub(crate) fn resolve_api_model_provider_spec(
     // mode, `ctox_core_api`, which still speaks Responses internally and only
     // differs at the outer provider edge.
     let normalized = provider.to_ascii_lowercase();
-    // (env_key, default_provider_for_url, wire_api)
-    let (env_key, default_provider, wire_api) = match normalized.as_str() {
-        "anthropic" => ("ANTHROPIC_API_KEY", "anthropic", "anthropic_messages"),
-        "openrouter" => ("OPENROUTER_API_KEY", "openrouter", "responses"),
-        "minimax" => (
-            runtime_state::api_key_env_var_for_provider_with_env_map("minimax", settings),
-            "minimax",
-            "responses",
-        ),
-        "azure_foundry" => ("AZURE_FOUNDRY_API_KEY", "azure_foundry", "responses"),
-        _ => return None,
-    };
+    // (env_key, default_provider_for_url, wire_api, requires_full_responses_history)
+    let (env_key, default_provider, wire_api, requires_full_responses_history) =
+        match normalized.as_str() {
+            "anthropic" => (
+                "ANTHROPIC_API_KEY",
+                "anthropic",
+                "anthropic_messages",
+                false,
+            ),
+            "openrouter" => ("OPENROUTER_API_KEY", "openrouter", "responses", false),
+            "minimax" => (
+                runtime_state::api_key_env_var_for_provider_with_env_map("minimax", settings),
+                "minimax",
+                "responses",
+                false,
+            ),
+            "azure_foundry" => ("AZURE_FOUNDRY_API_KEY", "azure_foundry", "responses", false),
+            _ => return None,
+        };
     let base_url = resolved_runtime
         .map(|runtime| runtime.internal_responses_base_url())
         .or_else(|| {
@@ -1263,6 +1376,7 @@ pub(crate) fn resolve_api_model_provider_spec(
         base_url,
         env_key,
         wire_api,
+        requires_full_responses_history,
     })
 }
 
@@ -1525,6 +1639,7 @@ mod tests {
             base_url: "https://contoso.cognitiveservices.azure.com/openai/v1".to_string(),
             env_key: "AZURE_FOUNDRY_API_KEY",
             wire_api: "responses",
+            requires_full_responses_history: false,
         };
 
         let overrides = spec
@@ -1550,6 +1665,10 @@ mod tests {
             overrides.get("model_providers.ctox_core_api.requires_openai_auth"),
             Some(&TomlValue::Boolean(false))
         );
+        assert_eq!(
+            overrides.get("model_providers.ctox_core_api.requires_full_responses_history"),
+            Some(&TomlValue::Boolean(false))
+        );
         assert!(!overrides.contains_key("model_providers.ctox_core_api.env_key"));
     }
 
@@ -1569,6 +1688,7 @@ mod tests {
         assert_eq!(spec.base_url, "https://llm.ctox.dev/v1");
         assert_eq!(spec.env_key, runtime_state::CTOX_LLM_PROXY_API_KEY_ENV);
         assert_eq!(spec.wire_api, "responses");
+        assert!(!spec.requires_full_responses_history);
     }
 
     #[test]
@@ -1782,11 +1902,13 @@ mod tests {
         assert!(run(vec![warning("recent_user_turn_repeated", Critical)]).is_ok());
         assert!(run(vec![warning("blocked_status_loop", Critical)]).is_ok());
         // NEGATIVE: both present but only Warning severity -> still invocable.
-        assert!(run(vec![
-            warning("recent_user_turn_repeated", Warning),
-            warning("blocked_status_loop", Warning),
-        ])
-        .is_ok());
+        assert!(
+            run(vec![
+                warning("recent_user_turn_repeated", Warning),
+                warning("blocked_status_loop", Warning),
+            ])
+            .is_ok()
+        );
 
         // The marker cools down like the other context bails (60s).
         assert_eq!(

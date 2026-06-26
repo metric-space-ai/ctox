@@ -68,9 +68,9 @@ wieder testbar:
   Account: Registry wird neu geladen, SecretStore-Referenzen bleiben extern,
   und der Launch bleibt WebRTC-only.
 - Local-Daemon-Kommandos binden einen ausgewaehlten `ctoxRoot` fail-closed an
-  den Child-Prozess. Nicht-CTOX-Runtime-Roots werden nicht mehr
-  stillschweigend akzeptiert und koennen dadurch nicht versehentlich die
-  globale CTOX-Installation steuern.
+  den Child-Prozess. Nicht-CTOX-Runtime-Roots werden nicht mehr stillschweigend
+  akzeptiert und koennen dadurch nicht versehentlich die globale
+  CTOX-Installation steuern.
 - `npm run smoke:local-runtime` validiert einen echten lokalen Runtime-Flow
   gegen ein reales `ctox` Binary und ein frisches Desktop-Profil: ein
   Nicht-Runtime-Root wird als Runtime-Root korrekt
@@ -600,9 +600,10 @@ Aufgaben:
 - [x] Lokales CTOX erkennen auf CLI-Contract-Ebene.
 - [x] `ctox business-os peer status` / `peer ensure` anbinden.
 - [x] Lokale Daemon-Pruefung und Attach per Business-OS Peer-CLI delegieren.
+- [x] Lokalen CTOX-Peer per `ctox business-os peer ensure/status` delegieren.
 - [x] App-Restart-Smoke fuer persistierte lokale Instanz ohne ctox.dev Account.
 - [x] Runtime-Smoke mit realem lokalem `ctox` Binary: Nicht-Runtime-Root
-  abweisen, `peer ensure`, Desktop-Attach und WebRTC-only Launch.
+  ablehnen, `peer ensure`, Desktop-Attach und WebRTC-only Launch.
 - [x] `ctoxRoot` wird fail-closed an Child-Prozesse gebunden; Nicht-Runtime-
   Roots werden abgelehnt statt heimlich auf die globale Installation
   zurueckzufallen.
@@ -629,8 +630,8 @@ Tests:
 - [x] Desktop-JS-Test: lokale Instanz attachen, Registry auf Platte schreiben,
   App/Source neu laden, ohne ctox.dev Account listen und WebRTC-Launch mit
   SecretStore-Referenz bauen.
-- [x] `npm run smoke:local-runtime`: Ablehnung eines Nicht-Runtime-Roots als
-  Runtime-Root, anschliessend `peer ensure`, Attach ueber `SourceManager` in einem frischen
+- [x] `npm run smoke:local-runtime`: Nicht-Runtime-Root wird abgelehnt,
+  anschliessend `peer ensure`, Attach ueber `SourceManager` in einem frischen
   Desktop-Profil, ctox.dev 401 ohne managed Instanzen, Registry secret-frei,
   simulierter Neustart und Launch `transport=webrtc` /
   `http_bridge_available=false`.

@@ -261,3 +261,70 @@ async fn effective_mcp_servers_include_plugins_without_overriding_user_config() 
         other => panic!("expected streamable http transport, got {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn disable_mcp_servers_suppresses_user_and_plugin_mcp_servers() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local");
+    write_file(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    );
+    write_file(
+        &plugin_root.join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "docs": {
+      "type": "http",
+      "url": "https://docs.example/mcp"
+    }
+  }
+}"#,
+    );
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        &plugin_config_toml(),
+    );
+
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should load");
+    let mut configured_servers = config.mcp_servers.get().clone();
+    configured_servers.insert(
+        "sample".to_string(),
+        McpServerConfig {
+            transport: McpServerTransportConfig::StreamableHttp {
+                url: "https://user.example/mcp".to_string(),
+                bearer_token_env_var: None,
+                http_headers: None,
+                env_http_headers: None,
+            },
+            enabled: true,
+            required: false,
+            disabled_reason: None,
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            enabled_tools: None,
+            disabled_tools: None,
+            scopes: None,
+            oauth_resource: None,
+        },
+    );
+    config
+        .mcp_servers
+        .set(configured_servers)
+        .expect("test config should accept MCP servers");
+    config.disable_mcp_servers = true;
+
+    let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
+
+    assert!(
+        mcp_manager.effective_servers(&config, None).is_empty(),
+        "the lean session override must remove both configured and plugin MCP servers"
+    );
+}

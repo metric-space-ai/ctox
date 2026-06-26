@@ -51,7 +51,7 @@ Before coding, choose the three best shipped Business OS apps yourself. Pick by:
 - similar UI shape
 - similar automation need
 
-Use `ctox business-os app references --json` if you need a local catalog. Do not treat any named app as mandatory; `customers`, `shiftflow`, and `outbound` are examples, not a fixed set.
+Use `ctox business-os app references --query "<workflow data keywords>" --json --limit 8` if you need a local catalog. Do not treat any named app as mandatory; `customers`, `shiftflow`, and `outbound` are examples, not a fixed set.
 
 The reference catalog is not a copy-paste manifest template. Many shipped
 source apps are packaged shell modules and may contain source-only fields such

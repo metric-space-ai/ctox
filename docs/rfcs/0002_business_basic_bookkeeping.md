@@ -3,6 +3,10 @@
 **Status:** Draft
 **Author:** michaelwelsch
 **Discussion:** see PR
+**Historical note:** This RFC describes the retired Business Basic template
+shape. It is not the current CTOX Business OS app-creation contract. New
+Business OS apps use `business-os-app-module-development` and runtime-installed
+vanilla HTML/CSS/browser ESM modules.
 **Affects:** `templates/business-basic/packages/db/src/schema.ts`,
 `templates/business-basic/apps/web/lib/business-seed.ts`,
 `templates/business-basic/apps/web/lib/business-runtime.ts`,
@@ -665,7 +669,7 @@ and are intentionally narrow:
 
 Concrete flows:
 
-1. **Context prompt.** Right-click "Chat to CTOX" on an invoice /
+1. **Context chat.** Right-click "Chat to CTOX" on an invoice /
    receipt / journal entry generates a queue task with
    `data-context-*` set to that record. If the agent suggests a change,
    it writes an `accounting_proposals` row.

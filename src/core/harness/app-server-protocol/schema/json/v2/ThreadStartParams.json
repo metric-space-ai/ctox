@@ -150,6 +150,13 @@
         "null"
       ]
     },
+    "disableMcpServers": {
+      "description": "Internal session-scoped override for agent runs that must not expose configured MCP servers or plugin-provided MCP tools to the model.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "ephemeral": {
       "type": [
         "boolean",

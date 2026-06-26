@@ -1696,6 +1696,9 @@ Batch and bound chunk work:
   only small payloads should remain inline in SQLite JSON.
 - keep direct `desktop_file_chunks.find().exec()` consumers out of browser
   modules before treating demand-only chunk sync as complete.
+- enforce demand-only bridge ownership centrally: direct `startCollection()`
+  calls for large chunk collections must fail unless a scoped lease owns the
+  collection start.
 
 Acceptance:
 
@@ -1703,9 +1706,18 @@ Acceptance:
 - Chunk cleanup never scans the whole `desktop_file_chunks` collection.
 - Repeated materialization of large files has bounded SQLite growth; live bytes,
   tombstone bytes, stale generations, and freelist/WAL deltas are reportable.
+- Large chunk collections cannot be accidentally activated by module startup,
+  Advanced Status, or future direct sync calls without an explicit scoped lease.
 
 Implementation status:
 
+- Done on 2026-06-27 for central browser sync ownership: `startModule()` skips
+  `desktop_file_chunks`, `document_blob_chunks`, and
+  `spreadsheet_blob_chunks`; `startCollection()` now rejects direct starts for
+  those collections with `DEMAND_ONLY_COLLECTION_REQUIRES_LEASE`; and
+  `leaseCollection()` remains the only production path that can activate and
+  later release those bridges. Guarded by
+  `node src/apps/business-os/rxdb/tests/module-demand-only-collections-smoke.mjs`.
 - Done on 2026-06-25 for native eager chunk generation writes: the desktop file
   sync path builds all chunk documents for a new generation in memory and writes
   them with one collection `bulk_upsert` call instead of one

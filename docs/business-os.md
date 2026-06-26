@@ -293,8 +293,8 @@ CTOX_BUSINESS_OS_MCP_CONNECT_TOKEN=<token> \
   ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id>
 
 # Create or modify runtime-installed Business OS apps
-ctox business-os app create --instruction <text> [--module-id <id>]
-ctox business-os app modify <module-id> --instruction <text>
+ctox business-os app create --instruction "<request>" [--module-id <id>]
+ctox business-os app modify <module-id> --instruction "<request>"
 ctox business-os app validate <module-id> --installed
 
 # List and manage optional skill-app modules

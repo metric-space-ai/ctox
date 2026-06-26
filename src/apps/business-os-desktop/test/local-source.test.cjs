@@ -125,6 +125,7 @@ test("local daemon attach stores metadata only and builds webrtc launch", async 
 
   const instance = await source.attachLocalDaemon({
     displayName: "Local CTOX",
+    ctoxBinary: "ctox",
     ctoxRoot: "/Users/example/CTOX",
   });
   assert.equal(instance.source, "local_daemon");

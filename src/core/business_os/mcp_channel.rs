@@ -4209,9 +4209,9 @@ mod tests {
             Some("business-os-app-module-development")
         );
         assert!(task.prompt.contains("ctox.business_os.app.create"));
-        assert!(task
-            .prompt
-            .contains("ctox business-os app references --json"));
+        assert!(task.prompt.contains(
+            "ctox business-os app references --query \"<workflow data keywords>\" --json --limit 8"
+        ));
         Ok(())
     }
 

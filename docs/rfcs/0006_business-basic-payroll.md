@@ -6,6 +6,11 @@ German UI label: `Lohnabrechnung`
 Created: 2026-05-07
 Last‑touched: 2026-05-08 (top‑level module wiring + workforce hourly bridge + country pack `payroll-de` + DSL feasibility RFC 0007)
 
+Historical note: This RFC describes the retired Business Basic template shape.
+It is not the current CTOX Business OS app-creation contract. New Business OS
+apps use `business-os-app-module-development` and runtime-installed vanilla
+HTML/CSS/browser ESM modules.
+
 ## OSS Evidence Summary
 
 Research notes: `templates/business-basic/docs/payroll-oss-implementation-notes.md`
@@ -196,7 +201,7 @@ data-context-record-id="<id>"
 data-context-label="<human label, e.g. 'Lohnlauf 2026-04 monatlich' or 'Lohnabrechnung Müller 2026-04'>"
 ```
 
-Chat to CTOX payload schema:
+Chat to CTOX context payload schema:
 
 ```json
 {

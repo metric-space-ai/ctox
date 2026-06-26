@@ -816,6 +816,10 @@ class CtoxWebRtcReplicationState {
 
   async buildProtocolPayload() {
     const checkpoint = await this.collection.storageCollection.replicationCheckpointStatus(this.schemaHashValue);
+    // #12c: attach the browser's CTOX capability token so the native (master)
+    // peer can bind this peer to its role for per-collection read authz. Best
+    // effort — a missing/failed token simply omits the field (native treats it
+    // as least privilege). Never let token resolution break the handshake.
     const capabilityToken = await resolveCapabilityToken(this.ctox);
     return buildProtocolPayload({
       collectionName: this.collection.name,
@@ -828,6 +832,7 @@ class CtoxWebRtcReplicationState {
       role: 'browser',
       capabilityToken,
       capabilities: BROWSER_CAPABILITIES,
+      capabilityToken: typeof capabilityToken === 'string' ? capabilityToken : null,
     });
   }
 
@@ -1568,8 +1573,18 @@ async function resolveCapabilityToken(ctox = {}) {
       return null;
     }
   }
-  const token = ctox?.capabilityToken;
-  return typeof token === 'string' && token.trim() ? token.trim() : null;
+  // #12c: also support ctox.capabilityToken being a function (best-effort
+  // resolver) in addition to a plain string. Never let resolution throw.
+  const source = ctox?.capabilityToken;
+  if (typeof source === 'function') {
+    try {
+      const token = await source();
+      return typeof token === 'string' && token.trim() ? token.trim() : null;
+    } catch {
+      return null;
+    }
+  }
+  return typeof source === 'string' && source.trim() ? source.trim() : null;
 }
 
 function checkpointKey(checkpoint) {

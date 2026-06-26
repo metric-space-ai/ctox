@@ -129,6 +129,10 @@ class CtoxRxCollection {
     };
     this.storageCollection = storageCollection;
     this.demandLoader = null;
+    this.liveQueryPerformanceStats = {
+      complexLiveQueryReexecs: 0,
+      lastComplexLiveQuery: null,
+    };
   }
 
   setDemandLoader(loader) {
@@ -207,6 +211,36 @@ class CtoxRxCollection {
       selectorFields: Object.keys(normalized.selector || {}),
       sortFields: normalizeSort(normalized.sort).map((entry) => Object.keys(entry)[0]).filter(Boolean),
       selectedIndex: null,
+    };
+  }
+
+  setQueryPerformancePolicy(policy = {}) {
+    this.storageCollection.setQueryPerformancePolicy?.(policy);
+  }
+
+  resetQueryPerformanceStats() {
+    this.storageCollection.resetQueryPerformanceStats?.();
+    this.liveQueryPerformanceStats = {
+      complexLiveQueryReexecs: 0,
+      lastComplexLiveQuery: null,
+    };
+  }
+
+  getQueryPerformanceStats() {
+    return {
+      storage: this.storageCollection.getQueryPerformanceStats?.() || null,
+      liveQueries: cloneJson(this.liveQueryPerformanceStats),
+    };
+  }
+
+  recordComplexLiveQueryReexec(query = {}) {
+    this.liveQueryPerformanceStats.complexLiveQueryReexecs += 1;
+    this.liveQueryPerformanceStats.lastComplexLiveQuery = {
+      at: Date.now(),
+      selectorFields: Object.keys(query?.selector || {}).filter((field) => !field.startsWith('$')),
+      sortFields: normalizeSort(query?.sort || []).map((entry) => Object.keys(entry || {})[0]).filter(Boolean),
+      limit: Number.isFinite(Number(query?.limit)) ? Number(query.limit) : null,
+      skip: Number.isFinite(Number(query?.skip)) ? Number(query.skip) : 0,
     };
   }
 
@@ -332,6 +366,9 @@ class CtoxRxQuery {
         const flushEmit = () => {
           pendingTimer = null;
           if (!active) return;
+          if (initialized && !canApplyPrimaryDelta) {
+            this.collection.recordComplexLiveQueryReexec(this.query);
+          }
           this.exec()
             .then((value) => {
               if (!active) return;
@@ -633,6 +670,10 @@ function successPayloadFromChangeEvent(event) {
 
 function documentIdFromDoc(doc) {
   return String(doc?.id || doc?._id || doc?.document_id || doc?.documentId || '').trim();
+}
+
+function cloneJson(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
 }
 
 function singlePrimaryKeyCandidateId(query = {}, primaryPath = 'id') {

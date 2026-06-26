@@ -1,4 +1,5 @@
 use ctox_protocol::config_types::ReasoningSummary;
+use ctox_protocol::openai_models::ApplyPatchToolType;
 use ctox_protocol::openai_models::ConfigShellToolType;
 use ctox_protocol::openai_models::ModelInfo;
 use ctox_protocol::openai_models::ModelInstructionsVariables;
@@ -63,6 +64,7 @@ pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> Mo
 /// Build a minimal fallback model descriptor for missing/unknown slugs.
 pub(crate) fn model_info_from_slug(slug: &str) -> ModelInfo {
     warn!("Unknown model {slug} is used. This will use fallback model metadata.");
+    let is_minimax = slug.to_ascii_lowercase().contains("minimax");
     ModelInfo {
         slug: slug.to_string(),
         display_name: slug.to_string(),
@@ -81,7 +83,11 @@ pub(crate) fn model_info_from_slug(slug: &str) -> ModelInfo {
         default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
         default_verbosity: None,
-        apply_patch_tool_type: None,
+        apply_patch_tool_type: if is_minimax {
+            Some(ApplyPatchToolType::Function)
+        } else {
+            None
+        },
         web_search_tool_type: WebSearchToolType::Text,
         truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
         supports_parallel_tool_calls: false,

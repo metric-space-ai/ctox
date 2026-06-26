@@ -2407,7 +2407,7 @@ fn parse_candidate_text(filename: &str, text: &str) -> CandidateParse {
 ///
 /// NOTE: the IP-range logic duplicates `ctox-web-stack`'s `egress` module
 /// (currently `pub(crate)`); fold onto that shared guard once it is exposed.
-fn fetch_url_guarded(url: &str) -> anyhow::Result<ureq::Response> {
+pub(crate) fn fetch_url_guarded(url: &str) -> anyhow::Result<ureq::Response> {
     let parsed =
         url::Url::parse(url).map_err(|err| anyhow::anyhow!("invalid URL '{url}': {err}"))?;
     match parsed.scheme() {

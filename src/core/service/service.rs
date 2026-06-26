@@ -149,6 +149,8 @@ const BUSINESS_OS_APP_VALIDATION_REQUEST_MAX_CHARS: usize = 1_600;
 const BUSINESS_OS_APP_VALIDATION_FEEDBACK_MAX_CHARS: usize = 12_000;
 const BUSINESS_OS_APP_VALIDATION_FAILURE_MARKER: &str =
     "Business OS app artifact validation failed.";
+const BUSINESS_OS_APP_AUTHORING_TURN_TIMEOUT_SECS: u64 = 900;
+const BUSINESS_OS_APP_AUTHORING_BASE_INSTRUCTIONS: &str = "You are a CTOX Business OS app module authoring agent. Build or edit the requested app as plain installed-module files: vanilla HTML, CSS, and JavaScript only, with ESM imports only for CTOX-provided browser bundles or explicit special-purpose modules. Use the provided Business OS app skill and resource paths as the implementation contract, inspect at least three existing Business OS apps with the reference command, create files only under the provided app_directory unless validation requires reading references, edit files with apply_patch, use exec_command only for inspection, validation, and tests, run the provided validation command before finalizing, and do not run CTOX service lifecycle commands.";
 #[cfg(test)]
 const BUSINESS_OS_APP_REQUIRED_ARTIFACTS: &[&str] = &[
     "module.json",
@@ -4482,18 +4484,20 @@ fn start_prompt_worker(
                     ),
                 }
             }
+            let app_module_job = business_os_app_module_target_from_prompt(&job.prompt).is_some();
             let base_execution_prompt = if is_cv_print_parser_queue_job(&job) {
                 business_os_cv_print_execution_prompt(&job)
             } else if is_business_os_chat_queue_job(&root, &job) {
                 business_os_chat_execution_prompt(&job)
-            } else if business_os_app_module_target_from_prompt(&job.prompt).is_some() {
+            } else if app_module_job {
                 business_os_app_module_execution_prompt(&job)
             } else {
                 artifact_first_execution_prompt(&job)
             };
             let execution_prompt =
                 outbound_email_first_execution_prompt(&job, base_execution_prompt);
-            let result = turn_loop::run_chat_turn_with_events_extended_guarded(
+            let session_options = chat_turn_session_options_for_queue_job(&job);
+            let result = turn_loop::run_chat_turn_with_events_extended_guarded_with_options(
                 &root,
                 &db_path,
                 &execution_prompt,
@@ -4502,6 +4506,7 @@ fn start_prompt_worker(
                 job.suggested_skill.as_deref(),
                 force_continuity_refresh,
                 None, // TUI service: per-turn clients (persistent session TODO)
+                session_options,
                 |event| {
                     push_event(&event_state, format!("phase {} {}", event_source, event));
                 },
@@ -8245,12 +8250,26 @@ fn cv_print_clean_detail_line(value: &str) -> String {
     cleaned
 }
 
+fn chat_turn_session_options_for_queue_job(
+    job: &QueuedPrompt,
+) -> turn_loop::ChatTurnSessionOptions {
+    if business_os_app_module_target_from_prompt(&job.prompt).is_some() {
+        return turn_loop::ChatTurnSessionOptions {
+            disable_mcp_servers: true,
+            base_instructions: Some(BUSINESS_OS_APP_AUTHORING_BASE_INSTRUCTIONS.to_string()),
+            plain_prompt: true,
+            turn_timeout_secs_override: Some(BUSINESS_OS_APP_AUTHORING_TURN_TIMEOUT_SECS),
+        };
+    }
+    turn_loop::ChatTurnSessionOptions::default()
+}
+
 fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
     let Some(target) = business_os_app_module_target_from_prompt(&job.prompt) else {
         return job.prompt.clone();
     };
     format!(
-        "{}\n\nBusiness OS app resource context:\n- module_id: {}\n- install_target: {}\n- app_directory: {}\n- skill: business-os-app-module-development\n- resource.module_contract: src/skills/system/product_engineering/business-os-app-module-development/references/module-contract.md\n- resource.dos_and_donts: src/skills/system/product_engineering/business-os-app-module-development/references/dos-and-donts.md\n- resource.green_checklist: src/skills/system/product_engineering/business-os-app-module-development/references/green-checklist.md\n- resource.architecture_translation: src/skills/system/product_engineering/business-os-app-module-development/references/architecture-translation.md\n- reference_catalog: ctox business-os app references --json\n- validation: ctox business-os app validate {} {}\n- tool_boundary: do not run ctox stop/start/upgrade, launchctl, systemctl, or service lifecycle commands during app creation; the running CTOX service is the required app runtime.",
+        "{}\n\nBusiness OS app resource context:\n- module_id: {}\n- install_target: {}\n- app_directory: {}\n- skill: business-os-app-module-development\n- resource.module_contract: src/skills/system/product_engineering/business-os-app-module-development/references/module-contract.md\n- resource.dos_and_donts: src/skills/system/product_engineering/business-os-app-module-development/references/dos-and-donts.md\n- resource.green_checklist: src/skills/system/product_engineering/business-os-app-module-development/references/green-checklist.md\n- resource.architecture_translation: src/skills/system/product_engineering/business-os-app-module-development/references/architecture-translation.md\n- reference_catalog: ctox business-os app references --query \"<workflow data keywords>\" --json --limit 8\n- validation: ctox business-os app validate {} {}\n- tool_boundary: do not run ctox stop/start/upgrade, launchctl, systemctl, or service lifecycle commands during app creation; the running CTOX service is the required app runtime.",
         job.prompt,
         target.module_id,
         target.install_target,
@@ -24977,9 +24996,51 @@ Business OS command:
         assert!(prompt.contains("resource.dos_and_donts:"));
         assert!(prompt.contains("resource.green_checklist:"));
         assert!(prompt.contains("resource.architecture_translation:"));
-        assert!(prompt.contains("reference_catalog: ctox business-os app references --json"));
+        assert!(prompt.contains(
+            "reference_catalog: ctox business-os app references --query \"<workflow data keywords>\" --json --limit 8"
+        ));
         assert!(prompt.contains("validation: ctox business-os app validate contracts --installed"));
         assert!(prompt.contains("tool_boundary: do not run ctox stop/start/upgrade"));
+    }
+
+    #[test]
+    fn business_os_app_queue_jobs_use_lean_mcp_free_session() {
+        let mut job = QueuedPrompt {
+            prompt: "Business OS app task metadata:\n- module_id: contracts\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+            goal: "Build contracts app".to_string(),
+            preview: "Build contracts app".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("business-os-app-module-development".to_string()),
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("business-os/apps/contracts".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let options = chat_turn_session_options_for_queue_job(&job);
+        assert!(options.disable_mcp_servers);
+        assert!(options.plain_prompt);
+        let base_instructions = options
+            .base_instructions
+            .expect("app queue job should use short app authoring instructions");
+        assert!(base_instructions.contains("CTOX Business OS app module authoring agent"));
+        assert!(base_instructions.contains("vanilla HTML, CSS, and JavaScript only"));
+        assert!(base_instructions.contains("edit files with apply_patch"));
+        assert!(!base_instructions.contains("personal CTO agent"));
+        assert_eq!(
+            options.turn_timeout_secs_override,
+            Some(BUSINESS_OS_APP_AUTHORING_TURN_TIMEOUT_SECS)
+        );
+
+        job.prompt = "Write a short implementation note.".to_string();
+        let options = chat_turn_session_options_for_queue_job(&job);
+        assert!(!options.disable_mcp_servers);
+        assert!(!options.plain_prompt);
+        assert!(options.base_instructions.is_none());
+        assert_eq!(options.turn_timeout_secs_override, None);
     }
 
     #[test]

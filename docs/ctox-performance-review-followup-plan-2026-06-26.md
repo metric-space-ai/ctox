@@ -128,6 +128,8 @@ These improvements are real and should be preserved with regression tests:
     one `document_by_id` point query per written document.
 11. The native peer heartbeat now exports loop counters and SQLite runtime
     counters for idle evidence collection.
+12. Direct browser `startCollection()` now rejects large demand-only chunk
+    collections unless a scoped `leaseCollection()` owns the bridge lifecycle.
 
 ## P0 - Evidence Gate Before Any Release Claim
 

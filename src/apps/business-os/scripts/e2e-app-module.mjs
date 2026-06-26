@@ -207,6 +207,26 @@ function sqliteCountLike(sqlitePath, table, marker) {
   return count;
 }
 
+function sqliteTableExists(sqlitePath, table) {
+  const sql = [
+    'PRAGMA busy_timeout=10000;',
+    `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ${quoteSqlString(table)};`,
+  ].join('\n');
+  const result = spawnSync('sqlite3', [sqlitePath], {
+    input: sql,
+    encoding: 'utf8',
+    timeout: 15000,
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error((result.stderr || result.stdout || `sqlite3 exited ${result.status}`).trim());
+  }
+  const count = Number(String(result.stdout || '').trim().split(/\r?\n/).filter(Boolean).pop() || '0');
+  return Number.isFinite(count) && count > 0;
+}
+
 async function pollUntil(fn, timeoutMs, intervalMs = 500) {
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
@@ -535,6 +555,27 @@ async function runE2e(options) {
   result.evidence.browser_runtime = browserRuntime.evidence;
   const sqlitePath = join(RELEASE_ROOT, 'runtime/business-os-rxdb.sqlite3');
   result.evidence.native_db = sqlitePath;
+
+  if (collections.length > 0) {
+    if (!existsSync(sqlitePath)) {
+      result.failures.push(`native RxDB SQLite database not found at ${sqlitePath}`);
+      return result;
+    }
+    const ready = await pollUntil(() => {
+      const missing = collections
+        .map((collection) => tableName(collection))
+        .filter((table) => !sqliteTableExists(sqlitePath, table));
+      return missing.length === 0
+        ? { ready: true, tables: collections.map((collection) => tableName(collection)) }
+        : null;
+    }, Math.min(options.timeoutMs, 45000), 1000);
+    if (!ready) {
+      result.evidence.native_schema_ready = false;
+      result.failures.push('native RxDB SQLite module collection tables were not ready before browser E2E');
+      return result;
+    }
+    result.evidence.native_schema_ready = ready;
+  }
 
   const browser = await browserRuntime.chromium.launch({
     headless: true,

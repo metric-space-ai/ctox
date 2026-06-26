@@ -2337,13 +2337,23 @@
         "enabled": {
           "type": "boolean"
         },
+        "name": {
+          "description": "Name-based selector.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "path": {
-          "type": "string"
+          "description": "Path-based selector.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
-        "enabled",
-        "path"
+        "enabled"
       ],
       "type": "object"
     },
@@ -2942,6 +2952,13 @@
         "developerInstructions": {
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "disableMcpServers": {
+          "description": "Internal session-scoped override for agent runs that must not expose configured MCP servers or plugin-provided MCP tools to the model.",
+          "type": [
+            "boolean",
             "null"
           ]
         },

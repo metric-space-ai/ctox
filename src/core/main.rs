@@ -133,9 +133,9 @@ INSTALL / UPGRADE
                                  emit a Desktop pairing invite for this instance
   ctox business-os modules list|enable|disable
                                  manage optional Business OS skill-app modules
-  ctox business-os app references [--query <text>] [--json]
+  ctox business-os app references [--query <text>] [--limit <n>|--all] [--json]
                                  list local Business OS apps an agent can inspect as references
-  ctox business-os app references [--query <text>] [--json]
+  ctox business-os app references [--query <text>] [--limit <n>|--all] [--json]
                                  list local Business OS app reference candidates
   ctox business-os app create --instruction <text> [--module-id <id>]
                                  enqueue an agent-led runtime Business OS app creation task

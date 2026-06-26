@@ -28,6 +28,8 @@ Use this before claiming a Business OS app is done.
   clickable from the originating record, opening the CTOX Flow/Queue focus via
   `ctox.businessOs.focusTask` and `#ctox?...`.
 - The UI has no decorative panes or dead controls.
+- Every record row/card/tree node exposes `data-context-record-id`/`-record-type`/`-label` (or at least a `data-*-id`) so a right-click hands the agent the record.
+- Browser proof right-clicks a record and confirms the "Chat to CTOX" popover opens showing that record (its label/id), proving the agent receives the click target.
 - The empty state lets the user create at least one primary business record.
 - Primary Create/New/Add controls are clicked in the real Business OS shell and
   reveal a usable dialog, form, or save flow.

@@ -42,7 +42,7 @@ use ctox_protocol::user_input::UserInput;
 use ctox_utils_absolute_path::AbsolutePathBuf;
 
 use crate::api_costs::{self, ApiCallTelemetry, ApiTokenUsage};
-use crate::context::compact::{CompactDecision, CompactMode, CompactPolicy, CompactTrigger};
+use crate::context::compact::{CompactDecision, CompactPolicy, CompactTrigger};
 use crate::context::live_context;
 use crate::inference::engine;
 use crate::inference::runtime_kernel;
@@ -381,6 +381,7 @@ pub(crate) struct PersistentSession {
     root: PathBuf,
     base_instructions: String,
     disable_active_tools: bool,
+    disable_mcp_servers: bool,
     read_only_sandbox: bool,
 }
 
@@ -389,6 +390,26 @@ impl PersistentSession {
     /// and thread. Call this ONCE per mission-turn-loop iteration.
     pub fn start(root: &Path, settings: &BTreeMap<String, String>) -> Result<Self> {
         Self::start_with_instructions(root, settings, None, false)
+    }
+
+    /// Start a worker session without configured MCP/plugin tool servers.
+    ///
+    /// The shell and apply_patch tools remain available; this only prevents
+    /// unrelated MCP tool schemas from bloating narrow queue-job requests.
+    pub(crate) fn start_without_mcp_servers_with_instructions(
+        root: &Path,
+        settings: &BTreeMap<String, String>,
+        base_instructions: Option<&str>,
+    ) -> Result<Self> {
+        Self::start_with_instructions_and_tool_mode(
+            root,
+            settings,
+            base_instructions,
+            false,
+            false,
+            true,
+            false,
+        )
     }
 
     /// The composed base instructions this session sends with every thread.
@@ -415,6 +436,7 @@ impl PersistentSession {
             base_instructions,
             disable_compaction,
             disable_compaction,
+            false,
             false,
         )
     }
@@ -448,6 +470,7 @@ impl PersistentSession {
             base_instructions,
             true,  // disable_compaction
             false, // disable_active_tools
+            false, // disable_mcp_servers
             false, // read_only_sandbox: dropped — was 100% a tool-use blocker
         )
     }
@@ -458,6 +481,7 @@ impl PersistentSession {
         base_instructions: Option<&str>,
         disable_compaction: bool,
         disable_active_tools: bool,
+        disable_mcp_servers: bool,
         read_only_sandbox: bool,
     ) -> Result<Self> {
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -475,6 +499,7 @@ impl PersistentSession {
                     settings,
                     &composed_base_instructions,
                     disable_active_tools,
+                    disable_mcp_servers,
                     read_only_sandbox,
                 )
                 .await
@@ -544,6 +569,7 @@ impl PersistentSession {
             root: root.to_path_buf(),
             base_instructions: composed_base_instructions,
             disable_active_tools,
+            disable_mcp_servers,
             read_only_sandbox,
         })
     }
@@ -581,6 +607,7 @@ impl PersistentSession {
         let root = self.root.clone();
         let base_instructions = self.base_instructions.clone();
         let disable_active_tools = self.disable_active_tools;
+        let disable_mcp_servers = self.disable_mcp_servers;
         let read_only_sandbox = self.read_only_sandbox;
         self.ctx_log.log(
             "turn_request",
@@ -608,6 +635,7 @@ impl PersistentSession {
                 &mut self.policy,
                 &mut self.ctx_log,
                 disable_active_tools,
+                disable_mcp_servers,
                 read_only_sandbox,
                 exact_prompt_preflight,
             )
@@ -632,6 +660,7 @@ impl PersistentSession {
         settings: &BTreeMap<String, String>,
         base_instructions: &str,
         disable_active_tools: bool,
+        disable_mcp_servers: bool,
         read_only_sandbox: bool,
     ) -> Result<(
         InProcessAppServerClient,
@@ -816,7 +845,9 @@ impl PersistentSession {
             } else {
                 SandboxMode::DangerFullAccess
             }),
+            include_apply_patch_tool: Some(true),
             ephemeral: Some(true),
+            disable_mcp_servers,
             ..Default::default()
         };
         // Hand ctox-core one of the two explicit CTOX provider modes:
@@ -896,6 +927,7 @@ impl PersistentSession {
                     }),
                     base_instructions: Some(base_instructions.to_string()),
                     dynamic_tools: disable_active_tools.then(Vec::new),
+                    disable_mcp_servers: Some(disable_mcp_servers),
                     ephemeral: Some(true),
                     ..ThreadStartParams::default()
                 },
@@ -934,6 +966,7 @@ impl PersistentSession {
         policy: &mut CompactPolicy,
         ctx_log: &mut ContextLogger,
         disable_active_tools: bool,
+        disable_mcp_servers: bool,
         read_only_sandbox: bool,
         exact_prompt_preflight: Option<ExactPromptTokenCount>,
     ) -> Result<String> {
@@ -1035,6 +1068,7 @@ impl PersistentSession {
                             }),
                             base_instructions: Some(base_instructions.to_string()),
                             dynamic_tools: disable_active_tools.then(Vec::new),
+                            disable_mcp_servers: Some(disable_mcp_servers),
                             ephemeral: Some(true),
                             ..ThreadStartParams::default()
                         },

@@ -145,10 +145,11 @@ function findCtoxBinary() {
 function findCtoxRepoRoot() {
   let current = path.resolve(__dirname, "..");
   while (true) {
-    if (fs.existsSync(path.join(current, "Cargo.toml"))
-      && (fs.existsSync(path.join(current, "src", "main.rs"))
-        || fs.existsSync(path.join(current, "src", "core", "main.rs")))
-      && fs.existsSync(path.join(current, "contracts", "history", "creation-ledger.md"))) {
+    const hasCargoToml = fs.existsSync(path.join(current, "Cargo.toml"));
+    const hasEntrypoint = fs.existsSync(path.join(current, "src", "main.rs"))
+      || fs.existsSync(path.join(current, "src", "core", "main.rs"));
+    const hasCreationLedger = fs.existsSync(path.join(current, "contracts", "history", "creation-ledger.md"));
+    if (hasCargoToml && hasEntrypoint && hasCreationLedger) {
       return current;
     }
     const parent = path.dirname(current);

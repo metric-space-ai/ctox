@@ -469,6 +469,29 @@ button {
   color: var(--danger);
 }
 
+.start-menu-update-dot,
+.desktop-icon-update-dot,
+.module-tab-update-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  flex: 0 0 auto;
+}
+
+.start-menu-lifecycle-badge.has-update {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+  color: var(--accent);
+}
+
+.desktop-icon-update-dot {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--surface-1) 70%, transparent);
+}
+
 .module-tab[draggable="true"] {
   cursor: grab;
 }

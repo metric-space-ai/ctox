@@ -290,16 +290,16 @@ ctox browser install-reference --install-browser
 
 ## Business OS
 
-Manage the bundled WebRTC pairing room and runtime-installed Business OS apps:
+Manage the bundled WebRTC pairing room and runtime-installed apps for the Business OS frontend shell:
 
 ```sh
 ctox business-os status                               # Show native/bundled status
 ctox business-os peer status                          # Show active pairing configuration
 ctox business-os peer rotate                          # Rotate signaling room and password
 ctox business-os serve [--addr 127.0.0.1:8765]        # Serve Business OS static web app
-ctox business-os app create --instruction <text>      # Enqueue app creation
-ctox business-os app modify <id> --instruction <text> # Enqueue app modification
-ctox business-os app validate <id> --installed        # Validate installed app artifact
+ctox business-os app create --instruction "<text>"           # Queue runtime app creation
+ctox business-os app modify <module-id> --instruction "<text>" # Enqueue app modification
+ctox business-os app validate <id> --installed               # Validate installed app artifact
 ctox business-os modules list|enable|disable          # Manage skill-app module options
 ctox business-os skills list|enable|disable           # Manage packed skills
 ```

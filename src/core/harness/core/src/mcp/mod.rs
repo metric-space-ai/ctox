@@ -227,6 +227,9 @@ fn configured_mcp_servers(
     config: &Config,
     plugins_manager: &PluginsManager,
 ) -> HashMap<String, McpServerConfig> {
+    if config.disable_mcp_servers {
+        return HashMap::new();
+    }
     let loaded_plugins = plugins_manager.plugins_for_config(config);
     let mut servers = config.mcp_servers.get().clone();
     for (name, plugin_server) in loaded_plugins.effective_mcp_servers() {

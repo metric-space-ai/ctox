@@ -33,6 +33,7 @@ const NATIVE_PEER_OPEN_WATCHDOG_MS = 30000;
 const NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS = 30000;
 const NATIVE_PEER_RESTART_STABLE_MS = 1000;
 const SYNC_DIAGNOSTIC_EMIT_MIN_INTERVAL_MS = 250;
+const DEMAND_ONLY_COLLECTION_START_ERROR = 'DEMAND_ONLY_COLLECTION_REQUIRES_LEASE';
 
 const signalingErrorHandlers = new Set();
 let signalingErrorObserverInstalled = false;
@@ -40,6 +41,7 @@ let signalingErrorObserverInstalled = false;
 export function createSyncRuntime({ db, config, onDiagnostic }) {
   const bridges = new Map();
   const activeCollections = new Set();
+  const collectionLeaseCounts = new Map();
   const suspendedCollections = new Set();
   let globalRestartTimer = null;
   let collectionStartQueue = Promise.resolve();
@@ -196,6 +198,18 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
       const results = [];
       emitDiagnostic({ phase: 'module-sync', moduleId: moduleManifest?.id || null });
       for (const collection of collections) {
+        if (!moduleSyncCollections([collection]).length) {
+          results.push({
+            status: 'fulfilled',
+            value: {
+              mode: 'skipped',
+              collection,
+              reason: 'demand-only-module-collection',
+              stop: async () => {},
+            },
+          });
+          continue;
+        }
         try {
           results.push({ status: 'fulfilled', value: await this.startCollection(collection) });
         } catch (reason) {
@@ -205,8 +219,51 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
       }
       return results;
     },
+    async leaseCollection(collection, reason = 'scoped-collection-lease') {
+      if (stopped) throw new Error('Business OS sync runtime has been stopped');
+      const normalized = normalizeCollectionName(collection);
+      if (!normalized) throw new Error('collection is required.');
+      collectionLeaseCounts.set(normalized, (collectionLeaseCounts.get(normalized) || 0) + 1);
+      let released = false;
+      let bridge = null;
+      try {
+        bridge = await this.startCollection(normalized);
+      } catch (error) {
+        releaseCollectionLease(normalized);
+        throw error;
+      }
+      return {
+        mode: 'leased',
+        collection: normalized,
+        reason,
+        bridge,
+        async release() {
+          if (released) return false;
+          released = true;
+          const remaining = releaseCollectionLease(normalized);
+          if (remaining <= 0 && isModuleDemandOnlyCollection(normalized)) {
+            await syncRuntime.stopCollection(normalized).catch(() => null);
+          }
+          return true;
+        },
+      };
+    },
     async startCollection(collection) {
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
+      collection = normalizeCollectionName(collection);
+      if (!collection) throw new Error('collection is required.');
+      if (isModuleDemandOnlyCollection(collection) && !collectionLeaseCounts.get(collection)) {
+        const error = new Error(`${collection} is demand-only and must be started through leaseCollection().`);
+        error.code = DEMAND_ONLY_COLLECTION_START_ERROR;
+        recordCollection(collection, {
+          status: 'skipped',
+          connectionStatus: 'demand-only',
+          reason: 'demand-only-requires-lease',
+          lastError: serializeError(error),
+          reconnectingSince: null,
+        });
+        throw error;
+      }
       activeCollections.add(collection);
       if (suspendedCollections.has(collection)) {
         recordCollection(collection, {
@@ -314,6 +371,7 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
     },
     async stopCollection(collection) {
       activeCollections.delete(collection);
+      collectionLeaseCounts.delete(collection);
       const bridgePromise = bridges.get(collection);
       bridges.delete(collection);
       if (!bridgePromise) return false;
@@ -435,6 +493,16 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
       await stopAllBridges();
       emitDiagnostic({ phase: 'stopped' }, { immediate: true });
     },
+  };
+  const releaseCollectionLease = (collection) => {
+    const current = collectionLeaseCounts.get(collection) || 0;
+    const next = Math.max(0, current - 1);
+    if (next) {
+      collectionLeaseCounts.set(collection, next);
+    } else {
+      collectionLeaseCounts.delete(collection);
+    }
+    return next;
   };
   return syncRuntime;
 }
@@ -1630,6 +1698,10 @@ export const __ctoxSyncTestHooks = {
   classifyReplicationIoError,
   extractReplicationErrorDetails,
   initialReplicationProgressSignature,
+  isDemandOnlyPullCollection,
+  isModuleDemandOnlyCollection,
+  moduleSyncCollections,
+  DEMAND_ONLY_COLLECTION_START_ERROR,
 };
 
 function replicationIoMessageFor(code) {
@@ -1829,6 +1901,10 @@ function iceServersContainCredentialedTurn(iceServers) {
   });
 }
 
+function normalizeCollectionName(collection) {
+  return String(collection || '').trim();
+}
+
 function ensureBrowserProcessNextTick() {
   if (!globalThis.process) globalThis.process = {};
   if (typeof globalThis.process.nextTick !== 'function') {
@@ -1848,5 +1924,19 @@ function isReadOnlyProjectionCollection(collection) {
 }
 
 function isDemandOnlyPullCollection(collection) {
-  return collection === 'desktop_file_chunks';
+  return collection === 'desktop_file_chunks'
+    || collection === 'document_blob_chunks'
+    || collection === 'spreadsheet_blob_chunks';
+}
+
+function isModuleDemandOnlyCollection(collection) {
+  return collection === 'desktop_file_chunks'
+    || collection === 'document_blob_chunks'
+    || collection === 'spreadsheet_blob_chunks';
+}
+
+function moduleSyncCollections(collections = []) {
+  return (Array.isArray(collections) ? collections : [])
+    .filter((collection) => typeof collection === 'string' && collection.trim())
+    .filter((collection) => !isModuleDemandOnlyCollection(collection));
 }

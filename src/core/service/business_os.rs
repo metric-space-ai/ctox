@@ -499,10 +499,12 @@ fn handle_business_os_repair(root: &Path, args: &[String]) -> anyhow::Result<()>
 
 pub fn business_os_status_text(root: &Path) -> String {
     let native_app = existing_dir_path(root, BUSINESS_OS_APP_CANDIDATES);
+    let installed_modules = root.join("runtime/business-os/installed-modules");
 
     format!(
         "CTOX Business OS\n\
-         Native app:   {native_app}\n\
+         Native app:   {native_app_status}  {native_app}\n\
+         Runtime apps: {installed_modules_status}  {installed_modules}\n\
          Native store: {native_store}\n\n\
          Serve the native no-build Business OS:\n\
            ctox business-os serve --addr 127.0.0.1:8765\n\n\
@@ -516,7 +518,10 @@ pub fn business_os_status_text(root: &Path) -> String {
            - SQLite state, commands, module manifests, and files sync over RxDB.\n\
            - Only system Business OS apps are installed by default.\n\
            - Non-system apps are installed through the app store only.\n",
+        native_app_status = exists_label(native_app.join("index.html").is_file()),
+        installed_modules_status = exists_label(installed_modules.is_dir()),
         native_app = native_app.display(),
+        installed_modules = installed_modules.display(),
         native_store = root.join("runtime/business-os.sqlite3").display(),
     )
 }
@@ -937,6 +942,8 @@ const BUSINESS_OS_APP_BENCH_EVIDENCE_DIR: &str = "runtime/business-os/app-creati
 const BUSINESS_OS_APP_BENCH_SOURCE: &str = "ctox-cli.business-os-app-bench";
 const BUSINESS_OS_APP_BENCH_SKILL: &str = "business-os-app-module-development";
 const BUSINESS_OS_APP_BENCH_USAGE: &str = "ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]\nctox business-os app bench status --run-id <id> [--validate]";
+const BUSINESS_OS_APP_REFERENCE_DEFAULT_LIMIT: usize = 8;
+const BUSINESS_OS_APP_REFERENCE_MAX_LIMIT: usize = 24;
 
 #[derive(Clone, Copy)]
 struct BusinessOsAppBenchCase {
@@ -1029,10 +1036,14 @@ fn run_business_os_app_bench(root: &Path, args: &[String]) -> anyhow::Result<ser
         .or_else(|| flag_value(args, "--actor-user"))
         .map(str::to_owned)
         .unwrap_or_else(|| {
-            crate::business_os::store::session(None, None)
-                .user
-                .map(|user| user.id)
-                .unwrap_or_else(|| "local-dev".to_owned())
+            crate::business_os::store::session_with_persisted_user(
+                root,
+                crate::business_os::store::session(None, None),
+            )
+            .unwrap_or_else(|_| crate::business_os::store::session(None, None))
+            .user
+            .map(|user| user.id)
+            .unwrap_or_else(|| "local-dev".to_owned())
         });
     let clean = !args.iter().any(|arg| arg == "--no-clean");
     let run_dir = root.join(BUSINESS_OS_APP_BENCH_EVIDENCE_DIR).join(&run_id);
@@ -1576,6 +1587,72 @@ fn truncate_bench_text(raw: &str, max_chars: usize) -> String {
     format!("{kept}\n... truncated ...")
 }
 
+fn business_os_app_reference_limit(args: &[String]) -> anyhow::Result<Option<usize>> {
+    if args.iter().any(|arg| arg == "--all") {
+        return Ok(None);
+    }
+    let Some(raw_limit) = flag_value(args, "--limit") else {
+        return Ok(Some(BUSINESS_OS_APP_REFERENCE_DEFAULT_LIMIT));
+    };
+    let parsed = raw_limit
+        .parse::<usize>()
+        .with_context(|| format!("invalid --limit value `{raw_limit}`"))?;
+    anyhow::ensure!(parsed > 0, "--limit must be greater than zero");
+    Ok(Some(parsed.min(BUSINESS_OS_APP_REFERENCE_MAX_LIMIT)))
+}
+
+fn business_os_app_reference_query_tokens(query: &str) -> Vec<String> {
+    query
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .map(str::trim)
+        .filter(|token| token.len() >= 3)
+        .map(str::to_ascii_lowercase)
+        .collect()
+}
+
+fn business_os_app_reference_match_score(
+    query_tokens: &[String],
+    id: &str,
+    title: &str,
+    description: &str,
+    manifest_text: &str,
+) -> i64 {
+    if query_tokens.is_empty() {
+        return 0;
+    }
+    let id = id.to_ascii_lowercase();
+    let title = title.to_ascii_lowercase();
+    let description = description.to_ascii_lowercase();
+    let manifest_text = manifest_text.to_ascii_lowercase();
+    query_tokens
+        .iter()
+        .map(|token| {
+            let mut score = 0;
+            if id.contains(token) {
+                score += 16;
+            }
+            if title.contains(token) {
+                score += 12;
+            }
+            if description.contains(token) {
+                score += 6;
+            }
+            if manifest_text.contains(token) {
+                score += 2;
+            }
+            score
+        })
+        .sum()
+}
+
+fn truncate_reference_text(raw: &str, max_chars: usize) -> String {
+    if raw.chars().count() <= max_chars {
+        return raw.to_string();
+    }
+    let kept = raw.chars().take(max_chars).collect::<String>();
+    format!("{kept}...")
+}
+
 fn business_os_app_reference_candidates(
     root: &Path,
     args: &[String],
@@ -1588,7 +1665,9 @@ fn business_os_app_reference_candidates(
         })
         .unwrap_or("")
         .trim()
-        .to_ascii_lowercase();
+        .to_owned();
+    let query_tokens = business_os_app_reference_query_tokens(&query);
+    let limit = business_os_app_reference_limit(args)?;
     let source_app_root = existing_dir_path(root, BUSINESS_OS_APP_CANDIDATES);
     let mut roots = vec![("source", source_app_root.join("modules"))];
     let installed_app_root =
@@ -1640,9 +1719,14 @@ fn business_os_app_reference_candidates(
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("")
                 .to_owned();
-            let searchable =
-                format!("{id} {title} {description} {}", manifest_text).to_ascii_lowercase();
-            if !query.is_empty() && !searchable.contains(&query) {
+            let match_score = business_os_app_reference_match_score(
+                &query_tokens,
+                &id,
+                &title,
+                &description,
+                &manifest_text,
+            );
+            if !query_tokens.is_empty() && match_score <= 0 {
                 continue;
             }
             let category = manifest
@@ -1655,10 +1739,11 @@ fn business_os_app_reference_candidates(
             modules.push(serde_json::json!({
                 "id": id,
                 "title": title,
-                "description": description,
+                "description": truncate_reference_text(&description, 240),
                 "source": source,
                 "reference_kind": reference_kind,
                 "recommended_for_generated_business_app": reference_kind == "business-workflow-reference",
+                "match_score": match_score,
                 "path": module_dir.display().to_string(),
                 "manifest_path": manifest_path.display().to_string(),
                 "entry": manifest.get("entry").cloned().unwrap_or(serde_json::Value::Null),
@@ -1666,17 +1751,25 @@ fn business_os_app_reference_candidates(
                 "layout": layout,
                 "category": category,
                 "warnings": warnings,
-                "runtime_manifest_contract": {
-                    "entry": format!("installed-modules/<module-id>/index.html"),
-                    "install_scope": "installed",
-                    "icon": "Use icon.svg. Do not copy layout.icon_svg or inline SVG into module.json.",
-                    "store": "Do not set store.installable for runtime-installed modules.",
-                    "layout": "Prefer left + center or a modal/drawer. Use layout.right only with layout.third_pane_justification."
-                }
             }));
         }
     }
+    let rank_by_query = !query_tokens.is_empty();
     modules.sort_by(|a, b| {
+        if rank_by_query {
+            let a_score = a
+                .get("match_score")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0);
+            let b_score = b
+                .get("match_score")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0);
+            let score_cmp = b_score.cmp(&a_score);
+            if score_cmp != std::cmp::Ordering::Equal {
+                return score_cmp;
+            }
+        }
         let a_recommended = a
             .get("recommended_for_generated_business_app")
             .and_then(serde_json::Value::as_bool)
@@ -1708,10 +1801,20 @@ fn business_os_app_reference_candidates(
             a_id.cmp(b_id)
         })
     });
+    let total_matches = modules.len();
+    if let Some(limit) = limit {
+        modules.truncate(limit);
+    }
     Ok(serde_json::json!({
         "ok": true,
         "query": query,
+        "query_tokens": query_tokens,
+        "total_matches": total_matches,
+        "returned": modules.len(),
+        "limit": limit,
+        "truncated": limit.is_some_and(|limit| total_matches > limit),
         "instruction": "Choose the three most relevant business-workflow references yourself by matching workflow, data shape, and UI shape. Internal shell/developer modules are poor defaults unless the requested app is itself a shell/developer tool.",
+        "usage": "Use --query with workflow/data keywords and inspect the returned candidates. Use --all only for manual debugging, not inside normal app-creation sessions.",
         "runtime_rules": [
             "Do not copy source manifest entry paths. Runtime apps use entry installed-modules/<module-id>/index.html.",
             "Do not copy layout.icon_svg or any inline SVG from source manifests. Runtime apps keep SVG markup in icon.svg.",
@@ -1719,6 +1822,13 @@ fn business_os_app_reference_candidates(
             "Do not copy layout.right unless the app truly needs a third pane and module.json includes layout.third_pane_justification.",
             "The skill contract and validator override any source reference field that conflicts with runtime-installed app rules."
         ],
+        "runtime_manifest_contract": {
+            "entry": "installed-modules/<module-id>/index.html",
+            "install_scope": "installed",
+            "icon": "Use icon.svg. Do not copy layout.icon_svg or inline SVG into module.json.",
+            "store": "Do not set store.installable for runtime-installed modules.",
+            "layout": "Prefer left + center or a modal/drawer. Use layout.right only with layout.third_pane_justification."
+        },
         "modules": modules,
     }))
 }
@@ -2834,7 +2944,7 @@ fn business_os_usage() -> String {
     business_os_usage_base()
         .replace(
             "  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]",
-            "  ctox business-os app references [--query <text>] [--json]\n  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]\n  ctox business-os app smoke <module-id> [--installed|--source] [--url <business-os-url>] [--json] [--timeout-ms <n>] [--output <path>] [--screenshot <path>]\n  ctox business-os app e2e <module-id> [--installed|--source] [--url <business-os-url>] [--json] [--timeout-ms <n>] [--output <path>] [--screenshot <path>] [--marker <value>]",
+            "  ctox business-os app references [--query <text>] [--limit <n>|--all] [--json]\n  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]\n  ctox business-os app smoke <module-id> [--installed|--source] [--url <business-os-url>] [--json] [--timeout-ms <n>] [--output <path>] [--screenshot <path>]\n  ctox business-os app e2e <module-id> [--installed|--source] [--url <business-os-url>] [--json] [--timeout-ms <n>] [--output <path>] [--screenshot <path>] [--marker <value>]",
         )
         .replace(
             "  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]",
@@ -2852,6 +2962,14 @@ fn business_os_usage() -> String {
 
 fn business_os_usage_base() -> &'static str {
     "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os mcp status\n  ctox business-os mcp tools\n  ctox business-os mcp policy\n  ctox business-os mcp policy keys\n  ctox business-os mcp policy set [--enabled true|false] [--allow-reads true|false] [--allow-writes true|false] [--allow-approvals true|false] [--allow-external-effects true|false] [--rate-limit-per-minute <n>] [--audit-retention-days <n>] [--allow-actor <id>]... [--allow-workspace <id>]... [--allow-module <id>]... [--allow-collection <name>]... [--deny-tool business_os.<tool>]... [--clear-deny-tools]\n  ctox business-os mcp call <tool-name> [--args <json>]\n  ctox business-os mcp audit [--limit <n>] [--format json|jsonl] [--output <path>] [--prune]\n  ctox business-os mcp serve [--addr 127.0.0.1:8788]\n  ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id> [--token <token>] [--once] [--max-reconnect-delay-ms <n>] [--heartbeat-interval-ms <n>] [--max-connection-age-ms <n>]\n  ctox business-os mcp gateway-status --url https://mcp.ctox.dev/status/<instance-id> [--token <token>]\n  ctox business-os peer status\n  ctox business-os peer rotate\n  ctox business-os peer start\n  ctox business-os desktop invite [--display-name <name>] [--ttl-hours <n> | --expires-at <rfc3339>] [--format json|link] [--output <path>]\n  ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]\n  ctox business-os app create --instruction <text> [--module-id <id>]\n  ctox business-os app modify <module-id> --instruction <text>\n  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]\n  ctox business-os app finalize <module-id> --task-id <queue-task-id> [--installed|--source] [--reason <text>]\n  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]\n  ctox business-os repair queue-projections (--dry-run | --apply)\n  ctox business-os backup restore-drill [--module <module-id>]\n  ctox business-os backup prune-drills [--dry-run]\n  ctox business-os commands process <command-id>\n  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os web-stack person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--auto-auth-assist] [--task-id <id>] [--workspace <path>] [--no-workspace]\n  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-status --session-id <id>\n  ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]\n  ctox business-os web-stack context-extract --session-id <id> [--source-id <id>] [--capture-script <id>] [--task-id <id>]\n  ctox business-os web-stack redaction-audit --canary <value> [--canary <value>]... [--path <path>]...\n  ctox business-os web-stack browser-doctor [--dir <path>]\n  ctox business-os files sync <path>\n  ctox business-os files sync-workspace <path>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
+}
+
+fn exists_label(exists: bool) -> &'static str {
+    if exists {
+        "ok"
+    } else {
+        "missing"
+    }
 }
 
 fn existing_dir_path(root: &Path, candidates: &[&str]) -> PathBuf {
@@ -3834,6 +3952,30 @@ mod tests {
 
         let tasks = channels::list_queue_tasks(root.path(), &[], 16)?;
         assert_eq!(tasks.len(), 5);
+        let expected_actor_id = crate::business_os::store::session_with_persisted_user(
+            root.path(),
+            crate::business_os::store::session(None, None),
+        )?
+        .user
+        .map(|user| user.id)
+        .unwrap_or_else(|| "local-dev".to_owned());
+        let conn = crate::business_os::store::open_store(root.path())?;
+        let mut stmt = conn
+            .prepare("SELECT client_context_json FROM business_commands ORDER BY command_id ASC")?;
+        let contexts = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        assert_eq!(contexts.len(), 5);
+        for raw_context in contexts {
+            let context: serde_json::Value = serde_json::from_str(&raw_context)?;
+            assert_eq!(
+                context
+                    .pointer("/actor/id")
+                    .and_then(serde_json::Value::as_str),
+                Some(expected_actor_id.as_str()),
+                "bench tasks without --actor must persist the local Business OS user"
+            );
+        }
         for task in tasks {
             assert_eq!(
                 task.suggested_skill.as_deref(),
@@ -3855,10 +3997,10 @@ mod tests {
                 .contains("runtime/business-os/installed-modules/bench_"));
             assert!(task
                 .prompt
-                .contains("ctox business-os app references --json"));
+                .contains("ctox business-os app references --query \"<workflow data keywords>\" --json --limit 8"));
             assert!(
-                task.prompt.contains("\"id\": \"local-dev\""),
-                "bench tasks without --actor must target the local Business OS user"
+                !task.prompt.contains("Client context JSON") && !task.prompt.contains("\"actor\""),
+                "app worker prompts must not leak raw client context or actor JSON"
             );
         }
         Ok(())
@@ -3898,9 +4040,9 @@ mod tests {
         assert!(task
             .prompt
             .contains("runtime/business-os/installed-modules/cli-inventory"));
-        assert!(task
-            .prompt
-            .contains("ctox business-os app references --json"));
+        assert!(task.prompt.contains(
+            "ctox business-os app references --query \"<workflow data keywords>\" --json --limit 8"
+        ));
         Ok(())
     }
 
@@ -4001,6 +4143,93 @@ mod tests {
             .is_some_and(|rules| rules
                 .iter()
                 .any(|rule| rule.as_str().unwrap_or("").contains("store.installable"))));
+        Ok(())
+    }
+
+    #[test]
+    fn app_references_default_to_small_ranked_catalog() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let modules_root = root.path().join("src/apps/business-os/modules");
+        for idx in 0..12 {
+            let id = if idx == 3 {
+                "office-assets".to_string()
+            } else if idx == 5 {
+                "inventory".to_string()
+            } else {
+                format!("workflow-{idx}")
+            };
+            let module_dir = modules_root.join(&id);
+            fs::create_dir_all(&module_dir)?;
+            let description = if id == "office-assets" {
+                "Track office asset inventory, owners, and replacement dates."
+            } else if id == "inventory" {
+                "Inventory counts, warehouse stock, and reorder dates."
+            } else {
+                "General business workflow reference."
+            };
+            fs::write(
+                module_dir.join("module.json"),
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "id": id.as_str(),
+                    "title": title_from_module_id(&id),
+                    "description": description,
+                    "entry": format!("modules/{id}/index.html"),
+                    "category": "Operations",
+                    "collections": [format!("{id}_records")],
+                    "layout": { "shell": "full-workspace", "left": "List", "center": "Detail" }
+                }))?,
+            )?;
+        }
+
+        let default_report = business_os_app_reference_candidates(root.path(), &[])?;
+        assert_eq!(
+            default_report
+                .get("returned")
+                .and_then(serde_json::Value::as_u64),
+            Some(BUSINESS_OS_APP_REFERENCE_DEFAULT_LIMIT as u64)
+        );
+        assert_eq!(
+            default_report
+                .get("truncated")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+
+        let query_report = business_os_app_reference_candidates(
+            root.path(),
+            &[
+                "--query".to_string(),
+                "asset inventory".to_string(),
+                "--limit".to_string(),
+                "3".to_string(),
+            ],
+        )?;
+        let query_modules = query_report
+            .get("modules")
+            .and_then(serde_json::Value::as_array)
+            .context("query modules")?;
+        assert!(query_modules.len() <= 3);
+        assert!(
+            query_modules.iter().any(|module| module
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|id| id == "office-assets" || id == "inventory")),
+            "query should surface workflow-relevant references"
+        );
+
+        let all_report = business_os_app_reference_candidates(root.path(), &["--all".to_string()])?;
+        assert_eq!(
+            all_report
+                .get("returned")
+                .and_then(serde_json::Value::as_u64),
+            Some(12)
+        );
+        assert_eq!(
+            all_report
+                .get("truncated")
+                .and_then(serde_json::Value::as_bool),
+            Some(false)
+        );
         Ok(())
     }
 

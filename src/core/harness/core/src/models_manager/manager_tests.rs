@@ -82,6 +82,7 @@ fn provider_for(base_url: String) -> ModelProviderInfo {
         env_key_instructions: None,
         experimental_bearer_token: None,
         wire_api: WireApi::Responses,
+        requires_full_responses_history: false,
         query_params: None,
         http_headers: None,
         env_http_headers: None,

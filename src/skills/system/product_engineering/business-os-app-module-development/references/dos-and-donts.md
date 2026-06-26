@@ -5,10 +5,13 @@
 - Build a real app for the user's request.
 - Choose three relevant shipped Business OS apps as references before coding.
 - Use plain HTML fragments, CSS, and browser ESM.
+- Use structured file-edit tools for app files. In CTOX Codex runs, use
+  `apply_patch`; use shell commands for inspection, validation, and tests.
 - Include `icon.svg` and set `"icon": "icon.svg"` in the runtime
   `module.json`.
 - Export `mount(ctx)` from `index.js`.
 - Render into `ctx.host`.
+- Put `data-context-record-id`/`-record-type`/`-label` on every record row/card/tree node so the shell right-click hands the agent that record (see module-contract "Agent Context").
 - In runtime-installed apps, load `index.html` into `ctx.host` from `mount(ctx)`
   or render the primary UI in JS. The shell does not preload runtime module
   `index.html`.
@@ -45,6 +48,11 @@
 
 ## Don't
 
+- Do not render record rows, cards, or tree nodes without
+  `data-context-record-id`/`-record-type`/`-label`. A record list the agent
+  cannot right-click into is an incomplete app, not a finished one.
+- Do not build your own right-click/context menu or a `ctox:context-action`
+  bridge; the shell owns the right-click -> agent flow.
 - Do not build a React, Next.js, Vite, bundled, or package-managed app.
 - Do not create a separate HTTP, REST, IndexedDB, Postgres, or SQLite data path.
 - Do not use `ctx.db[name]`, `ctx.db.collections`, direct
@@ -54,6 +62,9 @@
 - Do not use shared/domain collection names such as `inventory_items`,
   `contracts`, or `quality_complaints` for runtime-generated apps.
 - Do not write generated runtime apps under `src/` unless the task explicitly targets a source module.
+- Do not create or edit app source files through shell heredocs, `cat >`, `tee`,
+  Python file writers, or Node file writers when a structured file-edit tool is
+  available.
 - Do not write directly to `business_commands`; use `ctx.commandBus.dispatch(...)`.
 - Do not write directly to `ctox_ticket_*` projection collections.
 - Do not render queue, command, or task ids as inert text when the user needs
