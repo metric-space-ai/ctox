@@ -280,27 +280,34 @@ export function renderModuleWhyDiagnosticsHtml(options = {}) {
 
 export function buildGlobalCtoxContextModes({
   canModify = false,
+  canSelfExecute = true,
   labels = {},
 } = {}) {
-  const modes = [
-    {
+  // When the actor lacks data.write for this scope they cannot run a change
+  // themselves: hide the self-execute modes (data/app) and steer them to delegate
+  // the change to a reviewer via an approval request. Native policy stays
+  // authoritative; this is the matching UI guardrail.
+  const restricted = !canSelfExecute;
+  const modes = [];
+  if (!restricted) {
+    modes.push({
       value: 'data',
       label: labels.workData || 'Mit Daten arbeiten',
       impact: 'data_mutation',
       impactLabel: labels.impactData || 'Datenarbeit',
       description: labels.impactDataDescription || 'Kann Daten lesen oder eine Aenderung anstoßen.',
       selected: true,
-    },
-    {
-      value: 'ask',
-      label: labels.answer || 'Frage beantworten',
-      impact: 'read_only',
-      impactLabel: labels.impactAsk || 'Nur lesend',
-      description: labels.impactAskDescription || 'Beantwortet eine Frage ohne Daten oder Apps zu veraendern.',
-      selected: false,
-    },
-  ];
-  if (canModify) {
+    });
+  }
+  modes.push({
+    value: 'ask',
+    label: labels.answer || 'Frage beantworten',
+    impact: 'read_only',
+    impactLabel: labels.impactAsk || 'Nur lesend',
+    description: labels.impactAskDescription || 'Beantwortet eine Frage ohne Daten oder Apps zu veraendern.',
+    selected: false,
+  });
+  if (canModify && !restricted) {
     modes.push({
       value: 'app',
       label: labels.modifyApp || 'App ändern',
@@ -331,9 +338,16 @@ export function buildGlobalCtoxContextModes({
       value: 'approval',
       label: labels.approval || 'Freigabe anfragen',
       impact: 'approval_required',
-      impactLabel: labels.impactApproval || 'Freigabe',
-      description: labels.impactApprovalDescription || 'Erstellt einen CTOX-Auftrag, der erst nach Review laeuft.',
-      selected: false,
+      impactLabel: restricted
+        ? (labels.impactApprovalRequired || 'Erforderlich')
+        : (labels.impactApproval || 'Freigabe'),
+      description: restricted
+        ? (labels.impactApprovalRestrictedDescription
+          || 'Du darfst diese Aenderung nicht selbst ausfuehren - delegiere sie einem Reviewer zur Freigabe.')
+        : (labels.impactApprovalDescription || 'Erstellt einen CTOX-Auftrag, der erst nach Review laeuft.'),
+      // When the user cannot self-execute, approval is the primary path and is
+      // pre-selected so the menu opens straight into the delegation flow.
+      selected: restricted,
     },
   );
   return modes;

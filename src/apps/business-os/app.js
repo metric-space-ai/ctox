@@ -9,6 +9,7 @@ import {
 import {
   BusinessOsPermissions,
   canModifyBusinessModule,
+  canSelfExecuteBusinessData,
   canUseBusinessPermission,
   canViewBusinessModuleSource,
 } from './shared/permissions.js?v=20260623-role-session';
@@ -36,7 +37,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260626-skf-dialog-knowledge-v2';
+const APP_BUILD = '20260626-cv-print-data-fix-v1';
 
 ensureShellStylesheets();
 
@@ -8551,6 +8552,13 @@ function showGlobalCtoxContextMenu(context, x, y) {
 
   const mod = state.activeModule || { id: 'ctox', title: 'CTOX' };
   const canModify = canModifyModule(mod);
+  // Whether this actor may run a data change here themselves. If not, the menu
+  // hides the self-execute modes and steers them to delegate the change to a
+  // reviewer via an approval request. Native policy stays authoritative.
+  const canSelfExecute = canSelfExecuteBusinessData(mod, {
+    session: state.session,
+    governance: state.governance,
+  });
   const lifecycle = appLifecycleState(mod, {
     session: state.session,
     governance: state.governance,
@@ -8604,6 +8612,7 @@ function showGlobalCtoxContextMenu(context, x, y) {
       <div class="ctox-context-mode" role="radiogroup" aria-label="Aktion" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px;">
         ${renderGlobalCtoxContextModeHtml({
           canModify,
+          canSelfExecute,
           labels: {
             workData: workDataLabel,
             answer: answerLabel,
@@ -8611,6 +8620,10 @@ function showGlobalCtoxContextMenu(context, x, y) {
             note: noteLabel,
             mention: mentionLabel,
             approval: approvalLabel,
+            impactApprovalRequired: lang === 'de' ? 'Erforderlich' : 'Required',
+            impactApprovalRestrictedDescription: lang === 'de'
+              ? 'Du darfst diese Änderung hier nicht selbst ausführen – delegiere sie einem Reviewer zur Freigabe.'
+              : 'You cannot run this change here yourself — delegate it to a reviewer for approval.',
           },
         })}
       </div>
@@ -8689,6 +8702,11 @@ function showGlobalCtoxContextMenu(context, x, y) {
     });
   });
   syncModeInputs();
+  if (!canSelfExecute && statusEl) {
+    statusEl.textContent = lang === 'de'
+      ? 'Nur Freigabe möglich – wähle einen Reviewer.'
+      : 'Approval only — pick a reviewer.';
+  }
   populateGlobalCtoxUserOptions(userOptionsEl).catch((error) => {
     console.warn('[business-os] failed to populate context user picker:', error);
   });
@@ -8717,6 +8735,10 @@ function showGlobalCtoxContextMenu(context, x, y) {
 
     let mode = new FormData(form).get('contextMode') || 'data';
     if (mode === 'app' && !canModify) mode = 'data';
+    // Restricted actors cannot self-execute: any self-execute choice is forced to
+    // the delegation (approval) path. The UI already hides data/app for them; this
+    // is the defensive backstop (native policy remains authoritative regardless).
+    if (!canSelfExecute && (mode === 'data' || mode === 'app')) mode = 'approval';
 
     if (mode === 'note' || mode === 'mention' || mode === 'approval') {
       const rawUserValue = String(userInput?.value || '').trim();

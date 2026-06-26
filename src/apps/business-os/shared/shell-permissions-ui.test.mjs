@@ -353,6 +353,28 @@ test('global CTOX context modes default to human-in-the-loop actions', () => {
   assert.match(html, /data-impact="approval_required"/);
 });
 
+test('global CTOX context modes steer restricted actors to delegate via approval', () => {
+  // No data.write -> cannot self-execute: hide data/app, pre-select approval as
+  // the delegation path so the menu opens straight into "ask a reviewer".
+  const restricted = buildGlobalCtoxContextModes({ canModify: true, canSelfExecute: false });
+  const values = restricted.map((mode) => mode.value);
+  assert.equal(values.includes('data'), false, 'self-execute data mode must be hidden');
+  assert.equal(values.includes('app'), false, 'self-execute app mode must be hidden');
+  assert.deepEqual(values, ['ask', 'note', 'mention', 'approval']);
+  const approval = restricted.find((mode) => mode.value === 'approval');
+  assert.equal(approval?.selected, true, 'approval is the pre-selected delegation path');
+  assert.match(approval?.description || '', /Reviewer|ausfuehren/i);
+
+  // With data.write the actor can self-execute: data is present and selected.
+  const allowed = buildGlobalCtoxContextModes({ canModify: true, canSelfExecute: true });
+  assert.equal(allowed.find((mode) => mode.value === 'data')?.selected, true);
+  assert.equal(allowed.find((mode) => mode.value === 'approval')?.selected, false);
+
+  const restrictedHtml = renderGlobalCtoxContextModeHtml({ canSelfExecute: false });
+  assert.doesNotMatch(restrictedHtml, /Mit Daten arbeiten/);
+  assert.match(restrictedHtml, /Freigabe anfragen/);
+});
+
 test('global CTOX user picker keeps active users and escapes datalist labels', () => {
   const users = buildBusinessUserPickerOptions([
     { id: 'inactive', display_name: 'Inactive', active: false },
