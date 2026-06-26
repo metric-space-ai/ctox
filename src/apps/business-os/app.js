@@ -265,15 +265,30 @@ function installAdvancedStatusInterface() {
       const intervalMs = Number(options.intervalMs || 500);
       const deadline = Date.now() + timeoutMs;
       let lastSnapshot = null;
+      let lastEnsureError = null;
       while (Date.now() < deadline) {
-        await ensureAdvancedStatusRequiredCollections(options.requiredCollections, {
-          allowRestart: options.allowRestart === true,
-        });
+        const remainingMs = Math.max(0, deadline - Date.now());
+        const ensureTimeoutMs = Math.max(250, Math.min(5000, remainingMs));
+        try {
+          await runAdvancedStatusStepWithTimeout(
+            () => ensureAdvancedStatusRequiredCollections(options.requiredCollections, {
+              allowRestart: options.allowRestart === true,
+            }),
+            ensureTimeoutMs,
+            'Business OS advanced status required collection startup',
+          );
+          lastEnsureError = null;
+        } catch (error) {
+          lastEnsureError = error;
+        }
         lastSnapshot = await buildAdvancedStatusSnapshot({ ...options, includeCounts: false });
         if (lastSnapshot.ok) return lastSnapshot;
         await new Promise((resolve) => window.setTimeout(resolve, intervalMs));
       }
-      const error = new Error(`Business OS advanced status did not become healthy: ${JSON.stringify(lastSnapshot)}`);
+      const ensureMessage = lastEnsureError
+        ? `; last required-collection startup error: ${lastEnsureError.message || String(lastEnsureError)}`
+        : '';
+      const error = new Error(`Business OS advanced status did not become healthy${ensureMessage}: ${JSON.stringify(lastSnapshot)}`);
       error.status = lastSnapshot;
       throw error;
     },
@@ -281,6 +296,24 @@ function installAdvancedStatusInterface() {
   window.CTOX_BUSINESS_OS_STATUS = api;
   window.CTOX_BUSINESS_OS_APP = state;
   state.openModule = (moduleId, options = {}) => openModule(moduleId, options);
+}
+
+function runAdvancedStatusStepWithTimeout(step, timeoutMs, label) {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs} ms`));
+    }, timeoutMs);
+    Promise.resolve()
+      .then(step)
+      .then((value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      });
+  });
 }
 
 async function ensureAdvancedStatusRequiredCollections(requiredCollections, options = {}) {

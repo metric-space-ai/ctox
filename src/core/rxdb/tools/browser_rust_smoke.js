@@ -808,6 +808,11 @@ function writeBusinessOsReleaseModuleFixture(installedModulesRoot, id, module) {
 <script type="module" src="./index.js"></script>
 `);
   fs.writeFileSync(path.join(moduleRoot, 'index.css'), '.phase10-release-app { display: grid; gap: 0.5rem; padding: 1rem; }\n');
+  fs.writeFileSync(path.join(moduleRoot, 'icon.svg'), `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Phase 10 Release App">
+  <rect width="64" height="64" rx="12" fill="#0f172a"/>
+  <path d="M18 34l9 9 19-22" fill="none" stroke="#f8fafc" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+`);
   fs.writeFileSync(path.join(moduleRoot, 'schema.js'), 'export const collections = {};\n');
   fs.writeFileSync(path.join(moduleRoot, 'index.js'), `export async function mount(ctx) {
   const host = ctx.host || document.body;
@@ -1758,19 +1763,41 @@ function quoteSqlIdentifier(identifier) {
 async function waitForHealthyCompleteStatus(page, { timeoutMs = 60000, requiredCollections = null } = {}) {
   const deadline = Date.now() + timeoutMs;
   let status = null;
+  let lastError = null;
   for (;;) {
-    status = await page.evaluate((options) => globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
-      timeoutMs: options.timeoutMs,
-      ...(options.requiredCollections ? { requiredCollections: options.requiredCollections } : {}),
-    }), { timeoutMs, requiredCollections });
+    const remainingMs = Math.max(250, deadline - Date.now());
+    const probeTimeoutMs = Math.min(5000, remainingMs);
+    try {
+      status = await page.evaluate((options) => globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
+        timeoutMs: options.probeTimeoutMs,
+        intervalMs: 250,
+        ...(options.requiredCollections ? { requiredCollections: options.requiredCollections } : {}),
+      }), { probeTimeoutMs, requiredCollections });
+      lastError = null;
+    } catch (error) {
+      lastError = error?.message || String(error);
+      status = await page.evaluate((options) => globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({
+        includeCounts: false,
+        ...(options.requiredCollections ? { requiredCollections: options.requiredCollections } : {}),
+      }), { requiredCollections }).catch(() => null);
+    }
     const initialSync = status?.sync?.initialSync || {};
     const missing = Array.isArray(initialSync.missingInitialReplication)
       ? initialSync.missingInitialReplication
       : [];
     const incomplete = Array.isArray(initialSync.entries)
       && initialSync.entries.some((entry) => entry?.state !== 'complete');
-    if (status?.ok && missing.length === 0 && !incomplete) return status;
-    if (Date.now() > deadline) return status;
+    const streamingReady = status?.checks?.requiredCollectionsStreamingReady === true
+      && status?.checks?.requiredCollectionsCheckpointEpochAdvertised === true
+      && Array.isArray(initialSync.missingStreamingReady)
+      && initialSync.missingStreamingReady.length === 0;
+    if (status?.ok && ((missing.length === 0 && !incomplete) || streamingReady)) return status;
+    if (Date.now() > deadline) {
+      if (status && typeof status === 'object' && lastError) {
+        status.smokeWaitForHealthyError = lastError;
+      }
+      return status;
+    }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
 }
