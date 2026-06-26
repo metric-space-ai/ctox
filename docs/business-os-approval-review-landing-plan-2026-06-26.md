@@ -42,14 +42,24 @@ Workstream:
 - [x] Verified native authority matches the UI gate: `policy.rs:336` (data.write =
   Chef/Admin/assigned only), `threads.rs:672` (self-review blocked),
   `threads.rs:879` (`ensure_reviewer_or_admin` on approve/reject).
-- [ ] Threads i18n — ~20 approval strings (de/en). (In the parallel agent's active
-  module; not touched yet to avoid collision.)
-- [ ] Integration tests (native): restricted→execute DENIED + request ALLOWED;
-  non-reviewer approve DENIED; approve→`business_commands` enqueued; reject→none.
+- [x] Threads i18n — approval/delegation strings localized (de/en, 21 keys parity) —
+  `index.js` applyLabels + renderApproval, locales/{de,en}.json. Commit `<i18n>`.
+- [x] Integration tests (native) — **already comprehensive in `threads.rs`** (parallel
+  agent): `approval_request_is_not_a_queue_task_until_reviewed`,
+  `approval_request_requires_active_reviewer_and_blocks_self_review`,
+  `rejected_approval_creates_no_queue_task`,
+  `approved_request_creates_command_task_and_audit_linkage`,
+  `stale_approval_decision_is_rejected`, `approval_edit_cannot_change_target`,
+  `approval_execution_uses_central_command_policy` (17 threads tests total).
+- [~] Build verification — `cargo check --bin ctox` running (validates the in-flight
+  native compiles; gate for native test runs + landing). 0 errors so far.
+- [ ] Add `data.write` gate case to `policy.rs` role-matrix test (pins the exact gate
+  the browser `canSelfExecuteBusinessData` mirrors; currently DataWrite not in cases).
+- [ ] Run the approval native tests (`cargo test` threads/policy) after the check is green.
 - [blocked] Live browser e2e of the full flow — needs the native foundation
   (`threads.rs`) on `origin/main` + a deploy. Gated on the coordinated landing.
 - [blocked] Land on `origin/main` — coordinate decision: parallel agent pushes its
-  foundation stack; this session's commits (`6217a9c2`, `f1545144`) land with/after it.
+  foundation stack; this session's commits (`6217a9c2`, `f1545144`, i18n) land with/after it.
 - [ ] 6 release follow-ups (from the remediation plan).
 
 Progress log:
