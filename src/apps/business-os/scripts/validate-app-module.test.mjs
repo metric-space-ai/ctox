@@ -945,7 +945,7 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   });
   const run = runValidator(root, 'badpatterns', '--installed');
   assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /localStorage\/sessionStorage persistence/);
+  assert.match(run.stderr, /browser storage data path outside CTOX focus handoff/);
   assert.match(run.stderr, /Business OS HTTP data path/);
   assert.match(run.stderr, /React framework runtime/);
   assert.match(run.stderr, /direct business_commands write/);
