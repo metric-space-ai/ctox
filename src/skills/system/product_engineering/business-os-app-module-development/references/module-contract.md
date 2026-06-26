@@ -120,6 +120,21 @@ Keep extra files rare. Use extra local ESM helpers only when the app would other
 - Canonical reference: `src/apps/business-os/ARCHITECTURE.md`
   ("Right-Click -> Agent Context").
 
+Example -- annotate the record container, HTML-string or `dataset` form:
+
+```js
+// HTML string (escape values with the module's helper)
+`<button class="ticket-row"
+   data-context-record-id="${esc(t.id)}"
+   data-context-record-type="ticket"
+   data-context-label="${esc(t.title || t.id)}">...</button>`
+
+// createElement
+row.dataset.contextRecordId = t.id;
+row.dataset.contextRecordType = 'ticket';
+row.dataset.contextLabel = t.title || t.id;
+```
+
 ## Versioning
 
 - `0.0.x`: UI/UX, feature, and bug-fix changes without data-shape changes.

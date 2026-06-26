@@ -48,6 +48,11 @@
 
 ## Don't
 
+- Do not render record rows, cards, or tree nodes without
+  `data-context-record-id`/`-record-type`/`-label`. A record list the agent
+  cannot right-click into is an incomplete app, not a finished one.
+- Do not build your own right-click/context menu or a `ctox:context-action`
+  bridge; the shell owns the right-click -> agent flow.
 - Do not build a React, Next.js, Vite, bundled, or package-managed app.
 - Do not create a separate HTTP, REST, IndexedDB, Postgres, or SQLite data path.
 - Do not use `ctx.db[name]`, `ctx.db.collections`, direct

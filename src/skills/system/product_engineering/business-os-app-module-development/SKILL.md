@@ -44,9 +44,10 @@ records so the agent knows what was clicked.
   table row, tree node). The shell's global "Chat to CTOX" right-click menu reads
   them and tells the agent which record the user clicked. Without them the agent
   gets only loose text and cannot act on the record.
-- The shell also accepts any `data-*-id` as a fallback (record type derived from
-  the attribute name), but the explicit trio above is required because it pins a
-  clean record type and human label.
+- Always set the explicit trio. The shell will also resolve a bare `data-*-id` as
+  a safety net (deriving the type from the attribute name and guessing a label),
+  but that is NOT a substitute -- do not skip the trio just because a `data-*-id`
+  already exists on the element.
 - Mark side panes with a `*-left` / `*-right` / `*-sidebar` class or
   `data-left-content` / `data-right-content` so the agent learns the column.
 - Do not build a per-app context menu or app-owned right-click event bridge for
