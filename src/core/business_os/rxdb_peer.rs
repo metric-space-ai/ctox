@@ -24,10 +24,11 @@ use crate::mission::tickets;
 use anyhow::Context;
 use base64::Engine;
 use chrono::{DateTime, FixedOffset};
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
+use rusqlite::types::Value as SqlValue;
+use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension};
 use rxdb::plugins::replication_webrtc::{
-    CollectionAuthzHook, DocumentReadAuthzHook, RTCIceServer, RxWebRTCReplicationPool,
-    WebRTCRsConnectionHandler,
+    file_fetch_handler::FileRange, CollectionAuthzHook, DocumentReadAuthzHook, RTCIceServer,
+    RxWebRTCReplicationPool, WebRTCRsConnectionHandler,
 };
 use rxdb::rx_collection::RxCollection;
 use rxdb::rx_collection_helper::fill_object_data_before_insert;
@@ -37,7 +38,7 @@ use rxdb::types::{BulkWriteRow, HashOutput, JsonSchema, MangoQuery, RxJsonSchema
 use serde_json::json;
 use serde_json::Value;
 use sha2::Digest;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::fs::File;
 use std::path::Path;
@@ -95,6 +96,7 @@ static BUSINESS_COMMANDS_LOOP_METRICS: NativePeerLoopMetrics =
     NativePeerLoopMetrics::new("business_commands");
 static BROWSER_RUNTIME_LOOP_METRICS: NativePeerLoopMetrics =
     NativePeerLoopMetrics::new("browser_runtime");
+static DEMAND_FILE_FETCH_METRICS: DemandFileFetchMetrics = DemandFileFetchMetrics::new();
 
 /// Supervision backoff bounds for respawning the native peer after a
 /// non-intentional exit (bring-up failure, watchdog-stale heartbeat,
@@ -130,6 +132,7 @@ const CTOX_NATIVE_CAPABILITIES: &[&str] = &[
     "ctox-checkpoint-epoch-v1",
 ];
 const DESKTOP_FILE_CHUNK_SIZE: usize = 16 * 1024;
+const DESKTOP_FILE_CHUNK_DECODED_SIZE: u64 = (DESKTOP_FILE_CHUNK_SIZE as u64 / 4) * 3;
 const DESKTOP_FILE_EAGER_LIMIT_BYTES: u64 = 1024 * 1024;
 const DESKTOP_FILE_SCAN_INTERVAL_SECS: u64 = 15;
 const DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS: u64 = 5 * 60;
@@ -177,8 +180,8 @@ const TICKET_STATE_SYNC_LIMIT: usize = 500;
 const BROWSER_RUNTIME_ACTIVE_MAINTENANCE_INTERVAL_MS: u64 = 300;
 const BROWSER_RUNTIME_IDLE_MAINTENANCE_INTERVAL_SECS: u64 = 10;
 const BROWSER_RUNTIME_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
-const BROWSER_FRAME_GC_LIMIT: usize = 256;
-const BROWSER_INPUT_EVENT_GC_LIMIT: usize = 512;
+const BROWSER_FRAME_GC_LIMIT: u64 = 256;
+const BROWSER_INPUT_EVENT_GC_LIMIT: u64 = 512;
 const BROWSER_INPUT_EVENT_RETENTION_SECS: u64 = 60 * 60;
 const BUSINESS_OS_CHANNEL_IDS: &[&str] = &[
     "whatsapp",
@@ -543,6 +546,114 @@ impl NativePeerLoopMetrics {
     }
 }
 
+#[derive(Default)]
+struct DemandFileFetchRequestStats {
+    ranged: bool,
+    rows_loaded: u64,
+    chunks_decoded: u64,
+    bytes_requested: u64,
+    bytes_decoded: u64,
+    bytes_emitted: u64,
+}
+
+impl DemandFileFetchRequestStats {
+    fn new(range: Option<&FileRange>) -> Self {
+        Self {
+            ranged: range.is_some(),
+            bytes_requested: range.map(|range| range.length).unwrap_or_default(),
+            ..Self::default()
+        }
+    }
+
+    fn finish(&mut self) {
+        if !self.ranged {
+            self.bytes_requested = self.bytes_emitted;
+        }
+    }
+}
+
+struct DemandFileFetchMetrics {
+    requests: std::sync::atomic::AtomicU64,
+    ranged_requests: std::sync::atomic::AtomicU64,
+    error_requests: std::sync::atomic::AtomicU64,
+    rows_loaded: std::sync::atomic::AtomicU64,
+    chunks_decoded: std::sync::atomic::AtomicU64,
+    bytes_requested: std::sync::atomic::AtomicU64,
+    bytes_decoded: std::sync::atomic::AtomicU64,
+    bytes_emitted: std::sync::atomic::AtomicU64,
+    max_rows_loaded: std::sync::atomic::AtomicU64,
+    max_bytes_decoded: std::sync::atomic::AtomicU64,
+}
+
+impl DemandFileFetchMetrics {
+    const fn new() -> Self {
+        Self {
+            requests: std::sync::atomic::AtomicU64::new(0),
+            ranged_requests: std::sync::atomic::AtomicU64::new(0),
+            error_requests: std::sync::atomic::AtomicU64::new(0),
+            rows_loaded: std::sync::atomic::AtomicU64::new(0),
+            chunks_decoded: std::sync::atomic::AtomicU64::new(0),
+            bytes_requested: std::sync::atomic::AtomicU64::new(0),
+            bytes_decoded: std::sync::atomic::AtomicU64::new(0),
+            bytes_emitted: std::sync::atomic::AtomicU64::new(0),
+            max_rows_loaded: std::sync::atomic::AtomicU64::new(0),
+            max_bytes_decoded: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    fn record(&self, stats: &DemandFileFetchRequestStats, success: bool) {
+        self.requests.fetch_add(1, Ordering::Relaxed);
+        if stats.ranged {
+            self.ranged_requests.fetch_add(1, Ordering::Relaxed);
+        }
+        if !success {
+            self.error_requests.fetch_add(1, Ordering::Relaxed);
+        }
+        self.rows_loaded
+            .fetch_add(stats.rows_loaded, Ordering::Relaxed);
+        self.chunks_decoded
+            .fetch_add(stats.chunks_decoded, Ordering::Relaxed);
+        self.bytes_requested
+            .fetch_add(stats.bytes_requested, Ordering::Relaxed);
+        self.bytes_decoded
+            .fetch_add(stats.bytes_decoded, Ordering::Relaxed);
+        self.bytes_emitted
+            .fetch_add(stats.bytes_emitted, Ordering::Relaxed);
+        update_atomic_max(&self.max_rows_loaded, stats.rows_loaded);
+        update_atomic_max(&self.max_bytes_decoded, stats.bytes_decoded);
+    }
+
+    fn snapshot(&self) -> Value {
+        json!({
+            "schema": "ctox.native_peer.file_fetch.performance.v1",
+            "requests": self.requests.load(Ordering::Relaxed),
+            "ranged_requests": self.ranged_requests.load(Ordering::Relaxed),
+            "error_requests": self.error_requests.load(Ordering::Relaxed),
+            "rows_loaded": self.rows_loaded.load(Ordering::Relaxed),
+            "chunks_decoded": self.chunks_decoded.load(Ordering::Relaxed),
+            "bytes_requested": self.bytes_requested.load(Ordering::Relaxed),
+            "bytes_decoded": self.bytes_decoded.load(Ordering::Relaxed),
+            "bytes_emitted": self.bytes_emitted.load(Ordering::Relaxed),
+            "max_rows_loaded": self.max_rows_loaded.load(Ordering::Relaxed),
+            "max_bytes_decoded": self.max_bytes_decoded.load(Ordering::Relaxed),
+        })
+    }
+
+    #[cfg(test)]
+    fn reset(&self) {
+        self.requests.store(0, Ordering::Relaxed);
+        self.ranged_requests.store(0, Ordering::Relaxed);
+        self.error_requests.store(0, Ordering::Relaxed);
+        self.rows_loaded.store(0, Ordering::Relaxed);
+        self.chunks_decoded.store(0, Ordering::Relaxed);
+        self.bytes_requested.store(0, Ordering::Relaxed);
+        self.bytes_decoded.store(0, Ordering::Relaxed);
+        self.bytes_emitted.store(0, Ordering::Relaxed);
+        self.max_rows_loaded.store(0, Ordering::Relaxed);
+        self.max_bytes_decoded.store(0, Ordering::Relaxed);
+    }
+}
+
 fn update_atomic_max(value: &std::sync::atomic::AtomicU64, candidate: u64) {
     let mut current = value.load(Ordering::Relaxed);
     while candidate > current {
@@ -593,6 +704,7 @@ fn native_peer_performance_snapshot() -> Value {
             "business_commands": BUSINESS_COMMANDS_LOOP_METRICS.snapshot(),
             "browser_runtime": BROWSER_RUNTIME_LOOP_METRICS.snapshot(),
         },
+        "file_fetch": DEMAND_FILE_FETCH_METRICS.snapshot(),
         "rxdb_sqlite": rxdb::storage::sqlite::instance::sqlite_runtime_counters_snapshot(),
         "rxdb_subjects": {
             "schema": "ctox.rxdb.subjects.runtime_counters.v1",
@@ -4341,7 +4453,11 @@ async fn browser_runtime_maintenance_loop(
             let _browser_guard = BROWSER_RUNTIME_COMMAND_LOCK.lock().await;
             let started = Instant::now();
             let result = run_browser_runtime_maintenance(&database).await;
-            record_native_peer_loop_result(&BROWSER_RUNTIME_LOOP_METRICS, &result, started.elapsed());
+            record_native_peer_loop_result(
+                &BROWSER_RUNTIME_LOOP_METRICS,
+                &result,
+                started.elapsed(),
+            );
             match result {
                 Ok(rows) => rows > 0,
                 Err(err) => {
@@ -4771,7 +4887,10 @@ fn redacted_expired_browser_frame(row: &Value) -> Option<Value> {
     obj.remove("_rev");
     obj.remove("_meta");
     obj.insert("data".to_string(), Value::String(String::new()));
-    obj.insert("encoding".to_string(), Value::String("redacted".to_string()));
+    obj.insert(
+        "encoding".to_string(),
+        Value::String("redacted".to_string()),
+    );
     obj.insert("size_bytes".to_string(), Value::from(0));
     obj.insert("frame_hash".to_string(), Value::String(String::new()));
     obj.insert("updated_at_ms".to_string(), Value::from(now_ms() as u64));
@@ -7445,6 +7564,10 @@ fn sqlite_quote_identifier(identifier: &str) -> String {
     format!("\"{}\"", identifier.replace('"', "\"\""))
 }
 
+fn sqlite_quote_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
 async fn sync_channel_state_with_database_if_changed(
     root: &Path,
     database: &Arc<RxDatabase>,
@@ -8388,13 +8511,33 @@ fn stream_demand_file_chunks(
     collection: &str,
     key_field: &str,
     file_id: &str,
-    range: Option<&rxdb::plugins::replication_webrtc::file_fetch_handler::FileRange>,
+    range: Option<&FileRange>,
     emit: &mut dyn FnMut(&[u8]) -> rxdb::rx_error::RxResult<bool>,
 ) -> rxdb::rx_error::RxResult<()> {
+    let mut stats = DemandFileFetchRequestStats::new(range);
+    let result = stream_demand_file_chunks_inner(
+        root, collection, key_field, file_id, range, emit, &mut stats,
+    );
+    stats.finish();
+    DEMAND_FILE_FETCH_METRICS.record(&stats, result.is_ok());
+    result
+}
+
+fn stream_demand_file_chunks_inner(
+    root: &Path,
+    collection: &str,
+    key_field: &str,
+    file_id: &str,
+    range: Option<&FileRange>,
+    emit: &mut dyn FnMut(&[u8]) -> rxdb::rx_error::RxResult<bool>,
+    stats: &mut DemandFileFetchRequestStats,
+) -> rxdb::rx_error::RxResult<()> {
     let mut chunk_rows = if collection == "desktop_file_chunks" {
-        active_desktop_file_chunk_rows_from_sqlite(root, file_id)?
+        active_desktop_file_chunk_rows_from_sqlite(root, file_id, range, stats)?
     } else {
-        demand_file_chunk_rows_for_key_from_sqlite(root, collection, key_field, file_id)?
+        demand_file_chunk_rows_for_key_from_sqlite(
+            root, collection, key_field, file_id, None, None, stats,
+        )?
     };
     // Order by `idx` so the reassembled byte stream is correct.
     chunk_rows.sort_by_key(|chunk: &Value| chunk.get("idx").and_then(Value::as_u64).unwrap_or(0));
@@ -8422,6 +8565,10 @@ fn stream_demand_file_chunks(
                     })),
                 )
             })?;
+        stats.chunks_decoded = stats.chunks_decoded.saturating_add(1);
+        stats.bytes_decoded = stats
+            .bytes_decoded
+            .saturating_add(u64::try_from(decoded.len()).unwrap_or(u64::MAX));
         let chunk_start = emitted_offset;
         let chunk_end = emitted_offset.saturating_add(decoded.len() as u64);
         emitted_offset = chunk_end;
@@ -8439,8 +8586,33 @@ fn stream_demand_file_chunks(
         if !emit(slice)? {
             break;
         }
+        stats.bytes_emitted = stats
+            .bytes_emitted
+            .saturating_add(u64::try_from(slice.len()).unwrap_or(u64::MAX));
     }
     Ok(())
+}
+
+fn desktop_file_chunk_index_window(size_bytes: u64, range: Option<&FileRange>) -> (u64, u64) {
+    let expected_total = expected_desktop_file_chunk_total(size_bytes);
+    let Some(range) = range else {
+        return (0, expected_total);
+    };
+    if range.length == 0 || range.offset >= size_bytes {
+        return (0, 0);
+    }
+    let end = range.offset.saturating_add(range.length).min(size_bytes);
+    if end <= range.offset {
+        return (0, 0);
+    }
+    let start_idx = range.offset / DESKTOP_FILE_CHUNK_DECODED_SIZE;
+    let end_idx = end
+        .saturating_sub(1)
+        .checked_div(DESKTOP_FILE_CHUNK_DECODED_SIZE)
+        .unwrap_or(0)
+        .saturating_add(1)
+        .min(expected_total);
+    (start_idx.min(expected_total), end_idx)
 }
 
 struct DesktopFileDemandMetadata {
@@ -8455,6 +8627,8 @@ fn demand_file_source_error(message: impl Into<String>) -> rxdb::rx_error::RxErr
 fn active_desktop_file_chunk_rows_from_sqlite(
     root: &Path,
     file_id: &str,
+    range: Option<&FileRange>,
+    stats: &mut DemandFileFetchRequestStats,
 ) -> rxdb::rx_error::RxResult<Vec<Value>> {
     let database_path = store::rxdb_store_path(root);
     if !database_path.exists() {
@@ -8478,12 +8652,56 @@ fn active_desktop_file_chunk_rows_from_sqlite(
     let Some(metadata) = active_desktop_file_metadata_from_sqlite(&conn, file_id)? else {
         return Ok(Vec::new());
     };
-    desktop_file_chunk_rows_by_id_from_sqlite(
+    let index_window = desktop_file_chunk_index_window(metadata.size_bytes, range);
+    if index_window.0 >= index_window.1 {
+        return Ok(Vec::new());
+    }
+    let canonical = desktop_file_chunk_rows_by_id_from_sqlite(
         &conn,
         file_id,
         &metadata.generation_id,
         metadata.size_bytes,
-    )
+        index_window,
+        stats,
+    )?;
+    let expected_range_total = index_window.1.saturating_sub(index_window.0);
+    if u64::try_from(canonical.len()).unwrap_or_default() >= expected_range_total {
+        return Ok(canonical);
+    }
+
+    let fallback = demand_file_chunk_rows_for_key_from_sqlite(
+        root,
+        "desktop_file_chunks",
+        "file_id",
+        file_id,
+        Some(metadata.generation_id.as_str()),
+        Some(index_window),
+        stats,
+    )?
+    .into_iter()
+    .filter(|chunk| {
+        chunk.get("generation_id").and_then(Value::as_str) == Some(metadata.generation_id.as_str())
+            && chunk
+                .get("idx")
+                .and_then(Value::as_u64)
+                .is_some_and(|idx| idx >= index_window.0 && idx < index_window.1)
+    })
+    .collect::<Vec<_>>();
+    if fallback.len() > canonical.len() {
+        return Ok(dedupe_desktop_file_chunks_by_idx(fallback));
+    }
+    Ok(canonical)
+}
+
+fn dedupe_desktop_file_chunks_by_idx(chunks: Vec<Value>) -> Vec<Value> {
+    let mut by_idx: BTreeMap<u64, Value> = BTreeMap::new();
+    for chunk in chunks {
+        let Some(idx) = chunk.get("idx").and_then(Value::as_u64) else {
+            continue;
+        };
+        by_idx.entry(idx).or_insert(chunk);
+    }
+    by_idx.into_values().collect()
 }
 
 fn active_desktop_file_metadata_from_sqlite(
@@ -8530,13 +8748,23 @@ fn desktop_file_chunk_rows_by_id_from_sqlite(
     file_id: &str,
     generation_id: &str,
     size_bytes: u64,
+    index_window: (u64, u64),
+    stats: &mut DemandFileFetchRequestStats,
 ) -> rxdb::rx_error::RxResult<Vec<Value>> {
     let expected_total = expected_desktop_file_chunk_total(size_bytes);
-    let expected_total_usize = usize::try_from(expected_total).map_err(|err| {
+    let start_idx = usize::try_from(index_window.0).map_err(|err| {
         rxdb::rx_error::new_rx_error(
             "RC_WEBRTC_PEER",
             Some(json!({
-                "message": format!("desktop file chunk count overflow for {file_id}: {err}"),
+                "message": format!("desktop file chunk start overflow for {file_id}: {err}"),
+            })),
+        )
+    })?;
+    let end_idx = usize::try_from(index_window.1).map_err(|err| {
+        rxdb::rx_error::new_rx_error(
+            "RC_WEBRTC_PEER",
+            Some(json!({
+                "message": format!("desktop file chunk end overflow for {file_id}: {err}"),
             })),
         )
     })?;
@@ -8546,8 +8774,8 @@ fn desktop_file_chunk_rows_by_id_from_sqlite(
              WHERE id = ?1 AND COALESCE(deleted, 0) = 0",
         )
         .map_err(|err| demand_file_source_error(format!("prepare chunk lookup: {err}")))?;
-    let mut rows = Vec::with_capacity(expected_total_usize);
-    for idx in 0..expected_total_usize {
+    let mut rows = Vec::with_capacity(end_idx.saturating_sub(start_idx));
+    for idx in start_idx..end_idx {
         let chunk_id = format!("{file_id}_{generation_id}_{idx}");
         let Some(raw) = stmt
             .query_row([chunk_id.as_str()], |row| row.get::<_, String>(0))
@@ -8558,6 +8786,7 @@ fn desktop_file_chunk_rows_by_id_from_sqlite(
         else {
             continue;
         };
+        stats.rows_loaded = stats.rows_loaded.saturating_add(1);
         let value = serde_json::from_str::<Value>(&raw).map_err(|err| {
             demand_file_source_error(format!("decode desktop file chunk {chunk_id}: {err}"))
         })?;
@@ -8579,6 +8808,9 @@ fn demand_file_chunk_rows_for_key_from_sqlite(
     collection: &str,
     key_field: &str,
     file_id: &str,
+    generation_id: Option<&str>,
+    index_window: Option<(u64, u64)>,
+    stats: &mut DemandFileFetchRequestStats,
 ) -> rxdb::rx_error::RxResult<Vec<Value>> {
     let database_path = store::rxdb_store_path(root);
     if !database_path.exists() {
@@ -8607,28 +8839,52 @@ fn demand_file_chunk_rows_for_key_from_sqlite(
     }
     let quoted_table = sqlite_quote_identifier(&table);
     let key_path = format!("$.{key_field}");
+    let mut where_clauses = vec![
+        "COALESCE(deleted, 0) = 0".to_string(),
+        format!(
+            "json_extract(data, {}) = ?",
+            sqlite_quote_literal(&key_path)
+        ),
+    ];
+    let mut query_params = vec![SqlValue::Text(file_id.to_string())];
+    if let Some(generation_id) = generation_id {
+        where_clauses.push("json_extract(data, '$.generation_id') = ?".to_string());
+        query_params.push(SqlValue::Text(generation_id.to_string()));
+    }
+    if let Some((start_idx, end_idx)) = index_window {
+        where_clauses
+            .push("CAST(COALESCE(json_extract(data, '$.idx'), -1) AS INTEGER) >= ?".to_string());
+        query_params.push(SqlValue::Integer(
+            i64::try_from(start_idx).unwrap_or(i64::MAX),
+        ));
+        where_clauses
+            .push("CAST(COALESCE(json_extract(data, '$.idx'), -1) AS INTEGER) < ?".to_string());
+        query_params.push(SqlValue::Integer(
+            i64::try_from(end_idx).unwrap_or(i64::MAX),
+        ));
+    }
+    query_params.push(SqlValue::Integer(
+        i64::try_from(DESKTOP_FILE_CHUNK_CLEANUP_SCAN_LIMIT).unwrap_or(i64::MAX),
+    ));
     let mut stmt = conn
         .prepare(&format!(
             "SELECT data FROM {quoted_table}
-             WHERE COALESCE(deleted, 0) = 0
-               AND json_extract(data, ?1) = ?2
-             LIMIT ?3"
+             WHERE {}
+             ORDER BY CAST(COALESCE(json_extract(data, '$.idx'), 0) AS INTEGER), id
+             LIMIT ?",
+            where_clauses.join(" AND ")
         ))
         .map_err(|err| demand_file_source_error(format!("prepare {collection} fetch: {err}")))?;
     let rows = stmt
-        .query_map(
-            params![
-                key_path,
-                file_id,
-                DESKTOP_FILE_CHUNK_CLEANUP_SCAN_LIMIT as i64
-            ],
-            |row| row.get::<_, String>(0),
-        )
+        .query_map(params_from_iter(query_params), |row| {
+            row.get::<_, String>(0)
+        })
         .map_err(|err| demand_file_source_error(format!("query {collection} chunks: {err}")))?;
     let mut chunks = Vec::new();
     for row in rows {
         let raw =
             row.map_err(|err| demand_file_source_error(format!("read {collection} chunk: {err}")))?;
+        stats.rows_loaded = stats.rows_loaded.saturating_add(1);
         let value = serde_json::from_str::<Value>(&raw).map_err(|err| {
             demand_file_source_error(format!("decode {collection} chunk for {file_id}: {err}"))
         })?;
@@ -11458,6 +11714,22 @@ mod tests {
                         options: HashMap::new(),
                     },
                 ),
+                (
+                    "browser_frames".to_string(),
+                    RxCollectionCreator {
+                        schema: business_os_schema("browser_frames", "id"),
+                        conflict_handler: None,
+                        options: HashMap::new(),
+                    },
+                ),
+                (
+                    "browser_input_events".to_string(),
+                    RxCollectionCreator {
+                        schema: business_os_schema("browser_input_events", "id"),
+                        conflict_handler: None,
+                        options: HashMap::new(),
+                    },
+                ),
             ]))
             .await
             .expect("add hot collections");
@@ -11470,6 +11742,12 @@ mod tests {
         let chunks = database
             .collection("desktop_file_chunks")
             .expect("desktop_file_chunks collection");
+        let browser_frames = database
+            .collection("browser_frames")
+            .expect("browser_frames collection");
+        let browser_input_events = database
+            .collection("browser_input_events")
+            .expect("browser_input_events collection");
         for idx in 0..200 {
             let command_status = if idx == 0 {
                 "pending_sync"
@@ -11514,6 +11792,36 @@ mod tests {
                 }))
                 .await
                 .expect("insert desktop file chunk");
+            browser_frames
+                .incremental_upsert(json!({
+                    "id": format!("frame_{idx}"),
+                    "session_id": "session_1",
+                    "tab_id": "tab_1",
+                    "seq": idx,
+                    "mime_type": "image/png",
+                    "encoding": "base64",
+                    "data": "",
+                    "width": 10,
+                    "height": 10,
+                    "captured_at_ms": idx,
+                    "expires_at_ms": idx,
+                    "updated_at_ms": idx,
+                }))
+                .await
+                .expect("insert browser frame");
+            browser_input_events
+                .incremental_upsert(json!({
+                    "id": format!("input_{idx}"),
+                    "session_id": "session_1",
+                    "tab_id": "tab_1",
+                    "seq": idx,
+                    "type": "click",
+                    "status": if idx == 0 { "pending" } else { "consumed" },
+                    "created_at_ms": idx,
+                    "updated_at_ms": idx,
+                }))
+                .await
+                .expect("insert browser input event");
         }
         let conn = Connection::open(&database_path).expect("open sqlite");
         conn.execute_batch("ANALYZE")
@@ -11521,6 +11829,8 @@ mod tests {
         let business_commands_table = rxdb_test_table_name(&conn, "business_commands", 1);
         let ctox_queue_tasks_table = rxdb_test_table_name(&conn, "ctox_queue_tasks", 0);
         let desktop_file_chunks_table = rxdb_test_table_name(&conn, "desktop_file_chunks", 0);
+        let browser_frames_table = rxdb_test_table_name(&conn, "browser_frames", 0);
+        let browser_input_events_table = rxdb_test_table_name(&conn, "browser_input_events", 0);
 
         assert_plan_uses_index(
             &conn,
@@ -11596,6 +11906,152 @@ mod tests {
                 "{desktop_file_chunks_table}_json__deleted__file_id__generation_id__idx__id_idx"
             ),
         );
+        assert_plan_uses_index(
+            &conn,
+            &format!(
+                r#"
+            SELECT data FROM {}
+            WHERE deleted = 0
+              AND json_extract(data, '$.expires_at_ms') < ?
+            LIMIT 256
+            "#,
+                quote_sqlite_identifier(&browser_frames_table)
+            ),
+            &[&1_i64],
+            &format!("{browser_frames_table}_json__deleted__expires_at_ms"),
+        );
+        assert_plan_uses_index(
+            &conn,
+            &format!(
+                r#"
+            SELECT data FROM {}
+            WHERE deleted = 0
+              AND json_extract(data, '$.session_id') = ?
+              AND json_extract(data, '$.status') = ?
+            ORDER BY json_extract(data, '$.seq') ASC
+            LIMIT 64
+            "#,
+                quote_sqlite_identifier(&browser_input_events_table)
+            ),
+            &[&"session_1", &"pending"],
+            &format!("{browser_input_events_table}_json__deleted__session_id__status__seq"),
+        );
+    }
+
+    #[tokio::test]
+    async fn browser_runtime_gc_redacts_frames_and_retires_old_input_events() {
+        let root = tempfile::tempdir().expect("temp root");
+        let database_path = root.path().join("browser-runtime-gc.sqlite3");
+        let database = open_test_database(database_path.clone())
+            .await
+            .expect("open test database");
+        database
+            .add_collections(HashMap::from([
+                (
+                    "browser_frames".to_string(),
+                    RxCollectionCreator {
+                        schema: business_os_schema("browser_frames", "id"),
+                        conflict_handler: None,
+                        options: HashMap::new(),
+                    },
+                ),
+                (
+                    "browser_input_events".to_string(),
+                    RxCollectionCreator {
+                        schema: business_os_schema("browser_input_events", "id"),
+                        conflict_handler: None,
+                        options: HashMap::new(),
+                    },
+                ),
+            ]))
+            .await
+            .expect("add browser runtime collections");
+        let frames = database
+            .collection("browser_frames")
+            .expect("browser_frames collection");
+        frames
+            .incremental_upsert(json!({
+                "id": "expired_frame",
+                "session_id": "session_1",
+                "tab_id": "tab_1",
+                "seq": 1,
+                "mime_type": "image/png",
+                "encoding": "base64",
+                "data": "AAAA",
+                "width": 10,
+                "height": 10,
+                "captured_at_ms": 1,
+                "expires_at_ms": 1,
+                "updated_at_ms": 1,
+                "size_bytes": 3,
+                "frame_hash": "hash",
+            }))
+            .await
+            .expect("insert expired frame");
+        let events = database
+            .collection("browser_input_events")
+            .expect("browser_input_events collection");
+        for (id, status, created_at_ms) in [
+            ("old_consumed", "consumed", 1_u64),
+            ("old_failed", "failed", 1_u64),
+            ("old_pending", "pending", 1_u64),
+            (
+                "recent_consumed",
+                "consumed",
+                now_ms() as u64 - (BROWSER_INPUT_EVENT_RETENTION_SECS * 500),
+            ),
+        ] {
+            events
+                .incremental_upsert(json!({
+                    "id": id,
+                    "session_id": "session_1",
+                    "tab_id": "tab_1",
+                    "seq": 1,
+                    "type": "click",
+                    "status": status,
+                    "created_at_ms": created_at_ms,
+                    "updated_at_ms": created_at_ms,
+                }))
+                .await
+                .expect("insert browser input event");
+        }
+
+        assert_eq!(gc_expired_browser_frames(&database).await.unwrap(), 1);
+        assert_eq!(
+            gc_consumed_browser_input_events(&database).await.unwrap(),
+            2
+        );
+
+        let conn = Connection::open(&database_path).expect("open sqlite");
+        let frame_table = rxdb_test_table_name(&conn, "browser_frames", 0);
+        let frame: (i64, String, i64, String) = conn
+            .query_row(
+                &format!(
+                    "SELECT deleted, json_extract(data, '$.data'), CAST(json_extract(data, '$.size_bytes') AS INTEGER), json_extract(data, '$.encoding') FROM {} WHERE id = ?1",
+                    quote_sqlite_identifier(&frame_table)
+                ),
+                params!["expired_frame"],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("expired frame row");
+        assert_eq!(frame, (1, String::new(), 0, "redacted".to_string()));
+
+        let input_table = rxdb_test_table_name(&conn, "browser_input_events", 0);
+        let deleted_state = |id: &str| -> i64 {
+            conn.query_row(
+                &format!(
+                    "SELECT deleted FROM {} WHERE id = ?1",
+                    quote_sqlite_identifier(&input_table)
+                ),
+                params![id],
+                |row| row.get(0),
+            )
+            .expect("input event row")
+        };
+        assert_eq!(deleted_state("old_consumed"), 1);
+        assert_eq!(deleted_state("old_failed"), 1);
+        assert_eq!(deleted_state("old_pending"), 0);
+        assert_eq!(deleted_state("recent_consumed"), 0);
     }
 
     fn rxdb_test_table_name(conn: &Connection, collection: &str, version: i64) -> String {
@@ -11695,12 +12151,14 @@ mod tests {
         let files = database
             .collection("desktop_files")
             .expect("desktop_files collection");
+        let mut payload = vec![b'a'; DESKTOP_FILE_CHUNK_DECODED_SIZE as usize];
+        payload.extend_from_slice(b"world!");
         files
             .incremental_upsert(json!({
                 "id": "f1",
                 "name": "file.txt",
                 "kind": "file",
-                "size_bytes": DESKTOP_FILE_CHUNK_SIZE as u64,
+                "size_bytes": payload.len() as u64,
                 "content_state": "available",
                 "content_generation_id": "gen-active",
                 "created_at_ms": 1,
@@ -11711,19 +12169,30 @@ mod tests {
         let chunks = database
             .collection("desktop_file_chunks")
             .expect("desktop_file_chunks collection");
-        // Two chunks for file "f1": "Hello, " then "world!" (base64-encoded),
-        // inserted out of order to prove the source sorts by `idx`.
+        // Insert production-shaped chunks out of order to prove the source
+        // sorts by `idx` while range fetches can still load only the touched
+        // chunk ids.
         let enc = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
-        for (idx, payload) in [(1u64, &b"world!"[..]), (0u64, &b"Hello, "[..])] {
+        let encoded = enc(&payload);
+        let chunk_payloads = if encoded.is_empty() {
+            vec![""]
+        } else {
+            encoded
+                .as_bytes()
+                .chunks(DESKTOP_FILE_CHUNK_SIZE)
+                .map(|chunk| std::str::from_utf8(chunk).unwrap())
+                .collect::<Vec<_>>()
+        };
+        for (idx, data) in chunk_payloads.iter().enumerate().rev() {
             chunks
                 .incremental_upsert(json!({
                     "id": format!("f1_gen-active_{idx}"),
                     "file_id": "f1",
                     "generation_id": "gen-active",
                     "idx": idx,
-                    "total": 2,
+                    "total": chunk_payloads.len(),
                     "encoding": "base64",
-                    "data": enc(payload),
+                    "data": data,
                     "created_at_ms": 1,
                 }))
                 .await
@@ -11743,21 +12212,20 @@ mod tests {
             },
         )
         .expect("stream chunks");
-        assert_eq!(String::from_utf8(collected).unwrap(), "Hello, world!");
+        assert_eq!(collected, payload);
 
         // A byte range clips the stream across chunk boundaries.
+        DEMAND_FILE_FETCH_METRICS.reset();
         let mut ranged: Vec<u8> = Vec::new();
         stream_demand_file_chunks(
             root.path(),
             "desktop_file_chunks",
             "file_id",
             "f1",
-            Some(
-                &rxdb::plugins::replication_webrtc::file_fetch_handler::FileRange {
-                    offset: 7,
-                    length: 5,
-                },
-            ),
+            Some(&FileRange {
+                offset: DESKTOP_FILE_CHUNK_DECODED_SIZE,
+                length: 5,
+            }),
             &mut |bytes| {
                 ranged.extend_from_slice(bytes);
                 Ok(true)
@@ -11765,6 +12233,34 @@ mod tests {
         )
         .expect("stream ranged");
         assert_eq!(String::from_utf8(ranged).unwrap(), "world");
+        let metrics = DEMAND_FILE_FETCH_METRICS.snapshot();
+        assert_eq!(
+            metrics.pointer("/ranged_requests").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            metrics.pointer("/rows_loaded").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            metrics.pointer("/chunks_decoded").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            metrics.pointer("/bytes_requested").and_then(Value::as_u64),
+            Some(5)
+        );
+        assert_eq!(
+            metrics.pointer("/bytes_emitted").and_then(Value::as_u64),
+            Some(5)
+        );
+        assert!(
+            metrics
+                .pointer("/bytes_decoded")
+                .and_then(Value::as_u64)
+                .is_some_and(|bytes| bytes < DESKTOP_FILE_CHUNK_DECODED_SIZE),
+            "range fetch must decode only the touched tail chunk: {metrics}"
+        );
 
         // Unknown file → no bytes emitted (dispatcher maps that to FILE_NOT_FOUND).
         let mut none: Vec<u8> = Vec::new();
@@ -12103,6 +12599,64 @@ mod tests {
             reconstruct_desktop_file_chunks(&wrong_total, &file_id, generation_id, content_hash),
             "chunk total mismatch",
         );
+    }
+
+    #[test]
+    fn active_desktop_file_demand_fetch_falls_back_to_file_id_chunks() {
+        let root = tempfile::tempdir().expect("temp root");
+        let file_path = root.path().join("fallback.pdf");
+        let payload = vec![b'p'; DESKTOP_FILE_CHUNK_SIZE + 117];
+        fs::write(&file_path, &payload).expect("write fallback artifact");
+
+        sync_desktop_file_from_path(root.path(), &file_path).expect("sync desktop file");
+
+        let canonical = file_path.canonicalize().expect("canonical file");
+        let file_id = desktop_file_id(&canonical);
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
+        let file = read_desktop_file_row(&conn, &file_id);
+        let generation_id = file
+            .get("content_generation_id")
+            .and_then(Value::as_str)
+            .expect("active generation id");
+        let content_hash = file
+            .get("content_hash")
+            .and_then(Value::as_str)
+            .expect("content hash");
+        let chunks = read_desktop_file_chunks(&conn, &file_id, false);
+        assert!(
+            chunks.len() > 1,
+            "test file should create multiple chunks for fallback coverage"
+        );
+        for chunk in &chunks {
+            let old_id = chunk.get("id").and_then(Value::as_str).expect("chunk id");
+            let idx = chunk.get("idx").and_then(Value::as_u64).expect("chunk idx");
+            let legacy_id = format!("{file_id}-legacy-{idx}");
+            conn.execute(
+                "UPDATE ctox_business_os__desktop_file_chunks__v0 \
+                 SET id = ?1, data = json_set(data, '$.id', ?1) \
+                 WHERE id = ?2",
+                params![legacy_id, old_id],
+            )
+            .expect("rewrite chunk id to legacy form");
+        }
+        drop(conn);
+
+        let mut fallback_stats = DemandFileFetchRequestStats::new(None);
+        let fallback_chunks = active_desktop_file_chunk_rows_from_sqlite(
+            root.path(),
+            &file_id,
+            None,
+            &mut fallback_stats,
+        )
+        .expect("load fallback chunks");
+        let decoded = reconstruct_desktop_file_chunks(
+            &fallback_chunks,
+            &file_id,
+            generation_id,
+            content_hash,
+        )
+        .expect("fallback chunks reconstruct");
+        assert_eq!(decoded, payload);
     }
 
     #[test]
