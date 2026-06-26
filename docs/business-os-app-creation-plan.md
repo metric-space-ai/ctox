@@ -487,8 +487,8 @@ Immediate checklist:
   controls.
 - [x] Run installed deep E2E for all five `rfix12` apps: save, reload
   persistence, native DB/RxDB sync, and command-bus automation are green.
-- [x] Remove App Creator's deterministic local specification step, quickstart
-  presets, and generator/harness registry language.
+- [x] Remove obsolete App Creator copy that framed app creation as local
+  generation rather than CTOX task delegation.
 - [x] Make App Creator submit a direct `ctox.business_os.app.create` command
   from the user's app request, with optional metadata hints only.
 - [x] Split app validator behavior so runtime app checks stay strict while
@@ -843,10 +843,9 @@ Use this before marking any generated app green:
   `node --check src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs`,
   and `node --check src/apps/business-os/modules/creator/index.js`.
 - `2026-06-21`: commit `903756a3` (`Simplify Business OS app creator flow`)
-  was pushed to `main`. It removes the deterministic App Creator local
-  specification step, quickstart presets, generator/harness registry language,
-  and makes the Creator dispatch direct durable app-create tasks from the user
-  request.
+  was pushed to `main`. It removes obsolete App Creator copy that framed app
+  creation as local generation and makes the Creator dispatch direct durable
+  app-create tasks from the user request.
 - `2026-06-21`: first install of the App Creator simplification through
   `ctox upgrade --dev` produced release `branch-main-20260621T165131Z`, but
   installed validation exposed a release-boundary test issue: `creator.test.mjs`
