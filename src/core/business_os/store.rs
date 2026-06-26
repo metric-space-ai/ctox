@@ -478,6 +478,16 @@ fn default_update_mode() -> String {
     "vanilla".to_owned()
 }
 
+/// Install (`visible = true`) or remove (`visible = false`) a packaged catalog
+/// module as a launcher tab on this instance. Only meaningful in `"base"`
+/// provisioning mode; core modules are always tabs.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModuleSetVisibleRequest {
+    pub module_id: String,
+    #[serde(default = "default_true")]
+    pub visible: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct DesktopFileMaterializeRequest {
     pub file_id: String,
@@ -1242,6 +1252,133 @@ pub fn business_os_module_allowlist(root: &Path) -> Vec<String> {
         }
     }
     ids
+}
+
+const PROVISIONING_MODE_KEY: &str = "CTOX_BUSINESS_OS_PROVISIONING_MODE";
+const VISIBLE_MODULES_KEY: &str = "CTOX_BUSINESS_OS_VISIBLE_MODULES";
+
+/// Provisioning mode for this instance: `"base"` (a fresh instance comes up with
+/// only the core base set as tabs; everything else is installable from the app
+/// store) or `"legacy"` (every shipped module is a tab — the historical
+/// behaviour). Determined once, lazily, and persisted in the runtime store.
+///
+/// The determination ERRS TO `"legacy"`: any sign the instance has already been
+/// used (installed modules, more than a bootstrap user, module ACLs or recorded
+/// versions) classifies it legacy, so an upgrade never hides a live instance's
+/// apps. Only a genuinely empty, brand-new instance provisions as `"base"`.
+fn business_os_provisioning_mode(root: &Path, installed_app_root: &Path) -> String {
+    if let Some(mode) =
+        crate::inference::runtime_env::get_runtime_env_value(root, PROVISIONING_MODE_KEY)
+    {
+        let mode = mode.trim().to_ascii_lowercase();
+        if mode == "base" || mode == "legacy" {
+            return mode;
+        }
+    }
+    let mode = if instance_is_fresh(root, installed_app_root) {
+        "base"
+    } else {
+        "legacy"
+    };
+    let _ = crate::inference::runtime_env::set_runtime_env_value(root, PROVISIONING_MODE_KEY, mode);
+    mode.to_owned()
+}
+
+/// True only for an empty, never-used instance. Any error or any content errs to
+/// `false` (legacy), so the base-set reduction can never strip a used instance.
+fn instance_is_fresh(root: &Path, installed_app_root: &Path) -> bool {
+    if let Ok(entries) = fs::read_dir(installed_app_root.join("installed-modules")) {
+        for entry in entries.flatten() {
+            if entry.path().join("module.json").is_file() {
+                return false;
+            }
+        }
+    }
+    let Ok(conn) = open_store(root) else {
+        return false;
+    };
+    let users: i64 = conn
+        .query_row("SELECT COUNT(*) FROM business_users", [], |row| row.get(0))
+        .unwrap_or(1);
+    let acls: i64 = conn
+        .query_row("SELECT COUNT(*) FROM business_module_acl", [], |row| {
+            row.get(0)
+        })
+        .unwrap_or(1);
+    let versions: i64 = conn
+        .query_row("SELECT COUNT(*) FROM business_module_versions", [], |row| {
+            row.get(0)
+        })
+        .unwrap_or(1);
+    users <= 1 && acls == 0 && versions == 0
+}
+
+/// The set of non-core module ids this instance has explicitly installed as
+/// tabs (only meaningful in `"base"` mode; core modules are always tabs).
+fn business_os_visible_modules(root: &Path) -> std::collections::BTreeSet<String> {
+    let mut set = std::collections::BTreeSet::new();
+    if let Some(raw) = crate::inference::runtime_env::get_runtime_env_value(root, VISIBLE_MODULES_KEY)
+    {
+        for id in raw.split([',', ';', '\n', '\t', ' ']) {
+            let id = id.trim();
+            if !id.is_empty() {
+                set.insert(id.to_owned());
+            }
+        }
+    }
+    set
+}
+
+/// Add or remove a module from this instance's installed-tabs set.
+fn business_os_set_module_visible(
+    root: &Path,
+    module_id: &str,
+    visible: bool,
+) -> anyhow::Result<()> {
+    let mut set = business_os_visible_modules(root);
+    if visible {
+        set.insert(module_id.to_owned());
+    } else {
+        set.remove(module_id);
+    }
+    let joined = set.into_iter().collect::<Vec<_>>().join(",");
+    crate::inference::runtime_env::set_runtime_env_value(root, VISIBLE_MODULES_KEY, &joined)?;
+    Ok(())
+}
+
+/// Fold per-instance tab visibility into each projected module. A module is a
+/// tab when it is core, runtime-installed, explicitly installed (visible set),
+/// or the instance is legacy (show all). Non-visible modules still appear in the
+/// app store — they are just not launcher tabs.
+fn augment_modules_with_instance_visibility(
+    root: &Path,
+    installed_app_root: &Path,
+    modules: &mut [Value],
+) {
+    let mode = business_os_provisioning_mode(root, installed_app_root);
+    let legacy = mode != "base";
+    let visible_set = if legacy {
+        std::collections::BTreeSet::new()
+    } else {
+        business_os_visible_modules(root)
+    };
+    for module in modules.iter_mut() {
+        let id = module
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let runtime_installed = module
+            .get("lifecycle")
+            .and_then(|lifecycle| lifecycle.get("runtime_installed"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let visible =
+            legacy || is_core_module(&id) || runtime_installed || visible_set.contains(&id);
+        if let Some(object) = module.as_object_mut() {
+            object.insert("instance_visible".to_owned(), Value::Bool(visible));
+        }
+    }
 }
 
 pub(crate) fn sync_connection_config(
@@ -3746,6 +3883,7 @@ pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
     let version_states = module_version_states(root, &app_root).unwrap_or(Value::Null);
     let (mut modules, lifecycle) = modules_with_projected_lifecycle(root, modules, &version_states)?;
     augment_modules_with_catalog_update_state(&app_root, &mut modules, &version_states);
+    augment_modules_with_instance_visibility(root, &installed_app_root, &mut modules);
     if let Some(object) = governance.as_object_mut() {
         object.insert("lifecycle".to_owned(), lifecycle);
     }
@@ -15909,6 +16047,36 @@ pub fn accept_rxdb_business_command_with_origin(
                 None,
                 Some("completed"),
                 outcome,
+            );
+        }
+        "ctox.module.set_visible" => {
+            let request: ModuleSetVisibleRequest = serde_json::from_value(command.payload.clone())
+                .context("invalid ctox.module.set_visible payload")?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let module_id = source_sanitize_slug(&request.module_id);
+            anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+            let decision = scoped_policy_decision(
+                root,
+                &session,
+                BusinessOsPermission::AppsInstall,
+                BusinessOsScope::module(module_id.clone(), false),
+            )?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            business_os_set_module_visible(root, &module_id, request.visible)?;
+            write_module_catalog_projection_to_rxdb(root)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                serde_json::json!({
+                    "ok": true,
+                    "module_id": module_id,
+                    "visible": request.visible,
+                }),
             );
         }
         "ctox.module.rollback" => {
@@ -29938,6 +30106,53 @@ mod tests {
         assert!(sanitize_git_ref("a/../b").is_err());
         assert_eq!(source_relative_subpath("/modules/x/").unwrap(), "modules/x");
         assert!(source_relative_subpath("../x").is_err());
+    }
+
+    #[test]
+    fn instance_visibility_base_then_install() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let _conn = open_store(root)?;
+        let installed_app_root = resolve_business_os_installed_app_root(root);
+
+        // An empty, brand-new instance provisions as the minimal base set.
+        assert_eq!(business_os_provisioning_mode(root, &installed_app_root), "base");
+
+        let mut modules = vec![
+            serde_json::json!({"id": "ctox", "lifecycle": {"runtime_installed": false}}),
+            serde_json::json!({"id": "matching", "lifecycle": {"runtime_installed": false}}),
+        ];
+        augment_modules_with_instance_visibility(root, &installed_app_root, &mut modules);
+        assert_eq!(modules[0]["instance_visible"], Value::Bool(true)); // core base set
+        assert_eq!(modules[1]["instance_visible"], Value::Bool(false)); // non-core, not installed
+
+        // Installing a catalog module as a tab makes it visible.
+        business_os_set_module_visible(root, "matching", true)?;
+        let mut after = vec![serde_json::json!({"id": "matching", "lifecycle": {"runtime_installed": false}})];
+        augment_modules_with_instance_visibility(root, &installed_app_root, &mut after);
+        assert_eq!(after[0]["instance_visible"], Value::Bool(true));
+        Ok(())
+    }
+
+    #[test]
+    fn instance_with_content_stays_legacy() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let conn = open_store(root)?;
+        // A used instance (more than a bootstrap user) must keep every app.
+        conn.execute(
+            "INSERT INTO business_users
+                (user_id, display_name, role, active, created_at_ms, updated_at_ms)
+             VALUES ('a','A','admin',1,1,1), ('b','B','user',1,1,1)",
+            [],
+        )?;
+        let installed_app_root = resolve_business_os_installed_app_root(root);
+        assert_eq!(business_os_provisioning_mode(root, &installed_app_root), "legacy");
+        let mut modules =
+            vec![serde_json::json!({"id": "matching", "lifecycle": {"runtime_installed": false}})];
+        augment_modules_with_instance_visibility(root, &installed_app_root, &mut modules);
+        assert_eq!(modules[0]["instance_visible"], Value::Bool(true));
+        Ok(())
     }
 
     #[test]

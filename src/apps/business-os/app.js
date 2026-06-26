@@ -3514,6 +3514,7 @@ function moduleAppearsInSwitcher(mod) {
     && mod.id !== 'desktop'
     && mod.id !== 'notizen'
     && mod.install_scope !== 'internal'
+    && mod.instance_visible !== false
     && canSeeModuleForAppVersion(mod)
     && !moduleLaunchesAsDesktopApp(mod);
 }

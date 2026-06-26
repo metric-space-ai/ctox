@@ -209,7 +209,11 @@ async function triggerCardAction(appId, actionType) {
   if (!item || (state.busy && !['details', 'repository'].includes(actionType))) return;
 
   if (actionType === 'install') {
-    await installMarketplaceItem(item);
+    if (isPackagedCatalogTab(item)) {
+      await setModuleVisible(item, true);
+    } else {
+      await installMarketplaceItem(item);
+    }
   } else if (actionType === 'update') {
     if (!canInstallAppStoreItem(state, item)) return;
     const customized = item.modification_status === 'modified' || item.modification_status === 'customized';
@@ -235,8 +239,12 @@ async function triggerCardAction(appId, actionType) {
     if (!canReleaseAppStoreItem(state, item)) return;
     await openReleaseDialog(item);
   } else if (actionType === 'uninstall') {
-    if (!canUninstallAppStoreItem(state, item)) return;
-    await uninstallInstalledItem(item);
+    if (isPackagedCatalogTab(item)) {
+      await setModuleVisible(item, false);
+    } else {
+      if (!canUninstallAppStoreItem(state, item)) return;
+      await uninstallInstalledItem(item);
+    }
   } else if (actionType === 'repository') {
     if (item.homepage) {
       window.open(item.homepage, '_blank', 'noopener,noreferrer');
@@ -485,6 +493,7 @@ function normalizeItem(item, kind) {
     version_state: versionStateFor(id),
     latest_release: release,
     app_source: (item.app_source && typeof item.app_source === 'object') ? item.app_source : null,
+    instance_visible: item.instance_visible !== false,
     raw: item,
   };
 }
@@ -935,6 +944,31 @@ async function installFromGithub() {
       git_ref: gitRef,
       subpath,
     },
+  });
+}
+
+function isPackagedCatalogTab(item) {
+  return !item.download_url
+    && !item.repo
+    && !item.app_source
+    && item.kind !== 'installed'
+    && item.kind !== 'marketplace'
+    && item.kind !== 'template'
+    && item.launch_kind !== 'desktop-app';
+}
+
+async function setModuleVisible(item, visible) {
+  if (!canInstallAppStoreItem(state, item)) {
+    state.status = { kind: 'error', text: 'Du darfst diese App nicht installieren oder entfernen.' };
+    render();
+    return;
+  }
+  await runStoreCommand({
+    label: visible ? `Installiere ${item.title}...` : `Entferne ${item.title}...`,
+    success: visible ? `${item.title} als Tab installiert.` : `${item.title} aus den Tabs entfernt.`,
+    commandType: 'ctox.module.set_visible',
+    moduleId: item.id,
+    payload: { module_id: item.id, visible },
   });
 }
 
