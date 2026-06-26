@@ -675,17 +675,16 @@ ctox process-mining case case-OPS-204 --limit 200</code></pre>
 
         <section id="business-os">
           <p class="kicker">Business OS</p>
-          <h2>Installable business workspace</h2>
+          <h2>Runtime-installed business apps</h2>
           <p>
-            The Business OS commands deliberately create or inspect a separate
-            application repository. Core upgrades should update CTOX runtime and
-            bundled defaults, but they must not overwrite customer-owned
-            Business OS customizations.
+            Business OS app commands queue real app creation or modification in
+            the CTOX runtime. Runtime-created apps live under the installed
+            Business OS modules directory and use the RxDB/WebRTC data plane.
           </p>
           <pre><code>ctox business-os status
-ctox business-os install --target &lt;empty-dir&gt; [--init-git]
-ctox business status
-ctox business install --target &lt;empty-dir&gt; [--init-git]</code></pre>
+ctox business-os app create --instruction "&lt;text&gt;" [--module-id &lt;id&gt;]
+ctox business-os app modify &lt;module-id&gt; --instruction "&lt;text&gt;"
+ctox business-os app validate &lt;module-id&gt; --installed</code></pre>
         </section>
 
         <section id="capabilities">
@@ -1088,7 +1087,7 @@ ctox jami-daemon --foreground</code></pre>
           <pre><code>ctox boost status | ctox boost start [--minutes &lt;n&gt;] [--model &lt;id&gt;] [--reason &lt;text&gt;] | ctox boost stop
 ctox browser &lt;subcmd&gt; [args]
 ctox business-os status
-ctox business-os install --target &lt;empty-dir&gt; [--init-git]
+ctox business-os app create --instruction "&lt;text&gt;" [--module-id &lt;id&gt;]
 ctox channel ack [--db &lt;path&gt;] [--status &lt;status&gt;] &lt;message-key&gt;...
 ctox chat "&lt;instruction&gt;" [--thread-key &lt;key&gt;] [--workspace &lt;path&gt;] [--wait] [--timeout-secs &lt;n&gt;] [--atif-out &lt;path&gt;] [--to &lt;addr&gt; ...] [--cc &lt;addr&gt; ...] [--subject &lt;text&gt;]
 ctox doc &lt;subcmd&gt; [args]

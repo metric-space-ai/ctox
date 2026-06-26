@@ -703,10 +703,9 @@ Business runtime.
 - Workflow tests cover command idempotency, proposal accept/reject,
   outbox delivery retry and the rule that agents cannot create ledger
   rows without going through an accepted command.
-- A smoke test extends the existing
-  `pnpm test:business-stack` to import a sample camt.053 file, post
-  a sample receipt with a fixture image, generate a ZUGFeRD invoice
-  PDF, and emit a DATEV EXTF CSV.
+- A smoke test imports a sample camt.053 file, posts
+  a sample receipt with a fixture image, generates a ZUGFeRD invoice
+  PDF, and emits a DATEV EXTF CSV.
 
 ## 8. Rollout
 

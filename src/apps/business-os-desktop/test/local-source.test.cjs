@@ -10,32 +10,18 @@ const {
   LocalDaemonInstanceSource,
   assertLocalCtoxRoot,
   buildLocalCommandOptions,
-  buildLocalInstallArgs,
   buildLocalPeerArgs,
   localCtoxBinaryCandidates,
-  normalizeLocalInstallOptions,
   normalizeLocalProfile,
   resolveLocalCtoxBinary,
 } = require("../src/main/sources.cjs");
 
-test("local profile and install options validate CLI inputs", () => {
+test("local profile validates CLI inputs", () => {
   assert.deepEqual(normalizeLocalProfile({ ctoxBinary: "ctox", ctoxRoot: "/opt/ctox" }), {
     ctoxBinary: "ctox",
     ctoxRoot: "/opt/ctox",
   });
   assert.throws(() => normalizeLocalProfile({ ctoxBinary: "ctox\nbad" }), /unsupported/);
-  assert.throws(() => normalizeLocalInstallOptions({}), /target/);
-  assert.deepEqual(normalizeLocalInstallOptions({
-    target: "/tmp/business-os",
-    initGit: true,
-    noCopyEnv: true,
-    dryRun: true,
-  }), {
-    target: "/tmp/business-os",
-    initGit: true,
-    noCopyEnv: true,
-    dryRun: true,
-  });
 });
 
 test("local profile resolves bundled ctox helper before PATH fallback", () => {
@@ -65,24 +51,10 @@ test("local profile resolves bundled ctox helper before PATH fallback", () => {
   assert.ok(candidates.includes(path.join(tempRoot, "ctox", "linux-x64", "ctox")));
 });
 
-test("local CLI args use business-os peer ensure/status and install target", () => {
+test("local CLI args use business-os peer ensure/status", () => {
   assert.deepEqual(buildLocalPeerArgs("status"), ["business-os", "peer", "status"]);
   assert.deepEqual(buildLocalPeerArgs("ensure"), ["business-os", "peer", "ensure"]);
   assert.throws(() => buildLocalPeerArgs("rotate"), /unsupported/);
-  assert.deepEqual(buildLocalInstallArgs({
-    target: "/tmp/business-os",
-    initGit: true,
-    noCopyEnv: true,
-    dryRun: true,
-  }), [
-    "business-os",
-    "install",
-    "--target",
-    "/tmp/business-os",
-    "--init-git",
-    "--no-copy-env",
-    "--dry-run",
-  ]);
 });
 
 test("local command options bind child processes to the selected ctox root", () => {
@@ -112,10 +84,9 @@ test("local command options bind child processes to the selected ctox root", () 
   assert.equal(defaultOptions.env, undefined);
 });
 
-test("local command options reject business stack roots as runtime roots", () => {
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ctox-desktop-business-root-"));
-  fs.writeFileSync(path.join(tempRoot, "ctox-business.json"), "{}\n");
-  fs.writeFileSync(path.join(tempRoot, ".ctox-business-install.json"), "{}\n");
+test("local command options reject non-runtime roots", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ctox-desktop-non-runtime-root-"));
+  fs.writeFileSync(path.join(tempRoot, "README.md"), "# not ctox\n");
 
   assert.throws(
     () => assertLocalCtoxRoot(tempRoot),
@@ -154,6 +125,7 @@ test("local daemon attach stores metadata only and builds webrtc launch", async 
 
   const instance = await source.attachLocalDaemon({
     displayName: "Local CTOX",
+    ctoxBinary: "ctox",
     ctoxRoot: "/Users/example/CTOX",
   });
   assert.equal(instance.source, "local_daemon");
@@ -273,43 +245,4 @@ test("local daemon inspection exposes offline peer status", async () => {
   assert.equal(status.status, "offline");
   assert.equal(status.instanceId, "local-instance");
   assert.equal(status.httpDataProxy, false);
-});
-
-test("local business os install delegates to normalized install command", async () => {
-  let observedProfile;
-  let observedInstall;
-  const source = new LocalDaemonInstanceSource(
-    () => createDefaultRegistry(),
-    () => undefined,
-    {
-      get: async () => "",
-      set: async () => undefined,
-    },
-    {
-      runInstallCommand: async (profile, install) => {
-        observedProfile = profile;
-        observedInstall = install;
-        return { ok: true, target: install.target, dryRun: install.dryRun };
-      },
-    },
-  );
-
-  const result = await source.installLocalBusinessOs({
-    ctoxBinary: "/usr/local/bin/ctox",
-    ctoxRoot: "/Users/example/ctox",
-    target: "/Users/example/customer-os",
-    initGit: true,
-    dryRun: true,
-  });
-  assert.equal(result.ok, true);
-  assert.deepEqual(observedProfile, {
-    ctoxBinary: "/usr/local/bin/ctox",
-    ctoxRoot: "/Users/example/ctox",
-  });
-  assert.deepEqual(observedInstall, {
-    target: "/Users/example/customer-os",
-    initGit: true,
-    noCopyEnv: false,
-    dryRun: true,
-  });
 });

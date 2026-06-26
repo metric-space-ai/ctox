@@ -49,17 +49,6 @@ async function main() {
   });
 
   try {
-    const install = await sourceManager().installLocalBusinessOs({
-      ctoxBinary,
-      ctoxRoot: ctoxRepoRoot,
-      target,
-      noCopyEnv: true,
-    });
-    assert.equal(install.ok, true);
-    assert.equal(install.target, target);
-    assert.equal(install.dryRun, false);
-    assertFreshBusinessOsTarget(target);
-
     const invalidRuntimeRoot = await sourceManager().inspectLocalDaemon({
       ctoxBinary,
       ctoxRoot: target,
@@ -156,7 +145,11 @@ function findCtoxBinary() {
 function findCtoxRepoRoot() {
   let current = path.resolve(__dirname, "..");
   while (true) {
-    if (fs.existsSync(path.join(current, "templates", "business-basic", "ctox-business.json"))) {
+    const hasCargoToml = fs.existsSync(path.join(current, "Cargo.toml"));
+    const hasEntrypoint = fs.existsSync(path.join(current, "src", "main.rs"))
+      || fs.existsSync(path.join(current, "src", "core", "main.rs"));
+    const hasCreationLedger = fs.existsSync(path.join(current, "contracts", "history", "creation-ledger.md"));
+    if (hasCargoToml && hasEntrypoint && hasCreationLedger) {
       return current;
     }
     const parent = path.dirname(current);
@@ -173,13 +166,6 @@ function isExecutable(filePath) {
   } catch {
     return false;
   }
-}
-
-function assertFreshBusinessOsTarget(dir) {
-  assert.ok(fs.existsSync(path.join(dir, "ctox-business.json")), "ctox-business.json missing from install target");
-  assert.ok(fs.existsSync(path.join(dir, ".ctox-business-install.json")), "install manifest missing from install target");
-  assert.ok(!fs.existsSync(path.join(dir, ".env")), "fresh install target must not copy .env in desktop smoke");
-  assert.ok(!fs.existsSync(path.join(dir, "node_modules")), "fresh install target must not include node_modules");
 }
 
 main().catch((error) => {

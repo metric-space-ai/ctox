@@ -76,10 +76,6 @@ class SourceManager {
     return this.sources.local_daemon.inspectLocalDaemon(options);
   }
 
-  async installLocalBusinessOs(options) {
-    return this.sources.local_daemon.installLocalBusinessOs(options);
-  }
-
   async inspectSshHostKey(options) {
     return this.sources.ssh_managed.inspectHostKeyForProfile(options);
   }
