@@ -654,6 +654,15 @@ function indexJsHandlesDataAction(indexJs, action) {
     || new RegExp(String.raw`['"\`]${escaped}['"\`]\s*:`).test(indexJs);
 }
 
+function htmlDataActionIsSubmitControl(indexHtml, action) {
+  const escaped = escapeRegExp(action);
+  const tagWithAction = new RegExp(
+    String.raw`<\s*(?:button|input)\b(?=[^>]*\bdata-[a-z0-9-]*action\s*=\s*["']${escaped}["'])(?=[^>]*\btype\s*=\s*["']submit["'])[^>]*>`,
+    'i',
+  );
+  return tagWithAction.test(indexHtml);
+}
+
 function hasBusinessOsChatTaskCommandType(text) {
   if (/(?:command_type\s*:\s*['"]business_os\.chat\.task['"]|["']command_type["']\s*:\s*["']business_os\.chat\.task["'])/.test(text)) {
     return true;
@@ -957,6 +966,9 @@ if (/<\s*(?:link|script|meta|title|style)\b/i.test(indexHtml)) {
 }
 for (const message of collectHiddenModalFailures(indexHtml, indexCss)) fail(message);
 for (const action of htmlDataActions(indexHtml)) {
+  if (htmlDataActionIsSubmitControl(indexHtml, action) && hasFormSubmitHandler(indexJs)) {
+    continue;
+  }
   if (!indexJsHandlesDataAction(indexJs, action)) {
     fail(`index.html declares data-action="${action}" but index.js has no visible handler for it`);
   }
