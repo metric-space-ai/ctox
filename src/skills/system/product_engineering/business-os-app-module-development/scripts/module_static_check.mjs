@@ -398,6 +398,22 @@ function collectStringLiterals(text) {
   return values;
 }
 
+function maskAllowedFocusTaskSessionStorage(text) {
+  return String(text || '')
+    .replace(
+      /\b(?:window\.|parent\.)?sessionStorage\.setItem\s*\(\s*(['"])ctox\.businessOs\.focusTask\1/g,
+      'ctoxFocusTaskHandoff(',
+    )
+    .replace(
+      /\b(?:window\.|parent\.)?sessionStorage\[\s*(['"])ctox\.businessOs\.focusTask\1\s*\]\s*=/g,
+      'ctoxFocusTaskHandoff =',
+    );
+}
+
+function containsForbiddenBrowserPersistence(text) {
+  return /\b(?:localStorage|sessionStorage|indexedDB)\b/.test(maskAllowedFocusTaskSessionStorage(text));
+}
+
 function htmlDataActions(html) {
   const actions = new Set();
   for (const match of String(html || '').matchAll(/\bdata-[a-z0-9-]*action\s*=\s*(['"])([^'"]+)\1/gi)) {
@@ -903,7 +919,7 @@ if (installedMode) {
 }
 
 const runtimeRules = [
-  ['localStorage/sessionStorage persistence', /\b(?:localStorage|sessionStorage|indexedDB)\b/],
+  ['browser storage data path outside CTOX focus handoff', containsForbiddenBrowserPersistence],
   ['Business OS HTTP data path', /fetch\s*\(\s*['"]\/(?:api|rxdb|business-os)/],
   ['direct business_commands write', /collection\s*\(\s*['"]business_commands['"]\s*\)|business_commands[\s\S]{0,120}\b(?:insert|upsert|bulk)\s*\(/],
   ['upstream rxdb import', /from\s+['"]rxdb['"]/],
@@ -920,8 +936,9 @@ const runtimeRules = [
 for (const path of runtimeFiles) {
   const text = readText(path);
   if (!sourceShellModuleMode) {
-    for (const [label, regex] of runtimeRules) {
-      if (regex.test(text)) fail(`${rel(path)} contains forbidden runtime pattern: ${label}`);
+    for (const [label, check] of runtimeRules) {
+      const matched = typeof check === 'function' ? check(text) : check.test(text);
+      if (matched) fail(`${rel(path)} contains forbidden runtime pattern: ${label}`);
     }
   }
   if (installedMode && /\.(?:js|mjs)$/.test(path)) {
