@@ -222,6 +222,8 @@ async function triggerCardAction(appId, actionType) {
       return;
     }
     await updateInstalledItem(item, { mode: customized ? 'discard' : 'vanilla' });
+  } else if (actionType === 'check-updates') {
+    await checkModuleUpdates(item);
   } else if (actionType === 'versions') {
     await openVersionsDialog(item);
   } else if (actionType === 'open') {
@@ -972,10 +974,38 @@ async function setModuleVisible(item, visible) {
   });
 }
 
+async function checkModuleUpdates(item) {
+  await runStoreCommand({
+    label: `Suche Updates für ${item.title}...`,
+    success: `Update-Prüfung für ${item.title} abgeschlossen.`,
+    commandType: 'ctox.module.check_updates',
+    moduleId: item.id,
+    payload: { module_id: item.id },
+  });
+}
+
 async function updateInstalledItem(item, { mode = 'vanilla' } = {}) {
   if (!canInstallAppStoreItem(state, item)) {
     state.status = { kind: 'error', text: 'Du darfst diese App nicht aktualisieren.' };
     render();
+    return;
+  }
+  // GitHub-sourced apps update by re-installing from their pinned source.
+  const src = item.app_source;
+  if (src && src.kind === 'github' && src.repo) {
+    await runStoreCommand({
+      label: `Aktualisiere ${item.title} aus GitHub...`,
+      success: `${item.title} aus GitHub aktualisiert.`,
+      commandType: 'ctox.app_store.install',
+      moduleId: item.id,
+      payload: {
+        module_id: item.id,
+        source_kind: 'github',
+        repo: src.repo,
+        git_ref: src.ref || '',
+        subpath: src.subpath || '',
+      },
+    });
     return;
   }
   const baseline = item.version_state?.installed_from_bundle_sha256
@@ -1524,6 +1554,9 @@ function actionButtonsForManagedItem(item, permissionState = state) {
         appStorePermissionDeniedReason('update'),
         item.title,
       );
+  }
+  if (item.app_source && item.app_source.kind === 'github' && canInstallAppStoreItem(permissionState, item)) {
+    html += `<button type="button" class="card-btn link" data-card-action="check-updates" aria-label="${escapeHtml(item.title)} nach Updates suchen">${escapeHtml(state.t('actionCheckUpdates', 'Nach Updates suchen'))}</button>`;
   }
   if (item.editable && canEditAppStoreItem(permissionState, item)) {
     html += `<button type="button" class="card-btn secondary" data-card-action="edit" aria-label="${escapeHtml(item.title)} bearbeiten">${escapeHtml(state.t('actionEdit', 'Bearbeiten'))}</button>`;
