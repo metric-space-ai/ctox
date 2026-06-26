@@ -451,6 +451,10 @@ pub struct AppStoreInstallRequest {
     /// Subpath within the archive that holds the module (the `module.json` dir).
     #[serde(default)]
     pub subpath: String,
+    /// Desktop file id of an uploaded `.zip` when `source_kind = "zip"` (the
+    /// bytes are read from the RxDB chunk store, never over HTTP).
+    #[serde(default)]
+    pub file_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -6934,6 +6938,30 @@ fn desktop_file_generation_chunk_id_bounds(file_id: &str, generation_id: &str) -
     (prefix.clone(), format!("{prefix}`"))
 }
 
+/// Load and verify a desktop file's bytes from the RxDB chunk store (the WebRTC
+/// data plane — no HTTP). Used to install an app from an uploaded `.zip`.
+fn load_desktop_file_bytes(root: &Path, file_id: &str) -> anyhow::Result<Vec<u8>> {
+    let doc = rxdb_desktop_file_document(root, file_id)?;
+    let generation_id = doc
+        .get("content_generation_id")
+        .or_else(|| doc.get("generation_id"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    anyhow::ensure!(
+        !generation_id.is_empty(),
+        "desktop file `{file_id}` has no generation id"
+    );
+    let content_hash = doc
+        .get("content_hash")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let size_bytes = doc.get("size_bytes").and_then(Value::as_u64).unwrap_or(0);
+    let chunks = rxdb_desktop_file_chunks(root, file_id, &generation_id)?;
+    decode_verified_desktop_file_chunks(file_id, &generation_id, size_bytes, &content_hash, chunks)
+}
+
 fn resolve_business_os_app_root(root: &Path) -> anyhow::Result<PathBuf> {
     let mut candidates = Vec::new();
     if root
@@ -8589,6 +8617,18 @@ fn source_relative_subpath(subpath: &str) -> anyhow::Result<String> {
     Ok(s.to_owned())
 }
 
+/// Download an archive over the SSRF-guarded agent and read it into memory.
+fn fetch_archive_bytes(url: &str) -> anyhow::Result<Vec<u8>> {
+    let response = super::importer::fetch_url_guarded(url)
+        .with_context(|| format!("Failed to download module archive from {url}"))?;
+    let mut bytes = Vec::new();
+    response
+        .into_reader()
+        .read_to_end(&mut bytes)
+        .context("Failed to read module archive stream")?;
+    Ok(bytes)
+}
+
 /// Read the `app_source` descriptor from an installed module's manifest.
 fn installed_module_app_source(installed_app_root: &Path, module_id: &str) -> Option<Value> {
     let path = installed_app_root
@@ -8661,16 +8701,20 @@ pub fn install_app_module(
     );
 
     // Resolve the install source. GitHub repos and legacy download URLs are
-    // both fetched through the SSRF-guarded agent (PublicOnlyResolver) so an
+    // fetched through the SSRF-guarded agent (PublicOnlyResolver) so an
     // attacker-supplied source can never reach loopback/metadata/private hosts.
+    // Zip uploads are read from the RxDB chunk store (WebRTC data plane) — never
+    // over HTTP.
     let source_kind = if !request.source_kind.trim().is_empty() {
         request.source_kind.trim().to_ascii_lowercase()
     } else if !request.repo.trim().is_empty() {
         "github".to_owned()
+    } else if !request.file_id.trim().is_empty() {
+        "zip".to_owned()
     } else {
         "url".to_owned()
     };
-    let (fetch_url, effective_source_path, app_source_base) = match source_kind.as_str() {
+    let (effective_source_path, app_source_base, zip_bytes) = match source_kind.as_str() {
         "github" => {
             let repo = validate_github_repo(&request.repo)?;
             let git_ref = sanitize_git_ref(&request.git_ref)?;
@@ -8682,7 +8726,18 @@ pub fn install_app_module(
                 "ref": git_ref,
                 "subpath": subpath,
             });
-            (url, subpath, descriptor)
+            (subpath, descriptor, fetch_archive_bytes(&url)?)
+        }
+        "zip" => {
+            let file_id = request.file_id.trim();
+            anyhow::ensure!(!file_id.is_empty(), "file_id is required for a zip install");
+            let subpath = source_relative_subpath(&request.subpath)?;
+            let bytes = load_desktop_file_bytes(root, file_id)?;
+            (
+                subpath,
+                serde_json::json!({ "kind": "zip", "file_id": file_id }),
+                bytes,
+            )
         }
         "url" | "" => {
             anyhow::ensure!(
@@ -8691,21 +8746,13 @@ pub fn install_app_module(
             );
             let url = request.download_url.trim().to_owned();
             (
-                url.clone(),
                 request.source_path.clone(),
-                serde_json::json!({ "kind": "url", "url": url }),
+                serde_json::json!({ "kind": "url", "url": url.clone() }),
+                fetch_archive_bytes(&url)?,
             )
         }
         other => anyhow::bail!("unsupported install source kind '{other}'"),
     };
-
-    let response = super::importer::fetch_url_guarded(&fetch_url)
-        .with_context(|| format!("Failed to download module archive from {fetch_url}"))?;
-    let mut zip_bytes = Vec::new();
-    response
-        .into_reader()
-        .read_to_end(&mut zip_bytes)
-        .with_context(|| "Failed to read zip download stream")?;
 
     // Extract ZIP to a temporary directory
     let temp_dir = std::env::temp_dir().join(format!("ctox-app-install-{}", Uuid::new_v4()));
