@@ -1,6 +1,6 @@
 {
   "schema_version": "business-os-db-isolation-inventory-v1",
-  "updated_at": "2026-06-26",
+  "updated_at": "2026-06-27",
   "owner": "business-os-platform",
   "purpose": "Phase 13A inventory plus Phase 13D drift guard for packaged/core module data-isolation migration, unscoped facade exceptions, and tested scoped system/internal module exceptions.",
   "modules": {
@@ -632,6 +632,34 @@
         "uses_cached_db_handle": false
       },
       "notes": "P13C packaged user-module batch plus P13G resolver hardening: Support uses the guarded DB facade in Shell context and resolves support collections through ctx.db.collection(name) without collection-property fallback. Browser/Rust dynamic-app smoke requires collection/property/raw/context denial on the manifest-declared business_commands collection before data.read, ctx.permissions denial/allowance symmetry, a Shell locked state for a real support module open without data grants, read success after an exact collection data.read grant and write denial without data.write."
+    },
+    "threads": {
+      "title": "Threads",
+      "manifest_path": "src/apps/business-os/modules/threads/module.json",
+      "source_path": "src/apps/business-os/modules/threads",
+      "install_scope": "core",
+      "distribution": "system-module",
+      "default_installed": true,
+      "classification": "system-control-module",
+      "isolation_status": "system-scoped-exception-tested",
+      "owner": "business-os-platform",
+      "review_by": "2026-07-31",
+      "db_access": {
+        "uses_raw_db": false,
+        "uses_collection_property_access": false,
+        "uses_collections_proxy": false,
+        "uses_cached_db_handle": false
+      },
+      "scoped_collections": [
+        "business_commands",
+        "ctox_queue_tasks",
+        "ctox_task_approval_requests",
+        "user_notifications",
+        "user_thread_links",
+        "user_thread_messages",
+        "user_threads"
+      ],
+      "notes": "Scoped system exception: Threads reads thread, notification, approval, command and queue projections through ctx.db.collection(name), starts shell-delivered sync collections, and sends mutations through ctx.commandBus rather than raw DB writes. Keep the entry owner-reviewed until a dedicated Browser/Rust dynamic-app denial smoke covers Threads as its own system surface."
     },
     "tickets": {
       "title": "Tickets",

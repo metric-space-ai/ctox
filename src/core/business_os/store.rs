@@ -24687,7 +24687,10 @@ fn process_systematic_research_command(
         object.insert("id".to_string(), Value::String(run_id.clone()));
         object.insert("task_id".to_string(), Value::String(task_id.clone()));
         object.insert("status".to_string(), Value::String("completed".to_string()));
-        object.insert("command_id".to_string(), Value::String(command_id.to_string()));
+        object.insert(
+            "command_id".to_string(),
+            Value::String(command_id.to_string()),
+        );
         if let Some(task_queue_id) = task_queue_id.as_deref() {
             object.insert(
                 "task_queue_id".to_string(),
@@ -24709,13 +24712,7 @@ fn process_systematic_research_command(
         completed_at_ms,
         run_payload.clone(),
     )?;
-    upsert_rxdb_collection_record(
-        root,
-        "research_runs",
-        &run_id,
-        completed_at_ms,
-        run_payload,
-    )?;
+    upsert_rxdb_collection_record(root, "research_runs", &run_id, completed_at_ms, run_payload)?;
 
     let command_payload = serde_json::json!({
         "id": command_id,
@@ -39489,7 +39486,9 @@ mod tests {
             Some(task_id.as_str())
         );
         assert_eq!(
-            rxdb_run.pointer("/payload/result/knowledge_domain").and_then(Value::as_str),
+            rxdb_run
+                .pointer("/payload/result/knowledge_domain")
+                .and_then(Value::as_str),
             Some("drone_bearing_design")
         );
 

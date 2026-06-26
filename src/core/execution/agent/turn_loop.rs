@@ -551,13 +551,19 @@ where
         }
         emit("invoke-model");
         let reply = match session.as_deref_mut() {
-            Some(sess) => {
-                sess.run_turn_inner(prompt, Some(Duration::from_secs(config.turn_timeout_secs)), None)?
-            }
+            Some(sess) => sess.run_turn_inner(
+                prompt,
+                Some(Duration::from_secs(config.turn_timeout_secs)),
+                None,
+            )?,
             None => owned_session
                 .as_mut()
                 .expect("owned persistent session should exist when no session was supplied")
-                .run_turn_inner(prompt, Some(Duration::from_secs(config.turn_timeout_secs)), None)?,
+                .run_turn_inner(
+                    prompt,
+                    Some(Duration::from_secs(config.turn_timeout_secs)),
+                    None,
+                )?,
         };
         emit("persist-assistant-turn");
         persist_lcm_message_with_retry(db_path, conversation_id, "assistant", &reply, &mut emit)?;
