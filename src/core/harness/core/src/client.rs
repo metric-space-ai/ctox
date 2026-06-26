@@ -2788,10 +2788,7 @@ fn provider_requires_full_responses_history(provider: &ModelProviderInfo) -> boo
 
 fn is_stateless_chat_adapter_responses_base_url(base_url: &str) -> bool {
     let normalized = base_url.trim().to_ascii_lowercase();
-    normalized.contains("api.minimax.io")
-        || normalized.contains("api.minimaxi.com")
-        || normalized.contains("llm.ctox.dev")
-        || normalized.contains("/api/fallback-llm")
+    normalized.contains("api.minimax.io") || normalized.contains("api.minimaxi.com")
 }
 
 /// Handles a 401 response by optionally refreshing ChatGPT tokens once.

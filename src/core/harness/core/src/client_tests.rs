@@ -137,7 +137,7 @@ fn test_minimax_proxy_model_client(session_source: SessionSource) -> ModelClient
         env_key_instructions: None,
         experimental_bearer_token: None,
         wire_api: crate::model_provider_info::WireApi::Responses,
-        requires_full_responses_history: true,
+        requires_full_responses_history: false,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -349,7 +349,7 @@ fn http_request_keeps_full_history_for_minimax_responses() {
 }
 
 #[test]
-fn http_request_keeps_full_history_for_minimax_proxy_responses() {
+fn http_request_uses_previous_response_id_for_minimax_proxy_responses() {
     let client = test_minimax_proxy_model_client(SessionSource::Cli);
     let mut session = client.new_session();
     let initial_user = test_user_message("initial");
@@ -369,8 +369,11 @@ fn http_request_keeps_full_history_for_minimax_proxy_responses() {
 
     let wire_request = session.prepare_http_request(&next_request);
 
-    assert_eq!(wire_request.previous_response_id, None);
-    assert_eq!(wire_request.input, next_request.input);
+    assert_eq!(
+        wire_request.previous_response_id.as_deref(),
+        Some("resp_previous")
+    );
+    assert_eq!(wire_request.input, vec![next_user]);
 }
 
 #[test]

@@ -1030,7 +1030,9 @@ fn ensure_rendered_prompt_is_invocable(
             && warning.severity == context_health::WarningSeverity::Critical
     });
     if exact_duplicate_user_turn && structured_failure_loop {
-        emit("context-selection context_loop_short_circuit critical_duplicate_user_turn critical_blocked_status_loop");
+        emit(
+            "context-selection context_loop_short_circuit critical_duplicate_user_turn critical_blocked_status_loop",
+        );
         anyhow::bail!(
             "context_loop_short_circuit: exact-duplicate user turn re-entering an N-deep structured-failure loop with no new evidence"
         );
@@ -1285,11 +1287,7 @@ pub fn conversation_id_for_thread_key(thread_key: Option<&str>) -> i64 {
     let mut bytes = [0u8; 8];
     bytes.copy_from_slice(&digest[..8]);
     let value = (u64::from_be_bytes(bytes) & 0x3fff_ffff_ffff_ffff) as i64;
-    if value < 2 {
-        2
-    } else {
-        value
-    }
+    if value < 2 { 2 } else { value }
 }
 
 fn responses_api_base_url(base_url: &str) -> String {
@@ -1347,7 +1345,7 @@ pub(crate) fn resolve_api_model_provider_spec(
                 runtime_state::api_key_env_var_for_provider_with_env_map("minimax", settings),
                 "minimax",
                 "responses",
-                true,
+                false,
             ),
             "azure_foundry" => ("AZURE_FOUNDRY_API_KEY", "azure_foundry", "responses", false),
             _ => return None,
@@ -1682,7 +1680,7 @@ mod tests {
         assert_eq!(spec.base_url, "https://llm.ctox.dev/v1");
         assert_eq!(spec.env_key, runtime_state::CTOX_LLM_PROXY_API_KEY_ENV);
         assert_eq!(spec.wire_api, "responses");
-        assert!(spec.requires_full_responses_history);
+        assert!(!spec.requires_full_responses_history);
     }
 
     #[test]
@@ -1896,11 +1894,13 @@ mod tests {
         assert!(run(vec![warning("recent_user_turn_repeated", Critical)]).is_ok());
         assert!(run(vec![warning("blocked_status_loop", Critical)]).is_ok());
         // NEGATIVE: both present but only Warning severity -> still invocable.
-        assert!(run(vec![
-            warning("recent_user_turn_repeated", Warning),
-            warning("blocked_status_loop", Warning),
-        ])
-        .is_ok());
+        assert!(
+            run(vec![
+                warning("recent_user_turn_repeated", Warning),
+                warning("blocked_status_loop", Warning),
+            ])
+            .is_ok()
+        );
 
         // The marker cools down like the other context bails (60s).
         assert_eq!(
