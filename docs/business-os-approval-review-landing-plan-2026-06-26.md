@@ -74,11 +74,12 @@ Workstream:
 - [~] Full-flow live e2e (request → reviewer-in-Threads → approve → `business_commands`):
   the native half is proven by the `cargo test` suite (26/0); a live click-through needs
   the native foundation deployed — runs at the coordinated deploy below.
-- [~] Land on `origin/main` — pushed branch `codex/business-os-approval-delegation` and
-  opened **PR #24** (base `main`). Status: **CONFLICTING / DIRTY** (279 files, +57k/-7k) —
-  it carries the whole foundation + in-flight stack and collides with `main`'s 38 diverged
-  commits. The merge requires resolving those conflicts = the parallel agent reconciling its
-  stack against `main` (coordinated). Not a unilateral 53-commit force-rebase from this session.
+- [x] **Landed on `origin/main`** — merged `origin/main` into the branch (resolved 23 conflicts
+  preserving both sides, regenerated the rxdb dist, fixed a `run_turn_inner` arity break from a
+  semantic auto-merge), verified GREEN post-merge (cargo check 0-err, cargo test 26/0, browser
+  12/0, threads 1/0, rxdb 49/0), then fast-forwarded `origin/main` to the merge commit `332fac1e`.
+  **PR #24 is MERGED.** The whole stack — approval/delegation foundation + this session's work +
+  origin's app-store/deployment features — is now on `main`.
 
 Progress log:
 
