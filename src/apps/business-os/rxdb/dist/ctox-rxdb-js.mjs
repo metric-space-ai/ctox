@@ -614,6 +614,8 @@ var CtoxIndexedDbCollection = class {
     this.indexes = normalizeSchemaIndexes(schema, this.primaryPath);
     this.indexSignature = schemaIndexSignature(this.indexes);
     this.schemaIndexReady = null;
+    this.queryPerformancePolicy = { rejectAllDocumentsFallback: false };
+    this.queryPerformanceStats = createQueryPerformanceStats();
     this.events = new CtoxEventEmitter();
   }
   observe(listener) {
@@ -771,19 +773,25 @@ var CtoxIndexedDbCollection = class {
     return docs[String(id)] || null;
   }
   async allDocuments({ withDeleted = false } = {}) {
+    const stats = this.queryPerformanceStats;
+    stats.allDocumentsCalls += 1;
     const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
     const index = tx.objectStore(DOCUMENT_STORE).index("collection");
     const range = IDBKeyRange.only(this.name);
     const documents = [];
+    let rowsRead = 0;
     await iterateCursor(index.openCursor(range), (cursor) => {
       if (!cursor) return false;
       const record = cursor.value;
+      rowsRead += 1;
       if (withDeleted || !record.deleted) {
         documents.push(record.doc);
       }
       return true;
     });
     await idbTransactionDone(tx);
+    stats.allDocumentsRowsRead += rowsRead;
+    stats.lastAllDocumentsRowsRead = rowsRead;
     return documents;
   }
   async queryDocuments(query = {}, helpers = {}) {
@@ -803,7 +811,13 @@ var CtoxIndexedDbCollection = class {
     if (canUseBoundedCollectionCursor(query)) {
       return this.queryDocumentsByCollectionCursor(query, helpers);
     }
+    const fallback = this.recordAllDocumentsFallback(query);
+    if (this.queryPerformancePolicy.rejectAllDocumentsFallback) {
+      throw createAllDocumentsFallbackError(this.name, query, fallback);
+    }
     const docs = await this.allDocuments();
+    fallback.rowsRead = this.queryPerformanceStats.lastAllDocumentsRowsRead || docs.length;
+    this.queryPerformanceStats.allDocumentsFallbackRowsRead += fallback.rowsRead;
     return applyQueryToDocuments(docs, query, helpers);
   }
   async queryDocumentsBySchemaIndex(plan, query = {}, helpers = {}) {
@@ -1011,8 +1025,38 @@ var CtoxIndexedDbCollection = class {
       strategy,
       indexed: strategy === "primary-key" || strategy === "schema-index" || strategy === "collection-lwt",
       schemaIndexed: Boolean(schemaIndexPlan),
-      sortCovered: Boolean(schemaIndexPlan?.sortCovered)
+      sortCovered: Boolean(schemaIndexPlan?.sortCovered),
+      allDocumentsFallback: strategy === "all-documents"
     };
+  }
+  setQueryPerformancePolicy(policy = {}) {
+    this.queryPerformancePolicy = {
+      ...this.queryPerformancePolicy,
+      rejectAllDocumentsFallback: policy.rejectAllDocumentsFallback === true
+    };
+  }
+  getQueryPerformanceStats() {
+    return cloneJson(this.queryPerformanceStats);
+  }
+  resetQueryPerformanceStats() {
+    this.queryPerformanceStats = createQueryPerformanceStats();
+  }
+  recordAllDocumentsFallback(query = {}) {
+    const plan = this.queryPlanFor(query);
+    const fingerprint = queryFingerprintForStats(query);
+    const fallback = {
+      at: Date.now(),
+      collection: this.name,
+      fingerprint,
+      selectorFields: plan.selectorFields || [],
+      sortFields: plan.sortFields || [],
+      limit: Number.isFinite(Number(query?.limit)) ? Number(query.limit) : null,
+      skip: Number.isFinite(Number(query?.skip)) ? Number(query.skip) : 0,
+      rowsRead: 0
+    };
+    this.queryPerformanceStats.allDocumentsFallbackCalls += 1;
+    this.queryPerformanceStats.lastAllDocumentsFallback = fallback;
+    return fallback;
   }
   ensureSchemaIndexEntries() {
     if (!this.indexes.length) return Promise.resolve(0);
@@ -1442,6 +1486,37 @@ function applyQueryToDocuments(docs = [], query = {}, helpers = {}) {
   }
   return filtered;
 }
+function createQueryPerformanceStats() {
+  return {
+    allDocumentsCalls: 0,
+    allDocumentsRowsRead: 0,
+    allDocumentsFallbackCalls: 0,
+    allDocumentsFallbackRowsRead: 0,
+    lastAllDocumentsRowsRead: 0,
+    lastAllDocumentsFallback: null
+  };
+}
+function createAllDocumentsFallbackError(collection, query, fallback) {
+  const error = new Error(`IndexedDB query for ${collection} would use allDocuments() fallback.`);
+  error.name = "CtoxIndexedDbQueryPlanError";
+  error.code = "CTOX_INDEXEDDB_ALL_DOCUMENTS_FALLBACK";
+  error.collection = collection;
+  error.query = query;
+  error.fallback = fallback;
+  return error;
+}
+function queryFingerprintForStats(query = {}) {
+  try {
+    return JSON.stringify({
+      selector: query?.selector || {},
+      sort: query?.sort || [],
+      skip: Number.isFinite(Number(query?.skip)) ? Number(query.skip) : 0,
+      limit: Number.isFinite(Number(query?.limit)) ? Number(query.limit) : null
+    });
+  } catch {
+    return String(Date.now());
+  }
+}
 function normalizeSortFields(sort = []) {
   if (!Array.isArray(sort)) return typeof sort === "string" ? [sort] : [];
   return sort.map((entry) => {
@@ -1490,6 +1565,8 @@ function firstCursorValue(request) {
   });
 }
 var ctoxIndexedDbStorageTestInternals = {
+  createAllDocumentsFallbackError,
+  createQueryPerformanceStats,
   documentMatchesReplicationOrigin,
   indexValuesFor,
   normalizeDocument,
@@ -6822,6 +6899,10 @@ var CtoxRxCollection = class {
     };
     this.storageCollection = storageCollection;
     this.demandLoader = null;
+    this.liveQueryPerformanceStats = {
+      complexLiveQueryReexecs: 0,
+      lastComplexLiveQuery: null
+    };
   }
   setDemandLoader(loader) {
     this.demandLoader = loader || null;
@@ -6887,6 +6968,32 @@ var CtoxRxCollection = class {
       selectorFields: Object.keys(normalized.selector || {}),
       sortFields: normalizeSort2(normalized.sort).map((entry) => Object.keys(entry)[0]).filter(Boolean),
       selectedIndex: null
+    };
+  }
+  setQueryPerformancePolicy(policy = {}) {
+    this.storageCollection.setQueryPerformancePolicy?.(policy);
+  }
+  resetQueryPerformanceStats() {
+    this.storageCollection.resetQueryPerformanceStats?.();
+    this.liveQueryPerformanceStats = {
+      complexLiveQueryReexecs: 0,
+      lastComplexLiveQuery: null
+    };
+  }
+  getQueryPerformanceStats() {
+    return {
+      storage: this.storageCollection.getQueryPerformanceStats?.() || null,
+      liveQueries: cloneJson2(this.liveQueryPerformanceStats)
+    };
+  }
+  recordComplexLiveQueryReexec(query = {}) {
+    this.liveQueryPerformanceStats.complexLiveQueryReexecs += 1;
+    this.liveQueryPerformanceStats.lastComplexLiveQuery = {
+      at: Date.now(),
+      selectorFields: Object.keys(query?.selector || {}).filter((field) => !field.startsWith("$")),
+      sortFields: normalizeSort2(query?.sort || []).map((entry) => Object.keys(entry || {})[0]).filter(Boolean),
+      limit: Number.isFinite(Number(query?.limit)) ? Number(query.limit) : null,
+      skip: Number.isFinite(Number(query?.skip)) ? Number(query.skip) : 0
     };
   }
   observe(listener) {
@@ -6996,6 +7103,9 @@ var CtoxRxQuery = class _CtoxRxQuery {
         const flushEmit = () => {
           pendingTimer = null;
           if (!active) return;
+          if (initialized && !canApplyPrimaryDelta) {
+            this.collection.recordComplexLiveQueryReexec(this.query);
+          }
           this.exec().then((value) => {
             if (!active) return;
             initialized = true;
@@ -7261,6 +7371,9 @@ function successPayloadFromChangeEvent(event) {
 }
 function documentIdFromDoc(doc) {
   return String(doc?.id || doc?._id || doc?.document_id || doc?.documentId || "").trim();
+}
+function cloneJson2(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
 }
 function singlePrimaryKeyCandidateId(query = {}, primaryPath = "id") {
   const selector = query?.selector || {};
