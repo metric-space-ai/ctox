@@ -25,29 +25,29 @@ use anyhow::Context;
 use base64::Engine;
 use chrono::{DateTime, FixedOffset};
 use rusqlite::types::Value as SqlValue;
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params, params_from_iter};
+use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension};
 use rxdb::plugins::replication_webrtc::{
-    CollectionAuthzHook, DocumentReadAuthzHook, RTCIceServer, RxWebRTCReplicationPool,
-    WebRTCRsConnectionHandler, file_fetch_handler::FileRange,
+    file_fetch_handler::FileRange, CollectionAuthzHook, DocumentReadAuthzHook, RTCIceServer,
+    RxWebRTCReplicationPool, WebRTCRsConnectionHandler,
 };
 use rxdb::rx_collection::RxCollection;
 use rxdb::rx_collection_helper::fill_object_data_before_insert;
-use rxdb::rx_database::{RxCollectionCreator, RxDatabase, RxDatabaseCreator, create_rx_database};
-use rxdb::storage::sqlite::{RxStorageSqliteSettings, get_rx_storage_sqlite};
+use rxdb::rx_database::{create_rx_database, RxCollectionCreator, RxDatabase, RxDatabaseCreator};
+use rxdb::storage::sqlite::{get_rx_storage_sqlite, RxStorageSqliteSettings};
 use rxdb::types::{BulkWriteRow, HashOutput, JsonSchema, MangoQuery, RxJsonSchema};
-use serde_json::Value;
 use serde_json::json;
+use serde_json::Value;
 use sha2::Digest;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
@@ -145,6 +145,8 @@ const DESKTOP_FILE_CHUNK_CLEANUP_SCAN_LIMIT: u64 = 100_000;
 const DESKTOP_FILE_INDEX_MAINTENANCE_INTERVAL_SECS: u64 = 10 * 60;
 const DESKTOP_FILE_INDEX_MAINTENANCE_FILE_LIMIT: usize = 1_000;
 const DESKTOP_FILE_INDEX_MAINTENANCE_CHUNK_DELETE_LIMIT: usize = 5_000;
+const DESKTOP_FILE_INDEX_MAINTENANCE_FILE_TOMBSTONE_DELETE_LIMIT: usize = 5_000;
+const DESKTOP_FILE_INDEX_UNSAFE_TOMBSTONE_RETENTION_SECS: u64 = 24 * 60 * 60;
 const DESKTOP_FILE_CONTENT_HASH_SCHEME: &str = "sha256-bytes-v1";
 const DESKTOP_FILE_CHUNK_HASH_SCHEME: &str = "sha256-base64-chunk-v1";
 const CTOX_DESKTOP_FOLDER_ID: &str = "fs_ctox";
@@ -2959,11 +2961,13 @@ async fn sync_desktop_file_index_background_loop(
                     Ok(stats) if stats.changed() => {
                         eprintln!(
                             "[business-os] desktop file index maintenance: tombstoned {} unsafe file(s), \
-                             removed {} unsafe chunk(s), {} stale chunk(s), {} deleted chunk tombstone(s)",
+                             removed {} unsafe chunk(s), {} stale chunk(s), {} deleted chunk tombstone(s), \
+                             {} unsafe file tombstone(s)",
                             stats.tombstoned_unsafe_files,
                             stats.removed_unsafe_chunks,
                             stats.removed_stale_chunks,
-                            stats.removed_deleted_chunks
+                            stats.removed_deleted_chunks,
+                            stats.removed_unsafe_file_tombstones
                         );
                     }
                     Ok(_) => {}
@@ -4619,11 +4623,9 @@ async fn drain_browser_session_inputs(
                 "session_id": { "$eq": session_id },
                 "status": { "$eq": "pending" }
             })),
-            sort: Some(vec![
-                [("seq".to_string(), "asc".to_string())]
-                    .into_iter()
-                    .collect(),
-            ]),
+            sort: Some(vec![[("seq".to_string(), "asc".to_string())]
+                .into_iter()
+                .collect()]),
             limit: Some(64),
             ..Default::default()
         }))
@@ -4991,11 +4993,9 @@ async fn gc_consumed_browser_input_events(database: &Arc<RxDatabase>) -> anyhow:
                     "status": { "$eq": status },
                     "created_at_ms": { "$lt": cutoff }
                 })),
-                sort: Some(vec![
-                    [("created_at_ms".to_string(), "asc".to_string())]
-                        .into_iter()
-                        .collect(),
-                ]),
+                sort: Some(vec![[("created_at_ms".to_string(), "asc".to_string())]
+                    .into_iter()
+                    .collect()]),
                 limit: Some(BROWSER_INPUT_EVENT_GC_LIMIT),
                 ..Default::default()
             }))
@@ -9338,6 +9338,7 @@ struct DesktopFileIndexMaintenanceStats {
     removed_unsafe_chunks: usize,
     removed_stale_chunks: usize,
     removed_deleted_chunks: usize,
+    removed_unsafe_file_tombstones: usize,
 }
 
 impl DesktopFileIndexMaintenanceStats {
@@ -9346,6 +9347,7 @@ impl DesktopFileIndexMaintenanceStats {
             || self.removed_unsafe_chunks > 0
             || self.removed_stale_chunks > 0
             || self.removed_deleted_chunks > 0
+            || self.removed_unsafe_file_tombstones > 0
     }
 }
 
@@ -9470,9 +9472,33 @@ fn compact_desktop_file_index_store_sync(
         ),
         [],
     )?;
+    let unsafe_tombstone_cutoff = now
+        - Duration::from_secs(DESKTOP_FILE_INDEX_UNSAFE_TOMBSTONE_RETENTION_SECS).as_millis()
+            as f64;
+    stats.removed_unsafe_file_tombstones = tx.execute(
+        &format!(
+            "DELETE FROM {FILES_TABLE}
+             WHERE rowid IN (
+               SELECT rowid FROM {FILES_TABLE}
+               INDEXED BY ctox_business_os_desktop_files_deleted_unsafe_idx
+               WHERE COALESCE(deleted, 0) = 1
+                 AND json_extract(data, '$.source') = 'ctox-core'
+                 AND COALESCE(json_extract(data, '$.is_deleted'), 0) = 1
+                 AND json_extract(data, '$.tombstone_reason') = 'unsafe_internal_ctox_path'
+                 AND COALESCE(lastWriteTime, 0) <= ?1
+               ORDER BY lastWriteTime, id
+               LIMIT ?2
+             )"
+        ),
+        params![
+            unsafe_tombstone_cutoff,
+            DESKTOP_FILE_INDEX_MAINTENANCE_FILE_TOMBSTONE_DELETE_LIMIT as i64,
+        ],
+    )?;
     if stats.tombstoned_unsafe_files == 0
         && stats.removed_unsafe_chunks == 0
         && stats.removed_deleted_chunks == 0
+        && stats.removed_unsafe_file_tombstones == 0
     {
         stats.removed_stale_chunks = tx.execute(
             &format!(
@@ -9588,6 +9614,22 @@ fn ensure_desktop_file_index_query_indexes(conn: &Connection) -> anyhow::Result<
         [],
     )
     .context("ensure desktop_files live ctox-core index")?;
+    conn.execute(
+        r#"
+        CREATE INDEX IF NOT EXISTS ctox_business_os_desktop_files_deleted_unsafe_idx
+        ON "ctox_business_os__desktop_files__v0" (
+            COALESCE(deleted, 0),
+            json_extract(data, '$.tombstone_reason'),
+            lastWriteTime,
+            id
+        )
+        WHERE COALESCE(deleted, 0) = 1
+          AND json_extract(data, '$.source') = 'ctox-core'
+          AND COALESCE(json_extract(data, '$.is_deleted'), 0) = 1
+        "#,
+        [],
+    )
+    .context("ensure desktop_files unsafe tombstone cleanup index")?;
     if sqlite_table_exists(conn, "ctox_business_os__desktop_file_chunks__v0")?
         && sqlite_table_has_column(conn, "ctox_business_os__desktop_file_chunks__v0", "deleted")?
     {
@@ -11017,9 +11059,9 @@ fn quote_sqlite_identifier(identifier: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::params;
     use rusqlite::Connection;
     use rusqlite::OptionalExtension;
-    use rusqlite::params;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_RXDB_DATABASE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -11029,16 +11071,12 @@ mod tests {
         let collections = business_record_projection_collections();
         assert!(!collections.iter().any(|name| name == "browser_frames"));
         assert!(!collections.iter().any(|name| name == "desktop_file_chunks"));
-        assert!(
-            !collections
-                .iter()
-                .any(|name| name == "ctox_runtime_settings")
-        );
-        assert!(
-            !collections
-                .iter()
-                .any(|name| name == "business_module_catalog")
-        );
+        assert!(!collections
+            .iter()
+            .any(|name| name == "ctox_runtime_settings"));
+        assert!(!collections
+            .iter()
+            .any(|name| name == "business_module_catalog"));
         // `knowledge_tables` is owned by the dedicated rows-embedding
         // projection (`sync_knowledge_tables_with_database`); the generic
         // business-record projection must not also write it.
@@ -11590,12 +11628,10 @@ mod tests {
                 .and_then(Value::as_str),
             Some("ctox.rxdb.subjects.runtime_counters.v1")
         );
-        assert!(
-            status
-                .pointer("/performance/rxdb_subjects/lagged_items_total")
-                .and_then(Value::as_u64)
-                .is_some()
-        );
+        assert!(status
+            .pointer("/performance/rxdb_subjects/lagged_items_total")
+            .and_then(Value::as_u64)
+            .is_some());
         assert!(is_native_peer_running_for_root(root.path()));
     }
 
@@ -13202,12 +13238,10 @@ mod tests {
             materialized.get("content_state").and_then(Value::as_str),
             Some("available")
         );
-        assert!(
-            materialized
-                .get("content_synced_at_ms")
-                .and_then(Value::as_u64)
-                .is_some()
-        );
+        assert!(materialized
+            .get("content_synced_at_ms")
+            .and_then(Value::as_u64)
+            .is_some());
         let materialized_chunks: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM ctox_business_os__desktop_file_chunks__v0 WHERE id LIKE ?1",
@@ -13817,24 +13851,18 @@ mod tests {
         assert_eq!(settings.get("ok").and_then(Value::as_bool), Some(true));
         assert!(settings.get("runtime").and_then(Value::as_object).is_some());
         assert!(settings.get("auth").and_then(Value::as_object).is_some());
-        assert!(
-            settings
-                .get("harness_flow")
-                .and_then(Value::as_object)
-                .is_some()
-        );
-        assert!(
-            settings
-                .get("queue_health")
-                .and_then(Value::as_object)
-                .is_some()
-        );
-        assert!(
-            settings
-                .get("diagnostics")
-                .and_then(Value::as_object)
-                .is_some()
-        );
+        assert!(settings
+            .get("harness_flow")
+            .and_then(Value::as_object)
+            .is_some());
+        assert!(settings
+            .get("queue_health")
+            .and_then(Value::as_object)
+            .is_some());
+        assert!(settings
+            .get("diagnostics")
+            .and_then(Value::as_object)
+            .is_some());
     }
 
     #[test]
@@ -14637,12 +14665,10 @@ mod tests {
             repaired.get("title").and_then(Value::as_str),
             Some("Projected document repaired")
         );
-        assert!(
-            repaired
-                .get("_meta")
-                .and_then(|meta| meta.get("lwt"))
-                .is_some()
-        );
+        assert!(repaired
+            .get("_meta")
+            .and_then(|meta| meta.get("lwt"))
+            .is_some());
         assert!(repaired.get("_rev").and_then(Value::as_str).is_some());
     }
 
@@ -15273,12 +15299,10 @@ mod tests {
                 command_payload.get("status").and_then(Value::as_str),
                 Some("failed")
             );
-            assert!(
-                command_payload
-                    .get("error")
-                    .and_then(Value::as_str)
-                    .is_some()
-            );
+            assert!(command_payload
+                .get("error")
+                .and_then(Value::as_str)
+                .is_some());
         });
     }
 
@@ -15366,13 +15390,11 @@ mod tests {
                 repaired.get("tracking_status").and_then(Value::as_str),
                 Some("failed")
             );
-            assert!(
-                message
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .contains("kein passender Command")
-            );
+            assert!(message
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("kein passender Command"));
         });
     }
 
@@ -16156,6 +16178,138 @@ mod tests {
     }
 
     #[test]
+    fn desktop_file_index_maintenance_purges_old_unsafe_file_tombstones() {
+        let root = tempfile::tempdir().expect("temp root");
+        let database_path = store::rxdb_store_path(root.path());
+        fs::create_dir_all(database_path.parent().expect("rxdb parent")).expect("create rxdb dir");
+        let conn = Connection::open(&database_path).expect("open rxdb sqlite");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE ctox_business_os__desktop_files__v0 (
+                id TEXT NOT NULL PRIMARY KEY UNIQUE,
+                revision TEXT,
+                deleted INTEGER NOT NULL CHECK (deleted IN (0, 1)),
+                lastWriteTime REAL NOT NULL,
+                data TEXT NOT NULL
+            );
+            CREATE TABLE ctox_business_os__desktop_file_chunks__v0 (
+                id TEXT NOT NULL PRIMARY KEY UNIQUE,
+                revision TEXT,
+                deleted INTEGER NOT NULL CHECK (deleted IN (0, 1)),
+                lastWriteTime REAL NOT NULL,
+                data TEXT NOT NULL
+            );
+            "#,
+        )
+        .expect("create desktop index tables");
+        let old_tombstone = json!({
+            "id": "old-unsafe-file",
+            "_rev": "2-ctox-maintenance",
+            "_deleted": true,
+            "kind": "file",
+            "source": "ctox-core",
+            "is_deleted": true,
+            "local_path": "/Users/test/.local/lib/ctox/releases/old/file.md",
+            "tombstone_reason": "unsafe_internal_ctox_path",
+            "deleted_at_ms": 1,
+        });
+        let fresh_tombstone = json!({
+            "id": "fresh-unsafe-file",
+            "_rev": "2-ctox-maintenance",
+            "_deleted": true,
+            "kind": "file",
+            "source": "ctox-core",
+            "is_deleted": true,
+            "local_path": "/Users/test/.local/lib/ctox/releases/fresh/file.md",
+            "tombstone_reason": "unsafe_internal_ctox_path",
+            "deleted_at_ms": now_ms() as u64,
+        });
+        let old_missing_tombstone = json!({
+            "id": "old-missing-file",
+            "_rev": "2-ctox-maintenance",
+            "_deleted": true,
+            "kind": "file",
+            "source": "ctox-core",
+            "is_deleted": true,
+            "local_path": "/Users/test/Documents/missing.md",
+            "tombstone_reason": "missing_from_scan",
+            "deleted_at_ms": 1,
+        });
+        let old_browser_tombstone = json!({
+            "id": "old-browser-file",
+            "_rev": "2-browser",
+            "_deleted": true,
+            "kind": "file",
+            "source": "browser-upload",
+            "is_deleted": true,
+            "local_path": "/Users/test/.local/lib/ctox/releases/browser/file.md",
+            "tombstone_reason": "unsafe_internal_ctox_path",
+            "deleted_at_ms": 1,
+        });
+        let live_unsafe_looking_row = json!({
+            "id": "live-unsafe-looking-file",
+            "_rev": "1-live",
+            "kind": "file",
+            "source": "ctox-core",
+            "is_deleted": false,
+            "local_path": "/Users/test/.local/lib/ctox/releases/live/file.md",
+        });
+        for (id, deleted, last_write_time, document) in [
+            ("old-unsafe-file", 1, 1.0_f64, old_tombstone),
+            ("fresh-unsafe-file", 1, f64::MAX, fresh_tombstone),
+            ("old-missing-file", 1, 1.0_f64, old_missing_tombstone),
+            ("old-browser-file", 1, 1.0_f64, old_browser_tombstone),
+            (
+                "live-unsafe-looking-file",
+                0,
+                1.0_f64,
+                live_unsafe_looking_row,
+            ),
+        ] {
+            conn.execute(
+                "INSERT INTO ctox_business_os__desktop_files__v0 \
+                 (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    id,
+                    document
+                        .get("_rev")
+                        .and_then(Value::as_str)
+                        .unwrap_or("1-seed"),
+                    deleted,
+                    last_write_time,
+                    serde_json::to_string(&document).expect("desktop file json")
+                ],
+            )
+            .expect("insert desktop file row");
+        }
+        drop(conn);
+
+        let stats = compact_desktop_file_index_store_sync(root.path(), None)
+            .expect("compact desktop index");
+        assert_eq!(stats.removed_unsafe_file_tombstones, 1);
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("reopen sqlite");
+        let row_exists = |id: &str| -> i64 {
+            conn.query_row(
+                "SELECT COUNT(*) FROM ctox_business_os__desktop_files__v0 WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .expect("desktop file row count")
+        };
+        let old_exists = row_exists("old-unsafe-file");
+        let fresh_exists = row_exists("fresh-unsafe-file");
+        let missing_exists = row_exists("old-missing-file");
+        let browser_exists = row_exists("old-browser-file");
+        let live_exists = row_exists("live-unsafe-looking-file");
+        assert_eq!(old_exists, 0);
+        assert_eq!(fresh_exists, 1);
+        assert_eq!(missing_exists, 1);
+        assert_eq!(browser_exists, 1);
+        assert_eq!(live_exists, 1);
+    }
+
+    #[test]
     fn desktop_file_index_maintenance_uses_bounded_unsafe_candidate_plan() {
         let root = tempfile::tempdir().expect("temp root");
         let database_path = store::rxdb_store_path(root.path());
@@ -16416,11 +16570,9 @@ mod tests {
             .expect("query index list")
             .collect::<Result<Vec<_>, _>>()
             .expect("collect index list");
-        assert!(
-            index_names
-                .iter()
-                .any(|name| name == "ctox_business_os_desktop_files_live_core_idx")
-        );
+        assert!(index_names
+            .iter()
+            .any(|name| name == "ctox_business_os_desktop_files_live_core_idx"));
         drop(conn);
 
         let documents = load_live_ctox_desktop_file_documents_sync(root.path())
@@ -16787,12 +16939,10 @@ mod tests {
             original.get("tombstone_reason").and_then(Value::as_str),
             Some("missing_from_scan")
         );
-        assert!(
-            original
-                .get("deleted_at_ms")
-                .and_then(Value::as_u64)
-                .is_some()
-        );
+        assert!(original
+            .get("deleted_at_ms")
+            .and_then(Value::as_u64)
+            .is_some());
 
         let renamed_json: String = conn
             .query_row(
