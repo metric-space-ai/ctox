@@ -11,12 +11,14 @@ const {
   documentMatchesReplicationOrigin,
   indexValuesFor,
   normalizeDocument,
+  normalizeStoredReplicationFlags,
   normalizeSchemaIndexes,
   primaryKeyCandidateIds,
   replicationScanLimit,
   schemaIndexEntriesFor,
   schemaIndexQueryPlanFor,
   selectBestIndex,
+  shouldUsePushableReplicationIndex,
 } = ctoxIndexedDbStorageTestInternals;
 const { normalizeDoc } = ctoxRxdbTestInternals;
 
@@ -147,6 +149,23 @@ assert(
   !locallyEditedDoc._meta?.ctoxReplicationOrigin,
   'local writes must clear replication origin so browser edits remain pushable',
 );
+assert(shouldUsePushableReplicationIndex('ctox_instance') === true, 'ctox-origin push reads must use the pushable index');
+assert(shouldUsePushableReplicationIndex('browser') === false, 'non-ctox roles keep the generic changed-since scan');
+const legacyRemoteRecord = normalizeStoredReplicationFlags({
+  collection: 'messages',
+  id: 'remote-legacy',
+  lwt: 99,
+  doc: pulledDoc,
+});
+assert(legacyRemoteRecord.pushable === 0, 'legacy replicated records must migrate as non-pushable');
+assert(legacyRemoteRecord.replicationOriginRole === 'ctox_instance', 'legacy replicated records must preserve origin role');
+const legacyLocalRecord = normalizeStoredReplicationFlags({
+  collection: 'messages',
+  id: 'local-legacy',
+  lwt: 100,
+  doc: locallyEditedDoc,
+});
+assert(legacyLocalRecord.pushable === 1, 'legacy local records must migrate as pushable');
 assert(
   primaryKeyCandidateIds({ selector: { 'message.key': 'message-1' } }, 'message.key').join(',') === 'message-1',
   'nested primary-key equality should be detected as a bounded candidate query',
@@ -223,6 +242,39 @@ try {
   assert(fakeBulkDb.stats.gets === 3, `bulkUpsert must read existing rows once per doc in the write transaction, got ${fakeBulkDb.stats.gets}`);
   assert(fakeBulkDb.stats.puts === 3, `bulkUpsert must write each accepted doc once, got ${fakeBulkDb.stats.puts}`);
   assert(fakeBulkDb.stats.cursorOpens === 1, `bulkUpsert must read the collection lwt floor once, got ${fakeBulkDb.stats.cursorOpens}`);
+
+  const pushableDb = createFakeIndexedDb([
+    {
+      collection: 'pushable_changes',
+      id: 'remote-1',
+      lwt: 10,
+      pushable: 0,
+      deleted: false,
+      doc: { id: 'remote-1', _meta: { lwt: 10, ctoxReplicationOrigin: { role: 'ctox_instance' } } },
+    },
+    {
+      collection: 'pushable_changes',
+      id: 'remote-2',
+      lwt: 11,
+      pushable: 0,
+      deleted: false,
+      doc: { id: 'remote-2', _meta: { lwt: 11, ctoxReplicationOrigin: { role: 'ctox_instance' } } },
+    },
+    {
+      collection: 'pushable_changes',
+      id: 'local-1',
+      lwt: 12,
+      pushable: 1,
+      deleted: false,
+      doc: { id: 'local-1', _meta: { lwt: 12 } },
+    },
+  ]);
+  const pushableCollection = new CtoxIndexedDbCollection(pushableDb, 'pushable_changes', { schema: { primaryKey: 'id' } });
+  const pushableResult = await pushableCollection.getChangedDocumentsSince(null, 1, {
+    excludeReplicationOriginRole: 'ctox_instance',
+  });
+  assert(pushableResult.documents.map((doc) => doc.id).join(',') === 'local-1', 'pushable index must return only local changes');
+  assert(pushableResult.scanned === 1, `pushable index must not scan remote-origin rows, got scanned=${pushableResult.scanned}`);
 } finally {
   if (previousIdbKeyRange === undefined) {
     delete globalThis.IDBKeyRange;
@@ -342,11 +394,11 @@ function createFakeObjectStore(records, stats, tx) {
         return record;
       });
     },
-    index() {
+    index(indexName) {
       return {
-        openCursor(range) {
+        openCursor(range, direction = 'next') {
           stats.cursorOpens += 1;
-          return fakeRequest(tx, () => latestCollectionCursor(records, range?.lower?.[0]));
+          return fakeCursorRequest(tx, () => cursorRecordsForIndex(records, indexName, range, direction), records);
         },
       };
     },
@@ -381,11 +433,120 @@ function fakeRequest(tx, produce) {
   return request;
 }
 
-function latestCollectionCursor(records, collection) {
-  const latest = Array.from(records.values())
-    .filter((record) => record.collection === collection)
-    .sort((left, right) => (Number(right.lwt || 0) - Number(left.lwt || 0)) || String(right.id).localeCompare(String(left.id)))[0];
-  return latest ? { value: cloneJson(latest) } : null;
+function fakeCursorRequest(tx, produce, records) {
+  const request = {
+    result: undefined,
+    error: null,
+    onsuccess: null,
+    onerror: null,
+  };
+  tx._pending += 1;
+  let rows = [];
+  let offset = 0;
+  let active = true;
+  const finishCursor = () => {
+    if (!active) return;
+    active = false;
+    tx._pending -= 1;
+    settleTransactionIfIdle(tx);
+  };
+  const emit = () => {
+    queueMicrotask(() => {
+      try {
+        if (!rows.length) rows = produce();
+        const row = rows[offset] || null;
+        if (!row) {
+          request.result = null;
+          request.onsuccess?.();
+          finishCursor();
+          return;
+        }
+        let continued = false;
+        request.result = {
+          value: cloneJson(row),
+          continue() {
+            if (continued || !active) return;
+            continued = true;
+            offset += 1;
+            emit();
+          },
+          update(next) {
+            return fakeRequest(tx, () => {
+              const cloned = cloneJson(next);
+              records.set(recordKey(cloned.collection, cloned.id), cloned);
+              rows[offset] = cloned;
+              return cloned;
+            });
+          },
+        };
+        request.onsuccess?.();
+        setTimeout(() => {
+          if (!continued) finishCursor();
+        }, 0);
+      } catch (error) {
+        request.error = error;
+        request.onerror?.();
+        finishCursor();
+      }
+    });
+  };
+  emit();
+  return request;
+}
+
+function settleTransactionIfIdle(tx) {
+  setTimeout(() => {
+    if (tx._pending === 0 && !tx._settled) {
+      tx._settled = true;
+      tx.oncomplete?.();
+    }
+  }, 0);
+}
+
+function cursorRecordsForIndex(records, indexName, range, direction) {
+  const rows = Array.from(records.values())
+    .map((record) => ({ record, key: keyForIndex(record, indexName) }))
+    .filter((entry) => entry.key && keyInRange(entry.key, range))
+    .sort((left, right) => compareKeys(left.key, right.key))
+    .map((entry) => entry.record);
+  return direction === 'prev' ? rows.reverse() : rows;
+}
+
+function keyForIndex(record, indexName) {
+  if (indexName === 'collection') return [record.collection];
+  if (indexName === 'collectionLwtId') return [record.collection, Number(record.lwt || 0), String(record.id || '')];
+  if (indexName === 'collectionPushableLwtId') {
+    return [record.collection, Number(record.pushable || 0), Number(record.lwt || 0), String(record.id || '')];
+  }
+  return null;
+}
+
+function keyInRange(key, range) {
+  if (!range) return true;
+  if (Object.hasOwn(range, 'only')) return compareKeys(key, Array.isArray(range.only) ? range.only : [range.only]) === 0;
+  if (range.lower) {
+    const lowerCmp = compareKeys(key, range.lower);
+    if (lowerCmp < 0 || (lowerCmp === 0 && range.lowerOpen)) return false;
+  }
+  if (range.upper) {
+    const upperCmp = compareKeys(key, range.upper);
+    if (upperCmp > 0 || (upperCmp === 0 && range.upperOpen)) return false;
+  }
+  return true;
+}
+
+function compareKeys(left, right) {
+  const len = Math.max(left.length, right.length);
+  for (let i = 0; i < len; i += 1) {
+    const a = left[i];
+    const b = right[i];
+    if (a === b) continue;
+    if (a === undefined) return -1;
+    if (b === undefined) return 1;
+    if (typeof a === 'number' && typeof b === 'number') return a - b;
+    return String(a).localeCompare(String(b));
+  }
+  return 0;
 }
 
 function recordKeyFromIdbKey(key) {

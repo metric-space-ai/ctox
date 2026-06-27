@@ -576,9 +576,10 @@ function waitForEvent(emitter, type, timeoutMs = 1e4) {
 }
 
 // src/apps/business-os/rxdb/src/storage-indexeddb.mjs
-var DB_VERSION = 2;
+var DB_VERSION = 3;
 var DOCUMENT_STORE = "documents";
 var SCHEMA_INDEX_ENTRIES = "schemaIndexEntries";
+var PUSHABLE_LWT_INDEX = "collectionPushableLwtId";
 var OPEN_DATABASE_TIMEOUT_MS = 4e3;
 var REPLICATION_SCAN_MULTIPLIER = 50;
 var REPLICATION_MIN_SCAN_LIMIT = 1;
@@ -951,10 +952,11 @@ var CtoxIndexedDbCollection = class {
     const fromLwt = Number(checkpoint?.lwt || 0);
     const fromId = String(checkpoint?.id || "");
     const excludedOriginRole = String(options?.excludeReplicationOriginRole || "").trim();
+    const usePushableIndex = shouldUsePushableReplicationIndex(excludedOriginRole);
     const scanLimit = replicationScanLimit(limit);
     const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
-    const index = tx.objectStore(DOCUMENT_STORE).index("collectionLwtId");
-    const range = IDBKeyRange.bound([this.name, fromLwt, fromId], [this.name, Number.MAX_SAFE_INTEGER, "\uFFFF"], true, false);
+    const index = tx.objectStore(DOCUMENT_STORE).index(usePushableIndex ? PUSHABLE_LWT_INDEX : "collectionLwtId");
+    const range = usePushableIndex ? IDBKeyRange.bound([this.name, 1, fromLwt, fromId], [this.name, 1, Number.MAX_SAFE_INTEGER, "\uFFFF"], true, false) : IDBKeyRange.bound([this.name, fromLwt, fromId], [this.name, Number.MAX_SAFE_INTEGER, "\uFFFF"], true, false);
     const documents = [];
     let nextCheckpoint = checkpoint || null;
     let scanned = 0;
@@ -1119,6 +1121,10 @@ function openDatabase(databaseName) {
           multiEntry: true
         });
       }
+      if (store && !store.indexNames.contains(PUSHABLE_LWT_INDEX)) {
+        store.createIndex(PUSHABLE_LWT_INDEX, ["collection", "pushable", "lwt", "id"], { unique: false });
+        migrateStoredReplicationFlags(store);
+      }
     };
     request.onsuccess = () => {
       if (!finish(resolve, request.result)) {
@@ -1154,15 +1160,44 @@ function normalizeDocument(doc, lwt, replicationOrigin = null) {
   return normalized;
 }
 function storedRecordForWrite({ collection, id, doc, lwt, indexes, indexSignature, replicationOrigin = null }) {
+  const normalizedDoc = normalizeDocument(doc, lwt, replicationOrigin);
+  const replicationOriginRole = String(replicationOrigin?.role || "").slice(0, 64);
   return {
     collection,
     id,
     lwt,
     deleted: Boolean(doc._deleted),
+    replicationOriginRole,
+    pushable: replicationOriginRole ? 0 : 1,
     indexValues: indexValuesFor(indexes, doc),
     schemaIndexSignature: indexSignature,
     schemaIndexEntries: schemaIndexEntriesFor(indexes, doc, id, collection),
-    doc: normalizeDocument(doc, lwt, replicationOrigin)
+    doc: normalizedDoc
+  };
+}
+function migrateStoredReplicationFlags(store) {
+  const request = store.openCursor();
+  request.onsuccess = () => {
+    const cursor = request.result;
+    if (!cursor) return;
+    const next = normalizeStoredReplicationFlags(cursor.value);
+    if (next !== cursor.value) {
+      cursor.update(next);
+    }
+    cursor.continue();
+  };
+}
+function normalizeStoredReplicationFlags(record) {
+  if (!record || typeof record !== "object") return record;
+  const role = String(record.doc?._meta?.ctoxReplicationOrigin?.role || "").slice(0, 64);
+  const pushable = role ? 0 : 1;
+  if (record.replicationOriginRole === role && record.pushable === pushable) {
+    return record;
+  }
+  return {
+    ...record,
+    replicationOriginRole: role,
+    pushable
   };
 }
 function shouldAcceptDocumentWrite(existingRecord, incomingLwt, replicationOrigin = null) {
@@ -1208,6 +1243,9 @@ function documentMatchesReplicationOrigin(doc, excludedOriginRole) {
   if (!excludedOriginRole) return false;
   const origin = doc?._meta?.ctoxReplicationOrigin;
   return origin?.role === excludedOriginRole;
+}
+function shouldUsePushableReplicationIndex(excludedOriginRole) {
+  return excludedOriginRole === "ctox_instance";
 }
 function replicationScanLimit(limit) {
   const batchLimit = Number.isFinite(limit) && limit > 0 ? limit : 100;
@@ -1573,6 +1611,7 @@ var ctoxIndexedDbStorageTestInternals = {
   documentMatchesReplicationOrigin,
   indexValuesFor,
   normalizeDocument,
+  normalizeStoredReplicationFlags,
   normalizeSchemaIndexes,
   canUseBoundedCollectionCursor,
   encodeIndexValue,
@@ -1581,6 +1620,7 @@ var ctoxIndexedDbStorageTestInternals = {
   schemaIndexEntriesFor,
   schemaIndexQueryPlanFor,
   selectBestIndex,
+  shouldUsePushableReplicationIndex,
   shouldAcceptDocumentWrite
 };
 

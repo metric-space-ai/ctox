@@ -111,8 +111,7 @@ against source:
   schema-index equality/range cursors, browser `count()`, CTOX-origin
   push-scan suppression, and sync diagnostic fanout are now reduced. The
   remaining browser risks are non-indexed `allDocuments()` fallback, full
-  re-query subscriptions, local push scan mitigation after the new counters,
-  per-chunk browser uploads, and chunk bookkeeping.
+  re-query subscriptions, per-chunk browser uploads, and chunk bookkeeping.
 
 Additional read-only subagent review on 2026-06-26 rechecked the remaining
 performance risks after the browser/RxDB fixes:
@@ -2293,6 +2292,16 @@ Implementation status:
   app-local RxDB bundle was rebuilt and the shared `db.js`/`sync.js`
   cache-busters were bumped together to
   `20260628-local-push-scan-metrics-v1`.
+- Done on 2026-06-28 for local-push scan mitigation: browser IndexedDB storage
+  now stores a `pushable` replication flag and maintains a
+  `collectionPushableLwtId` index. CTOX-origin-excluding changed-since reads
+  use that index, so local push scans iterate local/browser-dirty rows instead
+  of reading CTOX-origin rows and filtering them after the cursor step. The
+  IndexedDB v3 upgrade migrates existing records' replication flags once at
+  open, and the storage smoke proves two preceding CTOX-origin rows are not
+  counted in the local-push `scanned` total. The app-local RxDB bundle was
+  rebuilt and the shared `db.js`/`sync.js` cache-busters were bumped together
+  to `20260628-pushable-lwt-index-v1`.
 - Still open: broader browser chunk-stream/range APIs and any remaining
   non-central upload/import paths, blob/chunk read/range APIs, Research blob
   reads, Universal Importer/file-integrity helpers, schema-aware file-demand
@@ -2318,6 +2327,11 @@ Validation:
 - `node src/apps/business-os/rxdb/tests/run-all.mjs` passed on 2026-06-28
   after the local-push changed-since diagnostics change: 50 passed, 0 failed,
   2 skipped because the wire daemon was not built.
+- `node src/apps/business-os/rxdb/tests/storage-index-smoke.mjs` passed on
+  2026-06-28 for the `collectionPushableLwtId` local-push scan mitigation.
+- `node src/apps/business-os/rxdb/tests/run-all.mjs` passed on 2026-06-28
+  after the `collectionPushableLwtId` local-push scan mitigation: 50 passed,
+  0 failed, 2 skipped because the wire daemon was not built.
 - `node src/apps/business-os/rxdb/tests/demand-loader-smoke.mjs` passed.
 - `node src/apps/business-os/rxdb/tests/demand-invalidation-hotpath-smoke.mjs` passed.
 - `node src/apps/business-os/modules/cv-print-builder/tests/cv-print-builder.test.mjs` passed.
@@ -2843,7 +2857,7 @@ finding.
 | L-rxdb-native-1 | Business command consumer status scan | fixed | Phase 1.4 |
 | L-rxdb-native-2 | `bulk_write` per-id current-state point query | fixed | Phase 2.3 |
 | L-browser-1 | `encodedSize()` allocates/encodes per frame | fixed | WebRTC `encodedSize()` now computes UTF-8 byte length without allocating `TextEncoder` buffers; frame-chunking smoke covers byte parity and bundle rebuild reproducibility. |
-| L-browser-2 | Local writes push immediately with scan multiplier | partial | Immediate-push bursts are reduced, but the local push scan multiplier remains and still needs a local-origin dirty index or a strict row-scan budget. |
+| L-browser-2 | Local writes push immediately with scan multiplier | fixed | Immediate-push bursts are debounced, and CTOX-origin-excluding changed-since reads now use the `collectionPushableLwtId` local/browser-dirty index instead of scanning remote-origin rows and filtering them afterward. |
 | L-browser-3 | Chunk reassembly recomputes contiguous sequence O(n^2) | fixed | Incoming frame reassembly keeps incremental `contiguousSeq` ACK state per transfer instead of rescanning received chunks on every frame; final payload assembly is one pass at completion. |
 | L-infer-1 | Metal dispatch string key + locked linear PSO lookup | open | Phase 7 |
 | L-infer-2 | Host argmax over full vocab per slot | open | Phase 7 |

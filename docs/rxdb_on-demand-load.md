@@ -52,7 +52,7 @@ Entscheidungen, die vor Wave 1 finalisiert sind:
 Dieses Dokument beschreibt **V1.5**: eine additive Erweiterung der existierenden RxDB-Bruecke zwischen Business-OS-Browser und CTOX. V1 (heute) ist die Checkpoint-basierte Replikation pro Collection ueber WebRTC mit `masterChangesSince` / `masterWrite`. V1.5 ergaenzt **Query-Demand-Loading** als zweiten Pfad. V1 bleibt unveraendert lauffaehig:
 
 - Die bestehenden RPCs (`masterChangesSince`, `masterWrite`, `ctoxProtocol`, `token`) bleiben Wire-kompatibel.
-- **Primaere IndexedDB-DB unangetastet.** `ctox_business_os_js_v1`, sein `documents`-Store, Key Path `[collection, id]`, Indizes `collection`/`collectionLwtId` und Record-Format `{ collection, id, lwt, deleted, indexValues, doc }` bleiben byte-identisch. `DB_VERSION` der primaeren DB bleibt `1`.
+- **Primaere IndexedDB-DB bleibt die Browser-Dokumentablage, bekommt aber additive Performance-Metadaten.** `ctox_business_os_js_v1` nutzt weiter den `documents`-Store mit Key Path `[collection, id]`; lokale Performance-Indizes wie `schemaIndexEntries` und `collectionPushableLwtId` duerfen dort liegen, solange sie keine HTTP-/SQLite-Datenbruecke einfuehren.
 - **Sidecar-IndexedDB-DB fuer V1.5-Metadaten.** Eine **separate** IDB-Datenbank `ctox_business_os_v1_5_meta` traegt die Query-Window-Completeness, Access-Times, Cache-Stats und Dedup-Hilfsstrukturen. Diese DB existiert nur, wenn V1.5 aktiv ist. Ein V1-Build kennt sie nicht und ignoriert sie.
 - **Kein Schema-Change in SQLite.** Keine neue Tabelle, keine neue Spalte, kein neuer Index auf CTOX-Seite. Der Query-Fetch-Handler ist ein neuer **Lesepfad** ueber die existierenden Tabellen (`business_records`, `communication_*` via `channels::*`). Server-seitige V1.5-Persistenz ist nicht noetig.
 - Browser- und CTOX-Peer verhandeln die neuen Faehigkeiten ueber die Capabilities-Liste (`ctox-rxdb-query-fetch-v1`). Faellt eine Seite weg, faehrt das System auf V1 zurueck.
@@ -136,8 +136,8 @@ Die autoritative Datenhaltung bleibt auf CTOX-Seite in SQLite. Der Browser haelt
 - Kein Vollspiegel aller CTOX-Daten in jedem Browser.
 - Keine Signaling-Server-Nutzung fuer Payload-Daten.
 - Keine Vermischung von allgemeiner RxDB-Replikation und Query-Completeness.
-- Kein Bruch der bestehenden Checkpoint-Replikation. Bestehende RPCs, IndexedDB-Stores, Indizes und Wire-Frames bleiben unveraendert.
-- **Keine Aenderung an der primaeren IndexedDB.** `ctox_business_os_js_v1` bleibt `DB_VERSION=1`, der `documents`-Store, seine Indizes und das Record-Format sind unveraendert.
+- Kein Bruch der bestehenden Checkpoint-Replikation. Bestehende RPCs und Wire-Frames bleiben kompatibel.
+- **Keine Browser-HTTP-Datenbruecke.** Additive primaere IndexedDB-Performancefelder/-Indizes sind erlaubt; sie duerfen aber nicht zur Source of Truth werden oder den WebRTC/RxDB-Pfad umgehen.
 - **Keine SQLite-Schema-Aenderung.** Keine neuen Tabellen, Spalten oder Indizes auf CTOX-Seite.
 - Kein Bezug auf "upstream RxDB"-Surfaces. Der JS-Code ist ein eigenstaendiger, minimaler RxDB-aehnlicher Layer, kein Fork von npm-`rxdb`. Es gibt nichts an upstream zu deaktivieren.
 
@@ -311,13 +311,13 @@ Abschlusskriterien:
 
 ## Phase 2: Sidecar-IndexedDB fuer V1.5-Metadaten
 
-Ziel: V1.5-Metadaten persistent ueber Reload und Tab-Wechsel halten, **ohne** die primaere DB anzufassen. Die Metadaten leben in einer separaten IndexedDB-Datenbank, die nur existiert, wenn V1.5 aktiv ist.
+Ziel: V1.5-Metadaten persistent ueber Reload und Tab-Wechsel halten. Query-/Cache-Window-Metadaten leben in einer separaten IndexedDB-Datenbank, die nur existiert, wenn V1.5 aktiv ist; eng an Dokumentzeilen gebundene lokale Performance-Indizes koennen additiv in der primaeren DB liegen.
 
-Primaere DB bleibt unveraendert:
+Primaere DB:
 
-- `ctox_business_os_js_v1`, `DB_VERSION = 1` (`storage-indexeddb.mjs:4`).
-- Object Store `documents`, Key Path `[collection, id]`, Indizes `collection` und `collectionLwtId`.
-- Record-Format `{ collection, id, lwt, deleted, indexValues, doc }` unveraendert.
+- `ctox_business_os_js_v1`, `DB_VERSION = 3` (`storage-indexeddb.mjs:4`).
+- Object Store `documents`, Key Path `[collection, id]`, Indizes `collection`, `collectionLwtId`, `schemaIndexEntries`, und `collectionPushableLwtId`.
+- Record-Format bleibt dokumentzentriert und enthaelt zusaetzlich lokale Performancefelder wie `replicationOriginRole` und `pushable`.
 - Schreiben/Lesen von Dokumenten laeuft genau wie heute durch `CtoxIndexedDbCollection`.
 
 Sidecar-DB (neu):
@@ -791,6 +791,6 @@ Dieses Thema ist erst abgeschlossen, wenn alle Punkte erfuellt sind:
 - Lokale und remote E2E-Smokes sind gruen.
 - Business-OS-Shell laedt weiterhin schnell und stabil.
 - V1.5 ist Capability-gated und durch Feature-Flag deaktivierbar; V1 funktioniert mit und ohne V1.5-Build auf der Gegenseite unveraendert.
-- Primaere IndexedDB-DB und SQLite-Tabellen sind nach V1.5-Aktivierung bit-fuer-bit identisch zu vor V1.5.
+- SQLite-Tabellen bleiben durch V1.5 unveraendert; primaere IndexedDB-Zusatzfelder/-Indizes bleiben lokale Browser-Performance-Metadaten und kein separater Datenpfad.
 - Sidecar-DB ist persistent, eviction- und reload-faehig, aber jederzeit risikolos loeschbar.
 - Rollback-Drill ist erfolgreich durchgefuehrt (Build-Downgrade + optionaler Sidecar-Cleanup).
