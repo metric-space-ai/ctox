@@ -106,6 +106,8 @@ static SQLITE_EXTERNAL_POLL_CHANGED_TABLE_READS: AtomicU64 = AtomicU64::new(0);
 static CHANGED_DOCUMENTS_SINCE_TABLE_CALLS: OnceLock<StdMutex<HashMap<String, usize>>> =
     OnceLock::new();
 #[cfg(test)]
+static READ_ONLY_OPEN_CALLS_BY_PATH: OnceLock<StdMutex<HashMap<String, u64>>> = OnceLock::new();
+#[cfg(test)]
 static FIND_DOCUMENTS_BY_ID_WRITER_FALLBACKS: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 static CHANGED_DOCUMENTS_SINCE_WRITER_FALLBACKS: AtomicUsize = AtomicUsize::new(0);
@@ -130,6 +132,29 @@ fn changed_documents_since_table_call_count(table_name: &str) -> usize {
         .lock()
         .unwrap();
     counts.get(table_name).copied().unwrap_or(0)
+}
+
+#[cfg(test)]
+fn record_read_only_open_call_for_path(path: &Path) {
+    let mut counts = READ_ONLY_OPEN_CALLS_BY_PATH
+        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    *counts
+        .entry(path.to_string_lossy().into_owned())
+        .or_insert(0) += 1;
+}
+
+#[cfg(test)]
+fn read_only_open_call_count_for_path(path: &Path) -> u64 {
+    let counts = READ_ONLY_OPEN_CALLS_BY_PATH
+        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    counts
+        .get(path.to_string_lossy().as_ref())
+        .copied()
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -1058,6 +1083,8 @@ fn sqlite_path_is_in_memory(path: &Path) -> bool {
 fn open_read_only_connection_for_path(path: &Path) -> RxResult<rusqlite::Connection> {
     use rusqlite::OpenFlags;
     SQLITE_READ_ONLY_OPEN_CALLS.fetch_add(1, Ordering::Relaxed);
+    #[cfg(test)]
+    record_read_only_open_call_for_path(path);
     let conn = rusqlite::Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -1848,9 +1875,9 @@ mod tests {
 
     use crate::rx_query_helper::{normalize_mango_query, prepare_query};
     use crate::storage::sqlite::sql::{
-        reset_sqlite_document_lookup_counts, reset_sqlite_json_document_decode_count,
-        sqlite_document_by_id_call_count, sqlite_documents_by_ids_call_count,
-        sqlite_json_document_decode_count,
+        reset_sqlite_document_lookup_counts_for_connection,
+        reset_sqlite_json_document_decode_count, sqlite_document_by_id_call_count_for_connection,
+        sqlite_documents_by_ids_call_count_for_connection, sqlite_json_document_decode_count,
     };
     use crate::storage::sqlite::{
         create_storage_instance, get_rx_storage_sqlite, RxStorageSqliteSettings,
@@ -2130,8 +2157,9 @@ mod tests {
     #[tokio::test]
     async fn file_backed_reads_reuse_cached_read_only_connection() {
         let dir = tempfile::tempdir().unwrap();
+        let database_path = dir.path().join("ctox.sqlite3");
         let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
-            database_path: dir.path().join("ctox.sqlite3"),
+            database_path: database_path.clone(),
         });
         let instance = create_storage_instance(&storage, params(test_schema()))
             .await
@@ -2154,7 +2182,7 @@ mod tests {
             "file-backed storage must reuse one read-only connection per instance"
         );
 
-        let opens_before = runtime_counter("read_only_open_calls");
+        let opens_before = read_only_open_call_count_for_path(&database_path);
         instance
             .find_documents_by_id(&["a".to_string()], false)
             .await
@@ -2163,10 +2191,10 @@ mod tests {
             .get_changed_documents_since(10, None)
             .await
             .unwrap();
-        let opens_after = runtime_counter("read_only_open_calls");
+        let opens_after = read_only_open_call_count_for_path(&database_path);
         assert_eq!(
             opens_after, opens_before,
-            "hot read paths must not reopen read-only SQLite connections"
+            "hot read paths must not reopen read-only SQLite connections for their database path"
         );
     }
 
@@ -2178,8 +2206,9 @@ mod tests {
         // lookup still yields correct conflict detection (successful update with
         // the right previous _rev, untouched neighbour, and a 409 on a stale rev).
         let dir = tempfile::tempdir().unwrap();
+        let database_path = dir.path().join("ctox.sqlite3");
         let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
-            database_path: dir.path().join("ctox.sqlite3"),
+            database_path: database_path.clone(),
         });
         let instance = create_storage_instance(&storage, params(test_schema()))
             .await
@@ -2200,7 +2229,11 @@ mod tests {
         );
 
         // Valid update (correct previous rev) + a fresh insert.
-        reset_sqlite_document_lookup_counts();
+        let lookup_conn = storage.connection().unwrap();
+        {
+            let conn = lookup_conn.lock();
+            reset_sqlite_document_lookup_counts_for_connection(&conn, &instance.table_name);
+        }
         let resp = instance
             .bulk_write(
                 vec![
@@ -2222,16 +2255,19 @@ mod tests {
             "valid update+insert must not error: {:?}",
             resp.error
         );
-        assert_eq!(
-            sqlite_document_by_id_call_count(),
-            0,
-            "bulk_write current-state load must not issue per-id document_by_id calls"
-        );
-        assert_eq!(
-            sqlite_documents_by_ids_call_count(),
-            1,
-            "bulk_write current-state load should use one batched ids lookup"
-        );
+        {
+            let conn = lookup_conn.lock();
+            assert_eq!(
+                sqlite_document_by_id_call_count_for_connection(&conn, &instance.table_name),
+                0,
+                "bulk_write current-state load must not issue per-id document_by_id calls"
+            );
+            assert_eq!(
+                sqlite_documents_by_ids_call_count_for_connection(&conn, &instance.table_name),
+                1,
+                "bulk_write current-state load should use one batched ids lookup"
+            );
+        }
 
         let got = instance
             .find_documents_by_id(

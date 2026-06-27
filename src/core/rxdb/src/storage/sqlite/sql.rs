@@ -5,6 +5,8 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(test)]
+use std::sync::{Mutex as StdMutex, OnceLock};
 
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
@@ -26,6 +28,12 @@ thread_local! {
 static SQLITE_DOCUMENT_BY_ID_CALL_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 static SQLITE_DOCUMENTS_BY_IDS_CALL_COUNT: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+static SQLITE_DOCUMENT_BY_ID_CALLS_BY_PATH: OnceLock<StdMutex<HashMap<String, usize>>> =
+    OnceLock::new();
+#[cfg(test)]
+static SQLITE_DOCUMENTS_BY_IDS_CALLS_BY_PATH: OnceLock<StdMutex<HashMap<String, usize>>> =
+    OnceLock::new();
 
 #[cfg(test)]
 pub fn reset_sqlite_json_document_decode_count() {
@@ -44,6 +52,21 @@ pub fn reset_sqlite_document_lookup_counts() {
 }
 
 #[cfg(test)]
+pub fn reset_sqlite_document_lookup_counts_for_connection(conn: &Connection, table: &str) {
+    let key = sqlite_document_lookup_counter_key_for_connection(conn, table);
+    SQLITE_DOCUMENT_BY_ID_CALLS_BY_PATH
+        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .lock()
+        .unwrap()
+        .insert(key.clone(), 0);
+    SQLITE_DOCUMENTS_BY_IDS_CALLS_BY_PATH
+        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .lock()
+        .unwrap()
+        .insert(key, 0);
+}
+
+#[cfg(test)]
 pub fn sqlite_document_by_id_call_count() -> usize {
     SQLITE_DOCUMENT_BY_ID_CALL_COUNT.load(Ordering::SeqCst)
 }
@@ -51,6 +74,54 @@ pub fn sqlite_document_by_id_call_count() -> usize {
 #[cfg(test)]
 pub fn sqlite_documents_by_ids_call_count() -> usize {
     SQLITE_DOCUMENTS_BY_IDS_CALL_COUNT.load(Ordering::SeqCst)
+}
+
+#[cfg(test)]
+pub fn sqlite_document_by_id_call_count_for_connection(conn: &Connection, table: &str) -> usize {
+    let key = sqlite_document_lookup_counter_key_for_connection(conn, table);
+    sqlite_lookup_count_for_key(&SQLITE_DOCUMENT_BY_ID_CALLS_BY_PATH, &key)
+}
+
+#[cfg(test)]
+pub fn sqlite_documents_by_ids_call_count_for_connection(conn: &Connection, table: &str) -> usize {
+    let key = sqlite_document_lookup_counter_key_for_connection(conn, table);
+    sqlite_lookup_count_for_key(&SQLITE_DOCUMENTS_BY_IDS_CALLS_BY_PATH, &key)
+}
+
+#[cfg(test)]
+fn sqlite_lookup_count_for_key(
+    counter: &OnceLock<StdMutex<HashMap<String, usize>>>,
+    key: &str,
+) -> usize {
+    counter
+        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .lock()
+        .unwrap()
+        .get(key)
+        .copied()
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+fn record_sqlite_lookup_for_connection(
+    counter: &OnceLock<StdMutex<HashMap<String, usize>>>,
+    conn: &Connection,
+    table: &str,
+) {
+    let key = sqlite_document_lookup_counter_key_for_connection(conn, table);
+    let mut counts = counter
+        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    *counts.entry(key).or_insert(0) += 1;
+}
+
+#[cfg(test)]
+fn sqlite_document_lookup_counter_key_for_connection(conn: &Connection, table: &str) -> String {
+    let path = conn
+        .query_row("PRAGMA database_list", [], |row| row.get::<_, String>(2))
+        .unwrap_or_else(|_| "<unknown>".to_string());
+    format!("{path}::{table}")
 }
 
 pub fn table_name(database_name: &str, collection_name: &str, schema_version: i32) -> String {
@@ -672,6 +743,8 @@ where
 pub fn document_by_id(conn: &Connection, table: &str, id: &str) -> RxResult<Option<Value>> {
     #[cfg(test)]
     SQLITE_DOCUMENT_BY_ID_CALL_COUNT.fetch_add(1, Ordering::SeqCst);
+    #[cfg(test)]
+    record_sqlite_lookup_for_connection(&SQLITE_DOCUMENT_BY_ID_CALLS_BY_PATH, conn, table);
     let _statement_timer = crate::storage::sqlite::instance::timed_sqlite_statement();
     let data: Option<String> = conn
         .query_row(
@@ -692,6 +765,8 @@ pub fn documents_by_ids(
 ) -> RxResult<Vec<Value>> {
     #[cfg(test)]
     SQLITE_DOCUMENTS_BY_IDS_CALL_COUNT.fetch_add(1, Ordering::SeqCst);
+    #[cfg(test)]
+    record_sqlite_lookup_for_connection(&SQLITE_DOCUMENTS_BY_IDS_CALLS_BY_PATH, conn, table);
     if ids.is_empty() {
         return Ok(Vec::new());
     }
