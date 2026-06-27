@@ -5691,21 +5691,46 @@ function ensureCtoxSmokeBinary() {
       const waitForNativePeerOpen = async (state, label, timeoutMs = 60000) => {
         const deadline = Date.now() + timeoutMs;
         let lastSnapshot = null;
-        while (Date.now() < deadline) {
-          await bounded(state?.awaitInitialReplication?.(), 5000);
-          await bounded(state?.awaitInSync?.(), 5000);
+        const describeOpenNativePeer = () => {
           const peerStates = state?.peerStates$?.getValue?.();
           const entries = peerStates && typeof peerStates.entries === 'function'
             ? Array.from(peerStates.entries())
             : [];
-          const nativeEntry = entries.find(([, entry]) => entry?.remoteProtocol?.peerSession?.role === 'ctox_instance');
-          const nativePeerId = nativeEntry?.[0] || '';
+          const openPeerIds = typeof state?.openPeerIds === 'function'
+            ? state.openPeerIds()
+            : [];
+          const negotiated = state?.shared?.negotiated || null;
+          const candidates = [
+            ...entries
+              .filter(([, entry]) => entry?.remoteProtocol?.peerSession?.role === 'ctox_instance')
+              .map(([peerId, entry]) => ({ peerId, role: entry?.remoteProtocol?.peerSession?.role || '', sessionId: entry?.remoteProtocol?.peerSession?.sessionId || '' })),
+            ...openPeerIds.map((peerId) => ({
+              peerId,
+              role: negotiated?.peerId === peerId ? negotiated?.remoteProtocol?.peerSession?.role || '' : '',
+              sessionId: negotiated?.peerId === peerId ? negotiated?.remoteProtocol?.peerSession?.sessionId || '' : '',
+            })),
+          ];
+          const seen = new Set();
+          const uniqueCandidates = candidates.filter((candidate) => {
+            if (!candidate.peerId || seen.has(candidate.peerId)) return false;
+            seen.add(candidate.peerId);
+            return true;
+          });
+          const nativeCandidate = uniqueCandidates.find((candidate) => candidate.role === 'ctox_instance')
+            || uniqueCandidates.find((candidate) => openPeerIds.includes(candidate.peerId))
+            || null;
+          const nativePeerId = nativeCandidate?.peerId || '';
           const connection = nativePeerId ? state?.peer?.connections?.get?.(nativePeerId) : null;
           const channelState = connection?.channel?.readyState || '';
           const pcState = connection?.peer?.connectionState || '';
-          lastSnapshot = {
+          const transportStatus = typeof state?.getTransportStatus === 'function'
+            ? state.getTransportStatus()
+            : null;
+          return {
             label,
             peerCount: entries.length,
+            openPeerIds,
+            activePeerCount: Number(transportStatus?.activePeerCount || 0),
             nativePeerId,
             channelState,
             pcState,
@@ -5714,8 +5739,17 @@ function ensureCtoxSmokeBinary() {
               role: entry?.remoteProtocol?.peerSession?.role || '',
               sessionId: entry?.remoteProtocol?.peerSession?.sessionId || '',
             })),
+            negotiatedRole: negotiated?.remoteProtocol?.peerSession?.role || '',
+            negotiatedPeerId: negotiated?.peerId || '',
           };
-          if (nativePeerId && channelState === 'open' && !['closed', 'failed', 'disconnected'].includes(pcState)) {
+        };
+        while (Date.now() < deadline) {
+          await bounded(state?.awaitInitialReplication?.(), 5000);
+          await bounded(state?.awaitInSync?.(), 5000);
+          lastSnapshot = describeOpenNativePeer();
+          if (lastSnapshot.nativePeerId
+            && lastSnapshot.channelState === 'open'
+            && !['closed', 'failed', 'disconnected'].includes(lastSnapshot.pcState)) {
             return lastSnapshot;
           }
           await delay(500);
