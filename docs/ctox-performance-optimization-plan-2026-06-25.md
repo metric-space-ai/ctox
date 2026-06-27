@@ -1824,6 +1824,12 @@ Implementation status:
   collection/operator fallback attribution is now exposed in SQLite runtime
   counters. Remaining work is broader SQL compiler coverage and a hot-query
   registry.
+- Done on 2026-06-27 for native non-stream fallback decode visibility: normal
+  SQLite fallback queries now expose decoded-row counters in addition to
+  visited-row counters, with collection, operator, and collection/operator row
+  attribution. The default installed idle probe budgets these row/decode
+  counters at zero, so a daemon-standby Rust matcher fallback cannot silently
+  decode JSON documents.
 
 Validation:
 
@@ -1842,6 +1848,10 @@ Validation:
   candidates instead of 1000 rows, and aborts broad fallback scans without
   candidate bounds after the fixed scan limit. It also verifies attribution by
   collection, operator family, and collection/operator pair.
+- `CARGO_TARGET_DIR=/tmp/ctox-rxdb-fallback-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --manifest-path src/core/rxdb/Cargo.toml query_fallback_ -- --nocapture`
+  passed on 2026-06-27: verifies fallback row/decode counters, row attribution
+  by collection/operator/collection-operator, writer-lock isolation, indexed
+  candidate narrowing, and too-broad scan-limit accounting.
 - `CARGO_TARGET_DIR=/tmp/ctox-rxdb-fallback-target cargo test --manifest-path src/core/rxdb/Cargo.toml fallback -- --nocapture`
   passed on 2026-06-27: 6 unit tests and 1 conformance test, 0 failures.
 - `CARGO_TARGET_DIR=/tmp/ctox-rxdb-target cargo test --manifest-path src/core/rxdb/Cargo.toml external_write_poll_uses_read_only_connection_while_writer_mutex_is_held -- --nocapture`
@@ -2854,9 +2864,7 @@ The performance problem is structurally fixed only when:
 ## Immediate Next Work Items
 
 1. Add hard measurement gates before the next release:
-   fallback row-visit/decode counters for remaining native RxDB non-stream
-   fallback queries; SQLite statement/write-lock counters including external
-   poller confirmation; browser spies for `allDocuments()`,
+   browser spies for `allDocuments()`,
    `scanQueryWindows()`, sidecar eviction scans, local-push changed-since
    scans, live-query full re-query, file-fetch peak retained bytes, heavy
    diagnostics snapshots, and guards against broad

@@ -60,6 +60,7 @@ static SQLITE_QUERY_CALLS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_QUERY_RESULTS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_QUERY_FALLBACK_CALLS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_QUERY_FALLBACK_ROWS_VISITED: AtomicU64 = AtomicU64::new(0);
+static SQLITE_QUERY_FALLBACK_ROWS_DECODED: AtomicU64 = AtomicU64::new(0);
 static SQLITE_QUERY_FALLBACK_INDEXED_CANDIDATE_CALLS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_QUERY_FALLBACK_TOO_BROAD_CALLS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_QUERY_FALLBACK_BY_COLLECTION: OnceLock<StdMutex<HashMap<String, u64>>> =
@@ -67,6 +68,20 @@ static SQLITE_QUERY_FALLBACK_BY_COLLECTION: OnceLock<StdMutex<HashMap<String, u6
 static SQLITE_QUERY_FALLBACK_BY_OPERATOR: OnceLock<StdMutex<HashMap<String, u64>>> =
     OnceLock::new();
 static SQLITE_QUERY_FALLBACK_BY_COLLECTION_OPERATOR: OnceLock<
+    StdMutex<HashMap<String, HashMap<String, u64>>>,
+> = OnceLock::new();
+static SQLITE_QUERY_FALLBACK_ROWS_VISITED_BY_COLLECTION: OnceLock<StdMutex<HashMap<String, u64>>> =
+    OnceLock::new();
+static SQLITE_QUERY_FALLBACK_ROWS_DECODED_BY_COLLECTION: OnceLock<StdMutex<HashMap<String, u64>>> =
+    OnceLock::new();
+static SQLITE_QUERY_FALLBACK_ROWS_VISITED_BY_OPERATOR: OnceLock<StdMutex<HashMap<String, u64>>> =
+    OnceLock::new();
+static SQLITE_QUERY_FALLBACK_ROWS_DECODED_BY_OPERATOR: OnceLock<StdMutex<HashMap<String, u64>>> =
+    OnceLock::new();
+static SQLITE_QUERY_FALLBACK_ROWS_VISITED_BY_COLLECTION_OPERATOR: OnceLock<
+    StdMutex<HashMap<String, HashMap<String, u64>>>,
+> = OnceLock::new();
+static SQLITE_QUERY_FALLBACK_ROWS_DECODED_BY_COLLECTION_OPERATOR: OnceLock<
     StdMutex<HashMap<String, HashMap<String, u64>>>,
 > = OnceLock::new();
 static SQLITE_COUNT_CALLS: AtomicU64 = AtomicU64::new(0);
@@ -214,6 +229,10 @@ pub fn sqlite_runtime_counters_snapshot() -> Value {
         SQLITE_QUERY_FALLBACK_ROWS_VISITED
     );
     counter!(
+        "query_fallback_rows_decoded",
+        SQLITE_QUERY_FALLBACK_ROWS_DECODED
+    );
+    counter!(
         "query_fallback_indexed_candidate_calls",
         SQLITE_QUERY_FALLBACK_INDEXED_CANDIDATE_CALLS
     );
@@ -232,6 +251,30 @@ pub fn sqlite_runtime_counters_snapshot() -> Value {
     out.insert(
         "query_fallback_by_collection_operator".to_string(),
         snapshot_nested_counter_map(&SQLITE_QUERY_FALLBACK_BY_COLLECTION_OPERATOR),
+    );
+    out.insert(
+        "query_fallback_rows_visited_by_collection".to_string(),
+        snapshot_counter_map(&SQLITE_QUERY_FALLBACK_ROWS_VISITED_BY_COLLECTION),
+    );
+    out.insert(
+        "query_fallback_rows_decoded_by_collection".to_string(),
+        snapshot_counter_map(&SQLITE_QUERY_FALLBACK_ROWS_DECODED_BY_COLLECTION),
+    );
+    out.insert(
+        "query_fallback_rows_visited_by_operator".to_string(),
+        snapshot_counter_map(&SQLITE_QUERY_FALLBACK_ROWS_VISITED_BY_OPERATOR),
+    );
+    out.insert(
+        "query_fallback_rows_decoded_by_operator".to_string(),
+        snapshot_counter_map(&SQLITE_QUERY_FALLBACK_ROWS_DECODED_BY_OPERATOR),
+    );
+    out.insert(
+        "query_fallback_rows_visited_by_collection_operator".to_string(),
+        snapshot_nested_counter_map(&SQLITE_QUERY_FALLBACK_ROWS_VISITED_BY_COLLECTION_OPERATOR),
+    );
+    out.insert(
+        "query_fallback_rows_decoded_by_collection_operator".to_string(),
+        snapshot_nested_counter_map(&SQLITE_QUERY_FALLBACK_ROWS_DECODED_BY_COLLECTION_OPERATOR),
     );
     counter!("count_calls", SQLITE_COUNT_CALLS);
     counter!(
@@ -495,19 +538,84 @@ fn increment_nested_counter_map(
     *counter = counter.saturating_add(1);
 }
 
-fn record_query_fallback_attribution(collection_name: &str, operator_families: &[String]) {
-    increment_counter_map(&SQLITE_QUERY_FALLBACK_BY_COLLECTION, collection_name);
-    let operators = if operator_families.is_empty() {
+fn increment_nested_counter_map_by(
+    map: &OnceLock<StdMutex<HashMap<String, HashMap<String, u64>>>>,
+    outer: &str,
+    inner: &str,
+    amount: u64,
+) {
+    if amount == 0 {
+        return;
+    }
+    let mut counters = map
+        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    let inner_counters = counters.entry(outer.to_string()).or_default();
+    let counter = inner_counters.entry(inner.to_string()).or_insert(0);
+    *counter = counter.saturating_add(amount);
+}
+
+fn normalized_query_fallback_operators(operator_families: &[String]) -> Vec<String> {
+    if operator_families.is_empty() {
         vec!["$none".to_string()]
     } else {
         operator_families.to_vec()
-    };
-    for operator in operators {
+    }
+}
+
+fn record_query_fallback_attribution(collection_name: &str, operator_families: &[String]) {
+    increment_counter_map(&SQLITE_QUERY_FALLBACK_BY_COLLECTION, collection_name);
+    for operator in normalized_query_fallback_operators(operator_families) {
         increment_counter_map(&SQLITE_QUERY_FALLBACK_BY_OPERATOR, &operator);
         increment_nested_counter_map(
             &SQLITE_QUERY_FALLBACK_BY_COLLECTION_OPERATOR,
             collection_name,
             &operator,
+        );
+    }
+}
+
+fn record_query_fallback_rows(
+    collection_name: &str,
+    operator_families: &[String],
+    rows_visited: u64,
+    rows_decoded: u64,
+) {
+    SQLITE_QUERY_FALLBACK_ROWS_VISITED.fetch_add(rows_visited, Ordering::Relaxed);
+    SQLITE_QUERY_FALLBACK_ROWS_DECODED.fetch_add(rows_decoded, Ordering::Relaxed);
+    increment_counter_map_by(
+        &SQLITE_QUERY_FALLBACK_ROWS_VISITED_BY_COLLECTION,
+        collection_name,
+        rows_visited,
+    );
+    increment_counter_map_by(
+        &SQLITE_QUERY_FALLBACK_ROWS_DECODED_BY_COLLECTION,
+        collection_name,
+        rows_decoded,
+    );
+    for operator in normalized_query_fallback_operators(operator_families) {
+        increment_counter_map_by(
+            &SQLITE_QUERY_FALLBACK_ROWS_VISITED_BY_OPERATOR,
+            &operator,
+            rows_visited,
+        );
+        increment_counter_map_by(
+            &SQLITE_QUERY_FALLBACK_ROWS_DECODED_BY_OPERATOR,
+            &operator,
+            rows_decoded,
+        );
+        increment_nested_counter_map_by(
+            &SQLITE_QUERY_FALLBACK_ROWS_VISITED_BY_COLLECTION_OPERATOR,
+            collection_name,
+            &operator,
+            rows_visited,
+        );
+        increment_nested_counter_map_by(
+            &SQLITE_QUERY_FALLBACK_ROWS_DECODED_BY_COLLECTION_OPERATOR,
+            collection_name,
+            &operator,
+            rows_decoded,
         );
     }
 }
@@ -1140,9 +1248,11 @@ fn execute_query_documents(
         SQLITE_QUERY_FALLBACK_INDEXED_CANDIDATE_CALLS.fetch_add(1, Ordering::Relaxed);
     }
     let mut visited_rows = 0u64;
+    let mut decoded_rows = 0u64;
     let mut rows: Vec<Value> = Vec::new();
     let mut visit_document = |doc: Value| {
         visited_rows = visited_rows.saturating_add(1);
+        decoded_rows = decoded_rows.saturating_add(1);
         if visited_rows > SQLITE_QUERY_FALLBACK_SCAN_LIMIT {
             SQLITE_QUERY_FALLBACK_TOO_BROAD_CALLS.fetch_add(1, Ordering::Relaxed);
             return Err(new_rx_error(
@@ -1166,7 +1276,12 @@ fn execute_query_documents(
     } else {
         for_each_document(conn, table_name, &mut visit_document)
     };
-    SQLITE_QUERY_FALLBACK_ROWS_VISITED.fetch_add(visited_rows, Ordering::Relaxed);
+    record_query_fallback_rows(
+        collection_name,
+        &fallback_operator_families,
+        visited_rows,
+        decoded_rows,
+    );
     fallback_result?;
     rows.sort_by(|a, b| comparator(a, b));
     let start = skip.min(rows.len());
@@ -2910,6 +3025,7 @@ mod tests {
         QUERY_WRITER_FALLBACKS.store(0, Ordering::SeqCst);
         let fallback_calls_before = runtime_counter("query_fallback_calls");
         let fallback_rows_before = runtime_counter("query_fallback_rows_visited");
+        let fallback_decoded_before = runtime_counter("query_fallback_rows_decoded");
         let shared_conn = storage.connection().unwrap();
         let _writer_guard = shared_conn.lock();
 
@@ -2942,6 +3058,10 @@ mod tests {
         assert!(
             runtime_counter("query_fallback_rows_visited") >= fallback_rows_before + 100,
             "runtime counters must expose rows visited by Rust matcher fallback"
+        );
+        assert!(
+            runtime_counter("query_fallback_rows_decoded") >= fallback_decoded_before + 100,
+            "runtime counters must expose rows decoded by Rust matcher fallback"
         );
     }
 
@@ -3013,11 +3133,26 @@ mod tests {
         let fallback_calls_before = runtime_counter("query_fallback_calls");
         let candidate_calls_before = runtime_counter("query_fallback_indexed_candidate_calls");
         let fallback_rows_before = runtime_counter("query_fallback_rows_visited");
+        let fallback_decoded_before = runtime_counter("query_fallback_rows_decoded");
         let collection_fallback_before =
             runtime_counter_pointer("/query_fallback_by_collection/docs");
         let regex_fallback_before = runtime_counter_pointer("/query_fallback_by_operator/$regex");
         let collection_regex_fallback_before =
             runtime_counter_pointer("/query_fallback_by_collection_operator/docs/$regex");
+        let collection_rows_before =
+            runtime_counter_pointer("/query_fallback_rows_visited_by_collection/docs");
+        let collection_decoded_before =
+            runtime_counter_pointer("/query_fallback_rows_decoded_by_collection/docs");
+        let regex_rows_before =
+            runtime_counter_pointer("/query_fallback_rows_visited_by_operator/$regex");
+        let regex_decoded_before =
+            runtime_counter_pointer("/query_fallback_rows_decoded_by_operator/$regex");
+        let collection_regex_rows_before = runtime_counter_pointer(
+            "/query_fallback_rows_visited_by_collection_operator/docs/$regex",
+        );
+        let collection_regex_decoded_before = runtime_counter_pointer(
+            "/query_fallback_rows_decoded_by_collection_operator/docs/$regex",
+        );
         let result = instance.query(&prepared).await.unwrap();
         let ids = result
             .documents
@@ -3041,6 +3176,11 @@ mod tests {
             "Rust matcher must only inspect the age-index candidate window"
         );
         assert_eq!(
+            runtime_counter("query_fallback_rows_decoded") - fallback_decoded_before,
+            10,
+            "fallback decode counter must match the bounded candidate window"
+        );
+        assert_eq!(
             runtime_counter_pointer("/query_fallback_by_collection/docs"),
             collection_fallback_before + 1,
             "fallback attribution must include the collection name"
@@ -3054,6 +3194,40 @@ mod tests {
             runtime_counter_pointer("/query_fallback_by_collection_operator/docs/$regex"),
             collection_regex_fallback_before + 1,
             "fallback attribution must include collection/operator pairs"
+        );
+        assert_eq!(
+            runtime_counter_pointer("/query_fallback_rows_visited_by_collection/docs"),
+            collection_rows_before + 10,
+            "fallback row visits must be attributed to the collection"
+        );
+        assert_eq!(
+            runtime_counter_pointer("/query_fallback_rows_decoded_by_collection/docs"),
+            collection_decoded_before + 10,
+            "fallback row decodes must be attributed to the collection"
+        );
+        assert_eq!(
+            runtime_counter_pointer("/query_fallback_rows_visited_by_operator/$regex"),
+            regex_rows_before + 10,
+            "fallback row visits must be attributed to the operator"
+        );
+        assert_eq!(
+            runtime_counter_pointer("/query_fallback_rows_decoded_by_operator/$regex"),
+            regex_decoded_before + 10,
+            "fallback row decodes must be attributed to the operator"
+        );
+        assert_eq!(
+            runtime_counter_pointer(
+                "/query_fallback_rows_visited_by_collection_operator/docs/$regex"
+            ),
+            collection_regex_rows_before + 10,
+            "fallback row visits must be attributed to the collection/operator pair"
+        );
+        assert_eq!(
+            runtime_counter_pointer(
+                "/query_fallback_rows_decoded_by_collection_operator/docs/$regex"
+            ),
+            collection_regex_decoded_before + 10,
+            "fallback row decodes must be attributed to the collection/operator pair"
         );
     }
 
@@ -3097,11 +3271,23 @@ mod tests {
             ),
         )
         .unwrap();
+        let fallback_rows_before = runtime_counter("query_fallback_rows_visited");
+        let fallback_decoded_before = runtime_counter("query_fallback_rows_decoded");
         let too_broad_before = runtime_counter("query_fallback_too_broad_calls");
         let collection_regex_fallback_before =
             runtime_counter_pointer("/query_fallback_by_collection_operator/docs/$regex");
         let err = instance.query(&prepared).await.unwrap_err();
         assert_eq!(err.code(), SQLITE_QUERY_FALLBACK_TOO_BROAD);
+        assert!(
+            runtime_counter("query_fallback_rows_visited")
+                >= fallback_rows_before + SQLITE_QUERY_FALLBACK_SCAN_LIMIT + 1,
+            "too-broad fallback abort must still report visited rows"
+        );
+        assert!(
+            runtime_counter("query_fallback_rows_decoded")
+                >= fallback_decoded_before + SQLITE_QUERY_FALLBACK_SCAN_LIMIT + 1,
+            "too-broad fallback abort must still report decoded rows"
+        );
         assert_eq!(
             runtime_counter("query_fallback_too_broad_calls"),
             too_broad_before + 1,
