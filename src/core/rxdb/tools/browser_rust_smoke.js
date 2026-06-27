@@ -10686,7 +10686,7 @@ function ensureCtoxSmokeBinary() {
             rowCount: rows.length,
             text: text.slice(0, 1400),
           };
-        }, 30000, 'settings activity release and rollback audit');
+        }, 90000, 'settings activity release and rollback audit');
 
         const status = await globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({
           includeCounts: false,

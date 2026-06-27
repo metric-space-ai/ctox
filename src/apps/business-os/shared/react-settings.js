@@ -2463,6 +2463,7 @@ async function dispatchModuleCommand({
   const commandId = `cmd_${newId()}`;
   const command = {
     id: commandId,
+    wait_timeout_ms: timeoutMs,
     module: 'ctox',
     type: commandType,
     record_id: recordId || moduleId,
