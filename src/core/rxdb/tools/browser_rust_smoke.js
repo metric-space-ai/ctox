@@ -5687,6 +5687,28 @@ function ensureCtoxSmokeBinary() {
       const waitForNativePeerOpen = async (state, label, timeoutMs = 60000) => {
         const deadline = Date.now() + timeoutMs;
         let lastSnapshot = null;
+        const collectionName = String(label || '').split(/\s+/)[0] || String(state?.collection?.name || '');
+        const collectionDiagnostics = () => {
+          const diagnostics = globalThis.ctoxBusinessOsSmoke?.state?.syncDiagnostics
+            || globalThis.CTOX_BUSINESS_OS_APP?.syncDiagnostics
+            || null;
+          const entry = diagnostics?.collections?.[collectionName] || null;
+          if (!entry) return null;
+          const transport = entry.frameTransport || {};
+          return {
+            status: entry.status || '',
+            connectionStatus: entry.connectionStatus || '',
+            initialReplicationState: entry.initialReplicationState || '',
+            initialReplicationAt: entry.initialReplicationAt || null,
+            connectedAt: entry.connectedAt || null,
+            remoteCheckpointEpoch: entry.remoteCheckpoint?.epoch || '',
+            remotePeerRole: entry.remotePeerSession?.role || '',
+            activePeerCount: Number(transport.activePeerCount || 0),
+            openPeerCount: Number(transport.openPeerCount || 0),
+            lastLifecycleCode: entry.lastLifecycleEvent?.code || '',
+            lastErrorCode: entry.lastError?.code || '',
+          };
+        };
         const describeOpenNativePeer = () => {
           const peerStates = state?.peerStates$?.getValue?.();
           const entries = peerStates && typeof peerStates.entries === 'function'
@@ -5737,12 +5759,25 @@ function ensureCtoxSmokeBinary() {
             })),
             negotiatedRole: negotiated?.remoteProtocol?.peerSession?.role || '',
             negotiatedPeerId: negotiated?.peerId || '',
+            collectionName,
+            collectionDiagnostics: collectionDiagnostics(),
           };
         };
         while (Date.now() < deadline) {
           await bounded(state?.awaitInitialReplication?.(), 5000);
           await bounded(state?.awaitInSync?.(), 5000);
           lastSnapshot = describeOpenNativePeer();
+          const diagnostic = lastSnapshot.collectionDiagnostics;
+          const diagnosticStatus = diagnostic?.connectionStatus || diagnostic?.status || '';
+          const diagnosticReady = diagnostic
+            && !['error', 'failed', 'stopped', 'reconnecting'].includes(diagnosticStatus)
+            && (
+              diagnosticStatus === 'connected'
+              || Boolean(diagnostic.connectedAt)
+              || Boolean(diagnostic.initialReplicationAt)
+              || (diagnostic.initialReplicationState === 'complete' && Boolean(diagnostic.remoteCheckpointEpoch))
+            );
+          if (diagnosticReady) return lastSnapshot;
           if (lastSnapshot.nativePeerId
             && lastSnapshot.channelState === 'open'
             && !['closed', 'failed', 'disconnected'].includes(lastSnapshot.pcState)) {
@@ -5961,8 +5996,16 @@ function ensureCtoxSmokeBinary() {
         }
         if (needsCommandCollections) {
           const commandCollectionsStartedAt = Date.now();
-          const commandBridge = await appState.sync.startCollection('business_commands');
-          const queueBridge = await appState.sync.startCollection('ctox_queue_tasks');
+          const [commandBridge, queueBridge] = businessOsAppReleaseUiSmokeMode
+            ? await restartAppCollections(
+              appState,
+              ['business_commands', 'ctox_queue_tasks'],
+              'browser-rust-smoke-app-release-commands',
+            )
+            : [
+              await appState.sync.startCollection('business_commands'),
+              await appState.sync.startCollection('ctox_queue_tasks'),
+            ];
           commandBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app business_commands replication error', error));
           queueBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app ctox_queue_tasks replication error', error));
           appCommandReplicationState = commandBridge?.state || null;
