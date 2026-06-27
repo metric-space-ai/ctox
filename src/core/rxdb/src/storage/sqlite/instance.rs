@@ -60,6 +60,7 @@ static SQLITE_QUERY_CALLS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_QUERY_RESULTS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_QUERY_FALLBACK_CALLS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_QUERY_FALLBACK_ROWS_VISITED: AtomicU64 = AtomicU64::new(0);
+static SQLITE_QUERY_FALLBACK_ROWS_DECODED: AtomicU64 = AtomicU64::new(0);
 static SQLITE_QUERY_FALLBACK_INDEXED_CANDIDATE_CALLS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_QUERY_FALLBACK_TOO_BROAD_CALLS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_QUERY_FALLBACK_BY_COLLECTION: OnceLock<StdMutex<HashMap<String, u64>>> =
@@ -67,6 +68,20 @@ static SQLITE_QUERY_FALLBACK_BY_COLLECTION: OnceLock<StdMutex<HashMap<String, u6
 static SQLITE_QUERY_FALLBACK_BY_OPERATOR: OnceLock<StdMutex<HashMap<String, u64>>> =
     OnceLock::new();
 static SQLITE_QUERY_FALLBACK_BY_COLLECTION_OPERATOR: OnceLock<
+    StdMutex<HashMap<String, HashMap<String, u64>>>,
+> = OnceLock::new();
+static SQLITE_QUERY_FALLBACK_ROWS_VISITED_BY_COLLECTION: OnceLock<StdMutex<HashMap<String, u64>>> =
+    OnceLock::new();
+static SQLITE_QUERY_FALLBACK_ROWS_DECODED_BY_COLLECTION: OnceLock<StdMutex<HashMap<String, u64>>> =
+    OnceLock::new();
+static SQLITE_QUERY_FALLBACK_ROWS_VISITED_BY_OPERATOR: OnceLock<StdMutex<HashMap<String, u64>>> =
+    OnceLock::new();
+static SQLITE_QUERY_FALLBACK_ROWS_DECODED_BY_OPERATOR: OnceLock<StdMutex<HashMap<String, u64>>> =
+    OnceLock::new();
+static SQLITE_QUERY_FALLBACK_ROWS_VISITED_BY_COLLECTION_OPERATOR: OnceLock<
+    StdMutex<HashMap<String, HashMap<String, u64>>>,
+> = OnceLock::new();
+static SQLITE_QUERY_FALLBACK_ROWS_DECODED_BY_COLLECTION_OPERATOR: OnceLock<
     StdMutex<HashMap<String, HashMap<String, u64>>>,
 > = OnceLock::new();
 static SQLITE_COUNT_CALLS: AtomicU64 = AtomicU64::new(0);
@@ -105,15 +120,34 @@ static SQLITE_EXTERNAL_POLL_CHANGED_TABLE_READS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_CONNECTION_OPENS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_CONNECTION_OPEN_FAILURES: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_WAKEUPS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_ACTIVE_WAKEUPS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_STANDBY_WAKEUPS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_STANDBY_ENTRIES: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_ACTIVE_RESETS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_DATA_VERSION_CHANGES: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_DATA_VERSION_READ_FAILURES: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_CHANGED_TABLE_READ_FAILURES: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_CHANGED_TABLE_ROWS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_CHANGED_TABLE_NOTIFICATIONS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_LOCAL_HOOK_SUPPRESSED_NOTIFICATIONS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_DRAIN_CALLS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_DRAIN_BATCHES: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_DRAIN_EMPTY_BATCHES: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_DRAIN_ROWS_VISITED: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_DRAIN_ROWS_DECODED: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_DRAIN_ROWS_MAX: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_DRAIN_BATCHES_MAX: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_DRAIN_BUDGET_EXHAUSTIONS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_NOTIFICATIONS_BY_TABLE: OnceLock<StdMutex<HashMap<String, u64>>> =
     OnceLock::new();
 static SQLITE_EXTERNAL_POLL_LOCAL_HOOK_SUPPRESSIONS_BY_TABLE: OnceLock<
+    StdMutex<HashMap<String, u64>>,
+> = OnceLock::new();
+static SQLITE_EXTERNAL_POLL_DRAIN_ROWS_BY_TABLE: OnceLock<StdMutex<HashMap<String, u64>>> =
+    OnceLock::new();
+static SQLITE_EXTERNAL_POLL_DRAIN_BATCHES_BY_TABLE: OnceLock<StdMutex<HashMap<String, u64>>> =
+    OnceLock::new();
+static SQLITE_EXTERNAL_POLL_DRAIN_BUDGET_EXHAUSTIONS_BY_TABLE: OnceLock<
     StdMutex<HashMap<String, u64>>,
 > = OnceLock::new();
 #[cfg(test)]
@@ -220,6 +254,10 @@ pub fn sqlite_runtime_counters_snapshot() -> Value {
         SQLITE_QUERY_FALLBACK_ROWS_VISITED
     );
     counter!(
+        "query_fallback_rows_decoded",
+        SQLITE_QUERY_FALLBACK_ROWS_DECODED
+    );
+    counter!(
         "query_fallback_indexed_candidate_calls",
         SQLITE_QUERY_FALLBACK_INDEXED_CANDIDATE_CALLS
     );
@@ -238,6 +276,30 @@ pub fn sqlite_runtime_counters_snapshot() -> Value {
     out.insert(
         "query_fallback_by_collection_operator".to_string(),
         snapshot_nested_counter_map(&SQLITE_QUERY_FALLBACK_BY_COLLECTION_OPERATOR),
+    );
+    out.insert(
+        "query_fallback_rows_visited_by_collection".to_string(),
+        snapshot_counter_map(&SQLITE_QUERY_FALLBACK_ROWS_VISITED_BY_COLLECTION),
+    );
+    out.insert(
+        "query_fallback_rows_decoded_by_collection".to_string(),
+        snapshot_counter_map(&SQLITE_QUERY_FALLBACK_ROWS_DECODED_BY_COLLECTION),
+    );
+    out.insert(
+        "query_fallback_rows_visited_by_operator".to_string(),
+        snapshot_counter_map(&SQLITE_QUERY_FALLBACK_ROWS_VISITED_BY_OPERATOR),
+    );
+    out.insert(
+        "query_fallback_rows_decoded_by_operator".to_string(),
+        snapshot_counter_map(&SQLITE_QUERY_FALLBACK_ROWS_DECODED_BY_OPERATOR),
+    );
+    out.insert(
+        "query_fallback_rows_visited_by_collection_operator".to_string(),
+        snapshot_nested_counter_map(&SQLITE_QUERY_FALLBACK_ROWS_VISITED_BY_COLLECTION_OPERATOR),
+    );
+    out.insert(
+        "query_fallback_rows_decoded_by_collection_operator".to_string(),
+        snapshot_nested_counter_map(&SQLITE_QUERY_FALLBACK_ROWS_DECODED_BY_COLLECTION_OPERATOR),
     );
     counter!("count_calls", SQLITE_COUNT_CALLS);
     counter!(
@@ -336,6 +398,22 @@ pub fn sqlite_runtime_counters_snapshot() -> Value {
     );
     counter!("external_poll_wakeups", SQLITE_EXTERNAL_POLL_WAKEUPS);
     counter!(
+        "external_poll_active_wakeups",
+        SQLITE_EXTERNAL_POLL_ACTIVE_WAKEUPS
+    );
+    counter!(
+        "external_poll_standby_wakeups",
+        SQLITE_EXTERNAL_POLL_STANDBY_WAKEUPS
+    );
+    counter!(
+        "external_poll_standby_entries",
+        SQLITE_EXTERNAL_POLL_STANDBY_ENTRIES
+    );
+    counter!(
+        "external_poll_active_resets",
+        SQLITE_EXTERNAL_POLL_ACTIVE_RESETS
+    );
+    counter!(
         "external_poll_data_version_changes",
         SQLITE_EXTERNAL_POLL_DATA_VERSION_CHANGES
     );
@@ -359,6 +437,38 @@ pub fn sqlite_runtime_counters_snapshot() -> Value {
         "external_poll_local_hook_suppressed_notifications",
         SQLITE_EXTERNAL_POLL_LOCAL_HOOK_SUPPRESSED_NOTIFICATIONS
     );
+    counter!(
+        "external_poll_drain_calls",
+        SQLITE_EXTERNAL_POLL_DRAIN_CALLS
+    );
+    counter!(
+        "external_poll_drain_batches",
+        SQLITE_EXTERNAL_POLL_DRAIN_BATCHES
+    );
+    counter!(
+        "external_poll_drain_empty_batches",
+        SQLITE_EXTERNAL_POLL_DRAIN_EMPTY_BATCHES
+    );
+    counter!(
+        "external_poll_drain_rows_visited",
+        SQLITE_EXTERNAL_POLL_DRAIN_ROWS_VISITED
+    );
+    counter!(
+        "external_poll_drain_rows_decoded",
+        SQLITE_EXTERNAL_POLL_DRAIN_ROWS_DECODED
+    );
+    counter!(
+        "external_poll_drain_rows_max",
+        SQLITE_EXTERNAL_POLL_DRAIN_ROWS_MAX
+    );
+    counter!(
+        "external_poll_drain_batches_max",
+        SQLITE_EXTERNAL_POLL_DRAIN_BATCHES_MAX
+    );
+    counter!(
+        "external_poll_drain_budget_exhaustions",
+        SQLITE_EXTERNAL_POLL_DRAIN_BUDGET_EXHAUSTIONS
+    );
     out.insert(
         "external_poll_notifications_by_table".to_string(),
         snapshot_counter_map(&SQLITE_EXTERNAL_POLL_NOTIFICATIONS_BY_TABLE),
@@ -366,6 +476,18 @@ pub fn sqlite_runtime_counters_snapshot() -> Value {
     out.insert(
         "external_poll_local_hook_suppressions_by_table".to_string(),
         snapshot_counter_map(&SQLITE_EXTERNAL_POLL_LOCAL_HOOK_SUPPRESSIONS_BY_TABLE),
+    );
+    out.insert(
+        "external_poll_drain_rows_by_table".to_string(),
+        snapshot_counter_map(&SQLITE_EXTERNAL_POLL_DRAIN_ROWS_BY_TABLE),
+    );
+    out.insert(
+        "external_poll_drain_batches_by_table".to_string(),
+        snapshot_counter_map(&SQLITE_EXTERNAL_POLL_DRAIN_BATCHES_BY_TABLE),
+    );
+    out.insert(
+        "external_poll_drain_budget_exhaustions_by_table".to_string(),
+        snapshot_counter_map(&SQLITE_EXTERNAL_POLL_DRAIN_BUDGET_EXHAUSTIONS_BY_TABLE),
     );
     Value::Object(out)
 }
@@ -411,6 +533,22 @@ fn increment_counter_map(map: &OnceLock<StdMutex<HashMap<String, u64>>>, key: &s
     *counter = counter.saturating_add(1);
 }
 
+fn increment_counter_map_by(
+    map: &OnceLock<StdMutex<HashMap<String, u64>>>,
+    key: &str,
+    amount: u64,
+) {
+    if amount == 0 {
+        return;
+    }
+    let mut counters = map
+        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    let counter = counters.entry(key.to_string()).or_insert(0);
+    *counter = counter.saturating_add(amount);
+}
+
 fn increment_nested_counter_map(
     map: &OnceLock<StdMutex<HashMap<String, HashMap<String, u64>>>>,
     outer: &str,
@@ -425,19 +563,84 @@ fn increment_nested_counter_map(
     *counter = counter.saturating_add(1);
 }
 
-fn record_query_fallback_attribution(collection_name: &str, operator_families: &[String]) {
-    increment_counter_map(&SQLITE_QUERY_FALLBACK_BY_COLLECTION, collection_name);
-    let operators = if operator_families.is_empty() {
+fn increment_nested_counter_map_by(
+    map: &OnceLock<StdMutex<HashMap<String, HashMap<String, u64>>>>,
+    outer: &str,
+    inner: &str,
+    amount: u64,
+) {
+    if amount == 0 {
+        return;
+    }
+    let mut counters = map
+        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    let inner_counters = counters.entry(outer.to_string()).or_default();
+    let counter = inner_counters.entry(inner.to_string()).or_insert(0);
+    *counter = counter.saturating_add(amount);
+}
+
+fn normalized_query_fallback_operators(operator_families: &[String]) -> Vec<String> {
+    if operator_families.is_empty() {
         vec!["$none".to_string()]
     } else {
         operator_families.to_vec()
-    };
-    for operator in operators {
+    }
+}
+
+fn record_query_fallback_attribution(collection_name: &str, operator_families: &[String]) {
+    increment_counter_map(&SQLITE_QUERY_FALLBACK_BY_COLLECTION, collection_name);
+    for operator in normalized_query_fallback_operators(operator_families) {
         increment_counter_map(&SQLITE_QUERY_FALLBACK_BY_OPERATOR, &operator);
         increment_nested_counter_map(
             &SQLITE_QUERY_FALLBACK_BY_COLLECTION_OPERATOR,
             collection_name,
             &operator,
+        );
+    }
+}
+
+fn record_query_fallback_rows(
+    collection_name: &str,
+    operator_families: &[String],
+    rows_visited: u64,
+    rows_decoded: u64,
+) {
+    SQLITE_QUERY_FALLBACK_ROWS_VISITED.fetch_add(rows_visited, Ordering::Relaxed);
+    SQLITE_QUERY_FALLBACK_ROWS_DECODED.fetch_add(rows_decoded, Ordering::Relaxed);
+    increment_counter_map_by(
+        &SQLITE_QUERY_FALLBACK_ROWS_VISITED_BY_COLLECTION,
+        collection_name,
+        rows_visited,
+    );
+    increment_counter_map_by(
+        &SQLITE_QUERY_FALLBACK_ROWS_DECODED_BY_COLLECTION,
+        collection_name,
+        rows_decoded,
+    );
+    for operator in normalized_query_fallback_operators(operator_families) {
+        increment_counter_map_by(
+            &SQLITE_QUERY_FALLBACK_ROWS_VISITED_BY_OPERATOR,
+            &operator,
+            rows_visited,
+        );
+        increment_counter_map_by(
+            &SQLITE_QUERY_FALLBACK_ROWS_DECODED_BY_OPERATOR,
+            &operator,
+            rows_decoded,
+        );
+        increment_nested_counter_map_by(
+            &SQLITE_QUERY_FALLBACK_ROWS_VISITED_BY_COLLECTION_OPERATOR,
+            collection_name,
+            &operator,
+            rows_visited,
+        );
+        increment_nested_counter_map_by(
+            &SQLITE_QUERY_FALLBACK_ROWS_DECODED_BY_COLLECTION_OPERATOR,
+            collection_name,
+            &operator,
+            rows_decoded,
         );
     }
 }
@@ -479,8 +682,21 @@ pub(crate) fn record_sqlite_external_poll_connection_open_failure() {
     SQLITE_EXTERNAL_POLL_CONNECTION_OPEN_FAILURES.fetch_add(1, Ordering::Relaxed);
 }
 
-pub(crate) fn record_sqlite_external_poll_wakeup() {
+pub(crate) fn record_sqlite_external_poll_wakeup(standby: bool) {
     SQLITE_EXTERNAL_POLL_WAKEUPS.fetch_add(1, Ordering::Relaxed);
+    if standby {
+        SQLITE_EXTERNAL_POLL_STANDBY_WAKEUPS.fetch_add(1, Ordering::Relaxed);
+    } else {
+        SQLITE_EXTERNAL_POLL_ACTIVE_WAKEUPS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+pub(crate) fn record_sqlite_external_poll_standby_entry() {
+    SQLITE_EXTERNAL_POLL_STANDBY_ENTRIES.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_sqlite_external_poll_active_reset() {
+    SQLITE_EXTERNAL_POLL_ACTIVE_RESETS.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn record_sqlite_external_poll_data_version_change() {
@@ -510,6 +726,39 @@ pub(crate) fn record_sqlite_external_poll_local_hook_suppression(table_name: &st
         &SQLITE_EXTERNAL_POLL_LOCAL_HOOK_SUPPRESSIONS_BY_TABLE,
         table_name,
     );
+}
+
+fn record_sqlite_external_poll_drain(
+    table_name: &str,
+    batches: usize,
+    empty_batches: usize,
+    rows: usize,
+    drained_to_empty: bool,
+) {
+    SQLITE_EXTERNAL_POLL_DRAIN_CALLS.fetch_add(1, Ordering::Relaxed);
+    SQLITE_EXTERNAL_POLL_DRAIN_BATCHES.fetch_add(batches as u64, Ordering::Relaxed);
+    SQLITE_EXTERNAL_POLL_DRAIN_EMPTY_BATCHES.fetch_add(empty_batches as u64, Ordering::Relaxed);
+    SQLITE_EXTERNAL_POLL_DRAIN_ROWS_VISITED.fetch_add(rows as u64, Ordering::Relaxed);
+    SQLITE_EXTERNAL_POLL_DRAIN_ROWS_DECODED.fetch_add(rows as u64, Ordering::Relaxed);
+    update_atomic_max(&SQLITE_EXTERNAL_POLL_DRAIN_ROWS_MAX, rows as u64);
+    update_atomic_max(&SQLITE_EXTERNAL_POLL_DRAIN_BATCHES_MAX, batches as u64);
+    increment_counter_map_by(
+        &SQLITE_EXTERNAL_POLL_DRAIN_ROWS_BY_TABLE,
+        table_name,
+        rows as u64,
+    );
+    increment_counter_map_by(
+        &SQLITE_EXTERNAL_POLL_DRAIN_BATCHES_BY_TABLE,
+        table_name,
+        batches as u64,
+    );
+    if !drained_to_empty {
+        SQLITE_EXTERNAL_POLL_DRAIN_BUDGET_EXHAUSTIONS.fetch_add(1, Ordering::Relaxed);
+        increment_counter_map(
+            &SQLITE_EXTERNAL_POLL_DRAIN_BUDGET_EXHAUSTIONS_BY_TABLE,
+            table_name,
+        );
+    }
 }
 
 fn record_sqlite_writer_lock_wait(elapsed: Duration) {
@@ -1024,9 +1273,11 @@ fn execute_query_documents(
         SQLITE_QUERY_FALLBACK_INDEXED_CANDIDATE_CALLS.fetch_add(1, Ordering::Relaxed);
     }
     let mut visited_rows = 0u64;
+    let mut decoded_rows = 0u64;
     let mut rows: Vec<Value> = Vec::new();
     let mut visit_document = |doc: Value| {
         visited_rows = visited_rows.saturating_add(1);
+        decoded_rows = decoded_rows.saturating_add(1);
         if visited_rows > SQLITE_QUERY_FALLBACK_SCAN_LIMIT {
             SQLITE_QUERY_FALLBACK_TOO_BROAD_CALLS.fetch_add(1, Ordering::Relaxed);
             return Err(new_rx_error(
@@ -1050,7 +1301,12 @@ fn execute_query_documents(
     } else {
         for_each_document(conn, table_name, &mut visit_document)
     };
-    SQLITE_QUERY_FALLBACK_ROWS_VISITED.fetch_add(visited_rows, Ordering::Relaxed);
+    record_query_fallback_rows(
+        collection_name,
+        &fallback_operator_families,
+        visited_rows,
+        decoded_rows,
+    );
     fallback_result?;
     rows.sort_by(|a, b| comparator(a, b));
     let start = skip.min(rows.len());
@@ -1262,6 +1518,8 @@ fn drain_external_changed_documents_since(
     };
     let mut checkpoint = initial_checkpoint;
     let mut batches = Vec::new();
+    let mut rows = 0usize;
+    let mut empty_batches = 0usize;
     for _ in 0..SQLITE_EXTERNAL_POLL_MAX_BATCHES_PER_WAKE {
         let result = changed_documents_since(
             conn,
@@ -1272,14 +1530,18 @@ fn drain_external_changed_documents_since(
         )?;
         checkpoint = result.checkpoint.clone();
         if result.documents.is_empty() {
+            empty_batches += 1;
+            record_sqlite_external_poll_drain(table_name, batches.len(), empty_batches, rows, true);
             return Ok(ExternalPollDrain {
                 batches,
                 checkpoint,
                 drained_to_empty: true,
             });
         }
+        rows = rows.saturating_add(result.documents.len());
         batches.push(result);
     }
+    record_sqlite_external_poll_drain(table_name, batches.len(), empty_batches, rows, false);
     Ok(ExternalPollDrain {
         batches,
         checkpoint,
@@ -2799,6 +3061,7 @@ mod tests {
         QUERY_WRITER_FALLBACKS.store(0, Ordering::SeqCst);
         let fallback_calls_before = runtime_counter("query_fallback_calls");
         let fallback_rows_before = runtime_counter("query_fallback_rows_visited");
+        let fallback_decoded_before = runtime_counter("query_fallback_rows_decoded");
         let shared_conn = storage.connection().unwrap();
         let _writer_guard = shared_conn.lock();
 
@@ -2831,6 +3094,10 @@ mod tests {
         assert!(
             runtime_counter("query_fallback_rows_visited") >= fallback_rows_before + 100,
             "runtime counters must expose rows visited by Rust matcher fallback"
+        );
+        assert!(
+            runtime_counter("query_fallback_rows_decoded") >= fallback_decoded_before + 100,
+            "runtime counters must expose rows decoded by Rust matcher fallback"
         );
     }
 
@@ -2902,11 +3169,26 @@ mod tests {
         let fallback_calls_before = runtime_counter("query_fallback_calls");
         let candidate_calls_before = runtime_counter("query_fallback_indexed_candidate_calls");
         let fallback_rows_before = runtime_counter("query_fallback_rows_visited");
+        let fallback_decoded_before = runtime_counter("query_fallback_rows_decoded");
         let collection_fallback_before =
             runtime_counter_pointer("/query_fallback_by_collection/docs");
         let regex_fallback_before = runtime_counter_pointer("/query_fallback_by_operator/$regex");
         let collection_regex_fallback_before =
             runtime_counter_pointer("/query_fallback_by_collection_operator/docs/$regex");
+        let collection_rows_before =
+            runtime_counter_pointer("/query_fallback_rows_visited_by_collection/docs");
+        let collection_decoded_before =
+            runtime_counter_pointer("/query_fallback_rows_decoded_by_collection/docs");
+        let regex_rows_before =
+            runtime_counter_pointer("/query_fallback_rows_visited_by_operator/$regex");
+        let regex_decoded_before =
+            runtime_counter_pointer("/query_fallback_rows_decoded_by_operator/$regex");
+        let collection_regex_rows_before = runtime_counter_pointer(
+            "/query_fallback_rows_visited_by_collection_operator/docs/$regex",
+        );
+        let collection_regex_decoded_before = runtime_counter_pointer(
+            "/query_fallback_rows_decoded_by_collection_operator/docs/$regex",
+        );
         let result = instance.query(&prepared).await.unwrap();
         let ids = result
             .documents
@@ -2930,6 +3212,11 @@ mod tests {
             "Rust matcher must only inspect the age-index candidate window"
         );
         assert_eq!(
+            runtime_counter("query_fallback_rows_decoded") - fallback_decoded_before,
+            10,
+            "fallback decode counter must match the bounded candidate window"
+        );
+        assert_eq!(
             runtime_counter_pointer("/query_fallback_by_collection/docs"),
             collection_fallback_before + 1,
             "fallback attribution must include the collection name"
@@ -2943,6 +3230,40 @@ mod tests {
             runtime_counter_pointer("/query_fallback_by_collection_operator/docs/$regex"),
             collection_regex_fallback_before + 1,
             "fallback attribution must include collection/operator pairs"
+        );
+        assert_eq!(
+            runtime_counter_pointer("/query_fallback_rows_visited_by_collection/docs"),
+            collection_rows_before + 10,
+            "fallback row visits must be attributed to the collection"
+        );
+        assert_eq!(
+            runtime_counter_pointer("/query_fallback_rows_decoded_by_collection/docs"),
+            collection_decoded_before + 10,
+            "fallback row decodes must be attributed to the collection"
+        );
+        assert_eq!(
+            runtime_counter_pointer("/query_fallback_rows_visited_by_operator/$regex"),
+            regex_rows_before + 10,
+            "fallback row visits must be attributed to the operator"
+        );
+        assert_eq!(
+            runtime_counter_pointer("/query_fallback_rows_decoded_by_operator/$regex"),
+            regex_decoded_before + 10,
+            "fallback row decodes must be attributed to the operator"
+        );
+        assert_eq!(
+            runtime_counter_pointer(
+                "/query_fallback_rows_visited_by_collection_operator/docs/$regex"
+            ),
+            collection_regex_rows_before + 10,
+            "fallback row visits must be attributed to the collection/operator pair"
+        );
+        assert_eq!(
+            runtime_counter_pointer(
+                "/query_fallback_rows_decoded_by_collection_operator/docs/$regex"
+            ),
+            collection_regex_decoded_before + 10,
+            "fallback row decodes must be attributed to the collection/operator pair"
         );
     }
 
@@ -2986,11 +3307,23 @@ mod tests {
             ),
         )
         .unwrap();
+        let fallback_rows_before = runtime_counter("query_fallback_rows_visited");
+        let fallback_decoded_before = runtime_counter("query_fallback_rows_decoded");
         let too_broad_before = runtime_counter("query_fallback_too_broad_calls");
         let collection_regex_fallback_before =
             runtime_counter_pointer("/query_fallback_by_collection_operator/docs/$regex");
         let err = instance.query(&prepared).await.unwrap_err();
         assert_eq!(err.code(), SQLITE_QUERY_FALLBACK_TOO_BROAD);
+        assert!(
+            runtime_counter("query_fallback_rows_visited")
+                >= fallback_rows_before + SQLITE_QUERY_FALLBACK_SCAN_LIMIT + 1,
+            "too-broad fallback abort must still report visited rows"
+        );
+        assert!(
+            runtime_counter("query_fallback_rows_decoded")
+                >= fallback_decoded_before + SQLITE_QUERY_FALLBACK_SCAN_LIMIT + 1,
+            "too-broad fallback abort must still report decoded rows"
+        );
         assert_eq!(
             runtime_counter("query_fallback_too_broad_calls"),
             too_broad_before + 1,
@@ -3740,6 +4073,22 @@ mod tests {
             tx.commit().unwrap();
         }
 
+        let drain_calls_before = runtime_counter("external_poll_drain_calls");
+        let drain_batches_before = runtime_counter("external_poll_drain_batches");
+        let drain_empty_batches_before = runtime_counter("external_poll_drain_empty_batches");
+        let drain_rows_visited_before = runtime_counter("external_poll_drain_rows_visited");
+        let drain_rows_before = runtime_counter("external_poll_drain_rows_decoded");
+        let drain_budget_exhaustions_before =
+            runtime_counter("external_poll_drain_budget_exhaustions");
+        let drain_table_rows_before =
+            runtime_counter_map_value("external_poll_drain_rows_by_table", &instance.table_name);
+        let drain_table_batches_before =
+            runtime_counter_map_value("external_poll_drain_batches_by_table", &instance.table_name);
+        let drain_table_budget_exhaustions_before = runtime_counter_map_value(
+            "external_poll_drain_budget_exhaustions_by_table",
+            &instance.table_name,
+        );
+
         notify_table_change(&database_key_for_path(&database_path), &instance.table_name);
 
         let deadline = Instant::now() + Duration::from_millis(750);
@@ -3765,6 +4114,50 @@ mod tests {
         assert!(
             bulks >= 3,
             "burst should be emitted as multiple bounded batches"
+        );
+        assert!(
+            runtime_counter("external_poll_drain_calls") >= drain_calls_before + 1,
+            "external poll should count the notified drain"
+        );
+        assert!(
+            runtime_counter("external_poll_drain_batches") >= drain_batches_before + 3,
+            "external poll should count all non-empty drain batches"
+        );
+        assert!(
+            runtime_counter("external_poll_drain_empty_batches") >= drain_empty_batches_before + 1,
+            "external poll should count the empty drain terminator"
+        );
+        assert!(
+            runtime_counter("external_poll_drain_rows_decoded") >= drain_rows_before + total as u64,
+            "external poll should count drained rows"
+        );
+        assert!(
+            runtime_counter("external_poll_drain_rows_visited")
+                >= drain_rows_visited_before + total as u64,
+            "external poll should count visited rows"
+        );
+        assert_eq!(
+            runtime_counter("external_poll_drain_budget_exhaustions"),
+            drain_budget_exhaustions_before,
+            "three-batch burst should drain before the per-wake budget is exhausted"
+        );
+        assert!(
+            runtime_counter_map_value("external_poll_drain_rows_by_table", &instance.table_name)
+                >= drain_table_rows_before + total as u64,
+            "external poll should attribute drained rows to the table"
+        );
+        assert!(
+            runtime_counter_map_value("external_poll_drain_batches_by_table", &instance.table_name)
+                >= drain_table_batches_before + 3,
+            "external poll should attribute drain batches to the table"
+        );
+        assert_eq!(
+            runtime_counter_map_value(
+                "external_poll_drain_budget_exhaustions_by_table",
+                &instance.table_name
+            ),
+            drain_table_budget_exhaustions_before,
+            "three-batch burst should not exhaust the table drain budget"
         );
     }
 

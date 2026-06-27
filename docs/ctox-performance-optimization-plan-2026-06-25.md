@@ -738,10 +738,13 @@ is no longer the original file-share/browser `allDocuments()` burn path.
 ### P1 - Remaining Structural Work
 
 1. Native RxDB external-write idle safety drains are fixed for file-backed
-   collections. Keep the new zero-drain regression as a release gate, add
-   production counters around the DB-wide changed-table watcher, and finish the
-   central dispatcher/backpressure design so future change-stream work cannot
-   regress into per-collection idle scanning.
+   collections. Keep the new zero-drain regression as a release gate. The
+   DB-wide changed-table watcher now exposes production counters that classify
+   active wakeups, standby wakeups, standby entries, active resets, drain
+   batches, drain rows, and budget exhaustion. Watcher ownership is now
+   de-duplicated per SQLite database path; finish the remaining central
+   dispatcher/backpressure design so future change-stream work cannot regress
+   into per-collection idle scanning.
 2. Native SQLite query pushdown is still partial for normal storage queries.
    Unsupported Mango selectors no longer silently run unbounded full-table Rust
    matcher scans. Runtime counters expose normal fallback calls, visited rows,
@@ -1822,6 +1825,12 @@ Implementation status:
   collection/operator fallback attribution is now exposed in SQLite runtime
   counters. Remaining work is broader SQL compiler coverage and a hot-query
   registry.
+- Done on 2026-06-27 for native non-stream fallback decode visibility: normal
+  SQLite fallback queries now expose decoded-row counters in addition to
+  visited-row counters, with collection, operator, and collection/operator row
+  attribution. The default installed idle probe budgets these row/decode
+  counters at zero, so a daemon-standby Rust matcher fallback cannot silently
+  decode JSON documents.
 
 Validation:
 
@@ -1840,6 +1849,10 @@ Validation:
   candidates instead of 1000 rows, and aborts broad fallback scans without
   candidate bounds after the fixed scan limit. It also verifies attribution by
   collection, operator family, and collection/operator pair.
+- `CARGO_TARGET_DIR=/tmp/ctox-rxdb-fallback-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --manifest-path src/core/rxdb/Cargo.toml query_fallback_ -- --nocapture`
+  passed on 2026-06-27: verifies fallback row/decode counters, row attribution
+  by collection/operator/collection-operator, writer-lock isolation, indexed
+  candidate narrowing, and too-broad scan-limit accounting.
 - `CARGO_TARGET_DIR=/tmp/ctox-rxdb-fallback-target cargo test --manifest-path src/core/rxdb/Cargo.toml fallback -- --nocapture`
   passed on 2026-06-27: 6 unit tests and 1 conformance test, 0 failures.
 - `CARGO_TARGET_DIR=/tmp/ctox-rxdb-target cargo test --manifest-path src/core/rxdb/Cargo.toml external_write_poll_uses_read_only_connection_while_writer_mutex_is_held -- --nocapture`
@@ -1901,14 +1914,38 @@ Implementation status:
   storage change streams emit a lag marker; query change-event buffers treat it
   as an invalidation that forces full re-execution, and storage-backed master
   change streams map it to replication `RESYNC`.
-- Still open: production loop-budget counters for the DB-wide watcher. The
-  dispatcher should remain centralized around SQLite file-level change detection
-  and must not re-add per-collection idle scans.
+- Done on 2026-06-27 for DB-wide watcher production counters: the SQLite
+  runtime snapshot now separates total external-poll wakeups into active and
+  standby wakeups, and records standby-entry plus active-reset transitions. The
+  default installed idle probe budgets these counters at zero, so a recurring
+  standby safety wake or unexpected active reset is visible in passive daemon
+  evidence instead of being inferred from downstream statement counters.
+- Done on 2026-06-27 for DB-wide watcher drain-budget counters: the SQLite
+  runtime snapshot now records external-poll drain calls, non-empty batches,
+  empty terminator batches, rows visited/decoded, max rows/batches per drain,
+  and budget exhaustion, with per-table row/batch/exhaustion attribution. The
+  default installed idle probe budgets these counters at zero so a standby
+  drain after the system should be idle fails the probe directly.
+- Done on 2026-06-27 for DB-wide watcher ownership: `RxStorageSqlite`
+  factories for the same SQLite path now share one external database poll
+  registration with refcounted shutdown. This prevents reopened databases or
+  parallel storage factories from starting duplicate file-level watcher
+  threads for the same Core DB.
+- Still open: remaining central dispatcher/backpressure design. The dispatcher
+  should remain centralized around SQLite file-level change detection, should
+  retain bounded catch-up semantics under file-share bursts, and must not
+  re-add per-collection idle scans.
 
 Validation:
 
 - `CARGO_TARGET_DIR=/tmp/ctox-rxdb-target cargo test --manifest-path src/core/rxdb/Cargo.toml storage::sqlite::instance::tests::change_stream_drains_multiple_external_batches_per_wake -- --nocapture`
   passed: 1 test, 0 failures.
+- `CARGO_TARGET_DIR=/tmp/ctox-rxdb-poll-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --manifest-path src/core/rxdb/Cargo.toml change_stream_drains_multiple_external_batches_per_wake -- --nocapture`
+  passed: 1 test, 0 failures.
+- `CARGO_TARGET_DIR=/tmp/ctox-rxdb-poll-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --manifest-path src/core/rxdb/Cargo.toml external_database_poll_registry_is_per_database_path -- --nocapture`
+  passed on 2026-06-27: verifies multiple SQLite storage factories for one
+  database path share one DB-wide poll registration and unregister it only
+  after the last factory is dropped.
 - `CARGO_TARGET_DIR=/tmp/ctox-rxdb-target cargo test --manifest-path src/core/rxdb/Cargo.toml storage::sqlite::instance::tests::change_stream_drains_ -- --nocapture`
   passed: 2 tests, 0 failures.
 - `CARGO_TARGET_DIR=/tmp/ctox-rxdb-target cargo test --manifest-path src/core/rxdb/Cargo.toml storage::sqlite::instance::tests::file_backed_external_poll_has_no_per_collection_idle_safety_drains -- --nocapture`
@@ -1933,6 +1970,8 @@ Validation:
   passed on 2026-06-26: 271 unit tests and 30 conformance tests.
 - `cargo fmt --check --manifest-path src/core/rxdb/Cargo.toml`
   passed on 2026-06-26.
+- `CARGO_TARGET_DIR=/tmp/ctox-rxdb-poll-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --manifest-path src/core/rxdb/Cargo.toml external_database_poll_records_backoff_transitions -- --nocapture`
+  passed on 2026-06-27.
 - `node src/apps/business-os/rxdb/tests/run-all.mjs`
   passed on 2026-06-26 after the native `RxSubject` change: 47 passed,
   0 failed, 2 skipped because the wire daemon was not built.
@@ -2117,15 +2156,25 @@ Implementation status:
   sorting. `queryPlanFor()` now reports `schema-index` only for this real
   execution strategy; unsupported operators such as `$regex`, `$nin`,
   `$contains`, and `$elemMatch` do not claim indexed execution.
+- Done on 2026-06-27 for browser query-performance guards: a new browser RxDB
+  smoke verifies representative `business_commands`, `ctox_queue_tasks`,
+  `desktop_files`, `desktop_file_chunks`, and `business_records` list/window
+  queries report schema-index execution instead of `allDocuments()` fallback.
+  It also exercises strict fallback rejection before IndexedDB opens and
+  ratchets app source against direct `.allDocuments()` calls and broad
+  `desktop_file_chunks.find().exec()` consumers.
 - Still open: `_deleted`/LWT count specialization beyond the current
-  LWT-window path, explicit browser perf spies that fail on unexpected
-  `allDocuments()` fallback, demand-loaded unbounded query semantics, and
-  collection subscription deltas that avoid full re-query/re-render.
+  LWT-window path, demand-loaded unbounded query semantics, and collection
+  subscription deltas that avoid full re-query/re-render.
 
 Validation:
 
 - `node src/apps/business-os/rxdb/tests/storage-index-smoke.mjs` passed.
 - `node src/apps/business-os/rxdb/tests/query-api-smoke.mjs` passed.
+- `node src/apps/business-os/rxdb/tests/browser-query-performance-guards-smoke.mjs`
+  passed on 2026-06-27.
+- `node src/apps/business-os/rxdb/tests/run-all.mjs` passed on 2026-06-27:
+  50 passed, 0 failed, 2 skipped because the wire daemon was not built.
 - `node src/apps/business-os/rxdb/tests/run-all.mjs` passed on 2026-06-26:
   49 tests, 0 failures, 0 skipped.
 
@@ -2227,6 +2276,14 @@ Implementation status:
   equivalent ranges still deduplicate. Persisted file-demand chunks now write
   through one `bulkWrite()` call per fetch instead of one transaction per
   received chunk.
+- Done on 2026-06-27 for file-fetch retained-byte diagnostics: the shared
+  demand-loading transport now reports current `bufferedFileChunkBytes` and
+  peak `maxBufferedFileChunkBytes` in addition to chunk counts. The transport
+  smoke drives a successful two-chunk `rxdb.file.fetch`, proves the current
+  byte count drops back to zero on completion, and keeps the peak byte count
+  available for release diagnostics. The app-local RxDB bundle was rebuilt and
+  the shared `db.js`/`sync.js` cache-busters were bumped together to
+  `20260627-file-buffer-bytes-v1`.
 - Still open: broader browser chunk-stream/range APIs and any remaining
   non-central upload/import paths, blob/chunk read/range APIs, Research blob
   reads, Universal Importer/file-integrity helpers, schema-aware file-demand
@@ -2239,6 +2296,11 @@ Implementation status:
 Validation:
 
 - `node src/apps/business-os/rxdb/tests/sidecar-storage-smoke.mjs` passed.
+- `node src/apps/business-os/rxdb/tests/demand-loading-transport-smoke.mjs`
+  passed on 2026-06-27.
+- `node src/apps/business-os/rxdb/tests/run-all.mjs` passed on 2026-06-27
+  after the file-fetch retained-byte diagnostics change: 50 passed, 0 failed,
+  2 skipped because the wire daemon was not built.
 - `node src/apps/business-os/rxdb/tests/demand-loader-smoke.mjs` passed.
 - `node src/apps/business-os/rxdb/tests/demand-invalidation-hotpath-smoke.mjs` passed.
 - `node src/apps/business-os/modules/cv-print-builder/tests/cv-print-builder.test.mjs` passed.
@@ -2836,13 +2898,10 @@ The performance problem is structurally fixed only when:
 ## Immediate Next Work Items
 
 1. Add hard measurement gates before the next release:
-   fallback row-visit/decode counters for remaining native RxDB non-stream
-   fallback queries; SQLite statement/write-lock counters including external
-   poller confirmation; browser spies for `allDocuments()`,
-   `scanQueryWindows()`, sidecar eviction scans, local-push changed-since
-   scans, live-query full re-query, file-fetch peak retained bytes, heavy
-   diagnostics snapshots, and guards against broad
-   `desktop_file_chunks.find().exec()` consumers.
+   remaining browser spies for `scanQueryWindows()`, sidecar eviction scans,
+   local-push changed-since
+   scans, live-query full re-query, heavy diagnostics snapshots, and remaining
+   broad chunk-consumer/source guards.
 2. Remove remaining P1 daemon idle-loop sources:
    Notes dirty flag/watcher, desktop-file watcher/dirty roots with slow
    fallback, provider-specific IMAP IDLE/delta token support, and finer service

@@ -138,6 +138,44 @@ assert(transport.diagnostics().maxPendingFileCollectors >= 1, 'diagnostics recor
 const fileAbortError = await fileOutcome;
 assert(fileAbortError?.code === 'FILE_CANCELLED', 'peer abort rejects file with FILE_CANCELLED');
 
+// Successful file fetch path: diagnostics must expose peak retained file
+// chunk bytes, not only the number of buffered chunks.
+const fileSuccessPromise = transport.requestFileFetch({
+  requestId: 'file-success',
+  collectionName: 'desktop_files',
+  fileId: 'file-success',
+});
+await new Promise((r) => setImmediate(r));
+await transport.requestHandlers['rxdb.file.chunk']({
+  params: [{
+    requestId: 'file-success',
+    sequence: 0,
+    bytesBase64: 'AAAA',
+    hash: 'h0',
+    complete: false,
+  }],
+});
+let fileDiagnostics = transport.diagnostics();
+assert(fileDiagnostics.bufferedFileChunks === 1, 'diagnostics expose current buffered file chunk count');
+assert(fileDiagnostics.bufferedFileChunkBytes === 4, 'diagnostics expose current buffered file chunk bytes');
+await transport.requestHandlers['rxdb.file.chunk']({
+  params: [{
+    requestId: 'file-success',
+    sequence: 1,
+    bytesBase64: 'BBBBBB',
+    hash: 'h1',
+    complete: true,
+  }],
+});
+const fileChunks = await fileSuccessPromise;
+assert(fileChunks.length === 2, `expected two file chunks (got ${fileChunks.length})`);
+fileDiagnostics = transport.diagnostics();
+assert(fileDiagnostics.bufferedFileChunks === 0, 'completed file fetch clears current buffered chunks');
+assert(fileDiagnostics.bufferedFileChunkBytes === 0, 'completed file fetch clears current buffered bytes');
+assert(fileDiagnostics.fileChunksReceived >= 2, 'diagnostics count received file chunks');
+assert(fileDiagnostics.maxBufferedFileChunks >= 2, 'diagnostics record file chunk buffer peak');
+assert(fileDiagnostics.maxBufferedFileChunkBytes >= 10, 'diagnostics record file chunk byte peak');
+
 console.log('ctox-rxdb-js demand-loading transport smoke OK', {
   docs: result.documents.length,
   sentRequests: sent.length,

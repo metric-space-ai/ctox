@@ -3733,7 +3733,8 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
     maxPendingFileCollectors: 0,
     maxQueuedQueryRequests: 0,
     maxBufferedQueryChunks: 0,
-    maxBufferedFileChunks: 0
+    maxBufferedFileChunks: 0,
+    maxBufferedFileChunkBytes: 0
   };
   function updatePeaks() {
     metrics.maxPendingQueryCollectors = Math.max(metrics.maxPendingQueryCollectors, queryCollectors.size);
@@ -3741,6 +3742,7 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
     metrics.maxQueuedQueryRequests = Math.max(metrics.maxQueuedQueryRequests, queryStreamState.queue.length);
     metrics.maxBufferedQueryChunks = Math.max(metrics.maxBufferedQueryChunks, bufferedChunkCount(queryCollectors));
     metrics.maxBufferedFileChunks = Math.max(metrics.maxBufferedFileChunks, bufferedChunkCount(fileCollectors));
+    metrics.maxBufferedFileChunkBytes = Math.max(metrics.maxBufferedFileChunkBytes, bufferedFileChunkBytes(fileCollectors));
   }
   function routeQueryChunk(chunk) {
     if (!chunk || !chunk.requestId) return;
@@ -3996,6 +3998,7 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
       activeQueryStreams: queryStreamState.active,
       bufferedQueryChunks: bufferedChunkCount(queryCollectors),
       bufferedFileChunks: bufferedChunkCount(fileCollectors),
+      bufferedFileChunkBytes: bufferedFileChunkBytes(fileCollectors),
       cancelledQueryRequestCacheSize: cancelledQueryRequests.size,
       ...metrics
     };
@@ -4150,6 +4153,18 @@ function bufferedChunkCount(collectors) {
   let total = 0;
   for (const slot of collectors.values()) {
     total += Array.isArray(slot?.chunks) ? slot.chunks.length : 0;
+  }
+  return total;
+}
+function bufferedFileChunkBytes(collectors) {
+  let total = 0;
+  for (const slot of collectors.values()) {
+    if (!Array.isArray(slot?.chunks)) continue;
+    for (const chunk of slot.chunks) {
+      if (typeof chunk?.bytesBase64 === "string") {
+        total += chunk.bytesBase64.length;
+      }
+    }
   }
   return total;
 }
