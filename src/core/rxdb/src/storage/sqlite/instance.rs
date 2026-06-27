@@ -1,6 +1,6 @@
 //! SQLite [`crate::types::RxStorageInstance`] implementation.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::{Deref, DerefMut};
 use std::path::Path;
 #[cfg(test)]
@@ -26,16 +26,17 @@ use crate::rx_query_helper::{
 use crate::rx_schema_helper::get_primary_field_of_primary_key;
 use crate::rxjs_compat::{RxStream, RxSubject, DEFAULT_SUBJECT_BUFFER};
 use crate::types::{
-    BulkWriteRow, EventBulk, FilledMangoQuery, RxJsonSchema, RxStorageBulkWriteResponse,
-    RxStorageChangedDocumentsSinceResult, RxStorageCountResult, RxStorageInstance,
-    RxStorageInstanceCreationParams, RxStorageQueryResult,
+    BulkWriteRow, EventBulk, FilledMangoQuery, RxJsonSchema, RxQueryPlan,
+    RxStorageBulkWriteResponse, RxStorageChangedDocumentsSinceResult, RxStorageCountResult,
+    RxStorageInstance, RxStorageInstanceCreationParams, RxStorageQueryResult,
 };
 
 use super::cleanup::cleanup_deleted_documents;
 use super::sql::{
-    compile_count_sql, compile_query_sql, count_with_compiled_sql, documents_by_ids, drop_table,
-    for_each_document, for_each_document_with_compiled_sql, insert_document,
-    query_documents_with_compiled_sql, quote_identifier, update_document, CompiledSqliteQuery,
+    compile_count_sql, compile_query_plan_candidate_sql, compile_query_sql,
+    count_with_compiled_sql, documents_by_ids, drop_table, for_each_document,
+    for_each_document_with_compiled_sql, insert_document, query_documents_with_compiled_sql,
+    quote_identifier, update_document, CompiledSqliteQuery,
 };
 use super::types::{sqlite_error, SharedSqliteConnection};
 
@@ -43,6 +44,8 @@ const SQLITE_EXTERNAL_POLL_FILE_CHUNK_LIMIT: u64 = 2;
 const SQLITE_EXTERNAL_POLL_DEFAULT_LIMIT: u64 = 50;
 const SQLITE_EXTERNAL_POLL_MAX_BATCHES_PER_WAKE: usize = 32;
 const SQLITE_EXTERNAL_POLL_SAFETY_INTERVAL: Duration = Duration::from_secs(60);
+const SQLITE_QUERY_FALLBACK_SCAN_LIMIT: u64 = 4096;
+const SQLITE_QUERY_FALLBACK_TOO_BROAD: &str = "SQLITE_QUERY_FALLBACK_TOO_BROAD";
 const SQLITE_QUERY_STREAM_UNSUPPORTED: &str = "SQLITE_QUERY_STREAM_UNSUPPORTED";
 
 static INSTANCE_ID: AtomicU64 = AtomicU64::new(0);
@@ -57,6 +60,15 @@ static SQLITE_QUERY_CALLS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_QUERY_RESULTS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_QUERY_FALLBACK_CALLS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_QUERY_FALLBACK_ROWS_VISITED: AtomicU64 = AtomicU64::new(0);
+static SQLITE_QUERY_FALLBACK_INDEXED_CANDIDATE_CALLS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_QUERY_FALLBACK_TOO_BROAD_CALLS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_QUERY_FALLBACK_BY_COLLECTION: OnceLock<StdMutex<HashMap<String, u64>>> =
+    OnceLock::new();
+static SQLITE_QUERY_FALLBACK_BY_OPERATOR: OnceLock<StdMutex<HashMap<String, u64>>> =
+    OnceLock::new();
+static SQLITE_QUERY_FALLBACK_BY_COLLECTION_OPERATOR: OnceLock<
+    StdMutex<HashMap<String, HashMap<String, u64>>>,
+> = OnceLock::new();
 static SQLITE_COUNT_CALLS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_COUNT_FALLBACK_QUERY_CALLS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_QUERY_STREAM_CALLS: AtomicU64 = AtomicU64::new(0);
@@ -65,14 +77,28 @@ static SQLITE_QUERY_STREAM_UNSUPPORTED_CALLS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_READ_ONLY_OPEN_FAILURES: AtomicU64 = AtomicU64::new(0);
 static SQLITE_WRITER_FALLBACKS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_STATEMENTS_EXECUTED: AtomicU64 = AtomicU64::new(0);
+static SQLITE_STATEMENT_ELAPSED_NS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static SQLITE_STATEMENT_ELAPSED_NS_MAX: AtomicU64 = AtomicU64::new(0);
+static SQLITE_STATEMENT_ELAPSED_GE_1MS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_STATEMENT_ELAPSED_GE_10MS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_STATEMENT_ELAPSED_GE_100MS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_STATEMENT_ELAPSED_GE_1000MS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_WRITE_TRANSACTIONS_STARTED: AtomicU64 = AtomicU64::new(0);
 static SQLITE_WRITE_TRANSACTIONS_COMMITTED: AtomicU64 = AtomicU64::new(0);
 static SQLITE_WRITE_TRANSACTIONS_FAILED: AtomicU64 = AtomicU64::new(0);
 static SQLITE_WRITER_LOCK_ACQUIRE_CALLS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_WRITER_LOCK_WAIT_NS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static SQLITE_WRITER_LOCK_WAIT_NS_MAX: AtomicU64 = AtomicU64::new(0);
+static SQLITE_WRITER_LOCK_WAIT_GE_1MS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_WRITER_LOCK_WAIT_GE_10MS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_WRITER_LOCK_WAIT_GE_100MS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_WRITER_LOCK_WAIT_GE_1000MS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_WRITER_LOCK_HELD_NS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static SQLITE_WRITER_LOCK_HELD_NS_MAX: AtomicU64 = AtomicU64::new(0);
+static SQLITE_WRITER_LOCK_HELD_GE_1MS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_WRITER_LOCK_HELD_GE_10MS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_WRITER_LOCK_HELD_GE_100MS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_WRITER_LOCK_HELD_GE_1000MS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_DATA_VERSION_READS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_CHANGED_TABLE_READS: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
@@ -111,42 +137,248 @@ fn set_test_external_poll_safety_interval_ms(ms: u64) {
 }
 
 pub fn sqlite_runtime_counters_snapshot() -> Value {
-    json!({
-        "schema": "ctox.rxdb.sqlite.runtime_counters.v1",
-        "bulk_write_calls": SQLITE_BULK_WRITE_CALLS.load(Ordering::Relaxed),
-        "bulk_write_rows": SQLITE_BULK_WRITE_ROWS.load(Ordering::Relaxed),
-        "find_documents_by_id_calls": SQLITE_FIND_DOCUMENTS_BY_ID_CALLS.load(Ordering::Relaxed),
-        "find_documents_by_id_requested": SQLITE_FIND_DOCUMENTS_BY_ID_REQUESTED.load(Ordering::Relaxed),
-        "find_documents_by_id_results": SQLITE_FIND_DOCUMENTS_BY_ID_RESULTS.load(Ordering::Relaxed),
-        "changed_documents_since_calls": SQLITE_CHANGED_DOCUMENTS_SINCE_CALLS.load(Ordering::Relaxed),
-        "changed_documents_since_results": SQLITE_CHANGED_DOCUMENTS_SINCE_RESULTS.load(Ordering::Relaxed),
-        "query_calls": SQLITE_QUERY_CALLS.load(Ordering::Relaxed),
-        "query_results": SQLITE_QUERY_RESULTS.load(Ordering::Relaxed),
-        "query_fallback_calls": SQLITE_QUERY_FALLBACK_CALLS.load(Ordering::Relaxed),
-        "query_fallback_rows_visited": SQLITE_QUERY_FALLBACK_ROWS_VISITED.load(Ordering::Relaxed),
-        "count_calls": SQLITE_COUNT_CALLS.load(Ordering::Relaxed),
-        "count_fallback_query_calls": SQLITE_COUNT_FALLBACK_QUERY_CALLS.load(Ordering::Relaxed),
-        "query_stream_calls": SQLITE_QUERY_STREAM_CALLS.load(Ordering::Relaxed),
-        "query_stream_results": SQLITE_QUERY_STREAM_RESULTS.load(Ordering::Relaxed),
-        "query_stream_unsupported_calls": SQLITE_QUERY_STREAM_UNSUPPORTED_CALLS.load(Ordering::Relaxed),
-        "read_only_open_failures": SQLITE_READ_ONLY_OPEN_FAILURES.load(Ordering::Relaxed),
-        "writer_fallbacks": SQLITE_WRITER_FALLBACKS.load(Ordering::Relaxed),
-        "statements_executed": SQLITE_STATEMENTS_EXECUTED.load(Ordering::Relaxed),
-        "write_transactions_started": SQLITE_WRITE_TRANSACTIONS_STARTED.load(Ordering::Relaxed),
-        "write_transactions_committed": SQLITE_WRITE_TRANSACTIONS_COMMITTED.load(Ordering::Relaxed),
-        "write_transactions_failed": SQLITE_WRITE_TRANSACTIONS_FAILED.load(Ordering::Relaxed),
-        "writer_lock_acquire_calls": SQLITE_WRITER_LOCK_ACQUIRE_CALLS.load(Ordering::Relaxed),
-        "writer_lock_wait_ns_total": SQLITE_WRITER_LOCK_WAIT_NS_TOTAL.load(Ordering::Relaxed),
-        "writer_lock_wait_ns_max": SQLITE_WRITER_LOCK_WAIT_NS_MAX.load(Ordering::Relaxed),
-        "writer_lock_held_ns_total": SQLITE_WRITER_LOCK_HELD_NS_TOTAL.load(Ordering::Relaxed),
-        "writer_lock_held_ns_max": SQLITE_WRITER_LOCK_HELD_NS_MAX.load(Ordering::Relaxed),
-        "external_poll_data_version_reads": SQLITE_EXTERNAL_POLL_DATA_VERSION_READS.load(Ordering::Relaxed),
-        "external_poll_changed_table_reads": SQLITE_EXTERNAL_POLL_CHANGED_TABLE_READS.load(Ordering::Relaxed),
-    })
+    let mut out = serde_json::Map::new();
+    out.insert(
+        "schema".to_string(),
+        Value::String("ctox.rxdb.sqlite.runtime_counters.v1".to_string()),
+    );
+    macro_rules! counter {
+        ($name:literal, $value:expr) => {
+            out.insert(
+                $name.to_string(),
+                Value::from($value.load(Ordering::Relaxed)),
+            );
+        };
+    }
+    counter!("bulk_write_calls", SQLITE_BULK_WRITE_CALLS);
+    counter!("bulk_write_rows", SQLITE_BULK_WRITE_ROWS);
+    counter!(
+        "find_documents_by_id_calls",
+        SQLITE_FIND_DOCUMENTS_BY_ID_CALLS
+    );
+    counter!(
+        "find_documents_by_id_requested",
+        SQLITE_FIND_DOCUMENTS_BY_ID_REQUESTED
+    );
+    counter!(
+        "find_documents_by_id_results",
+        SQLITE_FIND_DOCUMENTS_BY_ID_RESULTS
+    );
+    counter!(
+        "changed_documents_since_calls",
+        SQLITE_CHANGED_DOCUMENTS_SINCE_CALLS
+    );
+    counter!(
+        "changed_documents_since_results",
+        SQLITE_CHANGED_DOCUMENTS_SINCE_RESULTS
+    );
+    counter!("query_calls", SQLITE_QUERY_CALLS);
+    counter!("query_results", SQLITE_QUERY_RESULTS);
+    counter!("query_fallback_calls", SQLITE_QUERY_FALLBACK_CALLS);
+    counter!(
+        "query_fallback_rows_visited",
+        SQLITE_QUERY_FALLBACK_ROWS_VISITED
+    );
+    counter!(
+        "query_fallback_indexed_candidate_calls",
+        SQLITE_QUERY_FALLBACK_INDEXED_CANDIDATE_CALLS
+    );
+    counter!(
+        "query_fallback_too_broad_calls",
+        SQLITE_QUERY_FALLBACK_TOO_BROAD_CALLS
+    );
+    out.insert(
+        "query_fallback_by_collection".to_string(),
+        snapshot_counter_map(&SQLITE_QUERY_FALLBACK_BY_COLLECTION),
+    );
+    out.insert(
+        "query_fallback_by_operator".to_string(),
+        snapshot_counter_map(&SQLITE_QUERY_FALLBACK_BY_OPERATOR),
+    );
+    out.insert(
+        "query_fallback_by_collection_operator".to_string(),
+        snapshot_nested_counter_map(&SQLITE_QUERY_FALLBACK_BY_COLLECTION_OPERATOR),
+    );
+    counter!("count_calls", SQLITE_COUNT_CALLS);
+    counter!(
+        "count_fallback_query_calls",
+        SQLITE_COUNT_FALLBACK_QUERY_CALLS
+    );
+    counter!("query_stream_calls", SQLITE_QUERY_STREAM_CALLS);
+    counter!("query_stream_results", SQLITE_QUERY_STREAM_RESULTS);
+    counter!(
+        "query_stream_unsupported_calls",
+        SQLITE_QUERY_STREAM_UNSUPPORTED_CALLS
+    );
+    counter!("read_only_open_failures", SQLITE_READ_ONLY_OPEN_FAILURES);
+    counter!("writer_fallbacks", SQLITE_WRITER_FALLBACKS);
+    counter!("statements_executed", SQLITE_STATEMENTS_EXECUTED);
+    counter!(
+        "statement_elapsed_ns_total",
+        SQLITE_STATEMENT_ELAPSED_NS_TOTAL
+    );
+    counter!("statement_elapsed_ns_max", SQLITE_STATEMENT_ELAPSED_NS_MAX);
+    counter!("statement_elapsed_ge_1ms", SQLITE_STATEMENT_ELAPSED_GE_1MS);
+    counter!(
+        "statement_elapsed_ge_10ms",
+        SQLITE_STATEMENT_ELAPSED_GE_10MS
+    );
+    counter!(
+        "statement_elapsed_ge_100ms",
+        SQLITE_STATEMENT_ELAPSED_GE_100MS
+    );
+    counter!(
+        "statement_elapsed_ge_1000ms",
+        SQLITE_STATEMENT_ELAPSED_GE_1000MS
+    );
+    counter!(
+        "write_transactions_started",
+        SQLITE_WRITE_TRANSACTIONS_STARTED
+    );
+    counter!(
+        "write_transactions_committed",
+        SQLITE_WRITE_TRANSACTIONS_COMMITTED
+    );
+    counter!(
+        "write_transactions_failed",
+        SQLITE_WRITE_TRANSACTIONS_FAILED
+    );
+    counter!(
+        "writer_lock_acquire_calls",
+        SQLITE_WRITER_LOCK_ACQUIRE_CALLS
+    );
+    counter!(
+        "writer_lock_wait_ns_total",
+        SQLITE_WRITER_LOCK_WAIT_NS_TOTAL
+    );
+    counter!("writer_lock_wait_ns_max", SQLITE_WRITER_LOCK_WAIT_NS_MAX);
+    counter!("writer_lock_wait_ge_1ms", SQLITE_WRITER_LOCK_WAIT_GE_1MS);
+    counter!("writer_lock_wait_ge_10ms", SQLITE_WRITER_LOCK_WAIT_GE_10MS);
+    counter!(
+        "writer_lock_wait_ge_100ms",
+        SQLITE_WRITER_LOCK_WAIT_GE_100MS
+    );
+    counter!(
+        "writer_lock_wait_ge_1000ms",
+        SQLITE_WRITER_LOCK_WAIT_GE_1000MS
+    );
+    counter!(
+        "writer_lock_held_ns_total",
+        SQLITE_WRITER_LOCK_HELD_NS_TOTAL
+    );
+    counter!("writer_lock_held_ns_max", SQLITE_WRITER_LOCK_HELD_NS_MAX);
+    counter!("writer_lock_held_ge_1ms", SQLITE_WRITER_LOCK_HELD_GE_1MS);
+    counter!("writer_lock_held_ge_10ms", SQLITE_WRITER_LOCK_HELD_GE_10MS);
+    counter!(
+        "writer_lock_held_ge_100ms",
+        SQLITE_WRITER_LOCK_HELD_GE_100MS
+    );
+    counter!(
+        "writer_lock_held_ge_1000ms",
+        SQLITE_WRITER_LOCK_HELD_GE_1000MS
+    );
+    counter!(
+        "external_poll_data_version_reads",
+        SQLITE_EXTERNAL_POLL_DATA_VERSION_READS
+    );
+    counter!(
+        "external_poll_changed_table_reads",
+        SQLITE_EXTERNAL_POLL_CHANGED_TABLE_READS
+    );
+    Value::Object(out)
+}
+
+fn snapshot_counter_map(map: &OnceLock<StdMutex<HashMap<String, u64>>>) -> Value {
+    let Some(map) = map.get() else {
+        return Value::Object(Default::default());
+    };
+    let counters = map.lock().unwrap();
+    let sorted = counters
+        .iter()
+        .map(|(key, value)| (key.clone(), *value))
+        .collect::<BTreeMap<_, _>>();
+    serde_json::to_value(sorted).unwrap_or_else(|_| Value::Object(Default::default()))
+}
+
+fn snapshot_nested_counter_map(
+    map: &OnceLock<StdMutex<HashMap<String, HashMap<String, u64>>>>,
+) -> Value {
+    let Some(map) = map.get() else {
+        return Value::Object(Default::default());
+    };
+    let counters = map.lock().unwrap();
+    let sorted = counters
+        .iter()
+        .map(|(outer, inner)| {
+            let inner_sorted = inner
+                .iter()
+                .map(|(key, value)| (key.clone(), *value))
+                .collect::<BTreeMap<_, _>>();
+            (outer.clone(), inner_sorted)
+        })
+        .collect::<BTreeMap<_, _>>();
+    serde_json::to_value(sorted).unwrap_or_else(|_| Value::Object(Default::default()))
+}
+
+fn increment_counter_map(map: &OnceLock<StdMutex<HashMap<String, u64>>>, key: &str) {
+    let mut counters = map
+        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    let counter = counters.entry(key.to_string()).or_insert(0);
+    *counter = counter.saturating_add(1);
+}
+
+fn increment_nested_counter_map(
+    map: &OnceLock<StdMutex<HashMap<String, HashMap<String, u64>>>>,
+    outer: &str,
+    inner: &str,
+) {
+    let mut counters = map
+        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    let inner_counters = counters.entry(outer.to_string()).or_default();
+    let counter = inner_counters.entry(inner.to_string()).or_insert(0);
+    *counter = counter.saturating_add(1);
+}
+
+fn record_query_fallback_attribution(collection_name: &str, operator_families: &[String]) {
+    increment_counter_map(&SQLITE_QUERY_FALLBACK_BY_COLLECTION, collection_name);
+    let operators = if operator_families.is_empty() {
+        vec!["$none".to_string()]
+    } else {
+        operator_families.to_vec()
+    };
+    for operator in operators {
+        increment_counter_map(&SQLITE_QUERY_FALLBACK_BY_OPERATOR, &operator);
+        increment_nested_counter_map(
+            &SQLITE_QUERY_FALLBACK_BY_COLLECTION_OPERATOR,
+            collection_name,
+            &operator,
+        );
+    }
 }
 
 pub(crate) fn record_sqlite_statement_executed(count: u64) {
     SQLITE_STATEMENTS_EXECUTED.fetch_add(count, Ordering::Relaxed);
+}
+
+pub(crate) struct TimedSqliteStatement {
+    started: Instant,
+}
+
+impl Drop for TimedSqliteStatement {
+    fn drop(&mut self) {
+        record_sqlite_statement_elapsed(self.started.elapsed());
+    }
+}
+
+pub(crate) fn timed_sqlite_statement() -> TimedSqliteStatement {
+    record_sqlite_statement_executed(1);
+    TimedSqliteStatement {
+        started: Instant::now(),
+    }
 }
 
 pub(crate) fn record_sqlite_external_poll_data_version_read() {
@@ -161,16 +393,65 @@ fn record_sqlite_writer_lock_wait(elapsed: Duration) {
     let elapsed_ns = duration_ns(elapsed);
     SQLITE_WRITER_LOCK_WAIT_NS_TOTAL.fetch_add(elapsed_ns, Ordering::Relaxed);
     update_atomic_max(&SQLITE_WRITER_LOCK_WAIT_NS_MAX, elapsed_ns);
+    record_duration_buckets(
+        elapsed_ns,
+        &SQLITE_WRITER_LOCK_WAIT_GE_1MS,
+        &SQLITE_WRITER_LOCK_WAIT_GE_10MS,
+        &SQLITE_WRITER_LOCK_WAIT_GE_100MS,
+        &SQLITE_WRITER_LOCK_WAIT_GE_1000MS,
+    );
 }
 
 fn record_sqlite_writer_lock_held(elapsed: Duration) {
     let elapsed_ns = duration_ns(elapsed);
     SQLITE_WRITER_LOCK_HELD_NS_TOTAL.fetch_add(elapsed_ns, Ordering::Relaxed);
     update_atomic_max(&SQLITE_WRITER_LOCK_HELD_NS_MAX, elapsed_ns);
+    record_duration_buckets(
+        elapsed_ns,
+        &SQLITE_WRITER_LOCK_HELD_GE_1MS,
+        &SQLITE_WRITER_LOCK_HELD_GE_10MS,
+        &SQLITE_WRITER_LOCK_HELD_GE_100MS,
+        &SQLITE_WRITER_LOCK_HELD_GE_1000MS,
+    );
+}
+
+fn record_sqlite_statement_elapsed(elapsed: Duration) {
+    let elapsed_ns = duration_ns(elapsed);
+    SQLITE_STATEMENT_ELAPSED_NS_TOTAL.fetch_add(elapsed_ns, Ordering::Relaxed);
+    update_atomic_max(&SQLITE_STATEMENT_ELAPSED_NS_MAX, elapsed_ns);
+    record_duration_buckets(
+        elapsed_ns,
+        &SQLITE_STATEMENT_ELAPSED_GE_1MS,
+        &SQLITE_STATEMENT_ELAPSED_GE_10MS,
+        &SQLITE_STATEMENT_ELAPSED_GE_100MS,
+        &SQLITE_STATEMENT_ELAPSED_GE_1000MS,
+    );
 }
 
 fn duration_ns(duration: Duration) -> u64 {
-    duration.as_nanos().min(u128::from(u64::MAX)) as u64
+    let elapsed_ns = duration.as_nanos().min(u128::from(u64::MAX)) as u64;
+    elapsed_ns.max(1)
+}
+
+fn record_duration_buckets(
+    elapsed_ns: u64,
+    ge_1ms: &AtomicU64,
+    ge_10ms: &AtomicU64,
+    ge_100ms: &AtomicU64,
+    ge_1000ms: &AtomicU64,
+) {
+    if elapsed_ns >= 1_000_000 {
+        ge_1ms.fetch_add(1, Ordering::Relaxed);
+    }
+    if elapsed_ns >= 10_000_000 {
+        ge_10ms.fetch_add(1, Ordering::Relaxed);
+    }
+    if elapsed_ns >= 100_000_000 {
+        ge_100ms.fetch_add(1, Ordering::Relaxed);
+    }
+    if elapsed_ns >= 1_000_000_000 {
+        ge_1000ms.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 fn update_atomic_max(value: &AtomicU64, candidate: u64) {
@@ -498,11 +779,65 @@ fn primary_key_selector_ids(query: &FilledMangoQuery, primary_path: &str) -> Opt
     })
 }
 
+fn query_operator_families(query: &FilledMangoQuery) -> Vec<String> {
+    let mut operators = BTreeSet::new();
+    collect_selector_operator_families(&query.selector, &mut operators);
+    if operators.is_empty() {
+        operators.insert("$none".to_string());
+    }
+    operators.into_iter().collect()
+}
+
+fn collect_selector_operator_families(selector: &Value, operators: &mut BTreeSet<String>) {
+    let Some(selector) = selector.as_object() else {
+        return;
+    };
+    for (field_or_operator, matcher) in selector {
+        if field_or_operator.starts_with('$') {
+            operators.insert(field_or_operator.clone());
+            collect_logical_operator_children(matcher, operators);
+        } else {
+            collect_matcher_operator_families(matcher, operators);
+        }
+    }
+}
+
+fn collect_matcher_operator_families(matcher: &Value, operators: &mut BTreeSet<String>) {
+    let Some(matcher) = matcher.as_object() else {
+        operators.insert("$eq".to_string());
+        return;
+    };
+    let mut found_operator = false;
+    for (operator, value) in matcher {
+        if operator.starts_with('$') {
+            found_operator = true;
+            operators.insert(operator.clone());
+            collect_logical_operator_children(value, operators);
+        }
+    }
+    if !found_operator {
+        operators.insert("$eq".to_string());
+    }
+}
+
+fn collect_logical_operator_children(value: &Value, operators: &mut BTreeSet<String>) {
+    if let Some(children) = value.as_array() {
+        for child in children {
+            collect_selector_operator_families(child, operators);
+        }
+    } else {
+        collect_selector_operator_families(value, operators);
+    }
+}
+
 fn execute_query_documents(
     conn: &rusqlite::Connection,
     table_name: &str,
+    collection_name: &str,
     primary_ids: Option<Vec<String>>,
     compiled_sql: Option<CompiledSqliteQuery>,
+    fallback_candidate_sql: Option<CompiledSqliteQuery>,
+    fallback_operator_families: Vec<String>,
     matcher: QueryMatcher,
     comparator: DeterministicSortComparator,
     skip: usize,
@@ -526,16 +861,39 @@ fn execute_query_documents(
     }
 
     SQLITE_QUERY_FALLBACK_CALLS.fetch_add(1, Ordering::Relaxed);
+    record_query_fallback_attribution(collection_name, &fallback_operator_families);
+    if fallback_candidate_sql.is_some() {
+        SQLITE_QUERY_FALLBACK_INDEXED_CANDIDATE_CALLS.fetch_add(1, Ordering::Relaxed);
+    }
     let mut visited_rows = 0u64;
     let mut rows: Vec<Value> = Vec::new();
-    for_each_document(conn, table_name, |doc| {
+    let mut visit_document = |doc: Value| {
         visited_rows = visited_rows.saturating_add(1);
+        if visited_rows > SQLITE_QUERY_FALLBACK_SCAN_LIMIT {
+            SQLITE_QUERY_FALLBACK_TOO_BROAD_CALLS.fetch_add(1, Ordering::Relaxed);
+            return Err(new_rx_error(
+                SQLITE_QUERY_FALLBACK_TOO_BROAD,
+                Some(json!({
+                    "message": "SQLite Mango fallback scanned too many candidate rows; add an indexable selector or SQL compiler support for this query",
+                    "table": table_name,
+                    "visitedRows": visited_rows,
+                    "scanLimit": SQLITE_QUERY_FALLBACK_SCAN_LIMIT,
+                    "usedIndexedCandidatePlan": fallback_candidate_sql.is_some(),
+                })),
+            ));
+        }
         if matcher(&doc) {
             rows.push(doc);
         }
         Ok(true)
-    })?;
+    };
+    let fallback_result = if let Some(compiled) = &fallback_candidate_sql {
+        for_each_document_with_compiled_sql(conn, compiled, &mut visit_document)
+    } else {
+        for_each_document(conn, table_name, &mut visit_document)
+    };
     SQLITE_QUERY_FALLBACK_ROWS_VISITED.fetch_add(visited_rows, Ordering::Relaxed);
+    fallback_result?;
     rows.sort_by(|a, b| comparator(a, b));
     let start = skip.min(rows.len());
     let end = skip_plus_limit.min(rows.len());
@@ -742,7 +1100,7 @@ fn drain_external_changed_documents_since(
 }
 
 fn latest_checkpoint(conn: &rusqlite::Connection, table_name: &str) -> Option<Value> {
-    record_sqlite_statement_executed(1);
+    let _statement_timer = timed_sqlite_statement();
     conn.query_row(
         &format!(
             "SELECT id, lastWriteTime FROM {} ORDER BY lastWriteTime DESC, id DESC LIMIT 1",
@@ -799,7 +1157,7 @@ fn changed_documents_since(
         .unwrap_or_default()
         .to_string();
 
-    record_sqlite_statement_executed(1);
+    let _statement_timer = timed_sqlite_statement();
     let mut stmt = conn
         .prepare(&format!(
             "SELECT data FROM {} WHERE lastWriteTime > ? OR (lastWriteTime = ? AND id > ?) ORDER BY lastWriteTime ASC, id ASC LIMIT ?",
@@ -1095,20 +1453,38 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         let matcher = get_query_matcher(&self.schema, &query);
         let comparator = get_sort_comparator(&self.schema, &query);
         let primary_ids = primary_key_selector_ids(&query, &self.primary_path);
+        let fallback_operator_families = query_operator_families(&query);
         let compiled_sql = if primary_ids.is_none() {
             compile_query_sql(&self.table_name, &self.primary_path, &query)
         } else {
             None
         };
+        let fallback_candidate_sql = if primary_ids.is_none() && compiled_sql.is_none() {
+            prepared_query
+                .get("queryPlan")
+                .cloned()
+                .and_then(|value| serde_json::from_value::<RxQueryPlan>(value).ok())
+                .and_then(|plan| {
+                    compile_query_plan_candidate_sql(&self.table_name, &self.primary_path, &plan)
+                })
+        } else {
+            None
+        };
 
         let table_name = self.table_name.clone();
+        let collection_name = self.collection_name.clone();
         if let Ok(read_conn) = self.open_read_only_connection() {
+            let collection_name = collection_name.clone();
+            let fallback_operator_families = fallback_operator_families.clone();
             let documents = tokio::task::spawn_blocking(move || -> RxResult<Vec<Value>> {
                 execute_query_documents(
                     &read_conn,
                     &table_name,
+                    &collection_name,
                     primary_ids,
                     compiled_sql,
+                    fallback_candidate_sql,
+                    fallback_operator_families,
                     matcher,
                     comparator,
                     skip,
@@ -1135,8 +1511,11 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
             execute_query_documents(
                 &conn,
                 &table_name,
+                &collection_name,
                 primary_ids,
                 compiled_sql,
+                fallback_candidate_sql,
+                fallback_operator_families,
                 matcher,
                 comparator,
                 skip,
@@ -1451,6 +1830,13 @@ mod tests {
             .unwrap_or(0)
     }
 
+    fn runtime_counter_pointer(pointer: &str) -> u64 {
+        sqlite_runtime_counters_snapshot()
+            .pointer(pointer)
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    }
+
     fn test_schema() -> RxJsonSchema {
         let mut properties = HashMap::new();
         properties.insert(
@@ -1543,6 +1929,56 @@ mod tests {
             "_meta": { "lwt": lwt },
             "_attachments": {}
         })
+    }
+
+    #[tokio::test]
+    async fn sqlite_runtime_counters_report_statement_and_writer_lock_timing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ctox.sqlite3");
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: path,
+        });
+        let instance = create_storage_instance(&storage, params(test_schema()))
+            .await
+            .unwrap();
+
+        let statements_before = runtime_counter("statements_executed");
+        let statement_ns_before = runtime_counter("statement_elapsed_ns_total");
+        let lock_acquires_before = runtime_counter("writer_lock_acquire_calls");
+        let lock_wait_ns_before = runtime_counter("writer_lock_wait_ns_total");
+        let lock_held_ns_before = runtime_counter("writer_lock_held_ns_total");
+
+        instance
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: None,
+                    document: doc("timing", "1-timing", 1, false, 1.0),
+                }],
+                "timing-counter-test",
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            runtime_counter("statements_executed") > statements_before,
+            "SQLite statement counter must advance for real storage work"
+        );
+        assert!(
+            runtime_counter("statement_elapsed_ns_total") > statement_ns_before,
+            "SQLite statement elapsed time must be visible in runtime counters"
+        );
+        assert!(
+            runtime_counter("writer_lock_acquire_calls") > lock_acquires_before,
+            "SQLite writer lock acquisition counter must advance for writes"
+        );
+        assert!(
+            runtime_counter("writer_lock_wait_ns_total") > lock_wait_ns_before,
+            "SQLite writer lock wait time must be visible in runtime counters"
+        );
+        assert!(
+            runtime_counter("writer_lock_held_ns_total") > lock_held_ns_before,
+            "SQLite writer lock held time must be visible in runtime counters"
+        );
     }
 
     struct ExternalPollSafetyIntervalReset;
@@ -2146,6 +2582,175 @@ mod tests {
         assert!(
             runtime_counter("query_fallback_rows_visited") >= fallback_rows_before + 100,
             "runtime counters must expose rows visited by Rust matcher fallback"
+        );
+    }
+
+    #[tokio::test]
+    async fn query_fallback_uses_query_plan_candidate_bounds_before_rust_matcher() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("ctox.sqlite3"),
+        });
+        let schema = test_schema();
+        let instance = create_storage_instance(&storage, params(schema.clone()))
+            .await
+            .unwrap();
+        let rows: Vec<BulkWriteRow> = (0..1_000)
+            .map(|idx| BulkWriteRow {
+                previous: None,
+                document: doc(&format!("doc-{idx:04}"), "1-a", idx, false, idx as f64),
+            })
+            .collect();
+        instance.bulk_write(rows, "seed").await.unwrap();
+
+        let mut sort = HashMap::new();
+        sort.insert("age".to_string(), "asc".to_string());
+        let prepared = prepare_query(
+            &schema,
+            normalize_mango_query(
+                &schema,
+                MangoQuery {
+                    selector: Some(json!({
+                        "age": { "$gte": 990 },
+                        "id": { "$regex": "^doc-099[57]$" }
+                    })),
+                    sort: Some(vec![sort]),
+                    index: None,
+                    limit: None,
+                    skip: Some(0),
+                },
+            ),
+        )
+        .unwrap();
+        let query_plan: RxQueryPlan =
+            serde_json::from_value(prepared.get("queryPlan").cloned().unwrap()).unwrap();
+        let candidate = compile_query_plan_candidate_sql(
+            &instance.table_name,
+            &instance.primary_path,
+            &query_plan,
+        )
+        .expect("query plan should produce an age-bounded candidate query");
+        let conn = storage.connection().unwrap();
+        let conn = conn.lock();
+        let mut statement = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {}", candidate.sql))
+            .unwrap();
+        let plan = statement
+            .query_map(rusqlite::params_from_iter(candidate.params.iter()), |row| {
+                row.get::<_, String>(3)
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .join("\n");
+        assert!(
+            plan.contains("_json_age_idx"),
+            "expected query-plan candidate fallback to use the age index, got plan:\n{plan}"
+        );
+        drop(statement);
+        drop(conn);
+
+        let fallback_calls_before = runtime_counter("query_fallback_calls");
+        let candidate_calls_before = runtime_counter("query_fallback_indexed_candidate_calls");
+        let fallback_rows_before = runtime_counter("query_fallback_rows_visited");
+        let collection_fallback_before =
+            runtime_counter_pointer("/query_fallback_by_collection/docs");
+        let regex_fallback_before = runtime_counter_pointer("/query_fallback_by_operator/$regex");
+        let collection_regex_fallback_before =
+            runtime_counter_pointer("/query_fallback_by_collection_operator/docs/$regex");
+        let result = instance.query(&prepared).await.unwrap();
+        let ids = result
+            .documents
+            .iter()
+            .filter_map(|doc| doc.get("id").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["doc-0995", "doc-0997"]);
+        assert_eq!(
+            runtime_counter("query_fallback_calls"),
+            fallback_calls_before + 1,
+            "unsupported selector must still be counted as a fallback"
+        );
+        assert_eq!(
+            runtime_counter("query_fallback_indexed_candidate_calls"),
+            candidate_calls_before + 1,
+            "fallback must record that it used a SQL candidate plan"
+        );
+        assert_eq!(
+            runtime_counter("query_fallback_rows_visited") - fallback_rows_before,
+            10,
+            "Rust matcher must only inspect the age-index candidate window"
+        );
+        assert_eq!(
+            runtime_counter_pointer("/query_fallback_by_collection/docs"),
+            collection_fallback_before + 1,
+            "fallback attribution must include the collection name"
+        );
+        assert_eq!(
+            runtime_counter_pointer("/query_fallback_by_operator/$regex"),
+            regex_fallback_before + 1,
+            "fallback attribution must include the unsupported operator family"
+        );
+        assert_eq!(
+            runtime_counter_pointer("/query_fallback_by_collection_operator/docs/$regex"),
+            collection_regex_fallback_before + 1,
+            "fallback attribution must include collection/operator pairs"
+        );
+    }
+
+    #[tokio::test]
+    async fn query_fallback_without_candidate_bounds_fails_after_scan_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("ctox.sqlite3"),
+        });
+        let schema = test_schema();
+        let instance = create_storage_instance(&storage, params(schema.clone()))
+            .await
+            .unwrap();
+        let rows: Vec<BulkWriteRow> = (0..(SQLITE_QUERY_FALLBACK_SCAN_LIMIT + 5))
+            .map(|idx| BulkWriteRow {
+                previous: None,
+                document: doc(
+                    &format!("doc-{idx:05}"),
+                    "1-a",
+                    i64::try_from(idx).unwrap(),
+                    false,
+                    idx as f64,
+                ),
+            })
+            .collect();
+        instance.bulk_write(rows, "seed").await.unwrap();
+
+        let mut sort = HashMap::new();
+        sort.insert("id".to_string(), "asc".to_string());
+        let prepared = prepare_query(
+            &schema,
+            normalize_mango_query(
+                &schema,
+                MangoQuery {
+                    selector: Some(json!({ "id": { "$regex": "^never-matches$" } })),
+                    sort: Some(vec![sort]),
+                    index: None,
+                    limit: None,
+                    skip: Some(0),
+                },
+            ),
+        )
+        .unwrap();
+        let too_broad_before = runtime_counter("query_fallback_too_broad_calls");
+        let collection_regex_fallback_before =
+            runtime_counter_pointer("/query_fallback_by_collection_operator/docs/$regex");
+        let err = instance.query(&prepared).await.unwrap_err();
+        assert_eq!(err.code(), SQLITE_QUERY_FALLBACK_TOO_BROAD);
+        assert_eq!(
+            runtime_counter("query_fallback_too_broad_calls"),
+            too_broad_before + 1,
+            "broad fallback aborts must be visible in runtime counters"
+        );
+        assert_eq!(
+            runtime_counter_pointer("/query_fallback_by_collection_operator/docs/$regex"),
+            collection_regex_fallback_before + 1,
+            "too-broad fallback aborts must still be attributed"
         );
     }
 

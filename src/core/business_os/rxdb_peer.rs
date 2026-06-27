@@ -25,29 +25,29 @@ use anyhow::Context;
 use base64::Engine;
 use chrono::{DateTime, FixedOffset};
 use rusqlite::types::Value as SqlValue;
-use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params, params_from_iter};
 use rxdb::plugins::replication_webrtc::{
-    file_fetch_handler::FileRange, CollectionAuthzHook, DocumentReadAuthzHook, RTCIceServer,
-    RxWebRTCReplicationPool, WebRTCRsConnectionHandler,
+    CollectionAuthzHook, DocumentReadAuthzHook, RTCIceServer, RxWebRTCReplicationPool,
+    WebRTCRsConnectionHandler, file_fetch_handler::FileRange,
 };
 use rxdb::rx_collection::RxCollection;
 use rxdb::rx_collection_helper::fill_object_data_before_insert;
-use rxdb::rx_database::{create_rx_database, RxCollectionCreator, RxDatabase, RxDatabaseCreator};
-use rxdb::storage::sqlite::{get_rx_storage_sqlite, RxStorageSqliteSettings};
+use rxdb::rx_database::{RxCollectionCreator, RxDatabase, RxDatabaseCreator, create_rx_database};
+use rxdb::storage::sqlite::{RxStorageSqliteSettings, get_rx_storage_sqlite};
 use rxdb::types::{BulkWriteRow, HashOutput, JsonSchema, MangoQuery, RxJsonSchema};
-use serde_json::json;
 use serde_json::Value;
+use serde_json::json;
 use sha2::Digest;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
@@ -4619,9 +4619,11 @@ async fn drain_browser_session_inputs(
                 "session_id": { "$eq": session_id },
                 "status": { "$eq": "pending" }
             })),
-            sort: Some(vec![[("seq".to_string(), "asc".to_string())]
-                .into_iter()
-                .collect()]),
+            sort: Some(vec![
+                [("seq".to_string(), "asc".to_string())]
+                    .into_iter()
+                    .collect(),
+            ]),
             limit: Some(64),
             ..Default::default()
         }))
@@ -4989,9 +4991,11 @@ async fn gc_consumed_browser_input_events(database: &Arc<RxDatabase>) -> anyhow:
                     "status": { "$eq": status },
                     "created_at_ms": { "$lt": cutoff }
                 })),
-                sort: Some(vec![[("created_at_ms".to_string(), "asc".to_string())]
-                    .into_iter()
-                    .collect()]),
+                sort: Some(vec![
+                    [("created_at_ms".to_string(), "asc".to_string())]
+                        .into_iter()
+                        .collect(),
+                ]),
                 limit: Some(BROWSER_INPUT_EVENT_GC_LIMIT),
                 ..Default::default()
             }))
@@ -5028,7 +5032,7 @@ async fn recover_stale_browser_sessions(database: &Arc<RxDatabase>) -> anyhow::R
         .context("browser_sessions collection is not registered")?;
     let active = sessions
         .find(Some(MangoQuery {
-            selector: Some(json!({ "status": { "$ne": "stopped" } })),
+            selector: Some(json!({ "status": { "$eq": "active" } })),
             limit: Some(128),
             ..Default::default()
         }))
@@ -7640,10 +7644,6 @@ fn sqlite_quote_identifier(identifier: &str) -> String {
     format!("\"{}\"", identifier.replace('"', "\"\""))
 }
 
-fn sqlite_quote_literal(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
-
 async fn sync_channel_state_with_database_if_changed(
     root: &Path,
     database: &Arc<RxDatabase>,
@@ -8608,12 +8608,15 @@ fn stream_demand_file_chunks_inner(
     emit: &mut dyn FnMut(&[u8]) -> rxdb::rx_error::RxResult<bool>,
     stats: &mut DemandFileFetchRequestStats,
 ) -> rxdb::rx_error::RxResult<()> {
-    let mut chunk_rows = if collection == "desktop_file_chunks" {
+    let (mut chunk_rows, loaded_base_offset) = if collection == "desktop_file_chunks" {
         active_desktop_file_chunk_rows_from_sqlite(root, file_id, range, stats)?
     } else {
-        demand_file_chunk_rows_for_key_from_sqlite(
-            root, collection, key_field, file_id, None, None, stats,
-        )?
+        (
+            demand_file_chunk_rows_for_key_from_sqlite(
+                root, collection, key_field, file_id, None, None, stats,
+            )?,
+            0,
+        )
     };
     // Order by `idx` so the reassembled byte stream is correct.
     chunk_rows.sort_by_key(|chunk: &Value| chunk.get("idx").and_then(Value::as_u64).unwrap_or(0));
@@ -8623,7 +8626,7 @@ fn stream_demand_file_chunks_inner(
         Some(r) => (r.offset, r.offset.saturating_add(r.length)),
         None => (0u64, u64::MAX),
     };
-    let mut emitted_offset: u64 = 0;
+    let mut emitted_offset: u64 = loaded_base_offset;
     for chunk in chunk_rows {
         // Skip redacted/pruned chunks (empty data) so they do not corrupt the
         // stream; the browser tracks presence separately.
@@ -8705,10 +8708,10 @@ fn active_desktop_file_chunk_rows_from_sqlite(
     file_id: &str,
     range: Option<&FileRange>,
     stats: &mut DemandFileFetchRequestStats,
-) -> rxdb::rx_error::RxResult<Vec<Value>> {
+) -> rxdb::rx_error::RxResult<(Vec<Value>, u64)> {
     let database_path = store::rxdb_store_path(root);
     if !database_path.exists() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), 0));
     }
     let conn = Connection::open_with_flags(&database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|err| {
@@ -8723,15 +8726,18 @@ fn active_desktop_file_chunk_rows_from_sqlite(
             |err| demand_file_source_error(format!("inspect desktop_file_chunks table: {err}")),
         )?
     {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), 0));
     }
     let Some(metadata) = active_desktop_file_metadata_from_sqlite(&conn, file_id)? else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), 0));
     };
     let index_window = desktop_file_chunk_index_window(metadata.size_bytes, range);
     if index_window.0 >= index_window.1 {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), 0));
     }
+    let loaded_base_offset = index_window
+        .0
+        .saturating_mul(DESKTOP_FILE_CHUNK_DECODED_SIZE);
     let canonical = desktop_file_chunk_rows_by_id_from_sqlite(
         &conn,
         file_id,
@@ -8742,7 +8748,7 @@ fn active_desktop_file_chunk_rows_from_sqlite(
     )?;
     let expected_range_total = index_window.1.saturating_sub(index_window.0);
     if u64::try_from(canonical.len()).unwrap_or_default() >= expected_range_total {
-        return Ok(canonical);
+        return Ok((canonical, loaded_base_offset));
     }
 
     let fallback = demand_file_chunk_rows_for_key_from_sqlite(
@@ -8764,9 +8770,12 @@ fn active_desktop_file_chunk_rows_from_sqlite(
     })
     .collect::<Vec<_>>();
     if fallback.len() > canonical.len() {
-        return Ok(dedupe_desktop_file_chunks_by_idx(fallback));
+        return Ok((
+            dedupe_desktop_file_chunks_by_idx(fallback),
+            loaded_base_offset,
+        ));
     }
-    Ok(canonical)
+    Ok((canonical, loaded_base_offset))
 }
 
 fn dedupe_desktop_file_chunks_by_idx(chunks: Vec<Value>) -> Vec<Value> {
@@ -8914,41 +8923,20 @@ fn demand_file_chunk_rows_for_key_from_sqlite(
         )));
     }
     let quoted_table = sqlite_quote_identifier(&table);
-    let key_path = format!("$.{key_field}");
-    let mut where_clauses = vec![
-        "COALESCE(deleted, 0) = 0".to_string(),
-        format!(
-            "json_extract(data, {}) = ?",
-            sqlite_quote_literal(&key_path)
-        ),
+    let (chunk_id_lower, chunk_id_upper) = chunk_id_prefix_bounds(file_id);
+    let query_params = vec![
+        SqlValue::Text(chunk_id_lower),
+        SqlValue::Text(chunk_id_upper),
+        SqlValue::Integer(i64::try_from(DESKTOP_FILE_CHUNK_CLEANUP_SCAN_LIMIT).unwrap_or(i64::MAX)),
     ];
-    let mut query_params = vec![SqlValue::Text(file_id.to_string())];
-    if let Some(generation_id) = generation_id {
-        where_clauses.push("json_extract(data, '$.generation_id') = ?".to_string());
-        query_params.push(SqlValue::Text(generation_id.to_string()));
-    }
-    if let Some((start_idx, end_idx)) = index_window {
-        where_clauses
-            .push("CAST(COALESCE(json_extract(data, '$.idx'), -1) AS INTEGER) >= ?".to_string());
-        query_params.push(SqlValue::Integer(
-            i64::try_from(start_idx).unwrap_or(i64::MAX),
-        ));
-        where_clauses
-            .push("CAST(COALESCE(json_extract(data, '$.idx'), -1) AS INTEGER) < ?".to_string());
-        query_params.push(SqlValue::Integer(
-            i64::try_from(end_idx).unwrap_or(i64::MAX),
-        ));
-    }
-    query_params.push(SqlValue::Integer(
-        i64::try_from(DESKTOP_FILE_CHUNK_CLEANUP_SCAN_LIMIT).unwrap_or(i64::MAX),
-    ));
     let mut stmt = conn
         .prepare(&format!(
             "SELECT data FROM {quoted_table}
-             WHERE {}
-             ORDER BY CAST(COALESCE(json_extract(data, '$.idx'), 0) AS INTEGER), id
-             LIMIT ?",
-            where_clauses.join(" AND ")
+             WHERE id >= ?1
+               AND id < ?2
+               AND deleted = 0
+             ORDER BY id
+             LIMIT ?3",
         ))
         .map_err(|err| demand_file_source_error(format!("prepare {collection} fetch: {err}")))?;
     let rows = stmt
@@ -8964,7 +8952,19 @@ fn demand_file_chunk_rows_for_key_from_sqlite(
         let value = serde_json::from_str::<Value>(&raw).map_err(|err| {
             demand_file_source_error(format!("decode {collection} chunk for {file_id}: {err}"))
         })?;
-        chunks.push(value);
+        let key_matches = value.get(key_field).and_then(Value::as_str) == Some(file_id);
+        let generation_matches = generation_id.is_none_or(|expected| {
+            value.get("generation_id").and_then(Value::as_str) == Some(expected)
+        });
+        let index_matches = index_window.is_none_or(|(start_idx, end_idx)| {
+            value
+                .get("idx")
+                .and_then(Value::as_u64)
+                .is_some_and(|idx| idx >= start_idx && idx < end_idx)
+        });
+        if key_matches && generation_matches && index_matches {
+            chunks.push(value);
+        }
     }
     Ok(chunks)
 }
@@ -9521,11 +9521,15 @@ fn unsafe_desktop_file_index_candidates_sql(files_table: &str) -> String {
     )
 }
 
-fn desktop_file_chunk_id_bounds(file_id: &str) -> (String, String) {
+fn chunk_id_prefix_bounds(key: &str) -> (String, String) {
     // Chunk IDs are "{file_id}_{generation_id}_{idx}". The upper bound uses
     // the next ASCII character after '_' so SQLite can use the primary-key
-    // index instead of extracting file_id from every JSON payload.
-    (format!("{file_id}_"), format!("{file_id}`"))
+    // index instead of extracting the owner key from every JSON payload.
+    (format!("{key}_"), format!("{key}`"))
+}
+
+fn desktop_file_chunk_id_bounds(file_id: &str) -> (String, String) {
+    chunk_id_prefix_bounds(file_id)
 }
 
 fn desktop_file_index_document_is_unsafe(document: &Value, home: Option<&Path>) -> bool {
@@ -11013,9 +11017,9 @@ fn quote_sqlite_identifier(identifier: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusqlite::params;
     use rusqlite::Connection;
     use rusqlite::OptionalExtension;
+    use rusqlite::params;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_RXDB_DATABASE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -11025,12 +11029,16 @@ mod tests {
         let collections = business_record_projection_collections();
         assert!(!collections.iter().any(|name| name == "browser_frames"));
         assert!(!collections.iter().any(|name| name == "desktop_file_chunks"));
-        assert!(!collections
-            .iter()
-            .any(|name| name == "ctox_runtime_settings"));
-        assert!(!collections
-            .iter()
-            .any(|name| name == "business_module_catalog"));
+        assert!(
+            !collections
+                .iter()
+                .any(|name| name == "ctox_runtime_settings")
+        );
+        assert!(
+            !collections
+                .iter()
+                .any(|name| name == "business_module_catalog")
+        );
         // `knowledge_tables` is owned by the dedicated rows-embedding
         // projection (`sync_knowledge_tables_with_database`); the generic
         // business-record projection must not also write it.
@@ -11582,10 +11590,12 @@ mod tests {
                 .and_then(Value::as_str),
             Some("ctox.rxdb.subjects.runtime_counters.v1")
         );
-        assert!(status
-            .pointer("/performance/rxdb_subjects/lagged_items_total")
-            .and_then(Value::as_u64)
-            .is_some());
+        assert!(
+            status
+                .pointer("/performance/rxdb_subjects/lagged_items_total")
+                .and_then(Value::as_u64)
+                .is_some()
+        );
         assert!(is_native_peer_running_for_root(root.path()));
     }
 
@@ -11854,6 +11864,22 @@ mod tests {
                     },
                 ),
                 (
+                    "document_blob_chunks".to_string(),
+                    RxCollectionCreator {
+                        schema: business_os_schema("document_blob_chunks", "id"),
+                        conflict_handler: None,
+                        options: HashMap::new(),
+                    },
+                ),
+                (
+                    "spreadsheet_blob_chunks".to_string(),
+                    RxCollectionCreator {
+                        schema: business_os_schema("spreadsheet_blob_chunks", "id"),
+                        conflict_handler: None,
+                        options: HashMap::new(),
+                    },
+                ),
+                (
                     "browser_frames".to_string(),
                     RxCollectionCreator {
                         schema: business_os_schema("browser_frames", "id"),
@@ -11881,6 +11907,12 @@ mod tests {
         let chunks = database
             .collection("desktop_file_chunks")
             .expect("desktop_file_chunks collection");
+        let document_chunks = database
+            .collection("document_blob_chunks")
+            .expect("document_blob_chunks collection");
+        let spreadsheet_chunks = database
+            .collection("spreadsheet_blob_chunks")
+            .expect("spreadsheet_blob_chunks collection");
         let browser_frames = database
             .collection("browser_frames")
             .expect("browser_frames collection");
@@ -11931,6 +11963,36 @@ mod tests {
                 }))
                 .await
                 .expect("insert desktop file chunk");
+            document_chunks
+                .incremental_upsert(json!({
+                    "id": format!("blob_1_{idx}"),
+                    "blob_id": "blob_1",
+                    "document_id": "document_1",
+                    "version_id": "version_1",
+                    "idx": idx,
+                    "total": 200,
+                    "mime_type": "application/octet-stream",
+                    "encoding": "base64",
+                    "data": "",
+                    "created_at_ms": idx,
+                }))
+                .await
+                .expect("insert document blob chunk");
+            spreadsheet_chunks
+                .incremental_upsert(json!({
+                    "id": format!("sheet_blob_1_{idx}"),
+                    "blob_id": "sheet_blob_1",
+                    "spreadsheet_id": "spreadsheet_1",
+                    "version_id": "version_1",
+                    "idx": idx,
+                    "total": 200,
+                    "mime_type": "application/octet-stream",
+                    "encoding": "base64",
+                    "data": "",
+                    "created_at_ms": idx,
+                }))
+                .await
+                .expect("insert spreadsheet blob chunk");
             browser_frames
                 .incremental_upsert(json!({
                     "id": format!("frame_{idx}"),
@@ -11968,6 +12030,9 @@ mod tests {
         let business_commands_table = rxdb_test_table_name(&conn, "business_commands", 1);
         let ctox_queue_tasks_table = rxdb_test_table_name(&conn, "ctox_queue_tasks", 0);
         let desktop_file_chunks_table = rxdb_test_table_name(&conn, "desktop_file_chunks", 0);
+        let document_blob_chunks_table = rxdb_test_table_name(&conn, "document_blob_chunks", 0);
+        let spreadsheet_blob_chunks_table =
+            rxdb_test_table_name(&conn, "spreadsheet_blob_chunks", 0);
         let browser_frames_table = rxdb_test_table_name(&conn, "browser_frames", 0);
         let browser_input_events_table = rxdb_test_table_name(&conn, "browser_input_events", 0);
 
@@ -12044,6 +12109,46 @@ mod tests {
             &format!(
                 "{desktop_file_chunks_table}_json__deleted__file_id__generation_id__idx__id_idx"
             ),
+        );
+        let (document_lower, document_upper) = chunk_id_prefix_bounds("blob_1");
+        assert_plan_uses_primary_key_range_without_temp_sort(
+            &conn,
+            &format!(
+                r#"
+            SELECT data FROM {}
+            WHERE id >= ?1
+              AND id < ?2
+              AND deleted = 0
+            ORDER BY id
+            LIMIT ?3
+            "#,
+                quote_sqlite_identifier(&document_blob_chunks_table)
+            ),
+            &[
+                &document_lower as &dyn rusqlite::ToSql,
+                &document_upper as &dyn rusqlite::ToSql,
+                &100_i64 as &dyn rusqlite::ToSql,
+            ],
+        );
+        let (spreadsheet_lower, spreadsheet_upper) = chunk_id_prefix_bounds("sheet_blob_1");
+        assert_plan_uses_primary_key_range_without_temp_sort(
+            &conn,
+            &format!(
+                r#"
+            SELECT data FROM {}
+            WHERE id >= ?1
+              AND id < ?2
+              AND deleted = 0
+            ORDER BY id
+            LIMIT ?3
+            "#,
+                quote_sqlite_identifier(&spreadsheet_blob_chunks_table)
+            ),
+            &[
+                &spreadsheet_lower as &dyn rusqlite::ToSql,
+                &spreadsheet_upper as &dyn rusqlite::ToSql,
+                &100_i64 as &dyn rusqlite::ToSql,
+            ],
         );
         assert_plan_uses_index(
             &conn,
@@ -12193,6 +12298,100 @@ mod tests {
         assert_eq!(deleted_state("recent_consumed"), 0);
     }
 
+    #[tokio::test]
+    async fn browser_session_recovery_uses_indexed_active_query_without_fallback() {
+        let root = tempfile::tempdir().expect("temp root");
+        let database_path = root.path().join("browser-session-recovery.sqlite3");
+        let database = open_test_database(database_path.clone())
+            .await
+            .expect("open test database");
+        database
+            .add_collections(HashMap::from([(
+                "browser_sessions".to_string(),
+                RxCollectionCreator {
+                    schema: business_os_schema("browser_sessions", "id"),
+                    conflict_handler: None,
+                    options: HashMap::new(),
+                },
+            )]))
+            .await
+            .expect("add browser_sessions collection");
+        let sessions = database
+            .collection("browser_sessions")
+            .expect("browser_sessions collection");
+        for (id, status, runtime_status) in [
+            ("active_stale", "active", "active"),
+            ("stopped", "stopped", "stopped"),
+            ("already_disconnected", "disconnected", "disconnected"),
+            ("requested", "requested", "pending_command"),
+            ("synthetic", "synthetic", "not_started"),
+        ] {
+            sessions
+                .incremental_upsert(json!({
+                    "id": id,
+                    "owner_user_id": "ctox",
+                    "controller_user_id": "ctox",
+                    "status": status,
+                    "runtime_status": runtime_status,
+                    "current_tab_id": "tab_1",
+                    "current_url": "https://example.com",
+                    "title": id,
+                    "viewport_w": 1280,
+                    "viewport_h": 720,
+                    "device_scale_factor": 1,
+                    "frame_rate_target": 0,
+                    "active_frame_id": "",
+                    "last_frame_seq": 0,
+                    "last_input_seq": 0,
+                    "pending_input_count": 0,
+                    "error": "",
+                    "payload": {},
+                    "created_at_ms": 1,
+                    "updated_at_ms": 1,
+                }))
+                .await
+                .expect("insert browser session");
+        }
+
+        let fallback_calls_before =
+            rxdb::storage::sqlite::instance::sqlite_runtime_counters_snapshot()
+                .get("query_fallback_calls")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+        recover_stale_browser_sessions(&database)
+            .await
+            .expect("recover stale browser sessions");
+        let fallback_calls_after =
+            rxdb::storage::sqlite::instance::sqlite_runtime_counters_snapshot()
+                .get("query_fallback_calls")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+        assert_eq!(
+            fallback_calls_after, fallback_calls_before,
+            "browser session recovery must not use the unsupported Mango fallback"
+        );
+
+        let conn = Connection::open(&database_path).expect("open sqlite");
+        let session_table = rxdb_test_table_name(&conn, "browser_sessions", 0);
+        let status_for = |id: &str| -> String {
+            conn.query_row(
+                &format!(
+                    "SELECT json_extract(data, '$.status') FROM {} WHERE id = ?1",
+                    quote_sqlite_identifier(&session_table)
+                ),
+                params![id],
+                |row| row.get(0),
+            )
+            .expect("browser session status")
+        };
+
+        assert_eq!(status_for("active_stale"), "disconnected");
+        assert_eq!(status_for("stopped"), "stopped");
+        assert_eq!(status_for("already_disconnected"), "disconnected");
+        assert_eq!(status_for("requested"), "requested");
+        assert_eq!(status_for("synthetic"), "synthetic");
+    }
+
     fn rxdb_test_table_name(conn: &Connection, collection: &str, version: i64) -> String {
         conn.query_row(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE ?1 ORDER BY name",
@@ -12216,6 +12415,40 @@ mod tests {
         assert!(
             plan.contains(expected_index),
             "expected SQLite plan to use {expected_index}, got:\n{plan}\nindexes:\n{}",
+            sqlite_index_debug_list(conn)
+        );
+    }
+
+    fn assert_plan_uses_primary_key_range_without_temp_sort(
+        conn: &Connection,
+        sql: &str,
+        params: &[&dyn rusqlite::ToSql],
+    ) {
+        let plan = sqlite_query_plan(conn, sql, params);
+        let normalized = plan.to_ascii_uppercase();
+        assert!(
+            normalized.contains("SEARCH "),
+            "expected SQLite plan to search by primary-key range, got:\n{plan}\nindexes:\n{}",
+            sqlite_index_debug_list(conn)
+        );
+        assert!(
+            !normalized.starts_with("SCAN ")
+                && !normalized.contains("\nSCAN ")
+                && !normalized.contains(" SCAN "),
+            "expected primary-key demand chunk query to avoid table scans, got:\n{plan}\nindexes:\n{}",
+            sqlite_index_debug_list(conn)
+        );
+        assert!(
+            !normalized.contains("USE TEMP B-TREE"),
+            "expected primary-key demand chunk query to avoid temp sort, got:\n{plan}\nindexes:\n{}",
+            sqlite_index_debug_list(conn)
+        );
+        assert!(
+            normalized.contains("USING INDEX")
+                || normalized.contains("USING COVERING INDEX")
+                || normalized.contains("PRIMARY KEY")
+                || normalized.contains("AUTOINDEX"),
+            "expected SQLite plan to use an index for the primary-key range, got:\n{plan}\nindexes:\n{}",
             sqlite_index_debug_list(conn)
         );
     }
@@ -12497,6 +12730,122 @@ mod tests {
         )
         .expect("stream active generation");
         assert_eq!(String::from_utf8(collected).unwrap(), "active");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn demand_file_source_streams_blob_chunks_by_primary_key_prefix() {
+        let root = tempfile::tempdir().expect("temp root");
+        let database_path = store::rxdb_store_path(root.path());
+        fs::create_dir_all(database_path.parent().expect("rxdb parent")).expect("runtime dir");
+        let database =
+            open_test_database_with_name(database_path, RXDB_SQLITE_DATABASE_NAME.to_string())
+                .await
+                .expect("open db");
+        database
+            .add_collections(HashMap::from([
+                (
+                    "document_blob_chunks".to_string(),
+                    RxCollectionCreator {
+                        schema: business_os_schema("document_blob_chunks", "id"),
+                        conflict_handler: None,
+                        options: HashMap::new(),
+                    },
+                ),
+                (
+                    "spreadsheet_blob_chunks".to_string(),
+                    RxCollectionCreator {
+                        schema: business_os_schema("spreadsheet_blob_chunks", "id"),
+                        conflict_handler: None,
+                        options: HashMap::new(),
+                    },
+                ),
+            ]))
+            .await
+            .expect("add blob chunk collections");
+        let enc = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        let document_chunks = database
+            .collection("document_blob_chunks")
+            .expect("document_blob_chunks collection");
+        for (id, blob_id, idx, data) in [
+            ("blob_1_1", "blob_1", 1_u64, enc(b"world")),
+            ("blob_1_extra_0", "blob_1_extra", 0_u64, enc(b"wrong")),
+            ("blob_1_0", "blob_1", 0_u64, enc(b"hello ")),
+        ] {
+            document_chunks
+                .incremental_upsert(json!({
+                    "id": id,
+                    "blob_id": blob_id,
+                    "document_id": "document_1",
+                    "version_id": "version_1",
+                    "idx": idx,
+                    "total": 2,
+                    "mime_type": "application/octet-stream",
+                    "encoding": "base64",
+                    "data": data,
+                    "created_at_ms": idx,
+                }))
+                .await
+                .expect("insert document blob chunk");
+        }
+        let spreadsheet_chunks = database
+            .collection("spreadsheet_blob_chunks")
+            .expect("spreadsheet_blob_chunks collection");
+        for (id, blob_id, idx, data) in [
+            ("sheet_blob_1_1", "sheet_blob_1", 1_u64, enc(b"data")),
+            (
+                "sheet_blob_1_shadow_0",
+                "sheet_blob_1_shadow",
+                0_u64,
+                enc(b"wrong"),
+            ),
+            ("sheet_blob_1_0", "sheet_blob_1", 0_u64, enc(b"sheet ")),
+        ] {
+            spreadsheet_chunks
+                .incremental_upsert(json!({
+                    "id": id,
+                    "blob_id": blob_id,
+                    "spreadsheet_id": "spreadsheet_1",
+                    "version_id": "version_1",
+                    "idx": idx,
+                    "total": 2,
+                    "mime_type": "application/octet-stream",
+                    "encoding": "base64",
+                    "data": data,
+                    "created_at_ms": idx,
+                }))
+                .await
+                .expect("insert spreadsheet blob chunk");
+        }
+
+        let mut document_bytes = Vec::new();
+        stream_demand_file_chunks(
+            root.path(),
+            "document_blob_chunks",
+            "blob_id",
+            "blob_1",
+            None,
+            &mut |bytes| {
+                document_bytes.extend_from_slice(bytes);
+                Ok(true)
+            },
+        )
+        .expect("stream document blob chunks");
+        assert_eq!(String::from_utf8(document_bytes).unwrap(), "hello world");
+
+        let mut spreadsheet_bytes = Vec::new();
+        stream_demand_file_chunks(
+            root.path(),
+            "spreadsheet_blob_chunks",
+            "blob_id",
+            "sheet_blob_1",
+            None,
+            &mut |bytes| {
+                spreadsheet_bytes.extend_from_slice(bytes);
+                Ok(true)
+            },
+        )
+        .expect("stream spreadsheet blob chunks");
+        assert_eq!(String::from_utf8(spreadsheet_bytes).unwrap(), "sheet data");
     }
 
     async fn open_test_database(database_path: PathBuf) -> anyhow::Result<Arc<RxDatabase>> {
@@ -12781,13 +13130,14 @@ mod tests {
         drop(conn);
 
         let mut fallback_stats = DemandFileFetchRequestStats::new(None);
-        let fallback_chunks = active_desktop_file_chunk_rows_from_sqlite(
+        let (fallback_chunks, fallback_base_offset) = active_desktop_file_chunk_rows_from_sqlite(
             root.path(),
             &file_id,
             None,
             &mut fallback_stats,
         )
         .expect("load fallback chunks");
+        assert_eq!(fallback_base_offset, 0);
         let decoded = reconstruct_desktop_file_chunks(
             &fallback_chunks,
             &file_id,
@@ -12852,10 +13202,12 @@ mod tests {
             materialized.get("content_state").and_then(Value::as_str),
             Some("available")
         );
-        assert!(materialized
-            .get("content_synced_at_ms")
-            .and_then(Value::as_u64)
-            .is_some());
+        assert!(
+            materialized
+                .get("content_synced_at_ms")
+                .and_then(Value::as_u64)
+                .is_some()
+        );
         let materialized_chunks: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM ctox_business_os__desktop_file_chunks__v0 WHERE id LIKE ?1",
@@ -13465,18 +13817,24 @@ mod tests {
         assert_eq!(settings.get("ok").and_then(Value::as_bool), Some(true));
         assert!(settings.get("runtime").and_then(Value::as_object).is_some());
         assert!(settings.get("auth").and_then(Value::as_object).is_some());
-        assert!(settings
-            .get("harness_flow")
-            .and_then(Value::as_object)
-            .is_some());
-        assert!(settings
-            .get("queue_health")
-            .and_then(Value::as_object)
-            .is_some());
-        assert!(settings
-            .get("diagnostics")
-            .and_then(Value::as_object)
-            .is_some());
+        assert!(
+            settings
+                .get("harness_flow")
+                .and_then(Value::as_object)
+                .is_some()
+        );
+        assert!(
+            settings
+                .get("queue_health")
+                .and_then(Value::as_object)
+                .is_some()
+        );
+        assert!(
+            settings
+                .get("diagnostics")
+                .and_then(Value::as_object)
+                .is_some()
+        );
     }
 
     #[test]
@@ -14279,10 +14637,12 @@ mod tests {
             repaired.get("title").and_then(Value::as_str),
             Some("Projected document repaired")
         );
-        assert!(repaired
-            .get("_meta")
-            .and_then(|meta| meta.get("lwt"))
-            .is_some());
+        assert!(
+            repaired
+                .get("_meta")
+                .and_then(|meta| meta.get("lwt"))
+                .is_some()
+        );
         assert!(repaired.get("_rev").and_then(Value::as_str).is_some());
     }
 
@@ -14913,10 +15273,12 @@ mod tests {
                 command_payload.get("status").and_then(Value::as_str),
                 Some("failed")
             );
-            assert!(command_payload
-                .get("error")
-                .and_then(Value::as_str)
-                .is_some());
+            assert!(
+                command_payload
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .is_some()
+            );
         });
     }
 
@@ -15004,11 +15366,13 @@ mod tests {
                 repaired.get("tracking_status").and_then(Value::as_str),
                 Some("failed")
             );
-            assert!(message
-                .get("text")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("kein passender Command"));
+            assert!(
+                message
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .contains("kein passender Command")
+            );
         });
     }
 
@@ -16052,9 +16416,11 @@ mod tests {
             .expect("query index list")
             .collect::<Result<Vec<_>, _>>()
             .expect("collect index list");
-        assert!(index_names
-            .iter()
-            .any(|name| name == "ctox_business_os_desktop_files_live_core_idx"));
+        assert!(
+            index_names
+                .iter()
+                .any(|name| name == "ctox_business_os_desktop_files_live_core_idx")
+        );
         drop(conn);
 
         let documents = load_live_ctox_desktop_file_documents_sync(root.path())
@@ -16421,10 +16787,12 @@ mod tests {
             original.get("tombstone_reason").and_then(Value::as_str),
             Some("missing_from_scan")
         );
-        assert!(original
-            .get("deleted_at_ms")
-            .and_then(Value::as_u64)
-            .is_some());
+        assert!(
+            original
+                .get("deleted_at_ms")
+                .and_then(Value::as_u64)
+                .is_some()
+        );
 
         let renamed_json: String = conn
             .query_row(
