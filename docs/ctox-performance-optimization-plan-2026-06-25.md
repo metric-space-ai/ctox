@@ -2156,15 +2156,25 @@ Implementation status:
   sorting. `queryPlanFor()` now reports `schema-index` only for this real
   execution strategy; unsupported operators such as `$regex`, `$nin`,
   `$contains`, and `$elemMatch` do not claim indexed execution.
+- Done on 2026-06-27 for browser query-performance guards: a new browser RxDB
+  smoke verifies representative `business_commands`, `ctox_queue_tasks`,
+  `desktop_files`, `desktop_file_chunks`, and `business_records` list/window
+  queries report schema-index execution instead of `allDocuments()` fallback.
+  It also exercises strict fallback rejection before IndexedDB opens and
+  ratchets app source against direct `.allDocuments()` calls and broad
+  `desktop_file_chunks.find().exec()` consumers.
 - Still open: `_deleted`/LWT count specialization beyond the current
-  LWT-window path, explicit browser perf spies that fail on unexpected
-  `allDocuments()` fallback, demand-loaded unbounded query semantics, and
-  collection subscription deltas that avoid full re-query/re-render.
+  LWT-window path, demand-loaded unbounded query semantics, and collection
+  subscription deltas that avoid full re-query/re-render.
 
 Validation:
 
 - `node src/apps/business-os/rxdb/tests/storage-index-smoke.mjs` passed.
 - `node src/apps/business-os/rxdb/tests/query-api-smoke.mjs` passed.
+- `node src/apps/business-os/rxdb/tests/browser-query-performance-guards-smoke.mjs`
+  passed on 2026-06-27.
+- `node src/apps/business-os/rxdb/tests/run-all.mjs` passed on 2026-06-27:
+  50 passed, 0 failed, 2 skipped because the wire daemon was not built.
 - `node src/apps/business-os/rxdb/tests/run-all.mjs` passed on 2026-06-26:
   49 tests, 0 failures, 0 skipped.
 
@@ -2875,11 +2885,10 @@ The performance problem is structurally fixed only when:
 ## Immediate Next Work Items
 
 1. Add hard measurement gates before the next release:
-   browser spies for `allDocuments()`,
-   `scanQueryWindows()`, sidecar eviction scans, local-push changed-since
+   remaining browser spies for `scanQueryWindows()`, sidecar eviction scans,
+   local-push changed-since
    scans, live-query full re-query, file-fetch peak retained bytes, heavy
-   diagnostics snapshots, and guards against broad
-   `desktop_file_chunks.find().exec()` consumers.
+   diagnostics snapshots, and remaining broad chunk-consumer/source guards.
 2. Remove remaining P1 daemon idle-loop sources:
    Notes dirty flag/watcher, desktop-file watcher/dirty roots with slow
    fallback, provider-specific IMAP IDLE/delta token support, and finer service
