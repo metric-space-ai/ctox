@@ -74,6 +74,7 @@ static SQLITE_COUNT_FALLBACK_QUERY_CALLS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_QUERY_STREAM_CALLS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_QUERY_STREAM_RESULTS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_QUERY_STREAM_UNSUPPORTED_CALLS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_READ_ONLY_OPEN_CALLS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_READ_ONLY_OPEN_FAILURES: AtomicU64 = AtomicU64::new(0);
 static SQLITE_WRITER_FALLBACKS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_STATEMENTS_EXECUTED: AtomicU64 = AtomicU64::new(0);
@@ -210,6 +211,7 @@ pub fn sqlite_runtime_counters_snapshot() -> Value {
         "query_stream_unsupported_calls",
         SQLITE_QUERY_STREAM_UNSUPPORTED_CALLS
     );
+    counter!("read_only_open_calls", SQLITE_READ_ONLY_OPEN_CALLS);
     counter!("read_only_open_failures", SQLITE_READ_ONLY_OPEN_FAILURES);
     counter!("writer_fallbacks", SQLITE_WRITER_FALLBACKS);
     counter!("statements_executed", SQLITE_STATEMENTS_EXECUTED);
@@ -648,6 +650,7 @@ pub struct RxStorageInstanceSqlite {
     closed: Arc<AtomicBool>,
     external_checkpoint: Arc<Mutex<Value>>,
     external_notifier: Arc<TableNotifier>,
+    read_connection: Arc<Mutex<Option<SharedSqliteConnection>>>,
     instance_id: u64,
 }
 
@@ -668,6 +671,7 @@ impl RxStorageInstanceSqlite {
             let conn = lock_sqlite_writer(&connection);
             latest_checkpoint(&conn, &table_name).unwrap_or_else(|| json!({ "id": "", "lwt": 0 }))
         }));
+        let read_connection = Arc::new(Mutex::new(None));
 
         let notifier = Arc::new(TableNotifier::new());
         register_table_notifier(&database_key, &table_name, Arc::clone(&notifier));
@@ -684,6 +688,7 @@ impl RxStorageInstanceSqlite {
             Arc::clone(&closed),
             Arc::clone(&external_checkpoint),
             Arc::clone(&notifier),
+            Arc::clone(&read_connection),
         );
         let external_notifier = notifier;
         Self {
@@ -699,6 +704,7 @@ impl RxStorageInstanceSqlite {
             closed,
             external_checkpoint,
             external_notifier,
+            read_connection,
             instance_id: INSTANCE_ID.fetch_add(1, Ordering::SeqCst),
         }
     }
@@ -909,6 +915,7 @@ fn start_external_write_poll(
     closed: Arc<AtomicBool>,
     checkpoint: Arc<Mutex<Value>>,
     notifier: Arc<TableNotifier>,
+    read_connection: Arc<Mutex<Option<SharedSqliteConnection>>>,
 ) {
     let Ok(_) = tokio::runtime::Handle::try_current() else {
         return;
@@ -957,6 +964,7 @@ fn start_external_write_poll(
             let poll_table = table_name.clone();
             let poll_primary = primary_path.clone();
             let poll_checkpoint = checkpoint.lock().clone();
+            let poll_read_connection = Arc::clone(&read_connection);
             let result = tokio::task::spawn_blocking(move || {
                 if sqlite_path_is_in_memory(&poll_database_path) {
                     let conn = poll_conn.lock();
@@ -967,7 +975,11 @@ fn start_external_write_poll(
                         poll_checkpoint,
                     );
                 }
-                let conn = open_read_only_connection_for_path(&poll_database_path)?;
+                let conn = cached_read_only_connection_for_path(
+                    &poll_database_path,
+                    &poll_read_connection,
+                )?;
+                let conn = conn.lock();
                 drain_external_changed_documents_since(
                     &conn,
                     &poll_table,
@@ -1045,6 +1057,7 @@ fn sqlite_path_is_in_memory(path: &Path) -> bool {
 
 fn open_read_only_connection_for_path(path: &Path) -> RxResult<rusqlite::Connection> {
     use rusqlite::OpenFlags;
+    SQLITE_READ_ONLY_OPEN_CALLS.fetch_add(1, Ordering::Relaxed);
     let conn = rusqlite::Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -1053,6 +1066,27 @@ fn open_read_only_connection_for_path(path: &Path) -> RxResult<rusqlite::Connect
     conn.busy_timeout(std::time::Duration::from_secs(10))
         .map_err(super::types::sqlite_error)?;
     Ok(conn)
+}
+
+fn cached_read_only_connection_for_path(
+    path: &Path,
+    cache: &Arc<Mutex<Option<SharedSqliteConnection>>>,
+) -> RxResult<SharedSqliteConnection> {
+    if sqlite_path_is_in_memory(path) {
+        return Err(new_rx_error(
+            "SQLITE_QUERY",
+            Some(json!({
+                "message": "in-memory SQLite does not support concurrent readers; use file-backed storage in production"
+            })),
+        ));
+    }
+    let mut guard = cache.lock();
+    if let Some(existing) = guard.as_ref() {
+        return Ok(Arc::clone(existing));
+    }
+    let shared = Arc::new(Mutex::new(open_read_only_connection_for_path(path)?));
+    *guard = Some(Arc::clone(&shared));
+    Ok(shared)
 }
 
 struct ExternalPollDrain {
@@ -1384,7 +1418,8 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         let ids = ids.to_vec();
         if let Ok(read_conn) = self.open_read_only_connection() {
             let documents = tokio::task::spawn_blocking(move || -> RxResult<Vec<Value>> {
-                documents_by_ids(&read_conn, &table_name, &ids, with_deleted)
+                let conn = read_conn.lock();
+                documents_by_ids(&conn, &table_name, &ids, with_deleted)
             })
             .await
             .map_err(join_error)??;
@@ -1477,8 +1512,9 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
             let collection_name = collection_name.clone();
             let fallback_operator_families = fallback_operator_families.clone();
             let documents = tokio::task::spawn_blocking(move || -> RxResult<Vec<Value>> {
+                let conn = read_conn.lock();
                 execute_query_documents(
-                    &read_conn,
+                    &conn,
                     &table_name,
                     &collection_name,
                     primary_ids,
@@ -1542,7 +1578,8 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         if let Some(compiled) = compile_count_sql(&self.table_name, &self.primary_path, &query) {
             if let Ok(read_conn) = self.open_read_only_connection() {
                 let count = tokio::task::spawn_blocking(move || -> RxResult<u64> {
-                    count_with_compiled_sql(&read_conn, &compiled)
+                    let conn = read_conn.lock();
+                    count_with_compiled_sql(&conn, &compiled)
                 })
                 .await
                 .map_err(join_error)??;
@@ -1585,8 +1622,9 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         if let Ok(read_conn) = self.open_read_only_connection() {
             return tokio::task::spawn_blocking(
                 move || -> Result<RxStorageChangedDocumentsSinceResult, RxError> {
+                    let conn = read_conn.lock();
                     changed_documents_since(
-                        &read_conn,
+                        &conn,
                         &table_name,
                         &primary_path,
                         limit,
@@ -1730,10 +1768,10 @@ impl RxStorageInstanceSqlite {
                         Some(json!({ "message": format!("invalid prepared query: {err}") })),
                     )
                 })?;
-        // V1.5 production-hardening: open a DEDICATED read-only connection
-        // for this stream. The shared write-connection stays free for other
-        // peers, replication, and same-process writes. WAL mode (set in
-        // `RxStorageSqlite::connection`) makes concurrent readers cheap.
+        // V1.5 production-hardening: use the instance's cached read-only
+        // connection for this stream. The shared write-connection stays free
+        // for other peers, replication, and same-process writes. WAL mode
+        // (set in `RxStorageSqlite::connection`) makes concurrent readers cheap.
         let read_conn = match self.open_read_only_connection() {
             Ok(conn) => conn,
             Err(err) => {
@@ -1741,6 +1779,7 @@ impl RxStorageInstanceSqlite {
                 return Err(err);
             }
         };
+        let read_conn = read_conn.lock();
 
         if let Some(compiled) = compile_query_sql(&self.table_name, &self.primary_path, &query) {
             let chunk = chunk_size.max(1);
@@ -1777,7 +1816,7 @@ impl RxStorageInstanceSqlite {
         ))
     }
 
-    fn open_read_only_connection(&self) -> RxResult<rusqlite::Connection> {
+    fn open_read_only_connection(&self) -> RxResult<SharedSqliteConnection> {
         let path = &self.database_path;
         // SQLite supports `:memory:` only for the connection that created
         // it. Memory DBs are used in tests where we don't run concurrent
@@ -1785,11 +1824,6 @@ impl RxStorageInstanceSqlite {
         // connection is acceptable. For file-backed DBs, WAL mode gives us
         // a real concurrent reader.
         if sqlite_path_is_in_memory(path) {
-            // Fall back to the shared connection by cloning the connection
-            // primitive — but we still need to release it after the stream.
-            // The shared lock is held just for this stream; this is the
-            // legacy behavior the tests rely on. For production (file-backed)
-            // we go through the OpenFlags::SQLITE_OPEN_READ_ONLY path below.
             return Err(new_rx_error(
                 "SQLITE_QUERY",
                 Some(json!({
@@ -1797,7 +1831,7 @@ impl RxStorageInstanceSqlite {
                 })),
             ));
         }
-        open_read_only_connection_for_path(path)
+        cached_read_only_connection_for_path(path, &self.read_connection)
     }
 }
 
@@ -2090,6 +2124,49 @@ mod tests {
             FIND_DOCUMENTS_BY_ID_WRITER_FALLBACKS.load(Ordering::SeqCst),
             0,
             "with_deleted lookup must also stay on the read-only connection"
+        );
+    }
+
+    #[tokio::test]
+    async fn file_backed_reads_reuse_cached_read_only_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("ctox.sqlite3"),
+        });
+        let instance = create_storage_instance(&storage, params(test_schema()))
+            .await
+            .unwrap();
+        instance
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: None,
+                    document: doc("a", "1-a", 1, false, 1.0),
+                }],
+                "seed",
+            )
+            .await
+            .unwrap();
+
+        let first = instance.open_read_only_connection().unwrap();
+        let second = instance.open_read_only_connection().unwrap();
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &second),
+            "file-backed storage must reuse one read-only connection per instance"
+        );
+
+        let opens_before = runtime_counter("read_only_open_calls");
+        instance
+            .find_documents_by_id(&["a".to_string()], false)
+            .await
+            .unwrap();
+        instance
+            .get_changed_documents_since(10, None)
+            .await
+            .unwrap();
+        let opens_after = runtime_counter("read_only_open_calls");
+        assert_eq!(
+            opens_after, opens_before,
+            "hot read paths must not reopen read-only SQLite connections"
         );
     }
 
