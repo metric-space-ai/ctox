@@ -140,6 +140,8 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     name: CTOX CLI check (${{ matrix.target }})
+    env:
+      CARGO_PROFILE_TEST_DEBUG: "0"
 
     steps:
       - uses: actions/checkout@v6
@@ -260,6 +262,7 @@ jobs:
 
       - name: Business OS command idempotency
         if: matrix.target == 'x86_64-unknown-linux-gnu'
+        timeout-minutes: 20
         run: cargo test --locked --bin ctox native_peer_consumes_pending_business_command
 
       - name: Business OS schema hash parity
