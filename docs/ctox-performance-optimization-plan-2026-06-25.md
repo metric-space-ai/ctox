@@ -918,13 +918,16 @@ Implementation status:
   evidence.
 - Done on 2026-06-27 for installed release/PID identity:
   the installed gate now writes `release-identity.json` with the source git
-  commit/branch/status, `ctox --version`, install manifest, `current` symlink
+  commit/branch/status, `ctox version`, install manifest, `current` symlink
   target, current-release and shared-launcher `ctox-real` hashes, sampled
   process command/path/hash/start time, and upgrade timestamps. A real run
   fails before Gate A if the install root/current release is missing, the
   source commit cannot be recorded, installed binary hashes differ, the
   sampled process is not `ctox-real`, the process hash cannot be tied to the
   installed release, or the sampled process predates `ctox upgrade --dev`.
+  Updated on 2026-06-28: release-root installs without a shared
+  `/Users/.../.local/lib/ctox/bin/ctox-real` launcher are accepted when the
+  sampled process hash matches the `current` release binary hash.
 - Done on 2026-06-27 for SQLite statement/write-lock timing counters:
   the native RxDB SQLite runtime snapshot now exposes statement elapsed
   total/max/buckets plus writer-lock wait/held total/max/buckets. Central
@@ -952,6 +955,9 @@ Implementation status:
   and fails on positive per-component growth under the default idle budget. The
   installed gate also fails before Gate A when a real run sees extra
   `ctox-real` candidates.
+  Updated on 2026-06-28: the file-growth window now starts after the probe's
+  pre-sampling read-only SQLite diagnostics, so SQLite `-shm` files created by
+  the probe setup are not counted as daemon idle growth.
 - Done on 2026-06-27 for DB diagnostic delta gates:
   `ctox_perf_probe.py` now snapshots page/freelist, `dbstat`, RxDB collection
   row/data/tombstone metrics, and sampled desktop chunk metrics before and
@@ -964,9 +970,8 @@ Implementation status:
   the release gate.
 - Still open: broader `EXPLAIN QUERY PLAN` guards beyond the first hot Business OS set,
   chunk/change-stream soak tests, browser perf smokes, file-access scenario
-  automation, process-group/child CPU aggregation, page/freelist/dbstat and
-  RxDB row/payload/tombstone delta budgets, and installed 10 minute
-  post-file-share idle evidence.
+  automation, installed release proof that includes the service-performance
+  status artifact, and installed 10 minute post-file-share idle evidence.
 
 Validation:
 
@@ -994,6 +999,17 @@ Validation:
   assertion failure for `--max-sync-run-delta '*.ticket_sync_runs.row_count=0'`.
 - `python3 -m py_compile src/tools/perf/ctox_installed_idle_gate.py src/tools/perf/ctox_perf_probe.py`
   passed on 2026-06-27.
+- `python3 -m py_compile src/tools/perf/ctox_installed_idle_gate.py src/tools/perf/ctox_perf_probe.py`
+  passed on 2026-06-28 after the release-root identity and SQLite `-shm`
+  probe-order fixes.
+- `python3 src/tools/perf/ctox_perf_probe.py --root /Users/michaelwelsch/Documents/ctox.nosync --pid 54313 --assert-idle --skip-status --skip-service-performance --cpu-samples 10 --cpu-interval 1 --pretty`
+  passed on 2026-06-28 with CPU avg 0.02%, p95 0.1%, max 0.1%, and
+  `database_file_growth.total_growth_bytes = 0`.
+- `python3 src/tools/perf/ctox_installed_idle_gate.py --root /Users/michaelwelsch/Documents/ctox.nosync --artifact-dir /tmp/ctox-installed-idle-gate-post-probe-fix-20260628T0134Z --skip-upgrade --skip-gate-b --skip-gate-c --post-upgrade-warmup-seconds 0 --gate-a-seconds 30 --cpu-interval 1`
+  failed on 2026-06-28 only because the installed daemon did not expose
+  `runtime/service-performance.status.json`; release identity passed, CPU avg
+  was 0.023%, CPU p95 was 0.155%, CPU max was 0.3%, and database file growth
+  was 0 bytes.
 - Synthetic `ctox_perf_probe.py` checks passed on 2026-06-27 for:
   - current service-performance artifact with PID/boot identity and IPC/HTTP
     counters passes passive `--assert-idle --skip-status`;

@@ -2630,11 +2630,6 @@ def main() -> int:
     collect_db_metrics = bool(
         (args.assert_idle and not args.skip_db) or args.max_db_metric_delta
     )
-    database_files_before = None
-    if collect_file_growth:
-        database_files_before = database_file_snapshot(root, args.db)
-        report["database_file_snapshots"] = {"before_cpu": database_files_before}
-
     database_metrics_before = None
     if collect_db_metrics:
         database_metrics_before = database_metric_snapshot(
@@ -2651,6 +2646,14 @@ def main() -> int:
     if collect_sync_runs:
         sync_runs_before = sync_run_snapshot(root, args.db)
         report["sync_run_snapshots"] = {"before_cpu": sync_runs_before}
+
+    database_files_before = None
+    if collect_file_growth:
+        # Start the file-growth window after pre-sampling read-only SQLite
+        # diagnostics. Opening a WAL database read-only can materialize the
+        # SQLite -shm file; that is probe setup, not daemon idle growth.
+        database_files_before = database_file_snapshot(root, args.db)
+        report["database_file_snapshots"] = {"before_cpu": database_files_before}
 
     service_performance_before = None
     if not args.skip_service_performance:

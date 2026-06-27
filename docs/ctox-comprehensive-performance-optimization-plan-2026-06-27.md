@@ -108,6 +108,40 @@ Additional gate hardening from the release-gate review:
 - Default release counters must be required: a default metric pattern that
   matches no counter should fail the release gate, not only warn.
 
+2026-06-28 installed-gate status:
+
+- Fixed in the gate tooling: `release-identity.json` records `ctox version`,
+  accepts the current release-root layout when no shared launcher
+  `ctox-real` exists, and ties the sampled process hash to the `current`
+  release binary.
+- Fixed in the probe tooling: the DB file-growth window starts after read-only
+  SQLite pre-sampling diagnostics, so probe-created SQLite `-shm` files are no
+  longer misreported as daemon idle growth.
+- Current short installed Gate A evidence: release identity passed; passive CPU
+  sampling passed (`avg 0.023%`, `p95 0.155%`, `max 0.3%`); DB file growth was
+  0 bytes.
+- Current blocker: the installed daemon does not yet expose
+  `runtime/service-performance.status.json`, so Gate A correctly remains red
+  on missing service-performance deltas until that service instrumentation is
+  included in the installed release and re-tested through `ctox upgrade --dev`.
+
+Additional subagent findings from the 2026-06-28 architecture/performance pass:
+
+- `desktop_file_index` still falls back to frequent polling when scan roots
+  exist but the filesystem watcher is unavailable; it needs watcher-state
+  telemetry plus a stable-root slow backoff or partial watcher strategy.
+- `business_records` idle projection still pays for a composite stamp; queue
+  and chat-repair work should be split into a slower/event-driven loop with an
+  explicit projection clock.
+- `module_catalog` still rescans/hashes module file trees every 60s; module
+  lifecycle writes should maintain a catalog dirty marker or projection clock.
+- `channel_state` still opens/hashes Core DB and stats per-channel artifacts on
+  idle ticks; this needs a channel projection clock and artifact watcher/cache.
+- Native RxDB risks remain: DB-wide read serialization around read-only
+  operations, per-row changed-table trigger amplification, unindexed compiled
+  JSON SQL scans, per-collection read-connection caches, and external poller
+  deduplication across storage instances.
+
 Additional RxDB/SQLite architectural risks:
 
 - Business-record projection cursors must prove they do not skip records when

@@ -527,9 +527,9 @@ def build_release_identity(
 
     process = process_identity(pid, dry_run=dry_run)
     version = (
-        {"dry_run": True, "command": ctox_command + ["--version"]}
+        {"dry_run": True, "command": ctox_command + ["version"]}
         if dry_run
-        else run_capture(ctox_command + ["--version"], cwd=root, timeout=10)
+        else run_capture(ctox_command + ["version"], cwd=root, timeout=10)
     )
 
     identity: dict[str, Any] = {
@@ -599,6 +599,20 @@ def evaluate_release_identity(identity: dict[str, Any]) -> dict[str, Any]:
             }
         )
 
+    ctox_version = identity.get("ctox_version")
+    if (
+        not isinstance(ctox_version, dict)
+        or ctox_version.get("returncode") != 0
+        or not isinstance(ctox_version.get("stdout"), str)
+        or not ctox_version.get("stdout")
+    ):
+        failures.append(
+            {
+                "metric": "release_identity.ctox_version",
+                "message": "installed ctox version could not be recorded",
+            }
+        )
+
     manifest = identity.get("install_manifest")
     if isinstance(manifest, dict):
         manifest_release = manifest.get("current_release")
@@ -626,31 +640,38 @@ def evaluate_release_identity(identity: dict[str, Any]) -> dict[str, Any]:
     process = identity.get("process")
     process_exe = process.get("executable") if isinstance(process, dict) else None
     current_shared_match = same_sha(current_real, shared_real)
-    if current_shared_match is False:
+    shared_real_exists = isinstance(shared_real, dict) and shared_real.get("exists") is True
+    if shared_real_exists and current_shared_match is False:
         failures.append(
             {
                 "metric": "release_identity.current_vs_shared_binary_sha256",
                 "message": "current release ctox-real and shared launcher ctox-real differ",
             }
         )
-    elif current_shared_match is None:
+    elif shared_real_exists and current_shared_match is None:
         failures.append(
             {
                 "metric": "release_identity.current_vs_shared_binary_sha256",
                 "message": "could not compare current and shared ctox-real hashes",
             }
         )
+    elif not shared_real_exists:
+        warnings.append(
+            "shared launcher ctox-real is absent; release identity relies on current release and sampled process hashes",
+        )
 
     process_shared_match = same_sha(process_exe, shared_real)
     process_current_match = same_sha(process_exe, current_real)
-    if process_shared_match is False and process_current_match is False:
+    if process_current_match is True or process_shared_match is True:
+        pass
+    elif process_current_match is False or process_shared_match is False:
         failures.append(
             {
                 "metric": "release_identity.process_binary_sha256",
                 "message": "sampled ctox-real process binary does not match installed release binaries",
             }
         )
-    elif process_shared_match is None and process_current_match is None:
+    else:
         failures.append(
             {
                 "metric": "release_identity.process_binary_sha256",

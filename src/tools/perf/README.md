@@ -41,14 +41,16 @@ python3 src/tools/perf/ctox_installed_idle_gate.py \
 The installed workflow runs `ctox upgrade --dev`, resolves the installed
 `ctox-real` PID, writes `release-identity.json` with the source git commit,
 branch and status, install manifest, `current` symlink target,
-installed/current `ctox-real` hashes, process command path/hash and process
-start time, stores artifacts under
+installed/current `ctox-real` hashes, `ctox version`, process command
+path/hash and process start time, stores artifacts under
 `runtime/perf/installed-idle-*`, runs Gate A passive idle without `ctox status`,
 runs Gate B with status polling as separate load while sampling
 CPU/DB/heartbeat deltas, and then runs Gate C
 `ctox process-mining spawn-liveness`. A real run fails before Gate A when the
-sampled PID cannot be tied to the newly installed release. For a local
-command/artefact dry check without upgrading or sampling the daemon:
+sampled PID cannot be tied to the newly installed release. Release-root layouts
+without a shared `bin/ctox-real` launcher are valid when the sampled process
+hash matches the `current` release binary hash. For a local command/artefact
+dry check without upgrading or sampling the daemon:
 
 ```sh
 python3 src/tools/perf/ctox_installed_idle_gate.py \
@@ -93,6 +95,11 @@ Gate B in the installed workflow intentionally creates status load, so it skips
 the service-performance artifact delta while keeping status latency and
 status-load assertions separate, and it requires the status-poll load to show
 up in the daemon `status_requests.total_requests` counter.
+
+The file-growth window starts after the probe's read-only SQLite pre-sampling
+diagnostics. This avoids counting a SQLite `-shm` file materialized by the
+probe setup as daemon idle growth; any main/WAL/SHM/journal growth during the
+actual CPU sampling window still fails the default idle budget.
 
 For DB-size diagnostics only:
 
