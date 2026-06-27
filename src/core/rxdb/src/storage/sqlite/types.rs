@@ -135,7 +135,9 @@ fn start_external_database_poll(path: PathBuf, database_key: String, stop: Arc<A
                             if stop.load(Ordering::SeqCst) {
                                 break;
                             }
-                            crate::storage::sqlite::instance::record_sqlite_external_poll_wakeup();
+                            crate::storage::sqlite::instance::record_sqlite_external_poll_wakeup(
+                                poll_interval >= SQLITE_EXTERNAL_DATABASE_POLL_STANDBY_INTERVAL,
+                            );
                             let Ok(version) = read_data_version(&conn) else {
                                 break;
                             };
@@ -202,12 +204,21 @@ fn update_external_database_poll_backoff(
     idle_reads: &mut u32,
     poll_interval: &mut Duration,
 ) {
+    let previous_interval = *poll_interval;
     if keep_active {
         *idle_reads = 0;
         *poll_interval = SQLITE_EXTERNAL_DATABASE_POLL_ACTIVE_INTERVAL;
+        if previous_interval != *poll_interval {
+            crate::storage::sqlite::instance::record_sqlite_external_poll_active_reset();
+        }
     } else {
         *idle_reads = idle_reads.saturating_add(1);
         *poll_interval = external_database_poll_interval_for_idle_reads(*idle_reads);
+        if previous_interval != *poll_interval
+            && *poll_interval == SQLITE_EXTERNAL_DATABASE_POLL_STANDBY_INTERVAL
+        {
+            crate::storage::sqlite::instance::record_sqlite_external_poll_standby_entry();
+        }
     }
 }
 
@@ -339,6 +350,13 @@ fn read_changed_table_versions(conn: &Connection) -> rusqlite::Result<HashMap<St
 mod tests {
     use super::*;
 
+    fn runtime_counter(name: &str) -> u64 {
+        crate::storage::sqlite::instance::sqlite_runtime_counters_snapshot()
+            .get(name)
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0)
+    }
+
     #[test]
     fn external_database_poll_enters_standby_after_idle_reads() {
         assert_eq!(
@@ -377,6 +395,32 @@ mod tests {
         update_external_database_poll_backoff(true, &mut idle_reads, &mut poll_interval);
         assert_eq!(idle_reads, 0);
         assert_eq!(poll_interval, SQLITE_EXTERNAL_DATABASE_POLL_ACTIVE_INTERVAL);
+    }
+
+    #[test]
+    fn external_database_poll_records_backoff_transitions() {
+        let standby_entries_before = runtime_counter("external_poll_standby_entries");
+        let active_resets_before = runtime_counter("external_poll_active_resets");
+
+        let mut idle_reads = SQLITE_EXTERNAL_DATABASE_POLL_BACKOFF_AFTER_IDLE_READS - 1;
+        let mut poll_interval = SQLITE_EXTERNAL_DATABASE_POLL_ACTIVE_INTERVAL;
+
+        update_external_database_poll_backoff(false, &mut idle_reads, &mut poll_interval);
+        assert_eq!(
+            poll_interval,
+            SQLITE_EXTERNAL_DATABASE_POLL_STANDBY_INTERVAL
+        );
+        assert!(
+            runtime_counter("external_poll_standby_entries") > standby_entries_before,
+            "entering the DB-wide poll standby interval must be visible in runtime counters"
+        );
+
+        update_external_database_poll_backoff(true, &mut idle_reads, &mut poll_interval);
+        assert_eq!(poll_interval, SQLITE_EXTERNAL_DATABASE_POLL_ACTIVE_INTERVAL);
+        assert!(
+            runtime_counter("external_poll_active_resets") > active_resets_before,
+            "resetting the DB-wide poll to active mode must be visible in runtime counters"
+        );
     }
 }
 

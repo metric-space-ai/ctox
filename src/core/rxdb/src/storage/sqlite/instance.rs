@@ -105,6 +105,10 @@ static SQLITE_EXTERNAL_POLL_CHANGED_TABLE_READS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_CONNECTION_OPENS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_CONNECTION_OPEN_FAILURES: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_WAKEUPS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_ACTIVE_WAKEUPS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_STANDBY_WAKEUPS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_STANDBY_ENTRIES: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_ACTIVE_RESETS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_DATA_VERSION_CHANGES: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_DATA_VERSION_READ_FAILURES: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_CHANGED_TABLE_READ_FAILURES: AtomicU64 = AtomicU64::new(0);
@@ -311,6 +315,22 @@ pub fn sqlite_runtime_counters_snapshot() -> Value {
     );
     counter!("external_poll_wakeups", SQLITE_EXTERNAL_POLL_WAKEUPS);
     counter!(
+        "external_poll_active_wakeups",
+        SQLITE_EXTERNAL_POLL_ACTIVE_WAKEUPS
+    );
+    counter!(
+        "external_poll_standby_wakeups",
+        SQLITE_EXTERNAL_POLL_STANDBY_WAKEUPS
+    );
+    counter!(
+        "external_poll_standby_entries",
+        SQLITE_EXTERNAL_POLL_STANDBY_ENTRIES
+    );
+    counter!(
+        "external_poll_active_resets",
+        SQLITE_EXTERNAL_POLL_ACTIVE_RESETS
+    );
+    counter!(
         "external_poll_data_version_changes",
         SQLITE_EXTERNAL_POLL_DATA_VERSION_CHANGES
     );
@@ -454,8 +474,21 @@ pub(crate) fn record_sqlite_external_poll_connection_open_failure() {
     SQLITE_EXTERNAL_POLL_CONNECTION_OPEN_FAILURES.fetch_add(1, Ordering::Relaxed);
 }
 
-pub(crate) fn record_sqlite_external_poll_wakeup() {
+pub(crate) fn record_sqlite_external_poll_wakeup(standby: bool) {
     SQLITE_EXTERNAL_POLL_WAKEUPS.fetch_add(1, Ordering::Relaxed);
+    if standby {
+        SQLITE_EXTERNAL_POLL_STANDBY_WAKEUPS.fetch_add(1, Ordering::Relaxed);
+    } else {
+        SQLITE_EXTERNAL_POLL_ACTIVE_WAKEUPS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+pub(crate) fn record_sqlite_external_poll_standby_entry() {
+    SQLITE_EXTERNAL_POLL_STANDBY_ENTRIES.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_sqlite_external_poll_active_reset() {
+    SQLITE_EXTERNAL_POLL_ACTIVE_RESETS.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn record_sqlite_external_poll_data_version_change() {

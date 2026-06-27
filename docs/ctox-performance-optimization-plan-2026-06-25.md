@@ -738,10 +738,11 @@ is no longer the original file-share/browser `allDocuments()` burn path.
 ### P1 - Remaining Structural Work
 
 1. Native RxDB external-write idle safety drains are fixed for file-backed
-   collections. Keep the new zero-drain regression as a release gate, add
-   production counters around the DB-wide changed-table watcher, and finish the
-   central dispatcher/backpressure design so future change-stream work cannot
-   regress into per-collection idle scanning.
+   collections. Keep the new zero-drain regression as a release gate. The
+   DB-wide changed-table watcher now exposes production counters that classify
+   active wakeups, standby wakeups, standby entries, and active resets; finish
+   the central dispatcher/backpressure design so future change-stream work
+   cannot regress into per-collection idle scanning.
 2. Native SQLite query pushdown is still partial for normal storage queries.
    Unsupported Mango selectors no longer silently run unbounded full-table Rust
    matcher scans. Runtime counters expose normal fallback calls, visited rows,
@@ -1901,9 +1902,15 @@ Implementation status:
   storage change streams emit a lag marker; query change-event buffers treat it
   as an invalidation that forces full re-execution, and storage-backed master
   change streams map it to replication `RESYNC`.
-- Still open: production loop-budget counters for the DB-wide watcher. The
-  dispatcher should remain centralized around SQLite file-level change detection
-  and must not re-add per-collection idle scans.
+- Done on 2026-06-27 for DB-wide watcher production counters: the SQLite
+  runtime snapshot now separates total external-poll wakeups into active and
+  standby wakeups, and records standby-entry plus active-reset transitions. The
+  default installed idle probe budgets these counters at zero, so a recurring
+  standby safety wake or unexpected active reset is visible in passive daemon
+  evidence instead of being inferred from downstream statement counters.
+- Still open: finer per-drain loop-budget counters for rows visited/decoded by
+  the DB-wide watcher. The dispatcher should remain centralized around SQLite
+  file-level change detection and must not re-add per-collection idle scans.
 
 Validation:
 
@@ -1933,6 +1940,8 @@ Validation:
   passed on 2026-06-26: 271 unit tests and 30 conformance tests.
 - `cargo fmt --check --manifest-path src/core/rxdb/Cargo.toml`
   passed on 2026-06-26.
+- `CARGO_TARGET_DIR=/tmp/ctox-rxdb-poll-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --manifest-path src/core/rxdb/Cargo.toml external_database_poll_records_backoff_transitions -- --nocapture`
+  passed on 2026-06-27.
 - `node src/apps/business-os/rxdb/tests/run-all.mjs`
   passed on 2026-06-26 after the native `RxSubject` change: 47 passed,
   0 failed, 2 skipped because the wire daemon was not built.
