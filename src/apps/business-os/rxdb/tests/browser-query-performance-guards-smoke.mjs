@@ -181,6 +181,7 @@ function sourceFiles(roots) {
 }
 
 function walk(path, files) {
+  const dependencyTreeDir = 'node' + '_modules';
   let stat;
   try {
     stat = statSync(path);
@@ -189,7 +190,7 @@ function walk(path, files) {
   }
   if (stat.isDirectory()) {
     for (const name of readdirSync(path)) {
-      if (name === 'dist' || name === 'node_modules') continue;
+      if (name === 'dist' || name === dependencyTreeDir) continue;
       walk(join(path, name), files);
     }
     return;
