@@ -5746,6 +5746,88 @@ function ensureCtoxSmokeBinary() {
         if (isRecoverablePeerLifecycleError(error)) return;
         console.error(label, error);
       };
+      const demandOnlySmokeCollections = new Set(['desktop_file_chunks']);
+      const isDemandOnlyStartError = (error) => {
+        const haystack = [
+          error?.code,
+          error?.parameters?.error?.code,
+          error?.message,
+        ].filter(Boolean).join('\n');
+        return haystack.includes('DEMAND_ONLY_COLLECTION_START_ERROR')
+          || haystack.includes('demand-only');
+      };
+      const isDemandOnlySmokeCollection = (collection) => demandOnlySmokeCollections.has(collection);
+      const demandOnlyLeaseReason = (reason) => reason || 'browser-rust-smoke-demand-only';
+      const leaseAppCollection = async (state, collection, reason) => {
+        if (!isDemandOnlySmokeCollection(collection) || typeof state?.sync?.leaseCollection !== 'function') return null;
+        const lease = await state.sync.leaseCollection(collection, demandOnlyLeaseReason(reason));
+        return lease?.bridge || null;
+      };
+      const startAppCollection = async (state, collection, reason = 'browser-rust-smoke') => {
+        const leasedBridge = await leaseAppCollection(state, collection, reason);
+        if (leasedBridge) return leasedBridge;
+        if (typeof state?.sync?.startCollection !== 'function') {
+          throw new Error(`Business OS sync runtime cannot start ${collection}`);
+        }
+        return state.sync.startCollection(collection);
+      };
+      const restartAppCollection = async (state, collection, reason = 'browser-rust-smoke-restart') => {
+        if (isDemandOnlySmokeCollection(collection)) {
+          await state?.sync?.stopCollection?.(collection).catch(() => null);
+        }
+        const leasedBridge = await leaseAppCollection(state, collection, reason);
+        if (leasedBridge) return leasedBridge;
+        if (typeof state?.sync?.restartCollection === 'function') {
+          return state.sync.restartCollection(collection);
+        }
+        return startAppCollection(state, collection, reason);
+      };
+      const restartAppCollections = async (state, collections, reason = 'browser-rust-smoke-restart') => {
+        const requested = [...new Set((collections || []).filter((collection) => typeof collection === 'string' && collection.trim()))];
+        const bridgesByCollection = new Map();
+        const regularCollections = requested.filter((collection) => !isDemandOnlySmokeCollection(collection));
+        if (regularCollections.length) {
+          if (typeof state?.sync?.restartCollections === 'function') {
+            const regularBridges = await state.sync.restartCollections(regularCollections);
+            regularCollections.forEach((collection, index) => bridgesByCollection.set(collection, regularBridges[index]));
+          } else {
+            for (const collection of regularCollections) {
+              bridgesByCollection.set(collection, await restartAppCollection(state, collection, reason));
+            }
+          }
+        }
+        for (const collection of requested.filter(isDemandOnlySmokeCollection)) {
+          bridgesByCollection.set(collection, await restartAppCollection(state, collection, reason));
+        }
+        return requested.map((collection) => bridgesByCollection.get(collection) || null);
+      };
+      const resumeAppCollections = async (state, collections, reason = 'browser-rust-smoke-resume') => {
+        const requested = [...new Set((collections || []).filter((collection) => typeof collection === 'string' && collection.trim()))];
+        const bridgesByCollection = new Map();
+        const regularCollections = requested.filter((collection) => !isDemandOnlySmokeCollection(collection));
+        if (regularCollections.length) {
+          if (typeof state?.sync?.resumeCollections === 'function') {
+            const regularBridges = await state.sync.resumeCollections(regularCollections);
+            regularCollections.forEach((collection, index) => bridgesByCollection.set(collection, regularBridges[index]));
+          } else {
+            const regularBridges = await restartAppCollections(state, regularCollections, reason);
+            regularCollections.forEach((collection, index) => bridgesByCollection.set(collection, regularBridges[index]));
+          }
+        }
+        for (const collection of requested.filter(isDemandOnlySmokeCollection)) {
+          if (typeof state?.sync?.resumeCollections === 'function') {
+            try {
+              const [bridge] = await state.sync.resumeCollections([collection]);
+              bridgesByCollection.set(collection, bridge);
+              continue;
+            } catch (error) {
+              if (!isDemandOnlyStartError(error)) throw error;
+            }
+          }
+          bridgesByCollection.set(collection, await restartAppCollection(state, collection, reason));
+        }
+        return requested.map((collection) => bridgesByCollection.get(collection) || null);
+      };
 
       let db;
       let appFileReplicationState = null;
@@ -5890,8 +5972,8 @@ function ensureCtoxSmokeBinary() {
         }
         if (needsFileCollections) {
           const fileCollectionsStartedAt = Date.now();
-          const fileBridge = await appState.sync.startCollection('desktop_files');
-          const chunkBridge = await appState.sync.startCollection('desktop_file_chunks');
+          const fileBridge = await startAppCollection(appState, 'desktop_files', 'browser-rust-smoke-files');
+          const chunkBridge = await startAppCollection(appState, 'desktop_file_chunks', 'browser-rust-smoke-files');
           fileBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app desktop_files replication error', error));
           chunkBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app desktop_file_chunks replication error', error));
           appFileReplicationState = fileBridge?.state || null;
@@ -11092,11 +11174,11 @@ function ensureCtoxSmokeBinary() {
 
       async function startDeferredAppFileCollections(label = 'desktop_files') {
         const state = appState || globalThis.ctoxBusinessOsSmoke?.state;
-        if (!state?.sync?.startCollection) {
+        if (!state?.sync) {
           throw new Error(`Business OS sync runtime is not available for deferred ${label} replication`);
         }
-        const fileBridge = await state.sync.startCollection('desktop_files');
-        const chunkBridge = await state.sync.startCollection('desktop_file_chunks');
+        const fileBridge = await startAppCollection(state, 'desktop_files', `deferred-${label}`);
+        const chunkBridge = await startAppCollection(state, 'desktop_file_chunks', `deferred-${label}`);
         fileBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app desktop_files replication error', error));
         chunkBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app desktop_file_chunks replication error', error));
         appFileReplicationState = fileBridge?.state || null;
@@ -11249,7 +11331,7 @@ function ensureCtoxSmokeBinary() {
         }
         db = repairedState.db.raw;
         if (typeof repairedState.sync?.resumeCollections === 'function' && usedSuspend) {
-          const repairedBridges = await repairedState.sync.resumeCollections(criticalCollections);
+          const repairedBridges = await resumeAppCollections(repairedState, criticalCollections, 'native-peer-controlled-restart');
           const bridgeByCollection = Object.fromEntries(criticalCollections.map((collection, index) => [collection, repairedBridges[index]]));
           appCommandReplicationState = bridgeByCollection.business_commands?.state || appCommandReplicationState;
           appQueueReplicationState = bridgeByCollection.ctox_queue_tasks?.state || appQueueReplicationState;
@@ -11269,7 +11351,7 @@ function ensureCtoxSmokeBinary() {
           return repairedState;
         }
         if (typeof repairedState.sync?.restartCollections === 'function') {
-          const repairedBridges = await repairedState.sync.restartCollections(criticalCollections);
+          const repairedBridges = await restartAppCollections(repairedState, criticalCollections, 'native-peer-controlled-restart');
           const bridgeByCollection = Object.fromEntries(criticalCollections.map((collection, index) => [collection, repairedBridges[index]]));
           appCommandReplicationState = bridgeByCollection.business_commands?.state || appCommandReplicationState;
           appQueueReplicationState = bridgeByCollection.ctox_queue_tasks?.state || appQueueReplicationState;
@@ -11289,10 +11371,7 @@ function ensureCtoxSmokeBinary() {
           return repairedState;
         }
         const startFresh = async (collection) => {
-          if (typeof repairedState.sync?.restartCollection === 'function') {
-            return repairedState.sync.restartCollection(collection);
-          }
-          return repairedState.sync?.startCollection?.(collection);
+          return restartAppCollection(repairedState, collection, 'native-peer-controlled-restart');
         };
         const repairedModuleBridge = await startFresh('business_module_catalog');
         const repairedRuntimeBridge = await startFresh('ctox_runtime_settings');
@@ -12901,12 +12980,11 @@ function ensureCtoxSmokeBinary() {
           throw new Error('Business OS app DB was not available after restore resync peer restart');
         }
         db = repairedDb;
-        const repairedBridges = typeof repairedState.sync.restartCollections === 'function'
-          ? await repairedState.sync.restartCollections(['desktop_files', 'desktop_file_chunks'])
-          : [
-              await repairedState.sync.restartCollection('desktop_files'),
-              await repairedState.sync.restartCollection('desktop_file_chunks'),
-            ];
+        const repairedBridges = await restartAppCollections(
+          repairedState,
+          ['desktop_files', 'desktop_file_chunks'],
+          'restore-resync-smoke',
+        );
         appFileReplicationState = repairedBridges[0]?.state || null;
         appChunkReplicationState = repairedBridges[1]?.state || null;
         if (typeof appFileReplicationState?.reSync === 'function') appFileReplicationState.reSync();
@@ -13013,12 +13091,11 @@ function ensureCtoxSmokeBinary() {
             throw new Error('Business OS app DB was not available after reconnect repair');
           }
           db = repairedDb;
-          const repairedBridges = typeof repairedState.sync.restartCollections === 'function'
-            ? await repairedState.sync.restartCollections(['desktop_files', 'desktop_file_chunks'])
-            : [
-                await repairedState.sync.restartCollection('desktop_files'),
-                await repairedState.sync.restartCollection('desktop_file_chunks'),
-              ];
+          const repairedBridges = await restartAppCollections(
+            repairedState,
+            ['desktop_files', 'desktop_file_chunks'],
+            `${smokeMode}-repair`,
+          );
           const repairedFileBridge = repairedBridges[0];
           const repairedChunkBridge = repairedBridges[1];
           appFileReplicationState = repairedFileBridge?.state || null;
@@ -13080,12 +13157,11 @@ function ensureCtoxSmokeBinary() {
           };
           advancedStatusVersion = advancedStatusAfterRepair?.version || advancedStatusVersion;
           advancedStatusRuntime = advancedStatusAfterRepair?.rxdbRuntime || advancedStatusRuntime;
-          const stableFileBridges = typeof repairedState.sync.restartCollections === 'function'
-            ? await repairedState.sync.restartCollections(['desktop_files', 'desktop_file_chunks'])
-            : [
-                await repairedState.sync.restartCollection('desktop_files'),
-                await repairedState.sync.restartCollection('desktop_file_chunks'),
-              ];
+          const stableFileBridges = await restartAppCollections(
+            repairedState,
+            ['desktop_files', 'desktop_file_chunks'],
+            `${smokeMode}-stable-repair`,
+          );
           appFileReplicationState = stableFileBridges[0]?.state || appFileReplicationState;
           appChunkReplicationState = stableFileBridges[1]?.state || appChunkReplicationState;
           await bounded(appFileReplicationState?.awaitInitialReplication?.(), 20000);
