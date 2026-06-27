@@ -15,8 +15,8 @@ use crate::rx_error::{new_rx_error, RxResult};
 /// Matches upstream's `:memory:` SQLite database marker.
 pub const SQLITE_IN_MEMORY_DB_NAME: &str = ":memory:";
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(10);
-const SQLITE_EXTERNAL_DATABASE_POLL_MIN_INTERVAL: Duration = Duration::from_secs(1);
-const SQLITE_EXTERNAL_DATABASE_POLL_MAX_INTERVAL: Duration = Duration::from_secs(30);
+const SQLITE_EXTERNAL_DATABASE_POLL_ACTIVE_INTERVAL: Duration = Duration::from_secs(1);
+const SQLITE_EXTERNAL_DATABASE_POLL_STANDBY_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const SQLITE_EXTERNAL_DATABASE_POLL_BACKOFF_AFTER_IDLE_READS: u32 = 3;
 const SQLITE_CHANGED_TABLES_TABLE: &str = "__rxdb_changed_tables";
 
@@ -120,60 +120,75 @@ fn start_external_database_poll(path: PathBuf, database_key: String, stop: Arc<A
         .spawn(move || {
             let mut last_version: Option<i64> = None;
             let mut changed_tables: HashMap<String, i64>;
-            let mut table_generations: HashMap<String, u64>;
+            let mut local_hook_generations: HashMap<String, u64>;
             let mut idle_reads = 0u32;
-            let mut poll_interval = SQLITE_EXTERNAL_DATABASE_POLL_MIN_INTERVAL;
+            let mut poll_interval = SQLITE_EXTERNAL_DATABASE_POLL_ACTIVE_INTERVAL;
             while !stop.load(Ordering::SeqCst) {
                 match open_external_poll_connection(&path) {
                     Ok(conn) => {
                         last_version = read_data_version(&conn).ok().or(last_version);
                         changed_tables = read_changed_table_versions(&conn).unwrap_or_default();
-                        table_generations =
-                            current_table_generations(&database_key, changed_tables.keys());
+                        local_hook_generations =
+                            current_local_hook_generations(&database_key, changed_tables.keys());
                         while !stop.load(Ordering::SeqCst) {
                             sleep_external_poll(&stop, poll_interval);
                             if stop.load(Ordering::SeqCst) {
                                 break;
                             }
+                            crate::storage::sqlite::instance::record_sqlite_external_poll_wakeup();
                             let Ok(version) = read_data_version(&conn) else {
                                 break;
                             };
-                            if last_version.replace(version) != Some(version) {
+                            let previous_version = last_version.replace(version);
+                            if previous_version != Some(version) {
+                                if previous_version.is_some() {
+                                    crate::storage::sqlite::instance::record_sqlite_external_poll_data_version_change();
+                                }
                                 idle_reads = 0;
-                                poll_interval = SQLITE_EXTERNAL_DATABASE_POLL_MIN_INTERVAL;
+                                poll_interval = SQLITE_EXTERNAL_DATABASE_POLL_ACTIVE_INTERVAL;
                                 if let Ok(next_changed_tables) = read_changed_table_versions(&conn)
                                 {
+                                    crate::storage::sqlite::instance::record_sqlite_external_poll_changed_table_rows(
+                                        next_changed_tables.len(),
+                                    );
                                     for (table_name, changed_at) in next_changed_tables.iter() {
                                         if changed_tables.get(table_name) != Some(changed_at) {
                                             notify_external_table_change_unless_local_hook_ran(
                                                 &database_key,
                                                 table_name,
-                                                &mut table_generations,
+                                                &mut local_hook_generations,
                                             );
                                         }
                                     }
                                     changed_tables = next_changed_tables;
-                                    table_generations.retain(|table_name, _| {
+                                    local_hook_generations.retain(|table_name, _| {
                                         changed_tables.contains_key(table_name)
                                     });
                                 }
                             } else {
                                 idle_reads = idle_reads.saturating_add(1);
-                                if idle_reads
-                                    >= SQLITE_EXTERNAL_DATABASE_POLL_BACKOFF_AFTER_IDLE_READS
-                                {
-                                    poll_interval = (poll_interval * 2)
-                                        .min(SQLITE_EXTERNAL_DATABASE_POLL_MAX_INTERVAL);
-                                }
+                                poll_interval =
+                                    external_database_poll_interval_for_idle_reads(idle_reads);
                             }
                         }
                     }
                     Err(_) => {
-                        sleep_external_poll(&stop, SQLITE_EXTERNAL_DATABASE_POLL_MIN_INTERVAL);
+                        sleep_external_poll(&stop, SQLITE_EXTERNAL_DATABASE_POLL_ACTIVE_INTERVAL);
                     }
                 }
             }
         });
+}
+
+fn external_database_poll_interval_for_idle_reads(idle_reads: u32) -> Duration {
+    if idle_reads >= SQLITE_EXTERNAL_DATABASE_POLL_BACKOFF_AFTER_IDLE_READS {
+        // Same-process writes wake observers through SQLite update_hook. The
+        // database-wide poll is only a rescue path for other processes touching
+        // the file, so it must not become a daemon idle heartbeat.
+        SQLITE_EXTERNAL_DATABASE_POLL_STANDBY_INTERVAL
+    } else {
+        SQLITE_EXTERNAL_DATABASE_POLL_ACTIVE_INTERVAL
+    }
 }
 
 fn sleep_external_poll(stop: &AtomicBool, duration: Duration) {
@@ -186,7 +201,7 @@ fn sleep_external_poll(stop: &AtomicBool, duration: Duration) {
     }
 }
 
-fn current_table_generations<'a>(
+fn current_local_hook_generations<'a>(
     database_key: &str,
     table_names: impl Iterator<Item = &'a String>,
 ) -> HashMap<String, u64> {
@@ -194,8 +209,11 @@ fn current_table_generations<'a>(
         .map(|table_name| {
             (
                 table_name.clone(),
-                crate::storage::sqlite::instance::table_change_generation(database_key, table_name)
-                    .unwrap_or(0),
+                crate::storage::sqlite::instance::table_local_hook_generation(
+                    database_key,
+                    table_name,
+                )
+                .unwrap_or(0),
             )
         })
         .collect()
@@ -204,67 +222,118 @@ fn current_table_generations<'a>(
 fn notify_external_table_change_unless_local_hook_ran(
     database_key: &str,
     table_name: &str,
-    table_generations: &mut HashMap<String, u64>,
+    local_hook_generations: &mut HashMap<String, u64>,
 ) {
-    let current_generation =
-        crate::storage::sqlite::instance::table_change_generation(database_key, table_name)
+    let current_local_hook_generation =
+        crate::storage::sqlite::instance::table_local_hook_generation(database_key, table_name)
             .unwrap_or(0);
-    let previous_generation = table_generations.get(table_name).copied().unwrap_or(0);
-    if current_generation == previous_generation {
-        crate::storage::sqlite::instance::notify_table_change(database_key, table_name);
-        let next_generation =
-            crate::storage::sqlite::instance::table_change_generation(database_key, table_name)
-                .unwrap_or(current_generation);
-        table_generations.insert(table_name.to_string(), next_generation);
+    let previous_local_hook_generation =
+        local_hook_generations.get(table_name).copied().unwrap_or(0);
+    if current_local_hook_generation == previous_local_hook_generation {
+        if crate::storage::sqlite::instance::notify_external_table_change(database_key, table_name)
+        {
+            crate::storage::sqlite::instance::record_sqlite_external_poll_changed_table_notification(
+                table_name,
+            );
+        }
+        local_hook_generations.insert(table_name.to_string(), current_local_hook_generation);
     } else {
-        table_generations.insert(table_name.to_string(), current_generation);
+        crate::storage::sqlite::instance::record_sqlite_external_poll_local_hook_suppression(
+            table_name,
+        );
+        local_hook_generations.insert(table_name.to_string(), current_local_hook_generation);
     }
 }
 
 fn open_external_poll_connection(path: &PathBuf) -> rusqlite::Result<Connection> {
-    let conn = Connection::open_with_flags(
+    let conn = match Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?;
-    conn.busy_timeout(SQLITE_BUSY_TIMEOUT)?;
+    ) {
+        Ok(conn) => conn,
+        Err(err) => {
+            crate::storage::sqlite::instance::record_sqlite_external_poll_connection_open_failure();
+            return Err(err);
+        }
+    };
+    if let Err(err) = conn.busy_timeout(SQLITE_BUSY_TIMEOUT) {
+        crate::storage::sqlite::instance::record_sqlite_external_poll_connection_open_failure();
+        return Err(err);
+    }
+    crate::storage::sqlite::instance::record_sqlite_external_poll_connection_open();
     Ok(conn)
 }
 
 fn read_data_version(conn: &Connection) -> rusqlite::Result<i64> {
     crate::storage::sqlite::instance::record_sqlite_external_poll_data_version_read();
     let _statement_timer = crate::storage::sqlite::instance::timed_sqlite_statement();
-    conn.query_row("PRAGMA data_version", [], |row| row.get(0))
+    let result = conn.query_row("PRAGMA data_version", [], |row| row.get(0));
+    if result.is_err() {
+        crate::storage::sqlite::instance::record_sqlite_external_poll_data_version_read_failure();
+    }
+    result
 }
 
 fn read_changed_table_versions(conn: &Connection) -> rusqlite::Result<HashMap<String, i64>> {
     crate::storage::sqlite::instance::record_sqlite_external_poll_changed_table_read();
-    let exists = {
+    let result = (|| {
+        let exists = {
+            let _statement_timer = crate::storage::sqlite::instance::timed_sqlite_statement();
+            conn.query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
+                [SQLITE_CHANGED_TABLES_TABLE],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .is_some()
+        };
+        if !exists {
+            return Ok(HashMap::new());
+        }
         let _statement_timer = crate::storage::sqlite::instance::timed_sqlite_statement();
-        conn.query_row(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
-            [SQLITE_CHANGED_TABLES_TABLE],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()?
-        .is_some()
-    };
-    if !exists {
-        return Ok(HashMap::new());
+        let mut stmt = conn.prepare(&format!(
+            "SELECT table_name, changed_at FROM {}",
+            crate::storage::sqlite::sql::quote_identifier(SQLITE_CHANGED_TABLES_TABLE)
+        ))?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        let mut out = HashMap::new();
+        for row in rows {
+            let (table_name, changed_at) = row?;
+            out.insert(table_name, changed_at);
+        }
+        Ok(out)
+    })();
+    if result.is_err() {
+        crate::storage::sqlite::instance::record_sqlite_external_poll_changed_table_read_failure();
     }
-    let _statement_timer = crate::storage::sqlite::instance::timed_sqlite_statement();
-    let mut stmt = conn.prepare(&format!(
-        "SELECT table_name, changed_at FROM {}",
-        crate::storage::sqlite::sql::quote_identifier(SQLITE_CHANGED_TABLES_TABLE)
-    ))?;
-    let rows = stmt.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-    })?;
-    let mut out = HashMap::new();
-    for row in rows {
-        let (table_name, changed_at) = row?;
-        out.insert(table_name, changed_at);
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn external_database_poll_enters_standby_after_idle_reads() {
+        assert_eq!(
+            external_database_poll_interval_for_idle_reads(0),
+            SQLITE_EXTERNAL_DATABASE_POLL_ACTIVE_INTERVAL
+        );
+        assert_eq!(
+            external_database_poll_interval_for_idle_reads(
+                SQLITE_EXTERNAL_DATABASE_POLL_BACKOFF_AFTER_IDLE_READS - 1,
+            ),
+            SQLITE_EXTERNAL_DATABASE_POLL_ACTIVE_INTERVAL
+        );
+        assert_eq!(
+            external_database_poll_interval_for_idle_reads(
+                SQLITE_EXTERNAL_DATABASE_POLL_BACKOFF_AFTER_IDLE_READS,
+            ),
+            SQLITE_EXTERNAL_DATABASE_POLL_STANDBY_INTERVAL
+        );
     }
-    Ok(out)
 }
 
 pub fn sqlite_error(err: rusqlite::Error) -> crate::rx_error::RxError {

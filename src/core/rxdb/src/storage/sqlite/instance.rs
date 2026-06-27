@@ -102,6 +102,20 @@ static SQLITE_WRITER_LOCK_HELD_GE_100MS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_WRITER_LOCK_HELD_GE_1000MS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_DATA_VERSION_READS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_CHANGED_TABLE_READS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_CONNECTION_OPENS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_CONNECTION_OPEN_FAILURES: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_WAKEUPS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_DATA_VERSION_CHANGES: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_DATA_VERSION_READ_FAILURES: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_CHANGED_TABLE_READ_FAILURES: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_CHANGED_TABLE_ROWS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_CHANGED_TABLE_NOTIFICATIONS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_LOCAL_HOOK_SUPPRESSED_NOTIFICATIONS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_NOTIFICATIONS_BY_TABLE: OnceLock<StdMutex<HashMap<String, u64>>> =
+    OnceLock::new();
+static SQLITE_EXTERNAL_POLL_LOCAL_HOOK_SUPPRESSIONS_BY_TABLE: OnceLock<
+    StdMutex<HashMap<String, u64>>,
+> = OnceLock::new();
 #[cfg(test)]
 static CHANGED_DOCUMENTS_SINCE_TABLE_CALLS: OnceLock<StdMutex<HashMap<String, usize>>> =
     OnceLock::new();
@@ -312,6 +326,47 @@ pub fn sqlite_runtime_counters_snapshot() -> Value {
         "external_poll_changed_table_reads",
         SQLITE_EXTERNAL_POLL_CHANGED_TABLE_READS
     );
+    counter!(
+        "external_poll_connection_opens",
+        SQLITE_EXTERNAL_POLL_CONNECTION_OPENS
+    );
+    counter!(
+        "external_poll_connection_open_failures",
+        SQLITE_EXTERNAL_POLL_CONNECTION_OPEN_FAILURES
+    );
+    counter!("external_poll_wakeups", SQLITE_EXTERNAL_POLL_WAKEUPS);
+    counter!(
+        "external_poll_data_version_changes",
+        SQLITE_EXTERNAL_POLL_DATA_VERSION_CHANGES
+    );
+    counter!(
+        "external_poll_data_version_read_failures",
+        SQLITE_EXTERNAL_POLL_DATA_VERSION_READ_FAILURES
+    );
+    counter!(
+        "external_poll_changed_table_read_failures",
+        SQLITE_EXTERNAL_POLL_CHANGED_TABLE_READ_FAILURES
+    );
+    counter!(
+        "external_poll_changed_table_rows",
+        SQLITE_EXTERNAL_POLL_CHANGED_TABLE_ROWS
+    );
+    counter!(
+        "external_poll_changed_table_notifications",
+        SQLITE_EXTERNAL_POLL_CHANGED_TABLE_NOTIFICATIONS
+    );
+    counter!(
+        "external_poll_local_hook_suppressed_notifications",
+        SQLITE_EXTERNAL_POLL_LOCAL_HOOK_SUPPRESSED_NOTIFICATIONS
+    );
+    out.insert(
+        "external_poll_notifications_by_table".to_string(),
+        snapshot_counter_map(&SQLITE_EXTERNAL_POLL_NOTIFICATIONS_BY_TABLE),
+    );
+    out.insert(
+        "external_poll_local_hook_suppressions_by_table".to_string(),
+        snapshot_counter_map(&SQLITE_EXTERNAL_POLL_LOCAL_HOOK_SUPPRESSIONS_BY_TABLE),
+    );
     Value::Object(out)
 }
 
@@ -414,6 +469,47 @@ pub(crate) fn record_sqlite_external_poll_data_version_read() {
 
 pub(crate) fn record_sqlite_external_poll_changed_table_read() {
     SQLITE_EXTERNAL_POLL_CHANGED_TABLE_READS.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_sqlite_external_poll_connection_open() {
+    SQLITE_EXTERNAL_POLL_CONNECTION_OPENS.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_sqlite_external_poll_connection_open_failure() {
+    SQLITE_EXTERNAL_POLL_CONNECTION_OPEN_FAILURES.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_sqlite_external_poll_wakeup() {
+    SQLITE_EXTERNAL_POLL_WAKEUPS.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_sqlite_external_poll_data_version_change() {
+    SQLITE_EXTERNAL_POLL_DATA_VERSION_CHANGES.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_sqlite_external_poll_data_version_read_failure() {
+    SQLITE_EXTERNAL_POLL_DATA_VERSION_READ_FAILURES.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_sqlite_external_poll_changed_table_read_failure() {
+    SQLITE_EXTERNAL_POLL_CHANGED_TABLE_READ_FAILURES.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_sqlite_external_poll_changed_table_rows(rows: usize) {
+    SQLITE_EXTERNAL_POLL_CHANGED_TABLE_ROWS.fetch_add(rows as u64, Ordering::Relaxed);
+}
+
+pub(crate) fn record_sqlite_external_poll_changed_table_notification(table_name: &str) {
+    SQLITE_EXTERNAL_POLL_CHANGED_TABLE_NOTIFICATIONS.fetch_add(1, Ordering::Relaxed);
+    increment_counter_map(&SQLITE_EXTERNAL_POLL_NOTIFICATIONS_BY_TABLE, table_name);
+}
+
+pub(crate) fn record_sqlite_external_poll_local_hook_suppression(table_name: &str) {
+    SQLITE_EXTERNAL_POLL_LOCAL_HOOK_SUPPRESSED_NOTIFICATIONS.fetch_add(1, Ordering::Relaxed);
+    increment_counter_map(
+        &SQLITE_EXTERNAL_POLL_LOCAL_HOOK_SUPPRESSIONS_BY_TABLE,
+        table_name,
+    );
 }
 
 fn record_sqlite_writer_lock_wait(elapsed: Duration) {
@@ -546,6 +642,7 @@ fn join_error(err: tokio::task::JoinError) -> RxError {
 struct TableNotifier {
     notify: Notify,
     generation: AtomicU64,
+    local_hook_generation: AtomicU64,
 }
 
 impl TableNotifier {
@@ -553,6 +650,7 @@ impl TableNotifier {
         Self {
             notify: Notify::new(),
             generation: AtomicU64::new(0),
+            local_hook_generation: AtomicU64::new(0),
         }
     }
 
@@ -561,8 +659,17 @@ impl TableNotifier {
         self.notify.notify_one();
     }
 
+    fn signal_local_hook(&self) {
+        self.local_hook_generation.fetch_add(1, Ordering::SeqCst);
+        self.signal();
+    }
+
     fn generation(&self) -> u64 {
         self.generation.load(Ordering::SeqCst)
+    }
+
+    fn local_hook_generation(&self) -> u64 {
+        self.local_hook_generation.load(Ordering::SeqCst)
     }
 }
 
@@ -591,13 +698,26 @@ fn unregister_table_notifier(database_key: &str, table_name: &str) {
     }
 }
 
-pub fn notify_table_change(database_key: &str, table_name: &str) {
+pub fn notify_table_change(database_key: &str, table_name: &str) -> bool {
+    if let Some(registry) = UPDATE_REGISTRY.get() {
+        let map = registry.lock().unwrap();
+        if let Some(notifier) = map.get(&registry_key(database_key, table_name)) {
+            notifier.signal_local_hook();
+            return true;
+        }
+    }
+    false
+}
+
+pub(crate) fn notify_external_table_change(database_key: &str, table_name: &str) -> bool {
     if let Some(registry) = UPDATE_REGISTRY.get() {
         let map = registry.lock().unwrap();
         if let Some(notifier) = map.get(&registry_key(database_key, table_name)) {
             notifier.signal();
+            return true;
         }
     }
+    false
 }
 
 pub fn table_change_generation(database_key: &str, table_name: &str) -> Option<u64> {
@@ -605,6 +725,13 @@ pub fn table_change_generation(database_key: &str, table_name: &str) -> Option<u
     let map = registry.lock().unwrap();
     map.get(&registry_key(database_key, table_name))
         .map(|notifier| notifier.generation())
+}
+
+pub(crate) fn table_local_hook_generation(database_key: &str, table_name: &str) -> Option<u64> {
+    let registry = UPDATE_REGISTRY.get()?;
+    let map = registry.lock().unwrap();
+    map.get(&registry_key(database_key, table_name))
+        .map(|notifier| notifier.local_hook_generation())
 }
 
 pub fn table_change_generation_for_path(database_path: &Path, table_name: &str) -> Option<u64> {
@@ -1894,6 +2021,15 @@ mod tests {
     fn runtime_counter_pointer(pointer: &str) -> u64 {
         sqlite_runtime_counters_snapshot()
             .pointer(pointer)
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    }
+
+    fn runtime_counter_map_value(map_name: &str, key: &str) -> u64 {
+        sqlite_runtime_counters_snapshot()
+            .get(map_name)
+            .and_then(Value::as_object)
+            .and_then(|map| map.get(key))
             .and_then(Value::as_u64)
             .unwrap_or(0)
     }
@@ -3575,7 +3711,9 @@ mod tests {
             database_path: database_path.clone(),
         });
         let schema = test_schema();
-        let instance = create_storage_instance(&storage, params(schema))
+        let mut creation_params = params(schema);
+        creation_params.collection_name = "other_connection_counter".to_string();
+        let instance = create_storage_instance(&storage, creation_params)
             .await
             .unwrap();
         let mut stream = instance.change_stream();
@@ -3700,11 +3838,13 @@ mod tests {
 
     #[tokio::test]
     async fn change_stream_emits_other_connection_sqlite_writes() {
-        use tokio::time::timeout;
+        use tokio::time::{timeout, Instant};
         use tokio_stream::StreamExt;
 
         let dir = tempfile::tempdir().unwrap();
         let database_path = dir.path().join("ctox.sqlite3");
+        let poll_connection_opens_before = runtime_counter("external_poll_connection_opens");
+        let changed_table_reads_before = runtime_counter("external_poll_changed_table_reads");
         let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
             database_path: database_path.clone(),
         });
@@ -3713,6 +3853,28 @@ mod tests {
             .await
             .unwrap();
         let mut stream = instance.change_stream();
+
+        let startup_deadline = Instant::now() + Duration::from_secs(2);
+        while changed_documents_since_table_call_count(&instance.table_name) == 0
+            || runtime_counter("external_poll_connection_opens") <= poll_connection_opens_before
+            || runtime_counter("external_poll_changed_table_reads") <= changed_table_reads_before
+        {
+            assert!(
+                Instant::now() < startup_deadline,
+                "database-wide external poll did not complete its startup read"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            timeout(Duration::from_millis(100), stream.next())
+                .await
+                .is_err(),
+            "empty startup reconciliation should settle before the external write"
+        );
+        reset_changed_documents_since_table_call_count(&instance.table_name);
+
+        let table_notifications_before =
+            runtime_counter_map_value("external_poll_notifications_by_table", &instance.table_name);
 
         {
             let conn = rusqlite::Connection::open(&database_path).unwrap();
@@ -3725,10 +3887,14 @@ mod tests {
             .unwrap();
         }
 
-        let bulk = timeout(Duration::from_secs(4), stream.next())
-            .await
-            .expect("other-connection write should be emitted")
-            .expect("change stream should stay open");
+        let bulk = match timeout(Duration::from_secs(4), stream.next()).await {
+            Ok(Some(bulk)) => bulk,
+            Ok(None) => panic!("change stream closed before other-connection write was emitted"),
+            Err(_) => panic!(
+                "other-connection write should be emitted; sqlite counters: {}",
+                sqlite_runtime_counters_snapshot()
+            ),
+        };
         assert_eq!(bulk.context.as_deref(), Some("sqlite-external-poll"));
         assert_eq!(
             bulk.checkpoint,
@@ -3737,6 +3903,11 @@ mod tests {
         assert_eq!(bulk.events.len(), 1);
         assert_eq!(bulk.events[0].document_id, "external-connection");
         assert_eq!(bulk.events[0].operation, "UPDATE");
+        assert!(
+            runtime_counter_map_value("external_poll_notifications_by_table", &instance.table_name,)
+                > table_notifications_before,
+            "database-wide external poll notification counter must attribute the wake to the table"
+        );
     }
 
     #[tokio::test]
@@ -3778,6 +3949,15 @@ mod tests {
             }
             reset_changed_documents_since_table_call_count(table_name);
         }
+        let notification_counts_before = table_names
+            .iter()
+            .map(|table_name| {
+                (
+                    table_name.clone(),
+                    runtime_counter_map_value("external_poll_notifications_by_table", table_name),
+                )
+            })
+            .collect::<HashMap<_, _>>();
 
         tokio::time::sleep(Duration::from_millis(150)).await;
 
@@ -3786,6 +3966,14 @@ mod tests {
                 changed_documents_since_table_call_count(table_name),
                 0,
                 "file-backed idle table {table_name} was drained without a table notification"
+            );
+            assert_eq!(
+                runtime_counter_map_value("external_poll_notifications_by_table", table_name),
+                notification_counts_before
+                    .get(table_name)
+                    .copied()
+                    .unwrap_or(0),
+                "database-wide watcher emitted a notification for idle table {table_name}"
             );
         }
 

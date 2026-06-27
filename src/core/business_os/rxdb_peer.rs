@@ -24,6 +24,7 @@ use crate::mission::tickets;
 use anyhow::Context;
 use base64::Engine;
 use chrono::{DateTime, FixedOffset};
+use notify::Watcher;
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension};
 use rxdb::plugins::replication_webrtc::{
@@ -53,7 +54,7 @@ use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{mpsc, Mutex as AsyncMutex};
 use url::Url;
 use uuid::Uuid;
 
@@ -138,7 +139,12 @@ const DESKTOP_FILE_CHUNK_SIZE: usize = 16 * 1024;
 const DESKTOP_FILE_CHUNK_DECODED_SIZE: u64 = (DESKTOP_FILE_CHUNK_SIZE as u64 / 4) * 3;
 const DESKTOP_FILE_EAGER_LIMIT_BYTES: u64 = 1024 * 1024;
 const DESKTOP_FILE_SCAN_INTERVAL_SECS: u64 = 15;
-const DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS: u64 = 5 * 60;
+/// Standby reconciliation is a safety net, not the normal data path. Runtime
+/// command handlers and explicit sync paths project changes immediately; once
+/// the peer has observed an unchanged round, fallback loops must stop touching
+/// SQLite/RxDB on short idle windows.
+const BUSINESS_OS_STANDBY_RECONCILE_INTERVAL_SECS: u64 = 30 * 60;
+const DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS: u64 = BUSINESS_OS_STANDBY_RECONCILE_INTERVAL_SECS;
 const DESKTOP_FILE_SCAN_MAX_DEPTH: usize = 6;
 const DESKTOP_FILE_SCAN_MAX_FILES: usize = 200;
 const DESKTOP_FILE_CHUNK_RETAIN_GENERATIONS: usize = 2;
@@ -162,7 +168,7 @@ const DESKTOP_FILE_CHUNK_HASH_SCHEME: &str = "sha256-base64-chunk-v1";
 const CTOX_DESKTOP_FOLDER_ID: &str = "fs_ctox";
 const CTOX_DESKTOP_FOLDER_PATH: &str = "/CTOX";
 const NOTES_SYNC_ACTIVE_INTERVAL_SECS: u64 = 3;
-const NOTES_SYNC_IDLE_INTERVAL_SECS: u64 = 60;
+const NOTES_SYNC_IDLE_INTERVAL_SECS: u64 = BUSINESS_OS_STANDBY_RECONCILE_INTERVAL_SECS;
 const NOTES_SYNC_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 const CHANNEL_STATE_SYNC_INTERVAL_SECS: u64 = 3;
 const RXDB_SQLITE_DATABASE_NAME: &str = "ctox_business_os";
@@ -170,7 +176,10 @@ const BUSINESS_USERS_SYNC_INTERVAL_SECS: u64 = 3;
 const RUNTIME_SETTINGS_SYNC_INTERVAL_SECS: u64 = 3;
 const MODULE_CATALOG_SYNC_INTERVAL_SECS: u64 = 3;
 const TICKET_STATE_SYNC_INTERVAL_SECS: u64 = 3;
-const BUSINESS_OS_PROJECTION_IDLE_SYNC_INTERVAL_SECS: u64 = 60;
+// Command handlers project changed Business OS data synchronously; the idle
+// loops are reconciliation fallbacks and must stay quiet in daemon standby.
+const BUSINESS_OS_PROJECTION_IDLE_SYNC_INTERVAL_SECS: u64 =
+    BUSINESS_OS_STANDBY_RECONCILE_INTERVAL_SECS;
 const BUSINESS_OS_PROJECTION_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 /// Knowledge tables are record-shape parquet content that changes far less
 /// often than ticket/queue state, and projecting them reads parquet rows off
@@ -178,7 +187,8 @@ const BUSINESS_OS_PROJECTION_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 /// catalog/row changes to the browser within seconds-to-tens-of-seconds.
 const KNOWLEDGE_TABLES_SYNC_INTERVAL_SECS: u64 = 15;
 const BUSINESS_RECORD_PROJECTION_SYNC_INTERVAL_SECS: u64 = 3;
-const BUSINESS_RECORD_PROJECTION_IDLE_SYNC_INTERVAL_SECS: u64 = 60;
+const BUSINESS_RECORD_PROJECTION_IDLE_SYNC_INTERVAL_SECS: u64 =
+    BUSINESS_OS_STANDBY_RECONCILE_INTERVAL_SECS;
 const BUSINESS_RECORD_PROJECTION_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 const BUSINESS_RECORD_PROJECTION_SYNC_LIMIT: usize = 2_000;
 const QUEUE_CHAT_REPAIR_ORPHAN_EPOCH_MS: i64 = 10 * 60 * 1_000;
@@ -2088,14 +2098,7 @@ async fn run_native_peer(
     }
     match compact_desktop_file_index_store(&root).await {
         Ok(stats) if stats.changed() => {
-            eprintln!(
-                "[business-os] desktop file index maintenance: tombstoned {} unsafe file(s), \
-                 removed {} unsafe chunk(s), {} stale chunk(s), {} deleted chunk tombstone(s)",
-                stats.tombstoned_unsafe_files,
-                stats.removed_unsafe_chunks,
-                stats.removed_stale_chunks,
-                stats.removed_deleted_chunks
-            );
+            log_desktop_file_index_maintenance_stats(&stats);
         }
         Ok(_) => {}
         Err(err) => {
@@ -2878,6 +2881,65 @@ struct DesktopFileIndexScan {
     stamp: DesktopFileIndexProjectionStamp,
 }
 
+struct DesktopFileIndexWatch {
+    _watcher: notify::RecommendedWatcher,
+    rx: mpsc::UnboundedReceiver<()>,
+}
+
+impl DesktopFileIndexWatch {
+    fn new(scan_roots: &[DesktopFileScanRoot]) -> anyhow::Result<Option<Self>> {
+        if scan_roots.is_empty() {
+            return Ok(None);
+        }
+        let roots = scan_roots
+            .iter()
+            .map(|root| root.path.clone())
+            .collect::<Vec<_>>();
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut watcher = notify::recommended_watcher(move |_event| {
+            let _ = tx.send(());
+        })
+        .context("create desktop file index watcher")?;
+        for root in &roots {
+            watcher
+                .watch(root, notify::RecursiveMode::Recursive)
+                .with_context(|| format!("watch desktop file scan root {}", root.display()))?;
+        }
+        Ok(Some(Self {
+            _watcher: watcher,
+            rx,
+        }))
+    }
+
+    fn drain_pending(&mut self) -> bool {
+        let mut saw_event = false;
+        while self.rx.try_recv().is_ok() {
+            saw_event = true;
+        }
+        saw_event
+    }
+
+    async fn wait_for_event(&mut self, timeout: Duration) -> bool {
+        if timeout.is_zero() {
+            return self.drain_pending();
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(timeout) => self.drain_pending(),
+            event = self.rx.recv() => {
+                let saw_event = event.is_some();
+                self.drain_pending() || saw_event
+            }
+        }
+    }
+}
+
+fn desktop_file_scan_root_paths(scan_roots: &[DesktopFileScanRoot]) -> Vec<PathBuf> {
+    scan_roots
+        .iter()
+        .map(|scan_root| scan_root.path.clone())
+        .collect()
+}
+
 async fn sync_notes_background_loop(root: PathBuf) {
     let mut last_source_stamp: Option<store::LocalMarkdownNotesSourceStamp> = None;
     let mut unchanged_ticks = 0u32;
@@ -2948,8 +3010,13 @@ async fn sync_desktop_file_index_background_loop(
     let mut last_projection_stamp: Option<DesktopFileIndexProjectionStamp> = None;
     let mut last_scan_roots_stamp: Option<DesktopFileScanRootsStamp> = None;
     let mut last_full_scan_at: Option<SystemTime> = None;
+    let mut dirty_scan_roots = true;
+    let mut file_watch: Option<DesktopFileIndexWatch> = None;
+    let mut file_watch_roots: Option<Vec<PathBuf>> = None;
+    let mut last_watch_error: Option<String> = None;
     loop {
         let started = Instant::now();
+        let mut has_scan_roots = false;
         let result: anyhow::Result<usize> = async {
             let run_maintenance = last_maintenance_at
                 .elapsed()
@@ -2958,11 +3025,42 @@ async fn sync_desktop_file_index_background_loop(
                 })
                 .unwrap_or(true);
             let scan_roots = desktop_file_scan_roots(&root);
+            has_scan_roots = !scan_roots.is_empty();
+            let scan_root_paths = desktop_file_scan_root_paths(&scan_roots);
+            if file_watch_roots.as_ref() != Some(&scan_root_paths) {
+                match DesktopFileIndexWatch::new(&scan_roots) {
+                    Ok(next_watch) => {
+                        file_watch = next_watch;
+                        file_watch_roots = Some(scan_root_paths);
+                        last_watch_error = None;
+                        dirty_scan_roots = true;
+                    }
+                    Err(err) => {
+                        let message = format!("{err:#}");
+                        if last_watch_error.as_deref() != Some(message.as_str()) {
+                            eprintln!(
+                                "[business-os] desktop file index watcher unavailable: {message}"
+                            );
+                        }
+                        last_watch_error = Some(message);
+                        file_watch = None;
+                        file_watch_roots = None;
+                    }
+                }
+            }
+            if file_watch
+                .as_mut()
+                .map(DesktopFileIndexWatch::drain_pending)
+                .unwrap_or(false)
+            {
+                dirty_scan_roots = true;
+            }
             let scan_roots_stamp = desktop_file_scan_roots_stamp(&scan_roots);
             let should_collect_scan = desktop_file_index_should_collect_scan(
                 last_scan_roots_stamp.as_ref(),
                 last_full_scan_at,
                 &scan_roots_stamp,
+                dirty_scan_roots,
                 SystemTime::now(),
             );
             if !run_maintenance && !should_collect_scan {
@@ -2972,26 +3070,7 @@ async fn sync_desktop_file_index_background_loop(
             if run_maintenance {
                 match compact_desktop_file_index_store(&root).await {
                     Ok(stats) if stats.changed() => {
-                        eprintln!(
-                            "[business-os] desktop file index maintenance: tombstoned {} unsafe file(s), \
-                             removed {} unsafe chunk(s), {} stale chunk(s), {} deleted chunk tombstone(s), \
-                             {} unsafe file tombstone(s), evicted {} cached file(s), removed {} cache chunk(s) \
-                             ({} byte(s), live {} -> {}, pinned {}, over-quota pinned {}, checkpoint {}, vacuum {})",
-                            stats.tombstoned_unsafe_files,
-                            stats.removed_unsafe_chunks,
-                            stats.removed_stale_chunks,
-                            stats.removed_deleted_chunks,
-                            stats.removed_unsafe_file_tombstones,
-                            stats.evicted_cache_files,
-                            stats.removed_cache_chunks,
-                            stats.removed_cache_bytes,
-                            stats.cache_live_bytes_before,
-                            stats.cache_live_bytes_after,
-                            stats.cache_pinned_bytes,
-                            stats.cache_over_quota_pinned_bytes,
-                            stats.wal_checkpoint_ran,
-                            stats.vacuum_ran
-                        );
+                        log_desktop_file_index_maintenance_stats(&stats);
                     }
                     Ok(_) => {}
                     Err(err) => {
@@ -3009,12 +3088,14 @@ async fn sync_desktop_file_index_background_loop(
             last_full_scan_at = Some(SystemTime::now());
             let projection_changed = last_projection_stamp.as_ref() != Some(&scan.stamp);
             if !projection_changed {
+                dirty_scan_roots = false;
                 return Ok(0);
             }
             let projection_stamp = scan.stamp.clone();
             let _guard = database_write_lock.lock().await;
             let indexed = sync_desktop_file_scan_with_database(&root, &database, scan).await?;
             last_projection_stamp = Some(projection_stamp);
+            dirty_scan_roots = false;
             Ok(indexed)
         }
         .await;
@@ -3023,10 +3104,29 @@ async fn sync_desktop_file_index_background_loop(
             &result,
             started.elapsed(),
         );
-        if let Err(err) = result {
+        let result_failed = result.is_err();
+        if let Err(err) = &result {
             eprintln!("[business-os] native rxdb desktop file index failed: {err:#}");
         }
-        tokio::time::sleep(Duration::from_secs(DESKTOP_FILE_SCAN_INTERVAL_SECS)).await;
+        let sleep_for = if result_failed {
+            Duration::from_secs(DESKTOP_FILE_SCAN_INTERVAL_SECS)
+        } else {
+            desktop_file_index_sleep_interval(
+                has_scan_roots,
+                last_maintenance_at,
+                last_full_scan_at,
+                SystemTime::now(),
+            )
+        };
+        let saw_watch_event = if let Some(watch) = file_watch.as_mut() {
+            watch.wait_for_event(sleep_for).await
+        } else {
+            tokio::time::sleep(sleep_for).await;
+            false
+        };
+        if saw_watch_event {
+            dirty_scan_roots = true;
+        }
     }
 }
 
@@ -9387,6 +9487,29 @@ impl DesktopFileIndexMaintenanceStats {
     }
 }
 
+fn log_desktop_file_index_maintenance_stats(stats: &DesktopFileIndexMaintenanceStats) {
+    eprintln!(
+        "[business-os] desktop file index maintenance: tombstoned {} unsafe file(s), \
+         removed {} unsafe chunk(s), {} stale chunk(s), {} deleted chunk tombstone(s), \
+         {} unsafe file tombstone(s), evicted {} cached file(s), removed {} cache chunk(s) \
+         ({} byte(s), live {} -> {}, pinned {}, over-quota pinned {}, checkpoint {}, vacuum {})",
+        stats.tombstoned_unsafe_files,
+        stats.removed_unsafe_chunks,
+        stats.removed_stale_chunks,
+        stats.removed_deleted_chunks,
+        stats.removed_unsafe_file_tombstones,
+        stats.evicted_cache_files,
+        stats.removed_cache_chunks,
+        stats.removed_cache_bytes,
+        stats.cache_live_bytes_before,
+        stats.cache_live_bytes_after,
+        stats.cache_pinned_bytes,
+        stats.cache_over_quota_pinned_bytes,
+        stats.wal_checkpoint_ran,
+        stats.vacuum_ran
+    );
+}
+
 #[derive(Debug, Clone, Copy)]
 struct DesktopFileChunkCacheConfig {
     max_live_bytes: u64,
@@ -10381,8 +10504,12 @@ fn desktop_file_index_should_collect_scan(
     last_scan_roots_stamp: Option<&DesktopFileScanRootsStamp>,
     last_full_scan_at: Option<SystemTime>,
     scan_roots_stamp: &DesktopFileScanRootsStamp,
+    dirty_scan_roots: bool,
     now: SystemTime,
 ) -> bool {
+    if dirty_scan_roots {
+        return true;
+    }
     if last_scan_roots_stamp != Some(scan_roots_stamp) {
         return true;
     }
@@ -10392,6 +10519,53 @@ fn desktop_file_index_should_collect_scan(
     now.duration_since(last_full_scan_at)
         .map(|elapsed| elapsed >= Duration::from_secs(DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS))
         .unwrap_or(true)
+}
+
+fn desktop_file_index_sleep_interval(
+    has_scan_roots: bool,
+    last_maintenance_at: SystemTime,
+    last_full_scan_at: Option<SystemTime>,
+    now: SystemTime,
+) -> Duration {
+    if !has_scan_roots {
+        let discovery_due = last_full_scan_at
+            .map(|last_full_scan_at| {
+                duration_until_due(
+                    last_full_scan_at,
+                    Duration::from_secs(DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS),
+                    now,
+                )
+            })
+            .unwrap_or_else(|| Duration::from_secs(DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS));
+        let maintenance_due = duration_until_due(
+            last_maintenance_at,
+            Duration::from_secs(DESKTOP_FILE_INDEX_MAINTENANCE_INTERVAL_SECS),
+            now,
+        );
+        return discovery_due.min(maintenance_due);
+    }
+    let fallback_due = last_full_scan_at
+        .map(|last_full_scan_at| {
+            duration_until_due(
+                last_full_scan_at,
+                Duration::from_secs(DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS),
+                now,
+            )
+        })
+        .unwrap_or(Duration::ZERO);
+    let maintenance_due = duration_until_due(
+        last_maintenance_at,
+        Duration::from_secs(DESKTOP_FILE_INDEX_MAINTENANCE_INTERVAL_SECS),
+        now,
+    );
+    fallback_due.min(maintenance_due)
+}
+
+fn duration_until_due(last_run_at: SystemTime, interval: Duration, now: SystemTime) -> Duration {
+    match now.duration_since(last_run_at) {
+        Ok(elapsed) if elapsed < interval => interval - elapsed,
+        _ => Duration::ZERO,
+    }
 }
 
 fn update_hash_with_string(hasher: &mut sha2::Sha256, value: &str) {
@@ -16452,7 +16626,7 @@ mod tests {
         let first_stamp = desktop_file_scan_roots_stamp(&scan_roots);
         let first_scan_at = UNIX_EPOCH + Duration::from_secs(1_000);
         assert!(
-            desktop_file_index_should_collect_scan(None, None, &first_stamp, first_scan_at),
+            desktop_file_index_should_collect_scan(None, None, &first_stamp, true, first_scan_at),
             "first background round must collect a full scan"
         );
         assert!(
@@ -16460,9 +16634,20 @@ mod tests {
                 Some(&first_stamp),
                 Some(first_scan_at),
                 &first_stamp,
+                false,
                 first_scan_at + Duration::from_secs(DESKTOP_FILE_SCAN_INTERVAL_SECS)
             ),
             "unchanged roots must not recurse every desktop scan interval"
+        );
+        assert!(
+            desktop_file_index_should_collect_scan(
+                Some(&first_stamp),
+                Some(first_scan_at),
+                &first_stamp,
+                true,
+                first_scan_at + Duration::from_secs(DESKTOP_FILE_SCAN_INTERVAL_SECS)
+            ),
+            "watcher-dirty roots must collect a full scan without waiting for fallback"
         );
 
         fs::write(
@@ -16480,6 +16665,7 @@ mod tests {
                 Some(&first_stamp),
                 Some(first_scan_at),
                 &changed_stamp,
+                false,
                 first_scan_at + Duration::from_secs(DESKTOP_FILE_SCAN_INTERVAL_SECS)
             ),
             "dirty roots must collect a full scan without waiting for fallback"
@@ -16489,9 +16675,47 @@ mod tests {
                 Some(&changed_stamp),
                 Some(first_scan_at),
                 &changed_stamp,
+                false,
                 first_scan_at + Duration::from_secs(DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS)
             ),
             "unchanged roots still get a slow fallback scan for missed nested events"
+        );
+    }
+
+    #[test]
+    fn desktop_file_background_sleep_uses_slow_fallback_after_successful_scan() {
+        let first_scan_at = UNIX_EPOCH + Duration::from_secs(1_000);
+        let now = first_scan_at + Duration::from_secs(DESKTOP_FILE_SCAN_INTERVAL_SECS);
+        assert_eq!(
+            desktop_file_index_sleep_interval(true, first_scan_at, Some(first_scan_at), now),
+            Duration::from_secs(
+                DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS - DESKTOP_FILE_SCAN_INTERVAL_SECS
+            ),
+            "without a watcher, stable roots should still use the slow fallback after a full scan"
+        );
+        assert_eq!(
+            desktop_file_index_sleep_interval(true, first_scan_at, Some(first_scan_at), now),
+            Duration::from_secs(
+                DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS - DESKTOP_FILE_SCAN_INTERVAL_SECS
+            ),
+            "with a watcher, unchanged roots should sleep until the slow fallback scan"
+        );
+        assert_eq!(
+            desktop_file_index_sleep_interval(
+                true,
+                first_scan_at,
+                Some(first_scan_at),
+                first_scan_at + Duration::from_secs(DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS)
+            ),
+            Duration::ZERO,
+            "the fallback scan is due immediately at the fallback boundary"
+        );
+        assert_eq!(
+            desktop_file_index_sleep_interval(false, first_scan_at, Some(first_scan_at), now),
+            Duration::from_secs(
+                DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS - DESKTOP_FILE_SCAN_INTERVAL_SECS
+            ),
+            "with no scan roots, the background loop must not poll every desktop scan interval"
         );
     }
 

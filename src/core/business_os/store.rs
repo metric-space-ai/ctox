@@ -312,7 +312,6 @@ pub(crate) struct LocalMarkdownNotesSourceStamp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RuntimeSettingsProjectionStamp {
     cache: RuntimeSettingsCacheStamp,
-    refresh_epoch: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3990,15 +3989,7 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
 pub(crate) fn runtime_settings_projection_stamp(root: &Path) -> RuntimeSettingsProjectionStamp {
     RuntimeSettingsProjectionStamp {
         cache: runtime_settings_cache_stamp(root),
-        refresh_epoch: runtime_settings_refresh_epoch(),
     }
-}
-
-fn runtime_settings_refresh_epoch() -> u64 {
-    let ttl_ms = RUNTIME_SETTINGS_RXDB_CACHE_TTL_SECS
-        .saturating_mul(1_000)
-        .max(1);
-    (now_ms() as u64) / ttl_ms
 }
 
 fn stabilize_runtime_settings_timestamp(value: Value, previous: Option<&Value>) -> Value {
