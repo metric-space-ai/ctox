@@ -171,9 +171,10 @@ impl crate::types::RxReplicationHandler for StorageReplicationHandler {
         &self,
     ) -> crate::rxjs_compat::RxStream<crate::types::RxReplicationMasterChange> {
         use crate::replication_protocol::helper::write_doc_to_doc_state;
-        if self.instance.collection_name() == "desktop_file_chunks" {
-            let stream = self.instance.change_stream();
-            return Box::pin(stream.map(|_| crate::types::RxReplicationMasterChange::Resync));
+        if crate::rx_collection::is_demand_only_chunk_collection_name(
+            self.instance.collection_name(),
+        ) {
+            return Box::pin(futures::stream::empty());
         }
         let has_attachments = self.instance.schema().extra.get("attachments").is_some();
         let keep_meta = self.keep_meta;

@@ -46,6 +46,17 @@ pub type CollectionHookCallback = Arc<
     dyn Fn(Value, Option<Arc<RxDocument>>) -> BoxFuture<'static, RxResult<Value>> + Send + Sync,
 >;
 
+/// Business OS file/blob chunk collections are demand-only byte stores. They
+/// must not arm eager collection-level change buffers because those buffers
+/// force the SQLite external-poll path to deserialize large chunk stores even
+/// when no live replication/read workload needs chunk change events.
+pub(crate) fn is_demand_only_chunk_collection_name(name: &str) -> bool {
+    matches!(
+        name,
+        "desktop_file_chunks" | "document_blob_chunks" | "spreadsheet_blob_chunks"
+    )
+}
+
 #[derive(Clone)]
 pub struct BulkDocumentWriteResult {
     pub success: Vec<Arc<RxDocument>>,
@@ -119,7 +130,11 @@ impl RxCollection {
             });
             let doc_cache =
                 DocumentCache::new_without_stream(primary_path.clone(), document_creator);
-            let change_event_buffer = create_change_event_buffer(storage_instance.change_stream());
+            let change_event_buffer = if is_demand_only_chunk_collection_name(&name) {
+                None
+            } else {
+                Some(create_change_event_buffer(storage_instance.change_stream()))
+            };
             let incremental_write_queue = IncrementalWriteQueue::new(
                 Arc::clone(&storage_instance),
                 primary_path.clone(),
@@ -169,7 +184,7 @@ impl RxCollection {
                 conflict_handler,
                 schema: Some(schema),
                 doc_cache: Some(doc_cache),
-                change_event_buffer: Some(change_event_buffer),
+                change_event_buffer,
                 incremental_write_queue: Some(incremental_write_queue),
                 query_cache: Mutex::new(HashMap::new()),
                 query_cache_replacement_running: AtomicBool::new(false),
@@ -1603,6 +1618,33 @@ mod tests {
             event.document_data.as_ref().and_then(|doc| doc.get("id"))
                 == Some(&serde_json::json!("a"))
         }));
+    }
+
+    #[tokio::test]
+    async fn demand_only_chunk_collections_skip_eager_change_event_buffer() {
+        let collection = test_collection_named("desktop_file_chunks").await;
+
+        assert!(collection.change_event_buffer.is_none());
+        let err = match collection.change_event_buffer() {
+            Ok(_) => panic!("chunk collections must not create an eager change buffer"),
+            Err(err) => err,
+        };
+        assert_eq!(err.code(), "COL_CHANGE_EVENT_BUFFER");
+
+        let mut events = collection.event_bulks();
+        collection
+            .insert(serde_json::json!({ "id": "chunk-a", "age": 1 }))
+            .await
+            .unwrap();
+
+        let event_bulk = tokio::time::timeout(std::time::Duration::from_secs(1), events.next())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(event_bulk
+            .events
+            .iter()
+            .any(|event| event.document_id == "chunk-a"));
     }
 
     #[tokio::test]
