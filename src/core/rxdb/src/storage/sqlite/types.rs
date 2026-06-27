@@ -144,16 +144,15 @@ fn start_external_database_poll(path: PathBuf, database_key: String, stop: Arc<A
                                 if previous_version.is_some() {
                                     crate::storage::sqlite::instance::record_sqlite_external_poll_data_version_change();
                                 }
-                                idle_reads = 0;
-                                poll_interval = SQLITE_EXTERNAL_DATABASE_POLL_ACTIVE_INTERVAL;
-                                if let Ok(next_changed_tables) = read_changed_table_versions(&conn)
-                                {
+                                let mut keep_active = true;
+                                if let Ok(next_changed_tables) = read_changed_table_versions(&conn) {
+                                    keep_active = false;
                                     crate::storage::sqlite::instance::record_sqlite_external_poll_changed_table_rows(
                                         next_changed_tables.len(),
                                     );
                                     for (table_name, changed_at) in next_changed_tables.iter() {
                                         if changed_tables.get(table_name) != Some(changed_at) {
-                                            notify_external_table_change_unless_local_hook_ran(
+                                            keep_active |= notify_external_table_change_unless_local_hook_ran(
                                                 &database_key,
                                                 table_name,
                                                 &mut local_hook_generations,
@@ -165,10 +164,17 @@ fn start_external_database_poll(path: PathBuf, database_key: String, stop: Arc<A
                                         changed_tables.contains_key(table_name)
                                     });
                                 }
+                                update_external_database_poll_backoff(
+                                    keep_active,
+                                    &mut idle_reads,
+                                    &mut poll_interval,
+                                );
                             } else {
-                                idle_reads = idle_reads.saturating_add(1);
-                                poll_interval =
-                                    external_database_poll_interval_for_idle_reads(idle_reads);
+                                update_external_database_poll_backoff(
+                                    false,
+                                    &mut idle_reads,
+                                    &mut poll_interval,
+                                );
                             }
                         }
                     }
@@ -188,6 +194,20 @@ fn external_database_poll_interval_for_idle_reads(idle_reads: u32) -> Duration {
         SQLITE_EXTERNAL_DATABASE_POLL_STANDBY_INTERVAL
     } else {
         SQLITE_EXTERNAL_DATABASE_POLL_ACTIVE_INTERVAL
+    }
+}
+
+fn update_external_database_poll_backoff(
+    keep_active: bool,
+    idle_reads: &mut u32,
+    poll_interval: &mut Duration,
+) {
+    if keep_active {
+        *idle_reads = 0;
+        *poll_interval = SQLITE_EXTERNAL_DATABASE_POLL_ACTIVE_INTERVAL;
+    } else {
+        *idle_reads = idle_reads.saturating_add(1);
+        *poll_interval = external_database_poll_interval_for_idle_reads(*idle_reads);
     }
 }
 
@@ -223,7 +243,7 @@ fn notify_external_table_change_unless_local_hook_ran(
     database_key: &str,
     table_name: &str,
     local_hook_generations: &mut HashMap<String, u64>,
-) {
+) -> bool {
     let current_local_hook_generation =
         crate::storage::sqlite::instance::table_local_hook_generation(database_key, table_name)
             .unwrap_or(0);
@@ -235,13 +255,17 @@ fn notify_external_table_change_unless_local_hook_ran(
             crate::storage::sqlite::instance::record_sqlite_external_poll_changed_table_notification(
                 table_name,
             );
+            local_hook_generations.insert(table_name.to_string(), current_local_hook_generation);
+            return true;
         }
         local_hook_generations.insert(table_name.to_string(), current_local_hook_generation);
+        false
     } else {
         crate::storage::sqlite::instance::record_sqlite_external_poll_local_hook_suppression(
             table_name,
         );
         local_hook_generations.insert(table_name.to_string(), current_local_hook_generation);
+        false
     }
 }
 
@@ -333,6 +357,22 @@ mod tests {
             ),
             SQLITE_EXTERNAL_DATABASE_POLL_STANDBY_INTERVAL
         );
+    }
+
+    #[test]
+    fn external_database_poll_keeps_standby_for_local_only_changes() {
+        let mut idle_reads = SQLITE_EXTERNAL_DATABASE_POLL_BACKOFF_AFTER_IDLE_READS;
+        let mut poll_interval = SQLITE_EXTERNAL_DATABASE_POLL_STANDBY_INTERVAL;
+
+        update_external_database_poll_backoff(false, &mut idle_reads, &mut poll_interval);
+        assert_eq!(
+            poll_interval, SQLITE_EXTERNAL_DATABASE_POLL_STANDBY_INTERVAL,
+            "local-only data_version changes must not restart 1s active polling"
+        );
+
+        update_external_database_poll_backoff(true, &mut idle_reads, &mut poll_interval);
+        assert_eq!(idle_reads, 0);
+        assert_eq!(poll_interval, SQLITE_EXTERNAL_DATABASE_POLL_ACTIVE_INTERVAL);
     }
 }
 
