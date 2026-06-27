@@ -5664,7 +5664,7 @@ function ensureCtoxSmokeBinary() {
       }
     }
     const pageEvaluateStartedAt = Date.now();
-    const result = await page.evaluate(async ({ signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified }) => {
+    const result = await page.evaluate(async ({ signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, agentScopeTargetModule }) => {
       if (!globalThis.process) globalThis.process = {};
       if (typeof globalThis.process.nextTick !== 'function') {
         globalThis.process.nextTick = (callback, ...args) => Promise.resolve().then(() => callback(...args));
@@ -7639,9 +7639,11 @@ function ensureCtoxSmokeBinary() {
 
         const { BusinessOsPermissions } = await import('/shared/permissions.js');
         const targetModule = {
-          id: 'ctox',
-          title: 'CTOX',
+          ...(agentScopeTargetModule || {}),
         };
+        if (!targetModule.id) {
+          throw new Error('Business OS agent scope target module fixture is unavailable');
+        }
         const hiddenModule = {
           id: 'phase12-hidden-agent-scope-app',
           title: 'Phase 12 Hidden Agent Scope App',
@@ -13303,7 +13305,7 @@ function ensureCtoxSmokeBinary() {
           desktop_file_chunks: describeReplicationPool(appChunkReplicationState),
         },
       };
-    }, { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified });
+    }, { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, agentScopeTargetModule: agentScopeModuleFixture.module });
     outerPhaseTimings.pageEvaluateMs = Date.now() - pageEvaluateStartedAt;
 
     if (result.mode === 'business-os-ui-regression') {
