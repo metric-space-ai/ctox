@@ -1493,7 +1493,8 @@ fn instance_is_fresh(root: &Path, installed_app_root: &Path) -> bool {
 /// tabs (only meaningful in `"base"` mode; core modules are always tabs).
 fn business_os_visible_modules(root: &Path) -> std::collections::BTreeSet<String> {
     let mut set = std::collections::BTreeSet::new();
-    if let Some(raw) = crate::inference::runtime_env::get_runtime_env_value(root, VISIBLE_MODULES_KEY)
+    if let Some(raw) =
+        crate::inference::runtime_env::get_runtime_env_value(root, VISIBLE_MODULES_KEY)
     {
         for id in raw.split([',', ';', '\n', '\t', ' ']) {
             let id = id.trim();
@@ -1567,7 +1568,11 @@ fn business_os_module_remote_sha(root: &Path, module_id: &str) -> Option<String>
         .filter(|value| !value.is_empty())
 }
 
-fn business_os_set_module_remote_sha(root: &Path, module_id: &str, sha: &str) -> anyhow::Result<()> {
+fn business_os_set_module_remote_sha(
+    root: &Path,
+    module_id: &str,
+    sha: &str,
+) -> anyhow::Result<()> {
     let key = format!("CTOX_BUSINESS_OS_REMOTE_SHA__{module_id}");
     crate::inference::runtime_env::set_runtime_env_value(root, &key, sha)?;
     Ok(())
@@ -3797,18 +3802,71 @@ pub(crate) fn business_records_projection_stamp(
         hasher.update(collection.as_bytes());
     }
 
+    if sqlite_table_exists(&conn, "business_records_projection_clock")? {
+        return business_records_projection_clock_stamp(&conn, &collections, hasher);
+    }
+
+    business_records_projection_metadata_stamp(&conn, &collections, hasher)
+}
+
+fn business_records_projection_clock_stamp(
+    conn: &Connection,
+    collections: &[String],
+    mut hasher: Sha256,
+) -> anyhow::Result<BusinessRecordsProjectionStamp> {
     let mut row_count = 0usize;
     let mut latest_updated_at_ms = 0i64;
-    if let Some(sql) = business_records_projection_stamp_query(collections.len()) {
+    if let Some(sql) = business_records_projection_clock_stamp_query(collections.len()) {
         let mut statement = conn
             .prepare(&sql)
-            .context("prepare business records projection stamp query")?;
+            .context("prepare business records projection clock stamp query")?;
         let mut rows = statement
             .query(params_from_iter(collections.iter().map(String::as_str)))
-            .context("query business records projection stamp")?;
+            .context("query business records projection clock stamp")?;
         while let Some(row) = rows
             .next()
-            .context("read business records projection stamp row")?
+            .context("read business records projection clock stamp row")?
+        {
+            let collection: String = row.get(0)?;
+            let version: i64 = row.get(1)?;
+            let collection_row_count: i64 = row.get(2)?;
+            let deleted_count: i64 = row.get(3)?;
+            let collection_latest_updated_at_ms: i64 = row.get(4)?;
+            hasher.update(collection.len().to_le_bytes());
+            hasher.update(collection.as_bytes());
+            hasher.update(version.to_le_bytes());
+            hasher.update(collection_row_count.to_le_bytes());
+            hasher.update(deleted_count.to_le_bytes());
+            hasher.update(collection_latest_updated_at_ms.to_le_bytes());
+            row_count = row_count.saturating_add(collection_row_count.max(0) as usize);
+            latest_updated_at_ms = latest_updated_at_ms.max(collection_latest_updated_at_ms.max(0));
+        }
+    }
+
+    Ok(BusinessRecordsProjectionStamp {
+        row_count,
+        latest_updated_at_ms,
+        content_hash: format!("{:x}", hasher.finalize()),
+    })
+}
+
+fn business_records_projection_metadata_stamp(
+    conn: &Connection,
+    collections: &[String],
+    mut hasher: Sha256,
+) -> anyhow::Result<BusinessRecordsProjectionStamp> {
+    let mut row_count = 0usize;
+    let mut latest_updated_at_ms = 0i64;
+    if let Some(sql) = business_records_projection_metadata_stamp_query(collections.len()) {
+        let mut statement = conn
+            .prepare(&sql)
+            .context("prepare business records projection metadata stamp query")?;
+        let mut rows = statement
+            .query(params_from_iter(collections.iter().map(String::as_str)))
+            .context("query business records projection metadata stamp")?;
+        while let Some(row) = rows
+            .next()
+            .context("read business records projection metadata stamp row")?
         {
             row_count += 1;
             let collection: String = row.get(0)?;
@@ -3833,7 +3891,23 @@ pub(crate) fn business_records_projection_stamp(
     })
 }
 
-fn business_records_projection_stamp_query(collection_count: usize) -> Option<String> {
+fn business_records_projection_clock_stamp_query(collection_count: usize) -> Option<String> {
+    if collection_count == 0 {
+        return None;
+    }
+    let placeholders = std::iter::repeat("?")
+        .take(collection_count)
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "SELECT collection, version, row_count, deleted_count, latest_updated_at_ms
+         FROM business_records_projection_clock
+         WHERE collection IN ({placeholders})
+         ORDER BY collection ASC"
+    ))
+}
+
+fn business_records_projection_metadata_stamp_query(collection_count: usize) -> Option<String> {
     if collection_count == 0 {
         return None;
     }
@@ -4779,7 +4853,8 @@ pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         },
     )?;
     let version_states = module_version_states(root, &app_root).unwrap_or(Value::Null);
-    let (mut modules, lifecycle) = modules_with_projected_lifecycle(root, modules, &version_states)?;
+    let (mut modules, lifecycle) =
+        modules_with_projected_lifecycle(root, modules, &version_states)?;
     augment_modules_with_catalog_update_state(root, &app_root, &mut modules, &version_states);
     augment_modules_with_instance_visibility(root, &installed_app_root, &mut modules);
     if let Some(object) = governance.as_object_mut() {
@@ -5732,8 +5807,14 @@ fn check_module_updates(
         kind == "github",
         "update check is only supported for github-sourced apps"
     );
-    let repo = app_source.get("repo").and_then(Value::as_str).unwrap_or_default();
-    let git_ref = app_source.get("ref").and_then(Value::as_str).unwrap_or_default();
+    let repo = app_source
+        .get("repo")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let git_ref = app_source
+        .get("ref")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let subpath = app_source
         .get("subpath")
         .and_then(Value::as_str)
@@ -5832,7 +5913,10 @@ pub fn update_module_to_catalog(
     let staged_manifest_path = staging.join("module.json");
     let mut staged: Value = serde_json::from_str(&fs::read_to_string(&staged_manifest_path)?)?;
     staged["id"] = Value::String(module_id.clone());
-    if let Some(title) = installed_manifest.get("title").filter(|value| value.is_string()) {
+    if let Some(title) = installed_manifest
+        .get("title")
+        .filter(|value| value.is_string())
+    {
         staged["title"] = title.clone();
     }
     staged["entry"] = Value::String(format!("installed-modules/{module_id}/index.html"));
@@ -9502,10 +9586,7 @@ fn installed_module_app_source(installed_app_root: &Path, module_id: &str) -> Op
         .join(module_id)
         .join("module.json");
     let manifest: Value = serde_json::from_str(&fs::read_to_string(path).ok()?).ok()?;
-    manifest
-        .get("app_source")
-        .cloned()
-        .filter(Value::is_object)
+    manifest.get("app_source").cloned().filter(Value::is_object)
 }
 
 /// Fetch a github archive (SSRF-guarded) and compute the bundle hash of the
@@ -9652,13 +9733,14 @@ pub fn install_app_module(
     }
 
     // Search recursively for the directory containing module.json
-    let found_dir = find_module_json_dir_for_install(&temp_dir, &module_id, &effective_source_path)?
-        .with_context(|| {
-            format!(
-                "No module.json for module '{}' found in the downloaded repository archive",
-                module_id
-            )
-        })?;
+    let found_dir =
+        find_module_json_dir_for_install(&temp_dir, &module_id, &effective_source_path)?
+            .with_context(|| {
+                format!(
+                    "No module.json for module '{}' found in the downloaded repository archive",
+                    module_id
+                )
+            })?;
 
     // Read and parse module.json to ensure it's a valid manifest
     let manifest_path = found_dir.join("module.json");
@@ -17607,12 +17689,8 @@ pub fn accept_rxdb_business_command_with_origin(
             let session = rxdb_authenticated_session(root, &command)?;
             let module_id = source_sanitize_slug(&request.module_id);
             anyhow::ensure!(!module_id.is_empty(), "module_id is required");
-            let decision = module_policy_decision(
-                root,
-                &session,
-                BusinessOsPermission::AppsView,
-                &module_id,
-            )?;
+            let decision =
+                module_policy_decision(root, &session, BusinessOsPermission::AppsView, &module_id)?;
             if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
                 return Ok(outcome);
             }
@@ -24678,7 +24756,10 @@ fn process_systematic_research_command(
         object.insert("id".to_string(), Value::String(run_id.clone()));
         object.insert("task_id".to_string(), Value::String(task_id.clone()));
         object.insert("status".to_string(), Value::String("completed".to_string()));
-        object.insert("command_id".to_string(), Value::String(command_id.to_string()));
+        object.insert(
+            "command_id".to_string(),
+            Value::String(command_id.to_string()),
+        );
         if let Some(task_queue_id) = task_queue_id.as_deref() {
             object.insert(
                 "task_queue_id".to_string(),
@@ -24700,13 +24781,7 @@ fn process_systematic_research_command(
         completed_at_ms,
         run_payload.clone(),
     )?;
-    upsert_rxdb_collection_record(
-        root,
-        "research_runs",
-        &run_id,
-        completed_at_ms,
-        run_payload,
-    )?;
+    upsert_rxdb_collection_record(root, "research_runs", &run_id, completed_at_ms, run_payload)?;
 
     let command_payload = serde_json::json!({
         "id": command_id,
@@ -29893,6 +29968,206 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             ON business_records(collection, record_id, updated_at_ms, deleted);
         CREATE INDEX IF NOT EXISTS idx_business_records_projection_stamp
             ON business_records(collection, record_id, rev, deleted, updated_at_ms);
+        CREATE TABLE IF NOT EXISTS business_records_projection_clock (
+            collection TEXT PRIMARY KEY,
+            version INTEGER NOT NULL DEFAULT 0,
+            row_count INTEGER NOT NULL DEFAULT 0,
+            deleted_count INTEGER NOT NULL DEFAULT 0,
+            latest_updated_at_ms INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO business_records_projection_clock
+            (collection, version, row_count, deleted_count, latest_updated_at_ms)
+        SELECT source.collection, 0, 0, 0, 0
+        FROM (
+            SELECT collection
+            FROM business_records
+            GROUP BY collection
+        ) source
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM business_records_projection_clock clock
+            WHERE clock.collection = source.collection
+        );
+        UPDATE business_records_projection_clock
+        SET
+            row_count = (
+                SELECT COUNT(*)
+                FROM business_records
+                WHERE business_records.collection = business_records_projection_clock.collection
+            ),
+            deleted_count = (
+                SELECT COALESCE(SUM(deleted), 0)
+                FROM business_records
+                WHERE business_records.collection = business_records_projection_clock.collection
+            ),
+            latest_updated_at_ms = (
+                SELECT COALESCE(MAX(updated_at_ms), 0)
+                FROM business_records
+                WHERE business_records.collection = business_records_projection_clock.collection
+            )
+        WHERE EXISTS (
+            SELECT 1
+            FROM business_records
+            WHERE business_records.collection = business_records_projection_clock.collection
+        );
+        CREATE TRIGGER IF NOT EXISTS trg_business_records_projection_clock_insert
+        AFTER INSERT ON business_records
+        BEGIN
+            INSERT INTO business_records_projection_clock
+                (collection, version, row_count, deleted_count, latest_updated_at_ms)
+            SELECT NEW.collection, 0, 0, 0, 0
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM business_records_projection_clock
+                WHERE collection = NEW.collection
+            );
+            UPDATE business_records_projection_clock
+            SET
+                version = version + 1,
+                row_count = (
+                    SELECT COUNT(*)
+                    FROM business_records
+                    WHERE collection = NEW.collection
+                ),
+                deleted_count = (
+                    SELECT COALESCE(SUM(deleted), 0)
+                    FROM business_records
+                    WHERE collection = NEW.collection
+                ),
+                latest_updated_at_ms = (
+                    SELECT COALESCE(MAX(updated_at_ms), 0)
+                    FROM business_records
+                    WHERE collection = NEW.collection
+                )
+            WHERE collection = NEW.collection;
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_business_records_projection_clock_update_same_collection
+        AFTER UPDATE ON business_records
+        WHEN OLD.collection = NEW.collection
+        BEGIN
+            INSERT INTO business_records_projection_clock
+                (collection, version, row_count, deleted_count, latest_updated_at_ms)
+            SELECT NEW.collection, 0, 0, 0, 0
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM business_records_projection_clock
+                WHERE collection = NEW.collection
+            );
+            UPDATE business_records_projection_clock
+            SET
+                version = version + 1,
+                row_count = (
+                    SELECT COUNT(*)
+                    FROM business_records
+                    WHERE collection = NEW.collection
+                ),
+                deleted_count = (
+                    SELECT COALESCE(SUM(deleted), 0)
+                    FROM business_records
+                    WHERE collection = NEW.collection
+                ),
+                latest_updated_at_ms = (
+                    SELECT COALESCE(MAX(updated_at_ms), 0)
+                    FROM business_records
+                    WHERE collection = NEW.collection
+                )
+            WHERE collection = NEW.collection;
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_business_records_projection_clock_update_moved_old
+        AFTER UPDATE ON business_records
+        WHEN OLD.collection <> NEW.collection
+        BEGIN
+            INSERT INTO business_records_projection_clock
+                (collection, version, row_count, deleted_count, latest_updated_at_ms)
+            SELECT OLD.collection, 0, 0, 0, 0
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM business_records_projection_clock
+                WHERE collection = OLD.collection
+            );
+            UPDATE business_records_projection_clock
+            SET
+                version = version + 1,
+                row_count = (
+                    SELECT COUNT(*)
+                    FROM business_records
+                    WHERE collection = OLD.collection
+                ),
+                deleted_count = (
+                    SELECT COALESCE(SUM(deleted), 0)
+                    FROM business_records
+                    WHERE collection = OLD.collection
+                ),
+                latest_updated_at_ms = (
+                    SELECT COALESCE(MAX(updated_at_ms), 0)
+                    FROM business_records
+                    WHERE collection = OLD.collection
+                )
+            WHERE collection = OLD.collection;
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_business_records_projection_clock_update_moved_new
+        AFTER UPDATE ON business_records
+        WHEN OLD.collection <> NEW.collection
+        BEGIN
+            INSERT INTO business_records_projection_clock
+                (collection, version, row_count, deleted_count, latest_updated_at_ms)
+            SELECT NEW.collection, 0, 0, 0, 0
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM business_records_projection_clock
+                WHERE collection = NEW.collection
+            );
+            UPDATE business_records_projection_clock
+            SET
+                version = version + 1,
+                row_count = (
+                    SELECT COUNT(*)
+                    FROM business_records
+                    WHERE collection = NEW.collection
+                ),
+                deleted_count = (
+                    SELECT COALESCE(SUM(deleted), 0)
+                    FROM business_records
+                    WHERE collection = NEW.collection
+                ),
+                latest_updated_at_ms = (
+                    SELECT COALESCE(MAX(updated_at_ms), 0)
+                    FROM business_records
+                    WHERE collection = NEW.collection
+                )
+            WHERE collection = NEW.collection;
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_business_records_projection_clock_delete
+        AFTER DELETE ON business_records
+        BEGIN
+            INSERT INTO business_records_projection_clock
+                (collection, version, row_count, deleted_count, latest_updated_at_ms)
+            SELECT OLD.collection, 0, 0, 0, 0
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM business_records_projection_clock
+                WHERE collection = OLD.collection
+            );
+            UPDATE business_records_projection_clock
+            SET
+                version = version + 1,
+                row_count = (
+                    SELECT COUNT(*)
+                    FROM business_records
+                    WHERE collection = OLD.collection
+                ),
+                deleted_count = (
+                    SELECT COALESCE(SUM(deleted), 0)
+                    FROM business_records
+                    WHERE collection = OLD.collection
+                ),
+                latest_updated_at_ms = (
+                    SELECT COALESCE(MAX(updated_at_ms), 0)
+                    FROM business_records
+                    WHERE collection = OLD.collection
+                )
+            WHERE collection = OLD.collection;
+        END;
         CREATE INDEX IF NOT EXISTS idx_business_records_accounting_invoices_due
             ON business_records(
                 json_extract(payload_json, '$.state'),
@@ -30445,7 +30720,7 @@ mod tests {
     }
 
     #[test]
-    fn business_records_projection_stamp_uses_covering_metadata_index() -> anyhow::Result<()> {
+    fn business_records_projection_stamp_uses_projection_clock() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let collections = vec![
             "support_notes".to_string(),
@@ -30482,8 +30757,8 @@ mod tests {
             }),
         )?;
 
-        let sql = business_records_projection_stamp_query(collections.len())
-            .context("projection stamp query sql")?;
+        let sql = business_records_projection_clock_stamp_query(collections.len())
+            .context("projection clock stamp query sql")?;
         let explain_sql = format!("EXPLAIN QUERY PLAN {sql}");
         let mut stmt = conn.prepare(&explain_sql)?;
         let details = stmt
@@ -30493,10 +30768,10 @@ mod tests {
             )?
             .collect::<Result<Vec<_>, _>>()?;
         assert!(
-            details.iter().any(|detail| {
-                detail.contains("USING COVERING INDEX idx_business_records_projection_stamp")
-            }),
-            "business-record idle stamp must stay on the covering metadata index, got {details:#?}"
+            details
+                .iter()
+                .any(|detail| { detail.contains("business_records_projection_clock") }),
+            "business-record idle stamp must read the projection clock, got {details:#?}"
         );
         drop(stmt);
         drop(conn);
@@ -33366,7 +33641,10 @@ mod tests {
         let installed_app_root = resolve_business_os_installed_app_root(root);
 
         // An empty, brand-new instance provisions as the minimal base set.
-        assert_eq!(business_os_provisioning_mode(root, &installed_app_root), "base");
+        assert_eq!(
+            business_os_provisioning_mode(root, &installed_app_root),
+            "base"
+        );
 
         let mut modules = vec![
             serde_json::json!({"id": "ctox", "lifecycle": {"runtime_installed": false}}),
@@ -33378,7 +33656,8 @@ mod tests {
 
         // Installing a catalog module as a tab makes it visible.
         business_os_set_module_visible(root, "matching", true)?;
-        let mut after = vec![serde_json::json!({"id": "matching", "lifecycle": {"runtime_installed": false}})];
+        let mut after =
+            vec![serde_json::json!({"id": "matching", "lifecycle": {"runtime_installed": false}})];
         augment_modules_with_instance_visibility(root, &installed_app_root, &mut after);
         assert_eq!(after[0]["instance_visible"], Value::Bool(true));
         Ok(())
@@ -33397,7 +33676,10 @@ mod tests {
             [],
         )?;
         let installed_app_root = resolve_business_os_installed_app_root(root);
-        assert_eq!(business_os_provisioning_mode(root, &installed_app_root), "legacy");
+        assert_eq!(
+            business_os_provisioning_mode(root, &installed_app_root),
+            "legacy"
+        );
         let mut modules =
             vec![serde_json::json!({"id": "matching", "lifecycle": {"runtime_installed": false}})];
         augment_modules_with_instance_visibility(root, &installed_app_root, &mut modules);
@@ -33430,13 +33712,19 @@ mod tests {
         business_os_set_module_remote_sha(root, "extapp", "REMOTE_SHA")?;
         let mut modules = vec![github_module()];
         augment_modules_with_catalog_update_state(root, &app_root, &mut modules, &version_states);
-        assert_eq!(modules[0]["lifecycle"]["update_available"], Value::Bool(true));
+        assert_eq!(
+            modules[0]["lifecycle"]["update_available"],
+            Value::Bool(true)
+        );
 
         // Same upstream as installed => no update.
         business_os_set_module_remote_sha(root, "extapp", "INSTALLED_SHA")?;
         let mut modules = vec![github_module()];
         augment_modules_with_catalog_update_state(root, &app_root, &mut modules, &version_states);
-        assert_eq!(modules[0]["lifecycle"]["update_available"], Value::Bool(false));
+        assert_eq!(
+            modules[0]["lifecycle"]["update_available"],
+            Value::Bool(false)
+        );
         Ok(())
     }
 
@@ -39467,7 +39755,9 @@ mod tests {
             Some(task_id.as_str())
         );
         assert_eq!(
-            rxdb_run.pointer("/payload/result/knowledge_domain").and_then(Value::as_str),
+            rxdb_run
+                .pointer("/payload/result/knowledge_domain")
+                .and_then(Value::as_str),
             Some("drone_bearing_design")
         );
 
