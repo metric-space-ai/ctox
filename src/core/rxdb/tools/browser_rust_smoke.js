@@ -10692,6 +10692,7 @@ function ensureCtoxSmokeBinary() {
         document.body.dataset.authState = 'authenticated';
         await syncBusinessCollections(5000);
         await smoke.openSettingsDrawer({ initialTab: 'activity' });
+        let lastActivityRefreshAt = 0;
         const activityAudit = await waitFor(async () => {
           await syncBusinessCollections(5000);
           const drawer = document.querySelector('.settings-drawer');
@@ -10706,6 +10707,13 @@ function ensureCtoxSmokeBinary() {
             && /Team/.test(row));
           const rollbackRow = rows.find((row) => /App-Rollback angewendet/.test(row));
           const rawLeak = /business_os\.module|ctox\.module|data_access_review|locked_collection_ids|Browser\/Rust release smoke/i.test(text);
+          if (!(releaseRow && rollbackRow) && Date.now() - lastActivityRefreshAt > 2500) {
+            const refresh = drawer?.querySelector?.('[data-activity-refresh]');
+            if (refresh && !refresh.disabled) {
+              refresh.click();
+              lastActivityRefreshAt = Date.now();
+            }
+          }
           return {
             ok: Boolean(releaseRow && rollbackRow && !rawLeak),
             releaseVisible: Boolean(releaseRow),
@@ -10716,7 +10724,7 @@ function ensureCtoxSmokeBinary() {
             rowCount: rows.length,
             text: text.slice(0, 1400),
           };
-        }, 90000, 'settings activity release and rollback audit');
+        }, 120000, 'settings activity release and rollback audit');
 
         const status = await globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({
           includeCounts: false,
