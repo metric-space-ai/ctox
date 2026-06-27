@@ -37,7 +37,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260627-peer-restart-timeout-v1';
+const APP_BUILD = '20260627-effective-initial-sync-v1';
 
 ensureShellStylesheets();
 
@@ -2353,7 +2353,7 @@ async function buildAdvancedStatusSnapshot(options = {}) {
   const bodyDataset = { ...document.body?.dataset };
   const counts = options.includeCounts === false ? null : await collectAdvancedStatusCounts();
   const requiredCollectionEvidence = await collectAdvancedStatusRequiredEvidence(requiredCollections);
-  const initialSync = buildAdvancedStatusInitialSync(requiredCollections, collections);
+  const initialSync = buildAdvancedStatusInitialSync(requiredCollections, collections, requiredCollectionEvidence);
   const missingRequiredCollections = requiredCollections.filter((collection) => !isRequiredCollectionReady({
     collection,
     diagnostics: collections[collection] || null,
@@ -2843,25 +2843,35 @@ function sanitizeRxdbRuntime(value) {
   };
 }
 
-function buildAdvancedStatusInitialSync(requiredCollections, collections) {
+function buildAdvancedStatusInitialSync(requiredCollections, collections, requiredCollectionEvidence = {}) {
   const now = Date.now();
   const stallAfterMs = 45000;
   const entries = requiredCollections.map((collection) => {
     const diagnostics = collections?.[collection] || null;
+    const evidence = requiredCollectionEvidence?.[collection] || null;
     const httpBridgeReady = isHttpBridgeReady(diagnostics);
     const initialReplicationAt = diagnostics?.initialReplicationAt || (httpBridgeReady ? diagnostics?.httpBridgePulledAt : null) || null;
     const startedAt = diagnostics?.initialReplicationStartedAt || null;
     const startedMs = startedAt ? Date.parse(startedAt) : NaN;
-    const state = initialReplicationAt
-      ? 'complete'
-      : (diagnostics?.initialReplicationState || (diagnostics ? 'pending' : 'missing-diagnostics'));
     const remoteCapabilities = Array.isArray(diagnostics?.remoteCapabilities)
       ? diagnostics.remoteCapabilities
       : [];
     const checkpoint = sanitizeAdvancedStatusRemoteCheckpoint(diagnostics?.remoteCheckpoint || null);
     const checkpointEpochAdvertised = httpBridgeReady || hasAdvertisedCheckpointEpoch(diagnostics);
     const streamingReady = isRequiredCollectionStreamingReady(diagnostics, checkpointEpochAdvertised);
-    const stalledForMs = !initialReplicationAt && Number.isFinite(startedMs)
+    const effectiveReplicationComplete = Boolean(initialReplicationAt)
+      || (
+        streamingReady
+        && isRequiredCollectionReady({ collection, diagnostics, evidence })
+      );
+    const effectiveInitialReplicationAt = initialReplicationAt
+      || (effectiveReplicationComplete
+        ? (diagnostics?.connectedAt || diagnostics?.peerSessionSeenAt || startedAt || null)
+        : null);
+    const state = effectiveInitialReplicationAt
+      ? 'complete'
+      : (diagnostics?.initialReplicationState || (diagnostics ? 'pending' : 'missing-diagnostics'));
+    const stalledForMs = !effectiveInitialReplicationAt && Number.isFinite(startedMs)
       ? Math.max(0, now - startedMs)
       : 0;
     return {
@@ -2871,13 +2881,18 @@ function buildAdvancedStatusInitialSync(requiredCollections, collections) {
       connectionStatus: diagnostics?.connectionStatus || null,
       source: httpBridgeReady ? 'http-bridge' : (diagnostics?.initialReplicationSource || null),
       initialReplicationStartedAt: startedAt,
-      initialReplicationAt,
+      initialReplicationAt: effectiveInitialReplicationAt,
+      initialReplicationCompletion: initialReplicationAt
+        ? 'initial-replication'
+        : effectiveReplicationComplete
+          ? 'streaming-ready'
+          : null,
       checkpointState: checkpoint?.state || null,
       checkpointEpoch: checkpoint?.epoch || null,
       checkpointEpochAdvertised,
       streamingReady,
       checkpointCapabilityAdvertised: remoteCapabilities.includes('ctox-checkpoint-epoch-v1'),
-      stalled: !initialReplicationAt && stalledForMs >= stallAfterMs,
+      stalled: !effectiveInitialReplicationAt && stalledForMs >= stallAfterMs,
       stalledForMs,
     };
   });
