@@ -139,7 +139,12 @@ const DESKTOP_FILE_CHUNK_SIZE: usize = 16 * 1024;
 const DESKTOP_FILE_CHUNK_DECODED_SIZE: u64 = (DESKTOP_FILE_CHUNK_SIZE as u64 / 4) * 3;
 const DESKTOP_FILE_EAGER_LIMIT_BYTES: u64 = 1024 * 1024;
 const DESKTOP_FILE_SCAN_INTERVAL_SECS: u64 = 15;
-const DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS: u64 = 5 * 60;
+/// Standby reconciliation is a safety net, not the normal data path. Runtime
+/// command handlers and explicit sync paths project changes immediately; once
+/// the peer has observed an unchanged round, fallback loops must stop touching
+/// SQLite/RxDB on short idle windows.
+const BUSINESS_OS_STANDBY_RECONCILE_INTERVAL_SECS: u64 = 30 * 60;
+const DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS: u64 = BUSINESS_OS_STANDBY_RECONCILE_INTERVAL_SECS;
 const DESKTOP_FILE_SCAN_MAX_DEPTH: usize = 6;
 const DESKTOP_FILE_SCAN_MAX_FILES: usize = 200;
 const DESKTOP_FILE_CHUNK_RETAIN_GENERATIONS: usize = 2;
@@ -163,7 +168,7 @@ const DESKTOP_FILE_CHUNK_HASH_SCHEME: &str = "sha256-base64-chunk-v1";
 const CTOX_DESKTOP_FOLDER_ID: &str = "fs_ctox";
 const CTOX_DESKTOP_FOLDER_PATH: &str = "/CTOX";
 const NOTES_SYNC_ACTIVE_INTERVAL_SECS: u64 = 3;
-const NOTES_SYNC_IDLE_INTERVAL_SECS: u64 = 5 * 60;
+const NOTES_SYNC_IDLE_INTERVAL_SECS: u64 = BUSINESS_OS_STANDBY_RECONCILE_INTERVAL_SECS;
 const NOTES_SYNC_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 const CHANNEL_STATE_SYNC_INTERVAL_SECS: u64 = 3;
 const RXDB_SQLITE_DATABASE_NAME: &str = "ctox_business_os";
@@ -173,7 +178,8 @@ const MODULE_CATALOG_SYNC_INTERVAL_SECS: u64 = 3;
 const TICKET_STATE_SYNC_INTERVAL_SECS: u64 = 3;
 // Command handlers project changed Business OS data synchronously; the idle
 // loops are reconciliation fallbacks and must stay quiet in daemon standby.
-const BUSINESS_OS_PROJECTION_IDLE_SYNC_INTERVAL_SECS: u64 = 5 * 60;
+const BUSINESS_OS_PROJECTION_IDLE_SYNC_INTERVAL_SECS: u64 =
+    BUSINESS_OS_STANDBY_RECONCILE_INTERVAL_SECS;
 const BUSINESS_OS_PROJECTION_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 /// Knowledge tables are record-shape parquet content that changes far less
 /// often than ticket/queue state, and projecting them reads parquet rows off
@@ -181,12 +187,13 @@ const BUSINESS_OS_PROJECTION_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 /// catalog/row changes to the browser within seconds-to-tens-of-seconds.
 const KNOWLEDGE_TABLES_SYNC_INTERVAL_SECS: u64 = 15;
 const BUSINESS_RECORD_PROJECTION_SYNC_INTERVAL_SECS: u64 = 3;
-const BUSINESS_RECORD_PROJECTION_IDLE_SYNC_INTERVAL_SECS: u64 = 5 * 60;
+const BUSINESS_RECORD_PROJECTION_IDLE_SYNC_INTERVAL_SECS: u64 =
+    BUSINESS_OS_STANDBY_RECONCILE_INTERVAL_SECS;
 const BUSINESS_RECORD_PROJECTION_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 const BUSINESS_RECORD_PROJECTION_SYNC_LIMIT: usize = 2_000;
 const QUEUE_CHAT_REPAIR_ORPHAN_EPOCH_MS: i64 = 10 * 60 * 1_000;
 const BUSINESS_COMMAND_ACTIVE_POLL_SECS: u64 = 1;
-const BUSINESS_COMMAND_IDLE_POLL_SECS: u64 = 5 * 60;
+const BUSINESS_COMMAND_IDLE_POLL_SECS: u64 = BUSINESS_OS_STANDBY_RECONCILE_INTERVAL_SECS;
 const BUSINESS_COMMAND_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 const SUPPORT_COMMUNICATION_INTAKE_SINCE_KEY: &str = "__support_communication_intake";
 const THREADS_CTOX_RELEVANCE_COMMANDS_SINCE_KEY: &str =
