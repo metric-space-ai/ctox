@@ -16,7 +16,7 @@ use crate::rx_error::{new_rx_error, RxResult};
 pub const SQLITE_IN_MEMORY_DB_NAME: &str = ":memory:";
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(10);
 const SQLITE_EXTERNAL_DATABASE_POLL_ACTIVE_INTERVAL: Duration = Duration::from_secs(1);
-const SQLITE_EXTERNAL_DATABASE_POLL_STANDBY_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const SQLITE_EXTERNAL_DATABASE_POLL_STANDBY_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const SQLITE_EXTERNAL_DATABASE_POLL_BACKOFF_AFTER_IDLE_READS: u32 = 3;
 const SQLITE_CHANGED_TABLES_TABLE: &str = "__rxdb_changed_tables";
 
@@ -356,6 +356,10 @@ mod tests {
                 SQLITE_EXTERNAL_DATABASE_POLL_BACKOFF_AFTER_IDLE_READS,
             ),
             SQLITE_EXTERNAL_DATABASE_POLL_STANDBY_INTERVAL
+        );
+        assert!(
+            SQLITE_EXTERNAL_DATABASE_POLL_STANDBY_INTERVAL >= Duration::from_secs(30 * 60),
+            "standby poll must not be a frequent daemon idle heartbeat"
         );
     }
 
