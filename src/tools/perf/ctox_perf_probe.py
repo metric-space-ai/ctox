@@ -26,31 +26,84 @@ from typing import Any
 
 SCHEMA = "ctox.perf_probe.v1"
 DEFAULT_PROCESS_NAME = "ctox-real"
+EXPECTED_NATIVE_PEER_STATUS_VERSION = "ctox-native-rxdb-peer-status-v1"
+EXPECTED_NATIVE_PEER_PERFORMANCE_SCHEMA = "ctox.native_peer.performance.v1"
+EXPECTED_NATIVE_PEER_SQLITE_COUNTER_SCHEMA = "ctox.rxdb.sqlite.runtime_counters.v1"
+EXPECTED_NATIVE_PEER_SUBJECT_COUNTER_SCHEMA = "ctox.rxdb.subjects.runtime_counters.v1"
 DEFAULT_ASSERT_CPU_AVG = 2.0
 DEFAULT_ASSERT_CPU_P95 = 5.0
 DEFAULT_ASSERT_STATUS_P95_MS = 100.0
 DEFAULT_ASSERT_DB_GROWTH_BYTES = 0
+DEFAULT_ASSERT_DB_FILE_GROWTH_BYTES = 0
+DEFAULT_ASSERT_HEARTBEAT_MAX_AGE_MS = 30_000
+DEFAULT_ASSERT_DB_METRIC_DELTAS: tuple[tuple[str, float], ...] = (
+    ("*.page_count", 0.0),
+    ("*.database_page_bytes", 0.0),
+    ("*.freelist_count", 0.0),
+    ("*.freelist_bytes", 0.0),
+    ("*.dbstat.*.bytes", 0.0),
+    ("*.rxdb_collections.*.row_count", 0.0),
+    ("*.rxdb_collections.*.data_bytes", 0.0),
+    ("*.rxdb_collections.*.tombstone_count", 0.0),
+    ("*.desktop_file_chunks.row_count", 0.0),
+    ("*.desktop_file_chunks.live_generation_count", 0.0),
+    ("*.desktop_file_chunks.live_bytes_sampled", 0.0),
+    ("*.desktop_file_chunks.stale_generation_count", 0.0),
+    ("*.desktop_file_chunks.stale_bytes_sampled", 0.0),
+    ("*.desktop_file_chunks.tombstone_rows_sampled", 0.0),
+    ("*.desktop_file_chunks.tombstone_bytes_sampled", 0.0),
+)
 DEFAULT_ASSERT_HEARTBEAT_DELTAS: tuple[tuple[str, float], ...] = (
     ("rxdb_sqlite.bulk_write_calls", 0.0),
     ("rxdb_sqlite.bulk_write_rows", 0.0),
     ("rxdb_sqlite.changed_documents_since_calls", 0.0),
+    ("rxdb_sqlite.changed_documents_since_results", 0.0),
+    ("rxdb_sqlite.external_poll_data_version_reads", 0.0),
+    ("rxdb_sqlite.external_poll_changed_table_reads", 0.0),
     ("rxdb_sqlite.count_calls", 0.0),
     ("rxdb_sqlite.count_fallback_query_calls", 0.0),
     ("rxdb_sqlite.find_documents_by_id_calls", 0.0),
     ("rxdb_sqlite.query_calls", 0.0),
+    ("rxdb_sqlite.query_fallback_calls", 0.0),
+    ("rxdb_sqlite.query_fallback_rows_visited", 0.0),
+    ("rxdb_sqlite.query_fallback_indexed_candidate_calls", 0.0),
+    ("rxdb_sqlite.query_fallback_too_broad_calls", 0.0),
+    ("rxdb_sqlite.query_fallback_by_collection.*", 0.0),
+    ("rxdb_sqlite.query_fallback_by_operator.*", 0.0),
+    ("rxdb_sqlite.query_fallback_by_collection_operator.*.*", 0.0),
     ("rxdb_sqlite.query_stream_calls", 0.0),
     ("rxdb_sqlite.query_stream_unsupported_calls", 0.0),
     ("rxdb_sqlite.read_only_open_failures", 0.0),
+    ("rxdb_sqlite.statements_executed", 0.0),
+    ("rxdb_sqlite.statement_elapsed_ns_total", 0.0),
+    ("rxdb_sqlite.statement_elapsed_ge_1ms", 0.0),
     ("rxdb_sqlite.write_transactions_started", 0.0),
     ("rxdb_sqlite.write_transactions_committed", 0.0),
     ("rxdb_sqlite.write_transactions_failed", 0.0),
     ("rxdb_sqlite.writer_lock_acquire_calls", 0.0),
+    ("rxdb_sqlite.writer_lock_wait_ns_total", 0.0),
+    ("rxdb_sqlite.writer_lock_wait_ge_1ms", 0.0),
     ("rxdb_sqlite.writer_lock_held_ns_total", 0.0),
+    ("rxdb_sqlite.writer_lock_held_ge_1ms", 0.0),
     ("rxdb_sqlite.writer_fallbacks", 0.0),
     ("rxdb_subjects.lagged_items_total", 0.0),
     ("loops.*.active_ticks", 0.0),
     ("loops.*.error_ticks", 0.0),
     ("loops.*.rows", 0.0),
+)
+DEFAULT_ASSERT_SERVICE_STATUS_DELTAS: tuple[tuple[str, float], ...] = (
+    ("channel_sync.*.activity_runs", 0.0),
+    ("channel_sync.*.no_activity_runs", 0.0),
+    ("channel_sync.*.error_runs", 0.0),
+)
+DEFAULT_ASSERT_SERVICE_PERFORMANCE_DELTAS: tuple[tuple[str, float], ...] = (
+    ("status_requests.total_requests", 0.0),
+    ("status_requests.ipc_status_requests", 0.0),
+    ("status_requests.http_status_requests", 0.0),
+)
+DEFAULT_ASSERT_SYNC_RUN_DELTAS: tuple[tuple[str, float], ...] = (
+    ("*.ticket_sync_runs.row_count", 0.0),
+    ("*.communication_sync_runs.row_count", 0.0),
 )
 DEFAULT_DATABASES = (
     ("core", "runtime/ctox.sqlite3"),
@@ -90,6 +143,14 @@ def parse_args() -> argparse.Namespace:
         "--skip-heartbeat",
         action="store_true",
         help="Skip direct native RxDB peer heartbeat snapshots around CPU sampling.",
+    )
+    parser.add_argument(
+        "--skip-service-performance",
+        action="store_true",
+        help=(
+            "Skip direct service-performance status-file snapshots around CPU sampling. "
+            "Use only for scenarios that intentionally create status load."
+        ),
     )
     parser.add_argument(
         "--status-command",
@@ -179,6 +240,26 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--max-db-file-growth-bytes",
+        type=int,
+        help=(
+            "Maximum positive growth for any SQLite main/WAL/SHM/journal file "
+            f"during the CPU sample window. Default with --assert-idle: "
+            f"{DEFAULT_ASSERT_DB_FILE_GROWTH_BYTES}."
+        ),
+    )
+    parser.add_argument(
+        "--max-db-metric-delta",
+        action="append",
+        default=[],
+        metavar="GLOB=VALUE",
+        help=(
+            "Maximum database diagnostic metric delta during the CPU sample window. "
+            "May be repeated and supports shell-style globs, for example "
+            "'*.rxdb_collections.*.tombstone_count=0'."
+        ),
+    )
+    parser.add_argument(
         "--max-heartbeat-delta",
         action="append",
         default=[],
@@ -187,6 +268,47 @@ def parse_args() -> argparse.Namespace:
             "Maximum native peer heartbeat performance delta for a flattened metric key. "
             "May be repeated and supports shell-style globs, for example "
             "'rxdb_sqlite.query_calls=0' or 'loops.*.rows=0'."
+        ),
+    )
+    parser.add_argument(
+        "--max-heartbeat-age-ms",
+        type=int,
+        help=(
+            "Maximum age of runtime/business-os-rxdb-peer.status.json heartbeat "
+            f"snapshots. Default with --assert-idle: {DEFAULT_ASSERT_HEARTBEAT_MAX_AGE_MS}."
+        ),
+    )
+    parser.add_argument(
+        "--max-service-status-delta",
+        action="append",
+        default=[],
+        metavar="GLOB=VALUE",
+        help=(
+            "Maximum service status performance delta for a flattened metric key. "
+            "May be repeated and supports shell-style globs, for example "
+            "'channel_sync.*.no_activity_runs=0'."
+        ),
+    )
+    parser.add_argument(
+        "--max-service-performance-delta",
+        action="append",
+        default=[],
+        metavar="GLOB=VALUE",
+        help=(
+            "Maximum service performance-file delta during the CPU sample window. "
+            "May be repeated and supports shell-style globs, for example "
+            "'status_requests.total_requests=0'."
+        ),
+    )
+    parser.add_argument(
+        "--max-sync-run-delta",
+        action="append",
+        default=[],
+        metavar="GLOB=VALUE",
+        help=(
+            "Maximum sync-run table delta during the CPU sample window. "
+            "May be repeated and supports shell-style globs, for example "
+            "'*.ticket_sync_runs.row_count=0'."
         ),
     )
     args = parser.parse_args()
@@ -212,11 +334,37 @@ def parse_args() -> argparse.Namespace:
             parse_metric_threshold(raw)
         except ValueError as err:
             parser.error(f"--max-heartbeat-delta {err}")
+    if args.max_heartbeat_age_ms is not None and args.max_heartbeat_age_ms < 0:
+        parser.error("--max-heartbeat-age-ms must be >= 0")
+    for raw in args.max_db_metric_delta:
+        try:
+            parse_metric_threshold(raw)
+        except ValueError as err:
+            parser.error(f"--max-db-metric-delta {err}")
+    for raw in args.max_service_status_delta:
+        try:
+            parse_metric_threshold(raw)
+        except ValueError as err:
+            parser.error(f"--max-service-status-delta {err}")
+    for raw in args.max_service_performance_delta:
+        try:
+            parse_metric_threshold(raw)
+        except ValueError as err:
+            parser.error(f"--max-service-performance-delta {err}")
+    for raw in args.max_sync_run_delta:
+        try:
+            parse_metric_threshold(raw)
+        except ValueError as err:
+            parser.error(f"--max-sync-run-delta {err}")
     return args
 
 
 def utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def epoch_ms() -> int:
+    return int(time.time() * 1000)
 
 
 def percentile(values: list[float], pct: float) -> float | None:
@@ -282,6 +430,7 @@ def database_file_snapshot(root: Path, extras: list[str]) -> dict[str, Any]:
             "main": size_or_zero(path),
             "wal": size_or_zero(Path(str(path) + "-wal")),
             "shm": size_or_zero(Path(str(path) + "-shm")),
+            "journal": size_or_zero(Path(str(path) + "-journal")),
         }
         database_total = sum(files.values())
         total_bytes += database_total
@@ -327,6 +476,18 @@ def database_file_growth(
             growth = after_total - before_total
         else:
             growth = None
+        before_files = before_item.get("files") if isinstance(before_item, dict) else None
+        after_files = after_item.get("files")
+        file_growth = {}
+        if isinstance(before_files, dict) and isinstance(after_files, dict):
+            for component in sorted(set(before_files) | set(after_files)):
+                before_size = before_files.get(component)
+                after_size = after_files.get(component)
+                if isinstance(before_size, int) and isinstance(after_size, int):
+                    file_growth[component] = after_size - before_size
+        positive_file_growth = {
+            component: delta for component, delta in file_growth.items() if delta > 0
+        }
         databases.append(
             {
                 "name": after_item.get("name"),
@@ -334,6 +495,9 @@ def database_file_growth(
                 "before_total_bytes": before_total,
                 "after_total_bytes": after_total,
                 "growth_bytes": growth,
+                "file_growth_bytes": file_growth,
+                "positive_file_growth_bytes": positive_file_growth,
+                "positive_file_growth_total_bytes": sum(positive_file_growth.values()),
             }
         )
     total_before = before.get("total_bytes")
@@ -353,11 +517,125 @@ def database_file_growth(
     }
 
 
+def sync_run_snapshot(root: Path, extras: list[str]) -> dict[str, Any]:
+    databases = []
+    for name, path in database_specs(root, extras):
+        database_report: dict[str, Any] = {
+            "name": name,
+            "path": str(path),
+            "exists": path.exists(),
+            "tables": {},
+        }
+        if path.exists():
+            try:
+                with connect_read_only(path) as conn:
+                    tables = set(table_names(conn))
+                    for table in ("ticket_sync_runs", "communication_sync_runs"):
+                        if table in tables:
+                            database_report["tables"][table] = inspect_sync_run_table(conn, table)
+            except Exception as err:
+                database_report["error"] = f"{type(err).__name__}: {err}"
+        databases.append(database_report)
+    return {
+        "at": utc_now(),
+        "databases": databases,
+        "note": "Sync-run counts are read-only snapshots taken around process CPU sampling.",
+    }
+
+
+def inspect_sync_run_table(conn: sqlite3.Connection, table: str) -> dict[str, Any]:
+    columns = table_columns(conn, table)
+    quoted = quote_identifier(table)
+    report: dict[str, Any] = {
+        "row_count": query_scalar(conn, f"SELECT COUNT(*) FROM {quoted}") or 0,
+    }
+    if "status" in columns:
+        report["ok_count"] = query_scalar(conn, f"SELECT COUNT(*) FROM {quoted} WHERE status = 'ok'") or 0
+        report["failed_count"] = query_scalar(
+            conn,
+            f"SELECT COUNT(*) FROM {quoted} WHERE status != 'ok'",
+        ) or 0
+    elif "ok" in columns:
+        report["ok_count"] = query_scalar(
+            conn,
+            f"SELECT SUM(CASE WHEN COALESCE(ok, 0) != 0 THEN 1 ELSE 0 END) FROM {quoted}",
+        ) or 0
+        report["failed_count"] = query_scalar(
+            conn,
+            f"SELECT SUM(CASE WHEN COALESCE(ok, 0) = 0 THEN 1 ELSE 0 END) FROM {quoted}",
+        ) or 0
+    for column in (
+        "fetched_count",
+        "stored_count",
+        "stored_ticket_count",
+        "stored_event_count",
+    ):
+        if column in columns:
+            report[f"{column}_total"] = query_scalar(
+                conn,
+                f"SELECT COALESCE(SUM({quote_identifier(column)}), 0) FROM {quoted}",
+            ) or 0
+    for column in ("created_at", "finished_at", "started_at"):
+        if column in columns:
+            report[f"{column}_max"] = query_scalar(
+                conn,
+                f"SELECT MAX({quote_identifier(column)}) FROM {quoted}",
+            )
+    return report
+
+
+def sync_run_snapshot_numbers(snapshot: dict[str, Any] | None) -> dict[str, float]:
+    if not isinstance(snapshot, dict):
+        return {}
+    numbers: dict[str, float] = {}
+    databases = snapshot.get("databases")
+    if not isinstance(databases, list):
+        return numbers
+    for database in databases:
+        if not isinstance(database, dict):
+            continue
+        name = database.get("name")
+        tables = database.get("tables")
+        if not isinstance(name, str) or not isinstance(tables, dict):
+            continue
+        for table_name, table_report in tables.items():
+            if not isinstance(table_name, str) or not isinstance(table_report, dict):
+                continue
+            for key, value in flatten_numeric_values(table_report).items():
+                numbers[f"{name}.{table_name}.{key}"] = value
+    return numbers
+
+
+def sync_run_snapshot_delta(
+    before: dict[str, Any] | None,
+    after: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return None
+    before_numbers = sync_run_snapshot_numbers(before)
+    after_numbers = sync_run_snapshot_numbers(after)
+    deltas = {}
+    for key in sorted(set(before_numbers) & set(after_numbers)):
+        delta = after_numbers[key] - before_numbers[key]
+        if delta:
+            deltas[key] = delta
+    return {
+        "before_at": before.get("at"),
+        "after_at": after.get("at"),
+        "numeric_deltas": deltas,
+        "note": (
+            "Deltas count sync-run rows and totals created during the CPU sample window "
+            "without invoking ctox status."
+        ),
+    }
+
+
 def read_json_file(path: Path) -> dict[str, Any]:
     report: dict[str, Any] = {
         "path": str(path),
         "exists": path.exists(),
         "read_at": utc_now(),
+        "read_at_epoch_ms": epoch_ms(),
     }
     if not path.exists():
         return report
@@ -370,6 +648,10 @@ def read_json_file(path: Path) -> dict[str, Any]:
 
 def read_native_peer_heartbeat(root: Path) -> dict[str, Any]:
     return read_json_file(root / "runtime" / "business-os-rxdb-peer.status.json")
+
+
+def read_service_performance_status(root: Path) -> dict[str, Any]:
+    return read_json_file(root / "runtime" / "service-performance.status.json")
 
 
 def flatten_numeric_values(value: Any, prefix: str = "") -> dict[str, float]:
@@ -422,15 +704,294 @@ def native_peer_heartbeat_delta(
     }
 
 
-def resolve_pid(pid: int | None, process_name: str) -> dict[str, Any]:
-    if pid is not None:
-        return {
-            "pid": pid,
-            "process_name": process_name,
-            "source": "argument",
-            "candidates": [pid],
-        }
+def selected_process_pid(report: dict[str, Any], args: argparse.Namespace) -> int | None:
+    if args.pid is not None:
+        return args.pid
+    process = report.get("process")
+    if not isinstance(process, dict):
+        return None
+    pid_resolution = process.get("pid_resolution")
+    if not isinstance(pid_resolution, dict):
+        return None
+    pid = pid_resolution.get("pid")
+    return pid if isinstance(pid, int) else None
 
+
+def heartbeat_snapshot_age_ms(snapshot: dict[str, Any]) -> int | None:
+    payload = snapshot.get("payload") if isinstance(snapshot, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    updated_at_ms = payload.get("updated_at_ms")
+    read_at_epoch_ms = snapshot.get("read_at_epoch_ms")
+    if not isinstance(updated_at_ms, (int, float)) or isinstance(updated_at_ms, bool):
+        return None
+    if not isinstance(read_at_epoch_ms, (int, float)) or isinstance(read_at_epoch_ms, bool):
+        read_at_epoch_ms = epoch_ms()
+    return max(0, int(read_at_epoch_ms) - int(updated_at_ms))
+
+
+def validate_native_peer_heartbeat_health(
+    report: dict[str, Any],
+    args: argparse.Namespace,
+    max_age_ms: int | None,
+    failures: list[dict[str, Any]],
+    warnings: list[str],
+) -> None:
+    if max_age_ms is None:
+        return
+    heartbeat = report.get("native_peer_heartbeat")
+    if not isinstance(heartbeat, dict):
+        add_threshold_failure(
+            failures,
+            metric="native_peer_heartbeat",
+            actual=None,
+            limit="present",
+            message="native peer heartbeat snapshots are unavailable",
+        )
+        return
+    if heartbeat.get("skipped") is True:
+        add_threshold_failure(
+            failures,
+            metric="native_peer_heartbeat.skipped",
+            actual=True,
+            limit=False,
+            message="native peer heartbeat snapshots were skipped",
+        )
+        return
+
+    expected_pid = selected_process_pid(report, args)
+    seen_peer_session_ids: set[str] = set()
+    for label in ("before", "after"):
+        snapshot = heartbeat.get(label)
+        if not isinstance(snapshot, dict):
+            add_threshold_failure(
+                failures,
+                metric=f"native_peer_heartbeat.{label}",
+                actual=None,
+                limit="present",
+                message=f"native peer heartbeat {label} snapshot is unavailable",
+            )
+            continue
+        if snapshot.get("exists") is not True:
+            add_threshold_failure(
+                failures,
+                metric=f"native_peer_heartbeat.{label}.exists",
+                actual=snapshot.get("exists"),
+                limit=True,
+                message=f"native peer heartbeat {label} file is missing",
+            )
+            continue
+        if snapshot.get("error"):
+            add_threshold_failure(
+                failures,
+                metric=f"native_peer_heartbeat.{label}.error",
+                actual=snapshot.get("error"),
+                limit=None,
+                message=f"native peer heartbeat {label} file could not be read",
+            )
+            continue
+        payload = snapshot.get("payload")
+        if not isinstance(payload, dict):
+            add_threshold_failure(
+                failures,
+                metric=f"native_peer_heartbeat.{label}.payload",
+                actual=payload,
+                limit="object",
+                message=f"native peer heartbeat {label} payload is unavailable",
+            )
+            continue
+
+        version = payload.get("version")
+        if version != EXPECTED_NATIVE_PEER_STATUS_VERSION:
+            add_threshold_failure(
+                failures,
+                metric=f"native_peer_heartbeat.{label}.payload.version",
+                actual=version,
+                limit=EXPECTED_NATIVE_PEER_STATUS_VERSION,
+                message=f"native peer heartbeat {label} has unexpected schema version",
+            )
+        running = payload.get("running")
+        if running is not True:
+            add_threshold_failure(
+                failures,
+                metric=f"native_peer_heartbeat.{label}.payload.running",
+                actual=running,
+                limit=True,
+                message=f"native peer heartbeat {label} does not report running=true",
+            )
+        replication_up = payload.get("replicationUp")
+        if replication_up is not True:
+            add_threshold_failure(
+                failures,
+                metric=f"native_peer_heartbeat.{label}.payload.replicationUp",
+                actual=replication_up,
+                limit=True,
+                message=f"native peer heartbeat {label} does not report replicationUp=true",
+            )
+        heartbeat_pid = payload.get("pid")
+        if expected_pid is not None and heartbeat_pid != expected_pid:
+            add_threshold_failure(
+                failures,
+                metric=f"native_peer_heartbeat.{label}.payload.pid",
+                actual=heartbeat_pid,
+                limit=expected_pid,
+                message=f"native peer heartbeat {label} belongs to a different process",
+            )
+        peer_session_id = payload.get("peer_session_id")
+        if isinstance(peer_session_id, str) and peer_session_id.strip():
+            seen_peer_session_ids.add(peer_session_id)
+        else:
+            add_threshold_failure(
+                failures,
+                metric=f"native_peer_heartbeat.{label}.payload.peer_session_id",
+                actual=peer_session_id,
+                limit="non-empty",
+                message=f"native peer heartbeat {label} has no peer_session_id",
+            )
+        database_path = payload.get("database_path")
+        if not isinstance(database_path, str) or not database_path.strip():
+            add_threshold_failure(
+                failures,
+                metric=f"native_peer_heartbeat.{label}.payload.database_path",
+                actual=database_path,
+                limit="non-empty",
+                message=f"native peer heartbeat {label} has no database_path",
+            )
+
+        age_ms = heartbeat_snapshot_age_ms(snapshot)
+        snapshot["heartbeat_age_ms"] = age_ms
+        check_numeric_limit(
+            failures,
+            warnings,
+            metric=f"native_peer_heartbeat.{label}.heartbeat_age_ms",
+            actual=age_ms,
+            limit=max_age_ms,
+            missing_message=f"native peer heartbeat {label} age is unavailable",
+        )
+
+        performance = payload.get("performance")
+        if not isinstance(performance, dict):
+            add_threshold_failure(
+                failures,
+                metric=f"native_peer_heartbeat.{label}.payload.performance",
+                actual=performance,
+                limit="object",
+                message=f"native peer heartbeat {label} performance counters are unavailable",
+            )
+            continue
+        performance_schema = performance.get("schema")
+        if performance_schema != EXPECTED_NATIVE_PEER_PERFORMANCE_SCHEMA:
+            add_threshold_failure(
+                failures,
+                metric=f"native_peer_heartbeat.{label}.payload.performance.schema",
+                actual=performance_schema,
+                limit=EXPECTED_NATIVE_PEER_PERFORMANCE_SCHEMA,
+                message=f"native peer heartbeat {label} performance schema is unexpected",
+            )
+        sqlite_schema = (
+            performance.get("rxdb_sqlite", {}).get("schema")
+            if isinstance(performance.get("rxdb_sqlite"), dict)
+            else None
+        )
+        if sqlite_schema != EXPECTED_NATIVE_PEER_SQLITE_COUNTER_SCHEMA:
+            add_threshold_failure(
+                failures,
+                metric=f"native_peer_heartbeat.{label}.payload.performance.rxdb_sqlite.schema",
+                actual=sqlite_schema,
+                limit=EXPECTED_NATIVE_PEER_SQLITE_COUNTER_SCHEMA,
+                message=f"native peer heartbeat {label} SQLite counter schema is unexpected",
+            )
+        subjects_schema = (
+            performance.get("rxdb_subjects", {}).get("schema")
+            if isinstance(performance.get("rxdb_subjects"), dict)
+            else None
+        )
+        if subjects_schema != EXPECTED_NATIVE_PEER_SUBJECT_COUNTER_SCHEMA:
+            add_threshold_failure(
+                failures,
+                metric=f"native_peer_heartbeat.{label}.payload.performance.rxdb_subjects.schema",
+                actual=subjects_schema,
+                limit=EXPECTED_NATIVE_PEER_SUBJECT_COUNTER_SCHEMA,
+                message=f"native peer heartbeat {label} subject counter schema is unexpected",
+            )
+
+    if len(seen_peer_session_ids) > 1:
+        add_threshold_failure(
+            failures,
+            metric="native_peer_heartbeat.peer_session_id",
+            actual=sorted(seen_peer_session_ids),
+            limit="unchanged",
+            message="native peer heartbeat peer_session_id changed during sampling",
+        )
+
+
+def service_performance_status_delta(
+    before: dict[str, Any] | None,
+    after: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not before or not after:
+        return None
+    before_payload = before.get("payload")
+    after_payload = after.get("payload")
+    if not isinstance(before_payload, dict) or not isinstance(after_payload, dict):
+        return None
+    before_perf = before_payload.get("performance")
+    after_perf = after_payload.get("performance")
+    if not isinstance(before_perf, dict) or not isinstance(after_perf, dict):
+        return None
+    before_numbers = flatten_numeric_values(before_perf)
+    after_numbers = flatten_numeric_values(after_perf)
+    deltas = {}
+    for key in sorted(set(before_numbers) & set(after_numbers)):
+        delta = after_numbers[key] - before_numbers[key]
+        if delta:
+            deltas[key] = delta
+    return {
+        "performance_numeric_deltas": deltas,
+        "note": (
+            "Deltas are collected from runtime/service-performance.status.json "
+            "without invoking ctox status."
+        ),
+    }
+
+
+def service_status_performance_delta(samples: list[dict[str, Any]]) -> dict[str, Any] | None:
+    first_perf = next(
+        (
+            sample.get("performance")
+            for sample in samples
+            if isinstance(sample.get("performance"), dict)
+        ),
+        None,
+    )
+    last_perf = next(
+        (
+            sample.get("performance")
+            for sample in reversed(samples)
+            if isinstance(sample.get("performance"), dict)
+        ),
+        None,
+    )
+    if not isinstance(first_perf, dict) or not isinstance(last_perf, dict):
+        return None
+
+    before_numbers = flatten_numeric_values(first_perf)
+    after_numbers = flatten_numeric_values(last_perf)
+    deltas = {}
+    for key in sorted(set(before_numbers) & set(after_numbers)):
+        delta = after_numbers[key] - before_numbers[key]
+        if delta:
+            deltas[key] = delta
+    return {
+        "performance_numeric_deltas": deltas,
+        "note": (
+            "Deltas are collected from separate ctox status samples after "
+            "process CPU sampling."
+        ),
+    }
+
+
+def pgrep_candidates(process_name: str) -> dict[str, Any]:
     try:
         result = subprocess.run(
             ["pgrep", "-x", process_name],
@@ -459,12 +1020,42 @@ def resolve_pid(pid: int | None, process_name: str) -> dict[str, Any]:
             continue
 
     return {
-        "pid": max(candidates) if candidates else None,
         "process_name": process_name,
         "source": "pgrep -x",
         "candidates": candidates,
         "returncode": result.returncode,
         "stderr": result.stderr.strip() or None,
+    }
+
+
+def resolve_pid(pid: int | None, process_name: str) -> dict[str, Any]:
+    inventory = pgrep_candidates(process_name)
+    candidates = [
+        candidate for candidate in inventory.get("candidates", []) if isinstance(candidate, int)
+    ]
+    if pid is not None:
+        all_candidates = sorted(set(candidates + [pid]))
+        return {
+            "pid": pid,
+            "process_name": process_name,
+            "source": "argument",
+            "candidates": all_candidates,
+            "pgrep": inventory,
+            "extra_candidate_pids": [candidate for candidate in all_candidates if candidate != pid],
+        }
+
+    selected = max(candidates) if candidates else None
+    return {
+        "pid": selected,
+        "process_name": process_name,
+        "source": inventory.get("source"),
+        "candidates": candidates,
+        "returncode": inventory.get("returncode"),
+        "stderr": inventory.get("stderr"),
+        "extra_candidate_pids": [
+            candidate for candidate in candidates if selected is not None and candidate != selected
+        ],
+        "error": inventory.get("error"),
     }
 
 
@@ -511,6 +1102,124 @@ def read_process_sample(pid: int) -> dict[str, Any]:
     return sample
 
 
+def process_inventory_snapshot() -> dict[str, Any]:
+    result = subprocess.run(
+        ["ps", "axo", "pid=,ppid=,pgid=,pcpu=,comm="],
+        text=True,
+        capture_output=True,
+        timeout=5,
+        check=False,
+    )
+    report: dict[str, Any] = {
+        "at": utc_now(),
+        "returncode": result.returncode,
+        "processes": [],
+    }
+    if result.returncode != 0:
+        report["error"] = (result.stderr.strip() or "process inventory failed")[:400]
+        return report
+    processes = []
+    for line in result.stdout.splitlines():
+        parts = line.strip().split(None, 4)
+        if len(parts) < 5:
+            continue
+        pid_value = int_or_none(parts[0])
+        ppid_value = int_or_none(parts[1])
+        pgid_value = int_or_none(parts[2])
+        cpu_value = float_or_none(parts[3])
+        if pid_value is None:
+            continue
+        processes.append(
+            {
+                "pid": pid_value,
+                "ppid": ppid_value,
+                "pgid": pgid_value,
+                "cpu_percent": cpu_value,
+                "comm": parts[4],
+            }
+        )
+    report["processes"] = processes
+    return report
+
+
+def descendants_by_ppid(processes: list[dict[str, Any]], root_pid: int) -> set[int]:
+    children_by_parent: dict[int, list[int]] = {}
+    for process in processes:
+        pid_value = process.get("pid")
+        ppid_value = process.get("ppid")
+        if isinstance(pid_value, int) and isinstance(ppid_value, int):
+            children_by_parent.setdefault(ppid_value, []).append(pid_value)
+    descendants: set[int] = set()
+    stack = list(children_by_parent.get(root_pid, []))
+    while stack:
+        child = stack.pop()
+        if child in descendants:
+            continue
+        descendants.add(child)
+        stack.extend(children_by_parent.get(child, []))
+    return descendants
+
+
+def process_scope_snapshot(selected_pid: int, candidate_pids: list[int]) -> dict[str, Any]:
+    inventory = process_inventory_snapshot()
+    processes = inventory.get("processes")
+    if not isinstance(processes, list):
+        return {
+            "inventory": inventory,
+            "scope_pids": [selected_pid],
+            "selected_pid": selected_pid,
+            "cpu_percent_total": None,
+            "processes": [],
+            "error": "process inventory unavailable",
+        }
+    by_pid = {
+        process.get("pid"): process
+        for process in processes
+        if isinstance(process, dict) and isinstance(process.get("pid"), int)
+    }
+    selected = by_pid.get(selected_pid)
+    selected_pgid = selected.get("pgid") if isinstance(selected, dict) else None
+    scope_pids = set(candidate_pids)
+    scope_pids.add(selected_pid)
+    if isinstance(selected_pgid, int):
+        for process in processes:
+            if isinstance(process, dict) and process.get("pgid") == selected_pgid:
+                pid_value = process.get("pid")
+                if isinstance(pid_value, int):
+                    scope_pids.add(pid_value)
+    scope_pids.update(descendants_by_ppid(processes, selected_pid))
+    scoped = [
+        process
+        for pid_value, process in sorted(by_pid.items())
+        if isinstance(pid_value, int) and pid_value in scope_pids
+    ]
+    cpu_values = [
+        float(process["cpu_percent"])
+        for process in scoped
+        if isinstance(process.get("cpu_percent"), (int, float))
+        and not isinstance(process.get("cpu_percent"), bool)
+    ]
+    return {
+        "inventory": {
+            "at": inventory.get("at"),
+            "returncode": inventory.get("returncode"),
+            "process_count": len(processes),
+            "error": inventory.get("error"),
+        },
+        "selected_pid": selected_pid,
+        "selected_pgid": selected_pgid,
+        "scope_pids": sorted(scope_pids),
+        "scope_process_count": len(scoped),
+        "candidate_pids": candidate_pids,
+        "processes": scoped,
+        "cpu_percent_total": sum(cpu_values) if cpu_values else None,
+        "note": (
+            "Scope includes all ctox-real candidates, the selected process group, "
+            "and descendants of the selected PID."
+        ),
+    }
+
+
 def sample_process(pid: int | None, process_name: str, count: int, interval: float) -> dict[str, Any]:
     resolved = resolve_pid(pid, process_name)
     selected_pid = resolved.get("pid")
@@ -523,9 +1232,43 @@ def sample_process(pid: int | None, process_name: str, count: int, interval: flo
             "note": "No matching process found; pass --pid to sample a specific process.",
         }
 
+    candidate_pids = sorted(
+        {
+            candidate
+            for candidate in resolved.get("candidates", [])
+            if isinstance(candidate, int) and candidate > 0
+        }
+    )
+    if isinstance(selected_pid, int) and selected_pid > 0:
+        candidate_pids = sorted(set(candidate_pids + [int(selected_pid)]))
+
     samples = []
     for index in range(count):
-        samples.append(read_process_sample(int(selected_pid)))
+        candidate_samples = [read_process_sample(candidate) for candidate in candidate_pids]
+        scope_sample = process_scope_snapshot(int(selected_pid), candidate_pids)
+        selected_sample = next(
+            (
+                sample
+                for sample in candidate_samples
+                if sample.get("pid") == int(selected_pid)
+            ),
+            None,
+        )
+        if selected_sample is None:
+            selected_sample = read_process_sample(int(selected_pid))
+            candidate_samples.append(selected_sample)
+        selected_sample = dict(selected_sample)
+        aggregate_cpu = sum(
+            float(sample["cpu_percent"])
+            for sample in candidate_samples
+            if isinstance(sample.get("cpu_percent"), (int, float))
+            and not isinstance(sample.get("cpu_percent"), bool)
+        )
+        selected_sample["candidate_samples"] = candidate_samples
+        selected_sample["candidate_cpu_percent_total"] = aggregate_cpu
+        selected_sample["candidate_pids"] = candidate_pids
+        selected_sample["scope_sample"] = scope_sample
+        samples.append(selected_sample)
         if index + 1 < count and interval > 0:
             time.sleep(interval)
 
@@ -534,15 +1277,48 @@ def sample_process(pid: int | None, process_name: str, count: int, interval: flo
         for sample in samples
         if isinstance(sample.get("cpu_percent"), (int, float))
     ]
+    aggregate_cpu_values = [
+        sample["candidate_cpu_percent_total"]
+        for sample in samples
+        if isinstance(sample.get("candidate_cpu_percent_total"), (int, float))
+        and not isinstance(sample.get("candidate_cpu_percent_total"), bool)
+    ]
+    scope_cpu_values = [
+        sample.get("scope_sample", {}).get("cpu_percent_total")
+        for sample in samples
+        if isinstance(sample.get("scope_sample"), dict)
+        and isinstance(sample.get("scope_sample", {}).get("cpu_percent_total"), (int, float))
+        and not isinstance(sample.get("scope_sample", {}).get("cpu_percent_total"), bool)
+    ]
     first = samples[0] if samples else {}
     last = samples[-1] if samples else {}
+    last_scope = last.get("scope_sample") if isinstance(last.get("scope_sample"), dict) else {}
     summary = {
         "sample_count": len(samples),
         "interval_seconds": interval,
+        "candidate_count": len(candidate_pids),
+        "candidate_pids": candidate_pids,
+        "extra_candidate_pids": resolved.get("extra_candidate_pids", []),
         "cpu_percent_avg": statistics.fmean(cpu_values) if cpu_values else None,
         "cpu_percent_min": min(cpu_values) if cpu_values else None,
         "cpu_percent_max": max(cpu_values) if cpu_values else None,
         "cpu_percent_p95": percentile(cpu_values, 0.95),
+        "candidate_cpu_percent_total_avg": (
+            statistics.fmean(aggregate_cpu_values) if aggregate_cpu_values else None
+        ),
+        "candidate_cpu_percent_total_max": (
+            max(aggregate_cpu_values) if aggregate_cpu_values else None
+        ),
+        "candidate_cpu_percent_total_p95": percentile(aggregate_cpu_values, 0.95),
+        "scope_pids": last_scope.get("scope_pids") if isinstance(last_scope, dict) else [],
+        "scope_process_count": (
+            last_scope.get("scope_process_count") if isinstance(last_scope, dict) else None
+        ),
+        "scope_cpu_percent_total_avg": (
+            statistics.fmean(scope_cpu_values) if scope_cpu_values else None
+        ),
+        "scope_cpu_percent_total_max": max(scope_cpu_values) if scope_cpu_values else None,
+        "scope_cpu_percent_total_p95": percentile(scope_cpu_values, 0.95),
         "voluntary_context_switch_delta": counter_delta(
             first.get("voluntary_context_switches"),
             last.get("voluntary_context_switches"),
@@ -594,17 +1370,21 @@ def sample_status(command_text: str, count: int, timeout: float, cwd: Path) -> d
                     parsed_json = json.loads(result.stdout)
                 except json.JSONDecodeError:
                     parsed_json = None
-            samples.append(
-                {
-                    "at": utc_now(),
-                    "latency_ms": elapsed_ms,
-                    "returncode": result.returncode,
-                    "stdout_bytes": len(result.stdout.encode("utf-8", errors="replace")),
-                    "stderr_tail": result.stderr[-1000:] or None,
-                    "json_ok": parsed_json is not None,
-                    "status_ok": parsed_json.get("ok") if isinstance(parsed_json, dict) else None,
-                }
+            sample = {
+                "at": utc_now(),
+                "latency_ms": elapsed_ms,
+                "returncode": result.returncode,
+                "stdout_bytes": len(result.stdout.encode("utf-8", errors="replace")),
+                "stderr_tail": result.stderr[-1000:] or None,
+                "json_ok": parsed_json is not None,
+                "status_ok": parsed_json.get("ok") if isinstance(parsed_json, dict) else None,
+            }
+            performance = (
+                parsed_json.get("performance") if isinstance(parsed_json, dict) else None
             )
+            if isinstance(performance, dict):
+                sample["performance"] = performance
+            samples.append(sample)
         except subprocess.TimeoutExpired as err:
             samples.append(
                 {
@@ -641,12 +1421,25 @@ def sample_status(command_text: str, count: int, timeout: float, cwd: Path) -> d
             "latency_ms_max": max(latencies) if latencies else None,
             "latency_ms_p95": percentile(latencies, 0.95),
         },
+        "performance_delta": service_status_performance_delta(samples),
         "note": "Status latency is sampled after process CPU sampling.",
     }
 
 
 def database_specs(root: Path, extras: list[str]) -> list[tuple[str, Path]]:
     specs = [(name, root / relative) for name, relative in DEFAULT_DATABASES]
+    runtime_dir = root / "runtime"
+    if runtime_dir.exists():
+        discovered = sorted(
+            {
+                path
+                for pattern in ("*.sqlite3", "*.db")
+                for path in runtime_dir.glob(pattern)
+                if path.is_file()
+            }
+        )
+        for path in discovered:
+            specs.append((f"runtime:{path.name}", path))
     for raw in extras:
         if "=" in raw:
             name, path_text = raw.split("=", 1)
@@ -658,7 +1451,15 @@ def database_specs(root: Path, extras: list[str]) -> list[tuple[str, Path]]:
         if not path.is_absolute():
             path = root / path
         specs.append((name, path))
-    return specs
+    deduped: list[tuple[str, Path]] = []
+    seen: set[Path] = set()
+    for name, path in specs:
+        key = path.expanduser().resolve() if path.exists() else path.expanduser().absolute()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((name, path))
+    return deduped
 
 
 def connect_read_only(path: Path) -> sqlite3.Connection:
@@ -688,6 +1489,131 @@ def inspect_databases(
         )
         for name, path in database_specs(root, extras)
     ]
+
+
+def metric_segment(value: Any) -> str:
+    text = str(value) if value is not None else "unknown"
+    segment = re.sub(r"[^A-Za-z0-9_-]+", "_", text).strip("_")
+    return segment or "unknown"
+
+
+def record_numeric_metric(metrics: dict[str, float], key: str, value: Any) -> None:
+    if isinstance(value, bool):
+        return
+    if isinstance(value, (int, float)):
+        metrics[key] = float(value)
+
+
+def database_metric_numbers(databases: list[dict[str, Any]]) -> dict[str, float]:
+    metrics: dict[str, float] = {}
+    for database in databases:
+        if not isinstance(database, dict):
+            continue
+        prefix = metric_segment(database.get("name") or database.get("path"))
+        for key in (
+            "page_count",
+            "database_page_bytes",
+            "freelist_count",
+            "freelist_bytes",
+            "table_count",
+        ):
+            record_numeric_metric(metrics, f"{prefix}.{key}", database.get(key))
+        dbstat = database.get("dbstat")
+        objects = dbstat.get("objects") if isinstance(dbstat, dict) else None
+        if isinstance(objects, list):
+            for item in objects:
+                if not isinstance(item, dict):
+                    continue
+                object_prefix = f"{prefix}.dbstat.{metric_segment(item.get('name'))}"
+                record_numeric_metric(metrics, f"{object_prefix}.bytes", item.get("bytes"))
+                record_numeric_metric(metrics, f"{object_prefix}.pages", item.get("pages"))
+        collections = database.get("rxdb_collections")
+        if isinstance(collections, list):
+            for item in collections:
+                if not isinstance(item, dict):
+                    continue
+                collection_prefix = (
+                    f"{prefix}.rxdb_collections.{metric_segment(item.get('collection'))}"
+                )
+                for key in ("row_count", "data_bytes", "tombstone_count"):
+                    record_numeric_metric(metrics, f"{collection_prefix}.{key}", item.get(key))
+        chunks = database.get("desktop_file_chunks")
+        if isinstance(chunks, dict):
+            chunk_prefix = f"{prefix}.desktop_file_chunks"
+            for key in (
+                "row_count",
+                "sampled_rows",
+                "file_count",
+                "live_generation_count",
+                "live_bytes_sampled",
+                "retained_generation_count",
+                "retained_bytes_sampled",
+                "stale_generation_count",
+                "stale_bytes_sampled",
+                "tombstone_rows_sampled",
+                "tombstone_bytes_sampled",
+                "malformed_rows_sampled",
+            ):
+                record_numeric_metric(metrics, f"{chunk_prefix}.{key}", chunks.get(key))
+    return metrics
+
+
+def database_metric_snapshot(
+    root: Path,
+    extras: list[str],
+    *,
+    max_tables: int,
+    max_dbstat_rows: int,
+    max_chunk_rows: int,
+    retain_chunk_generations: int,
+) -> dict[str, Any]:
+    databases = inspect_databases(
+        root,
+        extras,
+        max_tables=max_tables,
+        max_dbstat_rows=max_dbstat_rows,
+        max_chunk_rows=max_chunk_rows,
+        retain_chunk_generations=retain_chunk_generations,
+    )
+    return {
+        "at": utc_now(),
+        "databases": databases,
+        "numeric_values": database_metric_numbers(databases),
+        "note": (
+            "Database metric snapshots are read-only diagnostics around process "
+            "CPU sampling."
+        ),
+    }
+
+
+def database_metric_delta(
+    before: dict[str, Any] | None,
+    after: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return None
+    before_values = before.get("numeric_values")
+    after_values = after.get("numeric_values")
+    if not isinstance(before_values, dict) or not isinstance(after_values, dict):
+        return None
+    deltas = {}
+    for key in sorted(set(before_values) | set(after_values)):
+        before_value = before_values.get(key, 0.0)
+        after_value = after_values.get(key, 0.0)
+        if (
+            isinstance(before_value, (int, float))
+            and not isinstance(before_value, bool)
+            and isinstance(after_value, (int, float))
+            and not isinstance(after_value, bool)
+        ):
+            delta = float(after_value) - float(before_value)
+            if delta:
+                deltas[key] = delta
+    return {
+        "before_at": before.get("at"),
+        "after_at": after.get("at"),
+        "numeric_deltas": deltas,
+    }
 
 
 def inspect_database(
@@ -1052,19 +1978,77 @@ def heartbeat_delta_thresholds(args: argparse.Namespace) -> list[tuple[str, floa
     return thresholds
 
 
+def database_metric_delta_thresholds(args: argparse.Namespace) -> list[tuple[str, float]]:
+    thresholds = (
+        list(DEFAULT_ASSERT_DB_METRIC_DELTAS)
+        if args.assert_idle and not args.skip_db
+        else []
+    )
+    thresholds.extend(parse_metric_threshold(raw) for raw in args.max_db_metric_delta)
+    return thresholds
+
+
+def service_status_delta_thresholds(args: argparse.Namespace) -> list[tuple[str, float]]:
+    thresholds = (
+        list(DEFAULT_ASSERT_SERVICE_STATUS_DELTAS)
+        if args.assert_idle and not args.skip_status
+        else []
+    )
+    thresholds.extend(parse_metric_threshold(raw) for raw in args.max_service_status_delta)
+    return thresholds
+
+
+def service_performance_delta_thresholds(args: argparse.Namespace) -> list[tuple[str, float]]:
+    thresholds = (
+        list(DEFAULT_ASSERT_SERVICE_PERFORMANCE_DELTAS)
+        if args.assert_idle and not args.skip_service_performance
+        else []
+    )
+    thresholds.extend(parse_metric_threshold(raw) for raw in args.max_service_performance_delta)
+    return thresholds
+
+
+def sync_run_delta_thresholds(args: argparse.Namespace) -> list[tuple[str, float]]:
+    thresholds = list(DEFAULT_ASSERT_SYNC_RUN_DELTAS) if args.assert_idle else []
+    thresholds.extend(parse_metric_threshold(raw) for raw in args.max_sync_run_delta)
+    return thresholds
+
+
 def evaluate_assertions(report: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
     heartbeat_thresholds = heartbeat_delta_thresholds(args)
-    enabled = bool(args.assert_idle or heartbeat_thresholds)
+    db_metric_thresholds = database_metric_delta_thresholds(args)
+    service_status_thresholds = service_status_delta_thresholds(args)
+    service_performance_thresholds = service_performance_delta_thresholds(args)
+    sync_run_thresholds = sync_run_delta_thresholds(args)
+    heartbeat_max_age_ms = assertion_limit(
+        args.max_heartbeat_age_ms,
+        DEFAULT_ASSERT_HEARTBEAT_MAX_AGE_MS,
+        args.assert_idle and not args.skip_heartbeat,
+    )
+    enabled = bool(
+        args.assert_idle
+        or heartbeat_thresholds
+        or heartbeat_max_age_ms is not None
+        or db_metric_thresholds
+        or service_status_thresholds
+        or service_performance_thresholds
+        or sync_run_thresholds
+    )
     cpu_avg_limit = assertion_limit(args.max_cpu_avg, DEFAULT_ASSERT_CPU_AVG, args.assert_idle)
     cpu_p95_limit = assertion_limit(args.max_cpu_p95, DEFAULT_ASSERT_CPU_P95, args.assert_idle)
     status_p95_limit = assertion_limit(
         args.max_status_p95_ms,
         DEFAULT_ASSERT_STATUS_P95_MS,
-        args.assert_idle,
+        args.assert_idle and not args.skip_status,
     )
     db_growth_limit = assertion_limit(
         args.max_db_growth_bytes,
         DEFAULT_ASSERT_DB_GROWTH_BYTES,
+        args.assert_idle,
+    )
+    db_file_growth_limit = assertion_limit(
+        args.max_db_file_growth_bytes,
+        DEFAULT_ASSERT_DB_FILE_GROWTH_BYTES,
         args.assert_idle,
     )
     if any(
@@ -1075,6 +2059,7 @@ def evaluate_assertions(report: dict[str, Any], args: argparse.Namespace) -> dic
             args.max_cpu_max,
             status_p95_limit,
             db_growth_limit,
+            db_file_growth_limit,
         )
     ):
         enabled = True
@@ -1087,8 +2072,25 @@ def evaluate_assertions(report: dict[str, Any], args: argparse.Namespace) -> dic
         "max_cpu_max": args.max_cpu_max,
         "max_status_p95_ms": status_p95_limit,
         "max_db_growth_bytes": db_growth_limit,
+        "max_db_file_growth_bytes": db_file_growth_limit,
+        "max_heartbeat_age_ms": heartbeat_max_age_ms,
         "max_heartbeat_deltas": [
             {"pattern": pattern, "limit": limit} for pattern, limit in heartbeat_thresholds
+        ],
+        "max_database_metric_deltas": [
+            {"pattern": pattern, "limit": limit}
+            for pattern, limit in db_metric_thresholds
+        ],
+        "max_service_status_deltas": [
+            {"pattern": pattern, "limit": limit}
+            for pattern, limit in service_status_thresholds
+        ],
+        "max_service_performance_deltas": [
+            {"pattern": pattern, "limit": limit}
+            for pattern, limit in service_performance_thresholds
+        ],
+        "max_sync_run_deltas": [
+            {"pattern": pattern, "limit": limit} for pattern, limit in sync_run_thresholds
         ],
     }
 
@@ -1118,6 +2120,63 @@ def evaluate_assertions(report: dict[str, Any], args: argparse.Namespace) -> dic
         limit=args.max_cpu_max,
         missing_message="process CPU max is unavailable",
     )
+    check_numeric_limit(
+        failures,
+        warnings,
+        metric="process.summary.candidate_cpu_percent_total_avg",
+        actual=process_summary.get("candidate_cpu_percent_total_avg"),
+        limit=cpu_avg_limit,
+        missing_message="aggregate candidate process CPU average is unavailable",
+    )
+    check_numeric_limit(
+        failures,
+        warnings,
+        metric="process.summary.candidate_cpu_percent_total_p95",
+        actual=process_summary.get("candidate_cpu_percent_total_p95"),
+        limit=cpu_p95_limit,
+        missing_message="aggregate candidate process CPU p95 is unavailable",
+    )
+    check_numeric_limit(
+        failures,
+        warnings,
+        metric="process.summary.candidate_cpu_percent_total_max",
+        actual=process_summary.get("candidate_cpu_percent_total_max"),
+        limit=args.max_cpu_max,
+        missing_message="aggregate candidate process CPU max is unavailable",
+    )
+    check_numeric_limit(
+        failures,
+        warnings,
+        metric="process.summary.scope_cpu_percent_total_avg",
+        actual=process_summary.get("scope_cpu_percent_total_avg"),
+        limit=cpu_avg_limit,
+        missing_message="process scope CPU average is unavailable",
+    )
+    check_numeric_limit(
+        failures,
+        warnings,
+        metric="process.summary.scope_cpu_percent_total_p95",
+        actual=process_summary.get("scope_cpu_percent_total_p95"),
+        limit=cpu_p95_limit,
+        missing_message="process scope CPU p95 is unavailable",
+    )
+    check_numeric_limit(
+        failures,
+        warnings,
+        metric="process.summary.scope_cpu_percent_total_max",
+        actual=process_summary.get("scope_cpu_percent_total_max"),
+        limit=args.max_cpu_max,
+        missing_message="process scope CPU max is unavailable",
+    )
+    extra_candidate_pids = process_summary.get("extra_candidate_pids")
+    if args.assert_idle and isinstance(extra_candidate_pids, list) and extra_candidate_pids:
+        add_threshold_failure(
+            failures,
+            metric="process.summary.extra_candidate_pids",
+            actual=extra_candidate_pids,
+            limit=[],
+            message="extra ctox-real candidates were present during idle sampling",
+        )
 
     status = report.get("status_latency") if isinstance(report.get("status_latency"), dict) else {}
     status_summary = status.get("summary") if isinstance(status.get("summary"), dict) else {}
@@ -1129,6 +2188,221 @@ def evaluate_assertions(report: dict[str, Any], args: argparse.Namespace) -> dic
         limit=status_p95_limit,
         missing_message="status latency p95 is unavailable",
     )
+    status_performance_delta = (
+        status.get("performance_delta") if isinstance(status.get("performance_delta"), dict) else None
+    )
+    service_performance_deltas = (
+        status_performance_delta.get("performance_numeric_deltas")
+        if isinstance(status_performance_delta, dict)
+        else None
+    )
+    if isinstance(service_performance_deltas, dict):
+        for pattern, limit in service_status_thresholds:
+            matches = [
+                (key, value)
+                for key, value in service_performance_deltas.items()
+                if fnmatch.fnmatchcase(key, pattern)
+            ]
+            if not matches:
+                warnings.append(f"service status delta pattern matched no metrics: {pattern}")
+                add_threshold_failure(
+                    failures,
+                    metric=f"status_latency.performance_delta.performance_numeric_deltas.{pattern}",
+                    actual=None,
+                    limit=limit,
+                    message="service status delta pattern matched no metrics",
+                )
+                continue
+            for key, value in matches:
+                if isinstance(value, (int, float)) and not isinstance(value, bool) and value > limit:
+                    add_threshold_failure(
+                        failures,
+                        metric=f"status_latency.performance_delta.performance_numeric_deltas.{key}",
+                        actual=value,
+                        limit=limit,
+                        message=f"service status delta {key} exceeded configured limit",
+                    )
+    elif service_status_thresholds:
+        warnings.append("service status performance deltas are unavailable")
+        for pattern, limit in service_status_thresholds:
+            add_threshold_failure(
+                failures,
+                metric=f"status_latency.performance_delta.performance_numeric_deltas.{pattern}",
+                actual=None,
+                limit=limit,
+                message="service status performance deltas are unavailable",
+            )
+
+    service_performance = (
+        report.get("service_performance_status")
+        if isinstance(report.get("service_performance_status"), dict)
+        else {}
+    )
+    service_file_delta = (
+        service_performance.get("delta")
+        if isinstance(service_performance.get("delta"), dict)
+        else None
+    )
+    service_file_deltas = (
+        service_file_delta.get("performance_numeric_deltas")
+        if isinstance(service_file_delta, dict)
+        else None
+    )
+    if isinstance(service_file_deltas, dict):
+        before = service_performance.get("before")
+        after = service_performance.get("after")
+        before_payload = before.get("payload") if isinstance(before, dict) else None
+        after_payload = after.get("payload") if isinstance(after, dict) else None
+        before_perf = (
+            before_payload.get("performance") if isinstance(before_payload, dict) else {}
+        )
+        after_perf = after_payload.get("performance") if isinstance(after_payload, dict) else {}
+        before_numbers = flatten_numeric_values(before_perf)
+        after_numbers = flatten_numeric_values(after_perf)
+        all_numbers = set(before_numbers) | set(after_numbers) | set(service_file_deltas)
+        before_process = (
+            before_perf.get("process") if isinstance(before_perf, dict) else None
+        )
+        after_process = after_perf.get("process") if isinstance(after_perf, dict) else None
+        if service_performance_thresholds:
+            if not isinstance(before_process, dict) or not isinstance(after_process, dict):
+                add_threshold_failure(
+                    failures,
+                    metric="service_performance_status.performance.process",
+                    actual=None,
+                    limit="present",
+                    message="service performance process identity is unavailable",
+                )
+            else:
+                before_pid = before_process.get("pid")
+                after_pid = after_process.get("pid")
+                if args.pid is not None and before_pid != args.pid:
+                    add_threshold_failure(
+                        failures,
+                        metric="service_performance_status.before.performance.process.pid",
+                        actual=before_pid,
+                        limit=args.pid,
+                        message="service performance artifact belongs to a different process",
+                    )
+                if args.pid is not None and after_pid != args.pid:
+                    add_threshold_failure(
+                        failures,
+                        metric="service_performance_status.after.performance.process.pid",
+                        actual=after_pid,
+                        limit=args.pid,
+                        message="service performance artifact belongs to a different process",
+                    )
+                if before_process.get("boot_id") != after_process.get("boot_id"):
+                    add_threshold_failure(
+                        failures,
+                        metric="service_performance_status.performance.process.boot_id",
+                        actual={
+                            "before": before_process.get("boot_id"),
+                            "after": after_process.get("boot_id"),
+                        },
+                        limit="unchanged",
+                        message="service performance artifact changed process boot identity",
+                    )
+        for pattern, limit in service_performance_thresholds:
+            candidate_keys = {key for key in all_numbers if fnmatch.fnmatchcase(key, pattern)}
+            if not candidate_keys:
+                warnings.append(f"service performance delta pattern matched no metrics: {pattern}")
+                add_threshold_failure(
+                    failures,
+                    metric=f"service_performance_status.delta.performance_numeric_deltas.{pattern}",
+                    actual=None,
+                    limit=limit,
+                    message="service performance delta pattern matched no metrics",
+                )
+                continue
+            for key in sorted(candidate_keys):
+                value = service_file_deltas.get(key, 0.0)
+                if not isinstance(value, (int, float)) or isinstance(value, bool):
+                    continue
+                if value < 0:
+                    add_threshold_failure(
+                        failures,
+                        metric=f"service_performance_status.delta.performance_numeric_deltas.{key}",
+                        actual=value,
+                        limit="non-negative",
+                        message=f"service performance counter {key} reset during sampling",
+                    )
+                elif limit == 0.0 and value != 0.0:
+                    add_threshold_failure(
+                        failures,
+                        metric=f"service_performance_status.delta.performance_numeric_deltas.{key}",
+                        actual=value,
+                        limit=limit,
+                        message=f"service performance delta {key} changed during passive idle",
+                    )
+                elif value > limit:
+                    add_threshold_failure(
+                        failures,
+                        metric=f"service_performance_status.delta.performance_numeric_deltas.{key}",
+                        actual=value,
+                        limit=limit,
+                        message=f"service performance delta {key} exceeded configured limit",
+                    )
+    elif service_performance_thresholds:
+        warnings.append("service performance-file deltas are unavailable")
+        for pattern, limit in service_performance_thresholds:
+            add_threshold_failure(
+                failures,
+                metric=f"service_performance_status.delta.performance_numeric_deltas.{pattern}",
+                actual=None,
+                limit=limit,
+                message="service performance-file deltas are unavailable",
+            )
+
+    sync_run_delta = report.get("sync_run_delta")
+    sync_run_deltas = (
+        sync_run_delta.get("numeric_deltas")
+        if isinstance(sync_run_delta, dict)
+        else None
+    )
+    if isinstance(sync_run_deltas, dict):
+        all_sync_run_numbers = sync_run_snapshot_numbers(
+            report.get("sync_run_snapshots", {}).get("after_cpu")
+            if isinstance(report.get("sync_run_snapshots"), dict)
+            else None
+        )
+        for pattern, limit in sync_run_thresholds:
+            candidate_keys = {
+                key for key in all_sync_run_numbers if fnmatch.fnmatchcase(key, pattern)
+            }
+            candidate_keys.update(
+                key for key in sync_run_deltas if fnmatch.fnmatchcase(key, pattern)
+            )
+            if not candidate_keys:
+                warnings.append(f"sync-run delta pattern matched no metrics: {pattern}")
+                add_threshold_failure(
+                    failures,
+                    metric=f"sync_run_delta.numeric_deltas.{pattern}",
+                    actual=None,
+                    limit=limit,
+                    message="sync-run delta pattern matched no metrics",
+                )
+                continue
+            for key in sorted(candidate_keys):
+                value = sync_run_deltas.get(key, 0.0)
+                if isinstance(value, (int, float)) and not isinstance(value, bool) and value > limit:
+                    add_threshold_failure(
+                        failures,
+                        metric=f"sync_run_delta.numeric_deltas.{key}",
+                        actual=value,
+                        limit=limit,
+                        message=f"sync-run delta {key} exceeded configured limit",
+                    )
+    elif sync_run_thresholds:
+        warnings.append("sync-run deltas are unavailable")
+        for pattern, limit in sync_run_thresholds:
+            add_threshold_failure(
+                failures,
+                metric=f"sync_run_delta.numeric_deltas.{pattern}",
+                actual=None,
+                limit=limit,
+                message="sync-run deltas are unavailable",
+            )
 
     db_growth = report.get("database_file_growth")
     total_growth = db_growth.get("total_growth_bytes") if isinstance(db_growth, dict) else None
@@ -1140,8 +2414,112 @@ def evaluate_assertions(report: dict[str, Any], args: argparse.Namespace) -> dic
         limit=db_growth_limit,
         missing_message="database file growth is unavailable",
     )
+    if db_file_growth_limit is not None:
+        growth_items = db_growth.get("databases") if isinstance(db_growth, dict) else None
+        if not isinstance(growth_items, list):
+            add_threshold_failure(
+                failures,
+                metric="database_file_growth.databases",
+                actual=None,
+                limit=db_file_growth_limit,
+                message="database file component growth is unavailable",
+            )
+        else:
+            for item in growth_items:
+                if not isinstance(item, dict):
+                    continue
+                name = item.get("name") or item.get("path") or "unknown"
+                file_growth = item.get("file_growth_bytes")
+                if not isinstance(file_growth, dict):
+                    add_threshold_failure(
+                        failures,
+                        metric=f"database_file_growth.databases.{name}.file_growth_bytes",
+                        actual=None,
+                        limit=db_file_growth_limit,
+                        message="database file component growth is unavailable",
+                    )
+                    continue
+                for component, value in sorted(file_growth.items()):
+                    if (
+                        isinstance(value, (int, float))
+                        and not isinstance(value, bool)
+                        and value > db_file_growth_limit
+                    ):
+                        add_threshold_failure(
+                            failures,
+                            metric=(
+                                f"database_file_growth.databases.{name}."
+                                f"file_growth_bytes.{component}"
+                            ),
+                            actual=value,
+                            limit=db_file_growth_limit,
+                            message="database file component growth exceeded configured limit",
+                        )
+
+    db_metric_delta = report.get("database_metric_delta")
+    db_metric_deltas = (
+        db_metric_delta.get("numeric_deltas")
+        if isinstance(db_metric_delta, dict)
+        else None
+    )
+    if isinstance(db_metric_deltas, dict):
+        metric_snapshots = report.get("database_metric_snapshots")
+        after_snapshot = (
+            metric_snapshots.get("after_cpu")
+            if isinstance(metric_snapshots, dict)
+            else None
+        )
+        after_values = (
+            after_snapshot.get("numeric_values")
+            if isinstance(after_snapshot, dict)
+            else {}
+        )
+        all_numbers = set(after_values) | set(db_metric_deltas)
+        for pattern, limit in db_metric_thresholds:
+            candidate_keys = {key for key in all_numbers if fnmatch.fnmatchcase(key, pattern)}
+            if not candidate_keys:
+                warnings.append(f"database metric delta pattern matched no metrics: {pattern}")
+                add_threshold_failure(
+                    failures,
+                    metric=f"database_metric_delta.numeric_deltas.{pattern}",
+                    actual=None,
+                    limit=limit,
+                    message="database metric delta pattern matched no metrics",
+                )
+                continue
+            for key in sorted(candidate_keys):
+                value = db_metric_deltas.get(key, 0.0)
+                if (
+                    isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and value > limit
+                ):
+                    add_threshold_failure(
+                        failures,
+                        metric=f"database_metric_delta.numeric_deltas.{key}",
+                        actual=value,
+                        limit=limit,
+                        message=f"database metric delta {key} exceeded configured limit",
+                    )
+    elif db_metric_thresholds:
+        warnings.append("database metric deltas are unavailable")
+        for pattern, limit in db_metric_thresholds:
+            add_threshold_failure(
+                failures,
+                metric=f"database_metric_delta.numeric_deltas.{pattern}",
+                actual=None,
+                limit=limit,
+                message="database metric deltas are unavailable",
+            )
 
     heartbeat = report.get("native_peer_heartbeat")
+    validate_native_peer_heartbeat_health(
+        report,
+        args,
+        heartbeat_max_age_ms,
+        failures,
+        warnings,
+    )
     heartbeat_delta = heartbeat.get("delta") if isinstance(heartbeat, dict) else None
     performance_deltas = (
         heartbeat_delta.get("performance_numeric_deltas")
@@ -1157,6 +2535,13 @@ def evaluate_assertions(report: dict[str, Any], args: argparse.Namespace) -> dic
             ]
             if not matches:
                 warnings.append(f"heartbeat delta pattern matched no metrics: {pattern}")
+                add_threshold_failure(
+                    failures,
+                    metric=f"native_peer_heartbeat.delta.performance_numeric_deltas.{pattern}",
+                    actual=None,
+                    limit=limit,
+                    message="heartbeat delta pattern matched no metrics",
+                )
                 continue
             for key, value in matches:
                 if isinstance(value, (int, float)) and not isinstance(value, bool) and value > limit:
@@ -1201,11 +2586,43 @@ def main() -> int:
         },
     }
 
-    collect_file_growth = not args.skip_db or args.assert_idle or args.max_db_growth_bytes is not None
+    collect_file_growth = (
+        not args.skip_db
+        or args.assert_idle
+        or args.max_db_growth_bytes is not None
+        or args.max_db_file_growth_bytes is not None
+    )
+    collect_sync_runs = bool(
+        not args.skip_db or args.assert_idle or args.max_sync_run_delta
+    )
+    collect_db_metrics = bool(
+        (args.assert_idle and not args.skip_db) or args.max_db_metric_delta
+    )
     database_files_before = None
     if collect_file_growth:
         database_files_before = database_file_snapshot(root, args.db)
         report["database_file_snapshots"] = {"before_cpu": database_files_before}
+
+    database_metrics_before = None
+    if collect_db_metrics:
+        database_metrics_before = database_metric_snapshot(
+            root,
+            args.db,
+            max_tables=args.max_tables,
+            max_dbstat_rows=args.max_dbstat_rows,
+            max_chunk_rows=args.max_chunk_rows,
+            retain_chunk_generations=args.retain_chunk_generations,
+        )
+        report["database_metric_snapshots"] = {"before_cpu": database_metrics_before}
+
+    sync_runs_before = None
+    if collect_sync_runs:
+        sync_runs_before = sync_run_snapshot(root, args.db)
+        report["sync_run_snapshots"] = {"before_cpu": sync_runs_before}
+
+    service_performance_before = None
+    if not args.skip_service_performance:
+        service_performance_before = read_service_performance_status(root)
 
     heartbeat_before = None
     if not args.skip_heartbeat:
@@ -1228,6 +2645,39 @@ def main() -> int:
             database_files_before,
             database_files_after,
         )
+
+    if collect_db_metrics:
+        database_metrics_after = database_metric_snapshot(
+            root,
+            args.db,
+            max_tables=args.max_tables,
+            max_dbstat_rows=args.max_dbstat_rows,
+            max_chunk_rows=args.max_chunk_rows,
+            retain_chunk_generations=args.retain_chunk_generations,
+        )
+        report["database_metric_snapshots"]["after_cpu"] = database_metrics_after
+        report["database_metric_delta"] = database_metric_delta(
+            database_metrics_before,
+            database_metrics_after,
+        )
+
+    if collect_sync_runs:
+        sync_runs_after = sync_run_snapshot(root, args.db)
+        report["sync_run_snapshots"]["after_cpu"] = sync_runs_after
+        report["sync_run_delta"] = sync_run_snapshot_delta(sync_runs_before, sync_runs_after)
+
+    if args.skip_service_performance:
+        report["service_performance_status"] = {"skipped": True}
+    else:
+        service_performance_after = read_service_performance_status(root)
+        report["service_performance_status"] = {
+            "before": service_performance_before,
+            "after": service_performance_after,
+            "delta": service_performance_status_delta(
+                service_performance_before,
+                service_performance_after,
+            ),
+        }
 
     if args.skip_heartbeat:
         report["native_peer_heartbeat"] = {"skipped": True}
