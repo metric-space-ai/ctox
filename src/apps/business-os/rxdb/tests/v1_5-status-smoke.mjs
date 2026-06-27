@@ -11,12 +11,17 @@ assert(V1_5_STATUS_FIELDS.includes('queryDemandLoadingActive'), 'missing queryDe
 assert(V1_5_STATUS_FIELDS.includes('peerCapabilityQueryFetchV1'), 'missing peerCapabilityQueryFetchV1 field');
 assert(V1_5_STATUS_FIELDS.includes('pendingQueryFetchCollectors'), 'missing pendingQueryFetchCollectors field');
 assert(V1_5_STATUS_FIELDS.includes('pendingFileFetchCollectors'), 'missing pendingFileFetchCollectors field');
+assert(V1_5_STATUS_FIELDS.includes('localPushChangedSinceScannedRows'), 'missing local push changed-since scan rows field');
 
 const state = createV1_5StatusState();
 assert(state.rxdbProtocolVersion === '1', 'baseline must report protocol version 1');
 assert(state.queryDemandLoadingEnabled === false, 'demand-loading must be off in baseline');
 assert(state.queryDemandLoadingActive === false, 'demand-loading must be inactive in baseline');
 assert(state.peerCapabilityQueryFetchV1 === false, 'query-fetch capability must be unnegotiated in baseline');
+assert(state.localPushChangedSinceCalls === 0, 'local push changed-since calls default to zero');
+assert(state.localPushChangedSinceScannedRows === 0, 'local push changed-since scanned rows default to zero');
+assert(state.localPushChangedSinceScanLimitHits === 0, 'local push scan-limit hits default to zero');
+assert(state.localPushChangedSinceMaxScannedRows === 0, 'local push max scanned rows default to zero');
 
 const snapshot = snapshotV1_5Status(state);
 for (const field of V1_5_STATUS_FIELDS) {

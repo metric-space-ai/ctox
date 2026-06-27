@@ -1085,6 +1085,7 @@ class CtoxWebRtcReplicationState {
         this.changedDocumentReadOptionsForPeer(peerId),
       );
       const documents = Array.isArray(result?.documents) ? result.documents : [];
+      this.recordLocalPushChangedSinceRead(result, documents);
       if (!documents.length) {
         const nextCheckpoint = result?.checkpoint || checkpoint;
         if (
@@ -1132,6 +1133,24 @@ class CtoxWebRtcReplicationState {
       checkpoint = result?.checkpoint || checkpoint;
       this.pushCheckpointsByPeer.set(peerId, checkpoint);
       if (documents.length < batchSize) break;
+    }
+  }
+
+  recordLocalPushChangedSinceRead(result, documents = []) {
+    const scanned = Number.isFinite(Number(result?.scanned))
+      ? Math.max(0, Number(result.scanned))
+      : (Array.isArray(documents) ? documents.length : 0);
+    this.demandStatus.localPushChangedSinceCalls =
+      Number(this.demandStatus.localPushChangedSinceCalls || 0) + 1;
+    this.demandStatus.localPushChangedSinceScannedRows =
+      Number(this.demandStatus.localPushChangedSinceScannedRows || 0) + scanned;
+    this.demandStatus.localPushChangedSinceMaxScannedRows = Math.max(
+      Number(this.demandStatus.localPushChangedSinceMaxScannedRows || 0),
+      scanned,
+    );
+    if (result?.scanLimitReached) {
+      this.demandStatus.localPushChangedSinceScanLimitHits =
+        Number(this.demandStatus.localPushChangedSinceScanLimitHits || 0) + 1;
     }
   }
 

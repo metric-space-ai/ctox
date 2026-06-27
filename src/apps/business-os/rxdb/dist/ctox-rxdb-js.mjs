@@ -5644,7 +5644,11 @@ var V1_5_STATUS_FIELDS = Object.freeze([
   "fileBytesReceived",
   "fileStreamErrors",
   "fileStreamDedupHits",
-  "lastFileFetchMs"
+  "lastFileFetchMs",
+  "localPushChangedSinceCalls",
+  "localPushChangedSinceScannedRows",
+  "localPushChangedSinceScanLimitHits",
+  "localPushChangedSinceMaxScannedRows"
 ]);
 function createV1_5StatusState() {
   return {
@@ -5675,7 +5679,11 @@ function createV1_5StatusState() {
     fileBytesReceived: 0,
     fileStreamErrors: 0,
     fileStreamDedupHits: 0,
-    lastFileFetchMs: null
+    lastFileFetchMs: null,
+    localPushChangedSinceCalls: 0,
+    localPushChangedSinceScannedRows: 0,
+    localPushChangedSinceScanLimitHits: 0,
+    localPushChangedSinceMaxScannedRows: 0
   };
 }
 function projectStatusFromSidecar(state, sidecarStats, registry = null) {
@@ -6575,6 +6583,7 @@ var CtoxWebRtcReplicationState = class {
         this.changedDocumentReadOptionsForPeer(peerId)
       );
       const documents = Array.isArray(result?.documents) ? result.documents : [];
+      this.recordLocalPushChangedSinceRead(result, documents);
       if (!documents.length) {
         const nextCheckpoint = result?.checkpoint || checkpoint;
         if (result?.scanLimitReached && nextCheckpoint && checkpointKey(nextCheckpoint) !== checkpointKey(checkpoint)) {
@@ -6616,6 +6625,18 @@ var CtoxWebRtcReplicationState = class {
       checkpoint = result?.checkpoint || checkpoint;
       this.pushCheckpointsByPeer.set(peerId, checkpoint);
       if (documents.length < batchSize) break;
+    }
+  }
+  recordLocalPushChangedSinceRead(result, documents = []) {
+    const scanned = Number.isFinite(Number(result?.scanned)) ? Math.max(0, Number(result.scanned)) : Array.isArray(documents) ? documents.length : 0;
+    this.demandStatus.localPushChangedSinceCalls = Number(this.demandStatus.localPushChangedSinceCalls || 0) + 1;
+    this.demandStatus.localPushChangedSinceScannedRows = Number(this.demandStatus.localPushChangedSinceScannedRows || 0) + scanned;
+    this.demandStatus.localPushChangedSinceMaxScannedRows = Math.max(
+      Number(this.demandStatus.localPushChangedSinceMaxScannedRows || 0),
+      scanned
+    );
+    if (result?.scanLimitReached) {
+      this.demandStatus.localPushChangedSinceScanLimitHits = Number(this.demandStatus.localPushChangedSinceScanLimitHits || 0) + 1;
     }
   }
   // ----- master handler (when CTOX picks the browser as fork's master) ----
@@ -7942,6 +7963,12 @@ function buildBusinessOsAdvancedStatus({
         errors: snapshot.fileStreamErrors,
         dedupHits: snapshot.fileStreamDedupHits,
         lastFetchMs: snapshot.lastFileFetchMs
+      },
+      localPush: {
+        changedSinceCalls: snapshot.localPushChangedSinceCalls,
+        scannedRows: snapshot.localPushChangedSinceScannedRows,
+        scanLimitHits: snapshot.localPushChangedSinceScanLimitHits,
+        maxScannedRows: snapshot.localPushChangedSinceMaxScannedRows
       },
       cache: {
         workingSetBytes: snapshot.indexedDbWorkingSetBytes,

@@ -66,6 +66,12 @@ export function buildBusinessOsAdvancedStatus({
         dedupHits: snapshot.fileStreamDedupHits,
         lastFetchMs: snapshot.lastFileFetchMs,
       },
+      localPush: {
+        changedSinceCalls: snapshot.localPushChangedSinceCalls,
+        scannedRows: snapshot.localPushChangedSinceScannedRows,
+        scanLimitHits: snapshot.localPushChangedSinceScanLimitHits,
+        maxScannedRows: snapshot.localPushChangedSinceMaxScannedRows,
+      },
       cache: {
         workingSetBytes: snapshot.indexedDbWorkingSetBytes,
         evictionCount: snapshot.indexedDbEvictionCount,

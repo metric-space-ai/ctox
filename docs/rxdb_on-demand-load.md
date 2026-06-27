@@ -182,6 +182,10 @@ Aufgaben:
   - `fileStreamErrors`
   - `fileStreamDedupHits`
   - `lastFileFetchMs`
+  - `localPushChangedSinceCalls`
+  - `localPushChangedSinceScannedRows`
+  - `localPushChangedSinceScanLimitHits`
+  - `localPushChangedSinceMaxScannedRows`
 - Tests als Gate dokumentieren und automatisierbar machen:
   - JS fork smoke.
   - Rust rxdb tests.
@@ -579,6 +583,10 @@ Aufgaben:
   - `activeFileStreams`
   - `fileBytesReceived`
   - `fileStreamErrors`
+  - `localPushChangedSinceCalls`
+  - `localPushChangedSinceScannedRows`
+  - `localPushChangedSinceScanLimitHits`
+  - `localPushChangedSinceMaxScannedRows`
 
 Abschlusskriterien:
 

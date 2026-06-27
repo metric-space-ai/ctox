@@ -37,6 +37,10 @@ export const V1_5_STATUS_FIELDS = Object.freeze([
   'fileStreamErrors',
   'fileStreamDedupHits',
   'lastFileFetchMs',
+  'localPushChangedSinceCalls',
+  'localPushChangedSinceScannedRows',
+  'localPushChangedSinceScanLimitHits',
+  'localPushChangedSinceMaxScannedRows',
 ]);
 
 export function createV1_5StatusState() {
@@ -69,6 +73,10 @@ export function createV1_5StatusState() {
     fileStreamErrors: 0,
     fileStreamDedupHits: 0,
     lastFileFetchMs: null,
+    localPushChangedSinceCalls: 0,
+    localPushChangedSinceScannedRows: 0,
+    localPushChangedSinceScanLimitHits: 0,
+    localPushChangedSinceMaxScannedRows: 0,
   };
 }
 

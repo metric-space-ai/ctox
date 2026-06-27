@@ -116,16 +116,19 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     {
       documents: [],
       checkpoint: { lwt: 100, id: 'remote-only' },
+      scanned: 300,
       scanLimitReached: true,
     },
     {
       documents: [{ id: 'local-doc', _meta: { lwt: 101 } }],
       checkpoint: { lwt: 101, id: 'local-doc' },
+      scanned: 1,
       scanLimitReached: false,
     },
     {
       documents: [],
       checkpoint: { lwt: 101, id: 'local-doc' },
+      scanned: 0,
       scanLimitReached: false,
     },
   ];
@@ -143,6 +146,19 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   await state.pushToPeer('p1');
   assert(readCalls >= 2, `push scan must continue past empty scan-limit page (reads=${readCalls})`);
   assert(writeCalls === 1, `exactly one local batch should be pushed (writes=${writeCalls})`);
+  assert(state.demandStatus.localPushChangedSinceCalls >= 2, 'local push changed-since reads must be counted');
+  assert(
+    state.demandStatus.localPushChangedSinceScannedRows === 301,
+    `local push scanned rows mismatch: ${state.demandStatus.localPushChangedSinceScannedRows}`,
+  );
+  assert(
+    state.demandStatus.localPushChangedSinceScanLimitHits === 1,
+    `local push scan-limit hits mismatch: ${state.demandStatus.localPushChangedSinceScanLimitHits}`,
+  );
+  assert(
+    state.demandStatus.localPushChangedSinceMaxScannedRows === 300,
+    `local push max scanned rows mismatch: ${state.demandStatus.localPushChangedSinceMaxScannedRows}`,
+  );
   await state.cancel();
 }
 

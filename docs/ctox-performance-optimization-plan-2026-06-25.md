@@ -111,7 +111,7 @@ against source:
   schema-index equality/range cursors, browser `count()`, CTOX-origin
   push-scan suppression, and sync diagnostic fanout are now reduced. The
   remaining browser risks are non-indexed `allDocuments()` fallback, full
-  re-query subscriptions, remaining local push scan counters,
+  re-query subscriptions, local push scan mitigation after the new counters,
   per-chunk browser uploads, and chunk bookkeeping.
 
 Additional read-only subagent review on 2026-06-26 rechecked the remaining
@@ -2284,6 +2284,15 @@ Implementation status:
   available for release diagnostics. The app-local RxDB bundle was rebuilt and
   the shared `db.js`/`sync.js` cache-busters were bumped together to
   `20260627-file-buffer-bytes-v1`.
+- Done on 2026-06-28 for local-push changed-since scan diagnostics: the
+  WebRTC replication push loop now records local push `getChangedDocumentsSince`
+  calls, scanned rows, scan-limit hits, and max scanned rows in the V1.5
+  status surface and Advanced Status bridge. The recovery smoke covers the
+  scan-limit continuation case and proves the diagnostic counters report the
+  remote-origin-only scan page plus the following local-document page. The
+  app-local RxDB bundle was rebuilt and the shared `db.js`/`sync.js`
+  cache-busters were bumped together to
+  `20260628-local-push-scan-metrics-v1`.
 - Still open: broader browser chunk-stream/range APIs and any remaining
   non-central upload/import paths, blob/chunk read/range APIs, Research blob
   reads, Universal Importer/file-integrity helpers, schema-aware file-demand
@@ -2300,6 +2309,14 @@ Validation:
   passed on 2026-06-27.
 - `node src/apps/business-os/rxdb/tests/run-all.mjs` passed on 2026-06-27
   after the file-fetch retained-byte diagnostics change: 50 passed, 0 failed,
+  2 skipped because the wire daemon was not built.
+- `node src/apps/business-os/rxdb/tests/replication-recovery-smoke.mjs`,
+  `node src/apps/business-os/rxdb/tests/v1_5-status-smoke.mjs`,
+  `node src/apps/business-os/rxdb/tests/status-projection-smoke.mjs`, and
+  `node src/apps/business-os/rxdb/tests/advanced-status-bridge-smoke.mjs`
+  passed on 2026-06-28 for the local-push changed-since diagnostics change.
+- `node src/apps/business-os/rxdb/tests/run-all.mjs` passed on 2026-06-28
+  after the local-push changed-since diagnostics change: 50 passed, 0 failed,
   2 skipped because the wire daemon was not built.
 - `node src/apps/business-os/rxdb/tests/demand-loader-smoke.mjs` passed.
 - `node src/apps/business-os/rxdb/tests/demand-invalidation-hotpath-smoke.mjs` passed.
@@ -2899,9 +2916,8 @@ The performance problem is structurally fixed only when:
 
 1. Add hard measurement gates before the next release:
    remaining browser spies for `scanQueryWindows()`, sidecar eviction scans,
-   local-push changed-since
-   scans, live-query full re-query, heavy diagnostics snapshots, and remaining
-   broad chunk-consumer/source guards.
+   live-query full re-query, heavy diagnostics snapshots, and remaining broad
+   chunk-consumer/source guards.
 2. Remove remaining P1 daemon idle-loop sources:
    Notes dirty flag/watcher, desktop-file watcher/dirty roots with slow
    fallback, provider-specific IMAP IDLE/delta token support, and finer service

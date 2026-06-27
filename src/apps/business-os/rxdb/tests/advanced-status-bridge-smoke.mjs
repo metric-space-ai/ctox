@@ -16,6 +16,10 @@ healthy.peerCapabilityQueryFetchV1 = true;
 healthy.queryDemandLoadingEnabled = true;
 healthy.queryDemandLoadingActive = true;
 healthy.queryFetchSuccessCount = 17;
+healthy.localPushChangedSinceCalls = 3;
+healthy.localPushChangedSinceScannedRows = 301;
+healthy.localPushChangedSinceScanLimitHits = 1;
+healthy.localPushChangedSinceMaxScannedRows = 300;
 
 const env = buildBusinessOsAdvancedStatus({
   v15Status: healthy,
@@ -44,6 +48,10 @@ assert(env.rxdbRuntime.apiContract === 'ctox-db-business-os-v1', 'api contract')
 assert(env.rxdbRuntime.upstreamCompatible === false, 'not upstream compatible');
 assert(env.rxdbRuntime.upstreamCompatibility === 'not-upstream-rxdb', 'upstream marker');
 assert(env.v1_5.query.success === 17, 'success count flows through');
+assert(env.v1_5.localPush.changedSinceCalls === 3, 'local push changed-since calls flow through');
+assert(env.v1_5.localPush.scannedRows === 301, 'local push scanned rows flow through');
+assert(env.v1_5.localPush.scanLimitHits === 1, 'local push scan-limit hits flow through');
+assert(env.v1_5.localPush.maxScannedRows === 300, 'local push max scanned rows flow through');
 assert(env.sync.v15Negotiated === true, 'V1.5 negotiation reflected in sync block');
 
 // === Degraded state: too many errors → not ok ===
