@@ -3781,6 +3781,28 @@ function ensureCtoxSmokeBinary() {
             collections: ['business_commands'],
             editable: true,
             deletable: true,
+            lifecycle: {
+              runtime_installed: true,
+              visibility_state: 'team',
+              audience: 'team',
+              current_semver: '1.0.0',
+              release_status: 'unreleased',
+              release_state: {
+                status: 'unreleased',
+                history_count: 1,
+              },
+              data_access: {
+                status: 'reviewed',
+                completed: true,
+                areas: [
+                  { collection: 'business_commands', read: 'locked', write: 'not_requested' },
+                ],
+                granted_collection_ids: [],
+                locked_collection_ids: ['business_commands'],
+                review_is_evidence_only: true,
+                grants_implied: false,
+              },
+            },
           };
           const restrictedModule = {
             id: 'phase14-fresh-restricted-app',
@@ -3943,6 +3965,9 @@ function ensureCtoxSmokeBinary() {
                     BusinessOsPermissions.AppsSourceView,
                     BusinessOsPermissions.AppsRelease,
                   ],
+                  fresh_team_member: [
+                    BusinessOsPermissions.AppsView,
+                  ],
                 },
                 [restrictedModule.id]: {
                   fresh_builder: [
@@ -4015,14 +4040,46 @@ function ensureCtoxSmokeBinary() {
             smoke.renderTabs();
             return Math.round(performance.now() - renderStartedAt);
           };
+          const appStoreCardEvidence = (targetId) => {
+            const root = document.querySelector('[data-app-store-root]');
+            const cards = [...document.querySelectorAll('[data-app-id]')].slice(0, 40).map((card) => ({
+              id: card.getAttribute('data-app-id') || '',
+              text: (card.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 220),
+              disabledReason: card.querySelector('[data-disabled-reason]')?.getAttribute('data-disabled-reason') || '',
+              lifecycle: card.querySelector('.app-lifecycle-badge')?.textContent?.trim() || '',
+            }));
+            const activeScope = [...document.querySelectorAll('[data-app-store-root] [data-scope]')]
+              .find((button) => button.classList?.contains('active') || button.getAttribute('aria-pressed') === 'true')
+              ?.getAttribute('data-scope') || '';
+            return {
+              root: Boolean(root),
+              activeScope,
+              targetPresent: cards.some((card) => card.id === targetId),
+              cardCount: document.querySelectorAll('[data-app-id]').length,
+              cards,
+              title: document.querySelector('[data-visible-category-title]')?.textContent?.trim() || '',
+              count: document.querySelector('[data-apps-count]')?.textContent?.trim() || '',
+              empty: document.querySelector('.store-empty-state')?.innerText?.replace(/\s+/g, ' ').trim() || '',
+              activeModule: state.activeModule?.id || '',
+              shellModuleCount: Array.isArray(state.modules) ? state.modules.length : 0,
+              targetInShellModules: Array.isArray(state.modules)
+                ? state.modules.some((mod) => mod?.id === targetId)
+                : false,
+              actor: state.session?.user?.id || '',
+              role: state.session?.user?.role || '',
+            };
+          };
           globalThis.__ctoxFreshProfileNarrowSetup = async () => {
             installModules(teamSession);
+            window.dispatchEvent(new Event('resize'));
             await state.openModule('app-store', { force: true, asModule: true });
+            await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
             await waitFor(() => ({
               ok: Boolean(document.querySelector('[data-app-store-root]')),
               text: document.querySelector('[data-app-store-root]')?.innerText?.slice(0, 500) || '',
             }), 10000, 'fresh-profile narrow app store root');
             document.querySelector('[data-app-store-root] [data-scope="installed"]')?.click();
+            await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
             return waitFor(() => {
               const card = document.querySelector(`[data-app-id="${css(teamModule.id)}"]`);
               const disabled = card?.querySelector('[data-disabled-reason]');
@@ -4032,6 +4089,7 @@ function ensureCtoxSmokeBinary() {
                 cardText: card?.innerText || '',
                 disabledReason: disabled?.getAttribute('data-disabled-reason') || '',
                 lifecycleText: lifecycle?.textContent?.trim() || '',
+                appStore: appStoreCardEvidence(teamModule.id),
               };
             }, 10000, 'fresh-profile narrow app-store disabled reason');
           };
