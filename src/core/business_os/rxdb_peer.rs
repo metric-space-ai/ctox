@@ -25,29 +25,30 @@ use anyhow::Context;
 use base64::Engine;
 use chrono::{DateTime, FixedOffset};
 use rusqlite::types::Value as SqlValue;
-use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params, params_from_iter};
 use rxdb::plugins::replication_webrtc::{
-    file_fetch_handler::FileRange, CollectionAuthzHook, DocumentReadAuthzHook, RTCIceServer,
-    RxWebRTCReplicationPool, WebRTCRsConnectionHandler,
+    CollectionAuthzHook, DocumentReadAuthzHook, RTCIceServer, RxWebRTCReplicationPool,
+    WebRTCRsConnectionHandler, file_fetch_handler::FileRange,
 };
 use rxdb::rx_collection::RxCollection;
 use rxdb::rx_collection_helper::fill_object_data_before_insert;
-use rxdb::rx_database::{create_rx_database, RxCollectionCreator, RxDatabase, RxDatabaseCreator};
-use rxdb::storage::sqlite::{get_rx_storage_sqlite, RxStorageSqliteSettings};
+use rxdb::rx_database::{RxCollectionCreator, RxDatabase, RxDatabaseCreator, create_rx_database};
+use rxdb::storage::sqlite::{RxStorageSqliteSettings, get_rx_storage_sqlite};
 use rxdb::types::{BulkWriteRow, HashOutput, JsonSchema, MangoQuery, RxJsonSchema};
-use serde_json::json;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use serde_json::json;
 use sha2::Digest;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
@@ -147,6 +148,15 @@ const DESKTOP_FILE_INDEX_MAINTENANCE_FILE_LIMIT: usize = 1_000;
 const DESKTOP_FILE_INDEX_MAINTENANCE_CHUNK_DELETE_LIMIT: usize = 5_000;
 const DESKTOP_FILE_INDEX_MAINTENANCE_FILE_TOMBSTONE_DELETE_LIMIT: usize = 5_000;
 const DESKTOP_FILE_INDEX_UNSAFE_TOMBSTONE_RETENTION_SECS: u64 = 24 * 60 * 60;
+const DESKTOP_FILE_CHUNK_CACHE_MAX_LIVE_BYTES: u64 = 64 * 1024 * 1024;
+const DESKTOP_FILE_CHUNK_CACHE_TARGET_LIVE_BYTES: u64 = 48 * 1024 * 1024;
+const DESKTOP_FILE_CHUNK_CACHE_ACTIVE_MIN_AGE_SECS: u64 = 6 * 60 * 60;
+const DESKTOP_FILE_CHUNK_CACHE_CHECKPOINT_MIN_INTERVAL_SECS: u64 = 30 * 60;
+const DESKTOP_FILE_CHUNK_CACHE_WAL_CHECKPOINT_MIN_BYTES: u64 = 16 * 1024 * 1024;
+const DESKTOP_FILE_CHUNK_CACHE_VACUUM_MIN_INTERVAL_SECS: u64 = 24 * 60 * 60;
+const DESKTOP_FILE_CHUNK_CACHE_VACUUM_MIN_RECLAIM_BYTES: u64 = 32 * 1024 * 1024;
+const DESKTOP_FILE_CHUNK_CACHE_STATE_TABLE: &str = "ctox_desktop_file_chunk_cache_state";
+const DESKTOP_FILE_CHUNK_CACHE_STATE_ID: &str = "desktop_file_chunks";
 const DESKTOP_FILE_CONTENT_HASH_SCHEME: &str = "sha256-bytes-v1";
 const DESKTOP_FILE_CHUNK_HASH_SCHEME: &str = "sha256-base64-chunk-v1";
 const CTOX_DESKTOP_FOLDER_ID: &str = "fs_ctox";
@@ -2962,12 +2972,22 @@ async fn sync_desktop_file_index_background_loop(
                         eprintln!(
                             "[business-os] desktop file index maintenance: tombstoned {} unsafe file(s), \
                              removed {} unsafe chunk(s), {} stale chunk(s), {} deleted chunk tombstone(s), \
-                             {} unsafe file tombstone(s)",
+                             {} unsafe file tombstone(s), evicted {} cached file(s), removed {} cache chunk(s) \
+                             ({} byte(s), live {} -> {}, pinned {}, over-quota pinned {}, checkpoint {}, vacuum {})",
                             stats.tombstoned_unsafe_files,
                             stats.removed_unsafe_chunks,
                             stats.removed_stale_chunks,
                             stats.removed_deleted_chunks,
-                            stats.removed_unsafe_file_tombstones
+                            stats.removed_unsafe_file_tombstones,
+                            stats.evicted_cache_files,
+                            stats.removed_cache_chunks,
+                            stats.removed_cache_bytes,
+                            stats.cache_live_bytes_before,
+                            stats.cache_live_bytes_after,
+                            stats.cache_pinned_bytes,
+                            stats.cache_over_quota_pinned_bytes,
+                            stats.wal_checkpoint_ran,
+                            stats.vacuum_ran
                         );
                     }
                     Ok(_) => {}
@@ -4623,9 +4643,11 @@ async fn drain_browser_session_inputs(
                 "session_id": { "$eq": session_id },
                 "status": { "$eq": "pending" }
             })),
-            sort: Some(vec![[("seq".to_string(), "asc".to_string())]
-                .into_iter()
-                .collect()]),
+            sort: Some(vec![
+                [("seq".to_string(), "asc".to_string())]
+                    .into_iter()
+                    .collect(),
+            ]),
             limit: Some(64),
             ..Default::default()
         }))
@@ -4993,9 +5015,11 @@ async fn gc_consumed_browser_input_events(database: &Arc<RxDatabase>) -> anyhow:
                     "status": { "$eq": status },
                     "created_at_ms": { "$lt": cutoff }
                 })),
-                sort: Some(vec![[("created_at_ms".to_string(), "asc".to_string())]
-                    .into_iter()
-                    .collect()]),
+                sort: Some(vec![
+                    [("created_at_ms".to_string(), "asc".to_string())]
+                        .into_iter()
+                        .collect(),
+                ]),
                 limit: Some(BROWSER_INPUT_EVENT_GC_LIMIT),
                 ..Default::default()
             }))
@@ -9339,6 +9363,15 @@ struct DesktopFileIndexMaintenanceStats {
     removed_stale_chunks: usize,
     removed_deleted_chunks: usize,
     removed_unsafe_file_tombstones: usize,
+    evicted_cache_files: usize,
+    removed_cache_chunks: usize,
+    removed_cache_bytes: u64,
+    cache_live_bytes_before: u64,
+    cache_live_bytes_after: u64,
+    cache_pinned_bytes: u64,
+    cache_over_quota_pinned_bytes: u64,
+    wal_checkpoint_ran: bool,
+    vacuum_ran: bool,
 }
 
 impl DesktopFileIndexMaintenanceStats {
@@ -9348,7 +9381,69 @@ impl DesktopFileIndexMaintenanceStats {
             || self.removed_stale_chunks > 0
             || self.removed_deleted_chunks > 0
             || self.removed_unsafe_file_tombstones > 0
+            || self.evicted_cache_files > 0
+            || self.removed_cache_chunks > 0
+            || self.wal_checkpoint_ran
+            || self.vacuum_ran
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DesktopFileChunkCacheConfig {
+    max_live_bytes: u64,
+    target_live_bytes: u64,
+    active_min_age_secs: u64,
+    max_files_per_pass: usize,
+    max_chunks_per_pass: usize,
+    checkpoint_min_interval_secs: u64,
+    wal_checkpoint_min_bytes: u64,
+    vacuum_min_interval_secs: u64,
+    vacuum_min_reclaim_bytes: u64,
+}
+
+impl Default for DesktopFileChunkCacheConfig {
+    fn default() -> Self {
+        Self {
+            max_live_bytes: DESKTOP_FILE_CHUNK_CACHE_MAX_LIVE_BYTES,
+            target_live_bytes: DESKTOP_FILE_CHUNK_CACHE_TARGET_LIVE_BYTES,
+            active_min_age_secs: DESKTOP_FILE_CHUNK_CACHE_ACTIVE_MIN_AGE_SECS,
+            max_files_per_pass: DESKTOP_FILE_INDEX_MAINTENANCE_FILE_LIMIT,
+            max_chunks_per_pass: DESKTOP_FILE_INDEX_MAINTENANCE_CHUNK_DELETE_LIMIT,
+            checkpoint_min_interval_secs: DESKTOP_FILE_CHUNK_CACHE_CHECKPOINT_MIN_INTERVAL_SECS,
+            wal_checkpoint_min_bytes: DESKTOP_FILE_CHUNK_CACHE_WAL_CHECKPOINT_MIN_BYTES,
+            vacuum_min_interval_secs: DESKTOP_FILE_CHUNK_CACHE_VACUUM_MIN_INTERVAL_SECS,
+            vacuum_min_reclaim_bytes: DESKTOP_FILE_CHUNK_CACHE_VACUUM_MIN_RECLAIM_BYTES,
+        }
+    }
+}
+
+impl DesktopFileChunkCacheConfig {
+    fn normalized(self) -> Self {
+        let max_live_bytes = self.max_live_bytes.max(1);
+        let target_live_bytes = self.target_live_bytes.min(max_live_bytes);
+        Self {
+            max_live_bytes,
+            target_live_bytes,
+            active_min_age_secs: self.active_min_age_secs,
+            max_files_per_pass: self.max_files_per_pass.max(1),
+            max_chunks_per_pass: self.max_chunks_per_pass.max(1),
+            checkpoint_min_interval_secs: self.checkpoint_min_interval_secs,
+            wal_checkpoint_min_bytes: self.wal_checkpoint_min_bytes,
+            vacuum_min_interval_secs: self.vacuum_min_interval_secs,
+            vacuum_min_reclaim_bytes: self.vacuum_min_reclaim_bytes,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+struct DesktopFileChunkCacheState {
+    last_eviction_at_ms: u64,
+    last_checkpoint_at_ms: u64,
+    last_vacuum_at_ms: u64,
+    last_live_bytes: u64,
+    last_pinned_bytes: u64,
+    last_deleted_bytes: u64,
+    last_deleted_chunks: u64,
 }
 
 async fn compact_desktop_file_index_store(
@@ -9363,6 +9458,18 @@ async fn compact_desktop_file_index_store(
 fn compact_desktop_file_index_store_sync(
     root: &Path,
     home: Option<&Path>,
+) -> anyhow::Result<DesktopFileIndexMaintenanceStats> {
+    compact_desktop_file_index_store_sync_with_config(
+        root,
+        home,
+        DesktopFileChunkCacheConfig::default(),
+    )
+}
+
+fn compact_desktop_file_index_store_sync_with_config(
+    root: &Path,
+    home: Option<&Path>,
+    cache_config: DesktopFileChunkCacheConfig,
 ) -> anyhow::Result<DesktopFileIndexMaintenanceStats> {
     const FILES_TABLE: &str = "\"ctox_business_os__desktop_files__v0\"";
     const CHUNKS_TABLE: &str = "\"ctox_business_os__desktop_file_chunks__v0\"";
@@ -9522,7 +9629,417 @@ fn compact_desktop_file_index_store_sync(
         )?;
     }
     tx.commit()?;
+    apply_desktop_file_chunk_cache_policy(root, &mut conn, &mut stats, cache_config.normalized())?;
     Ok(stats)
+}
+
+#[derive(Debug)]
+struct DesktopFileChunkCacheCandidate {
+    file_id: String,
+    revision: Option<String>,
+    document: Value,
+    generation_id: String,
+    chunk_count: usize,
+    bytes: u64,
+    created_at_ms: u64,
+}
+
+struct DesktopFileChunkCacheEviction {
+    candidate: DesktopFileChunkCacheCandidate,
+    metadata: fs::Metadata,
+}
+
+fn apply_desktop_file_chunk_cache_policy(
+    root: &Path,
+    conn: &mut Connection,
+    stats: &mut DesktopFileIndexMaintenanceStats,
+    config: DesktopFileChunkCacheConfig,
+) -> anyhow::Result<()> {
+    let live_bytes_before = desktop_file_chunk_cache_live_bytes(conn)?;
+    stats.cache_live_bytes_before = live_bytes_before;
+    stats.cache_live_bytes_after = live_bytes_before;
+    if live_bytes_before <= config.max_live_bytes {
+        return Ok(());
+    }
+
+    ensure_desktop_file_chunk_cache_state_table(conn)?;
+    let mut state = desktop_file_chunk_cache_state(conn)?;
+    let now = now_ms() as u64;
+    let cutoff_ms = now.saturating_sub(config.active_min_age_secs.saturating_mul(1_000));
+    let scan_roots = desktop_file_scan_roots(root);
+    let candidates = desktop_file_chunk_cache_candidates(conn, config.max_files_per_pass)?;
+    let mut projected_live_bytes = live_bytes_before;
+    let mut selected_chunk_count = 0usize;
+    let mut selected = Vec::new();
+    let mut pinned_bytes = 0u64;
+
+    for candidate in candidates {
+        if projected_live_bytes <= config.target_live_bytes {
+            break;
+        }
+        if selected.len() >= config.max_files_per_pass {
+            pinned_bytes = pinned_bytes.saturating_add(candidate.bytes);
+            continue;
+        }
+        if selected_chunk_count.saturating_add(candidate.chunk_count) > config.max_chunks_per_pass {
+            pinned_bytes = pinned_bytes.saturating_add(candidate.bytes);
+            continue;
+        }
+        if candidate.created_at_ms > cutoff_ms {
+            pinned_bytes = pinned_bytes.saturating_add(candidate.bytes);
+            continue;
+        }
+        let Some(metadata) =
+            desktop_file_chunk_cache_eviction_metadata(root, &scan_roots, &candidate.document)
+        else {
+            pinned_bytes = pinned_bytes.saturating_add(candidate.bytes);
+            continue;
+        };
+        selected_chunk_count = selected_chunk_count.saturating_add(candidate.chunk_count);
+        projected_live_bytes = projected_live_bytes.saturating_sub(candidate.bytes);
+        selected.push(DesktopFileChunkCacheEviction {
+            candidate,
+            metadata,
+        });
+    }
+
+    if selected.is_empty() {
+        stats.cache_pinned_bytes = pinned_bytes.max(live_bytes_before);
+        stats.cache_over_quota_pinned_bytes =
+            live_bytes_before.saturating_sub(config.max_live_bytes);
+        return Ok(());
+    }
+
+    {
+        let tx = conn.transaction()?;
+        let now_f64 = now as f64;
+        for eviction in &selected {
+            let next_revision = maintenance_revision(
+                eviction
+                    .candidate
+                    .document
+                    .get("_rev")
+                    .and_then(Value::as_str)
+                    .or(eviction.candidate.revision.as_deref()),
+            );
+            let mut document = eviction.candidate.document.clone();
+            prepare_desktop_file_cache_eviction(
+                &mut document,
+                &next_revision,
+                now,
+                &eviction.metadata,
+            );
+            let data = serde_json::to_string(&document)?;
+            let updated = tx.execute(
+                "UPDATE \"ctox_business_os__desktop_files__v0\"
+                 SET revision = ?2, lastWriteTime = ?3, data = ?4
+                 WHERE id = ?1
+                   AND COALESCE(deleted, 0) = 0
+                   AND json_extract(data, '$.content_generation_id') = ?5",
+                params![
+                    eviction.candidate.file_id,
+                    next_revision,
+                    now_f64,
+                    data,
+                    eviction.candidate.generation_id,
+                ],
+            )?;
+            if updated == 0 {
+                continue;
+            }
+            let (chunk_id_lower, chunk_id_upper) =
+                desktop_file_chunk_id_bounds(&eviction.candidate.file_id);
+            let removed_chunks = tx.execute(
+                "DELETE FROM \"ctox_business_os__desktop_file_chunks__v0\"
+                 WHERE rowid IN (
+                   SELECT rowid FROM \"ctox_business_os__desktop_file_chunks__v0\"
+                   WHERE id >= ?1
+                     AND id < ?2
+                     AND COALESCE(deleted, 0) = 0
+                     AND json_extract(data, '$.generation_id') = ?3
+                   LIMIT ?4
+                 )",
+                params![
+                    chunk_id_lower,
+                    chunk_id_upper,
+                    eviction.candidate.generation_id,
+                    config.max_chunks_per_pass as i64,
+                ],
+            )?;
+            stats.evicted_cache_files = stats.evicted_cache_files.saturating_add(1);
+            stats.removed_cache_chunks = stats.removed_cache_chunks.saturating_add(removed_chunks);
+            stats.removed_cache_bytes = stats
+                .removed_cache_bytes
+                .saturating_add(eviction.candidate.bytes);
+        }
+        tx.commit()?;
+    }
+
+    let live_bytes_after = desktop_file_chunk_cache_live_bytes(conn)?;
+    stats.cache_live_bytes_after = live_bytes_after;
+    stats.cache_pinned_bytes = live_bytes_after;
+    stats.cache_over_quota_pinned_bytes = live_bytes_after.saturating_sub(config.max_live_bytes);
+    if stats.removed_cache_chunks == 0 {
+        return Ok(());
+    }
+
+    state.last_eviction_at_ms = now;
+    state.last_live_bytes = live_bytes_after;
+    state.last_pinned_bytes = stats.cache_pinned_bytes;
+    state.last_deleted_bytes = stats.removed_cache_bytes;
+    state.last_deleted_chunks = stats.removed_cache_chunks as u64;
+
+    if stats.removed_cache_bytes >= config.wal_checkpoint_min_bytes
+        && now.saturating_sub(state.last_checkpoint_at_ms)
+            >= config.checkpoint_min_interval_secs.saturating_mul(1_000)
+    {
+        if conn
+            .execute_batch("PRAGMA wal_checkpoint(PASSIVE); PRAGMA optimize;")
+            .is_ok()
+        {
+            stats.wal_checkpoint_ran = true;
+            state.last_checkpoint_at_ms = now;
+        }
+    }
+
+    let page_size = sqlite_pragma_u64(conn, "page_size").unwrap_or(0);
+    let freelist_count = sqlite_pragma_u64(conn, "freelist_count").unwrap_or(0);
+    let reclaimable_bytes = page_size.saturating_mul(freelist_count);
+    if reclaimable_bytes >= config.vacuum_min_reclaim_bytes
+        && now.saturating_sub(state.last_vacuum_at_ms)
+            >= config.vacuum_min_interval_secs.saturating_mul(1_000)
+    {
+        if conn.execute_batch("VACUUM; PRAGMA optimize;").is_ok() {
+            stats.vacuum_ran = true;
+            state.last_vacuum_at_ms = now;
+        }
+    }
+
+    save_desktop_file_chunk_cache_state(conn, &state)?;
+    Ok(())
+}
+
+fn desktop_file_chunk_cache_live_bytes(conn: &Connection) -> anyhow::Result<u64> {
+    let bytes: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(
+             COALESCE(
+               CAST(json_extract(data, '$.size_bytes') AS INTEGER),
+               length(COALESCE(json_extract(data, '$.data'), '')),
+               0
+             )
+           ), 0)
+         FROM \"ctox_business_os__desktop_file_chunks__v0\"
+         WHERE COALESCE(deleted, 0) = 0",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(u64::try_from(bytes).unwrap_or(0))
+}
+
+fn desktop_file_chunk_cache_candidates(
+    conn: &Connection,
+    limit: usize,
+) -> anyhow::Result<Vec<DesktopFileChunkCacheCandidate>> {
+    let mut stmt = conn.prepare(
+        "SELECT f.id,
+                f.revision,
+                f.data,
+                json_extract(f.data, '$.content_generation_id') AS generation_id,
+                COUNT(c.rowid) AS chunk_count,
+                COALESCE(SUM(
+                  COALESCE(
+                    CAST(json_extract(c.data, '$.size_bytes') AS INTEGER),
+                    length(COALESCE(json_extract(c.data, '$.data'), '')),
+                    0
+                  )
+                ), 0) AS byte_count,
+                COALESCE(
+                  CAST(json_extract(f.data, '$.content_synced_at_ms') AS INTEGER),
+                  MIN(CAST(json_extract(c.data, '$.created_at_ms') AS INTEGER)),
+                  CAST(f.lastWriteTime AS INTEGER),
+                  0
+                ) AS created_at_ms
+         FROM \"ctox_business_os__desktop_file_chunks__v0\" AS c
+         JOIN \"ctox_business_os__desktop_files__v0\" AS f
+           ON f.id = json_extract(c.data, '$.file_id')
+          AND json_extract(f.data, '$.content_generation_id') =
+              json_extract(c.data, '$.generation_id')
+         WHERE COALESCE(c.deleted, 0) = 0
+           AND COALESCE(f.deleted, 0) = 0
+           AND COALESCE(json_extract(f.data, '$._deleted'), 0) = 0
+           AND COALESCE(json_extract(f.data, '$.is_deleted'), 0) = 0
+           AND json_extract(f.data, '$.source') = 'ctox-core'
+           AND json_extract(f.data, '$.kind') = 'file'
+           AND json_extract(f.data, '$.content_state') = 'available'
+         GROUP BY f.id, generation_id
+         ORDER BY created_at_ms ASC, byte_count DESC
+         LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit as i64], |row| {
+        let data: String = row.get(2)?;
+        let document = serde_json::from_str::<Value>(&data).unwrap_or(Value::Null);
+        let chunk_count: i64 = row.get(4)?;
+        let bytes: i64 = row.get(5)?;
+        let created_at_ms: i64 = row.get(6)?;
+        Ok(DesktopFileChunkCacheCandidate {
+            file_id: row.get(0)?,
+            revision: row.get(1)?,
+            document,
+            generation_id: row.get(3)?,
+            chunk_count: usize::try_from(chunk_count).unwrap_or(usize::MAX),
+            bytes: u64::try_from(bytes).unwrap_or(0),
+            created_at_ms: u64::try_from(created_at_ms).unwrap_or(0),
+        })
+    })?;
+    let mut candidates = Vec::new();
+    for row in rows {
+        let candidate = row?;
+        if candidate.document.is_object()
+            && !candidate.generation_id.trim().is_empty()
+            && candidate.chunk_count > 0
+        {
+            candidates.push(candidate);
+        }
+    }
+    Ok(candidates)
+}
+
+fn desktop_file_chunk_cache_eviction_metadata(
+    root: &Path,
+    scan_roots: &[DesktopFileScanRoot],
+    document: &Value,
+) -> Option<fs::Metadata> {
+    let path = document
+        .get("local_path")
+        .or_else(|| document.get("path"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)?;
+    ensure_safe_desktop_file_index_path(&path, "desktop file cache eviction").ok()?;
+    let metadata = fs::metadata(&path).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    if document.get("size_bytes").and_then(Value::as_u64) != Some(metadata.len()) {
+        return None;
+    }
+    let modified_at_ms = metadata_modified_at_ms(&metadata);
+    if document
+        .get("mtime_ms")
+        .and_then(Value::as_u64)
+        .map(u128::from)
+        != Some(modified_at_ms)
+    {
+        return None;
+    }
+    if scan_roots
+        .iter()
+        .any(|scan_root| path.starts_with(&scan_root.path))
+        && should_eager_sync_file(&path, &metadata)
+    {
+        return None;
+    }
+    if !path.starts_with(root)
+        && document.get("source").and_then(Value::as_str) != Some("ctox-core")
+    {
+        return None;
+    }
+    Some(metadata)
+}
+
+fn prepare_desktop_file_cache_eviction(
+    document: &mut Value,
+    revision: &str,
+    now: u64,
+    metadata: &fs::Metadata,
+) {
+    let modified_at_ms = metadata_modified_at_ms(metadata);
+    if let Some(object) = document.as_object_mut() {
+        object.insert("_rev".to_string(), Value::String(revision.to_string()));
+        object.insert("_meta".to_string(), json!({ "lwt": now as f64 }));
+        object.insert(
+            "content_state".to_string(),
+            Value::String("lazy".to_string()),
+        );
+        object.insert("content_generation_id".to_string(), Value::Null);
+        object.insert("chunk_count".to_string(), Value::Null);
+        object.insert("generation_verified_at_ms".to_string(), Value::Null);
+        object.insert("content_synced_at_ms".to_string(), Value::Null);
+        object.insert(
+            "content_hash".to_string(),
+            Value::String(format!("mtime:{modified_at_ms}:size:{}", metadata.len())),
+        );
+        object.insert(
+            "content_hash_scheme".to_string(),
+            Value::String(DESKTOP_FILE_CONTENT_HASH_SCHEME.to_string()),
+        );
+        object.insert("content_evicted_at_ms".to_string(), Value::from(now));
+        object.insert(
+            "content_eviction_reason".to_string(),
+            Value::String("desktop_file_chunk_cache_quota".to_string()),
+        );
+        object.insert("updated_at_ms".to_string(), Value::from(now));
+    }
+}
+
+fn ensure_desktop_file_chunk_cache_state_table(conn: &Connection) -> anyhow::Result<()> {
+    conn.execute(
+        &format!(
+            "CREATE TABLE IF NOT EXISTS {DESKTOP_FILE_CHUNK_CACHE_STATE_TABLE} (
+                id TEXT PRIMARY KEY,
+                updated_at_ms INTEGER NOT NULL,
+                value_json TEXT NOT NULL
+            )"
+        ),
+        [],
+    )
+    .context("ensure desktop file chunk cache state table")?;
+    Ok(())
+}
+
+fn desktop_file_chunk_cache_state(conn: &Connection) -> anyhow::Result<DesktopFileChunkCacheState> {
+    if !sqlite_table_exists(conn, DESKTOP_FILE_CHUNK_CACHE_STATE_TABLE)? {
+        return Ok(DesktopFileChunkCacheState::default());
+    }
+    let state_json = conn
+        .query_row(
+            &format!("SELECT value_json FROM {DESKTOP_FILE_CHUNK_CACHE_STATE_TABLE} WHERE id = ?1"),
+            [DESKTOP_FILE_CHUNK_CACHE_STATE_ID],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let Some(state_json) = state_json else {
+        return Ok(DesktopFileChunkCacheState::default());
+    };
+    Ok(serde_json::from_str(&state_json).unwrap_or_default())
+}
+
+fn save_desktop_file_chunk_cache_state(
+    conn: &Connection,
+    state: &DesktopFileChunkCacheState,
+) -> anyhow::Result<()> {
+    let now = now_ms() as u64;
+    let state_json = serde_json::to_string(state)?;
+    conn.execute(
+        &format!(
+            "INSERT INTO {DESKTOP_FILE_CHUNK_CACHE_STATE_TABLE}
+             (id, updated_at_ms, value_json)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(id) DO UPDATE SET
+               updated_at_ms = excluded.updated_at_ms,
+               value_json = excluded.value_json"
+        ),
+        params![DESKTOP_FILE_CHUNK_CACHE_STATE_ID, now, state_json],
+    )
+    .context("save desktop file chunk cache state")?;
+    Ok(())
+}
+
+fn sqlite_pragma_u64(conn: &Connection, name: &str) -> anyhow::Result<u64> {
+    let sql = format!("PRAGMA {name}");
+    let value: i64 = conn.query_row(&sql, [], |row| row.get(0))?;
+    Ok(u64::try_from(value).unwrap_or(0))
 }
 
 fn unsafe_desktop_file_index_candidates_sql(files_table: &str) -> String {
@@ -9630,6 +10147,21 @@ fn ensure_desktop_file_index_query_indexes(conn: &Connection) -> anyhow::Result<
         [],
     )
     .context("ensure desktop_files unsafe tombstone cleanup index")?;
+    conn.execute(
+        r#"
+        CREATE INDEX IF NOT EXISTS ctox_business_os_desktop_files_active_generation_idx
+        ON "ctox_business_os__desktop_files__v0" (
+            json_extract(data, '$.source'),
+            json_extract(data, '$.kind'),
+            json_extract(data, '$.content_state'),
+            json_extract(data, '$.content_generation_id'),
+            id
+        )
+        WHERE COALESCE(deleted, 0) = 0
+        "#,
+        [],
+    )
+    .context("ensure desktop_files active generation index")?;
     if sqlite_table_exists(conn, "ctox_business_os__desktop_file_chunks__v0")?
         && sqlite_table_has_column(conn, "ctox_business_os__desktop_file_chunks__v0", "deleted")?
     {
@@ -9645,6 +10177,21 @@ fn ensure_desktop_file_index_query_indexes(conn: &Connection) -> anyhow::Result<
             [],
         )
         .context("ensure desktop_file_chunks deleted index")?;
+        conn.execute(
+            r#"
+            CREATE INDEX IF NOT EXISTS ctox_business_os_desktop_file_chunks_live_owner_idx
+            ON "ctox_business_os__desktop_file_chunks__v0" (
+                COALESCE(deleted, 0),
+                json_extract(data, '$.file_id'),
+                json_extract(data, '$.generation_id'),
+                CAST(json_extract(data, '$.created_at_ms') AS INTEGER),
+                id
+            )
+            WHERE COALESCE(deleted, 0) = 0
+            "#,
+            [],
+        )
+        .context("ensure desktop_file_chunks live owner index")?;
     }
     Ok(())
 }
@@ -11059,9 +11606,9 @@ fn quote_sqlite_identifier(identifier: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusqlite::params;
     use rusqlite::Connection;
     use rusqlite::OptionalExtension;
+    use rusqlite::params;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_RXDB_DATABASE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -11071,12 +11618,16 @@ mod tests {
         let collections = business_record_projection_collections();
         assert!(!collections.iter().any(|name| name == "browser_frames"));
         assert!(!collections.iter().any(|name| name == "desktop_file_chunks"));
-        assert!(!collections
-            .iter()
-            .any(|name| name == "ctox_runtime_settings"));
-        assert!(!collections
-            .iter()
-            .any(|name| name == "business_module_catalog"));
+        assert!(
+            !collections
+                .iter()
+                .any(|name| name == "ctox_runtime_settings")
+        );
+        assert!(
+            !collections
+                .iter()
+                .any(|name| name == "business_module_catalog")
+        );
         // `knowledge_tables` is owned by the dedicated rows-embedding
         // projection (`sync_knowledge_tables_with_database`); the generic
         // business-record projection must not also write it.
@@ -11628,10 +12179,12 @@ mod tests {
                 .and_then(Value::as_str),
             Some("ctox.rxdb.subjects.runtime_counters.v1")
         );
-        assert!(status
-            .pointer("/performance/rxdb_subjects/lagged_items_total")
-            .and_then(Value::as_u64)
-            .is_some());
+        assert!(
+            status
+                .pointer("/performance/rxdb_subjects/lagged_items_total")
+                .and_then(Value::as_u64)
+                .is_some()
+        );
         assert!(is_native_peer_running_for_root(root.path()));
     }
 
@@ -13238,10 +13791,12 @@ mod tests {
             materialized.get("content_state").and_then(Value::as_str),
             Some("available")
         );
-        assert!(materialized
-            .get("content_synced_at_ms")
-            .and_then(Value::as_u64)
-            .is_some());
+        assert!(
+            materialized
+                .get("content_synced_at_ms")
+                .and_then(Value::as_u64)
+                .is_some()
+        );
         let materialized_chunks: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM ctox_business_os__desktop_file_chunks__v0 WHERE id LIKE ?1",
@@ -13851,18 +14406,24 @@ mod tests {
         assert_eq!(settings.get("ok").and_then(Value::as_bool), Some(true));
         assert!(settings.get("runtime").and_then(Value::as_object).is_some());
         assert!(settings.get("auth").and_then(Value::as_object).is_some());
-        assert!(settings
-            .get("harness_flow")
-            .and_then(Value::as_object)
-            .is_some());
-        assert!(settings
-            .get("queue_health")
-            .and_then(Value::as_object)
-            .is_some());
-        assert!(settings
-            .get("diagnostics")
-            .and_then(Value::as_object)
-            .is_some());
+        assert!(
+            settings
+                .get("harness_flow")
+                .and_then(Value::as_object)
+                .is_some()
+        );
+        assert!(
+            settings
+                .get("queue_health")
+                .and_then(Value::as_object)
+                .is_some()
+        );
+        assert!(
+            settings
+                .get("diagnostics")
+                .and_then(Value::as_object)
+                .is_some()
+        );
     }
 
     #[test]
@@ -14665,10 +15226,12 @@ mod tests {
             repaired.get("title").and_then(Value::as_str),
             Some("Projected document repaired")
         );
-        assert!(repaired
-            .get("_meta")
-            .and_then(|meta| meta.get("lwt"))
-            .is_some());
+        assert!(
+            repaired
+                .get("_meta")
+                .and_then(|meta| meta.get("lwt"))
+                .is_some()
+        );
         assert!(repaired.get("_rev").and_then(Value::as_str).is_some());
     }
 
@@ -15299,10 +15862,12 @@ mod tests {
                 command_payload.get("status").and_then(Value::as_str),
                 Some("failed")
             );
-            assert!(command_payload
-                .get("error")
-                .and_then(Value::as_str)
-                .is_some());
+            assert!(
+                command_payload
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .is_some()
+            );
         });
     }
 
@@ -15390,11 +15955,13 @@ mod tests {
                 repaired.get("tracking_status").and_then(Value::as_str),
                 Some("failed")
             );
-            assert!(message
-                .get("text")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("kein passender Command"));
+            assert!(
+                message
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .contains("kein passender Command")
+            );
         });
     }
 
@@ -16178,6 +16745,126 @@ mod tests {
     }
 
     #[test]
+    fn desktop_file_chunk_cache_quota_evicts_active_rematerializable_file() {
+        let root = safe_business_os_tempdir("chunk-cache-evict");
+        let file_path = root.path().join("materialized-cache.txt");
+        fs::write(&file_path, vec![b'a'; DESKTOP_FILE_CHUNK_SIZE + 128]).expect("write cache file");
+        sync_desktop_file_from_path(root.path(), &file_path).expect("sync cache file");
+        let canonical = file_path.canonicalize().expect("canonical cache file");
+        let file_id = desktop_file_id(&canonical);
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
+        let before_chunks: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ctox_business_os__desktop_file_chunks__v0 \
+                 WHERE id LIKE ?1 AND deleted = 0",
+                params![format!("{file_id}_%")],
+                |row| row.get(0),
+            )
+            .expect("chunk count before cache eviction");
+        assert!(before_chunks > 0);
+        drop(conn);
+
+        let stats = compact_desktop_file_index_store_sync_with_config(
+            root.path(),
+            None,
+            DesktopFileChunkCacheConfig {
+                max_live_bytes: 1,
+                target_live_bytes: 0,
+                active_min_age_secs: 0,
+                max_files_per_pass: 10,
+                max_chunks_per_pass: 100,
+                checkpoint_min_interval_secs: u64::MAX / 1_000,
+                wal_checkpoint_min_bytes: u64::MAX,
+                vacuum_min_interval_secs: u64::MAX / 1_000,
+                vacuum_min_reclaim_bytes: u64::MAX,
+            },
+        )
+        .expect("compact cache");
+        assert_eq!(stats.evicted_cache_files, 1, "{stats:?}");
+        assert_eq!(
+            stats.removed_cache_chunks, before_chunks as usize,
+            "{stats:?}"
+        );
+        assert_eq!(stats.cache_live_bytes_after, 0, "{stats:?}");
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("reopen sqlite");
+        let file = read_desktop_file_row(&conn, &file_id);
+        assert_eq!(
+            file.get("content_state").and_then(Value::as_str),
+            Some("lazy")
+        );
+        assert_eq!(file.get("content_generation_id"), Some(&Value::Null));
+        assert_eq!(file.get("chunk_count"), Some(&Value::Null));
+        assert_eq!(
+            file.get("content_eviction_reason").and_then(Value::as_str),
+            Some("desktop_file_chunk_cache_quota")
+        );
+        let after_chunks: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ctox_business_os__desktop_file_chunks__v0 \
+                 WHERE id LIKE ?1",
+                params![format!("{file_id}_%")],
+                |row| row.get(0),
+            )
+            .expect("chunk count after cache eviction");
+        assert_eq!(after_chunks, 0);
+    }
+
+    #[test]
+    fn desktop_file_chunk_cache_quota_keeps_eager_scan_root_file_pinned() {
+        let root = safe_business_os_tempdir("chunk-cache-pinned");
+        let import_dir = root.path().join("runtime/business-os-imports");
+        fs::create_dir_all(&import_dir).expect("create import scan root");
+        let file_path = import_dir.join("small-eager.txt");
+        fs::write(&file_path, b"small eager scan-root file").expect("write eager file");
+        sync_desktop_file_from_path(root.path(), &file_path).expect("sync eager file");
+        let canonical = file_path.canonicalize().expect("canonical eager file");
+        let file_id = desktop_file_id(&canonical);
+
+        let stats = compact_desktop_file_index_store_sync_with_config(
+            root.path(),
+            None,
+            DesktopFileChunkCacheConfig {
+                max_live_bytes: 1,
+                target_live_bytes: 0,
+                active_min_age_secs: 0,
+                max_files_per_pass: 10,
+                max_chunks_per_pass: 100,
+                checkpoint_min_interval_secs: u64::MAX / 1_000,
+                wal_checkpoint_min_bytes: u64::MAX,
+                vacuum_min_interval_secs: u64::MAX / 1_000,
+                vacuum_min_reclaim_bytes: u64::MAX,
+            },
+        )
+        .expect("compact cache");
+        assert_eq!(stats.evicted_cache_files, 0, "{stats:?}");
+        assert_eq!(stats.removed_cache_chunks, 0, "{stats:?}");
+        assert!(stats.cache_over_quota_pinned_bytes > 0, "{stats:?}");
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("reopen sqlite");
+        let file = read_desktop_file_row(&conn, &file_id);
+        assert_eq!(
+            file.get("content_state").and_then(Value::as_str),
+            Some("available")
+        );
+        assert!(
+            file.get("content_generation_id")
+                .and_then(Value::as_str)
+                .is_some_and(|generation| !generation.is_empty())
+        );
+        let chunks: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ctox_business_os__desktop_file_chunks__v0 \
+                 WHERE id LIKE ?1 AND deleted = 0",
+                params![format!("{file_id}_%")],
+                |row| row.get(0),
+            )
+            .expect("pinned chunk count");
+        assert!(chunks > 0);
+    }
+
+    #[test]
     fn desktop_file_index_maintenance_purges_old_unsafe_file_tombstones() {
         let root = tempfile::tempdir().expect("temp root");
         let database_path = store::rxdb_store_path(root.path());
@@ -16570,9 +17257,11 @@ mod tests {
             .expect("query index list")
             .collect::<Result<Vec<_>, _>>()
             .expect("collect index list");
-        assert!(index_names
-            .iter()
-            .any(|name| name == "ctox_business_os_desktop_files_live_core_idx"));
+        assert!(
+            index_names
+                .iter()
+                .any(|name| name == "ctox_business_os_desktop_files_live_core_idx")
+        );
         drop(conn);
 
         let documents = load_live_ctox_desktop_file_documents_sync(root.path())
@@ -16763,6 +17452,16 @@ mod tests {
         );
     }
 
+    fn safe_business_os_tempdir(prefix: &str) -> tempfile::TempDir {
+        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target/test-temp/business-os-rxdb-peer");
+        fs::create_dir_all(&base).expect("create safe test temp root");
+        tempfile::Builder::new()
+            .prefix(prefix)
+            .tempdir_in(base)
+            .expect("safe business os tempdir")
+    }
+
     fn read_desktop_file_row(conn: &Connection, file_id: &str) -> Value {
         let file_json: String = conn
             .query_row(
@@ -16939,10 +17638,12 @@ mod tests {
             original.get("tombstone_reason").and_then(Value::as_str),
             Some("missing_from_scan")
         );
-        assert!(original
-            .get("deleted_at_ms")
-            .and_then(Value::as_u64)
-            .is_some());
+        assert!(
+            original
+                .get("deleted_at_ms")
+                .and_then(Value::as_u64)
+                .is_some()
+        );
 
         let renamed_json: String = conn
             .query_row(
