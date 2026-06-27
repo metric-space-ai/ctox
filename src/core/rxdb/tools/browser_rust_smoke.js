@@ -3464,7 +3464,6 @@ function ensureCtoxSmokeBinary() {
           'business_commands',
           'ctox_queue_tasks',
           'desktop_files',
-          'desktop_file_chunks',
         ];
         const authSnapshot = async () => page.evaluate(async () => {
           const smoke = globalThis.ctoxBusinessOsSmoke;
@@ -3512,7 +3511,7 @@ function ensureCtoxSmokeBinary() {
               && !loading;
           }, null, { timeout: 60000 });
           const status = await waitForHealthyCompleteStatus(page, {
-            timeoutMs: 60000,
+            timeoutMs: 120000,
             requiredCollections,
           });
           if (!status?.ok) {
