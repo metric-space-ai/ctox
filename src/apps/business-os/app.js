@@ -24,7 +24,7 @@ import {
   renderGlobalCtoxAgentScopeHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260626-skf-dialog-knowledge-v2';
+} from './shared/shell-permissions-ui.js?v=20260627-peer-restart-timeout-v1';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -37,7 +37,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260626-skf-dialog-knowledge-v2';
+const APP_BUILD = '20260627-peer-restart-timeout-v1';
 
 ensureShellStylesheets();
 
