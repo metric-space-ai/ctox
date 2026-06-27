@@ -2085,14 +2085,7 @@ async fn run_native_peer(
     }
     match compact_desktop_file_index_store(&root).await {
         Ok(stats) if stats.changed() => {
-            eprintln!(
-                "[business-os] desktop file index maintenance: tombstoned {} unsafe file(s), \
-                 removed {} unsafe chunk(s), {} stale chunk(s), {} deleted chunk tombstone(s)",
-                stats.tombstoned_unsafe_files,
-                stats.removed_unsafe_chunks,
-                stats.removed_stale_chunks,
-                stats.removed_deleted_chunks
-            );
+            log_desktop_file_index_maintenance_stats(&stats);
         }
         Ok(_) => {}
         Err(err) => {
@@ -2969,26 +2962,7 @@ async fn sync_desktop_file_index_background_loop(
             if run_maintenance {
                 match compact_desktop_file_index_store(&root).await {
                     Ok(stats) if stats.changed() => {
-                        eprintln!(
-                            "[business-os] desktop file index maintenance: tombstoned {} unsafe file(s), \
-                             removed {} unsafe chunk(s), {} stale chunk(s), {} deleted chunk tombstone(s), \
-                             {} unsafe file tombstone(s), evicted {} cached file(s), removed {} cache chunk(s) \
-                             ({} byte(s), live {} -> {}, pinned {}, over-quota pinned {}, checkpoint {}, vacuum {})",
-                            stats.tombstoned_unsafe_files,
-                            stats.removed_unsafe_chunks,
-                            stats.removed_stale_chunks,
-                            stats.removed_deleted_chunks,
-                            stats.removed_unsafe_file_tombstones,
-                            stats.evicted_cache_files,
-                            stats.removed_cache_chunks,
-                            stats.removed_cache_bytes,
-                            stats.cache_live_bytes_before,
-                            stats.cache_live_bytes_after,
-                            stats.cache_pinned_bytes,
-                            stats.cache_over_quota_pinned_bytes,
-                            stats.wal_checkpoint_ran,
-                            stats.vacuum_ran
-                        );
+                        log_desktop_file_index_maintenance_stats(&stats);
                     }
                     Ok(_) => {}
                     Err(err) => {
@@ -9386,6 +9360,29 @@ impl DesktopFileIndexMaintenanceStats {
             || self.wal_checkpoint_ran
             || self.vacuum_ran
     }
+}
+
+fn log_desktop_file_index_maintenance_stats(stats: &DesktopFileIndexMaintenanceStats) {
+    eprintln!(
+        "[business-os] desktop file index maintenance: tombstoned {} unsafe file(s), \
+         removed {} unsafe chunk(s), {} stale chunk(s), {} deleted chunk tombstone(s), \
+         {} unsafe file tombstone(s), evicted {} cached file(s), removed {} cache chunk(s) \
+         ({} byte(s), live {} -> {}, pinned {}, over-quota pinned {}, checkpoint {}, vacuum {})",
+        stats.tombstoned_unsafe_files,
+        stats.removed_unsafe_chunks,
+        stats.removed_stale_chunks,
+        stats.removed_deleted_chunks,
+        stats.removed_unsafe_file_tombstones,
+        stats.evicted_cache_files,
+        stats.removed_cache_chunks,
+        stats.removed_cache_bytes,
+        stats.cache_live_bytes_before,
+        stats.cache_live_bytes_after,
+        stats.cache_pinned_bytes,
+        stats.cache_over_quota_pinned_bytes,
+        stats.wal_checkpoint_ran,
+        stats.vacuum_ran
+    );
 }
 
 #[derive(Debug, Clone, Copy)]
