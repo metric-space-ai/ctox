@@ -25,29 +25,29 @@ use anyhow::Context;
 use base64::Engine;
 use chrono::{DateTime, FixedOffset};
 use rusqlite::types::Value as SqlValue;
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params, params_from_iter};
+use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension};
 use rxdb::plugins::replication_webrtc::{
-    CollectionAuthzHook, DocumentReadAuthzHook, RTCIceServer, RxWebRTCReplicationPool,
-    WebRTCRsConnectionHandler, file_fetch_handler::FileRange,
+    file_fetch_handler::FileRange, CollectionAuthzHook, DocumentReadAuthzHook, RTCIceServer,
+    RxWebRTCReplicationPool, WebRTCRsConnectionHandler,
 };
 use rxdb::rx_collection::RxCollection;
 use rxdb::rx_collection_helper::fill_object_data_before_insert;
-use rxdb::rx_database::{RxCollectionCreator, RxDatabase, RxDatabaseCreator, create_rx_database};
-use rxdb::storage::sqlite::{RxStorageSqliteSettings, get_rx_storage_sqlite};
+use rxdb::rx_database::{create_rx_database, RxCollectionCreator, RxDatabase, RxDatabaseCreator};
+use rxdb::storage::sqlite::{get_rx_storage_sqlite, RxStorageSqliteSettings};
 use rxdb::types::{BulkWriteRow, HashOutput, JsonSchema, MangoQuery, RxJsonSchema};
-use serde_json::Value;
 use serde_json::json;
+use serde_json::Value;
 use sha2::Digest;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
@@ -4619,11 +4619,9 @@ async fn drain_browser_session_inputs(
                 "session_id": { "$eq": session_id },
                 "status": { "$eq": "pending" }
             })),
-            sort: Some(vec![
-                [("seq".to_string(), "asc".to_string())]
-                    .into_iter()
-                    .collect(),
-            ]),
+            sort: Some(vec![[("seq".to_string(), "asc".to_string())]
+                .into_iter()
+                .collect()]),
             limit: Some(64),
             ..Default::default()
         }))
@@ -4991,11 +4989,9 @@ async fn gc_consumed_browser_input_events(database: &Arc<RxDatabase>) -> anyhow:
                     "status": { "$eq": status },
                     "created_at_ms": { "$lt": cutoff }
                 })),
-                sort: Some(vec![
-                    [("created_at_ms".to_string(), "asc".to_string())]
-                        .into_iter()
-                        .collect(),
-                ]),
+                sort: Some(vec![[("created_at_ms".to_string(), "asc".to_string())]
+                    .into_iter()
+                    .collect()]),
                 limit: Some(BROWSER_INPUT_EVENT_GC_LIMIT),
                 ..Default::default()
             }))
@@ -11017,9 +11013,9 @@ fn quote_sqlite_identifier(identifier: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::params;
     use rusqlite::Connection;
     use rusqlite::OptionalExtension;
-    use rusqlite::params;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_RXDB_DATABASE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -11053,16 +11049,12 @@ mod tests {
         let collections = business_record_projection_collections();
         assert!(!collections.iter().any(|name| name == "browser_frames"));
         assert!(!collections.iter().any(|name| name == "desktop_file_chunks"));
-        assert!(
-            !collections
-                .iter()
-                .any(|name| name == "ctox_runtime_settings")
-        );
-        assert!(
-            !collections
-                .iter()
-                .any(|name| name == "business_module_catalog")
-        );
+        assert!(!collections
+            .iter()
+            .any(|name| name == "ctox_runtime_settings"));
+        assert!(!collections
+            .iter()
+            .any(|name| name == "business_module_catalog"));
         // `knowledge_tables` is owned by the dedicated rows-embedding
         // projection (`sync_knowledge_tables_with_database`); the generic
         // business-record projection must not also write it.
@@ -11614,12 +11606,10 @@ mod tests {
                 .and_then(Value::as_str),
             Some("ctox.rxdb.subjects.runtime_counters.v1")
         );
-        assert!(
-            status
-                .pointer("/performance/rxdb_subjects/lagged_items_total")
-                .and_then(Value::as_u64)
-                .is_some()
-        );
+        assert!(status
+            .pointer("/performance/rxdb_subjects/lagged_items_total")
+            .and_then(Value::as_u64)
+            .is_some());
         assert!(is_native_peer_running_for_root(root.path()));
     }
 
@@ -13226,12 +13216,10 @@ mod tests {
             materialized.get("content_state").and_then(Value::as_str),
             Some("available")
         );
-        assert!(
-            materialized
-                .get("content_synced_at_ms")
-                .and_then(Value::as_u64)
-                .is_some()
-        );
+        assert!(materialized
+            .get("content_synced_at_ms")
+            .and_then(Value::as_u64)
+            .is_some());
         let materialized_chunks: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM ctox_business_os__desktop_file_chunks__v0 WHERE id LIKE ?1",
@@ -13841,24 +13829,18 @@ mod tests {
         assert_eq!(settings.get("ok").and_then(Value::as_bool), Some(true));
         assert!(settings.get("runtime").and_then(Value::as_object).is_some());
         assert!(settings.get("auth").and_then(Value::as_object).is_some());
-        assert!(
-            settings
-                .get("harness_flow")
-                .and_then(Value::as_object)
-                .is_some()
-        );
-        assert!(
-            settings
-                .get("queue_health")
-                .and_then(Value::as_object)
-                .is_some()
-        );
-        assert!(
-            settings
-                .get("diagnostics")
-                .and_then(Value::as_object)
-                .is_some()
-        );
+        assert!(settings
+            .get("harness_flow")
+            .and_then(Value::as_object)
+            .is_some());
+        assert!(settings
+            .get("queue_health")
+            .and_then(Value::as_object)
+            .is_some());
+        assert!(settings
+            .get("diagnostics")
+            .and_then(Value::as_object)
+            .is_some());
     }
 
     #[test]
@@ -14661,12 +14643,10 @@ mod tests {
             repaired.get("title").and_then(Value::as_str),
             Some("Projected document repaired")
         );
-        assert!(
-            repaired
-                .get("_meta")
-                .and_then(|meta| meta.get("lwt"))
-                .is_some()
-        );
+        assert!(repaired
+            .get("_meta")
+            .and_then(|meta| meta.get("lwt"))
+            .is_some());
         assert!(repaired.get("_rev").and_then(Value::as_str).is_some());
     }
 
@@ -15297,12 +15277,10 @@ mod tests {
                 command_payload.get("status").and_then(Value::as_str),
                 Some("failed")
             );
-            assert!(
-                command_payload
-                    .get("error")
-                    .and_then(Value::as_str)
-                    .is_some()
-            );
+            assert!(command_payload
+                .get("error")
+                .and_then(Value::as_str)
+                .is_some());
         });
     }
 
@@ -15390,13 +15368,11 @@ mod tests {
                 repaired.get("tracking_status").and_then(Value::as_str),
                 Some("failed")
             );
-            assert!(
-                message
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .contains("kein passender Command")
-            );
+            assert!(message
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("kein passender Command"));
         });
     }
 
@@ -16440,11 +16416,9 @@ mod tests {
             .expect("query index list")
             .collect::<Result<Vec<_>, _>>()
             .expect("collect index list");
-        assert!(
-            index_names
-                .iter()
-                .any(|name| name == "ctox_business_os_desktop_files_live_core_idx")
-        );
+        assert!(index_names
+            .iter()
+            .any(|name| name == "ctox_business_os_desktop_files_live_core_idx"));
         drop(conn);
 
         let documents = load_live_ctox_desktop_file_documents_sync(root.path())
@@ -16811,12 +16785,10 @@ mod tests {
             original.get("tombstone_reason").and_then(Value::as_str),
             Some("missing_from_scan")
         );
-        assert!(
-            original
-                .get("deleted_at_ms")
-                .and_then(Value::as_u64)
-                .is_some()
-        );
+        assert!(original
+            .get("deleted_at_ms")
+            .and_then(Value::as_u64)
+            .is_some());
 
         let renamed_json: String = conn
             .query_row(
