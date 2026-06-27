@@ -3511,18 +3511,35 @@ function ensureCtoxSmokeBinary() {
           };
         });
         const waitForAuthenticatedShell = async (label) => {
-          await page.waitForFunction(() => {
-            const smoke = globalThis.ctoxBusinessOsSmoke;
-            const state = smoke?.state || globalThis.CTOX_BUSINESS_OS_APP;
-            const modulesLoaded = Array.isArray(state?.modules) && state.modules.length > 0;
-            const shellOpened = Boolean(document.body?.dataset?.moduleShell);
-            const loading = Boolean(document.body?.dataset?.moduleLoading);
-            return Boolean(smoke)
-              && Boolean(state?.session?.authenticated)
-              && modulesLoaded
-              && shellOpened
-              && !loading;
-          }, null, { timeout: 60000 });
+          try {
+            await page.waitForFunction(() => {
+              const smoke = globalThis.ctoxBusinessOsSmoke;
+              const state = smoke?.state || globalThis.CTOX_BUSINESS_OS_APP;
+              const modulesLoaded = Array.isArray(state?.modules) && state.modules.length > 0;
+              const shellOpened = Boolean(document.body?.dataset?.moduleShell);
+              const loading = Boolean(document.body?.dataset?.moduleLoading);
+              return Boolean(smoke)
+                && Boolean(state?.session?.authenticated)
+                && modulesLoaded
+                && shellOpened
+                && !loading;
+            }, null, { timeout: 60000 });
+          } catch (error) {
+            const snapshot = await authSnapshot().catch((snapshotError) => ({
+              snapshotError: snapshotError?.message || String(snapshotError),
+            }));
+            const status = await page.evaluate((collections) => globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({
+              includeCounts: false,
+              requiredCollections: collections,
+            }), requiredCollections).catch((statusError) => ({
+              statusError: statusError?.message || String(statusError),
+            }));
+            throw new Error(`Business OS auth smoke ${label} did not reach authenticated shell: ${JSON.stringify({
+              error: error?.message || String(error),
+              snapshot,
+              status,
+            }, null, 2)}`);
+          }
           const status = await waitForHealthyCompleteStatus(page, {
             timeoutMs: 120000,
             requiredCollections,
@@ -3648,10 +3665,26 @@ function ensureCtoxSmokeBinary() {
           && !tampered.activeModule;
         await page.locator('[data-login-gate-form] input[name="user"]').fill('admin', { timeout: 10000 });
         await page.locator('[data-login-gate-form] input[name="password"]').fill('admin', { timeout: 10000 });
-        await Promise.all([
-          page.waitForURL((url) => url.pathname === '/' || url.pathname.endsWith('/index.html'), { timeout: 15000 }).catch(() => {}),
-          page.locator('[data-login-gate-form] [data-gate-submit]').click({ timeout: 10000 }),
-        ]);
+        const loginResponsePromise = page.waitForResponse((response) => {
+          try {
+            const url = new URL(response.url());
+            return url.origin === `http://127.0.0.1:${businessPort}`
+              && url.pathname === '/login'
+              && response.request().method() === 'POST';
+          } catch {
+            return false;
+          }
+        }, { timeout: 15000 });
+        await page.locator('[data-login-gate-form] [data-gate-submit]').click({ timeout: 10000 });
+        const loginResponse = await loginResponsePromise;
+        const loginPayload = await loginResponse.json().catch(() => null);
+        if (!loginResponse.ok() || loginPayload?.authenticated !== true) {
+          throw new Error(`Business OS auth smoke login request failed: ${JSON.stringify({
+            status: loginResponse.status(),
+            payload: loginPayload,
+          }, null, 2)}`);
+        }
+        await page.waitForURL((url) => url.pathname === '/' || url.pathname.endsWith('/index.html'), { timeout: 15000 }).catch(() => {});
         await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
         await gotoInstrumentedSmokeUrl('login');
         const afterLogin = await waitForAuthenticatedShell('login');
