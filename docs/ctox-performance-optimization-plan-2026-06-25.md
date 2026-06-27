@@ -2276,6 +2276,14 @@ Implementation status:
   equivalent ranges still deduplicate. Persisted file-demand chunks now write
   through one `bulkWrite()` call per fetch instead of one transaction per
   received chunk.
+- Done on 2026-06-27 for file-fetch retained-byte diagnostics: the shared
+  demand-loading transport now reports current `bufferedFileChunkBytes` and
+  peak `maxBufferedFileChunkBytes` in addition to chunk counts. The transport
+  smoke drives a successful two-chunk `rxdb.file.fetch`, proves the current
+  byte count drops back to zero on completion, and keeps the peak byte count
+  available for release diagnostics. The app-local RxDB bundle was rebuilt and
+  the shared `db.js`/`sync.js` cache-busters were bumped together to
+  `20260627-file-buffer-bytes-v1`.
 - Still open: broader browser chunk-stream/range APIs and any remaining
   non-central upload/import paths, blob/chunk read/range APIs, Research blob
   reads, Universal Importer/file-integrity helpers, schema-aware file-demand
@@ -2288,6 +2296,11 @@ Implementation status:
 Validation:
 
 - `node src/apps/business-os/rxdb/tests/sidecar-storage-smoke.mjs` passed.
+- `node src/apps/business-os/rxdb/tests/demand-loading-transport-smoke.mjs`
+  passed on 2026-06-27.
+- `node src/apps/business-os/rxdb/tests/run-all.mjs` passed on 2026-06-27
+  after the file-fetch retained-byte diagnostics change: 50 passed, 0 failed,
+  2 skipped because the wire daemon was not built.
 - `node src/apps/business-os/rxdb/tests/demand-loader-smoke.mjs` passed.
 - `node src/apps/business-os/rxdb/tests/demand-invalidation-hotpath-smoke.mjs` passed.
 - `node src/apps/business-os/modules/cv-print-builder/tests/cv-print-builder.test.mjs` passed.
@@ -2887,8 +2900,8 @@ The performance problem is structurally fixed only when:
 1. Add hard measurement gates before the next release:
    remaining browser spies for `scanQueryWindows()`, sidecar eviction scans,
    local-push changed-since
-   scans, live-query full re-query, file-fetch peak retained bytes, heavy
-   diagnostics snapshots, and remaining broad chunk-consumer/source guards.
+   scans, live-query full re-query, heavy diagnostics snapshots, and remaining
+   broad chunk-consumer/source guards.
 2. Remove remaining P1 daemon idle-loop sources:
    Notes dirty flag/watcher, desktop-file watcher/dirty roots with slow
    fallback, provider-specific IMAP IDLE/delta token support, and finer service
