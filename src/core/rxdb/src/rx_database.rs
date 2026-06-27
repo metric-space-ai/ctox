@@ -777,7 +777,7 @@ fn schemas_allow_additive_optional_properties(stored: &Value, current: &Value) -
         return false;
     };
     for (key, stored_value) in stored_obj {
-        if key == "properties" || key == "required" {
+        if schema_meta_repair_ignores_top_level_key(key) {
             continue;
         }
         if current_obj.get(key) != Some(stored_value) {
@@ -785,7 +785,7 @@ fn schemas_allow_additive_optional_properties(stored: &Value, current: &Value) -
         }
     }
     for (key, current_value) in current_obj {
-        if key == "properties" || key == "required" {
+        if schema_meta_repair_ignores_top_level_key(key) {
             continue;
         }
         if stored_obj.get(key) != Some(current_value) {
@@ -823,6 +823,13 @@ fn schemas_allow_additive_optional_properties(stored: &Value, current: &Value) -
         .keys()
         .filter(|name| !stored_properties.contains_key(*name))
         .all(|name| !current_required.contains(name))
+}
+
+fn schema_meta_repair_ignores_top_level_key(key: &str) -> bool {
+    // Index changes are storage metadata, not document-shape changes. The
+    // collection storage instance creates missing indexes after the meta hash is
+    // repaired, while stale extra indexes are harmless for compatibility.
+    matches!(key, "properties" | "required" | "indexes")
 }
 
 fn schema_required_fields(schema: &Value) -> std::collections::BTreeSet<String> {
@@ -1027,6 +1034,80 @@ mod tests {
         });
 
         assert!(schemas_compatible_for_meta_repair(&stored, &current));
+    }
+
+    #[test]
+    fn schema_meta_repair_allows_index_only_drift() {
+        let stored = json!({
+            "version": 1,
+            "primaryKey": "id",
+            "type": "object",
+            "properties": {
+                "id": { "type": "string" },
+                "command_id": { "type": "string" },
+                "status": { "type": "string" },
+                "_deleted": { "type": "boolean" },
+                "_rev": { "type": "string" },
+                "_meta": { "type": "object" },
+                "_attachments": { "type": "object" }
+            },
+            "required": ["id", "command_id", "status", "_deleted", "_rev", "_meta", "_attachments"],
+            "indexes": [["_deleted", "id"], ["_meta.lwt", "id"]],
+            "additionalProperties": false,
+            "encrypted": [],
+            "keyCompression": false
+        });
+        let current = json!({
+            "version": 1,
+            "primaryKey": "id",
+            "type": "object",
+            "properties": {
+                "id": { "type": "string" },
+                "command_id": { "type": "string" },
+                "status": { "type": "string" }
+            },
+            "required": ["id", "command_id", "status"],
+            "indexes": [
+                ["_deleted", "status", "id"],
+                ["_deleted", "command_id", "id"],
+                ["_meta.lwt", "id"]
+            ],
+            "additionalProperties": false,
+            "encrypted": [],
+            "keyCompression": false
+        });
+
+        assert!(schemas_compatible_for_meta_repair(&stored, &current));
+    }
+
+    #[test]
+    fn schema_meta_repair_rejects_property_type_changes_despite_index_drift() {
+        let stored = json!({
+            "version": 0,
+            "primaryKey": "id",
+            "type": "object",
+            "properties": {
+                "id": { "type": "string" },
+                "status": { "type": "string" }
+            },
+            "required": ["id", "status"],
+            "indexes": [["_deleted", "id"]],
+            "additionalProperties": false
+        });
+        let current = json!({
+            "version": 0,
+            "primaryKey": "id",
+            "type": "object",
+            "properties": {
+                "id": { "type": "string" },
+                "status": { "type": "number" }
+            },
+            "required": ["id", "status"],
+            "indexes": [["_deleted", "status", "id"], ["_meta.lwt", "id"]],
+            "additionalProperties": false
+        });
+
+        assert!(!schemas_compatible_for_meta_repair(&stored, &current));
     }
 
     #[test]
