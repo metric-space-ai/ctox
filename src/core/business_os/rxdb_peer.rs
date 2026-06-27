@@ -3101,7 +3101,6 @@ async fn sync_desktop_file_index_background_loop(
         } else {
             desktop_file_index_sleep_interval(
                 has_scan_roots,
-                file_watch.is_some(),
                 last_maintenance_at,
                 last_full_scan_at,
                 SystemTime::now(),
@@ -10512,7 +10511,6 @@ fn desktop_file_index_should_collect_scan(
 
 fn desktop_file_index_sleep_interval(
     has_scan_roots: bool,
-    watcher_available: bool,
     last_maintenance_at: SystemTime,
     last_full_scan_at: Option<SystemTime>,
     now: SystemTime,
@@ -10533,9 +10531,6 @@ fn desktop_file_index_sleep_interval(
             now,
         );
         return discovery_due.min(maintenance_due);
-    }
-    if !watcher_available {
-        return Duration::from_secs(DESKTOP_FILE_SCAN_INTERVAL_SECS);
     }
     let fallback_due = last_full_scan_at
         .map(|last_full_scan_at| {
@@ -16652,16 +16647,18 @@ mod tests {
     }
 
     #[test]
-    fn desktop_file_background_sleep_uses_watcher_fallback_when_available() {
+    fn desktop_file_background_sleep_uses_slow_fallback_after_successful_scan() {
         let first_scan_at = UNIX_EPOCH + Duration::from_secs(1_000);
         let now = first_scan_at + Duration::from_secs(DESKTOP_FILE_SCAN_INTERVAL_SECS);
         assert_eq!(
-            desktop_file_index_sleep_interval(true, false, first_scan_at, Some(first_scan_at), now),
-            Duration::from_secs(DESKTOP_FILE_SCAN_INTERVAL_SECS),
-            "without a watcher the background loop must keep the cheap polling fallback"
+            desktop_file_index_sleep_interval(true, first_scan_at, Some(first_scan_at), now),
+            Duration::from_secs(
+                DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS - DESKTOP_FILE_SCAN_INTERVAL_SECS
+            ),
+            "without a watcher, stable roots should still use the slow fallback after a full scan"
         );
         assert_eq!(
-            desktop_file_index_sleep_interval(true, true, first_scan_at, Some(first_scan_at), now),
+            desktop_file_index_sleep_interval(true, first_scan_at, Some(first_scan_at), now),
             Duration::from_secs(
                 DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS - DESKTOP_FILE_SCAN_INTERVAL_SECS
             ),
@@ -16669,7 +16666,6 @@ mod tests {
         );
         assert_eq!(
             desktop_file_index_sleep_interval(
-                true,
                 true,
                 first_scan_at,
                 Some(first_scan_at),
@@ -16679,13 +16675,7 @@ mod tests {
             "the fallback scan is due immediately at the fallback boundary"
         );
         assert_eq!(
-            desktop_file_index_sleep_interval(
-                false,
-                false,
-                first_scan_at,
-                Some(first_scan_at),
-                now
-            ),
+            desktop_file_index_sleep_interval(false, first_scan_at, Some(first_scan_at), now),
             Duration::from_secs(
                 DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS - DESKTOP_FILE_SCAN_INTERVAL_SECS
             ),
