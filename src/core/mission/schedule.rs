@@ -7,14 +7,18 @@ use chrono::Timelike;
 use chrono::Utc;
 use rusqlite::params;
 use rusqlite::Connection;
+use rusqlite::OpenFlags;
 use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::fs;
+use std::hash::Hash;
+use std::hash::Hasher;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
@@ -41,9 +45,25 @@ static SCHEDULE_SCHEMA_READY: OnceLock<Mutex<HashSet<ScheduleDbKey>>> = OnceLock
 #[derive(Debug, Clone)]
 struct EmitDueScanGateState {
     db_path: PathBuf,
-    stamp: CoreDbChangeStamp,
+    stamp: ScheduleDueGateStamp,
     next_due_at: Option<DateTime<Utc>>,
     last_scan: Instant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ScheduleDueGateStamp {
+    Source(ScheduleDueSourceStamp),
+    File(CoreDbChangeStamp),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ScheduleDueSourceStamp {
+    database_exists: bool,
+    table_exists: bool,
+    enabled_task_count: i64,
+    earliest_next_run_at: Option<String>,
+    latest_task_updated_at: Option<String>,
+    source_fingerprint: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -660,13 +680,16 @@ fn load_next_due_at(conn: &Connection) -> Result<Option<DateTime<Utc>>> {
 
 fn should_skip_emit_due_scan(root: &Path, now: &DateTime<Utc>) -> bool {
     let db_path = resolve_db_path(root);
-    let stamp = core_db_change_stamp(&db_path);
+    let stamp = schedule_due_gate_stamp(&db_path);
     let gate = EMIT_DUE_SCAN_GATE.get_or_init(|| Mutex::new(None));
     let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let Some(previous) = guard.as_ref() else {
         return false;
     };
     if previous.db_path != db_path || previous.stamp != stamp {
+        return false;
+    }
+    if schedule_due_gate_stamp_has_due_time(&stamp, now) {
         return false;
     }
     if previous
@@ -682,7 +705,7 @@ fn should_skip_emit_due_scan(root: &Path, now: &DateTime<Utc>) -> bool {
 
 fn mark_emit_due_scan(root: &Path, next_due_at: Option<DateTime<Utc>>) {
     let db_path = resolve_db_path(root);
-    let stamp = core_db_change_stamp(&db_path);
+    let stamp = schedule_due_gate_stamp(&db_path);
     let gate = EMIT_DUE_SCAN_GATE.get_or_init(|| Mutex::new(None));
     let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     *guard = Some(EmitDueScanGateState {
@@ -841,6 +864,124 @@ fn schema_state(conn: &Connection) -> Result<serde_json::Value> {
 
 fn resolve_db_path(root: &Path) -> std::path::PathBuf {
     root.join(DEFAULT_DB_RELATIVE_PATH)
+}
+
+fn schedule_due_gate_stamp(path: &Path) -> ScheduleDueGateStamp {
+    match schedule_due_source_stamp(path) {
+        Ok(stamp) => ScheduleDueGateStamp::Source(stamp),
+        Err(_) => ScheduleDueGateStamp::File(core_db_change_stamp(path)),
+    }
+}
+
+fn schedule_due_source_stamp(path: &Path) -> Result<ScheduleDueSourceStamp> {
+    if !path.exists() {
+        return Ok(ScheduleDueSourceStamp {
+            database_exists: false,
+            table_exists: false,
+            enabled_task_count: 0,
+            earliest_next_run_at: None,
+            latest_task_updated_at: None,
+            source_fingerprint: 0,
+        });
+    }
+
+    let conn = open_existing_schedule_db_read_only(path)?;
+    let table_exists = sqlite_table_exists(&conn, "scheduled_tasks")?;
+    if !table_exists {
+        return Ok(ScheduleDueSourceStamp {
+            database_exists: true,
+            table_exists: false,
+            enabled_task_count: 0,
+            earliest_next_run_at: None,
+            latest_task_updated_at: None,
+            source_fingerprint: 0,
+        });
+    }
+
+    let (enabled_task_count, earliest_next_run_at, latest_task_updated_at) = conn.query_row(
+        r#"
+        SELECT COUNT(*), MIN(next_run_at), MAX(updated_at)
+        FROM scheduled_tasks
+        WHERE enabled = 1
+        "#,
+        [],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        },
+    )?;
+
+    Ok(ScheduleDueSourceStamp {
+        database_exists: true,
+        table_exists: true,
+        enabled_task_count,
+        earliest_next_run_at,
+        latest_task_updated_at,
+        source_fingerprint: schedule_due_source_fingerprint(&conn)?,
+    })
+}
+
+fn schedule_due_source_fingerprint(conn: &Connection) -> Result<u64> {
+    let mut statement = conn.prepare(
+        r#"
+        SELECT task_id, cron_expr, prompt, thread_key, skill, enabled,
+               next_run_at, last_run_at, updated_at
+        FROM scheduled_tasks
+        WHERE enabled = 1
+        ORDER BY task_id
+        "#,
+    )?;
+    let mut rows = statement.query([])?;
+    let mut hasher = DefaultHasher::new();
+    while let Some(row) = rows.next()? {
+        row.get::<_, String>(0)?.hash(&mut hasher);
+        row.get::<_, String>(1)?.hash(&mut hasher);
+        row.get::<_, String>(2)?.hash(&mut hasher);
+        row.get::<_, String>(3)?.hash(&mut hasher);
+        row.get::<_, Option<String>>(4)?.hash(&mut hasher);
+        row.get::<_, i64>(5)?.hash(&mut hasher);
+        row.get::<_, Option<String>>(6)?.hash(&mut hasher);
+        row.get::<_, Option<String>>(7)?.hash(&mut hasher);
+        row.get::<_, String>(8)?.hash(&mut hasher);
+    }
+    Ok(hasher.finish())
+}
+
+fn open_existing_schedule_db_read_only(path: &Path) -> Result<Connection> {
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("failed to open schedule db read-only {}", path.display()))?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .context("failed to configure SQLite busy_timeout for schedule source stamp")?;
+    conn.execute_batch("PRAGMA query_only = ON;")
+        .context("failed to set schedule source stamp connection read-only")?;
+    Ok(conn)
+}
+
+fn sqlite_table_exists(conn: &Connection, table_name: &str) -> Result<bool> {
+    let exists: i64 = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?1)",
+        params![table_name],
+        |row| row.get(0),
+    )?;
+    Ok(exists != 0)
+}
+
+fn schedule_due_gate_stamp_has_due_time(stamp: &ScheduleDueGateStamp, now: &DateTime<Utc>) -> bool {
+    let ScheduleDueGateStamp::Source(source) = stamp else {
+        return false;
+    };
+    source
+        .earliest_next_run_at
+        .as_deref()
+        .and_then(|value| parse_rfc3339_utc(value).ok())
+        .map(|next_due_at| next_due_at <= *now)
+        .unwrap_or(false)
 }
 
 fn core_db_change_stamp(path: &Path) -> CoreDbChangeStamp {
@@ -1036,6 +1177,41 @@ mod tests {
         assert_eq!(summary.emitted_count, 0);
         assert!(should_skip_emit_due_scan(&root, &now_utc()));
 
+        {
+            let conn = open_schedule_db(&root).expect("reopen schedule db for unrelated churn");
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS unrelated_schedule_churn (id TEXT PRIMARY KEY, value TEXT NOT NULL)",
+                [],
+            )
+            .expect("create unrelated churn table");
+            conn.execute(
+                "INSERT INTO unrelated_schedule_churn (id, value) VALUES (?1, ?2)",
+                params!["unrelated", now_iso_string()],
+            )
+            .expect("insert unrelated churn");
+        }
+        assert!(should_skip_emit_due_scan(&root, &now_utc()));
+
+        {
+            let conn = open_schedule_db(&root).expect("reopen schedule db for run history churn");
+            conn.execute(
+                r#"
+                INSERT INTO scheduled_task_runs (
+                    run_id, task_id, scheduled_for, emitted_at, message_key, status, error_text
+                ) VALUES (?1, ?2, ?3, ?4, ?5, 'emitted', '')
+                "#,
+                params![
+                    "future::manual-history",
+                    "future",
+                    now.to_rfc3339(),
+                    now_iso_string(),
+                    "message/history"
+                ],
+            )
+            .expect("insert schedule run history");
+        }
+        assert!(should_skip_emit_due_scan(&root, &now_utc()));
+
         mark_emit_due_scan(&root, Some(now_utc() - Duration::minutes(1)));
         assert!(!should_skip_emit_due_scan(&root, &now_utc()));
 
@@ -1044,7 +1220,11 @@ mod tests {
             let conn = open_schedule_db(&root).expect("reopen schedule db");
             conn.execute(
                 "UPDATE scheduled_tasks SET prompt = ?2, updated_at = ?3 WHERE task_id = ?1",
-                params!["future", "changed", now_iso_string()],
+                params![
+                    "future",
+                    "changed",
+                    (now + Duration::minutes(1)).to_rfc3339()
+                ],
             )
             .expect("mutate schedule task");
         }

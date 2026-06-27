@@ -1189,6 +1189,7 @@ impl App {
             worker_phase: None,
             business_os: None,
             work_hours: service::working_hours::WorkHoursSnapshot::default(),
+            performance: serde_json::Value::Null,
             degraded_probe: false,
         };
         let model_perf_stats = load_model_perf_stats(&root);
@@ -2315,6 +2316,7 @@ impl App {
             worker_phase: None,
             business_os: None,
             work_hours: service::working_hours::snapshot(&self.root),
+            performance: serde_json::Value::Null,
             degraded_probe: false,
         });
         if next.degraded_probe {

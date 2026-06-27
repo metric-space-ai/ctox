@@ -25,6 +25,8 @@ pub(crate) fn apply_ticket_sync_batch(
     batch: &TicketSyncBatch,
 ) -> Result<TicketSyncApplyResult> {
     let control = ensure_ticket_source_control_for_sync(root, batch)?;
+    let mut stored_ticket_count = 0usize;
+    let mut stored_event_count = 0usize;
     for ticket in &batch.tickets {
         let request = AdapterTicketMirrorRequest {
             system: &batch.system,
@@ -38,7 +40,9 @@ pub(crate) fn apply_ticket_sync_batch(
             external_created_at: &ticket.external_created_at,
             external_updated_at: &ticket.external_updated_at,
         };
-        let _ = upsert_ticket_from_adapter(root, request)?;
+        if upsert_ticket_from_adapter(root, request)?.changed {
+            stored_ticket_count += 1;
+        }
     }
     for event in &batch.events {
         let request = AdapterTicketEventRequest {
@@ -52,20 +56,24 @@ pub(crate) fn apply_ticket_sync_batch(
             metadata: event.metadata.clone(),
             external_created_at: &event.external_created_at,
         };
-        let _ = upsert_ticket_event_from_adapter(root, request)?;
+        if upsert_ticket_event_from_adapter(root, request)?.changed {
+            stored_event_count += 1;
+        }
     }
-    record_ticket_sync_run(
-        root,
-        &batch.system,
-        batch.fetched_ticket_count,
-        batch.tickets.len(),
-        batch.events.len(),
-    )?;
+    if stored_ticket_count > 0 || stored_event_count > 0 {
+        record_ticket_sync_run(
+            root,
+            &batch.system,
+            batch.fetched_ticket_count,
+            stored_ticket_count,
+            stored_event_count,
+        )?;
+    }
     Ok(TicketSyncApplyResult {
         system: batch.system.clone(),
         fetched_count: batch.fetched_ticket_count,
-        stored_ticket_count: batch.tickets.len(),
-        stored_event_count: batch.events.len(),
+        stored_ticket_count,
+        stored_event_count,
         source_control: serde_json::to_value(
             load_ticket_source_control(root, &batch.system)?.unwrap_or(control),
         )?,
@@ -78,7 +86,7 @@ mod tests {
     use crate::mission::ticket_protocol::TicketEventRecord;
     use crate::mission::ticket_protocol::TicketMirrorRecord;
     use crate::mission::ticket_protocol::TicketSyncBatch;
-    use rusqlite::Connection;
+    use rusqlite::{params, Connection};
     use serde_json::json;
     use std::fs;
 
@@ -144,6 +152,83 @@ mod tests {
         assert_eq!(ticket_count, 1);
         assert_eq!(event_count, 1);
         assert_eq!(sync_count, 1);
+        drop(conn);
+
+        let second = apply_ticket_sync_batch(&root, &batch)?;
+        assert_eq!(second.fetched_count, 1);
+        assert_eq!(second.stored_ticket_count, 0);
+        assert_eq!(second.stored_event_count, 0);
+
+        let conn = Connection::open(root.join("runtime/ctox.sqlite3"))?;
+        let sync_count_after_noop: i64 =
+            conn.query_row("SELECT COUNT(*) FROM ticket_sync_runs", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(
+            sync_count_after_noop, 1,
+            "unchanged ticket sync batches must not dirty the DB with sync-run heartbeat rows"
+        );
+
+        drop(conn);
+
+        let event_key = "example:E-100";
+        for (idx, progressed_status) in ["leased", "handled", "blocked", "failed"]
+            .into_iter()
+            .enumerate()
+        {
+            let conn = Connection::open(root.join("runtime/ctox.sqlite3"))?;
+            let marker = format!("2026-04-09T11:00:0{idx}Z");
+            let lease_owner = (progressed_status == "leased").then_some("ticket-test");
+            let leased_at = (progressed_status == "leased").then_some(marker.as_str());
+            let acked_at = (progressed_status == "handled").then_some(marker.as_str());
+            conn.execute(
+                r#"
+                UPDATE ticket_event_routing_state
+                SET route_status = ?1,
+                    lease_owner = ?2,
+                    leased_at = ?3,
+                    acked_at = ?4,
+                    updated_at = ?5
+                WHERE event_key = ?6
+                "#,
+                params![
+                    progressed_status,
+                    lease_owner,
+                    leased_at,
+                    acked_at,
+                    marker,
+                    event_key
+                ],
+            )?;
+            drop(conn);
+
+            let progressed_noop = apply_ticket_sync_batch(&root, &batch)?;
+            assert_eq!(progressed_noop.stored_ticket_count, 0);
+            assert_eq!(
+                progressed_noop.stored_event_count, 0,
+                "unchanged event payload must not reset progressed routing state {progressed_status}"
+            );
+
+            let conn = Connection::open(root.join("runtime/ctox.sqlite3"))?;
+            let sync_count_after_progressed_noop: i64 =
+                conn.query_row("SELECT COUNT(*) FROM ticket_sync_runs", [], |row| {
+                    row.get(0)
+                })?;
+            assert_eq!(
+                sync_count_after_progressed_noop, 1,
+                "unchanged progressed events must not append sync-run rows"
+            );
+            let (route_status, updated_at): (String, String) = conn.query_row(
+                "SELECT route_status, updated_at FROM ticket_event_routing_state WHERE event_key = ?1",
+                [event_key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            assert_eq!(route_status, progressed_status);
+            assert_eq!(
+                updated_at, marker,
+                "unchanged progressed events must not update routing timestamps"
+            );
+        }
 
         let _ = fs::remove_dir_all(&root);
         Ok(())

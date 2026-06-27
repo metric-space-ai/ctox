@@ -6,6 +6,7 @@ use regex::Regex;
 use rusqlite::params;
 use rusqlite::params_from_iter;
 use rusqlite::Connection;
+use rusqlite::OpenFlags;
 use rusqlite::OptionalExtension;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -99,6 +100,14 @@ pub(crate) struct TicketStoreChangeStamp {
     main: TicketFileChangeStamp,
     wal: TicketFileChangeStamp,
     journal: TicketFileChangeStamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TicketCaseStatusStamp {
+    database_exists: bool,
+    table_exists: bool,
+    open_case_count: usize,
+    latest_open_case_updated_at: String,
 }
 
 type TicketSelfWorkListCacheStamp = TicketStoreChangeStamp;
@@ -524,13 +533,6 @@ pub(crate) struct TicketDispatchPreflightIssue {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub(crate) struct TicketConfiguredSyncResult {
-    pub system: String,
-    pub ok: bool,
-    pub error: Option<String>,
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct TicketKnowledgeEntryView {
     pub entry_id: String,
@@ -780,6 +782,12 @@ pub(crate) struct AdapterTicketEventRequest<'a> {
     pub body_text: &'a str,
     pub metadata: Value,
     pub external_created_at: &'a str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AdapterTicketUpsertResult {
+    pub key: String,
+    pub changed: bool,
 }
 
 pub fn handle_ticket_command(root: &Path, args: &[String]) -> Result<()> {
@@ -1826,32 +1834,6 @@ pub(crate) fn preflight_configured_ticket_systems(
         }
     }
     issues
-}
-
-pub(crate) fn sync_configured_ticket_systems(
-    root: &Path,
-    settings: &std::collections::BTreeMap<String, String>,
-) -> Vec<TicketConfiguredSyncResult> {
-    let mut results = Vec::new();
-    for system in configured_ticket_systems(settings) {
-        match sync_ticket_system(root, &system) {
-            Ok(_) => results.push(TicketConfiguredSyncResult {
-                system,
-                ok: true,
-                error: None,
-            }),
-            Err(err) => {
-                let error = err.to_string();
-                let _ = record_ticket_sync_failure(root, &system, &error);
-                results.push(TicketConfiguredSyncResult {
-                    system,
-                    ok: false,
-                    error: Some(error),
-                });
-            }
-        }
-    }
-    results
 }
 
 fn test_ticket_system(root: &Path, system: &str) -> Result<Value> {
@@ -7012,10 +6994,66 @@ fn default_skill_for_self_work_kind(kind: &str) -> Option<String> {
 pub(crate) fn upsert_ticket_from_adapter(
     root: &Path,
     request: AdapterTicketMirrorRequest<'_>,
-) -> Result<String> {
+) -> Result<AdapterTicketUpsertResult> {
     let conn = open_ticket_db(root)?;
     let now = now_iso_string();
     let ticket_key = canonical_ticket_key(request.system, request.remote_ticket_id);
+    let metadata_json = serde_json::to_string(&request.metadata)?;
+    let title = request.title.trim();
+    let body_text = request.body_text.trim();
+    let remote_status = request.remote_status.trim();
+    let priority = request.priority.map(str::trim);
+    let requester = request.requester.map(str::trim);
+    let existing = conn
+        .query_row(
+            r#"
+            SELECT title, body_text, remote_status, priority, requester,
+                   metadata_json, created_at, updated_at
+            FROM ticket_items
+            WHERE ticket_key = ?1
+            LIMIT 1
+            "#,
+            params![ticket_key],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                ))
+            },
+        )
+        .optional()?;
+    if existing.as_ref().is_some_and(
+        |(
+            existing_title,
+            existing_body_text,
+            existing_status,
+            existing_priority,
+            existing_requester,
+            existing_metadata,
+            existing_created_at,
+            existing_updated_at,
+        )| {
+            existing_title == title
+                && existing_body_text == body_text
+                && existing_status == remote_status
+                && existing_priority.as_deref() == priority
+                && existing_requester.as_deref() == requester
+                && existing_metadata == &metadata_json
+                && existing_created_at == request.external_created_at
+                && existing_updated_at == request.external_updated_at
+        },
+    ) {
+        return Ok(AdapterTicketUpsertResult {
+            key: ticket_key,
+            changed: false,
+        });
+    }
     conn.execute(
         r#"
         INSERT INTO ticket_items (
@@ -7036,24 +7074,27 @@ pub(crate) fn upsert_ticket_from_adapter(
             ticket_key,
             request.system,
             request.remote_ticket_id,
-            request.title.trim(),
-            request.body_text.trim(),
-            request.remote_status.trim(),
-            request.priority.map(str::trim),
-            request.requester.map(str::trim),
-            serde_json::to_string(&request.metadata)?,
+            title,
+            body_text,
+            remote_status,
+            priority,
+            requester,
+            metadata_json,
             request.external_created_at,
             request.external_updated_at,
             now,
         ],
     )?;
-    Ok(ticket_key)
+    Ok(AdapterTicketUpsertResult {
+        key: ticket_key,
+        changed: true,
+    })
 }
 
 pub(crate) fn upsert_ticket_event_from_adapter(
     root: &Path,
     request: AdapterTicketEventRequest<'_>,
-) -> Result<String> {
+) -> Result<AdapterTicketUpsertResult> {
     let conn = open_ticket_db(root)?;
     let observed_at = now_iso_string();
     let ticket_key = canonical_ticket_key(request.system, request.remote_ticket_id);
@@ -7064,6 +7105,73 @@ pub(crate) fn upsert_ticket_event_from_adapter(
         } else {
             request.direction
         };
+    let event_type = request.event_type.trim();
+    let summary = request.summary.trim();
+    let body_text = request.body_text.trim();
+    let metadata_json = serde_json::to_string(&request.metadata)?;
+    let initial_route_status = if effective_direction == "outbound" {
+        "handled"
+    } else {
+        initial_route_status_for_inbound_event(&conn, request.system, request.external_created_at)?
+    };
+    let existing = conn
+        .query_row(
+            r#"
+            SELECT direction, event_type, summary, body_text, metadata_json, external_created_at
+            FROM ticket_events
+            WHERE event_key = ?1
+            LIMIT 1
+            "#,
+            params![event_key],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            },
+        )
+        .optional()?;
+    if existing.as_ref().is_some_and(
+        |(
+            existing_direction,
+            existing_event_type,
+            existing_summary,
+            existing_body_text,
+            existing_metadata,
+            existing_created_at,
+        )| {
+            existing_direction == effective_direction
+                && existing_event_type == event_type
+                && existing_summary == summary
+                && existing_body_text == body_text
+                && existing_metadata == &metadata_json
+                && existing_created_at == request.external_created_at
+        },
+    ) {
+        let existing_route_status = conn
+            .query_row(
+                "SELECT route_status FROM ticket_event_routing_state WHERE event_key = ?1 LIMIT 1",
+                params![event_key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        if let Some(existing_route_status) = existing_route_status {
+            canonical_ticket_event_route_status(&existing_route_status)?;
+            return Ok(AdapterTicketUpsertResult {
+                key: event_key,
+                changed: false,
+            });
+        }
+        force_ticket_event_routed_state(&conn, &event_key, initial_route_status)?;
+        return Ok(AdapterTicketUpsertResult {
+            key: event_key,
+            changed: true,
+        });
+    }
     conn.execute(
         r#"
         INSERT INTO ticket_events (
@@ -7082,22 +7190,19 @@ pub(crate) fn upsert_ticket_event_from_adapter(
             request.system,
             request.remote_event_id,
             effective_direction,
-            request.event_type,
-            request.summary.trim(),
-            request.body_text.trim(),
-            serde_json::to_string(&request.metadata)?,
+            event_type,
+            summary,
+            body_text,
+            metadata_json,
             request.external_created_at,
             observed_at,
         ],
     )?;
-    ensure_ticket_event_routing_rows(&conn)?;
-    let initial_route_status = if effective_direction == "outbound" {
-        "handled"
-    } else {
-        initial_route_status_for_inbound_event(&conn, request.system, request.external_created_at)?
-    };
     force_ticket_event_routed_state(&conn, &event_key, initial_route_status)?;
-    Ok(event_key)
+    Ok(AdapterTicketUpsertResult {
+        key: event_key,
+        changed: true,
+    })
 }
 
 fn mark_remote_events_outbound(
@@ -10414,6 +10519,63 @@ pub(crate) fn ticket_store_change_stamp(root: &Path) -> TicketStoreChangeStamp {
     ticket_store_change_stamp_for_path(&resolve_db_path(root))
 }
 
+pub(crate) fn ticket_case_status_stamp(root: &Path) -> Result<TicketCaseStatusStamp> {
+    let path = resolve_db_path(root);
+    if !path.exists() {
+        return Ok(empty_ticket_case_status_stamp(false, false));
+    }
+    let conn = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| {
+        format!(
+            "failed to open ticket db {} for status stamp",
+            path.display()
+        )
+    })?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .context("failed to configure SQLite busy_timeout for ticket status stamp")?;
+    let table_exists = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ticket_cases' LIMIT 1",
+            [],
+            |_| Ok(true),
+        )
+        .optional()?
+        .unwrap_or(false);
+    if !table_exists {
+        return Ok(empty_ticket_case_status_stamp(true, false));
+    }
+    let (open_case_count, latest_open_case_updated_at) = conn.query_row(
+        r#"
+        SELECT COUNT(*), COALESCE(MAX(updated_at), '')
+        FROM ticket_cases
+        WHERE state <> 'closed'
+        "#,
+        [],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+    )?;
+    Ok(TicketCaseStatusStamp {
+        database_exists: true,
+        table_exists: true,
+        open_case_count: open_case_count.max(0) as usize,
+        latest_open_case_updated_at,
+    })
+}
+
+fn empty_ticket_case_status_stamp(
+    database_exists: bool,
+    table_exists: bool,
+) -> TicketCaseStatusStamp {
+    TicketCaseStatusStamp {
+        database_exists,
+        table_exists,
+        open_case_count: 0,
+        latest_open_case_updated_at: String::new(),
+    }
+}
+
 fn ticket_store_change_stamp_for_path(path: &Path) -> TicketStoreChangeStamp {
     TicketStoreChangeStamp {
         main: ticket_file_change_stamp(path),
@@ -10849,6 +11011,9 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_ticket_cases_ticket
             ON ticket_cases(ticket_key, updated_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_ticket_cases_state_time
+            ON ticket_cases(state, updated_at DESC);
 
         CREATE TABLE IF NOT EXISTS ticket_dry_runs (
             dry_run_id TEXT PRIMARY KEY,
@@ -14213,7 +14378,8 @@ mod tests {
                 external_created_at: &now,
                 external_updated_at: &now,
             },
-        )?;
+        )?
+        .key;
         upsert_ticket_event_from_adapter(
             &root,
             AdapterTicketEventRequest {

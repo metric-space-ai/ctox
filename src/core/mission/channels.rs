@@ -70,11 +70,23 @@ const QUEUE_TASK_COUNT_CACHE_MAX_ENTRIES: usize = 256;
 
 type ChannelFileChangeStamp = (u64, u128);
 type ChannelRoutingCacheStamp = (u64, u64, u64);
-type QueueTaskListCacheStamp = (
-    ChannelFileChangeStamp,
-    ChannelFileChangeStamp,
-    ChannelFileChangeStamp,
-);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum QueueTaskListCacheStamp {
+    ProjectionClock {
+        database_exists: bool,
+        clock_exists: bool,
+        version: i64,
+        message_count: usize,
+        routing_count: usize,
+        updated_at: String,
+    },
+    File {
+        main: ChannelFileChangeStamp,
+        wal: ChannelFileChangeStamp,
+        journal: ChannelFileChangeStamp,
+    },
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct QueueTaskListCacheKey {
@@ -7686,11 +7698,62 @@ fn channel_routing_cache_stamp(path: &Path) -> ChannelRoutingCacheStamp {
 }
 
 fn queue_task_list_cache_stamp(path: &Path) -> QueueTaskListCacheStamp {
-    (
-        channel_file_change_stamp(path),
-        channel_file_change_stamp(&sqlite_sidecar_path(path, "-wal")),
-        channel_file_change_stamp(&sqlite_sidecar_path(path, "-journal")),
-    )
+    match queue_task_projection_clock_stamp(path) {
+        Ok(stamp) => stamp,
+        Err(_) => QueueTaskListCacheStamp::File {
+            main: channel_file_change_stamp(path),
+            wal: channel_file_change_stamp(&sqlite_sidecar_path(path, "-wal")),
+            journal: channel_file_change_stamp(&sqlite_sidecar_path(path, "-journal")),
+        },
+    }
+}
+
+fn queue_task_projection_clock_stamp(path: &Path) -> Result<QueueTaskListCacheStamp> {
+    let Some(conn) = open_channel_db_read_only(path)? else {
+        return Ok(QueueTaskListCacheStamp::ProjectionClock {
+            database_exists: false,
+            clock_exists: false,
+            version: 0,
+            message_count: 0,
+            routing_count: 0,
+            updated_at: String::new(),
+        });
+    };
+    let clock_exists = channel_projection_tables_exist(&conn, &["communication_projection_clock"])?;
+    if !clock_exists {
+        return Ok(QueueTaskListCacheStamp::ProjectionClock {
+            database_exists: true,
+            clock_exists: false,
+            version: 0,
+            message_count: 0,
+            routing_count: 0,
+            updated_at: String::new(),
+        });
+    }
+    let (version, message_count, routing_count, updated_at) = conn.query_row(
+        r#"
+        SELECT version, message_count, routing_count, updated_at
+        FROM communication_projection_clock
+        WHERE id = 1
+        "#,
+        [],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        },
+    )?;
+    Ok(QueueTaskListCacheStamp::ProjectionClock {
+        database_exists: true,
+        clock_exists: true,
+        version,
+        message_count: non_negative_i64_to_usize(message_count),
+        routing_count: non_negative_i64_to_usize(routing_count),
+        updated_at,
+    })
 }
 
 fn channel_file_size_stamp(path: &Path) -> u64 {
@@ -10429,6 +10492,9 @@ pub(crate) fn record_communication_sync_run(
     conn: &mut Connection,
     run: CommunicationSyncRun<'_>,
 ) -> Result<()> {
+    if run.ok && run.stored_count <= 0 && run.error_text.trim().is_empty() {
+        return Ok(());
+    }
     conn.execute(
         r#"
         INSERT INTO communication_sync_runs (
@@ -10772,6 +10838,59 @@ mod tests {
                 .unwrap_or_default()
                 .as_nanos()
         ))
+    }
+
+    #[test]
+    fn communication_sync_run_recorder_skips_successful_noop_heartbeats() -> Result<()> {
+        let db_path = unique_test_db_path("ctox-comm-sync-noop");
+        let mut conn = open_channel_db(&db_path)?;
+
+        record_communication_sync_run(
+            &mut conn,
+            CommunicationSyncRun {
+                run_key: "noop-1",
+                channel: "email",
+                account_key: "email:owner@example.test",
+                folder_hint: "INBOX",
+                started_at: "2026-06-27T00:00:00Z",
+                finished_at: "2026-06-27T00:00:01Z",
+                ok: true,
+                fetched_count: 42,
+                stored_count: 0,
+                error_text: "",
+                metadata_json: "{}",
+            },
+        )?;
+        let count_after_noop: i64 =
+            conn.query_row("SELECT COUNT(*) FROM communication_sync_runs", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(count_after_noop, 0);
+
+        record_communication_sync_run(
+            &mut conn,
+            CommunicationSyncRun {
+                run_key: "stored-1",
+                channel: "email",
+                account_key: "email:owner@example.test",
+                folder_hint: "INBOX",
+                started_at: "2026-06-27T00:00:02Z",
+                finished_at: "2026-06-27T00:00:03Z",
+                ok: true,
+                fetched_count: 42,
+                stored_count: 1,
+                error_text: "",
+                metadata_json: "{}",
+            },
+        )?;
+        let count_after_store: i64 =
+            conn.query_row("SELECT COUNT(*) FROM communication_sync_runs", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(count_after_store, 1);
+
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
     }
 
     #[test]
@@ -11374,6 +11493,67 @@ mod tests {
             queue_task_list_cache_miss_count_for_tests(&db_path, &pending, 10),
             3,
             "status updates must invalidate the cached queue snapshot"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn queue_task_caches_ignore_sync_run_metadata_churn() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-queue-cache-sync-run-churn-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("failed to create temp test root");
+        let db_path = resolve_db_path(&root, None);
+        let pending = vec!["pending".to_string()];
+
+        let listed = list_queue_tasks(&root, &pending, 10).expect("failed to list empty queue");
+        assert!(listed.is_empty());
+        assert_eq!(
+            queue_task_list_cache_miss_count_for_tests(&db_path, &pending, 10),
+            1
+        );
+        let count = count_queue_tasks(&root, &pending).expect("failed to count empty queue");
+        assert_eq!(count, 0);
+        assert_eq!(
+            queue_task_count_cache_miss_count_for_tests(&db_path, &pending),
+            1
+        );
+
+        let conn = Connection::open(&db_path).expect("failed to open channel db directly");
+        conn.execute(
+            r#"
+            INSERT INTO communication_sync_runs (
+                run_key, channel, account_key, folder_hint, started_at, finished_at, ok,
+                fetched_count, stored_count, error_text, metadata_json
+            ) VALUES (
+                'queue-cache-sync-run-churn', 'email', 'email:owner@example.test', 'INBOX',
+                '2026-06-27T00:00:00Z', '2026-06-27T00:00:01Z', 1, 10, 10, '', '{}'
+            )
+            "#,
+            [],
+        )
+        .expect("failed to insert communication sync-run metadata");
+
+        let listed_after_churn =
+            list_queue_tasks(&root, &pending, 10).expect("failed to relist after sync churn");
+        assert!(listed_after_churn.is_empty());
+        assert_eq!(
+            queue_task_list_cache_miss_count_for_tests(&db_path, &pending, 10),
+            1,
+            "sync-run metadata writes must not invalidate cached queue lists"
+        );
+        let count_after_churn =
+            count_queue_tasks(&root, &pending).expect("failed to recount after sync churn");
+        assert_eq!(count_after_churn, 0);
+        assert_eq!(
+            queue_task_count_cache_miss_count_for_tests(&db_path, &pending),
+            1,
+            "sync-run metadata writes must not invalidate cached queue counts"
         );
 
         let _ = fs::remove_dir_all(&root);

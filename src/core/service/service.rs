@@ -1,5 +1,7 @@
 use anyhow::Context;
 use anyhow::Result;
+use chrono::DateTime;
+use chrono::Utc;
 #[cfg(unix)]
 use libc::geteuid;
 #[cfg(unix)]
@@ -25,11 +27,14 @@ use rusqlite::OptionalExtension;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::env;
 use std::fs::OpenOptions;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::io::BufRead;
 use std::io::BufReader;
 #[cfg(unix)]
@@ -110,6 +115,8 @@ const TICKET_RECONCILE_IDLE_SAFETY_SECS: u64 = 3600;
 const CHANNEL_ROUTER_IDLE_SAFETY_SECS: u64 = 3600;
 const CHANNEL_SYNC_POLL_SECS: u64 = 60;
 const CHANNEL_SYNC_BACKOFF_MAX_SECS: u64 = 900;
+const TICKET_SYNC_POLL_SECS: u64 = 60;
+const TICKET_SYNC_BACKOFF_MAX_SECS: u64 = 900;
 const MISSION_MAINTENANCE_POLL_SECS: u64 = 15;
 const APPROVAL_NAG_IDLE_SAFETY_SECS: u64 = 300;
 const HARNESS_AUDIT_TICK_SECS: u64 = 300;
@@ -122,6 +129,8 @@ const BUSINESS_OS_APP_RECOVERY_IDLE_STALE_SECS: u64 = 180;
 const BUSINESS_OS_APP_RECOVERY_STALE_SECS: u64 = 180;
 const BUSINESS_OS_APP_RECOVERY_PREFLIGHT_IDLE_SAFETY_SECS: u64 = 60;
 const BUSINESS_OS_APP_RECOVERY_SCAN_LIMIT: usize = 128;
+const BUSINESS_OS_APP_RECOVERY_ARTIFACT_STAMP_MAX_ENTRIES: usize = 256;
+const BUSINESS_OS_APP_RECOVERY_ARTIFACT_STAMP_MAX_DEPTH: usize = 8;
 const IDLE_DURABLE_QUEUE_EMPTY_BACKOFF_MAX_SECS: u64 = 60;
 const IDLE_DURABLE_QUEUE_EMPTY_IDLE_SAFETY_SECS: u64 = 3600;
 const SERVICE_PROCESS_SCAN_STATUS_CACHE_TTL_SECS: u64 = 5;
@@ -201,6 +210,10 @@ static IDLE_DURABLE_QUEUE_EMPTY_GATE: OnceLock<Mutex<Option<IdleDurableQueueEmpt
 static LIVE_SERVICE_SETTINGS_CACHE: OnceLock<Mutex<Option<LiveServiceSettingsCacheState>>> =
     OnceLock::new();
 static CHANNEL_SYNC_DUE_GATE: OnceLock<Mutex<Option<ChannelSyncDueGateState>>> = OnceLock::new();
+static TICKET_SYNC_DUE_GATE: OnceLock<Mutex<Option<TicketSyncDueGateState>>> = OnceLock::new();
+static TICKET_SYNC_RUNTIME_METRICS: OnceLock<
+    Mutex<BTreeMap<String, TicketSyncRuntimeMetricCounts>>,
+> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 struct TicketReconcileGateState {
@@ -213,9 +226,7 @@ struct TicketReconcileGateState {
 #[derive(Debug, Clone)]
 struct ChannelRouterPreflightIdleGateState {
     root: PathBuf,
-    core_db_path: PathBuf,
-    core_stamp: CoreDbChangeStamp,
-    ticket_stamp: tickets::TicketStoreChangeStamp,
+    source_stamp: ChannelRouterSourceStamp,
     env_overlay: BTreeMap<String, String>,
     last_idle_pass: Instant,
 }
@@ -223,9 +234,7 @@ struct ChannelRouterPreflightIdleGateState {
 #[derive(Debug, Clone)]
 struct ChannelRouterIdleGateState {
     root: PathBuf,
-    core_db_path: PathBuf,
-    core_stamp: CoreDbChangeStamp,
-    ticket_stamp: tickets::TicketStoreChangeStamp,
+    source_stamp: ChannelRouterSourceStamp,
     settings: BTreeMap<String, String>,
     last_idle_pass: Instant,
 }
@@ -233,8 +242,7 @@ struct ChannelRouterIdleGateState {
 #[derive(Debug, Clone)]
 struct HarnessAuditIdleGateState {
     root: PathBuf,
-    core_db_path: PathBuf,
-    core_stamp: CoreDbChangeStamp,
+    source_stamp: HarnessAuditSourceStamp,
     last_run: Instant,
 }
 
@@ -255,16 +263,14 @@ struct BusinessOsAppRecoveryPreflightGateState {
 #[derive(Debug, Clone)]
 struct BusinessOsAppRecoveryIdleGateState {
     root: PathBuf,
-    core_db_path: PathBuf,
-    core_stamp: CoreDbChangeStamp,
+    source_stamp: BusinessOsAppRecoverySourceStamp,
     last_run: Instant,
 }
 
 #[derive(Debug, Clone)]
 struct IdleDurableQueueEmptyGateState {
     root: PathBuf,
-    core_db_path: PathBuf,
-    core_stamp: CoreDbChangeStamp,
+    queue_stamp: DurableCommunicationSourceStamp,
     last_empty_probe: Instant,
     consecutive_empty_probes: u32,
 }
@@ -282,6 +288,135 @@ struct ChannelSyncAdapterDueState {
     unchanged_runs: u32,
 }
 
+#[derive(Debug, Clone)]
+struct TicketSyncDueGateState {
+    root: PathBuf,
+    settings: BTreeMap<String, String>,
+    sources: BTreeMap<String, TicketSyncSourceDueState>,
+}
+
+#[derive(Debug, Clone)]
+struct TicketSyncSourceDueState {
+    next_due: Instant,
+    unchanged_runs: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+struct TicketSyncRuntimeMetricCounts {
+    attempts: u64,
+    activity_runs: u64,
+    no_activity_runs: u64,
+    error_runs: u64,
+}
+
+impl TicketSyncRuntimeMetricCounts {
+    fn record(&mut self, ok: bool, activity: bool) {
+        self.attempts = self.attempts.saturating_add(1);
+        match (ok, activity) {
+            (true, true) => {
+                self.activity_runs = self.activity_runs.saturating_add(1);
+            }
+            (true, false) => {
+                self.no_activity_runs = self.no_activity_runs.saturating_add(1);
+            }
+            (false, _) => {
+                self.error_runs = self.error_runs.saturating_add(1);
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ChannelSyncAdapterRuntimeMetrics {
+    attempts: std::sync::atomic::AtomicU64,
+    activity_runs: std::sync::atomic::AtomicU64,
+    no_activity_runs: std::sync::atomic::AtomicU64,
+    error_runs: std::sync::atomic::AtomicU64,
+}
+
+impl ChannelSyncAdapterRuntimeMetrics {
+    const fn new() -> Self {
+        Self {
+            attempts: std::sync::atomic::AtomicU64::new(0),
+            activity_runs: std::sync::atomic::AtomicU64::new(0),
+            no_activity_runs: std::sync::atomic::AtomicU64::new(0),
+            error_runs: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    fn record(&self, ok: bool, activity: bool) {
+        use std::sync::atomic::Ordering;
+
+        self.attempts.fetch_add(1, Ordering::Relaxed);
+        match (ok, activity) {
+            (true, true) => {
+                self.activity_runs.fetch_add(1, Ordering::Relaxed);
+            }
+            (true, false) => {
+                self.no_activity_runs.fetch_add(1, Ordering::Relaxed);
+            }
+            (false, _) => {
+                self.error_runs.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn snapshot(&self) -> Value {
+        use std::sync::atomic::Ordering;
+
+        serde_json::json!({
+            "attempts": self.attempts.load(Ordering::Relaxed),
+            "activity_runs": self.activity_runs.load(Ordering::Relaxed),
+            "no_activity_runs": self.no_activity_runs.load(Ordering::Relaxed),
+            "error_runs": self.error_runs.load(Ordering::Relaxed),
+        })
+    }
+
+    #[cfg(test)]
+    fn reset(&self) {
+        use std::sync::atomic::Ordering;
+
+        self.attempts.store(0, Ordering::Relaxed);
+        self.activity_runs.store(0, Ordering::Relaxed);
+        self.no_activity_runs.store(0, Ordering::Relaxed);
+        self.error_runs.store(0, Ordering::Relaxed);
+    }
+}
+
+static SERVICE_STATUS_REQUESTS_TOTAL: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+static SERVICE_STATUS_IPC_REQUESTS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+static SERVICE_STATUS_HTTP_REQUESTS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+static SERVICE_PERFORMANCE_BOOT_ID: OnceLock<String> = OnceLock::new();
+static SERVICE_PERFORMANCE_STARTED_AT: OnceLock<String> = OnceLock::new();
+
+static CHANNEL_SYNC_EMAIL_METRICS: ChannelSyncAdapterRuntimeMetrics =
+    ChannelSyncAdapterRuntimeMetrics::new();
+static CHANNEL_SYNC_DISCORD_METRICS: ChannelSyncAdapterRuntimeMetrics =
+    ChannelSyncAdapterRuntimeMetrics::new();
+static CHANNEL_SYNC_GOOGLE_CHAT_METRICS: ChannelSyncAdapterRuntimeMetrics =
+    ChannelSyncAdapterRuntimeMetrics::new();
+static CHANNEL_SYNC_JAMI_METRICS: ChannelSyncAdapterRuntimeMetrics =
+    ChannelSyncAdapterRuntimeMetrics::new();
+static CHANNEL_SYNC_MATRIX_METRICS: ChannelSyncAdapterRuntimeMetrics =
+    ChannelSyncAdapterRuntimeMetrics::new();
+static CHANNEL_SYNC_MATTERMOST_METRICS: ChannelSyncAdapterRuntimeMetrics =
+    ChannelSyncAdapterRuntimeMetrics::new();
+static CHANNEL_SYNC_MEETING_METRICS: ChannelSyncAdapterRuntimeMetrics =
+    ChannelSyncAdapterRuntimeMetrics::new();
+static CHANNEL_SYNC_SLACK_METRICS: ChannelSyncAdapterRuntimeMetrics =
+    ChannelSyncAdapterRuntimeMetrics::new();
+static CHANNEL_SYNC_TEAMS_METRICS: ChannelSyncAdapterRuntimeMetrics =
+    ChannelSyncAdapterRuntimeMetrics::new();
+static CHANNEL_SYNC_TELEGRAM_METRICS: ChannelSyncAdapterRuntimeMetrics =
+    ChannelSyncAdapterRuntimeMetrics::new();
+static CHANNEL_SYNC_WHATSAPP_METRICS: ChannelSyncAdapterRuntimeMetrics =
+    ChannelSyncAdapterRuntimeMetrics::new();
+static CHANNEL_SYNC_ZULIP_METRICS: ChannelSyncAdapterRuntimeMetrics =
+    ChannelSyncAdapterRuntimeMetrics::new();
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct CoreDbChangeStamp {
     main: FileChangeStamp,
@@ -294,6 +429,136 @@ struct FileChangeStamp {
     exists: bool,
     len: u64,
     modified_ns: u128,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct DurableStatusSourceStamp {
+    communication: DurableCommunicationSourceStamp,
+    lcm_outcome: DurableLcmOutcomeSourceStamp,
+    ticket_cases: DurableTicketCaseSourceStamp,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct ChannelRouterSourceStamp {
+    communication: DurableCommunicationSourceStamp,
+    schedule: RouterScheduleSourceStamp,
+    document_reports: RouterDocumentReportSourceStamp,
+    tickets: RouterTicketSourceStamp,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+enum BusinessOsAppRecoverySourceStamp {
+    Source(BusinessOsAppRecoveryQueueStamp),
+    File(CoreDbChangeStamp),
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct BusinessOsAppRecoveryQueueStamp {
+    database_exists: bool,
+    messages_table_exists: bool,
+    routing_table_exists: bool,
+    candidate_count: usize,
+    latest_route_updated_at: String,
+    next_recovery_due_epoch_secs: Option<u64>,
+    source_fingerprint: u64,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+enum HarnessAuditSourceStamp {
+    Source(HarnessAuditDbStamp),
+    File(CoreDbChangeStamp),
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct HarnessAuditDbStamp {
+    database_exists: bool,
+    tables: Vec<HarnessAuditTableStamp>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct HarnessAuditTableStamp {
+    table_name: String,
+    table_exists: bool,
+    row_count: usize,
+    max_rowid: i64,
+    latest_timestamp: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+enum RouterScheduleSourceStamp {
+    Source(RouterScheduleTableStamp),
+    File(CoreDbChangeStamp),
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct RouterScheduleTableStamp {
+    database_exists: bool,
+    table_exists: bool,
+    enabled_count: usize,
+    earliest_next_run_at: String,
+    latest_updated_at: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+enum RouterDocumentReportSourceStamp {
+    Source(RouterDocumentReportTableStamp),
+    File(CoreDbChangeStamp),
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct RouterDocumentReportTableStamp {
+    database_exists: bool,
+    table_exists: bool,
+    pending_count: usize,
+    latest_observed_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+enum RouterTicketSourceStamp {
+    Source(RouterTicketTableStamp),
+    File(CoreDbChangeStamp),
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct RouterTicketTableStamp {
+    database_exists: bool,
+    events_table_exists: bool,
+    event_routing_table_exists: bool,
+    self_work_table_exists: bool,
+    cases_table_exists: bool,
+    routed_event_count: usize,
+    latest_routed_event_updated_at: String,
+    active_self_work_count: usize,
+    latest_active_self_work_updated_at: String,
+    open_case_count: usize,
+    latest_open_case_updated_at: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+enum DurableCommunicationSourceStamp {
+    Source(channels::CommunicationIntakeSourceStamp),
+    File(CoreDbChangeStamp),
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+enum DurableTicketCaseSourceStamp {
+    Source(tickets::TicketCaseStatusStamp),
+    File(tickets::TicketStoreChangeStamp),
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+enum DurableLcmOutcomeSourceStamp {
+    Source(LcmLastAgentOutcomeStamp),
+    File(CoreDbChangeStamp),
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct LcmLastAgentOutcomeStamp {
+    database_exists: bool,
+    messages_table_exists: bool,
+    agent_outcome_column_exists: bool,
+    last_assistant_seq: i64,
+    last_assistant_outcome: String,
 }
 
 #[derive(Debug, Clone)]
@@ -309,9 +574,7 @@ struct LiveServiceSettingsCacheState {
 struct DurableServiceStatusCacheEntry {
     loaded_at: Instant,
     root: PathBuf,
-    core_db_path: PathBuf,
-    core_stamp: CoreDbChangeStamp,
-    ticket_stamp: tickets::TicketStoreChangeStamp,
+    source_stamp: DurableStatusSourceStamp,
     snapshot: DurableServiceStatusSnapshot,
 }
 
@@ -353,6 +616,8 @@ pub struct ServiceStatus {
     pub business_os: Option<Value>,
     #[serde(default)]
     pub work_hours: crate::service::working_hours::WorkHoursSnapshot,
+    #[serde(default)]
+    pub performance: Value,
     /// True when this snapshot came from the pid/systemd fallback because
     /// the daemon missed the status-IPC budget: the daemon is alive but
     /// too busy to answer, and the busy/queue fields are NOT fresh truth.
@@ -389,6 +654,7 @@ struct ServiceStatusWire {
     worker_phase: Option<String>,
     business_os: Option<Value>,
     work_hours: crate::service::working_hours::WorkHoursSnapshot,
+    performance: Value,
 }
 
 impl ServiceStatus {
@@ -424,6 +690,7 @@ impl ServiceStatus {
             worker_phase: None,
             business_os: include_business_os.then(|| business_os_health_snapshot(root)),
             work_hours: crate::service::working_hours::snapshot(root),
+            performance: service_performance_snapshot(),
             degraded_probe: false,
         };
         status.apply_durable_queue_snapshot(root);
@@ -511,6 +778,7 @@ fn parse_service_status(body: &str, root: &Path) -> Result<ServiceStatus> {
         worker_phase: wire.worker_phase,
         business_os: wire.business_os,
         work_hours: wire.work_hours,
+        performance: wire.performance,
         degraded_probe: false,
     })
 }
@@ -992,6 +1260,7 @@ pub fn run_foreground(root: &Path) -> Result<()> {
     let _ = crate::lcm::LcmEngine::open(&db_path, crate::lcm::LcmConfig::default())?;
     let listen_addr = service_listen_addr(root);
     write_pid_file(root, std::process::id())?;
+    let _ = write_service_performance_status_artifact(root);
     let state = Arc::new(Mutex::new(SharedState::default()));
     run_boot_state_invariant_check(root, &state);
     run_boot_auto_submitted_reclassifier(root, &state);
@@ -2549,9 +2818,12 @@ fn handle_service_ipc_request(
     state: Arc<Mutex<SharedState>>,
 ) -> Result<ServiceIpcResponse> {
     match request {
-        ServiceIpcRequest::Status => Ok(ServiceIpcResponse::Status(status_from_shared_state(
-            root, &state,
-        )?)),
+        ServiceIpcRequest::Status => {
+            record_service_status_request(root, "ipc_status");
+            Ok(ServiceIpcResponse::Status(status_from_shared_state(
+                root, &state,
+            )?))
+        }
         ServiceIpcRequest::ChatSubmit {
             prompt,
             thread_key,
@@ -2725,6 +2997,7 @@ fn handle_request(
     eprintln!("ctox service request {} {}", method.as_str(), url);
     match (method, url.as_str()) {
         (Method::Get, "/ctox/service/status") => {
+            record_service_status_request(root, "http_status");
             let snapshot = status_from_shared_state(root, &state)?;
             respond_json(request, StatusCode(200), &snapshot)?;
         }
@@ -3069,19 +3342,21 @@ fn durable_status_snapshot_cache() -> &'static DurableServiceStatusCache {
 
 fn durable_status_snapshot_cached(root: &Path, ttl: Duration) -> DurableServiceStatusSnapshot {
     let root_path = root.to_path_buf();
-    let core_db_path = crate::paths::core_db(root);
-    let core_stamp = core_db_change_stamp(&core_db_path);
-    let ticket_stamp = tickets::ticket_store_change_stamp(root);
     let cache = durable_status_snapshot_cache();
     {
         let guard = cache.lock().unwrap_or_else(|err| err.into_inner());
         if let Some(cached) = guard.as_ref() {
-            if cached.root == root_path
-                && (cached.loaded_at.elapsed() < ttl
-                    || (cached.core_db_path == core_db_path
-                        && cached.core_stamp == core_stamp
-                        && cached.ticket_stamp == ticket_stamp))
-            {
+            if cached.root == root_path && cached.loaded_at.elapsed() < ttl {
+                return cached.snapshot.clone();
+            }
+        }
+    }
+
+    let source_stamp = durable_status_source_stamp(root);
+    {
+        let guard = cache.lock().unwrap_or_else(|err| err.into_inner());
+        if let Some(cached) = guard.as_ref() {
+            if cached.root == root_path && cached.source_stamp == source_stamp {
                 return cached.snapshot.clone();
             }
         }
@@ -3091,12 +3366,578 @@ fn durable_status_snapshot_cached(root: &Path, ttl: Duration) -> DurableServiceS
     *cache.lock().unwrap_or_else(|err| err.into_inner()) = Some(DurableServiceStatusCacheEntry {
         loaded_at: Instant::now(),
         root: root_path,
-        core_db_path: core_db_path.clone(),
-        core_stamp: core_db_change_stamp(&core_db_path),
-        ticket_stamp: tickets::ticket_store_change_stamp(root),
+        source_stamp: durable_status_source_stamp(root),
         snapshot: snapshot.clone(),
     });
     snapshot
+}
+
+fn durable_status_source_stamp(root: &Path) -> DurableStatusSourceStamp {
+    let core_db_path = crate::paths::core_db(root);
+    DurableStatusSourceStamp {
+        communication: durable_communication_source_stamp(root, &core_db_path),
+        lcm_outcome: durable_lcm_outcome_source_stamp(&core_db_path),
+        ticket_cases: durable_ticket_case_source_stamp(root),
+    }
+}
+
+fn channel_router_source_stamp(root: &Path) -> ChannelRouterSourceStamp {
+    let core_db_path = crate::paths::core_db(root);
+    ChannelRouterSourceStamp {
+        communication: durable_communication_source_stamp(root, &core_db_path),
+        schedule: router_schedule_source_stamp(&core_db_path),
+        document_reports: router_document_report_source_stamp(root),
+        tickets: router_ticket_source_stamp(&core_db_path),
+    }
+}
+
+fn channel_router_source_has_due_time(source_stamp: &ChannelRouterSourceStamp) -> bool {
+    let RouterScheduleSourceStamp::Source(schedule) = &source_stamp.schedule else {
+        return false;
+    };
+    if schedule.earliest_next_run_at.trim().is_empty() {
+        return false;
+    }
+    DateTime::parse_from_rfc3339(&schedule.earliest_next_run_at)
+        .map(|due_at| due_at.with_timezone(&Utc) <= Utc::now())
+        .unwrap_or(false)
+}
+
+fn business_os_app_recovery_source_stamp(root: &Path) -> BusinessOsAppRecoverySourceStamp {
+    let core_db_path = crate::paths::core_db(root);
+    match business_os_app_recovery_queue_stamp(root, &core_db_path) {
+        Ok(stamp) => BusinessOsAppRecoverySourceStamp::Source(stamp),
+        Err(_) => BusinessOsAppRecoverySourceStamp::File(core_db_change_stamp(&core_db_path)),
+    }
+}
+
+fn business_os_app_recovery_queue_stamp(
+    root: &Path,
+    core_db_path: &Path,
+) -> Result<BusinessOsAppRecoveryQueueStamp> {
+    let Some(conn) =
+        open_existing_sqlite_read_only(core_db_path, "Business OS app recovery stamp")?
+    else {
+        return Ok(empty_business_os_app_recovery_queue_stamp(
+            false, false, false,
+        ));
+    };
+    let messages_table_exists = sqlite_table_exists(&conn, "communication_messages")?;
+    let routing_table_exists = sqlite_table_exists(&conn, "communication_routing_state")?;
+    if !messages_table_exists || !routing_table_exists {
+        return Ok(empty_business_os_app_recovery_queue_stamp(
+            true,
+            messages_table_exists,
+            routing_table_exists,
+        ));
+    }
+
+    let mut statement = conn.prepare(
+        r#"
+        SELECT
+            m.message_key,
+            m.body_text,
+            m.metadata_json,
+            COALESCE(r.route_status, 'pending'),
+            COALESCE(r.leased_at, ''),
+            COALESCE(r.updated_at, m.observed_at),
+            COALESCE(m.external_created_at, ''),
+            COALESCE(m.observed_at, '')
+        FROM communication_messages m
+        JOIN communication_routing_state r ON r.message_key = m.message_key
+        WHERE m.channel = 'queue'
+          AND m.direction = 'inbound'
+          AND lower(COALESCE(r.route_status, 'pending')) = 'leased'
+        ORDER BY m.message_key
+        "#,
+    )?;
+    let mut rows = statement.query([])?;
+    let mut candidate_count = 0usize;
+    let mut latest_route_updated_at = String::new();
+    let mut next_recovery_due_epoch_secs: Option<u64> = None;
+    let mut hasher = DefaultHasher::new();
+
+    while let Some(row) = rows.next()? {
+        let message_key: String = row.get(0)?;
+        let prompt: String = row.get(1)?;
+        let metadata_json: String = row.get(2)?;
+        let route_status: String = row.get(3)?;
+        let leased_at: String = row.get(4)?;
+        let route_updated_at: String = row.get(5)?;
+        let external_created_at: String = row.get(6)?;
+        let observed_at: String = row.get(7)?;
+        let Some(target) = business_os_app_module_target_from_prompt(&prompt) else {
+            continue;
+        };
+        candidate_count = candidate_count.saturating_add(1);
+        if route_updated_at > latest_route_updated_at {
+            latest_route_updated_at = route_updated_at.clone();
+        }
+        if let Some(due_epoch_secs) = business_os_app_recovery_due_epoch_secs(&leased_at) {
+            next_recovery_due_epoch_secs = Some(
+                next_recovery_due_epoch_secs
+                    .map(|current| current.min(due_epoch_secs))
+                    .unwrap_or(due_epoch_secs),
+            );
+        }
+
+        message_key.hash(&mut hasher);
+        prompt.hash(&mut hasher);
+        metadata_json.hash(&mut hasher);
+        route_status.hash(&mut hasher);
+        leased_at.hash(&mut hasher);
+        route_updated_at.hash(&mut hasher);
+        external_created_at.hash(&mut hasher);
+        observed_at.hash(&mut hasher);
+        target.module_id.hash(&mut hasher);
+        target.install_target.hash(&mut hasher);
+        target.artifact_directory.hash(&mut hasher);
+
+        let metadata = serde_json::from_str::<Value>(&metadata_json).unwrap_or(Value::Null);
+        let workspace_root =
+            channels::workspace_root_from_queue_metadata_or_prompt(&metadata, &prompt)
+                .map(PathBuf::from)
+                .filter(|path| business_os_app_workspace_root_looks_valid(path))
+                .unwrap_or_else(|| root.to_path_buf());
+        let artifact_dir = workspace_root.join(&target.artifact_directory);
+        business_os_app_artifact_tree_stamp(&artifact_dir).hash(&mut hasher);
+    }
+
+    Ok(BusinessOsAppRecoveryQueueStamp {
+        database_exists: true,
+        messages_table_exists: true,
+        routing_table_exists: true,
+        candidate_count,
+        latest_route_updated_at,
+        next_recovery_due_epoch_secs,
+        source_fingerprint: hasher.finish(),
+    })
+}
+
+fn empty_business_os_app_recovery_queue_stamp(
+    database_exists: bool,
+    messages_table_exists: bool,
+    routing_table_exists: bool,
+) -> BusinessOsAppRecoveryQueueStamp {
+    BusinessOsAppRecoveryQueueStamp {
+        database_exists,
+        messages_table_exists,
+        routing_table_exists,
+        candidate_count: 0,
+        latest_route_updated_at: String::new(),
+        next_recovery_due_epoch_secs: None,
+        source_fingerprint: 0,
+    }
+}
+
+fn business_os_app_recovery_due_epoch_secs(leased_at: &str) -> Option<u64> {
+    let leased_at = parse_rfc3339_system_time(leased_at)?;
+    let leased_epoch_secs = leased_at.duration_since(UNIX_EPOCH).ok()?.as_secs();
+    Some(leased_epoch_secs.saturating_add(BUSINESS_OS_APP_RECOVERY_STALE_SECS))
+}
+
+fn business_os_app_recovery_source_has_due_time(
+    source_stamp: &BusinessOsAppRecoverySourceStamp,
+) -> bool {
+    let BusinessOsAppRecoverySourceStamp::Source(stamp) = source_stamp else {
+        return false;
+    };
+    stamp
+        .next_recovery_due_epoch_secs
+        .map(|due_epoch_secs| due_epoch_secs <= current_epoch_secs())
+        .unwrap_or(false)
+}
+
+fn harness_audit_source_stamp(root: &Path) -> HarnessAuditSourceStamp {
+    let core_db_path = crate::paths::core_db(root);
+    match harness_audit_db_stamp(&core_db_path) {
+        Ok(stamp) => HarnessAuditSourceStamp::Source(stamp),
+        Err(_) => HarnessAuditSourceStamp::File(core_db_change_stamp(&core_db_path)),
+    }
+}
+
+fn harness_audit_db_stamp(core_db_path: &Path) -> Result<HarnessAuditDbStamp> {
+    let Some(conn) = open_existing_sqlite_read_only(core_db_path, "harness audit stamp")? else {
+        return Ok(HarnessAuditDbStamp {
+            database_exists: false,
+            tables: Vec::new(),
+        });
+    };
+    let table_specs = [
+        ("ctox_core_transition_proofs", Some("updated_at"), None),
+        ("ctox_process_events", Some("observed_at"), None),
+        ("ctox_pm_state_violations", Some("detected_at"), None),
+        ("ctox_pm_core_transition_audit", Some("scanned_at"), None),
+        ("ctox_pm_core_transition_rules", Some("updated_at"), None),
+        (
+            "ctox_pm_event_transition_coverage",
+            Some("scanned_at"),
+            None,
+        ),
+        ("ctox_pm_unmapped_events", Some("scanned_at"), None),
+        ("ctox_core_spawn_edges", Some("updated_at"), None),
+        (
+            "ctox_hm_findings",
+            Some("last_seen_at"),
+            Some("status NOT IN ('mitigated','verified','stale')"),
+        ),
+    ];
+    let mut tables = Vec::with_capacity(table_specs.len());
+    for (table_name, timestamp_column, where_clause) in table_specs {
+        tables.push(harness_audit_table_stamp(
+            &conn,
+            table_name,
+            timestamp_column,
+            where_clause,
+        )?);
+    }
+    Ok(HarnessAuditDbStamp {
+        database_exists: true,
+        tables,
+    })
+}
+
+fn harness_audit_table_stamp(
+    conn: &Connection,
+    table_name: &str,
+    timestamp_column: Option<&str>,
+    where_clause: Option<&str>,
+) -> Result<HarnessAuditTableStamp> {
+    if !sqlite_table_exists(conn, table_name)? {
+        return Ok(HarnessAuditTableStamp {
+            table_name: table_name.to_string(),
+            table_exists: false,
+            row_count: 0,
+            max_rowid: 0,
+            latest_timestamp: String::new(),
+        });
+    }
+    let where_sql = where_clause
+        .map(|clause| format!(" WHERE {clause}"))
+        .unwrap_or_default();
+    let sql = if let Some(column) = timestamp_column {
+        format!(
+            "SELECT COUNT(*), COALESCE(MAX(rowid), 0), COALESCE(MAX({column}), '') FROM {table_name}{where_sql}"
+        )
+    } else {
+        format!("SELECT COUNT(*), COALESCE(MAX(rowid), 0), '' FROM {table_name}{where_sql}")
+    };
+    let (row_count, max_rowid, latest_timestamp) = conn.query_row(&sql, [], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    Ok(HarnessAuditTableStamp {
+        table_name: table_name.to_string(),
+        table_exists: true,
+        row_count: row_count.max(0) as usize,
+        max_rowid,
+        latest_timestamp,
+    })
+}
+
+fn harness_audit_source_has_active_findings(source_stamp: &HarnessAuditSourceStamp) -> bool {
+    let HarnessAuditSourceStamp::Source(stamp) = source_stamp else {
+        return false;
+    };
+    stamp.tables.iter().any(|table| {
+        table.table_name == "ctox_hm_findings" && table.table_exists && table.row_count > 0
+    })
+}
+
+fn router_schedule_source_stamp(core_db_path: &Path) -> RouterScheduleSourceStamp {
+    match router_schedule_table_stamp(core_db_path) {
+        Ok(stamp) => RouterScheduleSourceStamp::Source(stamp),
+        Err(_) => RouterScheduleSourceStamp::File(core_db_change_stamp(core_db_path)),
+    }
+}
+
+fn router_schedule_table_stamp(core_db_path: &Path) -> Result<RouterScheduleTableStamp> {
+    let Some(conn) = open_existing_sqlite_read_only(core_db_path, "router schedule stamp")? else {
+        return Ok(RouterScheduleTableStamp {
+            database_exists: false,
+            table_exists: false,
+            enabled_count: 0,
+            earliest_next_run_at: String::new(),
+            latest_updated_at: String::new(),
+        });
+    };
+    let table_exists = sqlite_table_exists(&conn, "scheduled_tasks")?;
+    if !table_exists {
+        return Ok(RouterScheduleTableStamp {
+            database_exists: true,
+            table_exists: false,
+            enabled_count: 0,
+            earliest_next_run_at: String::new(),
+            latest_updated_at: String::new(),
+        });
+    }
+    let (enabled_count, earliest_next_run_at, latest_updated_at) = conn.query_row(
+        r#"
+        SELECT COUNT(*), COALESCE(MIN(next_run_at), ''), COALESCE(MAX(updated_at), '')
+        FROM scheduled_tasks
+        WHERE enabled = 1
+        "#,
+        [],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        },
+    )?;
+    Ok(RouterScheduleTableStamp {
+        database_exists: true,
+        table_exists: true,
+        enabled_count: enabled_count.max(0) as usize,
+        earliest_next_run_at,
+        latest_updated_at,
+    })
+}
+
+fn router_document_report_source_stamp(root: &Path) -> RouterDocumentReportSourceStamp {
+    let path = root.join("runtime").join("business-os.sqlite3");
+    match router_document_report_table_stamp(&path) {
+        Ok(stamp) => RouterDocumentReportSourceStamp::Source(stamp),
+        Err(_) => RouterDocumentReportSourceStamp::File(core_db_change_stamp(&path)),
+    }
+}
+
+fn router_document_report_table_stamp(path: &Path) -> Result<RouterDocumentReportTableStamp> {
+    let Some(conn) = open_existing_sqlite_read_only(path, "router document report stamp")? else {
+        return Ok(RouterDocumentReportTableStamp {
+            database_exists: false,
+            table_exists: false,
+            pending_count: 0,
+            latest_observed_at_ms: 0,
+        });
+    };
+    let table_exists = sqlite_table_exists(&conn, "business_commands")?;
+    if !table_exists {
+        return Ok(RouterDocumentReportTableStamp {
+            database_exists: true,
+            table_exists: false,
+            pending_count: 0,
+            latest_observed_at_ms: 0,
+        });
+    }
+    let (pending_count, latest_observed_at_ms) = conn.query_row(
+        r#"
+        SELECT COUNT(*), COALESCE(MAX(observed_at_ms), 0)
+        FROM business_commands
+        WHERE module = 'documents'
+          AND command_type = 'research.systematic.report.create'
+          AND status NOT IN ('completed', 'failed', 'cancelled')
+        "#,
+        [],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+    )?;
+    Ok(RouterDocumentReportTableStamp {
+        database_exists: true,
+        table_exists: true,
+        pending_count: pending_count.max(0) as usize,
+        latest_observed_at_ms,
+    })
+}
+
+fn router_ticket_source_stamp(core_db_path: &Path) -> RouterTicketSourceStamp {
+    match router_ticket_table_stamp(core_db_path) {
+        Ok(stamp) => RouterTicketSourceStamp::Source(stamp),
+        Err(_) => RouterTicketSourceStamp::File(core_db_change_stamp(core_db_path)),
+    }
+}
+
+fn router_ticket_table_stamp(core_db_path: &Path) -> Result<RouterTicketTableStamp> {
+    let Some(conn) = open_existing_sqlite_read_only(core_db_path, "router ticket stamp")? else {
+        return Ok(RouterTicketTableStamp {
+            database_exists: false,
+            events_table_exists: false,
+            event_routing_table_exists: false,
+            self_work_table_exists: false,
+            cases_table_exists: false,
+            routed_event_count: 0,
+            latest_routed_event_updated_at: String::new(),
+            active_self_work_count: 0,
+            latest_active_self_work_updated_at: String::new(),
+            open_case_count: 0,
+            latest_open_case_updated_at: String::new(),
+        });
+    };
+    let events_table_exists = sqlite_table_exists(&conn, "ticket_events")?;
+    let event_routing_table_exists = sqlite_table_exists(&conn, "ticket_event_routing_state")?;
+    let self_work_table_exists = sqlite_table_exists(&conn, "ticket_self_work_items")?;
+    let cases_table_exists = sqlite_table_exists(&conn, "ticket_cases")?;
+    let (routed_event_count, latest_routed_event_updated_at) =
+        if events_table_exists && event_routing_table_exists {
+            conn.query_row(
+                r#"
+                SELECT COUNT(*), COALESCE(MAX(r.updated_at), '')
+                FROM ticket_events e
+                JOIN ticket_event_routing_state r ON r.event_key = e.event_key
+                WHERE r.route_status NOT IN ('handled', 'blocked', 'failed', 'cancelled')
+                "#,
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )?
+        } else {
+            (0, String::new())
+        };
+    let (active_self_work_count, latest_active_self_work_updated_at) = if self_work_table_exists {
+        conn.query_row(
+            r#"
+            SELECT COUNT(*), COALESCE(MAX(updated_at), '')
+            FROM ticket_self_work_items
+            WHERE state IN ('published', 'queued', 'created', 'open', 'blocked', 'restored')
+            "#,
+            [],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )?
+    } else {
+        (0, String::new())
+    };
+    let (open_case_count, latest_open_case_updated_at) = if cases_table_exists {
+        conn.query_row(
+            r#"
+            SELECT COUNT(*), COALESCE(MAX(updated_at), '')
+            FROM ticket_cases
+            WHERE state <> 'closed'
+            "#,
+            [],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )?
+    } else {
+        (0, String::new())
+    };
+    Ok(RouterTicketTableStamp {
+        database_exists: true,
+        events_table_exists,
+        event_routing_table_exists,
+        self_work_table_exists,
+        cases_table_exists,
+        routed_event_count: routed_event_count.max(0) as usize,
+        latest_routed_event_updated_at,
+        active_self_work_count: active_self_work_count.max(0) as usize,
+        latest_active_self_work_updated_at,
+        open_case_count: open_case_count.max(0) as usize,
+        latest_open_case_updated_at,
+    })
+}
+
+fn durable_communication_source_stamp(
+    root: &Path,
+    core_db_path: &Path,
+) -> DurableCommunicationSourceStamp {
+    match channels::communication_intake_source_stamp(root) {
+        Ok(stamp) => DurableCommunicationSourceStamp::Source(stamp),
+        Err(_) => DurableCommunicationSourceStamp::File(core_db_change_stamp(core_db_path)),
+    }
+}
+
+fn durable_ticket_case_source_stamp(root: &Path) -> DurableTicketCaseSourceStamp {
+    match tickets::ticket_case_status_stamp(root) {
+        Ok(stamp) => DurableTicketCaseSourceStamp::Source(stamp),
+        Err(_) => DurableTicketCaseSourceStamp::File(tickets::ticket_store_change_stamp(root)),
+    }
+}
+
+fn durable_lcm_outcome_source_stamp(core_db_path: &Path) -> DurableLcmOutcomeSourceStamp {
+    match lcm_last_agent_outcome_stamp(core_db_path) {
+        Ok(stamp) => DurableLcmOutcomeSourceStamp::Source(stamp),
+        Err(_) => DurableLcmOutcomeSourceStamp::File(core_db_change_stamp(core_db_path)),
+    }
+}
+
+fn open_existing_sqlite_read_only(path: &Path, purpose: &str) -> Result<Option<Connection>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("failed to open SQLite db {} for {purpose}", path.display()))?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .with_context(|| format!("failed to configure SQLite busy_timeout for {purpose}"))?;
+    conn.execute_batch("PRAGMA query_only = ON;")
+        .with_context(|| format!("failed to configure read-only SQLite mode for {purpose}"))?;
+    Ok(Some(conn))
+}
+
+fn lcm_last_agent_outcome_stamp(core_db_path: &Path) -> Result<LcmLastAgentOutcomeStamp> {
+    if !core_db_path.exists() {
+        return Ok(empty_lcm_last_agent_outcome_stamp(false, false, false));
+    }
+    let conn = Connection::open_with_flags(
+        core_db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| {
+        format!(
+            "failed to open core db {} for LCM outcome stamp",
+            core_db_path.display()
+        )
+    })?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .context("failed to configure SQLite busy_timeout for LCM outcome stamp")?;
+    let messages_table_exists = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'messages' LIMIT 1",
+            [],
+            |_| Ok(true),
+        )
+        .optional()?
+        .unwrap_or(false);
+    if !messages_table_exists {
+        return Ok(empty_lcm_last_agent_outcome_stamp(true, false, false));
+    }
+    let agent_outcome_column_exists = conn
+        .prepare("PRAGMA table_info(messages)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .iter()
+        .any(|name| name == "agent_outcome");
+    if !agent_outcome_column_exists {
+        return Ok(empty_lcm_last_agent_outcome_stamp(true, true, false));
+    }
+    let last = conn
+        .query_row(
+            r#"
+            SELECT seq, COALESCE(agent_outcome, '')
+            FROM messages
+            WHERE conversation_id = ?1
+              AND role = 'assistant'
+            ORDER BY seq DESC
+            LIMIT 1
+            "#,
+            params![turn_loop::CHAT_CONVERSATION_ID],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    let (last_assistant_seq, last_assistant_outcome) = last.unwrap_or_else(|| (0, String::new()));
+    Ok(LcmLastAgentOutcomeStamp {
+        database_exists: true,
+        messages_table_exists: true,
+        agent_outcome_column_exists: true,
+        last_assistant_seq,
+        last_assistant_outcome,
+    })
+}
+
+fn empty_lcm_last_agent_outcome_stamp(
+    database_exists: bool,
+    messages_table_exists: bool,
+    agent_outcome_column_exists: bool,
+) -> LcmLastAgentOutcomeStamp {
+    LcmLastAgentOutcomeStamp {
+        database_exists,
+        messages_table_exists,
+        agent_outcome_column_exists,
+        last_assistant_seq: 0,
+        last_assistant_outcome: String::new(),
+    }
 }
 
 fn load_durable_status_snapshot(root: &Path) -> DurableServiceStatusSnapshot {
@@ -3334,6 +4175,7 @@ fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Res
         // its short control-plane timeout while an agent turn is busy.
         business_os: None,
         work_hours: crate::service::working_hours::snapshot(root),
+        performance: service_performance_snapshot(),
         degraded_probe: false,
     })
 }
@@ -8351,6 +9193,78 @@ fn business_os_app_workspace_root_looks_valid(path: &Path) -> bool {
         || path.join("runtime/business-os/installed-modules").is_dir()
 }
 
+fn business_os_app_artifact_tree_stamp(path: &Path) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    let mut visited = 0usize;
+    hash_business_os_app_artifact_path(path, path, 0, &mut visited, &mut hasher);
+    hasher.finish()
+}
+
+fn hash_business_os_app_artifact_path(
+    root: &Path,
+    path: &Path,
+    depth: usize,
+    visited: &mut usize,
+    hasher: &mut DefaultHasher,
+) {
+    if *visited >= BUSINESS_OS_APP_RECOVERY_ARTIFACT_STAMP_MAX_ENTRIES {
+        "truncated".hash(hasher);
+        return;
+    }
+    *visited = (*visited).saturating_add(1);
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .hash(hasher);
+
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) => {
+            "metadata-error".hash(hasher);
+            err.kind().hash(hasher);
+            return;
+        }
+    };
+    let file_type = metadata.file_type();
+    file_type.is_dir().hash(hasher);
+    file_type.is_file().hash(hasher);
+    file_type.is_symlink().hash(hasher);
+    metadata.len().hash(hasher);
+    metadata
+        .modified()
+        .ok()
+        .map(system_time_to_unix_nanos)
+        .unwrap_or(0)
+        .hash(hasher);
+
+    if !file_type.is_dir() {
+        return;
+    }
+    if depth >= BUSINESS_OS_APP_RECOVERY_ARTIFACT_STAMP_MAX_DEPTH {
+        "depth-limit".hash(hasher);
+        return;
+    }
+    let mut entries = match std::fs::read_dir(path) {
+        Ok(entries) => entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>(),
+        Err(err) => {
+            "read-dir-error".hash(hasher);
+            err.kind().hash(hasher);
+            return;
+        }
+    };
+    entries.sort();
+    for entry in entries {
+        hash_business_os_app_artifact_path(root, &entry, depth + 1, visited, hasher);
+        if *visited >= BUSINESS_OS_APP_RECOVERY_ARTIFACT_STAMP_MAX_ENTRIES {
+            "truncated".hash(hasher);
+            break;
+        }
+    }
+}
+
 fn business_os_app_artifact_dir_has_user_content(path: &Path) -> Result<bool> {
     if !path.exists() {
         return Ok(false);
@@ -12235,31 +13149,32 @@ fn active_agent_loop_in_progress(state: &Arc<Mutex<SharedState>>) -> bool {
 
 fn should_skip_idle_harness_audit_tick(root: &Path) -> bool {
     let root_path = root.to_path_buf();
-    let core_db_path = crate::paths::core_db(root);
-    let core_stamp = core_db_change_stamp(&core_db_path);
+    let source_stamp = harness_audit_source_stamp(root);
     let now = Instant::now();
     let gate = HARNESS_AUDIT_IDLE_GATE.get_or_init(|| Mutex::new(None));
     let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let Some(previous) = guard.as_ref() else {
         return false;
     };
+    let elapsed = now.duration_since(previous.last_run);
+    if harness_audit_source_has_active_findings(&source_stamp)
+        && elapsed >= Duration::from_secs(HARNESS_AUDIT_TICK_SECS)
+    {
+        return false;
+    }
     previous.root == root_path
-        && previous.core_db_path == core_db_path
-        && previous.core_stamp == core_stamp
-        && now.duration_since(previous.last_run)
-            < Duration::from_secs(HARNESS_AUDIT_IDLE_SAFETY_SECS)
+        && previous.source_stamp == source_stamp
+        && elapsed < Duration::from_secs(HARNESS_AUDIT_IDLE_SAFETY_SECS)
 }
 
 fn mark_harness_audit_tick_ran(root: &Path) {
     let root_path = root.to_path_buf();
-    let core_db_path = crate::paths::core_db(root);
-    let core_stamp = core_db_change_stamp(&core_db_path);
+    let source_stamp = harness_audit_source_stamp(root);
     let gate = HARNESS_AUDIT_IDLE_GATE.get_or_init(|| Mutex::new(None));
     let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     *guard = Some(HarnessAuditIdleGateState {
         root: root_path,
-        core_db_path,
-        core_stamp,
+        source_stamp,
         last_run: Instant::now(),
     });
 }
@@ -12313,9 +13228,7 @@ fn clear_approval_nag_idle_gate_for_tests() {
 
 fn should_skip_idle_channel_router_preflight(root: &Path) -> bool {
     let root_path = root.to_path_buf();
-    let core_db_path = crate::paths::core_db(root);
-    let core_stamp = core_db_change_stamp(&core_db_path);
-    let ticket_stamp = tickets::ticket_store_change_stamp(root);
+    let source_stamp = channel_router_source_stamp(root);
     let env_overlay = live_service_env_overlay();
     let now = Instant::now();
     let gate = CHANNEL_ROUTER_PREFLIGHT_IDLE_GATE.get_or_init(|| Mutex::new(None));
@@ -12323,10 +13236,11 @@ fn should_skip_idle_channel_router_preflight(root: &Path) -> bool {
     let Some(previous) = guard.as_ref() else {
         return false;
     };
+    if channel_router_source_has_due_time(&source_stamp) {
+        return false;
+    }
     previous.root == root_path
-        && previous.core_db_path == core_db_path
-        && previous.core_stamp == core_stamp
-        && previous.ticket_stamp == ticket_stamp
+        && previous.source_stamp == source_stamp
         && previous.env_overlay == env_overlay
         && now.duration_since(previous.last_idle_pass)
             < Duration::from_secs(CHANNEL_ROUTER_IDLE_SAFETY_SECS)
@@ -12334,17 +13248,13 @@ fn should_skip_idle_channel_router_preflight(root: &Path) -> bool {
 
 fn mark_channel_router_preflight_idle(root: &Path) {
     let root_path = root.to_path_buf();
-    let core_db_path = crate::paths::core_db(root);
-    let core_stamp = core_db_change_stamp(&core_db_path);
-    let ticket_stamp = tickets::ticket_store_change_stamp(root);
+    let source_stamp = channel_router_source_stamp(root);
     let env_overlay = live_service_env_overlay();
     let gate = CHANNEL_ROUTER_PREFLIGHT_IDLE_GATE.get_or_init(|| Mutex::new(None));
     let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     *guard = Some(ChannelRouterPreflightIdleGateState {
         root: root_path,
-        core_db_path,
-        core_stamp,
-        ticket_stamp,
+        source_stamp,
         env_overlay,
         last_idle_pass: Instant::now(),
     });
@@ -12360,38 +13270,24 @@ fn clear_channel_router_preflight_idle_gate_for_tests() {
 
 fn should_skip_idle_channel_router_tick(root: &Path, settings: &BTreeMap<String, String>) -> bool {
     let root_path = root.to_path_buf();
-    let core_db_path = crate::paths::core_db(root);
-    let core_stamp = core_db_change_stamp(&core_db_path);
-    let ticket_stamp = tickets::ticket_store_change_stamp(root);
+    let source_stamp = channel_router_source_stamp(root);
     let now = Instant::now();
     let gate = CHANNEL_ROUTER_IDLE_GATE.get_or_init(|| Mutex::new(None));
     let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let Some(previous) = guard.as_ref() else {
         return false;
     };
-    channel_router_idle_gate_matches(
-        previous,
-        &root_path,
-        &core_db_path,
-        &core_stamp,
-        &ticket_stamp,
-        settings,
-        now,
-    )
+    channel_router_idle_gate_matches(previous, &root_path, &source_stamp, settings, now)
 }
 
 fn mark_idle_channel_router_pass(root: &Path, settings: &BTreeMap<String, String>) {
     let root_path = root.to_path_buf();
-    let core_db_path = crate::paths::core_db(root);
-    let core_stamp = core_db_change_stamp(&core_db_path);
-    let ticket_stamp = tickets::ticket_store_change_stamp(root);
+    let source_stamp = channel_router_source_stamp(root);
     let gate = CHANNEL_ROUTER_IDLE_GATE.get_or_init(|| Mutex::new(None));
     let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     *guard = Some(ChannelRouterIdleGateState {
         root: root_path,
-        core_db_path,
-        core_stamp,
-        ticket_stamp,
+        source_stamp,
         settings: settings.clone(),
         last_idle_pass: Instant::now(),
     });
@@ -12400,16 +13296,15 @@ fn mark_idle_channel_router_pass(root: &Path, settings: &BTreeMap<String, String
 fn channel_router_idle_gate_matches(
     previous: &ChannelRouterIdleGateState,
     root_path: &Path,
-    core_db_path: &Path,
-    core_stamp: &CoreDbChangeStamp,
-    ticket_stamp: &tickets::TicketStoreChangeStamp,
+    source_stamp: &ChannelRouterSourceStamp,
     settings: &BTreeMap<String, String>,
     now: Instant,
 ) -> bool {
+    if channel_router_source_has_due_time(source_stamp) {
+        return false;
+    }
     previous.root == root_path
-        && previous.core_db_path == core_db_path
-        && previous.core_stamp == *core_stamp
-        && previous.ticket_stamp == *ticket_stamp
+        && previous.source_stamp == *source_stamp
         && previous.settings == *settings
         && now.duration_since(previous.last_idle_pass)
             < Duration::from_secs(CHANNEL_ROUTER_IDLE_SAFETY_SECS)
@@ -13168,16 +14063,13 @@ fn idle_durable_queue_probe_available(state: &Arc<Mutex<SharedState>>) -> bool {
 fn should_skip_idle_durable_queue_empty_probe(root: &Path) -> bool {
     let root_path = root.to_path_buf();
     let core_db_path = crate::paths::core_db(root);
-    let core_stamp = core_db_change_stamp(&core_db_path);
+    let queue_stamp = durable_communication_source_stamp(root, &core_db_path);
     let gate = IDLE_DURABLE_QUEUE_EMPTY_GATE.get_or_init(|| Mutex::new(None));
     let gate = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let Some(previous) = gate.as_ref() else {
         return false;
     };
-    if previous.root != root_path
-        || previous.core_db_path != core_db_path
-        || previous.core_stamp != core_stamp
-    {
+    if previous.root != root_path || previous.queue_stamp != queue_stamp {
         return false;
     }
     let timer_backoff = idle_durable_queue_empty_backoff(previous.consecutive_empty_probes);
@@ -13193,22 +14085,17 @@ fn should_skip_idle_durable_queue_empty_probe(root: &Path) -> bool {
 fn mark_idle_durable_queue_empty_probe(root: &Path) {
     let root_path = root.to_path_buf();
     let core_db_path = crate::paths::core_db(root);
-    let core_stamp = core_db_change_stamp(&core_db_path);
+    let queue_stamp = durable_communication_source_stamp(root, &core_db_path);
     let gate = IDLE_DURABLE_QUEUE_EMPTY_GATE.get_or_init(|| Mutex::new(None));
     let mut gate = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let consecutive_empty_probes = gate
         .as_ref()
-        .filter(|previous| {
-            previous.root == root_path
-                && previous.core_db_path == core_db_path
-                && previous.core_stamp == core_stamp
-        })
+        .filter(|previous| previous.root == root_path && previous.queue_stamp == queue_stamp)
         .map(|previous| previous.consecutive_empty_probes.saturating_add(1))
         .unwrap_or(1);
     *gate = Some(IdleDurableQueueEmptyGateState {
         root: root_path,
-        core_db_path,
-        core_stamp,
+        queue_stamp,
         last_empty_probe: Instant::now(),
         consecutive_empty_probes,
     });
@@ -13421,31 +14308,30 @@ fn mark_business_os_app_recovery_preflight_due(root: &Path) -> bool {
 
 fn should_skip_idle_business_os_app_recovery(root: &Path) -> bool {
     let root_path = root.to_path_buf();
-    let core_db_path = crate::paths::core_db(root);
-    let core_stamp = core_db_change_stamp(&core_db_path);
+    let source_stamp = business_os_app_recovery_source_stamp(root);
     let now = Instant::now();
     let gate = BUSINESS_OS_APP_RECOVERY_IDLE_GATE.get_or_init(|| Mutex::new(None));
     let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let Some(previous) = guard.as_ref() else {
         return false;
     };
+    if business_os_app_recovery_source_has_due_time(&source_stamp) {
+        return false;
+    }
     previous.root == root_path
-        && previous.core_db_path == core_db_path
-        && previous.core_stamp == core_stamp
+        && previous.source_stamp == source_stamp
         && now.duration_since(previous.last_run)
             < Duration::from_secs(BUSINESS_OS_APP_RECOVERY_IDLE_SAFETY_SECS)
 }
 
 fn mark_business_os_app_recovery_ran(root: &Path) {
     let root_path = root.to_path_buf();
-    let core_db_path = crate::paths::core_db(root);
-    let core_stamp = core_db_change_stamp(&core_db_path);
+    let source_stamp = business_os_app_recovery_source_stamp(root);
     let gate = BUSINESS_OS_APP_RECOVERY_IDLE_GATE.get_or_init(|| Mutex::new(None));
     let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     *guard = Some(BusinessOsAppRecoveryIdleGateState {
         root: root_path,
-        core_db_path,
-        core_stamp,
+        source_stamp,
         last_run: Instant::now(),
     });
 }
@@ -18732,6 +19618,7 @@ fn run_due_channel_sync_adapter<F>(
                 .as_ref()
                 .map(channel_sync_result_has_activity)
                 .unwrap_or(false);
+            channel_sync_metrics_for(adapter).record(true, activity);
             mark_channel_sync_adapter_result(
                 root,
                 settings,
@@ -18743,6 +19630,7 @@ fn run_due_channel_sync_adapter<F>(
             );
         }
         Err(_) => {
+            channel_sync_metrics_for(adapter).record(false, false);
             mark_channel_sync_adapter_result(
                 root,
                 settings,
@@ -18753,6 +19641,164 @@ fn run_due_channel_sync_adapter<F>(
                 now,
             );
         }
+    }
+}
+
+fn service_performance_snapshot() -> Value {
+    serde_json::json!({
+        "schema": "ctox.service.performance.v1",
+        "process": service_performance_process_snapshot(),
+        "status_requests": service_status_request_metrics_snapshot(),
+        "channel_sync": channel_sync_runtime_metrics_snapshot(),
+        "ticket_sync": ticket_sync_runtime_metrics_snapshot(),
+    })
+}
+
+fn service_performance_process_snapshot() -> Value {
+    let boot_id = SERVICE_PERFORMANCE_BOOT_ID
+        .get_or_init(|| uuid::Uuid::new_v4().to_string())
+        .clone();
+    let started_at = SERVICE_PERFORMANCE_STARTED_AT
+        .get_or_init(|| Utc::now().to_rfc3339())
+        .clone();
+
+    serde_json::json!({
+        "schema": "ctox.service.performance.process.v1",
+        "pid": std::process::id(),
+        "boot_id": boot_id,
+        "started_at": started_at,
+    })
+}
+
+fn service_status_request_metrics_snapshot() -> Value {
+    use std::sync::atomic::Ordering;
+
+    serde_json::json!({
+        "schema": "ctox.service.status_requests.v1",
+        "total_requests": SERVICE_STATUS_REQUESTS_TOTAL.load(Ordering::Relaxed),
+        "ipc_status_requests": SERVICE_STATUS_IPC_REQUESTS.load(Ordering::Relaxed),
+        "http_status_requests": SERVICE_STATUS_HTTP_REQUESTS.load(Ordering::Relaxed),
+    })
+}
+
+fn record_service_status_request(root: &Path, source: &str) {
+    use std::sync::atomic::Ordering;
+
+    SERVICE_STATUS_REQUESTS_TOTAL.fetch_add(1, Ordering::Relaxed);
+    if source == "ipc_status" {
+        SERVICE_STATUS_IPC_REQUESTS.fetch_add(1, Ordering::Relaxed);
+    } else if source == "http_status" {
+        SERVICE_STATUS_HTTP_REQUESTS.fetch_add(1, Ordering::Relaxed);
+    }
+    let _ = write_service_performance_status_artifact(root);
+}
+
+fn service_performance_status_path(root: &Path) -> PathBuf {
+    root.join("runtime").join("service-performance.status.json")
+}
+
+fn write_service_performance_status_artifact(root: &Path) -> Result<()> {
+    let path = service_performance_status_path(root);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create `{}`", parent.display()))?;
+    }
+    let payload = serde_json::json!({
+        "schema": "ctox.service.performance.status_file.v1",
+        "generated_at": Utc::now().to_rfc3339(),
+        "performance": service_performance_snapshot(),
+    });
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec_pretty(&payload)?)
+        .with_context(|| format!("failed to write `{}`", tmp.display()))?;
+    std::fs::rename(&tmp, &path)
+        .with_context(|| format!("failed to move `{}` to `{}`", tmp.display(), path.display()))?;
+    Ok(())
+}
+
+#[cfg(test)]
+fn reset_service_status_request_metrics_for_tests() {
+    use std::sync::atomic::Ordering;
+
+    SERVICE_STATUS_REQUESTS_TOTAL.store(0, Ordering::Relaxed);
+    SERVICE_STATUS_IPC_REQUESTS.store(0, Ordering::Relaxed);
+    SERVICE_STATUS_HTTP_REQUESTS.store(0, Ordering::Relaxed);
+}
+
+fn record_ticket_sync_runtime_metric(source: &str, ok: bool, activity: bool) {
+    let gate = TICKET_SYNC_RUNTIME_METRICS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard
+        .entry(source.to_string())
+        .or_default()
+        .record(ok, activity);
+}
+
+fn ticket_sync_runtime_metrics_snapshot() -> Value {
+    let gate = TICKET_SYNC_RUNTIME_METRICS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    serde_json::to_value(&*guard).unwrap_or_else(|_| serde_json::json!({}))
+}
+
+#[cfg(test)]
+fn reset_ticket_sync_runtime_metrics_for_tests() {
+    let gate = TICKET_SYNC_RUNTIME_METRICS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard.clear();
+}
+
+fn channel_sync_runtime_metrics_snapshot() -> Value {
+    serde_json::json!({
+        "email": CHANNEL_SYNC_EMAIL_METRICS.snapshot(),
+        "discord": CHANNEL_SYNC_DISCORD_METRICS.snapshot(),
+        "google_chat": CHANNEL_SYNC_GOOGLE_CHAT_METRICS.snapshot(),
+        "jami": CHANNEL_SYNC_JAMI_METRICS.snapshot(),
+        "matrix": CHANNEL_SYNC_MATRIX_METRICS.snapshot(),
+        "mattermost": CHANNEL_SYNC_MATTERMOST_METRICS.snapshot(),
+        "meeting": CHANNEL_SYNC_MEETING_METRICS.snapshot(),
+        "slack": CHANNEL_SYNC_SLACK_METRICS.snapshot(),
+        "teams": CHANNEL_SYNC_TEAMS_METRICS.snapshot(),
+        "telegram": CHANNEL_SYNC_TELEGRAM_METRICS.snapshot(),
+        "whatsapp": CHANNEL_SYNC_WHATSAPP_METRICS.snapshot(),
+        "zulip": CHANNEL_SYNC_ZULIP_METRICS.snapshot(),
+    })
+}
+
+fn channel_sync_metrics_for(adapter: &str) -> &'static ChannelSyncAdapterRuntimeMetrics {
+    match adapter {
+        "email" => &CHANNEL_SYNC_EMAIL_METRICS,
+        "discord" => &CHANNEL_SYNC_DISCORD_METRICS,
+        "google_chat" => &CHANNEL_SYNC_GOOGLE_CHAT_METRICS,
+        "jami" => &CHANNEL_SYNC_JAMI_METRICS,
+        "matrix" => &CHANNEL_SYNC_MATRIX_METRICS,
+        "mattermost" => &CHANNEL_SYNC_MATTERMOST_METRICS,
+        "meeting" => &CHANNEL_SYNC_MEETING_METRICS,
+        "slack" => &CHANNEL_SYNC_SLACK_METRICS,
+        "teams" => &CHANNEL_SYNC_TEAMS_METRICS,
+        "telegram" => &CHANNEL_SYNC_TELEGRAM_METRICS,
+        "whatsapp" => &CHANNEL_SYNC_WHATSAPP_METRICS,
+        "zulip" => &CHANNEL_SYNC_ZULIP_METRICS,
+        _ => &CHANNEL_SYNC_EMAIL_METRICS,
+    }
+}
+
+#[cfg(test)]
+fn reset_channel_sync_runtime_metrics_for_tests() {
+    for metrics in [
+        &CHANNEL_SYNC_EMAIL_METRICS,
+        &CHANNEL_SYNC_DISCORD_METRICS,
+        &CHANNEL_SYNC_GOOGLE_CHAT_METRICS,
+        &CHANNEL_SYNC_JAMI_METRICS,
+        &CHANNEL_SYNC_MATRIX_METRICS,
+        &CHANNEL_SYNC_MATTERMOST_METRICS,
+        &CHANNEL_SYNC_MEETING_METRICS,
+        &CHANNEL_SYNC_SLACK_METRICS,
+        &CHANNEL_SYNC_TEAMS_METRICS,
+        &CHANNEL_SYNC_TELEGRAM_METRICS,
+        &CHANNEL_SYNC_WHATSAPP_METRICS,
+        &CHANNEL_SYNC_ZULIP_METRICS,
+    ] {
+        metrics.reset();
     }
 }
 
@@ -18838,9 +19884,7 @@ fn channel_sync_next_delay_secs(base_delay_secs: u64, unchanged_runs: u32) -> u6
 fn channel_sync_result_has_activity(value: &Value) -> bool {
     let has_ingested_or_stored_activity = [
         "storedCount",
-        "fetchedCount",
         "messages_stored",
-        "messages_fetched",
         "messages_synced",
         "ingested",
         "history_syncs_seen",
@@ -18865,13 +19909,146 @@ fn channel_sync_result_has_activity(value: &Value) -> bool {
 
     value
         .get("pairing")
-        .map(|pairing| !pairing.is_null())
+        .map(channel_sync_pairing_has_activity)
         .unwrap_or(false)
+}
+
+fn channel_sync_pairing_has_activity(pairing: &Value) -> bool {
+    let Some(object) = pairing.as_object() else {
+        return pairing
+            .as_array()
+            .map(|items| items.iter().any(channel_sync_pairing_has_activity))
+            .unwrap_or(false);
+    };
+
+    [
+        "changed",
+        "updated",
+        "started",
+        "completed",
+        "paired_now",
+        "qr_changed",
+        "qr_updated",
+        "artifact_changed",
+        "artifact_updated",
+        "created",
+        "rotated",
+    ]
+    .iter()
+    .any(|key| object.get(*key).and_then(Value::as_bool).unwrap_or(false))
+        || [
+            "changedCount",
+            "updatedCount",
+            "qr_updates",
+            "artifact_updates",
+            "artifacts_updated",
+        ]
+        .iter()
+        .any(|key| object.get(*key).and_then(Value::as_u64).unwrap_or(0) > 0)
+        || object.values().any(|value| {
+            (value.is_object() || value.is_array()) && channel_sync_pairing_has_activity(value)
+        })
 }
 
 #[cfg(test)]
 fn clear_channel_sync_due_gate_for_tests() {
     if let Some(gate) = CHANNEL_SYNC_DUE_GATE.get() {
+        let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = None;
+    }
+}
+
+fn ticket_sync_source_due(
+    root: &Path,
+    settings: &BTreeMap<String, String>,
+    source: &str,
+    now: Instant,
+) -> bool {
+    let root = root.to_path_buf();
+    let gate = TICKET_SYNC_DUE_GATE.get_or_init(|| Mutex::new(None));
+    let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let state = ticket_sync_due_state_for(&mut guard, root, settings);
+    state
+        .sources
+        .get(source)
+        .map(|entry| now >= entry.next_due)
+        .unwrap_or(true)
+}
+
+fn mark_ticket_sync_source_result(
+    root: &Path,
+    settings: &BTreeMap<String, String>,
+    source: &str,
+    ok: bool,
+    activity: bool,
+    now: Instant,
+) {
+    let root = root.to_path_buf();
+    let gate = TICKET_SYNC_DUE_GATE.get_or_init(|| Mutex::new(None));
+    let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let state = ticket_sync_due_state_for(&mut guard, root, settings);
+    let previous = state
+        .sources
+        .get(source)
+        .map(|entry| entry.unchanged_runs)
+        .unwrap_or(0);
+    let unchanged_runs = if ok && !activity {
+        previous.saturating_add(1)
+    } else {
+        0
+    };
+    let delay_secs = ticket_sync_next_delay_secs(unchanged_runs);
+    state.sources.insert(
+        source.to_string(),
+        TicketSyncSourceDueState {
+            next_due: now + Duration::from_secs(delay_secs),
+            unchanged_runs,
+        },
+    );
+}
+
+fn ticket_sync_due_state_for<'a>(
+    guard: &'a mut Option<TicketSyncDueGateState>,
+    root: PathBuf,
+    settings: &BTreeMap<String, String>,
+) -> &'a mut TicketSyncDueGateState {
+    let reset = guard
+        .as_ref()
+        .map(|state| state.root != root || state.settings != *settings)
+        .unwrap_or(true);
+    if reset {
+        *guard = Some(TicketSyncDueGateState {
+            root,
+            settings: settings.clone(),
+            sources: BTreeMap::new(),
+        });
+    }
+    guard.as_mut().expect("ticket sync due gate state")
+}
+
+fn ticket_sync_next_delay_secs(unchanged_runs: u32) -> u64 {
+    let base = TICKET_SYNC_POLL_SECS.max(1);
+    if unchanged_runs == 0 {
+        return base.min(TICKET_SYNC_BACKOFF_MAX_SECS);
+    }
+    let shift = unchanged_runs.saturating_sub(1).min(4);
+    base.saturating_mul(1_u64 << shift)
+        .min(TICKET_SYNC_BACKOFF_MAX_SECS)
+}
+
+fn ticket_sync_result_has_activity(value: &Value) -> bool {
+    [
+        "stored_ticket_count",
+        "stored_event_count",
+        "resolved_clarification_count",
+    ]
+    .iter()
+    .any(|key| value.get(*key).and_then(Value::as_u64).unwrap_or(0) > 0)
+}
+
+#[cfg(test)]
+fn clear_ticket_sync_due_gate_for_tests() {
+    if let Some(gate) = TICKET_SYNC_DUE_GATE.get() {
         let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         *guard = None;
     }
@@ -18883,41 +20060,61 @@ fn sync_configured_tickets(
     settings: &BTreeMap<String, String>,
 ) -> HashSet<String> {
     let mut ok_sources = HashSet::new();
-    for result in tickets::sync_configured_ticket_systems(root, settings) {
-        if result.ok {
-            ok_sources.insert(result.system);
+    for system in tickets::configured_ticket_systems(settings) {
+        let now = Instant::now();
+        if !ticket_sync_source_due(root, settings, &system, now) {
             continue;
         }
-        let system = result.system.clone();
-        let error = result
-            .error
-            .as_deref()
-            .unwrap_or("unknown ticket sync error");
-        let idempotence_key = format!(
-            "ticket-sync-failed:{}:{}",
-            system,
-            normalize_token(&clip_text(error, 96))
-        );
-        governance::record_event_or_count(
-            root,
-            governance::GovernanceEventRequest {
-                mechanism_id: "ticket_adapter_sync",
-                conversation_id: None,
-                severity: "warning",
-                reason: error,
-                action_taken: "recorded ticket sync failure and skipped dispatch from this source for this cycle",
-                details: serde_json::json!({
-                    "system": system.clone(),
-                }),
-                idempotence_key: Some(&idempotence_key),
-            },
-        );
-        push_event(
-            state,
-            format!("Ticket sync failed for {system}: {}", clip_text(error, 180)),
-        );
+        match tickets::sync_ticket_system(root, &system) {
+            Ok(result) => {
+                let activity = ticket_sync_result_has_activity(&result);
+                record_ticket_sync_runtime_metric(&system, true, activity);
+                mark_ticket_sync_source_result(root, settings, &system, true, activity, now);
+                ok_sources.insert(system);
+                continue;
+            }
+            Err(err) => {
+                let error = err.to_string();
+                let _ = tickets::record_ticket_sync_failure(root, &system, &error);
+                record_ticket_sync_runtime_metric(&system, false, false);
+                mark_ticket_sync_source_result(root, settings, &system, false, false, now);
+                record_ticket_sync_failure_event(root, state, &system, &error);
+            }
+        }
     }
     ok_sources
+}
+
+fn record_ticket_sync_failure_event(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+    system: &str,
+    error: &str,
+) {
+    let idempotence_key = format!(
+        "ticket-sync-failed:{}:{}",
+        system,
+        normalize_token(&clip_text(error, 96))
+    );
+    governance::record_event_or_count(
+        root,
+        governance::GovernanceEventRequest {
+            mechanism_id: "ticket_adapter_sync",
+            conversation_id: None,
+            severity: "warning",
+            reason: error,
+            action_taken:
+                "recorded ticket sync failure and skipped dispatch from this source for this cycle",
+            details: serde_json::json!({
+                "system": system,
+            }),
+            idempotence_key: Some(&idempotence_key),
+        },
+    );
+    push_event(
+        state,
+        format!("Ticket sync failed for {system}: {}", clip_text(error, 180)),
+    );
 }
 
 fn render_ticket_prompt(root: &Path, event: &tickets::RoutedTicketEvent) -> String {
@@ -20545,6 +21742,29 @@ mod tests {
     use crate::secrets;
     use serde_json::json;
 
+    static CHANNEL_SYNC_DUE_GATE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static TICKET_SYNC_DUE_GATE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static DURABLE_STATUS_SNAPSHOT_CACHE_TEST_LOCK: std::sync::Mutex<()> =
+        std::sync::Mutex::new(());
+
+    fn channel_sync_due_gate_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        CHANNEL_SYNC_DUE_GATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn ticket_sync_due_gate_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        TICKET_SYNC_DUE_GATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn durable_status_snapshot_cache_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        DURABLE_STATUS_SNAPSHOT_CACHE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn temp_root(prefix: &str) -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!(
             "ctox-service-{prefix}-{}",
@@ -20559,6 +21779,7 @@ mod tests {
 
     #[test]
     fn channel_sync_due_gate_backs_off_unchanged_adapters() {
+        let _serial = channel_sync_due_gate_test_lock();
         clear_channel_sync_due_gate_for_tests();
         let root = temp_root("channel-sync-due-backoff");
         let mut settings = BTreeMap::new();
@@ -20603,6 +21824,7 @@ mod tests {
 
     #[test]
     fn channel_sync_due_gate_resets_after_activity_or_settings_change() {
+        let _serial = channel_sync_due_gate_test_lock();
         clear_channel_sync_due_gate_for_tests();
         let root = temp_root("channel-sync-due-reset");
         let mut settings = BTreeMap::new();
@@ -20654,6 +21876,7 @@ mod tests {
 
     #[test]
     fn channel_sync_due_gate_backs_off_unchanged_active_meetings() {
+        let _serial = channel_sync_due_gate_test_lock();
         clear_channel_sync_due_gate_for_tests();
         let root = temp_root("channel-sync-due-meeting-unchanged");
         let mut settings = BTreeMap::new();
@@ -20702,10 +21925,78 @@ mod tests {
     }
 
     #[test]
+    fn channel_sync_due_gate_backs_off_unchanged_pairing_payloads() {
+        let _serial = channel_sync_due_gate_test_lock();
+        clear_channel_sync_due_gate_for_tests();
+        let root = temp_root("channel-sync-due-pairing-unchanged");
+        let mut settings = BTreeMap::new();
+        settings.insert("CTOX_CHANNEL_SYNC_POLL_SECS".to_string(), "60".to_string());
+        let now = Instant::now();
+        let unchanged_pairing = json!({
+            "ok": false,
+            "status": "pairing_required",
+            "pairing": {
+                "status": "qr",
+                "qr_svg": "/tmp/ctox/runtime/communication/whatsapp/artifacts/pairing-qr.svg",
+                "updated_at": "2026-06-27T10:00:00Z"
+            }
+        });
+
+        assert!(
+            !channel_sync_result_has_activity(&unchanged_pairing),
+            "an unchanged pairing artifact must not reset channel sync backoff"
+        );
+        mark_channel_sync_adapter_result(
+            &root,
+            &settings,
+            "whatsapp",
+            60,
+            true,
+            channel_sync_result_has_activity(&unchanged_pairing),
+            now,
+        );
+        assert!(
+            !channel_sync_adapter_due(&root, &settings, "whatsapp", now + Duration::from_secs(59)),
+            "unchanged pairing should not run again before the base delay"
+        );
+        assert!(
+            channel_sync_adapter_due(&root, &settings, "whatsapp", now + Duration::from_secs(60)),
+            "unchanged pairing should become due at the base delay"
+        );
+
+        mark_channel_sync_adapter_result(
+            &root,
+            &settings,
+            "whatsapp",
+            60,
+            true,
+            channel_sync_result_has_activity(&unchanged_pairing),
+            now + Duration::from_secs(60),
+        );
+        assert!(
+            !channel_sync_adapter_due(&root, &settings, "whatsapp", now + Duration::from_secs(179)),
+            "second unchanged pairing sync should extend the backoff"
+        );
+        assert!(
+            channel_sync_adapter_due(&root, &settings, "whatsapp", now + Duration::from_secs(180)),
+            "unchanged pairing backoff should reopen deterministically"
+        );
+
+        clear_channel_sync_due_gate_for_tests();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn channel_sync_activity_detection_covers_adapter_result_shapes() {
         assert!(channel_sync_result_has_activity(&json!({"storedCount": 1})));
+        assert!(!channel_sync_result_has_activity(
+            &json!({"fetchedCount": 12, "storedCount": 0})
+        ));
         assert!(channel_sync_result_has_activity(
             &json!({"messages_synced": 1})
+        ));
+        assert!(!channel_sync_result_has_activity(
+            &json!({"messages_fetched": 12, "messages_stored": 0})
         ));
         assert!(channel_sync_result_has_activity(&json!({"ingested": 1})));
         assert!(channel_sync_result_has_activity(
@@ -20720,6 +22011,105 @@ mod tests {
         assert!(!channel_sync_result_has_activity(
             &json!({"storedCount": 0, "messages_synced": 0, "ingested": 0, "active_sessions": 0})
         ));
+        assert!(!channel_sync_result_has_activity(
+            &json!({"pairing": {"status": "missing"}})
+        ));
+        assert!(!channel_sync_result_has_activity(
+            &json!({"pairing": {"status": "qr", "updated_at": "2026-06-27T10:00:00Z"}})
+        ));
+        assert!(channel_sync_result_has_activity(
+            &json!({"pairing": {"changed": true}})
+        ));
+        assert!(channel_sync_result_has_activity(
+            &json!({"pairing": [{"status": "qr"}, {"updatedCount": 1}]})
+        ));
+    }
+
+    #[test]
+    fn ticket_sync_activity_detection_covers_adapter_result_shapes() {
+        assert!(!ticket_sync_result_has_activity(&json!({
+            "fetched_count": 12,
+            "stored_ticket_count": 0,
+            "stored_event_count": 0,
+            "resolved_clarification_count": 0,
+            "knowledge_count": 5,
+            "self_work_count": 3
+        })));
+        assert!(ticket_sync_result_has_activity(&json!({
+            "stored_ticket_count": 1,
+            "stored_event_count": 0,
+            "resolved_clarification_count": 0
+        })));
+        assert!(ticket_sync_result_has_activity(&json!({
+            "stored_ticket_count": 0,
+            "stored_event_count": 1,
+            "resolved_clarification_count": 0
+        })));
+        assert!(ticket_sync_result_has_activity(&json!({
+            "stored_ticket_count": 0,
+            "stored_event_count": 0,
+            "resolved_clarification_count": 1
+        })));
+    }
+
+    #[test]
+    fn ticket_sync_due_gate_backs_off_unchanged_sources() {
+        let _serial = ticket_sync_due_gate_test_lock();
+        clear_ticket_sync_due_gate_for_tests();
+        let root = temp_root("ticket-sync-due-unchanged");
+        let settings = BTreeMap::from([("CTOX_TICKET_SYSTEMS".to_string(), "local".to_string())]);
+        let now = Instant::now();
+
+        assert!(
+            ticket_sync_source_due(&root, &settings, "local", now),
+            "first ticket sync for a source must run"
+        );
+        mark_ticket_sync_source_result(&root, &settings, "local", true, false, now);
+        assert!(
+            !ticket_sync_source_due(&root, &settings, "local", now + Duration::from_secs(59)),
+            "unchanged ticket sync should not run again before the base delay"
+        );
+        assert!(
+            ticket_sync_source_due(&root, &settings, "local", now + Duration::from_secs(60)),
+            "unchanged ticket sync should become due at the base delay"
+        );
+
+        mark_ticket_sync_source_result(
+            &root,
+            &settings,
+            "local",
+            true,
+            false,
+            now + Duration::from_secs(60),
+        );
+        assert!(
+            !ticket_sync_source_due(&root, &settings, "local", now + Duration::from_secs(179)),
+            "second unchanged ticket sync should extend the backoff"
+        );
+        assert!(
+            ticket_sync_source_due(&root, &settings, "local", now + Duration::from_secs(180)),
+            "unchanged ticket sync backoff should reopen deterministically"
+        );
+
+        mark_ticket_sync_source_result(
+            &root,
+            &settings,
+            "local",
+            true,
+            true,
+            now + Duration::from_secs(180),
+        );
+        assert!(
+            !ticket_sync_source_due(&root, &settings, "local", now + Duration::from_secs(239)),
+            "activity should reset ticket sync to the base delay"
+        );
+        assert!(
+            ticket_sync_source_due(&root, &settings, "local", now + Duration::from_secs(240)),
+            "activity reset should make the source due at the base interval"
+        );
+
+        clear_ticket_sync_due_gate_for_tests();
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -20764,63 +22154,83 @@ mod tests {
     fn channel_router_idle_gate_ignores_business_os_store_churn() {
         let root = temp_root("channel-router-business-os-store-gate");
         std::fs::create_dir_all(root.join("runtime")).unwrap();
+        crate::business_os::store::open_store(&root).expect("failed to create Business OS store");
         let settings = BTreeMap::new();
         let root_path = root.clone();
-        let core_db_path = crate::paths::core_db(&root);
-        let core_stamp = core_db_change_stamp(&core_db_path);
-        let ticket_stamp = tickets::ticket_store_change_stamp(&root);
+        let source_stamp = channel_router_source_stamp(&root);
         let now = Instant::now();
         let previous = ChannelRouterIdleGateState {
             root: root_path.clone(),
-            core_db_path: core_db_path.clone(),
-            core_stamp: core_stamp.clone(),
-            ticket_stamp: ticket_stamp.clone(),
+            source_stamp: source_stamp.clone(),
             settings: settings.clone(),
             last_idle_pass: now,
         };
 
         assert!(
-            channel_router_idle_gate_matches(
-                &previous,
-                &root_path,
-                &core_db_path,
-                &core_stamp,
-                &ticket_stamp,
-                &settings,
-                now,
-            ),
+            channel_router_idle_gate_matches(&previous, &root_path, &source_stamp, &settings, now,),
             "unchanged idle router state should be skipped inside the safety window"
         );
 
-        std::fs::write(root.join("runtime").join("business-os.sqlite3"), b"changed").unwrap();
+        {
+            let conn =
+                crate::business_os::store::open_store(&root).expect("failed to reopen store");
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS unrelated_router_churn (id INTEGER PRIMARY KEY, value TEXT);
+                 INSERT INTO unrelated_router_churn (value) VALUES ('changed');",
+            )
+            .expect("failed to write unrelated Business OS churn");
+        }
+        let churned_source_stamp = channel_router_source_stamp(&root);
         assert!(
             channel_router_idle_gate_matches(
                 &previous,
                 &root_path,
-                &core_db_path,
-                &core_stamp,
-                &ticket_stamp,
+                &churned_source_stamp,
                 &settings,
                 now,
             ),
             "Business OS runtime store churn must not reopen the idle router gate by itself"
         );
+
+        {
+            let conn =
+                crate::business_os::store::open_store(&root).expect("failed to reopen store");
+            conn.execute(
+                r#"
+                INSERT INTO business_commands (
+                    command_id, module, command_type, record_id, status,
+                    payload_json, client_context_json, observed_at_ms
+                ) VALUES (?1, 'documents', 'research.systematic.report.create', NULL, 'queued', '{}', '{}', 42)
+                "#,
+                params!["cmd-router-doc-report"],
+            )
+            .expect("failed to insert pending document report command");
+        }
+        let changed_source_stamp = channel_router_source_stamp(&root);
+        assert!(
+            !channel_router_idle_gate_matches(
+                &previous,
+                &root_path,
+                &changed_source_stamp,
+                &settings,
+                now,
+            ),
+            "a pending document report command must reopen the idle router gate"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
-    fn channel_router_preflight_gate_reopens_when_core_db_changes() {
+    fn channel_router_preflight_gate_ignores_metadata_churn_and_reopens_on_queue_work() {
         clear_channel_router_preflight_idle_gate_for_tests();
         let root = temp_root("channel-router-preflight-gate");
         std::fs::create_dir_all(root.join("runtime")).unwrap();
         let db_path = crate::paths::core_db(&root);
         {
-            let conn = Connection::open(&db_path).unwrap();
-            conn.execute_batch(
-                "CREATE TABLE router_preflight_probe (id INTEGER PRIMARY KEY, value TEXT);",
-            )
-            .unwrap();
+            let conn = channels::open_channel_db(&db_path).unwrap();
+            drop(conn);
         }
+        crate::business_os::store::open_store(&root).expect("failed to create Business OS store");
 
         assert!(
             !should_skip_idle_channel_router_preflight(&root),
@@ -20832,7 +22242,15 @@ mod tests {
             "unchanged router preflight should be skipped inside the idle safety window"
         );
 
-        std::fs::write(root.join("runtime").join("business-os.sqlite3"), b"churn").unwrap();
+        {
+            let conn =
+                crate::business_os::store::open_store(&root).expect("failed to reopen store");
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS unrelated_preflight_churn (id INTEGER PRIMARY KEY, value TEXT);
+                 INSERT INTO unrelated_preflight_churn (value) VALUES ('changed');",
+            )
+            .expect("failed to write unrelated Business OS churn");
+        }
         assert!(
             should_skip_idle_channel_router_preflight(&root),
             "Business OS runtime store churn must not reopen the channel-router preflight gate"
@@ -20841,14 +22259,43 @@ mod tests {
         {
             let conn = Connection::open(&db_path).unwrap();
             conn.execute(
-                "INSERT INTO router_preflight_probe (value) VALUES (?1)",
-                params!["changed"],
+                r#"
+                INSERT INTO communication_sync_runs (
+                    run_key, channel, account_key, folder_hint, started_at, finished_at, ok,
+                    fetched_count, stored_count, error_text, metadata_json
+                ) VALUES (
+                    'router-preflight-sync-run-churn', 'email', 'email:owner@example.test',
+                    'INBOX', '2026-06-27T00:00:00Z', '2026-06-27T00:00:01Z',
+                    1, 10, 10, '', '{}'
+                )
+                "#,
+                [],
             )
             .unwrap();
         }
         assert!(
+            should_skip_idle_channel_router_preflight(&root),
+            "sync-run metadata churn must not reopen the channel-router preflight gate"
+        );
+
+        channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Router source gate".to_string(),
+                prompt: "Verify source-specific router gates reopen for real queue work."
+                    .to_string(),
+                thread_key: "router/source-gate".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+        assert!(
             !should_skip_idle_channel_router_preflight(&root),
-            "core DB changes must reopen the channel-router preflight gate"
+            "queue work must reopen the channel-router preflight gate"
         );
 
         clear_channel_router_preflight_idle_gate_for_tests();
@@ -20856,7 +22303,7 @@ mod tests {
     }
 
     #[test]
-    fn harness_audit_idle_gate_reopens_when_core_db_changes() {
+    fn harness_audit_idle_gate_ignores_unrelated_churn_and_reopens_on_audit_sources() {
         clear_harness_audit_idle_gate_for_tests();
         let root = temp_root("harness-audit-idle-gate");
         std::fs::create_dir_all(root.join("runtime")).unwrap();
@@ -20881,6 +22328,26 @@ mod tests {
 
         {
             let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                r#"
+                CREATE TABLE ctox_hm_audit_runs (
+                    run_id TEXT PRIMARY KEY,
+                    started_at TEXT NOT NULL,
+                    status TEXT NOT NULL
+                );
+                INSERT INTO ctox_hm_audit_runs (run_id, started_at, status)
+                VALUES ('run-1', '2026-06-27T00:00:00Z', 'completed');
+                "#,
+            )
+            .unwrap();
+        }
+        assert!(
+            should_skip_idle_harness_audit_tick(&root),
+            "harness audit's own run table must not reopen the harness audit gate"
+        );
+
+        {
+            let conn = Connection::open(&db_path).unwrap();
             conn.execute(
                 "INSERT INTO audit_gate_probe (value) VALUES (?1)",
                 params!["changed"],
@@ -20888,8 +22355,52 @@ mod tests {
             .unwrap();
         }
         assert!(
+            should_skip_idle_harness_audit_tick(&root),
+            "unrelated Core DB changes must not reopen the harness audit gate"
+        );
+
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                r#"
+                CREATE TABLE ctox_process_events (
+                    event_id TEXT PRIMARY KEY,
+                    observed_at TEXT NOT NULL
+                );
+                INSERT INTO ctox_process_events (event_id, observed_at)
+                VALUES ('event-1', '2026-06-27T00:01:00Z');
+                "#,
+            )
+            .unwrap();
+        }
+        assert!(
             !should_skip_idle_harness_audit_tick(&root),
-            "core DB changes must reopen the harness audit gate"
+            "process-mining input changes must reopen the harness audit gate"
+        );
+
+        mark_harness_audit_tick_ran(&root);
+        assert!(
+            should_skip_idle_harness_audit_tick(&root),
+            "unchanged harness audit source should skip after process input is marked"
+        );
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                r#"
+                CREATE TABLE ctox_hm_findings (
+                    finding_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL
+                );
+                INSERT INTO ctox_hm_findings (finding_id, status, last_seen_at)
+                VALUES ('finding-1', 'detected', '2026-06-27T00:02:00Z');
+                "#,
+            )
+            .unwrap();
+        }
+        assert!(
+            !should_skip_idle_harness_audit_tick(&root),
+            "active harness findings must reopen the harness audit gate for follow-up"
         );
 
         clear_harness_audit_idle_gate_for_tests();
@@ -20897,11 +22408,27 @@ mod tests {
     }
 
     #[test]
-    fn business_os_app_recovery_idle_gate_reopens_when_core_db_changes() {
+    fn business_os_app_recovery_idle_gate_ignores_unrelated_churn_and_reopens_on_app_sources() {
         clear_business_os_app_recovery_idle_gate_for_tests();
         let root = temp_root("business-os-app-recovery-idle-gate");
         std::fs::create_dir_all(root.join("runtime")).unwrap();
         let db_path = crate::paths::core_db(&root);
+        let non_app_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Non-app queue task".to_string(),
+                prompt: "ordinary queue work".to_string(),
+                thread_key: "queue/non-app".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("create non-app queue task");
+        channels::lease_queue_task(&root, &non_app_task.message_key, CHANNEL_ROUTER_LEASE_OWNER)
+            .expect("lease non-app queue task");
         {
             let conn = Connection::open(&db_path).unwrap();
             conn.execute_batch(
@@ -20935,8 +22462,69 @@ mod tests {
             .unwrap();
         }
         assert!(
+            should_skip_idle_business_os_app_recovery(&root),
+            "unrelated Core DB changes must not reopen the app recovery gate"
+        );
+
+        let second_non_app_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Second non-app queue task".to_string(),
+                prompt: "ordinary queue work after idle mark".to_string(),
+                thread_key: "queue/non-app-2".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("create second non-app queue task");
+        channels::lease_queue_task(
+            &root,
+            &second_non_app_task.message_key,
+            CHANNEL_ROUTER_LEASE_OWNER,
+        )
+        .expect("lease second non-app queue task");
+        assert!(
+            should_skip_idle_business_os_app_recovery(&root),
+            "non-app queue work must not reopen the app recovery gate"
+        );
+
+        let app_prompt = "Business OS app task metadata:\n- module_id: inventory\n- install_target: runtime-installed-module\n- app_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n";
+        let app_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Build inventory app".to_string(),
+                prompt: app_prompt.to_string(),
+                thread_key: "queue/app-inventory".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("create app queue task");
+        channels::lease_queue_task(&root, &app_task.message_key, CHANNEL_ROUTER_LEASE_OWNER)
+            .expect("lease app queue task");
+        assert!(
             !should_skip_idle_business_os_app_recovery(&root),
-            "core DB changes must reopen the app recovery gate"
+            "leased Business OS app queue work must reopen the app recovery gate"
+        );
+
+        mark_business_os_app_recovery_ran(&root);
+        assert!(
+            should_skip_idle_business_os_app_recovery(&root),
+            "unchanged app recovery source should skip after the app source is marked"
+        );
+
+        let artifact_dir = root.join("runtime/business-os/installed-modules/inventory");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+        std::fs::write(artifact_dir.join("index.html"), "<main>Inventory</main>").unwrap();
+        assert!(
+            !should_skip_idle_business_os_app_recovery(&root),
+            "Business OS app artifact changes must reopen the app recovery gate"
         );
 
         clear_business_os_app_recovery_idle_gate_for_tests();
@@ -23177,10 +24765,119 @@ Business OS command:
         assert!(status.pending_previews.is_empty());
         assert_eq!(status.current_goal_preview, None);
         assert_eq!(status.recent_events, vec!["ready".to_string()]);
+        assert!(status.performance.is_null());
+    }
+
+    #[test]
+    fn service_status_reports_channel_sync_runtime_metrics() {
+        reset_channel_sync_runtime_metrics_for_tests();
+        reset_ticket_sync_runtime_metrics_for_tests();
+
+        channel_sync_metrics_for("whatsapp").record(true, false);
+        channel_sync_metrics_for("whatsapp").record(true, true);
+        channel_sync_metrics_for("email").record(false, false);
+        record_ticket_sync_runtime_metric("local", true, false);
+        record_ticket_sync_runtime_metric("local", true, true);
+        record_ticket_sync_runtime_metric("zammad", false, false);
+
+        let performance = service_performance_snapshot();
+
+        assert_eq!(
+            performance
+                .pointer("/channel_sync/whatsapp/attempts")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            performance
+                .pointer("/channel_sync/whatsapp/activity_runs")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            performance
+                .pointer("/channel_sync/whatsapp/no_activity_runs")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            performance
+                .pointer("/channel_sync/email/error_runs")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            performance
+                .pointer("/ticket_sync/local/attempts")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            performance
+                .pointer("/ticket_sync/local/activity_runs")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            performance
+                .pointer("/ticket_sync/local/no_activity_runs")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            performance
+                .pointer("/ticket_sync/zammad/error_runs")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+
+        reset_channel_sync_runtime_metrics_for_tests();
+        reset_ticket_sync_runtime_metrics_for_tests();
+    }
+
+    #[test]
+    fn service_status_request_counter_writes_status_free_perf_artifact() {
+        let root = temp_root("service-status-request-metrics");
+        reset_service_status_request_metrics_for_tests();
+
+        record_service_status_request(&root, "ipc_status");
+
+        let performance = service_performance_snapshot();
+        assert_eq!(
+            performance
+                .pointer("/status_requests/total_requests")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            performance
+                .pointer("/status_requests/ipc_status_requests")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+
+        let payload: Value = serde_json::from_slice(
+            &std::fs::read(service_performance_status_path(&root))
+                .expect("read service performance status artifact"),
+        )
+        .expect("parse service performance status artifact");
+        assert_eq!(
+            payload
+                .pointer("/performance/status_requests/total_requests")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            payload
+                .pointer("/performance/status_requests/ipc_status_requests")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
     }
 
     #[test]
     fn durable_status_snapshot_reuses_unchanged_store_after_ttl() {
+        let _serial = durable_status_snapshot_cache_test_lock();
         let root = temp_root("status-durable-stamp-cache");
         std::fs::create_dir_all(root.join("runtime")).unwrap();
         let db_path = crate::paths::core_db(&root);
@@ -23241,6 +24938,79 @@ Business OS command:
             "core DB changes must invalidate the durable status cache"
         );
         assert_eq!(durable_status_lcm_outcome_open_count_for_test(&root), 2);
+
+        clear_durable_status_snapshot_cache_for_tests();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn durable_status_snapshot_ignores_sync_run_metadata_churn() {
+        let _serial = durable_status_snapshot_cache_test_lock();
+        let root = temp_root("status-sync-run-churn-cache");
+        std::fs::create_dir_all(root.join("runtime")).unwrap();
+        let db_path = crate::paths::core_db(&root);
+        {
+            let engine =
+                lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default()).expect("open lcm db");
+            engine
+                .continuity_init_documents(turn_loop::CHAT_CONVERSATION_ID)
+                .expect("init continuity");
+            engine
+                .add_message_with_outcome(
+                    turn_loop::CHAT_CONVERSATION_ID,
+                    "assistant",
+                    "done",
+                    Some(lcm::AgentOutcome::Success),
+                )
+                .expect("add outcome message");
+        }
+
+        clear_durable_status_snapshot_cache_for_tests();
+        let first = durable_status_snapshot_cached(&root, Duration::ZERO);
+        assert_eq!(first.last_agent_outcome.as_deref(), Some("Success"));
+        assert_eq!(durable_status_load_count_for_test(&root), 1);
+        assert_eq!(durable_status_lcm_outcome_open_count_for_test(&root), 1);
+
+        let conn = Connection::open(&db_path).expect("open core db for metadata churn");
+        conn.execute(
+            r#"
+            INSERT INTO communication_sync_runs (
+                run_key, channel, account_key, folder_hint, started_at, finished_at, ok,
+                fetched_count, stored_count, error_text, metadata_json
+            ) VALUES (
+                'comm-sync-run-churn', 'email', 'email:owner@example.test', 'INBOX',
+                '2026-06-27T00:00:00Z', '2026-06-27T00:00:01Z', 1, 10, 10, '', '{}'
+            )
+            "#,
+            [],
+        )
+        .expect("insert communication sync metadata");
+        conn.execute(
+            r#"
+            INSERT INTO ticket_sync_runs (
+                run_id, source_system, fetched_count, stored_ticket_count, stored_event_count,
+                status, error_text, created_at
+            ) VALUES (
+                'ticket-sync-run-churn', 'local', 10, 10, 10, 'ok', '',
+                '2026-06-27T00:00:02Z'
+            )
+            "#,
+            [],
+        )
+        .expect("insert ticket sync metadata");
+
+        let second = durable_status_snapshot_cached(&root, Duration::ZERO);
+        assert_eq!(second.last_agent_outcome.as_deref(), Some("Success"));
+        assert_eq!(
+            durable_status_load_count_for_test(&root),
+            1,
+            "sync-run metadata writes must not reopen the durable status snapshot"
+        );
+        assert_eq!(
+            durable_status_lcm_outcome_open_count_for_test(&root),
+            1,
+            "sync-run metadata writes must not reopen LCM during idle status polling"
+        );
 
         clear_durable_status_snapshot_cache_for_tests();
         let _ = std::fs::remove_dir_all(root);
@@ -23383,6 +25153,7 @@ Business OS command:
             worker_phase: None,
             business_os: None,
             work_hours: crate::service::working_hours::snapshot(&root),
+            performance: service_performance_snapshot(),
             degraded_probe: false,
         }))
         .unwrap();
@@ -23456,6 +25227,7 @@ Business OS command:
             worker_phase: None,
             business_os: Some(serde_json::json!({"unexpected": true})),
             work_hours: crate::service::working_hours::snapshot(&root),
+            performance: service_performance_snapshot(),
             degraded_probe: false,
         }))
         .unwrap();
@@ -23597,6 +25369,7 @@ Business OS command:
             worker_phase: None,
             business_os: None,
             work_hours: crate::service::working_hours::snapshot(&root),
+            performance: service_performance_snapshot(),
             degraded_probe: false,
         }))
         .unwrap();
@@ -30997,6 +32770,62 @@ Use shell tools to create or update these files."
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn idle_durable_queue_empty_gate_ignores_sync_run_metadata_churn() {
+        let root = temp_root("durable-empty-sync-run-churn");
+        let pending = ["pending".to_string()];
+        channels::list_queue_tasks(&root, &pending, 1).expect("initialize queue schema");
+        clear_idle_durable_queue_empty_gate(&root);
+
+        mark_idle_durable_queue_empty_probe(&root);
+        assert!(
+            should_skip_idle_durable_queue_empty_probe(&root),
+            "fresh empty queue probe should be backoff-gated"
+        );
+
+        let db_path = crate::paths::core_db(&root);
+        let conn = Connection::open(&db_path).expect("open core db for sync churn");
+        conn.execute(
+            r#"
+            INSERT INTO communication_sync_runs (
+                run_key, channel, account_key, folder_hint, started_at, finished_at, ok,
+                fetched_count, stored_count, error_text, metadata_json
+            ) VALUES (
+                'queue-empty-comm-sync-churn', 'email', 'email:owner@example.test', 'INBOX',
+                '2026-06-27T00:00:00Z', '2026-06-27T00:00:01Z', 1, 10, 10, '', '{}'
+            )
+            "#,
+            [],
+        )
+        .expect("insert communication sync metadata");
+        assert!(
+            should_skip_idle_durable_queue_empty_probe(&root),
+            "sync-run metadata writes must not reset the empty queue backoff"
+        );
+
+        channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Real durable work".to_string(),
+                prompt: "Process real work.".to_string(),
+                thread_key: "queue/real-work".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("create real durable queue task");
+        assert!(
+            !should_skip_idle_durable_queue_empty_probe(&root),
+            "real queue source changes must reopen durable queue leasing"
+        );
+
+        clear_idle_durable_queue_empty_gate(&root);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     /// router-4 (negative): with no higher-ranked inbound pending, the durable-queue
