@@ -7806,12 +7806,22 @@ function ensureCtoxSmokeBinary() {
           const form = menu?.querySelector('form');
           const textarea = menu?.querySelector('textarea');
           if (!form || !textarea) throw new Error('agent scope context form is missing');
+          const askInput = menu.querySelector('input[name="contextMode"][value="ask"]');
+          if (askInput) {
+            askInput.closest('label')?.dispatchEvent(new MouseEvent('click', {
+              bubbles: true,
+              cancelable: true,
+            }));
+            askInput.checked = true;
+          }
           textarea.value = 'Bitte prüfe den sichtbaren Agent Scope.';
           form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
           try {
             return await waitFor(() => ({
               ok: Boolean(submittedDetail),
               detail: submittedDetail,
+              mode: new FormData(form).get('contextMode') || '',
+              status: menu.querySelector('.ctox-context-status')?.textContent?.trim() || '',
             }), 5000, 'agent scope context submit detail');
           } finally {
             window.removeEventListener('ctox-business-os-chat-submit', listener, { capture: true });
