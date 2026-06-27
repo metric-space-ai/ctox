@@ -37,6 +37,7 @@ include_dir = "0.7"
 libc = "0.2"
 mailparse = "0.16"
 native-tls = "0.2"
+notify = "8.2"
 polars = { version = "0.52", default-features = false, features = [
     "lazy", "parquet", "csv", "json",
     "dtype-full", "strings", "regex", "timezones",

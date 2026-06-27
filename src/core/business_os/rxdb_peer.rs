@@ -24,36 +24,37 @@ use crate::mission::tickets;
 use anyhow::Context;
 use base64::Engine;
 use chrono::{DateTime, FixedOffset};
+use notify::Watcher;
 use rusqlite::types::Value as SqlValue;
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params, params_from_iter};
+use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension};
 use rxdb::plugins::replication_webrtc::{
-    CollectionAuthzHook, DocumentReadAuthzHook, RTCIceServer, RxWebRTCReplicationPool,
-    WebRTCRsConnectionHandler, file_fetch_handler::FileRange,
+    file_fetch_handler::FileRange, CollectionAuthzHook, DocumentReadAuthzHook, RTCIceServer,
+    RxWebRTCReplicationPool, WebRTCRsConnectionHandler,
 };
 use rxdb::rx_collection::RxCollection;
 use rxdb::rx_collection_helper::fill_object_data_before_insert;
-use rxdb::rx_database::{RxCollectionCreator, RxDatabase, RxDatabaseCreator, create_rx_database};
-use rxdb::storage::sqlite::{RxStorageSqliteSettings, get_rx_storage_sqlite};
+use rxdb::rx_database::{create_rx_database, RxCollectionCreator, RxDatabase, RxDatabaseCreator};
+use rxdb::storage::sqlite::{get_rx_storage_sqlite, RxStorageSqliteSettings};
 use rxdb::types::{BulkWriteRow, HashOutput, JsonSchema, MangoQuery, RxJsonSchema};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use serde_json::json;
+use serde_json::Value;
 use sha2::Digest;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{mpsc, Mutex as AsyncMutex};
 use url::Url;
 use uuid::Uuid;
 
@@ -2868,6 +2869,69 @@ struct DesktopFileIndexScan {
     stamp: DesktopFileIndexProjectionStamp,
 }
 
+struct DesktopFileIndexWatch {
+    _watcher: notify::RecommendedWatcher,
+    roots: Vec<PathBuf>,
+    rx: mpsc::UnboundedReceiver<()>,
+}
+
+impl DesktopFileIndexWatch {
+    fn new(scan_roots: &[DesktopFileScanRoot]) -> anyhow::Result<Option<Self>> {
+        if scan_roots.is_empty() {
+            return Ok(None);
+        }
+        let roots = scan_roots
+            .iter()
+            .map(|root| root.path.clone())
+            .collect::<Vec<_>>();
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut watcher = notify::recommended_watcher(move |_event| {
+            let _ = tx.send(());
+        })
+        .context("create desktop file index watcher")?;
+        for root in &roots {
+            watcher
+                .watch(root, notify::RecursiveMode::Recursive)
+                .with_context(|| format!("watch desktop file scan root {}", root.display()))?;
+        }
+        Ok(Some(Self {
+            _watcher: watcher,
+            roots,
+            rx,
+        }))
+    }
+
+    fn matches_roots(&self, scan_roots: &[DesktopFileScanRoot]) -> bool {
+        self.roots.len() == scan_roots.len()
+            && self
+                .roots
+                .iter()
+                .zip(scan_roots)
+                .all(|(left, right)| left == &right.path)
+    }
+
+    fn drain_pending(&mut self) -> bool {
+        let mut saw_event = false;
+        while self.rx.try_recv().is_ok() {
+            saw_event = true;
+        }
+        saw_event
+    }
+
+    async fn wait_for_event(&mut self, timeout: Duration) -> bool {
+        if timeout.is_zero() {
+            return self.drain_pending();
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(timeout) => self.drain_pending(),
+            event = self.rx.recv() => {
+                let saw_event = event.is_some();
+                self.drain_pending() || saw_event
+            }
+        }
+    }
+}
+
 async fn sync_notes_background_loop(root: PathBuf) {
     let mut last_source_stamp: Option<store::LocalMarkdownNotesSourceStamp> = None;
     let mut unchanged_ticks = 0u32;
@@ -2938,6 +3002,9 @@ async fn sync_desktop_file_index_background_loop(
     let mut last_projection_stamp: Option<DesktopFileIndexProjectionStamp> = None;
     let mut last_scan_roots_stamp: Option<DesktopFileScanRootsStamp> = None;
     let mut last_full_scan_at: Option<SystemTime> = None;
+    let mut dirty_scan_roots = true;
+    let mut file_watch: Option<DesktopFileIndexWatch> = None;
+    let mut last_watch_error: Option<String> = None;
     loop {
         let started = Instant::now();
         let result: anyhow::Result<usize> = async {
@@ -2948,11 +3015,42 @@ async fn sync_desktop_file_index_background_loop(
                 })
                 .unwrap_or(true);
             let scan_roots = desktop_file_scan_roots(&root);
+            if file_watch
+                .as_ref()
+                .map(|watch| !watch.matches_roots(&scan_roots))
+                .unwrap_or(true)
+            {
+                match DesktopFileIndexWatch::new(&scan_roots) {
+                    Ok(next_watch) => {
+                        file_watch = next_watch;
+                        last_watch_error = None;
+                        dirty_scan_roots = true;
+                    }
+                    Err(err) => {
+                        let message = format!("{err:#}");
+                        if last_watch_error.as_deref() != Some(message.as_str()) {
+                            eprintln!(
+                                "[business-os] desktop file index watcher unavailable: {message}"
+                            );
+                        }
+                        last_watch_error = Some(message);
+                        file_watch = None;
+                    }
+                }
+            }
+            if file_watch
+                .as_mut()
+                .map(DesktopFileIndexWatch::drain_pending)
+                .unwrap_or(false)
+            {
+                dirty_scan_roots = true;
+            }
             let scan_roots_stamp = desktop_file_scan_roots_stamp(&scan_roots);
             let should_collect_scan = desktop_file_index_should_collect_scan(
                 last_scan_roots_stamp.as_ref(),
                 last_full_scan_at,
                 &scan_roots_stamp,
+                dirty_scan_roots,
                 SystemTime::now(),
             );
             if !run_maintenance && !should_collect_scan {
@@ -2980,12 +3078,14 @@ async fn sync_desktop_file_index_background_loop(
             last_full_scan_at = Some(SystemTime::now());
             let projection_changed = last_projection_stamp.as_ref() != Some(&scan.stamp);
             if !projection_changed {
+                dirty_scan_roots = false;
                 return Ok(0);
             }
             let projection_stamp = scan.stamp.clone();
             let _guard = database_write_lock.lock().await;
             let indexed = sync_desktop_file_scan_with_database(&root, &database, scan).await?;
             last_projection_stamp = Some(projection_stamp);
+            dirty_scan_roots = false;
             Ok(indexed)
         }
         .await;
@@ -2994,10 +3094,29 @@ async fn sync_desktop_file_index_background_loop(
             &result,
             started.elapsed(),
         );
-        if let Err(err) = result {
+        let result_failed = result.is_err();
+        if let Err(err) = &result {
             eprintln!("[business-os] native rxdb desktop file index failed: {err:#}");
         }
-        tokio::time::sleep(Duration::from_secs(DESKTOP_FILE_SCAN_INTERVAL_SECS)).await;
+        let sleep_for = if result_failed {
+            Duration::from_secs(DESKTOP_FILE_SCAN_INTERVAL_SECS)
+        } else {
+            desktop_file_index_sleep_interval(
+                file_watch.is_some(),
+                last_maintenance_at,
+                last_full_scan_at,
+                SystemTime::now(),
+            )
+        };
+        let saw_watch_event = if let Some(watch) = file_watch.as_mut() {
+            watch.wait_for_event(sleep_for).await
+        } else {
+            tokio::time::sleep(sleep_for).await;
+            false
+        };
+        if saw_watch_event {
+            dirty_scan_roots = true;
+        }
     }
 }
 
@@ -4617,11 +4736,9 @@ async fn drain_browser_session_inputs(
                 "session_id": { "$eq": session_id },
                 "status": { "$eq": "pending" }
             })),
-            sort: Some(vec![
-                [("seq".to_string(), "asc".to_string())]
-                    .into_iter()
-                    .collect(),
-            ]),
+            sort: Some(vec![[("seq".to_string(), "asc".to_string())]
+                .into_iter()
+                .collect()]),
             limit: Some(64),
             ..Default::default()
         }))
@@ -4989,11 +5106,9 @@ async fn gc_consumed_browser_input_events(database: &Arc<RxDatabase>) -> anyhow:
                     "status": { "$eq": status },
                     "created_at_ms": { "$lt": cutoff }
                 })),
-                sort: Some(vec![
-                    [("created_at_ms".to_string(), "asc".to_string())]
-                        .into_iter()
-                        .collect(),
-                ]),
+                sort: Some(vec![[("created_at_ms".to_string(), "asc".to_string())]
+                    .into_iter()
+                    .collect()]),
                 limit: Some(BROWSER_INPUT_EVENT_GC_LIMIT),
                 ..Default::default()
             }))
@@ -10379,8 +10494,12 @@ fn desktop_file_index_should_collect_scan(
     last_scan_roots_stamp: Option<&DesktopFileScanRootsStamp>,
     last_full_scan_at: Option<SystemTime>,
     scan_roots_stamp: &DesktopFileScanRootsStamp,
+    dirty_scan_roots: bool,
     now: SystemTime,
 ) -> bool {
+    if dirty_scan_roots {
+        return true;
+    }
     if last_scan_roots_stamp != Some(scan_roots_stamp) {
         return true;
     }
@@ -10390,6 +10509,39 @@ fn desktop_file_index_should_collect_scan(
     now.duration_since(last_full_scan_at)
         .map(|elapsed| elapsed >= Duration::from_secs(DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS))
         .unwrap_or(true)
+}
+
+fn desktop_file_index_sleep_interval(
+    watcher_available: bool,
+    last_maintenance_at: SystemTime,
+    last_full_scan_at: Option<SystemTime>,
+    now: SystemTime,
+) -> Duration {
+    if !watcher_available {
+        return Duration::from_secs(DESKTOP_FILE_SCAN_INTERVAL_SECS);
+    }
+    let fallback_due = last_full_scan_at
+        .map(|last_full_scan_at| {
+            duration_until_due(
+                last_full_scan_at,
+                Duration::from_secs(DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS),
+                now,
+            )
+        })
+        .unwrap_or(Duration::ZERO);
+    let maintenance_due = duration_until_due(
+        last_maintenance_at,
+        Duration::from_secs(DESKTOP_FILE_INDEX_MAINTENANCE_INTERVAL_SECS),
+        now,
+    );
+    fallback_due.min(maintenance_due)
+}
+
+fn duration_until_due(last_run_at: SystemTime, interval: Duration, now: SystemTime) -> Duration {
+    match now.duration_since(last_run_at) {
+        Ok(elapsed) if elapsed < interval => interval - elapsed,
+        _ => Duration::ZERO,
+    }
 }
 
 fn update_hash_with_string(hasher: &mut sha2::Sha256, value: &str) {
@@ -11603,9 +11755,9 @@ fn quote_sqlite_identifier(identifier: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::params;
     use rusqlite::Connection;
     use rusqlite::OptionalExtension;
-    use rusqlite::params;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_RXDB_DATABASE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -11615,16 +11767,12 @@ mod tests {
         let collections = business_record_projection_collections();
         assert!(!collections.iter().any(|name| name == "browser_frames"));
         assert!(!collections.iter().any(|name| name == "desktop_file_chunks"));
-        assert!(
-            !collections
-                .iter()
-                .any(|name| name == "ctox_runtime_settings")
-        );
-        assert!(
-            !collections
-                .iter()
-                .any(|name| name == "business_module_catalog")
-        );
+        assert!(!collections
+            .iter()
+            .any(|name| name == "ctox_runtime_settings"));
+        assert!(!collections
+            .iter()
+            .any(|name| name == "business_module_catalog"));
         // `knowledge_tables` is owned by the dedicated rows-embedding
         // projection (`sync_knowledge_tables_with_database`); the generic
         // business-record projection must not also write it.
@@ -12176,12 +12324,10 @@ mod tests {
                 .and_then(Value::as_str),
             Some("ctox.rxdb.subjects.runtime_counters.v1")
         );
-        assert!(
-            status
-                .pointer("/performance/rxdb_subjects/lagged_items_total")
-                .and_then(Value::as_u64)
-                .is_some()
-        );
+        assert!(status
+            .pointer("/performance/rxdb_subjects/lagged_items_total")
+            .and_then(Value::as_u64)
+            .is_some());
         assert!(is_native_peer_running_for_root(root.path()));
     }
 
@@ -13788,12 +13934,10 @@ mod tests {
             materialized.get("content_state").and_then(Value::as_str),
             Some("available")
         );
-        assert!(
-            materialized
-                .get("content_synced_at_ms")
-                .and_then(Value::as_u64)
-                .is_some()
-        );
+        assert!(materialized
+            .get("content_synced_at_ms")
+            .and_then(Value::as_u64)
+            .is_some());
         let materialized_chunks: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM ctox_business_os__desktop_file_chunks__v0 WHERE id LIKE ?1",
@@ -14403,24 +14547,18 @@ mod tests {
         assert_eq!(settings.get("ok").and_then(Value::as_bool), Some(true));
         assert!(settings.get("runtime").and_then(Value::as_object).is_some());
         assert!(settings.get("auth").and_then(Value::as_object).is_some());
-        assert!(
-            settings
-                .get("harness_flow")
-                .and_then(Value::as_object)
-                .is_some()
-        );
-        assert!(
-            settings
-                .get("queue_health")
-                .and_then(Value::as_object)
-                .is_some()
-        );
-        assert!(
-            settings
-                .get("diagnostics")
-                .and_then(Value::as_object)
-                .is_some()
-        );
+        assert!(settings
+            .get("harness_flow")
+            .and_then(Value::as_object)
+            .is_some());
+        assert!(settings
+            .get("queue_health")
+            .and_then(Value::as_object)
+            .is_some());
+        assert!(settings
+            .get("diagnostics")
+            .and_then(Value::as_object)
+            .is_some());
     }
 
     #[test]
@@ -15223,12 +15361,10 @@ mod tests {
             repaired.get("title").and_then(Value::as_str),
             Some("Projected document repaired")
         );
-        assert!(
-            repaired
-                .get("_meta")
-                .and_then(|meta| meta.get("lwt"))
-                .is_some()
-        );
+        assert!(repaired
+            .get("_meta")
+            .and_then(|meta| meta.get("lwt"))
+            .is_some());
         assert!(repaired.get("_rev").and_then(Value::as_str).is_some());
     }
 
@@ -15859,12 +15995,10 @@ mod tests {
                 command_payload.get("status").and_then(Value::as_str),
                 Some("failed")
             );
-            assert!(
-                command_payload
-                    .get("error")
-                    .and_then(Value::as_str)
-                    .is_some()
-            );
+            assert!(command_payload
+                .get("error")
+                .and_then(Value::as_str)
+                .is_some());
         });
     }
 
@@ -15952,13 +16086,11 @@ mod tests {
                 repaired.get("tracking_status").and_then(Value::as_str),
                 Some("failed")
             );
-            assert!(
-                message
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .contains("kein passender Command")
-            );
+            assert!(message
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("kein passender Command"));
         });
     }
 
@@ -16446,7 +16578,7 @@ mod tests {
         let first_stamp = desktop_file_scan_roots_stamp(&scan_roots);
         let first_scan_at = UNIX_EPOCH + Duration::from_secs(1_000);
         assert!(
-            desktop_file_index_should_collect_scan(None, None, &first_stamp, first_scan_at),
+            desktop_file_index_should_collect_scan(None, None, &first_stamp, true, first_scan_at),
             "first background round must collect a full scan"
         );
         assert!(
@@ -16454,9 +16586,20 @@ mod tests {
                 Some(&first_stamp),
                 Some(first_scan_at),
                 &first_stamp,
+                false,
                 first_scan_at + Duration::from_secs(DESKTOP_FILE_SCAN_INTERVAL_SECS)
             ),
             "unchanged roots must not recurse every desktop scan interval"
+        );
+        assert!(
+            desktop_file_index_should_collect_scan(
+                Some(&first_stamp),
+                Some(first_scan_at),
+                &first_stamp,
+                true,
+                first_scan_at + Duration::from_secs(DESKTOP_FILE_SCAN_INTERVAL_SECS)
+            ),
+            "watcher-dirty roots must collect a full scan without waiting for fallback"
         );
 
         fs::write(
@@ -16474,6 +16617,7 @@ mod tests {
                 Some(&first_stamp),
                 Some(first_scan_at),
                 &changed_stamp,
+                false,
                 first_scan_at + Duration::from_secs(DESKTOP_FILE_SCAN_INTERVAL_SECS)
             ),
             "dirty roots must collect a full scan without waiting for fallback"
@@ -16483,9 +16627,38 @@ mod tests {
                 Some(&changed_stamp),
                 Some(first_scan_at),
                 &changed_stamp,
+                false,
                 first_scan_at + Duration::from_secs(DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS)
             ),
             "unchanged roots still get a slow fallback scan for missed nested events"
+        );
+    }
+
+    #[test]
+    fn desktop_file_background_sleep_uses_watcher_fallback_when_available() {
+        let first_scan_at = UNIX_EPOCH + Duration::from_secs(1_000);
+        let now = first_scan_at + Duration::from_secs(DESKTOP_FILE_SCAN_INTERVAL_SECS);
+        assert_eq!(
+            desktop_file_index_sleep_interval(false, first_scan_at, Some(first_scan_at), now),
+            Duration::from_secs(DESKTOP_FILE_SCAN_INTERVAL_SECS),
+            "without a watcher the background loop must keep the cheap polling fallback"
+        );
+        assert_eq!(
+            desktop_file_index_sleep_interval(true, first_scan_at, Some(first_scan_at), now),
+            Duration::from_secs(
+                DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS - DESKTOP_FILE_SCAN_INTERVAL_SECS
+            ),
+            "with a watcher, unchanged roots should sleep until the slow fallback scan"
+        );
+        assert_eq!(
+            desktop_file_index_sleep_interval(
+                true,
+                first_scan_at,
+                Some(first_scan_at),
+                first_scan_at + Duration::from_secs(DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS)
+            ),
+            Duration::ZERO,
+            "the fallback scan is due immediately at the fallback boundary"
         );
     }
 
@@ -16845,11 +17018,10 @@ mod tests {
             file.get("content_state").and_then(Value::as_str),
             Some("available")
         );
-        assert!(
-            file.get("content_generation_id")
-                .and_then(Value::as_str)
-                .is_some_and(|generation| !generation.is_empty())
-        );
+        assert!(file
+            .get("content_generation_id")
+            .and_then(Value::as_str)
+            .is_some_and(|generation| !generation.is_empty()));
         let chunks: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM ctox_business_os__desktop_file_chunks__v0 \
@@ -17254,11 +17426,9 @@ mod tests {
             .expect("query index list")
             .collect::<Result<Vec<_>, _>>()
             .expect("collect index list");
-        assert!(
-            index_names
-                .iter()
-                .any(|name| name == "ctox_business_os_desktop_files_live_core_idx")
-        );
+        assert!(index_names
+            .iter()
+            .any(|name| name == "ctox_business_os_desktop_files_live_core_idx"));
         drop(conn);
 
         let documents = load_live_ctox_desktop_file_documents_sync(root.path())
@@ -17635,12 +17805,10 @@ mod tests {
             original.get("tombstone_reason").and_then(Value::as_str),
             Some("missing_from_scan")
         );
-        assert!(
-            original
-                .get("deleted_at_ms")
-                .and_then(Value::as_u64)
-                .is_some()
-        );
+        assert!(original
+            .get("deleted_at_ms")
+            .and_then(Value::as_u64)
+            .is_some());
 
         let renamed_json: String = conn
             .query_row(
