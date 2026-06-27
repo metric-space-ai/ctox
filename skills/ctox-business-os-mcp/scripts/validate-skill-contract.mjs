@@ -70,6 +70,21 @@ export function validateSkillContract({ skillText, rustText, planText }) {
       errors.push(`skill must document remote role/app/data scope phrase: ${phrase}`);
     }
   }
+  for (const phrase of [
+    "/api/business-os/mcp/connect-info",
+    "managed MCP client token",
+    "business_os.create_app",
+    "business_os.modify_app",
+    "development_contract",
+    "runtime/business-os/installed-modules/<module_id>",
+    "business-os-app-module-development",
+    "ctox business-os app validate <module_id> --installed",
+    "business_os.get_command_status"
+  ]) {
+    if (!skillText.includes(phrase)) {
+      errors.push(`skill must document MCP app development phrase: ${phrase}`);
+    }
+  }
 
   return {
     ok: errors.length === 0,

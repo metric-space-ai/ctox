@@ -1069,6 +1069,11 @@ where
                         // message-stream loop above.
                         for collection in collections.iter() {
                             let collection_name = collection.name.clone();
+                            if crate::rx_collection::is_demand_only_chunk_collection_name(
+                                &collection_name,
+                            ) {
+                                continue;
+                            }
                             // Phase 3 schema-validation hardening: skip a collection
                             // whose schema mismatched the remote — no master-change
                             // relay for it, so no rows flow until reconciled.

@@ -39,11 +39,27 @@ codex mcp add cto1-kunstmen-business-os \
 The skill does not provide CTOX access by itself. Access comes only through a
 configured MCP server and the server-side Business OS MCP policy.
 
+For local/same-host agents, copy the MCP configuration from Business OS
+Settings -> MCP or the admin control-plane route
+`/api/business-os/mcp/connect-info`. That payload includes the local
+`http://127.0.0.1:8788/mcp` endpoint, the local inbound bearer token, and
+Codex/Claude config snippets. Managed `mcp.ctox.dev` clients need a separate
+managed MCP client token from ctox.dev/Web Auth; the local bearer token is not a
+managed gateway token.
+
 MCP policy is only the channel gate. Remote agents still follow Business OS
 roles and app/data grants: `Owner`/`chef`, `Admin`/`admin`,
 `App-Verantwortliche:r`/`founder`, and `Teammitglied`/`user`; private
 `0.x.y` apps require app visibility grants, `1.0.0+` apps are team-visible by
 default unless restricted, and data reads/writes remain explicit.
+
+App development goes through typed tools. Use `business_os.create_app` and
+`business_os.modify_app`; their response includes `command_id`, `task_id`,
+`app_directory`, and a `development_contract` with the runtime-installed app
+source root, required files, `business-os-app-module-development` resources,
+and validation/smoke/E2E commands. Agents must poll
+`business_os.get_command_status` rather than inventing raw shell, SQL, or RxDB
+write paths.
 
 ## Validation
 

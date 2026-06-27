@@ -55,6 +55,50 @@ CTOX connector sends timestamp/nonce replay-protection headers automatically.
 If no CTOX Business OS MCP server is available, say that CTOX MCP is not
 connected. Do not pretend to have CTOX access.
 
+## MCP Configuration And Auth
+
+The skill does not grant access by itself. The agent runtime must have a CTOX
+Business OS MCP server configured before the tools are available.
+
+For a local/same-host agent, an admin can open Business OS Settings -> MCP or
+read the admin-only control-plane route:
+
+```text
+GET /api/business-os/mcp/connect-info
+```
+
+That response contains the local endpoint, the local inbound bearer token, and
+ready-to-copy Codex/Claude MCP server snippets. The local bearer token is the
+CTOX secret-store value `business_os/mcp_inbound_auth_token`; it is valid for
+`http://127.0.0.1:8788/mcp` or an operator-managed tunnel to that local MCP
+server. Do not use that local token as a managed `mcp.ctox.dev` client token.
+
+For a managed remote agent, configure the agent client with:
+
+```json
+{
+  "mcpServers": {
+    "<instance>-business-os": {
+      "url": "https://mcp.ctox.dev/mcp/<instance-id>",
+      "headers": {
+        "Authorization": "Bearer <managed MCP client token>"
+      }
+    }
+  }
+}
+```
+
+The CTOX instance must also connect outbound to the managed gateway with the
+instance connect token issued by ctox.dev/Web Auth:
+
+```text
+ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id>
+```
+
+If the managed endpoint returns `runtime_unavailable`, the agent is configured
+but the CTOX instance is not currently connected. Report that state instead of
+trying shell, SQL, browser-control, or raw HTTP fallbacks.
+
 ## Safe Workflow
 
 1. Call status and module discovery first.
@@ -104,6 +148,78 @@ business_os.get_command_status
 ```
 
 If the server exposes fewer tools, use only the advertised tools.
+
+## Business OS App Development Via MCP
+
+Use `business_os.create_app` and `business_os.modify_app` for app development
+and deployment requests. These are typed, policy-gated Business OS actions:
+they enqueue CTOX app work and return the canonical app development contract.
+They do not expose raw file writes, shell commands, SQL, or RxDB replication.
+
+Create flow:
+
+1. Call `business_os.status` and confirm the expected actor, workspace, and
+   policy.
+2. Call `business_os.list_modules` so you know the current app catalog.
+3. Call `business_os.create_app` with `instruction` and, when known,
+   `module_id`, `title`, `description`, `category`, and `version`.
+4. Read the response fields:
+   - `command_id` and `task_id`
+   - `install_target`
+   - `app_directory`
+   - `development_contract.source_root`
+   - `development_contract.source_files`
+   - `development_contract.required_skill`
+   - `development_contract.skill_resources`
+   - `development_contract.validation_command`
+   - `development_contract.smoke_command`
+   - `development_contract.e2e_command`
+5. Poll `business_os.get_command_status` with the returned `command_id`.
+6. Use `business_os.open_link` for a Business OS deep link after the app is
+   visible in the catalog.
+
+Modify flow:
+
+1. Discover the module with `business_os.get_module`.
+2. Call `business_os.modify_app` with `module_id` and a precise `instruction`.
+3. Use the returned `development_contract` exactly as above.
+4. Poll `business_os.get_command_status` until the command reaches a terminal
+   state.
+
+The canonical runtime-installed app source root is:
+
+```text
+runtime/business-os/installed-modules/<module_id>
+```
+
+The canonical files under that root are:
+
+```text
+module.json
+collections.schema.json
+schema.js
+index.html
+index.css
+index.js
+icon.svg
+core/records.mjs
+core/automation.mjs
+locales/en.json
+locales/de.json
+tests/*.test.mjs
+```
+
+The CTOX app worker must use the `business-os-app-module-development` skill and
+the resource files listed in `development_contract.skill_resources`. It must
+validate with the returned validation command, normally:
+
+```text
+ctox business-os app validate <module_id> --installed
+```
+
+When the app finalizes, CTOX records a runtime module version and refreshes the
+native Business OS RxDB peer when schemas changed. Module records and app data
+still replicate through CTOX DB/WebRTC; MCP remains the control channel only.
 
 ## Managed Identity Context
 

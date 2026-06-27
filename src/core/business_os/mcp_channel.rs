@@ -258,7 +258,23 @@ pub struct BusinessOsAppCommandExecution {
     pub task_status: Option<String>,
     pub install_target: String,
     pub app_directory: String,
+    pub development_contract: BusinessOsAppDevelopmentContract,
     pub client_context: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BusinessOsAppDevelopmentContract {
+    pub source_root: String,
+    pub required_skill: String,
+    pub skill_resources: Vec<String>,
+    pub source_files: Vec<String>,
+    pub reference_catalog_command: String,
+    pub validation_command: String,
+    pub smoke_command: String,
+    pub e2e_command: String,
+    pub command_status_tool: String,
+    pub lifecycle: Vec<String>,
+    pub data_boundary: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -882,7 +898,7 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         ),
         write_tool(
             "business_os.create_app",
-            "Use this when the user asks CTOX Business OS to build a new runtime-installed app.",
+            "Use this when a coding agent should ask CTOX Business OS to create and deploy a new runtime-installed app; returns command ids, app source paths, required skill resources, and validation commands.",
             object_schema(vec![
                 required_string("instruction"),
                 optional_string("module_id"),
@@ -894,7 +910,7 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         ),
         write_tool(
             "business_os.modify_app",
-            "Use this when the user asks CTOX Business OS to modify an existing app.",
+            "Use this when a coding agent should ask CTOX Business OS to modify and redeploy an existing app; returns command ids, app source paths, required skill resources, and validation commands.",
             object_schema(vec![
                 required_string("module_id"),
                 required_string("instruction"),
@@ -1164,6 +1180,7 @@ pub fn create_app(
         task_status: accepted.task_status,
         install_target: "runtime-installed-module".to_string(),
         app_directory: format!("runtime/business-os/installed-modules/{module_id}"),
+        development_contract: app_development_contract(&module_id, "runtime-installed-module"),
         client_context,
     })
 }
@@ -1229,8 +1246,95 @@ pub fn modify_app(
         task_status: accepted.task_status,
         install_target: "runtime-installed-module".to_string(),
         app_directory: format!("runtime/business-os/installed-modules/{module_id}"),
+        development_contract: app_development_contract(&module_id, "runtime-installed-module"),
         client_context,
     })
+}
+
+fn app_development_contract(
+    module_id: &str,
+    install_target: &str,
+) -> BusinessOsAppDevelopmentContract {
+    let source_root = if install_target == "runtime-installed-module" {
+        format!("runtime/business-os/installed-modules/{module_id}")
+    } else {
+        format!("src/apps/business-os/modules/{module_id}")
+    };
+    let source_files = [
+        "module.json",
+        "collections.schema.json",
+        "schema.js",
+        "index.html",
+        "index.css",
+        "index.js",
+        "icon.svg",
+        "core/records.mjs",
+        "core/automation.mjs",
+        "locales/en.json",
+        "locales/de.json",
+        "tests/*.test.mjs",
+    ]
+    .iter()
+    .map(|file| format!("{source_root}/{file}"))
+    .collect::<Vec<_>>();
+    BusinessOsAppDevelopmentContract {
+        source_root: source_root.clone(),
+        required_skill: "business-os-app-module-development".to_string(),
+        skill_resources: vec![
+            "src/skills/system/product_engineering/business-os-app-module-development/SKILL.md"
+                .to_string(),
+            "src/skills/system/product_engineering/business-os-app-module-development/references/module-contract.md"
+                .to_string(),
+            "src/skills/system/product_engineering/business-os-app-module-development/references/dos-and-donts.md"
+                .to_string(),
+            "src/skills/system/product_engineering/business-os-app-module-development/references/green-checklist.md"
+                .to_string(),
+            "src/skills/system/product_engineering/business-os-app-module-development/references/architecture-translation.md"
+                .to_string(),
+        ],
+        source_files,
+        reference_catalog_command:
+            "ctox business-os app references --query \"<workflow data keywords>\" --json --limit 8"
+                .to_string(),
+        validation_command: format!(
+            "ctox business-os app validate {module_id} {}",
+            app_validation_mode_flag(install_target)
+        ),
+        smoke_command: format!(
+            "ctox business-os app smoke {module_id} {} --json",
+            app_validation_mode_flag(install_target)
+        ),
+        e2e_command: format!(
+            "ctox business-os app e2e {module_id} {} --json",
+            app_validation_mode_flag(install_target)
+        ),
+        command_status_tool:
+            "business_os.get_command_status command_id=<command_id from this response>".to_string(),
+        lifecycle: vec![
+            "MCP accepts a typed command and returns command_id/task_id; it does not expose shell, SQL, or raw RxDB writes."
+                .to_string(),
+            format!(
+                "The CTOX worker edits or creates the app under `{source_root}` with the required Business OS app skill."
+            ),
+            "Validation must pass before the app task can finalize a runtime-installed module version."
+                .to_string(),
+            "Schema changes refresh the native Business OS RxDB peer so new collections replicate over WebRTC."
+                .to_string(),
+            "Poll business_os.get_command_status until completed, failed, cancelled, or blocked."
+                .to_string(),
+        ],
+        data_boundary:
+            "Business OS app records, commands, module manifests, and runtime state remain in CTOX/RxDB; MCP is a typed control channel, not a data-plane or file bridge."
+                .to_string(),
+    }
+}
+
+fn app_validation_mode_flag(install_target: &str) -> &'static str {
+    if install_target == "runtime-installed-module" {
+        "--installed"
+    } else {
+        "--source"
+    }
 }
 
 pub fn call_tool(root: &Path, tool_name: &str, arguments: Value) -> anyhow::Result<Value> {
@@ -4192,6 +4296,25 @@ mod tests {
             result.get("app_directory").and_then(Value::as_str),
             Some("runtime/business-os/installed-modules/mcp-inventory")
         );
+        assert_eq!(
+            result
+                .pointer("/development_contract/source_root")
+                .and_then(Value::as_str),
+            Some("runtime/business-os/installed-modules/mcp-inventory")
+        );
+        assert_eq!(
+            result
+                .pointer("/development_contract/validation_command")
+                .and_then(Value::as_str),
+            Some("ctox business-os app validate mcp-inventory --installed")
+        );
+        assert!(result
+            .pointer("/development_contract/source_files")
+            .and_then(Value::as_array)
+            .context("expected development_contract.source_files")?
+            .iter()
+            .any(|path| path.as_str()
+                == Some("runtime/business-os/installed-modules/mcp-inventory/module.json")));
         assert!(
             !root
                 .join("runtime/business-os/installed-modules/mcp-inventory")
@@ -4238,6 +4361,18 @@ mod tests {
         assert_eq!(
             result.get("command_type").and_then(Value::as_str),
             Some("ctox.business_os.app.modify")
+        );
+        assert_eq!(
+            result
+                .pointer("/development_contract/source_root")
+                .and_then(Value::as_str),
+            Some("runtime/business-os/installed-modules/mcp-inventory")
+        );
+        assert_eq!(
+            result
+                .pointer("/development_contract/required_skill")
+                .and_then(Value::as_str),
+            Some("business-os-app-module-development")
         );
         let task_id = result
             .get("task_id")

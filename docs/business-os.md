@@ -155,6 +155,13 @@ localhost unless the deployment has a separate network/auth plan. Install with
 `--no-business-os-autostart` to keep both local surfaces disabled by default and
 start them explicitly with the commands below.
 
+Local MCP configuration is exposed to admins in Business OS Settings -> MCP and
+through the no-store control-plane route `/api/business-os/mcp/connect-info`.
+That payload includes the local endpoint, the local inbound bearer token, and
+ready-to-copy MCP server snippets for agent clients. Managed `mcp.ctox.dev`
+clients use a separate managed MCP client token from ctox.dev/Web Auth; the
+local bearer token must not be reused as a managed gateway token.
+
 The managed gateway requires the CTOX daemon to hold an outbound WebSocket:
 
 ```sh
@@ -164,6 +171,15 @@ ctox business-os mcp connect \
 ```
 
 If the instance is not connected, `/mcp/cto1.kunstmen.com` returns `runtime_unavailable` and agents must report that CTOX MCP is not connected.
+
+For Business OS app development, MCP exposes typed app actions rather than raw
+filesystem or SQL access. `business_os.create_app` and `business_os.modify_app`
+enqueue CTOX app work and return `command_id`, `task_id`, `app_directory`, and
+a `development_contract` containing the runtime-installed app source root
+(`runtime/business-os/installed-modules/<module_id>`), required files, the
+`business-os-app-module-development` resources, and validation/smoke/E2E
+commands. Agents poll `business_os.get_command_status` until the app task is
+terminal.
 
 ---
 

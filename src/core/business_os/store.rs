@@ -3802,18 +3802,71 @@ pub(crate) fn business_records_projection_stamp(
         hasher.update(collection.as_bytes());
     }
 
+    if sqlite_table_exists(&conn, "business_records_projection_clock")? {
+        return business_records_projection_clock_stamp(&conn, &collections, hasher);
+    }
+
+    business_records_projection_metadata_stamp(&conn, &collections, hasher)
+}
+
+fn business_records_projection_clock_stamp(
+    conn: &Connection,
+    collections: &[String],
+    mut hasher: Sha256,
+) -> anyhow::Result<BusinessRecordsProjectionStamp> {
     let mut row_count = 0usize;
     let mut latest_updated_at_ms = 0i64;
-    if let Some(sql) = business_records_projection_stamp_query(collections.len()) {
+    if let Some(sql) = business_records_projection_clock_stamp_query(collections.len()) {
         let mut statement = conn
             .prepare(&sql)
-            .context("prepare business records projection stamp query")?;
+            .context("prepare business records projection clock stamp query")?;
         let mut rows = statement
             .query(params_from_iter(collections.iter().map(String::as_str)))
-            .context("query business records projection stamp")?;
+            .context("query business records projection clock stamp")?;
         while let Some(row) = rows
             .next()
-            .context("read business records projection stamp row")?
+            .context("read business records projection clock stamp row")?
+        {
+            let collection: String = row.get(0)?;
+            let version: i64 = row.get(1)?;
+            let collection_row_count: i64 = row.get(2)?;
+            let deleted_count: i64 = row.get(3)?;
+            let collection_latest_updated_at_ms: i64 = row.get(4)?;
+            hasher.update(collection.len().to_le_bytes());
+            hasher.update(collection.as_bytes());
+            hasher.update(version.to_le_bytes());
+            hasher.update(collection_row_count.to_le_bytes());
+            hasher.update(deleted_count.to_le_bytes());
+            hasher.update(collection_latest_updated_at_ms.to_le_bytes());
+            row_count = row_count.saturating_add(collection_row_count.max(0) as usize);
+            latest_updated_at_ms = latest_updated_at_ms.max(collection_latest_updated_at_ms.max(0));
+        }
+    }
+
+    Ok(BusinessRecordsProjectionStamp {
+        row_count,
+        latest_updated_at_ms,
+        content_hash: format!("{:x}", hasher.finalize()),
+    })
+}
+
+fn business_records_projection_metadata_stamp(
+    conn: &Connection,
+    collections: &[String],
+    mut hasher: Sha256,
+) -> anyhow::Result<BusinessRecordsProjectionStamp> {
+    let mut row_count = 0usize;
+    let mut latest_updated_at_ms = 0i64;
+    if let Some(sql) = business_records_projection_metadata_stamp_query(collections.len()) {
+        let mut statement = conn
+            .prepare(&sql)
+            .context("prepare business records projection metadata stamp query")?;
+        let mut rows = statement
+            .query(params_from_iter(collections.iter().map(String::as_str)))
+            .context("query business records projection metadata stamp")?;
+        while let Some(row) = rows
+            .next()
+            .context("read business records projection metadata stamp row")?
         {
             row_count += 1;
             let collection: String = row.get(0)?;
@@ -3838,7 +3891,23 @@ pub(crate) fn business_records_projection_stamp(
     })
 }
 
-fn business_records_projection_stamp_query(collection_count: usize) -> Option<String> {
+fn business_records_projection_clock_stamp_query(collection_count: usize) -> Option<String> {
+    if collection_count == 0 {
+        return None;
+    }
+    let placeholders = std::iter::repeat("?")
+        .take(collection_count)
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "SELECT collection, version, row_count, deleted_count, latest_updated_at_ms
+         FROM business_records_projection_clock
+         WHERE collection IN ({placeholders})
+         ORDER BY collection ASC"
+    ))
+}
+
+fn business_records_projection_metadata_stamp_query(collection_count: usize) -> Option<String> {
     if collection_count == 0 {
         return None;
     }
@@ -29899,6 +29968,206 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             ON business_records(collection, record_id, updated_at_ms, deleted);
         CREATE INDEX IF NOT EXISTS idx_business_records_projection_stamp
             ON business_records(collection, record_id, rev, deleted, updated_at_ms);
+        CREATE TABLE IF NOT EXISTS business_records_projection_clock (
+            collection TEXT PRIMARY KEY,
+            version INTEGER NOT NULL DEFAULT 0,
+            row_count INTEGER NOT NULL DEFAULT 0,
+            deleted_count INTEGER NOT NULL DEFAULT 0,
+            latest_updated_at_ms INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO business_records_projection_clock
+            (collection, version, row_count, deleted_count, latest_updated_at_ms)
+        SELECT source.collection, 0, 0, 0, 0
+        FROM (
+            SELECT collection
+            FROM business_records
+            GROUP BY collection
+        ) source
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM business_records_projection_clock clock
+            WHERE clock.collection = source.collection
+        );
+        UPDATE business_records_projection_clock
+        SET
+            row_count = (
+                SELECT COUNT(*)
+                FROM business_records
+                WHERE business_records.collection = business_records_projection_clock.collection
+            ),
+            deleted_count = (
+                SELECT COALESCE(SUM(deleted), 0)
+                FROM business_records
+                WHERE business_records.collection = business_records_projection_clock.collection
+            ),
+            latest_updated_at_ms = (
+                SELECT COALESCE(MAX(updated_at_ms), 0)
+                FROM business_records
+                WHERE business_records.collection = business_records_projection_clock.collection
+            )
+        WHERE EXISTS (
+            SELECT 1
+            FROM business_records
+            WHERE business_records.collection = business_records_projection_clock.collection
+        );
+        CREATE TRIGGER IF NOT EXISTS trg_business_records_projection_clock_insert
+        AFTER INSERT ON business_records
+        BEGIN
+            INSERT INTO business_records_projection_clock
+                (collection, version, row_count, deleted_count, latest_updated_at_ms)
+            SELECT NEW.collection, 0, 0, 0, 0
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM business_records_projection_clock
+                WHERE collection = NEW.collection
+            );
+            UPDATE business_records_projection_clock
+            SET
+                version = version + 1,
+                row_count = (
+                    SELECT COUNT(*)
+                    FROM business_records
+                    WHERE collection = NEW.collection
+                ),
+                deleted_count = (
+                    SELECT COALESCE(SUM(deleted), 0)
+                    FROM business_records
+                    WHERE collection = NEW.collection
+                ),
+                latest_updated_at_ms = (
+                    SELECT COALESCE(MAX(updated_at_ms), 0)
+                    FROM business_records
+                    WHERE collection = NEW.collection
+                )
+            WHERE collection = NEW.collection;
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_business_records_projection_clock_update_same_collection
+        AFTER UPDATE ON business_records
+        WHEN OLD.collection = NEW.collection
+        BEGIN
+            INSERT INTO business_records_projection_clock
+                (collection, version, row_count, deleted_count, latest_updated_at_ms)
+            SELECT NEW.collection, 0, 0, 0, 0
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM business_records_projection_clock
+                WHERE collection = NEW.collection
+            );
+            UPDATE business_records_projection_clock
+            SET
+                version = version + 1,
+                row_count = (
+                    SELECT COUNT(*)
+                    FROM business_records
+                    WHERE collection = NEW.collection
+                ),
+                deleted_count = (
+                    SELECT COALESCE(SUM(deleted), 0)
+                    FROM business_records
+                    WHERE collection = NEW.collection
+                ),
+                latest_updated_at_ms = (
+                    SELECT COALESCE(MAX(updated_at_ms), 0)
+                    FROM business_records
+                    WHERE collection = NEW.collection
+                )
+            WHERE collection = NEW.collection;
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_business_records_projection_clock_update_moved_old
+        AFTER UPDATE ON business_records
+        WHEN OLD.collection <> NEW.collection
+        BEGIN
+            INSERT INTO business_records_projection_clock
+                (collection, version, row_count, deleted_count, latest_updated_at_ms)
+            SELECT OLD.collection, 0, 0, 0, 0
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM business_records_projection_clock
+                WHERE collection = OLD.collection
+            );
+            UPDATE business_records_projection_clock
+            SET
+                version = version + 1,
+                row_count = (
+                    SELECT COUNT(*)
+                    FROM business_records
+                    WHERE collection = OLD.collection
+                ),
+                deleted_count = (
+                    SELECT COALESCE(SUM(deleted), 0)
+                    FROM business_records
+                    WHERE collection = OLD.collection
+                ),
+                latest_updated_at_ms = (
+                    SELECT COALESCE(MAX(updated_at_ms), 0)
+                    FROM business_records
+                    WHERE collection = OLD.collection
+                )
+            WHERE collection = OLD.collection;
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_business_records_projection_clock_update_moved_new
+        AFTER UPDATE ON business_records
+        WHEN OLD.collection <> NEW.collection
+        BEGIN
+            INSERT INTO business_records_projection_clock
+                (collection, version, row_count, deleted_count, latest_updated_at_ms)
+            SELECT NEW.collection, 0, 0, 0, 0
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM business_records_projection_clock
+                WHERE collection = NEW.collection
+            );
+            UPDATE business_records_projection_clock
+            SET
+                version = version + 1,
+                row_count = (
+                    SELECT COUNT(*)
+                    FROM business_records
+                    WHERE collection = NEW.collection
+                ),
+                deleted_count = (
+                    SELECT COALESCE(SUM(deleted), 0)
+                    FROM business_records
+                    WHERE collection = NEW.collection
+                ),
+                latest_updated_at_ms = (
+                    SELECT COALESCE(MAX(updated_at_ms), 0)
+                    FROM business_records
+                    WHERE collection = NEW.collection
+                )
+            WHERE collection = NEW.collection;
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_business_records_projection_clock_delete
+        AFTER DELETE ON business_records
+        BEGIN
+            INSERT INTO business_records_projection_clock
+                (collection, version, row_count, deleted_count, latest_updated_at_ms)
+            SELECT OLD.collection, 0, 0, 0, 0
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM business_records_projection_clock
+                WHERE collection = OLD.collection
+            );
+            UPDATE business_records_projection_clock
+            SET
+                version = version + 1,
+                row_count = (
+                    SELECT COUNT(*)
+                    FROM business_records
+                    WHERE collection = OLD.collection
+                ),
+                deleted_count = (
+                    SELECT COALESCE(SUM(deleted), 0)
+                    FROM business_records
+                    WHERE collection = OLD.collection
+                ),
+                latest_updated_at_ms = (
+                    SELECT COALESCE(MAX(updated_at_ms), 0)
+                    FROM business_records
+                    WHERE collection = OLD.collection
+                )
+            WHERE collection = OLD.collection;
+        END;
         CREATE INDEX IF NOT EXISTS idx_business_records_accounting_invoices_due
             ON business_records(
                 json_extract(payload_json, '$.state'),
@@ -30451,7 +30720,7 @@ mod tests {
     }
 
     #[test]
-    fn business_records_projection_stamp_uses_covering_metadata_index() -> anyhow::Result<()> {
+    fn business_records_projection_stamp_uses_projection_clock() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let collections = vec![
             "support_notes".to_string(),
@@ -30488,8 +30757,8 @@ mod tests {
             }),
         )?;
 
-        let sql = business_records_projection_stamp_query(collections.len())
-            .context("projection stamp query sql")?;
+        let sql = business_records_projection_clock_stamp_query(collections.len())
+            .context("projection clock stamp query sql")?;
         let explain_sql = format!("EXPLAIN QUERY PLAN {sql}");
         let mut stmt = conn.prepare(&explain_sql)?;
         let details = stmt
@@ -30499,10 +30768,10 @@ mod tests {
             )?
             .collect::<Result<Vec<_>, _>>()?;
         assert!(
-            details.iter().any(|detail| {
-                detail.contains("USING COVERING INDEX idx_business_records_projection_stamp")
-            }),
-            "business-record idle stamp must stay on the covering metadata index, got {details:#?}"
+            details
+                .iter()
+                .any(|detail| { detail.contains("business_records_projection_clock") }),
+            "business-record idle stamp must read the projection clock, got {details:#?}"
         );
         drop(stmt);
         drop(conn);

@@ -145,6 +145,8 @@ const DESKTOP_FILE_CHUNK_CLEANUP_SCAN_LIMIT: u64 = 100_000;
 const DESKTOP_FILE_INDEX_MAINTENANCE_INTERVAL_SECS: u64 = 10 * 60;
 const DESKTOP_FILE_INDEX_MAINTENANCE_FILE_LIMIT: usize = 1_000;
 const DESKTOP_FILE_INDEX_MAINTENANCE_CHUNK_DELETE_LIMIT: usize = 5_000;
+const DESKTOP_FILE_INDEX_MAINTENANCE_FILE_TOMBSTONE_DELETE_LIMIT: usize = 5_000;
+const DESKTOP_FILE_INDEX_UNSAFE_TOMBSTONE_RETENTION_SECS: u64 = 24 * 60 * 60;
 const DESKTOP_FILE_CONTENT_HASH_SCHEME: &str = "sha256-bytes-v1";
 const DESKTOP_FILE_CHUNK_HASH_SCHEME: &str = "sha256-base64-chunk-v1";
 const CTOX_DESKTOP_FOLDER_ID: &str = "fs_ctox";
@@ -2962,11 +2964,13 @@ async fn sync_desktop_file_index_background_loop(
                     Ok(stats) if stats.changed() => {
                         eprintln!(
                             "[business-os] desktop file index maintenance: tombstoned {} unsafe file(s), \
-                             removed {} unsafe chunk(s), {} stale chunk(s), {} deleted chunk tombstone(s)",
+                             removed {} unsafe chunk(s), {} stale chunk(s), {} deleted chunk tombstone(s), \
+                             {} unsafe file tombstone(s)",
                             stats.tombstoned_unsafe_files,
                             stats.removed_unsafe_chunks,
                             stats.removed_stale_chunks,
-                            stats.removed_deleted_chunks
+                            stats.removed_deleted_chunks,
+                            stats.removed_unsafe_file_tombstones
                         );
                     }
                     Ok(_) => {}
@@ -9337,6 +9341,7 @@ struct DesktopFileIndexMaintenanceStats {
     removed_unsafe_chunks: usize,
     removed_stale_chunks: usize,
     removed_deleted_chunks: usize,
+    removed_unsafe_file_tombstones: usize,
 }
 
 impl DesktopFileIndexMaintenanceStats {
@@ -9345,6 +9350,7 @@ impl DesktopFileIndexMaintenanceStats {
             || self.removed_unsafe_chunks > 0
             || self.removed_stale_chunks > 0
             || self.removed_deleted_chunks > 0
+            || self.removed_unsafe_file_tombstones > 0
     }
 }
 
@@ -9469,9 +9475,33 @@ fn compact_desktop_file_index_store_sync(
         ),
         [],
     )?;
+    let unsafe_tombstone_cutoff = now
+        - Duration::from_secs(DESKTOP_FILE_INDEX_UNSAFE_TOMBSTONE_RETENTION_SECS).as_millis()
+            as f64;
+    stats.removed_unsafe_file_tombstones = tx.execute(
+        &format!(
+            "DELETE FROM {FILES_TABLE}
+             WHERE rowid IN (
+               SELECT rowid FROM {FILES_TABLE}
+               INDEXED BY ctox_business_os_desktop_files_deleted_unsafe_idx
+               WHERE COALESCE(deleted, 0) = 1
+                 AND json_extract(data, '$.source') = 'ctox-core'
+                 AND COALESCE(json_extract(data, '$.is_deleted'), 0) = 1
+                 AND json_extract(data, '$.tombstone_reason') = 'unsafe_internal_ctox_path'
+                 AND COALESCE(lastWriteTime, 0) <= ?1
+               ORDER BY lastWriteTime, id
+               LIMIT ?2
+             )"
+        ),
+        params![
+            unsafe_tombstone_cutoff,
+            DESKTOP_FILE_INDEX_MAINTENANCE_FILE_TOMBSTONE_DELETE_LIMIT as i64,
+        ],
+    )?;
     if stats.tombstoned_unsafe_files == 0
         && stats.removed_unsafe_chunks == 0
         && stats.removed_deleted_chunks == 0
+        && stats.removed_unsafe_file_tombstones == 0
     {
         stats.removed_stale_chunks = tx.execute(
             &format!(
@@ -9587,6 +9617,22 @@ fn ensure_desktop_file_index_query_indexes(conn: &Connection) -> anyhow::Result<
         [],
     )
     .context("ensure desktop_files live ctox-core index")?;
+    conn.execute(
+        r#"
+        CREATE INDEX IF NOT EXISTS ctox_business_os_desktop_files_deleted_unsafe_idx
+        ON "ctox_business_os__desktop_files__v0" (
+            COALESCE(deleted, 0),
+            json_extract(data, '$.tombstone_reason'),
+            lastWriteTime,
+            id
+        )
+        WHERE COALESCE(deleted, 0) = 1
+          AND json_extract(data, '$.source') = 'ctox-core'
+          AND COALESCE(json_extract(data, '$.is_deleted'), 0) = 1
+        "#,
+        [],
+    )
+    .context("ensure desktop_files unsafe tombstone cleanup index")?;
     if sqlite_table_exists(conn, "ctox_business_os__desktop_file_chunks__v0")?
         && sqlite_table_has_column(conn, "ctox_business_os__desktop_file_chunks__v0", "deleted")?
     {
@@ -16156,6 +16202,138 @@ mod tests {
             )
             .expect("chunk count after maintenance");
         assert_eq!(after_chunks, 0);
+    }
+
+    #[test]
+    fn desktop_file_index_maintenance_purges_old_unsafe_file_tombstones() {
+        let root = tempfile::tempdir().expect("temp root");
+        let database_path = store::rxdb_store_path(root.path());
+        fs::create_dir_all(database_path.parent().expect("rxdb parent")).expect("create rxdb dir");
+        let conn = Connection::open(&database_path).expect("open rxdb sqlite");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE ctox_business_os__desktop_files__v0 (
+                id TEXT NOT NULL PRIMARY KEY UNIQUE,
+                revision TEXT,
+                deleted INTEGER NOT NULL CHECK (deleted IN (0, 1)),
+                lastWriteTime REAL NOT NULL,
+                data TEXT NOT NULL
+            );
+            CREATE TABLE ctox_business_os__desktop_file_chunks__v0 (
+                id TEXT NOT NULL PRIMARY KEY UNIQUE,
+                revision TEXT,
+                deleted INTEGER NOT NULL CHECK (deleted IN (0, 1)),
+                lastWriteTime REAL NOT NULL,
+                data TEXT NOT NULL
+            );
+            "#,
+        )
+        .expect("create desktop index tables");
+        let old_tombstone = json!({
+            "id": "old-unsafe-file",
+            "_rev": "2-ctox-maintenance",
+            "_deleted": true,
+            "kind": "file",
+            "source": "ctox-core",
+            "is_deleted": true,
+            "local_path": "/Users/test/.local/lib/ctox/releases/old/file.md",
+            "tombstone_reason": "unsafe_internal_ctox_path",
+            "deleted_at_ms": 1,
+        });
+        let fresh_tombstone = json!({
+            "id": "fresh-unsafe-file",
+            "_rev": "2-ctox-maintenance",
+            "_deleted": true,
+            "kind": "file",
+            "source": "ctox-core",
+            "is_deleted": true,
+            "local_path": "/Users/test/.local/lib/ctox/releases/fresh/file.md",
+            "tombstone_reason": "unsafe_internal_ctox_path",
+            "deleted_at_ms": now_ms() as u64,
+        });
+        let old_missing_tombstone = json!({
+            "id": "old-missing-file",
+            "_rev": "2-ctox-maintenance",
+            "_deleted": true,
+            "kind": "file",
+            "source": "ctox-core",
+            "is_deleted": true,
+            "local_path": "/Users/test/Documents/missing.md",
+            "tombstone_reason": "missing_from_scan",
+            "deleted_at_ms": 1,
+        });
+        let old_browser_tombstone = json!({
+            "id": "old-browser-file",
+            "_rev": "2-browser",
+            "_deleted": true,
+            "kind": "file",
+            "source": "browser-upload",
+            "is_deleted": true,
+            "local_path": "/Users/test/.local/lib/ctox/releases/browser/file.md",
+            "tombstone_reason": "unsafe_internal_ctox_path",
+            "deleted_at_ms": 1,
+        });
+        let live_unsafe_looking_row = json!({
+            "id": "live-unsafe-looking-file",
+            "_rev": "1-live",
+            "kind": "file",
+            "source": "ctox-core",
+            "is_deleted": false,
+            "local_path": "/Users/test/.local/lib/ctox/releases/live/file.md",
+        });
+        for (id, deleted, last_write_time, document) in [
+            ("old-unsafe-file", 1, 1.0_f64, old_tombstone),
+            ("fresh-unsafe-file", 1, f64::MAX, fresh_tombstone),
+            ("old-missing-file", 1, 1.0_f64, old_missing_tombstone),
+            ("old-browser-file", 1, 1.0_f64, old_browser_tombstone),
+            (
+                "live-unsafe-looking-file",
+                0,
+                1.0_f64,
+                live_unsafe_looking_row,
+            ),
+        ] {
+            conn.execute(
+                "INSERT INTO ctox_business_os__desktop_files__v0 \
+                 (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    id,
+                    document
+                        .get("_rev")
+                        .and_then(Value::as_str)
+                        .unwrap_or("1-seed"),
+                    deleted,
+                    last_write_time,
+                    serde_json::to_string(&document).expect("desktop file json")
+                ],
+            )
+            .expect("insert desktop file row");
+        }
+        drop(conn);
+
+        let stats = compact_desktop_file_index_store_sync(root.path(), None)
+            .expect("compact desktop index");
+        assert_eq!(stats.removed_unsafe_file_tombstones, 1);
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("reopen sqlite");
+        let row_exists = |id: &str| -> i64 {
+            conn.query_row(
+                "SELECT COUNT(*) FROM ctox_business_os__desktop_files__v0 WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .expect("desktop file row count")
+        };
+        let old_exists = row_exists("old-unsafe-file");
+        let fresh_exists = row_exists("fresh-unsafe-file");
+        let missing_exists = row_exists("old-missing-file");
+        let browser_exists = row_exists("old-browser-file");
+        let live_exists = row_exists("live-unsafe-looking-file");
+        assert_eq!(old_exists, 0);
+        assert_eq!(fresh_exists, 1);
+        assert_eq!(missing_exists, 1);
+        assert_eq!(browser_exists, 1);
+        assert_eq!(live_exists, 1);
     }
 
     #[test]
