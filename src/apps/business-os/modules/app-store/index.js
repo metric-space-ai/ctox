@@ -978,13 +978,12 @@ function bytesToBase64(bytes) {
 // verified-decode accepts it; the native installer reads it back by file_id.
 async function uploadZipToChunkStore(file) {
   const db = state.ctx?.db;
-  if (!db?.collection) throw new Error('Datenbank nicht verfügbar.');
   const syncHandles = await startScopedSyncCollections(
     ['desktop_files', 'desktop_file_chunks'],
     'app-store-zip-upload',
   );
-  const filesColl = db.collection('desktop_files');
-  const chunksColl = db.collection('desktop_file_chunks');
+  const filesColl = resolveDbCollection(db, 'desktop_files');
+  const chunksColl = resolveDbCollection(db, 'desktop_file_chunks');
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const base64 = bytesToBase64(bytes);
