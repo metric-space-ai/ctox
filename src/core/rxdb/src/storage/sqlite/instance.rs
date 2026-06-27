@@ -115,9 +115,24 @@ static SQLITE_EXTERNAL_POLL_CHANGED_TABLE_READ_FAILURES: AtomicU64 = AtomicU64::
 static SQLITE_EXTERNAL_POLL_CHANGED_TABLE_ROWS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_CHANGED_TABLE_NOTIFICATIONS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_LOCAL_HOOK_SUPPRESSED_NOTIFICATIONS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_DRAIN_CALLS: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_DRAIN_BATCHES: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_DRAIN_EMPTY_BATCHES: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_DRAIN_ROWS_VISITED: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_DRAIN_ROWS_DECODED: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_DRAIN_ROWS_MAX: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_DRAIN_BATCHES_MAX: AtomicU64 = AtomicU64::new(0);
+static SQLITE_EXTERNAL_POLL_DRAIN_BUDGET_EXHAUSTIONS: AtomicU64 = AtomicU64::new(0);
 static SQLITE_EXTERNAL_POLL_NOTIFICATIONS_BY_TABLE: OnceLock<StdMutex<HashMap<String, u64>>> =
     OnceLock::new();
 static SQLITE_EXTERNAL_POLL_LOCAL_HOOK_SUPPRESSIONS_BY_TABLE: OnceLock<
+    StdMutex<HashMap<String, u64>>,
+> = OnceLock::new();
+static SQLITE_EXTERNAL_POLL_DRAIN_ROWS_BY_TABLE: OnceLock<StdMutex<HashMap<String, u64>>> =
+    OnceLock::new();
+static SQLITE_EXTERNAL_POLL_DRAIN_BATCHES_BY_TABLE: OnceLock<StdMutex<HashMap<String, u64>>> =
+    OnceLock::new();
+static SQLITE_EXTERNAL_POLL_DRAIN_BUDGET_EXHAUSTIONS_BY_TABLE: OnceLock<
     StdMutex<HashMap<String, u64>>,
 > = OnceLock::new();
 #[cfg(test)]
@@ -354,6 +369,38 @@ pub fn sqlite_runtime_counters_snapshot() -> Value {
         "external_poll_local_hook_suppressed_notifications",
         SQLITE_EXTERNAL_POLL_LOCAL_HOOK_SUPPRESSED_NOTIFICATIONS
     );
+    counter!(
+        "external_poll_drain_calls",
+        SQLITE_EXTERNAL_POLL_DRAIN_CALLS
+    );
+    counter!(
+        "external_poll_drain_batches",
+        SQLITE_EXTERNAL_POLL_DRAIN_BATCHES
+    );
+    counter!(
+        "external_poll_drain_empty_batches",
+        SQLITE_EXTERNAL_POLL_DRAIN_EMPTY_BATCHES
+    );
+    counter!(
+        "external_poll_drain_rows_visited",
+        SQLITE_EXTERNAL_POLL_DRAIN_ROWS_VISITED
+    );
+    counter!(
+        "external_poll_drain_rows_decoded",
+        SQLITE_EXTERNAL_POLL_DRAIN_ROWS_DECODED
+    );
+    counter!(
+        "external_poll_drain_rows_max",
+        SQLITE_EXTERNAL_POLL_DRAIN_ROWS_MAX
+    );
+    counter!(
+        "external_poll_drain_batches_max",
+        SQLITE_EXTERNAL_POLL_DRAIN_BATCHES_MAX
+    );
+    counter!(
+        "external_poll_drain_budget_exhaustions",
+        SQLITE_EXTERNAL_POLL_DRAIN_BUDGET_EXHAUSTIONS
+    );
     out.insert(
         "external_poll_notifications_by_table".to_string(),
         snapshot_counter_map(&SQLITE_EXTERNAL_POLL_NOTIFICATIONS_BY_TABLE),
@@ -361,6 +408,18 @@ pub fn sqlite_runtime_counters_snapshot() -> Value {
     out.insert(
         "external_poll_local_hook_suppressions_by_table".to_string(),
         snapshot_counter_map(&SQLITE_EXTERNAL_POLL_LOCAL_HOOK_SUPPRESSIONS_BY_TABLE),
+    );
+    out.insert(
+        "external_poll_drain_rows_by_table".to_string(),
+        snapshot_counter_map(&SQLITE_EXTERNAL_POLL_DRAIN_ROWS_BY_TABLE),
+    );
+    out.insert(
+        "external_poll_drain_batches_by_table".to_string(),
+        snapshot_counter_map(&SQLITE_EXTERNAL_POLL_DRAIN_BATCHES_BY_TABLE),
+    );
+    out.insert(
+        "external_poll_drain_budget_exhaustions_by_table".to_string(),
+        snapshot_counter_map(&SQLITE_EXTERNAL_POLL_DRAIN_BUDGET_EXHAUSTIONS_BY_TABLE),
     );
     Value::Object(out)
 }
@@ -404,6 +463,22 @@ fn increment_counter_map(map: &OnceLock<StdMutex<HashMap<String, u64>>>, key: &s
         .unwrap();
     let counter = counters.entry(key.to_string()).or_insert(0);
     *counter = counter.saturating_add(1);
+}
+
+fn increment_counter_map_by(
+    map: &OnceLock<StdMutex<HashMap<String, u64>>>,
+    key: &str,
+    amount: u64,
+) {
+    if amount == 0 {
+        return;
+    }
+    let mut counters = map
+        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    let counter = counters.entry(key.to_string()).or_insert(0);
+    *counter = counter.saturating_add(amount);
 }
 
 fn increment_nested_counter_map(
@@ -518,6 +593,39 @@ pub(crate) fn record_sqlite_external_poll_local_hook_suppression(table_name: &st
         &SQLITE_EXTERNAL_POLL_LOCAL_HOOK_SUPPRESSIONS_BY_TABLE,
         table_name,
     );
+}
+
+fn record_sqlite_external_poll_drain(
+    table_name: &str,
+    batches: usize,
+    empty_batches: usize,
+    rows: usize,
+    drained_to_empty: bool,
+) {
+    SQLITE_EXTERNAL_POLL_DRAIN_CALLS.fetch_add(1, Ordering::Relaxed);
+    SQLITE_EXTERNAL_POLL_DRAIN_BATCHES.fetch_add(batches as u64, Ordering::Relaxed);
+    SQLITE_EXTERNAL_POLL_DRAIN_EMPTY_BATCHES.fetch_add(empty_batches as u64, Ordering::Relaxed);
+    SQLITE_EXTERNAL_POLL_DRAIN_ROWS_VISITED.fetch_add(rows as u64, Ordering::Relaxed);
+    SQLITE_EXTERNAL_POLL_DRAIN_ROWS_DECODED.fetch_add(rows as u64, Ordering::Relaxed);
+    update_atomic_max(&SQLITE_EXTERNAL_POLL_DRAIN_ROWS_MAX, rows as u64);
+    update_atomic_max(&SQLITE_EXTERNAL_POLL_DRAIN_BATCHES_MAX, batches as u64);
+    increment_counter_map_by(
+        &SQLITE_EXTERNAL_POLL_DRAIN_ROWS_BY_TABLE,
+        table_name,
+        rows as u64,
+    );
+    increment_counter_map_by(
+        &SQLITE_EXTERNAL_POLL_DRAIN_BATCHES_BY_TABLE,
+        table_name,
+        batches as u64,
+    );
+    if !drained_to_empty {
+        SQLITE_EXTERNAL_POLL_DRAIN_BUDGET_EXHAUSTIONS.fetch_add(1, Ordering::Relaxed);
+        increment_counter_map(
+            &SQLITE_EXTERNAL_POLL_DRAIN_BUDGET_EXHAUSTIONS_BY_TABLE,
+            table_name,
+        );
+    }
 }
 
 fn record_sqlite_writer_lock_wait(elapsed: Duration) {
@@ -1268,6 +1376,8 @@ fn drain_external_changed_documents_since(
     };
     let mut checkpoint = initial_checkpoint;
     let mut batches = Vec::new();
+    let mut rows = 0usize;
+    let mut empty_batches = 0usize;
     for _ in 0..SQLITE_EXTERNAL_POLL_MAX_BATCHES_PER_WAKE {
         let result = changed_documents_since(
             conn,
@@ -1278,14 +1388,18 @@ fn drain_external_changed_documents_since(
         )?;
         checkpoint = result.checkpoint.clone();
         if result.documents.is_empty() {
+            empty_batches += 1;
+            record_sqlite_external_poll_drain(table_name, batches.len(), empty_batches, rows, true);
             return Ok(ExternalPollDrain {
                 batches,
                 checkpoint,
                 drained_to_empty: true,
             });
         }
+        rows = rows.saturating_add(result.documents.len());
         batches.push(result);
     }
+    record_sqlite_external_poll_drain(table_name, batches.len(), empty_batches, rows, false);
     Ok(ExternalPollDrain {
         batches,
         checkpoint,
@@ -3737,6 +3851,22 @@ mod tests {
             tx.commit().unwrap();
         }
 
+        let drain_calls_before = runtime_counter("external_poll_drain_calls");
+        let drain_batches_before = runtime_counter("external_poll_drain_batches");
+        let drain_empty_batches_before = runtime_counter("external_poll_drain_empty_batches");
+        let drain_rows_visited_before = runtime_counter("external_poll_drain_rows_visited");
+        let drain_rows_before = runtime_counter("external_poll_drain_rows_decoded");
+        let drain_budget_exhaustions_before =
+            runtime_counter("external_poll_drain_budget_exhaustions");
+        let drain_table_rows_before =
+            runtime_counter_map_value("external_poll_drain_rows_by_table", &instance.table_name);
+        let drain_table_batches_before =
+            runtime_counter_map_value("external_poll_drain_batches_by_table", &instance.table_name);
+        let drain_table_budget_exhaustions_before = runtime_counter_map_value(
+            "external_poll_drain_budget_exhaustions_by_table",
+            &instance.table_name,
+        );
+
         notify_table_change(&database_key_for_path(&database_path), &instance.table_name);
 
         let deadline = Instant::now() + Duration::from_millis(750);
@@ -3762,6 +3892,50 @@ mod tests {
         assert!(
             bulks >= 3,
             "burst should be emitted as multiple bounded batches"
+        );
+        assert!(
+            runtime_counter("external_poll_drain_calls") >= drain_calls_before + 1,
+            "external poll should count the notified drain"
+        );
+        assert!(
+            runtime_counter("external_poll_drain_batches") >= drain_batches_before + 3,
+            "external poll should count all non-empty drain batches"
+        );
+        assert!(
+            runtime_counter("external_poll_drain_empty_batches") >= drain_empty_batches_before + 1,
+            "external poll should count the empty drain terminator"
+        );
+        assert!(
+            runtime_counter("external_poll_drain_rows_decoded") >= drain_rows_before + total as u64,
+            "external poll should count drained rows"
+        );
+        assert!(
+            runtime_counter("external_poll_drain_rows_visited")
+                >= drain_rows_visited_before + total as u64,
+            "external poll should count visited rows"
+        );
+        assert_eq!(
+            runtime_counter("external_poll_drain_budget_exhaustions"),
+            drain_budget_exhaustions_before,
+            "three-batch burst should drain before the per-wake budget is exhausted"
+        );
+        assert!(
+            runtime_counter_map_value("external_poll_drain_rows_by_table", &instance.table_name)
+                >= drain_table_rows_before + total as u64,
+            "external poll should attribute drained rows to the table"
+        );
+        assert!(
+            runtime_counter_map_value("external_poll_drain_batches_by_table", &instance.table_name)
+                >= drain_table_batches_before + 3,
+            "external poll should attribute drain batches to the table"
+        );
+        assert_eq!(
+            runtime_counter_map_value(
+                "external_poll_drain_budget_exhaustions_by_table",
+                &instance.table_name
+            ),
+            drain_table_budget_exhaustions_before,
+            "three-batch burst should not exhaust the table drain budget"
         );
     }
 

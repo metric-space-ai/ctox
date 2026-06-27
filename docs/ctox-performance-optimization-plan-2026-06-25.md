@@ -740,9 +740,10 @@ is no longer the original file-share/browser `allDocuments()` burn path.
 1. Native RxDB external-write idle safety drains are fixed for file-backed
    collections. Keep the new zero-drain regression as a release gate. The
    DB-wide changed-table watcher now exposes production counters that classify
-   active wakeups, standby wakeups, standby entries, and active resets; finish
-   the central dispatcher/backpressure design so future change-stream work
-   cannot regress into per-collection idle scanning.
+   active wakeups, standby wakeups, standby entries, active resets, drain
+   batches, drain rows, and budget exhaustion; finish the central
+   dispatcher/backpressure design so future change-stream work cannot regress
+   into per-collection idle scanning.
 2. Native SQLite query pushdown is still partial for normal storage queries.
    Unsupported Mango selectors no longer silently run unbounded full-table Rust
    matcher scans. Runtime counters expose normal fallback calls, visited rows,
@@ -1908,13 +1909,21 @@ Implementation status:
   default installed idle probe budgets these counters at zero, so a recurring
   standby safety wake or unexpected active reset is visible in passive daemon
   evidence instead of being inferred from downstream statement counters.
-- Still open: finer per-drain loop-budget counters for rows visited/decoded by
-  the DB-wide watcher. The dispatcher should remain centralized around SQLite
-  file-level change detection and must not re-add per-collection idle scans.
+- Done on 2026-06-27 for DB-wide watcher drain-budget counters: the SQLite
+  runtime snapshot now records external-poll drain calls, non-empty batches,
+  empty terminator batches, rows visited/decoded, max rows/batches per drain,
+  and budget exhaustion, with per-table row/batch/exhaustion attribution. The
+  default installed idle probe budgets these counters at zero so a standby
+  drain after the system should be idle fails the probe directly.
+- Still open: central dispatcher/backpressure design. The dispatcher should
+  remain centralized around SQLite file-level change detection and must not
+  re-add per-collection idle scans.
 
 Validation:
 
 - `CARGO_TARGET_DIR=/tmp/ctox-rxdb-target cargo test --manifest-path src/core/rxdb/Cargo.toml storage::sqlite::instance::tests::change_stream_drains_multiple_external_batches_per_wake -- --nocapture`
+  passed: 1 test, 0 failures.
+- `CARGO_TARGET_DIR=/tmp/ctox-rxdb-poll-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --manifest-path src/core/rxdb/Cargo.toml change_stream_drains_multiple_external_batches_per_wake -- --nocapture`
   passed: 1 test, 0 failures.
 - `CARGO_TARGET_DIR=/tmp/ctox-rxdb-target cargo test --manifest-path src/core/rxdb/Cargo.toml storage::sqlite::instance::tests::change_stream_drains_ -- --nocapture`
   passed: 2 tests, 0 failures.
