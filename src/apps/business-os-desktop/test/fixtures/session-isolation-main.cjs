@@ -38,8 +38,8 @@ app.whenReady().then(async () => {
     windows.push(alphaWindow, betaWindow);
     const alphaWrite = await withTimeout(writeAndRead(alphaWindow.webContents, "alpha"), "write alpha state");
     const betaWrite = await withTimeout(writeAndRead(betaWindow.webContents, "beta"), "write beta state");
-    const alphaRead = await withTimeout(readState(alphaWindow.webContents), "read alpha state");
-    const betaRead = await withTimeout(readState(betaWindow.webContents), "read beta state");
+    const alphaRead = await withTimeout(readState(alphaWindow.webContents, "alpha"), "read alpha state");
+    const betaRead = await withTimeout(readState(betaWindow.webContents, "beta"), "read beta state");
     const result = {
       ok: alphaRead.localStorage === "alpha"
         && betaRead.localStorage === "beta"
@@ -136,13 +136,13 @@ function writeAndRead(webContents, value) {
           tx.onerror = () => reject(tx.error);
         };
       });
-      return (${readStateScript})();
+      return (${readStateScript})(value);
     })();
   `, true);
 }
 
-function readState(webContents) {
-  return webContents.executeJavaScript(`(${readStateScript})();`, true);
+function readState(webContents, expected = "") {
+  return webContents.executeJavaScript(`(${readStateScript})(${JSON.stringify(expected)});`, true);
 }
 
 function withTimeout(promise, label, timeoutMs = 5000) {
@@ -161,25 +161,39 @@ function withTimeout(promise, label, timeoutMs = 5000) {
   });
 }
 
-const readStateScript = `async () => {
-  const indexedDb = await new Promise((resolve, reject) => {
-    const request = indexedDB.open("ctoxSmokeDb", 1);
-    request.onupgradeneeded = () => request.result.createObjectStore("kv");
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => {
-      const db = request.result;
-      const tx = db.transaction("kv", "readonly");
-      const get = tx.objectStore("kv").get("value");
-      get.onsuccess = () => {
-        db.close();
-        resolve(get.result || "");
+const readStateScript = `async (expected = "") => {
+  const readOnce = async () => {
+    const indexedDb = await new Promise((resolve, reject) => {
+      const request = indexedDB.open("ctoxSmokeDb", 1);
+      request.onupgradeneeded = () => request.result.createObjectStore("kv");
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const db = request.result;
+        const tx = db.transaction("kv", "readonly");
+        const get = tx.objectStore("kv").get("value");
+        get.onsuccess = () => {
+          db.close();
+          resolve(get.result || "");
+        };
+        get.onerror = () => reject(get.error);
       };
-      get.onerror = () => reject(get.error);
+    });
+    return {
+      cookie: document.cookie,
+      localStorage: localStorage.getItem("ctoxSmoke") || "",
+      indexedDb,
     };
-  });
-  return {
-    cookie: document.cookie,
-    localStorage: localStorage.getItem("ctoxSmoke") || "",
-    indexedDb,
   };
+  const ready = (state) => !expected || (
+    state.cookie.includes("ctoxSmoke=" + expected)
+    && state.localStorage === expected
+    && state.indexedDb === expected
+  );
+  const deadline = Date.now() + 5000;
+  let latest = await readOnce();
+  while (!ready(latest) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    latest = await readOnce();
+  }
+  return latest;
 }`;
