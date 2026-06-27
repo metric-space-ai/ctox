@@ -163,7 +163,7 @@ const DESKTOP_FILE_CHUNK_HASH_SCHEME: &str = "sha256-base64-chunk-v1";
 const CTOX_DESKTOP_FOLDER_ID: &str = "fs_ctox";
 const CTOX_DESKTOP_FOLDER_PATH: &str = "/CTOX";
 const NOTES_SYNC_ACTIVE_INTERVAL_SECS: u64 = 3;
-const NOTES_SYNC_IDLE_INTERVAL_SECS: u64 = 60;
+const NOTES_SYNC_IDLE_INTERVAL_SECS: u64 = 5 * 60;
 const NOTES_SYNC_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 const CHANNEL_STATE_SYNC_INTERVAL_SECS: u64 = 3;
 const RXDB_SQLITE_DATABASE_NAME: &str = "ctox_business_os";
@@ -171,7 +171,9 @@ const BUSINESS_USERS_SYNC_INTERVAL_SECS: u64 = 3;
 const RUNTIME_SETTINGS_SYNC_INTERVAL_SECS: u64 = 3;
 const MODULE_CATALOG_SYNC_INTERVAL_SECS: u64 = 3;
 const TICKET_STATE_SYNC_INTERVAL_SECS: u64 = 3;
-const BUSINESS_OS_PROJECTION_IDLE_SYNC_INTERVAL_SECS: u64 = 60;
+// Command handlers project changed Business OS data synchronously; the idle
+// loops are reconciliation fallbacks and must stay quiet in daemon standby.
+const BUSINESS_OS_PROJECTION_IDLE_SYNC_INTERVAL_SECS: u64 = 5 * 60;
 const BUSINESS_OS_PROJECTION_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 /// Knowledge tables are record-shape parquet content that changes far less
 /// often than ticket/queue state, and projecting them reads parquet rows off
@@ -179,7 +181,7 @@ const BUSINESS_OS_PROJECTION_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 /// catalog/row changes to the browser within seconds-to-tens-of-seconds.
 const KNOWLEDGE_TABLES_SYNC_INTERVAL_SECS: u64 = 15;
 const BUSINESS_RECORD_PROJECTION_SYNC_INTERVAL_SECS: u64 = 3;
-const BUSINESS_RECORD_PROJECTION_IDLE_SYNC_INTERVAL_SECS: u64 = 60;
+const BUSINESS_RECORD_PROJECTION_IDLE_SYNC_INTERVAL_SECS: u64 = 5 * 60;
 const BUSINESS_RECORD_PROJECTION_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 const BUSINESS_RECORD_PROJECTION_SYNC_LIMIT: usize = 2_000;
 const QUEUE_CHAT_REPAIR_ORPHAN_EPOCH_MS: i64 = 10 * 60 * 1_000;
