@@ -2640,8 +2640,18 @@ function ensureCtoxSmokeBinary() {
     expectedNetworkFlapWarnings: 0,
     expectedNetworkFlapErrors: 0,
     expectedNetworkFlapRequestFailures: 0,
+    warningSamples: [],
   };
   let browserDiagnosticsEmitted = false;
+  function addBrowserDiagnosticSample(samples, text) {
+    if (!Array.isArray(samples) || samples.length >= 8) return;
+    const normalized = String(text || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 500);
+    if (!normalized || samples.includes(normalized)) return;
+    samples.push(normalized);
+  }
   function emitBrowserDiagnostics() {
     if (browserDiagnosticsEmitted) return;
     browserDiagnosticsEmitted = true;
@@ -2657,6 +2667,9 @@ function ensureCtoxSmokeBinary() {
     console.log(`expected_network_flap_request_failure_count=${browserDiagnostics.expectedNetworkFlapRequestFailures}`);
     console.log(`startup_smoke_hook_reload_count=${browserDiagnostics.smokeHookReloads}`);
     console.log(`startup_smoke_hook_wait_ms=${browserDiagnostics.smokeHookWaitMs}`);
+    if (browserDiagnostics.warningSamples.length > 0) {
+      console.log(`browser_warning_samples=${JSON.stringify(browserDiagnostics.warningSamples)}`);
+    }
     if (browserDiagnostics.cacheRepairs > 0) {
       throw new Error(`Business OS local RxDB cache repair was triggered during smoke: ${browserDiagnostics.cacheRepairs}`);
     }
@@ -2719,6 +2732,7 @@ function ensureCtoxSmokeBinary() {
         } else {
           browserDiagnostics.warnings += 1;
           if (/websocket/i.test(text)) browserDiagnostics.websocketWarnings += 1;
+          addBrowserDiagnosticSample(browserDiagnostics.warningSamples, text);
         }
       } else if (type === 'error') {
         if (/failed to load resource/i.test(text) && /status of 404/i.test(text)) {

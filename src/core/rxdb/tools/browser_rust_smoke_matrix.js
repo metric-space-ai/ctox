@@ -981,6 +981,22 @@ function runSmokeMatrixSelfTest() {
     broken.modes[0].attempts[0].warningBudget.browserWarnings = 1;
     validateSmokeMatrixSummaryArtifact(broken, { final: true }, { throwOnError: true });
   });
+  const warningProblems = validateBrowserDiagnosticsBudget({
+    browser_warning_count: 2,
+    browser_warning_samples: JSON.stringify(['first warning sample', 'second warning sample']),
+    browser_websocket_warning_count: 0,
+    browser_request_failure_count: 0,
+    browser_asset_response_error_count: 0,
+  }, {
+    browserWarningBudget: 0,
+    websocketWarningBudget: 0,
+    requestFailureBudget: 0,
+    assetResponseErrorBudget: 0,
+    syncConfigWaitBudgetMs: null,
+  });
+  if (!warningProblems.some((problem) => problem.includes('first warning sample'))) {
+    throw new Error('Warning-budget self-test did not include diagnostic samples');
+  }
   console.log(`business_os_production_smoke_registry_modes=${businessOsProductionSmokeModes.join(',')}`);
   console.log('business_os_production_smoke_registry_self_test=1');
 }
@@ -1363,7 +1379,8 @@ function validateBrowserDiagnosticsBudget(evidence, budget) {
   if (budget.browserWarningBudget !== null) {
     const browserWarnings = Number(evidence.browser_warning_count || 0);
     if (Number.isFinite(browserWarnings) && browserWarnings > budget.browserWarningBudget) {
-      problems.push(`browser_warning_count<=${budget.browserWarningBudget}`);
+      const samples = diagnosticSamplePreview(evidence.browser_warning_samples);
+      problems.push(`browser_warning_count<=${budget.browserWarningBudget}${samples ? ` samples=${samples}` : ''}`);
     }
   }
   const websocketWarnings = Number(evidence.browser_websocket_warning_count || 0);
@@ -1390,6 +1407,24 @@ function validateBrowserDiagnosticsBudget(evidence, budget) {
     }
   }
   return problems;
+}
+
+function diagnosticSamplePreview(rawSamples) {
+  if (!rawSamples) return '';
+  let samples = rawSamples;
+  if (typeof rawSamples === 'string') {
+    try {
+      samples = JSON.parse(rawSamples);
+    } catch {
+      return rawSamples.slice(0, 400);
+    }
+  }
+  if (!Array.isArray(samples)) return String(samples).slice(0, 400);
+  return samples
+    .filter((sample) => typeof sample === 'string' && sample.trim())
+    .slice(0, 3)
+    .join(' | ')
+    .slice(0, 400);
 }
 
 function validateDurationBudget(durationMs, maxDurationMs) {
