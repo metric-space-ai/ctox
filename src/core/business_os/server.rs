@@ -32,6 +32,7 @@ use tiny_http::Server;
 use url::Url;
 use uuid::Uuid;
 
+use super::policy;
 use super::store;
 
 const CORE_MODULE_IDS: &[&str] = &["ctox", "knowledge"];
@@ -733,13 +734,48 @@ fn request_session(root: &Path, request: &Request) -> store::BusinessOsSession {
         session_header.as_deref(),
         request_allows_local_dev_session(request),
     );
-    store::session_with_persisted_user(root, session).unwrap_or_else(|_| {
+    let session = store::session_with_persisted_user(root, session).unwrap_or_else(|_| {
         store::session_for_request(
             auth_header.as_deref(),
             session_header.as_deref(),
             request_allows_local_dev_session(request),
         )
-    })
+    });
+    if session.authenticated {
+        return session;
+    }
+
+    // Managed ctox.dev control-plane requests mint a short-lived native
+    // capability token over SSH and replay it as Authorization: Bearer for
+    // localhost-only control-plane fetches. Treat that signed token as an API
+    // session, then let the normal route-level role checks decide access.
+    session_from_capability_bearer(root, auth_header.as_deref()).unwrap_or(session)
+}
+
+fn session_from_capability_bearer(
+    root: &Path,
+    auth_header: Option<&str>,
+) -> Option<store::BusinessOsSession> {
+    let token = auth_header
+        .map(str::trim)?
+        .strip_prefix("Bearer ")
+        .map(str::trim)?;
+    let (id, role) = store::verify_capability_actor(root, token)?;
+    let role = policy::normalize_role(&role);
+    let session = store::BusinessOsSession {
+        ok: true,
+        authenticated: true,
+        auth_required: true,
+        user: Some(store::BusinessOsSessionUser {
+            id: id.clone(),
+            display_name: id,
+            role: role.clone(),
+            is_admin: policy::role_can_manage(&role),
+        }),
+        login_url: None,
+        reason: None,
+    };
+    Some(store::session_with_persisted_user(root, session.clone()).unwrap_or(session))
 }
 
 fn request_allows_local_dev_session(request: &Request) -> bool {
@@ -2993,6 +3029,31 @@ mod tests {
         assert!(html.contains(r#"href="shared/base.css?v=20260609-base1""#));
         assert!(!html.contains("sync_room"));
         assert!(!html.contains("signaling_room_password"));
+    }
+
+    #[test]
+    fn capability_bearer_resolves_admin_api_session() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let now = 1_789_000_000_000;
+        let (token, _) = store::issue_business_os_capability_token_for_managed_user(
+            root.path(),
+            "admin@example.com",
+            "Admin User",
+            "admin",
+            now,
+        )
+        .expect("issue capability token");
+        let auth_header = format!("Bearer {token}");
+
+        let session = session_from_capability_bearer(root.path(), Some(&auth_header))
+            .expect("capability bearer session");
+
+        assert!(session.authenticated);
+        assert!(store::session_can_manage_all(&session));
+        let user = session.user.expect("session user");
+        assert_eq!(user.id, "admin@example.com");
+        assert_eq!(user.display_name, "Admin User");
+        assert_eq!(user.role, "admin");
     }
 
     #[test]
