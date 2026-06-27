@@ -9,6 +9,8 @@ assert(V1_5_QUERY_FETCH_CAPABILITY === 'ctox-rxdb-query-fetch-v1', 'capability c
 assert(Object.isFrozen(V1_5_STATUS_FIELDS), 'status fields must be frozen');
 assert(V1_5_STATUS_FIELDS.includes('queryDemandLoadingActive'), 'missing queryDemandLoadingActive field');
 assert(V1_5_STATUS_FIELDS.includes('peerCapabilityQueryFetchV1'), 'missing peerCapabilityQueryFetchV1 field');
+assert(V1_5_STATUS_FIELDS.includes('pendingQueryFetchCollectors'), 'missing pendingQueryFetchCollectors field');
+assert(V1_5_STATUS_FIELDS.includes('pendingFileFetchCollectors'), 'missing pendingFileFetchCollectors field');
 
 const state = createV1_5StatusState();
 assert(state.rxdbProtocolVersion === '1', 'baseline must report protocol version 1');

@@ -110,6 +110,24 @@ const unsupportedExecutablePlan = collectionPlanProbe.queryPlanFor({
 });
 assert(unsupportedExecutablePlan.strategy === 'bounded-collection', 'unsupported regex should fall back to bounded collection cursor');
 assert(unsupportedExecutablePlan.indexed === false && unsupportedExecutablePlan.schemaIndexed === false, 'unsupported regex must not report indexed execution');
+const allDocumentsExecutablePlan = collectionPlanProbe.queryPlanFor({
+  selector: { thread_key: { $regex: '^t' } },
+  sort: [{ external_created_at: 'desc' }],
+});
+assert(allDocumentsExecutablePlan.strategy === 'all-documents', 'unbounded sorted regex must be classified as all-documents fallback');
+assert(allDocumentsExecutablePlan.allDocumentsFallback === true, 'all-documents query plan must expose fallback flag');
+collectionPlanProbe.setQueryPerformancePolicy({ rejectAllDocumentsFallback: true });
+await assertRejects(
+  () => collectionPlanProbe.queryDocuments({
+    selector: { thread_key: { $regex: '^t' } },
+    sort: [{ external_created_at: 'desc' }],
+  }),
+  (error) => error?.code === 'CTOX_INDEXEDDB_ALL_DOCUMENTS_FALLBACK',
+  'strict query-performance policy must reject allDocuments fallback before opening IndexedDB',
+);
+const fallbackStats = collectionPlanProbe.getQueryPerformanceStats();
+assert(fallbackStats.allDocumentsFallbackCalls === 1, 'allDocuments fallback rejection must increment fallback calls');
+assert(fallbackStats.allDocumentsCalls === 0, 'strict fallback rejection must happen before allDocuments() executes');
 
 const pulledDoc = normalizeDocument(
   { id: 'chunk-1', file_id: 'file-1', data: 'abc' },
@@ -266,6 +284,16 @@ console.log('ctox-rxdb-js storage index smoke OK');
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+async function assertRejects(fn, predicate, message) {
+  try {
+    await fn();
+  } catch (error) {
+    if (predicate(error)) return;
+    throw new Error(`${message}: unexpected error ${error?.stack || error}`);
+  }
+  throw new Error(`${message}: expected rejection`);
 }
 
 function createFakeIndexedDb(seedRecords = []) {

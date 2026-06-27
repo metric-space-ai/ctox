@@ -17,7 +17,7 @@ const INDEXEDDB_PREFLIGHT_TIMEOUT_MS = 8000;
 const RXDB_MODULE_IMPORT_TIMEOUT_MS = 8000;
 const RXDB_CREATE_DATABASE_TIMEOUT_MS = 8000;
 const RXDB_RECOVERY_OPEN_TIMEOUT_MS = 20000;
-const RXDB_BUNDLE_URL = '../rxdb/dist/ctox-rxdb-js.mjs?v=20260626-browser-runtime-retention-v1';
+const RXDB_BUNDLE_URL = '../rxdb/dist/ctox-rxdb-js.mjs?v=20260627-demand-diagnostics-v1';
 
 export async function createBusinessDb({ name }) {
   try {

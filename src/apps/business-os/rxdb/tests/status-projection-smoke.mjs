@@ -25,6 +25,8 @@ for (const field of V1_5_STATUS_FIELDS) {
   assert(field in snapshot, `snapshot includes ${field}`);
 }
 assert(snapshot.activeFileStreams === 0, 'file streams default to zero');
+assert(snapshot.pendingQueryFetchCollectors === 0, 'pending query collectors default to zero');
+assert(snapshot.pendingFileFetchCollectors === 0, 'pending file collectors default to zero');
 assert(snapshot.fileBytesReceived === 0, 'file bytes default to zero');
 
 console.log('ctox-rxdb-js status projection smoke OK');
