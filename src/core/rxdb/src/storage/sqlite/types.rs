@@ -15,8 +15,8 @@ use crate::rx_error::{new_rx_error, RxResult};
 /// Matches upstream's `:memory:` SQLite database marker.
 pub const SQLITE_IN_MEMORY_DB_NAME: &str = ":memory:";
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(10);
-const SQLITE_EXTERNAL_DATABASE_POLL_MIN_INTERVAL: Duration = Duration::from_secs(1);
-const SQLITE_EXTERNAL_DATABASE_POLL_MAX_INTERVAL: Duration = Duration::from_secs(30);
+const SQLITE_EXTERNAL_DATABASE_POLL_ACTIVE_INTERVAL: Duration = Duration::from_secs(1);
+const SQLITE_EXTERNAL_DATABASE_POLL_STANDBY_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const SQLITE_EXTERNAL_DATABASE_POLL_BACKOFF_AFTER_IDLE_READS: u32 = 3;
 const SQLITE_CHANGED_TABLES_TABLE: &str = "__rxdb_changed_tables";
 
@@ -122,7 +122,7 @@ fn start_external_database_poll(path: PathBuf, database_key: String, stop: Arc<A
             let mut changed_tables: HashMap<String, i64>;
             let mut local_hook_generations: HashMap<String, u64>;
             let mut idle_reads = 0u32;
-            let mut poll_interval = SQLITE_EXTERNAL_DATABASE_POLL_MIN_INTERVAL;
+            let mut poll_interval = SQLITE_EXTERNAL_DATABASE_POLL_ACTIVE_INTERVAL;
             while !stop.load(Ordering::SeqCst) {
                 match open_external_poll_connection(&path) {
                     Ok(conn) => {
@@ -145,7 +145,7 @@ fn start_external_database_poll(path: PathBuf, database_key: String, stop: Arc<A
                                     crate::storage::sqlite::instance::record_sqlite_external_poll_data_version_change();
                                 }
                                 idle_reads = 0;
-                                poll_interval = SQLITE_EXTERNAL_DATABASE_POLL_MIN_INTERVAL;
+                                poll_interval = SQLITE_EXTERNAL_DATABASE_POLL_ACTIVE_INTERVAL;
                                 if let Ok(next_changed_tables) = read_changed_table_versions(&conn)
                                 {
                                     crate::storage::sqlite::instance::record_sqlite_external_poll_changed_table_rows(
@@ -167,21 +167,28 @@ fn start_external_database_poll(path: PathBuf, database_key: String, stop: Arc<A
                                 }
                             } else {
                                 idle_reads = idle_reads.saturating_add(1);
-                                if idle_reads
-                                    >= SQLITE_EXTERNAL_DATABASE_POLL_BACKOFF_AFTER_IDLE_READS
-                                {
-                                    poll_interval = (poll_interval * 2)
-                                        .min(SQLITE_EXTERNAL_DATABASE_POLL_MAX_INTERVAL);
-                                }
+                                poll_interval =
+                                    external_database_poll_interval_for_idle_reads(idle_reads);
                             }
                         }
                     }
                     Err(_) => {
-                        sleep_external_poll(&stop, SQLITE_EXTERNAL_DATABASE_POLL_MIN_INTERVAL);
+                        sleep_external_poll(&stop, SQLITE_EXTERNAL_DATABASE_POLL_ACTIVE_INTERVAL);
                     }
                 }
             }
         });
+}
+
+fn external_database_poll_interval_for_idle_reads(idle_reads: u32) -> Duration {
+    if idle_reads >= SQLITE_EXTERNAL_DATABASE_POLL_BACKOFF_AFTER_IDLE_READS {
+        // Same-process writes wake observers through SQLite update_hook. The
+        // database-wide poll is only a rescue path for other processes touching
+        // the file, so it must not become a daemon idle heartbeat.
+        SQLITE_EXTERNAL_DATABASE_POLL_STANDBY_INTERVAL
+    } else {
+        SQLITE_EXTERNAL_DATABASE_POLL_ACTIVE_INTERVAL
+    }
 }
 
 fn sleep_external_poll(stop: &AtomicBool, duration: Duration) {
@@ -302,6 +309,31 @@ fn read_changed_table_versions(conn: &Connection) -> rusqlite::Result<HashMap<St
         crate::storage::sqlite::instance::record_sqlite_external_poll_changed_table_read_failure();
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn external_database_poll_enters_standby_after_idle_reads() {
+        assert_eq!(
+            external_database_poll_interval_for_idle_reads(0),
+            SQLITE_EXTERNAL_DATABASE_POLL_ACTIVE_INTERVAL
+        );
+        assert_eq!(
+            external_database_poll_interval_for_idle_reads(
+                SQLITE_EXTERNAL_DATABASE_POLL_BACKOFF_AFTER_IDLE_READS - 1,
+            ),
+            SQLITE_EXTERNAL_DATABASE_POLL_ACTIVE_INTERVAL
+        );
+        assert_eq!(
+            external_database_poll_interval_for_idle_reads(
+                SQLITE_EXTERNAL_DATABASE_POLL_BACKOFF_AFTER_IDLE_READS,
+            ),
+            SQLITE_EXTERNAL_DATABASE_POLL_STANDBY_INTERVAL
+        );
+    }
 }
 
 pub fn sqlite_error(err: rusqlite::Error) -> crate::rx_error::RxError {
