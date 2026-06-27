@@ -61,4 +61,33 @@ describe('Explorer app helpers', () => {
     assert.match(bundledSource, /\.app-explorer-grid \{[\s\S]*min-width: 0;/);
     assert.match(bundledSource, /\.app-explorer-row \{[\s\S]*min-width: 0;/);
   });
+
+  it('stores uploaded file chunks in one bulk write without DataURL materialization', async () => {
+    assert.doesNotMatch(bundledSource, /readAsDataURL/);
+    const chunkWrites = [];
+    const fileWrites = [];
+    const db = {
+      collection(name) {
+        if (name === 'desktop_file_chunks') {
+          return {
+            bulkUpsert: async (docs) => { chunkWrites.push(docs); },
+            upsert: async () => { throw new Error('desktop_file_chunks upsert must not run per chunk'); },
+          };
+        }
+        if (name === 'desktop_files') {
+          return {
+            upsert: async (doc) => { fileWrites.push(doc); },
+          };
+        }
+        return null;
+      },
+    };
+    const bytes = new Uint8Array(24 * 1024);
+    bytes.fill(65);
+    await explorer.storeFile(db, 'fs_root', '/', 'bulk.txt', new File([bytes], 'bulk.txt', { type: 'text/plain' }));
+
+    assert.equal(chunkWrites.length, 1, 'chunks are written through one bulkUpsert call');
+    assert.ok(chunkWrites[0].length > 1, 'test payload spans multiple chunk documents');
+    assert.equal(fileWrites.length, 1, 'file metadata is written once');
+  });
 });

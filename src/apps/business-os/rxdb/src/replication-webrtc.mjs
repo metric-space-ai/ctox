@@ -36,6 +36,7 @@ import { QueryMetaStorage } from './query-meta-storage.mjs';
 import { createIndexedDbMetaBackend } from './query-meta-backend-indexeddb.mjs';
 import { createMemoryMetaBackend } from './query-meta-backend-memory.mjs';
 import { getActiveCollectionRegistry } from './active-collections.mjs';
+import { createV1_5StatusState, snapshotV1_5Status } from './v1_5_status.mjs';
 
 // Phase 2: the wire method the browser uses to tell the native peer which
 // collections are foreground (subscription-driven). Must match the native
@@ -282,6 +283,10 @@ class SharedRoomPeer {
     }
   }
 
+  abortPeerRequests(peerId, reason = 'peer-close') {
+    return this.demandTransport?.abortPeerRequests?.(peerId, reason) || 0;
+  }
+
   ensurePeer() {
     if (this.peer) return this.peer;
     this.peer = createCtoxWebRtcNativePeer({
@@ -322,6 +327,7 @@ class SharedRoomPeer {
     this.peer.on('peer-close', (event) => {
       // A closed peer invalidates the negotiated handshake; a fresh peer-open
       // will renegotiate and re-drive every collection's catch-up.
+      try { this.demandTransport.abortPeerRequests(event.detail?.peerId, event.detail?.reason || 'peer-close'); } catch {}
       if (this.negotiated && this.negotiated.peerId === event.detail?.peerId) {
         this.negotiated = null;
       }
@@ -662,7 +668,10 @@ class SharedRoomPeer {
   }
 
   getTransportStatus() {
-    return this.peer?.getTransportStatus?.() || {};
+    return {
+      ...(this.peer?.getTransportStatus?.() || {}),
+      demandTransport: this.demandTransport?.diagnostics?.() || null,
+    };
   }
 }
 
@@ -730,6 +739,7 @@ class CtoxWebRtcReplicationState {
     this.retainedCheckpoints = null;
     this.activeRemotePeerId = null;
     this.demandLoaderActive = false;
+    this.demandStatus = createV1_5StatusState();
     this.schemaHashValue = null;
     this.peerReadyPromisesByPeer = new Map();
   }
@@ -850,6 +860,8 @@ class CtoxWebRtcReplicationState {
     if (this.cancelled) return;
     this.ctox?.onPeerProtocol?.(normalizedRemoteProtocol);
     this.activeRemotePeerId = peerId;
+    this.demandStatus.peerConnected = true;
+    this.demandStatus.peerCapabilityQueryFetchV1 = queryFetchCapable === true;
     // Seed retained checkpoints when the native storage generation matches —
     // the catch-up pull/push below then resumes incrementally instead of
     // re-reading everything from a null checkpoint after each reconnect.
@@ -1197,6 +1209,7 @@ class CtoxWebRtcReplicationState {
     this.shared = null;
     try { shared?.unregister?.(this.collection.name); } catch {}
     try { this.demandLoader?.abortAllInFlight?.('replication-cancel'); } catch {}
+    try { this.demandFileLoader?.abortAllInFlight?.('replication-cancel'); } catch {}
     try { this.demandSidecar?.stopEvictionScheduler?.(); } catch {}
     try { await this.demandSidecar?.close?.(); } catch {}
   }
@@ -1215,6 +1228,8 @@ class CtoxWebRtcReplicationState {
     const queryDemandEnabled = shouldAttachQueryDemandLoader(this.collection.name);
     const fileDemandEnabled = shouldAttachFileDemandLoader(this.collection.name);
     if (!queryDemandEnabled && !fileDemandEnabled) {
+      this.demandStatus.queryDemandLoadingEnabled = false;
+      this.demandStatus.queryDemandLoadingActive = false;
       if (typeof this.collection.setDemandLoader === 'function') {
         this.collection.setDemandLoader(null);
       }
@@ -1227,6 +1242,7 @@ class CtoxWebRtcReplicationState {
     const backend = indexedDbAvailable
       ? createIndexedDbMetaBackend({ databaseName: dbName })
       : createMemoryMetaBackend();
+    this.demandStatus.queryDemandLoadingEnabled = queryDemandEnabled || fileDemandEnabled;
     const primaryDelete = async (collection, id) => {
       if (collection !== this.collection.name) return;
       if (typeof this.collection.storageCollection.hardDeleteByIds === 'function') {
@@ -1262,7 +1278,7 @@ class CtoxWebRtcReplicationState {
       schemaVersion: this.collection.schema?.version || 0,
       requestQueryFetch: (envelope) => demandTransport.requestQueryFetch(envelope),
       requestCancel: ({ requestId, reason }) => demandTransport.requestQueryCancel({ requestId, reason }),
-      status: null,
+      status: this.demandStatus,
       replicationOrigin: demandReplicationOrigin,
     }) : null;
     if (typeof this.collection.setDemandLoader === 'function') {
@@ -1283,9 +1299,13 @@ class CtoxWebRtcReplicationState {
           knownSequences,
           collectionName: this.collection.name,
         }),
+      requestFileCancel: ({ requestId, reason }) =>
+        demandTransport.requestFileCancel({ requestId, reason }),
+      status: this.demandStatus,
     }) : null;
 
     this.demandLoaderActive = true;
+    this.demandStatus.queryDemandLoadingActive = queryDemandEnabled || fileDemandEnabled;
     return this.demandLoader;
   }
 
@@ -1315,7 +1335,13 @@ class CtoxWebRtcReplicationState {
     this.pullCheckpointsByPeer.delete(peerId);
     this.pushCheckpointsByPeer.delete(peerId);
     this.peerStates$.next(peerStates);
-    if (!peerStates.size) this.active$.next(false);
+    try { this.demandLoader?.abortAllInFlight?.(`peer-${reason}`); } catch {}
+    try { this.demandFileLoader?.abortAllInFlight?.(`peer-${reason}`); } catch {}
+    try { this.shared?.abortPeerRequests?.(peerId, reason); } catch {}
+    if (!peerStates.size) {
+      this.demandStatus.peerConnected = false;
+      this.active$.next(false);
+    }
     this.ctox?.onPeerClose?.({ peerId, reason });
   }
 
@@ -1460,6 +1486,20 @@ class CtoxWebRtcReplicationState {
   }
 
   decorateTransportStatus(status = {}) {
+    const demandTransport = status.demandTransport || this.shared?.demandTransport?.diagnostics?.() || null;
+    if (demandTransport) {
+      this.demandStatus.pendingQueryFetchCollectors = Number(demandTransport.pendingQueryCollectors || 0);
+      this.demandStatus.pendingFileFetchCollectors = Number(demandTransport.pendingFileCollectors || 0);
+      this.demandStatus.queuedQueryFetchRequests = Number(demandTransport.queuedQueryRequests || 0);
+      this.demandStatus.maxPendingQueryFetchCollectors = Math.max(
+        Number(this.demandStatus.maxPendingQueryFetchCollectors || 0),
+        Number(demandTransport.maxPendingQueryCollectors || 0),
+      );
+      this.demandStatus.maxPendingFileFetchCollectors = Math.max(
+        Number(this.demandStatus.maxPendingFileFetchCollectors || 0),
+        Number(demandTransport.maxPendingFileCollectors || 0),
+      );
+    }
     const localPeerCount = (this.peerStates$.getValue?.() || new Map()).size;
     const sharedPeerCount = this.shared?.openSharedPeerIds?.().length || 0;
     const connectionPeerCount = Array.isArray(status.connectionStates)
@@ -1476,6 +1516,8 @@ class CtoxWebRtcReplicationState {
       activePeerCount: Math.max(localPeerCount, sharedPeerCount, connectionPeerCount),
       pullInProgress: this.pullInProgress,
       pushInProgress: this.pushInProgress,
+      demandLoading: snapshotV1_5Status(this.demandStatus),
+      demandTransport,
       updatedAtMs: Date.now(),
     };
   }

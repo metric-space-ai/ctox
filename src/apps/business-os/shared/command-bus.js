@@ -1,6 +1,11 @@
 const COMMAND_ACCEPT_TIMEOUT_MS = 45000;
 const COMMAND_SYNC_READY_TIMEOUT_MS = 15000;
 const COMMAND_SYNC_FLUSH_TIMEOUT_MS = 15000;
+const DEMAND_ONLY_SYNC_COLLECTIONS = new Set([
+  'desktop_file_chunks',
+  'document_blob_chunks',
+  'spreadsheet_blob_chunks',
+]);
 
 export function createCommandBus({ db, sync = null, session = null } = {}) {
   return {
@@ -58,10 +63,14 @@ async function dispatchRxdbCommand({ db, sync, session, command }) {
   if (!collection) throw commandError(commandId, 'business_commands collection is required.');
 
   const syncPlan = await prepareCommandSync({ db: currentDb, sync, command });
-  await flushSyncBridges(syncPlan.beforeCommand);
-  await insertOrPatchCommandDocument(collection, commandId, doc);
-  await flushSyncBridges(syncPlan.afterCommand);
-  return waitForAuthoritativeQueueProjection(currentDb, commandId, commandWaitTimeoutMs(command));
+  try {
+    await flushSyncBridges(syncPlan.beforeCommand);
+    await insertOrPatchCommandDocument(collection, commandId, doc);
+    await flushSyncBridges(syncPlan.afterCommand);
+    return await waitForAuthoritativeQueueProjection(currentDb, commandId, commandWaitTimeoutMs(command));
+  } finally {
+    await releaseSyncPlan(syncPlan);
+  }
 }
 
 function commandDocument(command, commandId, actor, capabilityToken = null) {
@@ -260,21 +269,53 @@ async function resolveCommandSync(sync) {
 async function prepareCommandSync({ db, sync, command = null }) {
   const currentSync = await resolveCommandSync(sync);
   const dependencyCollections = commandDependencySyncCollections(command);
-  const dependencyBridges = await Promise.all(
-    dependencyCollections.map((collection) => currentSync?.startCollection?.(collection)),
-  );
-  const commandBridge = await currentSync?.startCollection?.('business_commands');
-  const queueBridge = await currentSync?.startCollection?.('ctox_queue_tasks');
-  const afterCommand = [commandBridge, queueBridge];
-  await Promise.all(
-    [...dependencyBridges, ...afterCommand].map((bridge) => (
-      waitForSyncBridgeReady(bridge, COMMAND_SYNC_READY_TIMEOUT_MS)
-    )),
-  );
-  return {
-    beforeCommand: dependencyBridges,
-    afterCommand,
-  };
+  const leases = [];
+  try {
+    const dependencyBridges = await Promise.all(
+      dependencyCollections.map((collection) => startScopedSyncCollection(
+        currentSync,
+        collection,
+        `command-dependency:${command?.type || command?.command_type || 'unknown'}`,
+        leases,
+      )),
+    );
+    const commandBridge = await currentSync?.startCollection?.('business_commands');
+    const queueBridge = await currentSync?.startCollection?.('ctox_queue_tasks');
+    const afterCommand = [commandBridge, queueBridge];
+    await Promise.all(
+      [...dependencyBridges, ...afterCommand].map((bridge) => (
+        waitForSyncBridgeReady(bridge, COMMAND_SYNC_READY_TIMEOUT_MS)
+      )),
+    );
+    return {
+      beforeCommand: dependencyBridges,
+      afterCommand,
+      leases,
+    };
+  } catch (error) {
+    await releaseSyncLeases(leases);
+    throw error;
+  }
+}
+
+async function startScopedSyncCollection(sync, collection, reason, leases) {
+  if (DEMAND_ONLY_SYNC_COLLECTIONS.has(collection)) {
+    if (typeof sync?.leaseCollection === 'function') {
+      const lease = await sync.leaseCollection(collection, reason);
+      leases.push(lease);
+      return lease;
+    }
+    throw new Error(`${collection} requires sync.leaseCollection().`);
+  }
+  return sync?.startCollection?.(collection);
+}
+
+async function releaseSyncPlan(syncPlan) {
+  await releaseSyncLeases(syncPlan?.leases || []);
+}
+
+async function releaseSyncLeases(leases) {
+  await Promise.all((leases || []).map((lease) => lease?.release?.().catch(() => null)));
 }
 
 function commandDependencySyncCollections(command) {
@@ -304,6 +345,16 @@ function commandUsesDesktopFileMetadata(command) {
 
 function commandUsesDesktopFileChunks(command) {
   const payload = command?.payload && typeof command.payload === 'object' ? command.payload : {};
+  const commandType = cleanContextText(command?.type || command?.command_type || '');
+  const fileId = cleanContextText(payload.source_file_id || payload.file_id);
+  if (fileId && (
+    cleanContextText(payload.source_kind) === 'zip'
+    || cleanContextText(payload.generation_id)
+    || commandType.includes('install')
+    || commandType.includes('parse')
+  )) {
+    return true;
+  }
   return desktopFileAttachmentRefs(payload).some((item) => (
     cleanContextText(item.chunk_collection || item.chunkCollection) === 'desktop_file_chunks'
     || cleanContextText(item.storage_collection || item.storageCollection) === 'desktop_file_chunks'
@@ -428,7 +479,7 @@ async function findDoc(collection, id) {
 }
 
 async function waitForSyncBridgeReady(bridge, timeoutMs) {
-  const state = bridge?.state;
+  const state = syncBridgeFromHandle(bridge)?.state;
   if (!state) return;
   await Promise.race([
     Promise.resolve()
@@ -443,7 +494,7 @@ async function flushSyncBridges(bridges) {
 }
 
 async function flushSyncBridge(bridge) {
-  const state = bridge?.state;
+  const state = syncBridgeFromHandle(bridge)?.state;
   if (!state) return;
   await Promise.race([
     Promise.resolve()
@@ -454,6 +505,10 @@ async function flushSyncBridge(bridge) {
       .catch(() => {}),
     delay(COMMAND_SYNC_FLUSH_TIMEOUT_MS),
   ]);
+}
+
+function syncBridgeFromHandle(handle) {
+  return handle?.bridge || handle;
 }
 
 function commandError(commandId, message) {

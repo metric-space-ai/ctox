@@ -11,7 +11,7 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde_json::Value;
 
 use crate::rx_error::{new_rx_error, RxResult};
-use crate::types::{BulkWriteRow, FilledMangoQuery, RxJsonSchema};
+use crate::types::{BulkWriteRow, FilledMangoQuery, RxJsonSchema, RxQueryPlan};
 
 use super::types::sqlite_error;
 
@@ -79,7 +79,7 @@ pub fn ensure_collection_table(conn: &Connection, table: &str) -> RxResult<()> {
     let insert_trigger = quote_identifier(&format!("{table}__rxdb_changed_insert"));
     let update_trigger = quote_identifier(&format!("{table}__rxdb_changed_update"));
     let delete_trigger = quote_identifier(&format!("{table}__rxdb_changed_delete"));
-    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
+    let _statement_timer = crate::storage::sqlite::instance::timed_sqlite_statement();
     conn.execute_batch(&format!(
         r#"
         CREATE TABLE IF NOT EXISTS {quoted}(
@@ -172,7 +172,7 @@ fn ensure_schema_index(
         table,
         sanitize_index_name(&index_key)
     ));
-    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
+    let _statement_timer = crate::storage::sqlite::instance::timed_sqlite_statement();
     conn.execute_batch(&format!(
         "CREATE INDEX IF NOT EXISTS {index_name}
          ON {quoted_table}({});",
@@ -269,6 +269,90 @@ pub fn compile_count_sql(
     Some(CompiledSqliteQuery { sql, params })
 }
 
+pub fn compile_query_plan_candidate_sql(
+    table: &str,
+    primary_path: &str,
+    query_plan: &RxQueryPlan,
+) -> Option<CompiledSqliteQuery> {
+    if query_plan.index.is_empty()
+        || query_plan.index.len() != query_plan.start_keys.len()
+        || query_plan.index.len() != query_plan.end_keys.len()
+    {
+        return None;
+    }
+
+    let mut clauses = Vec::new();
+    let mut params = Vec::new();
+    for (idx, field) in query_plan.index.iter().enumerate() {
+        let expression = field_sql_expression(primary_path, field);
+        let start = &query_plan.start_keys[idx];
+        let end = &query_plan.end_keys[idx];
+        let has_start = !is_index_min(start) && !is_index_max(start);
+        let has_end = !is_index_min(end) && !is_index_max(end);
+        match (has_start, has_end) {
+            (true, true) if start == end => {
+                clauses.push(format!("{expression} = ?"));
+                params.push(json_value_to_sql_param(start)?);
+            }
+            (true, true) => {
+                clauses.push(format!(
+                    "{expression} {} ?",
+                    if query_plan.inclusive_start {
+                        ">="
+                    } else {
+                        ">"
+                    }
+                ));
+                params.push(json_value_to_sql_param(start)?);
+                clauses.push(format!(
+                    "{expression} {} ?",
+                    if query_plan.inclusive_end { "<=" } else { "<" }
+                ));
+                params.push(json_value_to_sql_param(end)?);
+            }
+            (true, false) => {
+                clauses.push(format!(
+                    "{expression} {} ?",
+                    if query_plan.inclusive_start {
+                        ">="
+                    } else {
+                        ">"
+                    }
+                ));
+                params.push(json_value_to_sql_param(start)?);
+            }
+            (false, true) => {
+                clauses.push(format!(
+                    "{expression} {} ?",
+                    if query_plan.inclusive_end { "<=" } else { "<" }
+                ));
+                params.push(json_value_to_sql_param(end)?);
+            }
+            (false, false) => {}
+        }
+    }
+    if clauses.is_empty() {
+        return None;
+    }
+
+    let order_sql = query_plan
+        .index
+        .iter()
+        .map(|field| format!("{} ASC", field_sql_expression(primary_path, field)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut sql = format!(
+        "SELECT data FROM {} WHERE {}",
+        quote_identifier(table),
+        clauses.join(" AND ")
+    );
+    if !order_sql.is_empty() {
+        sql.push_str(" ORDER BY ");
+        sql.push_str(&order_sql);
+    }
+    Some(CompiledSqliteQuery { sql, params })
+}
+
 fn decode_document_json(data: &str) -> RxResult<Value> {
     #[cfg(test)]
     SQLITE_JSON_DOCUMENT_DECODE_COUNT.with(|count| count.set(count.get() + 1));
@@ -301,7 +385,7 @@ pub fn for_each_document_with_compiled_sql<F>(
 where
     F: FnMut(Value) -> RxResult<bool>,
 {
-    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
+    let _statement_timer = crate::storage::sqlite::instance::timed_sqlite_statement();
     let mut statement = conn.prepare(&compiled.sql).map_err(sqlite_error)?;
     let rows = statement
         .query_map(params_from_iter(compiled.params.iter()), |row| {
@@ -319,7 +403,7 @@ where
 }
 
 pub fn count_with_compiled_sql(conn: &Connection, compiled: &CompiledSqliteQuery) -> RxResult<u64> {
-    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
+    let _statement_timer = crate::storage::sqlite::instance::timed_sqlite_statement();
     let count: i64 = conn
         .query_row(
             &compiled.sql,
@@ -476,6 +560,14 @@ fn sql_integer_param(value: u64) -> Option<SqlValue> {
     i64::try_from(value).ok().map(SqlValue::Integer)
 }
 
+fn is_index_min(value: &Value) -> bool {
+    value.as_i64() == Some(-9_007_199_254_740_991)
+}
+
+fn is_index_max(value: &Value) -> bool {
+    value.as_str() == Some("\u{ffff}")
+}
+
 pub fn insert_document(
     conn: &Connection,
     table: &str,
@@ -498,7 +590,7 @@ pub fn insert_document(
             Some(serde_json::json!({ "message": err.to_string() })),
         )
     })?;
-    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
+    let _statement_timer = crate::storage::sqlite::instance::timed_sqlite_statement();
     conn.execute(
         &format!(
             "INSERT INTO {} (id, revision, deleted, lastWriteTime, data) VALUES (?, ?, ?, ?, ?)",
@@ -533,7 +625,7 @@ pub fn update_document(
             Some(serde_json::json!({ "message": err.to_string() })),
         )
     })?;
-    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
+    let _statement_timer = crate::storage::sqlite::instance::timed_sqlite_statement();
     conn.execute(
         &format!(
             "UPDATE {} SET revision = ?, deleted = ?, lastWriteTime = ?, data = ? WHERE id = ?",
@@ -562,7 +654,7 @@ pub fn for_each_document<F>(conn: &Connection, table: &str, mut visit: F) -> RxR
 where
     F: FnMut(Value) -> RxResult<bool>,
 {
-    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
+    let _statement_timer = crate::storage::sqlite::instance::timed_sqlite_statement();
     let mut stmt = conn
         .prepare(&format!("SELECT data FROM {}", quote_identifier(table)))
         .map_err(sqlite_error)?;
@@ -580,7 +672,7 @@ where
 pub fn document_by_id(conn: &Connection, table: &str, id: &str) -> RxResult<Option<Value>> {
     #[cfg(test)]
     SQLITE_DOCUMENT_BY_ID_CALL_COUNT.fetch_add(1, Ordering::SeqCst);
-    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
+    let _statement_timer = crate::storage::sqlite::instance::timed_sqlite_statement();
     let data: Option<String> = conn
         .query_row(
             &format!("SELECT data FROM {} WHERE id = ?", quote_identifier(table)),
@@ -618,7 +710,7 @@ pub fn documents_by_ids(
                 "SELECT id, data FROM {quoted_table} WHERE id IN ({placeholders}) AND deleted = 0"
             )
         };
-        crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
+        let _statement_timer = crate::storage::sqlite::instance::timed_sqlite_statement();
         let mut statement = conn.prepare(&sql).map_err(sqlite_error)?;
         let rows = statement
             .query_map(params_from_iter(chunk.iter().map(String::as_str)), |row| {
@@ -636,7 +728,7 @@ pub fn documents_by_ids(
 }
 
 pub fn drop_table(conn: &Connection, table: &str) -> RxResult<()> {
-    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
+    let _statement_timer = crate::storage::sqlite::instance::timed_sqlite_statement();
     conn.execute_batch(&format!("DROP TABLE IF EXISTS {}", quote_identifier(table)))
         .map_err(sqlite_error)
 }

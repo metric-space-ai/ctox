@@ -2107,24 +2107,35 @@ function base64ToUint8(base64) {
 function saveBlobChunks(ctx, input) {
   const base64 = uint8ToBase64(input.bytes);
   const total = Math.ceil(base64.length / CHUNK_SIZE) || 1;
-  const promises = [];
-  for (let idx = 0; idx < total; idx += 1) {
-    promises.push(
-      spreadsheetCollection(ctx, 'spreadsheet_blob_chunks').insert({
-        id: `${input.blobId}_${idx}`,
-        blob_id: input.blobId,
-        spreadsheet_id: input.spreadsheetId,
-        version_id: input.versionId,
-        idx,
-        total,
-        mime_type: input.mimeType,
-        encoding: 'base64',
-        data: base64.slice(idx * CHUNK_SIZE, (idx + 1) * CHUNK_SIZE),
-        created_at_ms: Date.now(),
-      })
-    );
+  const now = Date.now();
+  const docs = Array.from({ length: total }, (_, idx) => ({
+    id: `${input.blobId}_${idx}`,
+    blob_id: input.blobId,
+    spreadsheet_id: input.spreadsheetId,
+    version_id: input.versionId,
+    idx,
+    total,
+    mime_type: input.mimeType,
+    encoding: 'base64',
+    data: base64.slice(idx * CHUNK_SIZE, (idx + 1) * CHUNK_SIZE),
+    created_at_ms: now,
+  }));
+  return writeCollectionDocuments(spreadsheetCollection(ctx, 'spreadsheet_blob_chunks'), docs);
+}
+
+async function writeCollectionDocuments(collection, docs) {
+  if (!docs.length) return;
+  if (typeof collection.bulkUpsert === 'function') {
+    await collection.bulkUpsert(docs);
+    return;
   }
-  return Promise.all(promises);
+  if (typeof collection.bulkInsert === 'function') {
+    await collection.bulkInsert(docs);
+    return;
+  }
+  for (const doc of docs) {
+    await collection.insert(doc);
+  }
 }
 
 function sanitizeTitle(val) {
@@ -2179,6 +2190,7 @@ export const __spreadsheetsTestHooks = {
   validateImportInput,
   validateNewSpreadsheetInput,
   visibleSpreadsheets,
+  saveBlobChunks,
   evaluateGridData,
   escapeCsvCell,
   rowsToCsv,

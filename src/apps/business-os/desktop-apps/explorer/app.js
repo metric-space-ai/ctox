@@ -2,7 +2,6 @@ import {
   FILE_CHUNK_HASH_SCHEME,
   FILE_CHUNK_ERROR_CODES,
   FILE_CONTENT_HASH_SCHEME,
-  base64ToBytes,
   readStoredFileFromDemandChunks,
   sha256Hex,
 } from '../../shared/file-integrity.js?v=20260624-demand-file-fetch1';
@@ -670,14 +669,14 @@ async function storeFile(db, parentId, parentPath, name, file) {
   if (!files || !chunks) return;
   const now = Date.now();
   const id = `file_${now}_${Math.random().toString(36).slice(2, 10)}`;
-  const dataUrl = await readFileAsDataUrl(file);
-  const base64 = String(dataUrl).split(',')[1] || '';
+  const bytes = await fileToUint8(file);
+  const base64 = uint8ToBase64(bytes);
   const total = Math.max(1, Math.ceil(base64.length / CHUNK_SIZE));
-  const contentHash = await sha256Hex(base64ToBytes(base64));
+  const contentHash = await sha256Hex(bytes);
   const generationId = `gen_${now}_${contentHash.slice(0, 12)}`;
-  for (let idx = 0; idx < total; idx += 1) {
+  const chunkRows = await Promise.all(Array.from({ length: total }, async (_, idx) => {
     const data = base64.slice(idx * CHUNK_SIZE, (idx + 1) * CHUNK_SIZE);
-    await chunks.upsert({
+    return {
       id: `${id}_${generationId}_${idx}`,
       file_id: id,
       generation_id: generationId,
@@ -691,8 +690,9 @@ async function storeFile(db, parentId, parentPath, name, file) {
       chunk_hash_scheme: FILE_CHUNK_HASH_SCHEME,
       size_bytes: data.length,
       created_at_ms: now,
-    });
-  }
+    };
+  }));
+  await writeChunkDocuments(chunks, chunkRows);
   await files.upsert({
     id,
     parent_id: parentId,
@@ -910,13 +910,34 @@ function validateEntryName(name, existingNames = new Set()) {
   return '';
 }
 
-function readFileAsDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener('load', () => resolve(reader.result || ''));
-    reader.addEventListener('error', () => reject(reader.error || new Error('Datei konnte nicht gelesen werden.')));
-    reader.readAsDataURL(file);
-  });
+async function fileToUint8(file) {
+  if (!file || typeof file.arrayBuffer !== 'function') {
+    throw new Error('Datei konnte nicht gelesen werden.');
+  }
+  return new Uint8Array(await file.arrayBuffer());
+}
+
+function uint8ToBase64(bytes) {
+  let binary = '';
+  for (let idx = 0; idx < bytes.length; idx += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(idx, idx + 0x8000));
+  }
+  return btoa(binary);
+}
+
+async function writeChunkDocuments(collection, docs) {
+  if (!docs.length) return;
+  if (typeof collection.bulkUpsert === 'function') {
+    await collection.bulkUpsert(docs);
+    return;
+  }
+  if (typeof collection.bulkInsert === 'function') {
+    await collection.bulkInsert(docs);
+    return;
+  }
+  for (const doc of docs) {
+    await collection.upsert(doc);
+  }
 }
 
 function isPreviewable(row) {
@@ -1533,6 +1554,7 @@ export const __explorerTestHooks = {
   normalizeBusinessRow,
   normalizeFileRow,
   normalizeRowsForSource,
+  storeFile,
   uniqueName,
   validateEntryName,
 };

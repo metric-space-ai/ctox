@@ -1050,6 +1050,10 @@ function queryFingerprintForStats(query = {}) {
   }
 }
 
+function cloneJson(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
 function normalizeSortFields(sort = []) {
   if (!Array.isArray(sort)) return typeof sort === 'string' ? [sort] : [];
   return sort.map((entry) => {

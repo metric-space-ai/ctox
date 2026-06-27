@@ -115,3 +115,32 @@ test('CSV serialization quotes only when required, preserving numeric round-trip
     'Name,Total\n"Acme, Inc",30\n,plain'
   );
 });
+
+test('spreadsheet blob chunks are persisted with one bulk write', async () => {
+  const bulkWrites = [];
+  const blobChunks = {
+    bulkUpsert: async (docs) => { bulkWrites.push(docs); },
+    insert: async () => { throw new Error('spreadsheet_blob_chunks insert must not run per chunk'); },
+  };
+  const ctx = {
+    db: {
+      collection(name) {
+        if (name === 'spreadsheet_blob_chunks') return blobChunks;
+        return {};
+      },
+    },
+  };
+
+  const bytes = new Uint8Array(260 * 1024);
+  bytes.fill(67);
+  await hooks.saveBlobChunks(ctx, {
+    blobId: 'sheet_blob_bulk',
+    spreadsheetId: 'sheet_bulk',
+    versionId: 'sheet_version_bulk',
+    mimeType: 'application/octet-stream',
+    bytes,
+  });
+
+  assert.equal(bulkWrites.length, 1, 'blob chunks are written through one bulkUpsert call');
+  assert.ok(bulkWrites[0].length > 1, 'test payload spans multiple chunk documents');
+});

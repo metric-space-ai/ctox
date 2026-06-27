@@ -2151,19 +2151,34 @@ async function saveBlobChunks(ctx, input) {
   requireDocumentPersistence(ctx);
   const base64 = uint8ToBase64(input.bytes);
   const total = Math.ceil(base64.length / CHUNK_SIZE) || 1;
-  for (let idx = 0; idx < total; idx += 1) {
-    await documentCollection(ctx, 'document_blob_chunks').insert({
-      id: `${input.blobId}_${idx}`,
-      blob_id: input.blobId,
-      document_id: input.documentId,
-      version_id: input.versionId,
-      idx,
-      total,
-      mime_type: input.mimeType,
-      encoding: 'base64',
-      data: base64.slice(idx * CHUNK_SIZE, (idx + 1) * CHUNK_SIZE),
-      created_at_ms: Date.now(),
-    });
+  const now = Date.now();
+  const docs = Array.from({ length: total }, (_, idx) => ({
+    id: `${input.blobId}_${idx}`,
+    blob_id: input.blobId,
+    document_id: input.documentId,
+    version_id: input.versionId,
+    idx,
+    total,
+    mime_type: input.mimeType,
+    encoding: 'base64',
+    data: base64.slice(idx * CHUNK_SIZE, (idx + 1) * CHUNK_SIZE),
+    created_at_ms: now,
+  }));
+  await writeCollectionDocuments(documentCollection(ctx, 'document_blob_chunks'), docs);
+}
+
+async function writeCollectionDocuments(collection, docs) {
+  if (!docs.length) return;
+  if (typeof collection.bulkUpsert === 'function') {
+    await collection.bulkUpsert(docs);
+    return;
+  }
+  if (typeof collection.bulkInsert === 'function') {
+    await collection.bulkInsert(docs);
+    return;
+  }
+  for (const doc of docs) {
+    await collection.insert(doc);
   }
 }
 
@@ -2391,6 +2406,7 @@ export const __documentsTestHooks = {
   validateNewDocumentInput,
   visibleDocuments,
   isReclaimableDraftBlob,
+  saveBlobChunks,
 };
 
 function escapeHtml(value) {

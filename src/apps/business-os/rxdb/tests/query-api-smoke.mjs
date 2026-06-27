@@ -137,6 +137,27 @@ await waitFor(() => findOneEmissions.length === 3);
 assert(findOneEmissions.at(-1) === null, 'findOne(primary).$ must emit null for deleted primary doc');
 assert(liveStorage.stats.queryCalls === 2, 'findOne(primary).$ deletion delta must not re-query');
 findOneSub.unsubscribe();
+
+liveDb.live_items.resetQueryPerformanceStats();
+const complexEmissions = [];
+const complexSub = liveDb.live_items.find({ selector: { status: 'open' } }).$.subscribe((value) => {
+  complexEmissions.push(value);
+});
+await waitFor(() => complexEmissions.length === 1);
+liveStorage.emitChange({
+  c: { id: 'c', title: 'Gamma', status: 'open' },
+});
+await waitFor(() => complexEmissions.length === 2);
+const queryStats = liveDb.live_items.getQueryPerformanceStats();
+assert(
+  queryStats.liveQueries.complexLiveQueryReexecs === 1,
+  `complex live query re-exec counter mismatch: ${queryStats.liveQueries.complexLiveQueryReexecs}`,
+);
+assert(
+  queryStats.liveQueries.lastComplexLiveQuery?.selectorFields?.join(',') === 'status',
+  'complex live query counter must retain selector fields for attribution',
+);
+complexSub.unsubscribe();
 await liveDb.close();
 
 console.log('ctox-rxdb-js query API smoke OK');

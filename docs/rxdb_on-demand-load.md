@@ -162,13 +162,26 @@ Aufgaben:
   - `queryDemandLoadingEnabled`: Feature-Flag (Runtime-Toggle, kein Re-Deploy)
   - `queryDemandLoadingActive`: Flag UND Capability vorhanden
   - `queryFetchInFlight`
+  - `pendingQueryFetchCollectors`
+  - `queuedQueryFetchRequests`
+  - `maxPendingQueryFetchCollectors`
   - `queryFetchSuccessCount`
   - `queryFetchErrorCount`
   - `queryFetchDedupHitCount`: lokal deduplizierte identische In-Flight-Requests
   - `indexedDbWorkingSetBytes`
   - `indexedDbEvictionCount`
+  - `pinnedDocCount`
+  - `pinnedBytes`
   - `lastQueryFetchMs`
   - `lastTransportBackpressureMs`
+  - `lastReloadHydrationMs`
+  - `activeFileStreams`
+  - `pendingFileFetchCollectors`
+  - `maxPendingFileFetchCollectors`
+  - `fileBytesReceived`
+  - `fileStreamErrors`
+  - `fileStreamDedupHits`
+  - `lastFileFetchMs`
 - Tests als Gate dokumentieren und automatisierbar machen:
   - JS fork smoke.
   - Rust rxdb tests.

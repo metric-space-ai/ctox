@@ -70,17 +70,19 @@ impl RxStorageSqlite {
         connection
             .busy_timeout(SQLITE_BUSY_TIMEOUT)
             .map_err(sqlite_error)?;
-        connection
-            .execute_batch(
-                r#"
+        {
+            let _statement_timer = crate::storage::sqlite::instance::timed_sqlite_statement();
+            connection
+                .execute_batch(
+                    r#"
                 PRAGMA journal_mode = WAL;
                 PRAGMA busy_timeout = 10000;
                 PRAGMA synchronous = NORMAL;
                 PRAGMA foreign_keys = ON;
                 "#,
-            )
-            .map_err(sqlite_error)?;
-        crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
+                )
+                .map_err(sqlite_error)?;
+        }
 
         let database_key = crate::storage::sqlite::instance::database_key_for_path(path);
         start_external_database_poll(
@@ -230,25 +232,26 @@ fn open_external_poll_connection(path: &PathBuf) -> rusqlite::Result<Connection>
 
 fn read_data_version(conn: &Connection) -> rusqlite::Result<i64> {
     crate::storage::sqlite::instance::record_sqlite_external_poll_data_version_read();
-    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
+    let _statement_timer = crate::storage::sqlite::instance::timed_sqlite_statement();
     conn.query_row("PRAGMA data_version", [], |row| row.get(0))
 }
 
 fn read_changed_table_versions(conn: &Connection) -> rusqlite::Result<HashMap<String, i64>> {
     crate::storage::sqlite::instance::record_sqlite_external_poll_changed_table_read();
-    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
-    let exists = conn
-        .query_row(
+    let exists = {
+        let _statement_timer = crate::storage::sqlite::instance::timed_sqlite_statement();
+        conn.query_row(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
             [SQLITE_CHANGED_TABLES_TABLE],
             |row| row.get::<_, i64>(0),
         )
         .optional()?
-        .is_some();
+        .is_some()
+    };
     if !exists {
         return Ok(HashMap::new());
     }
-    crate::storage::sqlite::instance::record_sqlite_statement_executed(1);
+    let _statement_timer = crate::storage::sqlite::instance::timed_sqlite_statement();
     let mut stmt = conn.prepare(&format!(
         "SELECT table_name, changed_at FROM {}",
         crate::storage::sqlite::sql::quote_identifier(SQLITE_CHANGED_TABLES_TABLE)

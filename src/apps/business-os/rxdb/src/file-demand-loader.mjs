@@ -12,6 +12,7 @@ export function createFileDemandLoader({
   storageCollection,
   sidecarBackend,
   requestFileFetch,
+  requestFileCancel = null,
   status = null,
   clock = Date.now,
   persistChunks = true,
@@ -28,23 +29,26 @@ export function createFileDemandLoader({
   }
 
   const inflight = new Map();
+  let requestSequence = 0;
   const resolveReplicationOrigin = () => (
     (typeof replicationOrigin === 'function' ? replicationOrigin() : replicationOrigin) || null
   );
 
   return {
     async fetchFile(fileId, { range = null } = {}) {
-      if (inflight.has(fileId)) {
+      const inflightKey = fileInflightKey(fileId, range);
+      if (inflight.has(inflightKey)) {
         bump(status, 'fileStreamDedupHits');
-        return inflight.get(fileId);
+        return inflight.get(inflightKey).promise;
       }
+      const startedAt = clock();
+      const requestId = `file-${fileId}-${startedAt}-${++requestSequence}`;
       const job = (async () => {
-        const startedAt = clock();
         bump(status, 'activeFileStreams', 1);
         try {
           const presence = persistChunks ? await getPresence(sidecarBackend, collectionName, fileId) : null;
           const chunks = await requestFileFetch({
-            requestId: `file-${fileId}-${startedAt}`,
+            requestId,
             collectionName,
             fileId,
             range,
@@ -53,22 +57,21 @@ export function createFileDemandLoader({
           if (!Array.isArray(chunks)) {
             throw new TypeError('requestFileFetch must return an array of chunks');
           }
-          for (const chunk of chunks) bump(status, 'fileBytesReceived', (chunk?.bytesBase64?.length || 0));
+          const validChunks = chunks.filter((chunk) => chunk && typeof chunk === 'object');
+          for (const chunk of validChunks) bump(status, 'fileBytesReceived', (chunk?.bytesBase64?.length || 0));
           if (persistChunks) {
-            for (const chunk of chunks) {
-              if (!chunk || typeof chunk !== 'object') continue;
-              await storageCollection.bulkWrite([
-                {
-                  id: `${fileId}-${chunk.sequence}`,
-                  file_id: fileId,
-                  sequence: chunk.sequence,
-                  bytes_base64: chunk.bytesBase64,
-                  hash: chunk.hash || null,
-                },
-              ], { replicationOrigin: resolveReplicationOrigin() });
+            const rows = validChunks.map((chunk) => ({
+              id: `${fileId}-${chunk.sequence}`,
+              file_id: fileId,
+              sequence: chunk.sequence,
+              bytes_base64: chunk.bytesBase64,
+              hash: chunk.hash || null,
+            }));
+            if (rows.length) {
+              await storageCollection.bulkWrite(rows, { replicationOrigin: resolveReplicationOrigin() });
             }
           }
-          const sequences = chunks.map((c) => c.sequence).sort((a, b) => a - b);
+          const sequences = validChunks.map((c) => c.sequence).sort((a, b) => a - b);
           if (persistChunks) {
             const highestSequence = sequences.length ? Math.max(...sequences) : -1;
             const expectedTotal = Math.max(
@@ -101,14 +104,38 @@ export function createFileDemandLoader({
           throw error;
         } finally {
           bump(status, 'activeFileStreams', -1);
-          inflight.delete(fileId);
+          if (inflight.get(inflightKey)?.requestId === requestId) {
+            inflight.delete(inflightKey);
+          }
         }
       })();
-      inflight.set(fileId, job);
+      inflight.set(inflightKey, { promise: job, requestId, fileId, range });
       return job;
     },
     inflightSize() {
       return inflight.size;
+    },
+    async abortAllInFlight(reason = 'reconnect') {
+      const slots = [...inflight.values()];
+      inflight.clear();
+      for (const slot of slots) {
+        try {
+          slot.promise?.catch?.(() => {});
+        } catch {}
+        if (typeof requestFileCancel === 'function') {
+          try {
+            await requestFileCancel({
+              requestId: slot.requestId,
+              fileId: slot.fileId,
+              range: slot.range,
+              reason,
+            });
+          } catch {
+            // best-effort cancel
+          }
+        }
+      }
+      return slots.length;
     },
   };
 }
@@ -136,6 +163,19 @@ function bump(status, field, delta = 1) {
   if (!status) return;
   if (typeof status[field] !== 'number') status[field] = 0;
   status[field] += delta;
+}
+
+function fileInflightKey(fileId, range) {
+  return `${String(fileId || '')}|${canonicalRangeKey(range)}`;
+}
+
+function canonicalRangeKey(range) {
+  if (range == null) return 'full';
+  if (Array.isArray(range)) return `[${range.map(canonicalRangeKey).join(',')}]`;
+  if (typeof range === 'object') {
+    return `{${Object.keys(range).sort().map((key) => `${key}:${canonicalRangeKey(range[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(range);
 }
 
 function dedupeSorted(values) {

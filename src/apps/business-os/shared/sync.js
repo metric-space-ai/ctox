@@ -650,7 +650,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     recordCollection?.(collection, { status: 'pending', reason: 'collection-not-registered' });
     return { mode: 'pending', collection, reason: 'collection-not-registered' };
   }
-  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260627-current-main-guard-v1');
+  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260627-demand-diagnostics-v1');
   if (typeof rxdb?.replicateWebRTC !== 'function' || typeof rxdb?.getConnectionHandlerSimplePeer !== 'function') {
     throw new Error('RxDB WebRTC bundle is missing replicateWebRTC/getConnectionHandlerSimplePeer');
   }
@@ -1355,12 +1355,71 @@ function sanitizeReplicationTransportStatus(status) {
     lastBufferedAmount: numberField('lastBufferedAmount'),
     pullInProgress: status.pullInProgress === true,
     pushInProgress: status.pushInProgress === true,
+    demandLoading: sanitizeDemandLoadingStatus(status.demandLoading),
+    demandTransport: sanitizeDemandTransportStatus(status.demandTransport),
     rtcConnections: sanitizeRtcConnectionSnapshots(status.rtcConnections),
     recentRtcEvents: sanitizeRecentRtcEvents(status.recentRtcEvents),
     connectionStates: sanitizeRtcConnectionStates(status.connectionStates),
     rtcConnectionPool: sanitizeRtcConnectionPool(status.rtcConnectionPool),
     updatedAtMs: numberField('updatedAtMs'),
     observedAt: new Date().toISOString(),
+  };
+}
+
+function sanitizeDemandLoadingStatus(value) {
+  if (!value || typeof value !== 'object') return null;
+  const boolField = (key) => value[key] === true;
+  const numberField = (key) => sanitizeNumber(value[key]);
+  return {
+    rxdbRuntime: sanitizeShortString(value.rxdbRuntime, 80),
+    rxdbProtocolVersion: sanitizeShortString(value.rxdbProtocolVersion, 24),
+    peerConnected: boolField('peerConnected'),
+    peerCapabilityQueryFetchV1: boolField('peerCapabilityQueryFetchV1'),
+    queryDemandLoadingEnabled: boolField('queryDemandLoadingEnabled'),
+    queryDemandLoadingActive: boolField('queryDemandLoadingActive'),
+    queryFetchInFlight: numberField('queryFetchInFlight'),
+    pendingQueryFetchCollectors: numberField('pendingQueryFetchCollectors'),
+    queuedQueryFetchRequests: numberField('queuedQueryFetchRequests'),
+    maxPendingQueryFetchCollectors: numberField('maxPendingQueryFetchCollectors'),
+    queryFetchSuccessCount: numberField('queryFetchSuccessCount'),
+    queryFetchErrorCount: numberField('queryFetchErrorCount'),
+    queryFetchDedupHitCount: numberField('queryFetchDedupHitCount'),
+    activeFileStreams: numberField('activeFileStreams'),
+    pendingFileFetchCollectors: numberField('pendingFileFetchCollectors'),
+    maxPendingFileFetchCollectors: numberField('maxPendingFileFetchCollectors'),
+    fileBytesReceived: numberField('fileBytesReceived'),
+    fileStreamErrors: numberField('fileStreamErrors'),
+    fileStreamDedupHits: numberField('fileStreamDedupHits'),
+    lastQueryFetchMs: nullableNumber(value.lastQueryFetchMs),
+    lastFileFetchMs: nullableNumber(value.lastFileFetchMs),
+  };
+}
+
+function sanitizeDemandTransportStatus(value) {
+  if (!value || typeof value !== 'object') return null;
+  const numberField = (key) => sanitizeNumber(value[key]);
+  return {
+    schema: sanitizeShortString(value.schema, 80),
+    pendingQueryCollectors: numberField('pendingQueryCollectors'),
+    pendingFileCollectors: numberField('pendingFileCollectors'),
+    queuedQueryRequests: numberField('queuedQueryRequests'),
+    activeQueryStreams: numberField('activeQueryStreams'),
+    bufferedQueryChunks: numberField('bufferedQueryChunks'),
+    bufferedFileChunks: numberField('bufferedFileChunks'),
+    cancelledQueryRequestCacheSize: numberField('cancelledQueryRequestCacheSize'),
+    queryFetchRequests: numberField('queryFetchRequests'),
+    fileFetchRequests: numberField('fileFetchRequests'),
+    queryChunksReceived: numberField('queryChunksReceived'),
+    fileChunksReceived: numberField('fileChunksReceived'),
+    queryCollectorsRejected: numberField('queryCollectorsRejected'),
+    fileCollectorsRejected: numberField('fileCollectorsRejected'),
+    queryCancelRequests: numberField('queryCancelRequests'),
+    fileCancelRequests: numberField('fileCancelRequests'),
+    maxPendingQueryCollectors: numberField('maxPendingQueryCollectors'),
+    maxPendingFileCollectors: numberField('maxPendingFileCollectors'),
+    maxQueuedQueryRequests: numberField('maxQueuedQueryRequests'),
+    maxBufferedQueryChunks: numberField('maxBufferedQueryChunks'),
+    maxBufferedFileChunks: numberField('maxBufferedFileChunks'),
   };
 }
 
@@ -1460,6 +1519,10 @@ function sanitizeShortString(value, maxLength = 120) {
 
 function sanitizeNumber(value) {
   return Number.isFinite(Number(value)) ? Number(value) : 0;
+}
+
+function nullableNumber(value) {
+  return value == null ? null : sanitizeNumber(value);
 }
 
 function isTransientSignalingSocketError(error) {

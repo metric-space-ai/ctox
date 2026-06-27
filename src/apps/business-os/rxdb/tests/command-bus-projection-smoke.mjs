@@ -56,17 +56,29 @@ function makeDb({ commandAck, queueTask = null, events = null }) {
 }
 
 function makeSync(events) {
+  const bridgeFor = (name) => ({
+    collection: name,
+    state: {
+      async awaitInSync() {
+        events.push(`ready:${name}`);
+      },
+      async pushToRemotePeers() {
+        events.push(`flush:${name}`);
+      },
+    },
+  });
   return {
     async startCollection(name) {
       events.push(`start:${name}`);
+      return bridgeFor(name);
+    },
+    async leaseCollection(name, reason) {
+      events.push(`lease:${name}:${reason}`);
       return {
-        state: {
-          async awaitInSync() {
-            events.push(`ready:${name}`);
-          },
-          async pushToRemotePeers() {
-            events.push(`flush:${name}`);
-          },
+        collection: name,
+        bridge: bridgeFor(name),
+        async release() {
+          events.push(`release:${name}`);
         },
       };
     },
@@ -181,10 +193,16 @@ const assert = (condition, message) => {
     assert(flush >= 0, `dependency sync command: ${name} flushed`);
     assert(flush < commandInsert, `dependency sync command: ${name} flushed before command insert`);
   }
+  assert(!events.includes('start:desktop_file_chunks'), 'dependency sync command: desktop_file_chunks not directly started');
+  assert(
+    events.some((event) => event.startsWith('lease:desktop_file_chunks:command-dependency:')),
+    'dependency sync command: desktop_file_chunks leased',
+  );
   assert(
     events.indexOf('flush:business_commands') > commandInsert,
     'dependency sync command: business_commands flushed after command insert',
   );
+  assert(events.includes('release:desktop_file_chunks'), 'dependency sync command: desktop_file_chunks lease released');
 }
 
 // --- 6. failed command rejects with the command error ----------------------

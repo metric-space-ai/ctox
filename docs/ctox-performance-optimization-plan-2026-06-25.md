@@ -192,6 +192,27 @@ external-write idle patch confirmed the updated priority stack:
   76.3 MB of freelist pages. That makes retention/compaction a release-blocking
   performance topic, not just cleanup.
 
+Additional 2026-06-27 subagent recheck corrected two plan-status mistakes and
+sharpened the file-access idle gates:
+
+- H4 is fixed for the exact `syncTrackedMessages` N+1 finding; remaining Chat
+  cost is the separate M22 DOM/layout path.
+- M22 remains open, M24 is partial, L-browser-2 is partial, and L-async-1 is
+  partial. These must not be counted as closed in release summaries.
+- Passive installed idle after file-access warmup must require zero deltas for
+  `rxdb_sqlite.external_poll_data_version_reads`,
+  `rxdb_sqlite.external_poll_changed_table_reads`,
+  `rxdb_sqlite.changed_documents_since_calls`,
+  `rxdb_sqlite.changed_documents_since_results`, `rxdb_sqlite.bulk_write_rows`,
+  and `loops.desktop_file_index.rows`.
+- Normal demand-file reads must prove the canonical chunk-id lookup path was
+  used. Prefix-range fallback scans are exceptional and should fail the
+  file-access perf scenario unless the scenario explicitly exercises fallback.
+- File Viewer large text previews now use a bounded `rxdb.file.fetch` byte
+  range; full downloads remain full reads with content-hash validation.
+  Remaining file consumers still need streaming/range conversion and
+  peak-retained-byte gates.
+
 ## Verified As Fixed Or Strongly Reduced
 
 These old review findings are no longer accurate as written:
@@ -246,8 +267,9 @@ These old review findings are no longer accurate as written:
 
 - `M31` status path pressure: partially fixed. Durable status reads and process
   scans are cached, and the normal status path no longer triggers Business OS
-  app recovery. The dedicated Business OS app recovery loop now also uses a
-  Core-DB change-stamp gate before running its leased-queue scan.
+  app recovery. The dedicated Business OS app recovery loop now uses a
+  source-specific leased-app queue/artifact stamp before running its
+  leased-queue scan.
   File:
   - `src/core/service/service.rs`
 
@@ -540,10 +562,12 @@ These old review findings are no longer accurate as written:
   service-level due gate when `ingested = 0` and all active sessions were
   skipped unchanged.
   Channel sync is still not yet an event/IDLE/token-driven model.
-- Business OS app recovery, harness audit, and idle durable-queue empty probes
-  now have source-stamp gates. The durable-queue dispatcher no longer retries a
-  known-empty queue on every short idle tick, while a Core-DB change such as a
-  newly persisted queue task reopens the gate immediately.
+- Business OS app recovery, harness audit, and idle durable-queue empty probes now have
+  source-stamp gates. The durable-queue dispatcher no longer retries a
+  known-empty queue on every short idle tick, while a newly persisted queue
+  task reopens the gate immediately. Harness audit now watches only
+  process/core-transition/process-mining inputs plus active findings, and
+  ignores unrelated Core-DB writes and its own audit-run history table.
 
 ### Browser RxDB, WebRTC, And IndexedDB
 
@@ -623,7 +647,7 @@ These old review findings are no longer accurate as written:
 | H1 native RxDB non-PK full scans | Partial | Simple selectors/count/query-fetch compile to SQL; browser schema-index cursor plans exist; broader native/browser fallback guards remain. |
 | H2 WebRTC status per frame | Fixed for exact finding | Native status is skinny by default and sync-layer diagnostic snapshots are coalesced instead of emitted per collection/frame. |
 | H3 IMAP FETCH/STORE full body load | Fixed for exact finding | SELECT uses COUNT and FETCH/STORE sequence resolution uses body-free summaries. Broader mail residuals remain under M19. |
-| H4 chat tracked message N+1 | Partial | Native Chat tracking repair uses indexed top-level active-tracking metadata and batched command/task lookups. Browser `syncTrackedMessages` now batches tracked command/task reads into one query per collection, coalesces subscription-triggered sync, and only keeps command/queue subscriptions plus the 4 second fallback active while active tracked messages exist. Chat attachments now release `desktop_file_chunks` after flush. Broader Chat DOM/layout work remains. |
+| H4 chat tracked message N+1 | Fixed for exact finding | Native Chat tracking repair uses indexed top-level active-tracking metadata and batched command/task lookups. Browser `syncTrackedMessages` now batches tracked command/task reads into one query per collection, coalesces subscription-triggered sync, and only keeps command/queue subscriptions plus the 4 second fallback active while active tracked messages exist. Chat attachments now release `desktop_file_chunks` after flush. Broader Chat DOM/layout work remains under M22 and shell/layout items. |
 | H5 matching per-keystroke recompute | Open | Needs Maps, cached haystacks, debounce, representative tests. |
 | H6 outbound per-row pipeline recompute | Open | Needs memoized pipeline and by-company index. |
 | M1 RxDB count materializes docs | Partial | Native fixed for expressible selectors; browser `count()` now delegates to `countDocuments()` instead of `find().exec()`, but non-indexed browser selector counts still cursor-scan. |
@@ -649,7 +673,7 @@ These old review findings are no longer accurate as written:
 | M21 ticket projection DB reopens | Fixed for direct projection | Direct Business OS ticket projection buckets now reuse one ticket DB connection, including control bundles; non-projection ticket/queue helper audits remain separate. |
 | M22 chat full message HTML rebuild | Open | Needs signatures/append-only DOM reconcile. |
 | M23 window drag forced reflow | Open | Needs geometry-read/write batching behind one rAF. |
-| M24 sync.js transport diagnostics fanout | Fixed for exact finding | `sync.js` coalesces diagnostic snapshot publication and emits immediately only for real error/lifecycle transitions. |
+| M24 sync.js transport diagnostics fanout | Partial | `sync.js` coalesces diagnostic snapshot publication and emits immediately only for real error/lifecycle transitions, but observer/fanout counters and remaining sanitize/record cost still need release evidence. |
 | M25 spreadsheet full HyperFormula rebuild | Open | Needs persistent engine and changed-cell updates. |
 | M26 matching requirements full rebuild/scans | Open | Needs Maps, debounce, and DOM reconcile. |
 | M27 Buchhaltung journal joins per render | Open | Needs pre-aggregated Maps and targeted reloads. |
@@ -719,11 +743,20 @@ is no longer the original file-share/browser `allDocuments()` burn path.
    central dispatcher/backpressure design so future change-stream work cannot
    regress into per-collection idle scanning.
 2. Native SQLite query pushdown is still partial for normal storage queries.
-   Unsupported Mango selectors can still fall back to read-only full-table Rust
-   matcher scans. Runtime counters now expose normal fallback calls and visited
-   rows, and unsupported `count()` fallbacks report slow mode instead of
-   `"fast"`. Integrate `prepared_query.queryPlan`, add caps for remaining
-   fallbacks, and add query-plan guards for every hot `json_extract` path.
+   Unsupported Mango selectors no longer silently run unbounded full-table Rust
+   matcher scans. Runtime counters expose normal fallback calls, visited rows,
+   indexed-candidate fallback calls, and too-broad aborts; unsupported `count()`
+   fallbacks report slow mode instead of `"fast"`. Normal `query()` fallbacks
+   now consume `prepared_query.queryPlan` to build SQL candidate bounds before
+   the Rust matcher runs, and broad fallbacks without useful candidate bounds
+   fail after a fixed scan limit. Per-collection, per-operator, and
+   collection/operator fallback attribution is exposed through the native
+   heartbeat and included in the default idle budgets. Finish broader SQL
+   compiler coverage, a hot-query registry, and query-plan guards for every hot
+   `json_extract` path.
+   The startup `browser_sessions` recovery hot path was narrowed on 2026-06-27
+   from a negative selector to `status == active`, and a regression test now
+   proves that recovery does not increment `query_fallback_calls`.
 3. Notes and desktop files still poll. Keep current source stamps as safety
    checks, but add watcher/dirty-root triggering and prove large unchanged
    roots only perform bounded metadata reads between fallback scans. Desktop
@@ -863,9 +896,74 @@ Implementation status:
   SQLite file-growth, native loop-work, and native SQLite delta budgets; it can
   add scenario-specific `--max-heartbeat-delta GLOB=VALUE` limits and exits
   non-zero on budget failure.
-- Still open: SQLite statement/write-lock timing counters, broader
-  `EXPLAIN QUERY PLAN` guards beyond the first hot Business OS set,
-  chunk/change-stream soak tests, browser perf smokes, and installed 10 minute
+- Done on 2026-06-27 for service sync runtime visibility:
+  live service status now includes a `performance` snapshot with channel-sync
+  and ticket-sync runtime counters. This allows status-poll load gates to fail
+  on repeated no-activity sync attempts or error loops while the passive
+  `--assert-idle --skip-status` path remains status-free.
+- Done on 2026-06-27 for sync-run idle diagnostics:
+  `ctox_perf_probe.py` now snapshots `ticket_sync_runs` and
+  `communication_sync_runs` before and after the CPU sampling window in
+  read-only mode, reports `sync_run_delta.numeric_deltas`, supports
+  `--max-sync-run-delta`, and includes default zero-row-growth budgets for
+  those sync-run tables under `--assert-idle`.
+- Done on 2026-06-27 for the installed idle Gate A/B/C workflow:
+  `src/tools/perf/ctox_installed_idle_gate.py` is the checked-in runner for
+  the real `ctox upgrade --dev` release path. It runs the upgrade, resolves the
+  installed `ctox-real` PID, stores artifacts under
+  `runtime/perf/installed-idle-*`, runs passive idle without `ctox status`,
+  runs status-poll load separately, and records process-mining liveness
+  evidence.
+- Done on 2026-06-27 for installed release/PID identity:
+  the installed gate now writes `release-identity.json` with the source git
+  commit/branch/status, `ctox --version`, install manifest, `current` symlink
+  target, current-release and shared-launcher `ctox-real` hashes, sampled
+  process command/path/hash/start time, and upgrade timestamps. A real run
+  fails before Gate A if the install root/current release is missing, the
+  source commit cannot be recorded, installed binary hashes differ, the
+  sampled process is not `ctox-real`, the process hash cannot be tied to the
+  installed release, or the sampled process predates `ctox upgrade --dev`.
+- Done on 2026-06-27 for SQLite statement/write-lock timing counters:
+  the native RxDB SQLite runtime snapshot now exposes statement elapsed
+  total/max/buckets plus writer-lock wait/held total/max/buckets. Central
+  SQLite helpers time statements with an RAII guard, and
+  `ctox_perf_probe.py --assert-idle` fails on idle statement execution,
+  statement elapsed time, writer-lock wait time, and writer-lock held buckets.
+- Done on 2026-06-27 for external status quiet proof:
+  live IPC and HTTP service status requests increment daemon-side counters and
+  write `runtime/service-performance.status.json` with process PID/boot
+  identity without requiring another `ctox status` call.
+  `ctox_perf_probe.py --assert-idle --skip-status` reads that artifact before
+  and after passive CPU sampling and fails by default if
+  `status_requests.total_requests`, `status_requests.ipc_status_requests`, or
+  `status_requests.http_status_requests` changes. The probe also fails on a
+  wrong artifact PID, boot-ID change, missing artifact, or negative counter
+  delta. Gate B intentionally runs status polling and therefore disables this
+  passive artifact-delta check while separately requiring the status-poll load
+  to appear as daemon `status_requests.total_requests` growth.
+- Done on 2026-06-27 for process/DB release-gate scope:
+  `ctox_perf_probe.py` now records every `pgrep -x ctox-real` candidate,
+  aggregates candidate CPU, samples the selected process group plus selected
+  PID descendants, fails `--assert-idle` when extra candidates or aggregate
+  scope CPU exceed budgets, discovers known CTOX SQLite files plus
+  `runtime/*.sqlite3` and `runtime/*.db`, records main/WAL/SHM/journal sizes,
+  and fails on positive per-component growth under the default idle budget. The
+  installed gate also fails before Gate A when a real run sees extra
+  `ctox-real` candidates.
+- Done on 2026-06-27 for DB diagnostic delta gates:
+  `ctox_perf_probe.py` now snapshots page/freelist, `dbstat`, RxDB collection
+  row/data/tombstone metrics, and sampled desktop chunk metrics before and
+  after CPU sampling when DB diagnostics are enabled. Default idle budgets and
+  `--max-db-metric-delta` can fail positive growth in those metrics.
+- Done on 2026-06-27 for required default metric presence:
+  default heartbeat, service-status, service-performance, and sync-run metric
+  patterns now fail the idle assertion when no metric matches instead of only
+  warning. Older or incomplete daemon artifacts can no longer silently satisfy
+  the release gate.
+- Still open: broader `EXPLAIN QUERY PLAN` guards beyond the first hot Business OS set,
+  chunk/change-stream soak tests, browser perf smokes, file-access scenario
+  automation, process-group/child CPU aggregation, page/freelist/dbstat and
+  RxDB row/payload/tombstone delta budgets, and installed 10 minute
   post-file-share idle evidence.
 
 Validation:
@@ -885,6 +983,48 @@ Validation:
   passed and produced read-only DB diagnostics for the current checkout.
 - `python3 src/tools/perf/ctox_perf_probe.py --skip-status --skip-db --cpu-samples 5 --cpu-interval 1 --pretty`
   passed against the currently running `ctox-real` PID 34277.
+- `python3 src/tools/perf/ctox_perf_probe.py --skip-cpu --skip-status --skip-db --skip-heartbeat --max-sync-run-delta '*.ticket_sync_runs.row_count=0' --pretty | python3 -m json.tool >/dev/null`
+  passed on 2026-06-27 and verifies the read-only sync-run delta path is valid
+  when no row changes during the sampling window.
+- A synthetic negative run on 2026-06-27 inserted one `ticket_sync_runs` row in
+  a temporary SQLite DB during the CPU sampling window; the probe exited 1 with
+  `sync_run_delta.numeric_deltas.core.ticket_sync_runs.row_count = 1` and an
+  assertion failure for `--max-sync-run-delta '*.ticket_sync_runs.row_count=0'`.
+- `python3 -m py_compile src/tools/perf/ctox_installed_idle_gate.py src/tools/perf/ctox_perf_probe.py`
+  passed on 2026-06-27.
+- Synthetic `ctox_perf_probe.py` checks passed on 2026-06-27 for:
+  - current service-performance artifact with PID/boot identity and IPC/HTTP
+    counters passes passive `--assert-idle --skip-status`;
+  - missing service-performance artifact fails;
+  - old service-performance artifact without `http_status_requests` fails;
+  - negative status-request counter delta fails.
+- A synthetic `ctox_installed_idle_gate.py` check passed on 2026-06-27 proving
+  Gate B fails when status polling does not appear as
+  `status_requests.total_requests` growth in service performance deltas.
+- A synthetic `ctox_perf_probe.py` check passed on 2026-06-27 proving an
+  extra `ctox-real` candidate PID is reported as an idle assertion failure.
+- A synthetic `ctox_perf_probe.py` check passed on 2026-06-27 proving high
+  aggregate process-scope CPU is reported as an idle assertion failure.
+- A synthetic `ctox_perf_probe.py` check passed on 2026-06-27 proving growth in
+  a discovered `runtime/*.db` main file fails the per-component DB growth
+  budget.
+- Synthetic `ctox_perf_probe.py` checks passed on 2026-06-27 proving a
+  positive RxDB collection row-count delta fails `--max-db-metric-delta`, while
+  the same metric gate passes when the collection is unchanged.
+- `python3 src/tools/perf/ctox_installed_idle_gate.py --root /Users/michaelwelsch/Documents/ctox.nosync --artifact-dir <tmp>/artifacts --dry-run --skip-upgrade --skip-gate-c --pid 12345 --gate-a-seconds 1 --gate-b-seconds 1 --cpu-interval 1 --status-interval 1`
+  passed on 2026-06-27 and verified the installed-gate runner creates the
+  expected manifest, PID resolution, release identity, Gate A/Gate B command
+  metadata, status assertion, and summary artifacts without running the real
+  upgrade.
+- `CARGO_TARGET_DIR=/tmp/ctox-rxdb-peer-timing-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox service_status_request_counter_writes_status_free_perf_artifact -- --nocapture`
+  passed on 2026-06-27 and verifies the daemon writes the
+  status-free service performance artifact with status-request counters.
+- `CARGO_TARGET_DIR=/tmp/ctox-rxdb-peer-timing-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox service_status_reports_channel_sync_runtime_metrics -- --nocapture`
+  passed on 2026-06-27 after the service-performance schema gained process
+  identity and HTTP status counters.
+- `CARGO_TARGET_DIR=/tmp/ctox-rxdb-timing-target cargo test --manifest-path src/core/rxdb/Cargo.toml storage::sqlite::instance::tests::sqlite_runtime_counters_report_statement_and_writer_lock_timing -- --nocapture`
+  passed on 2026-06-27 and proves real SQLite work advances statement elapsed
+  and writer-lock wait/held timing counters.
 - `rustfmt --edition 2021 --check src/core/rxdb/src/storage/sqlite/sql.rs src/core/rxdb/src/storage/sqlite/instance.rs`
   passed.
 - `cargo test --manifest-path src/core/rxdb/Cargo.toml query_indexed_selector_pushes_filter_and_window_into_sqlite -- --nocapture`
@@ -1012,10 +1152,32 @@ Implementation status:
   now creates a partial expression index over valid queue
   `metadata_json.business_os_command_id`, and `find_queue_task_for_command`
   uses that keyed lookup before falling back to legacy prompt substring scans.
-- Done on 2026-06-25 for Queue status counts: `count_queue_tasks` now uses the
-  same DB/WAL/journal stamp family as queue list caching, keyed by normalized
-  status set, so repeated idle status checks reuse a cached count until the
-  channel store changes.
+- Done on 2026-06-25 for Queue status counts, tightened on 2026-06-27:
+  `count_queue_tasks` and `list_queue_tasks` now use the trigger-maintained
+  `communication_projection_clock`, keyed by normalized status set and list
+  limit, instead of DB/WAL/journal file stamps. Repeated idle status checks
+  reuse cached queue views across `communication_sync_runs` metadata churn,
+  while message/routing changes still advance the clock and invalidate the
+  cache.
+- Done on 2026-06-27 for channel-router preflight/tick broad-stamp removal:
+  the idle router gates now use a composite source clock over communication
+  projection state, scheduled-task due summary, pending document-report
+  commands, and router-relevant ticket tables instead of whole Core/Ticket DB
+  file stamps. `communication_sync_runs` and unrelated Business OS store churn
+  no longer reopen the router, while real queue work and pending document-report
+  commands do.
+- Done on 2026-06-27 for scheduler due-scan broad-stamp removal:
+  `should_skip_emit_due_scan` and `mark_emit_due_scan` now use a
+  `ScheduleDueGateStamp` over `scheduled_tasks` instead of the whole Core
+  DB/WAL/SHM file stamp. Unrelated Core-DB writes and `scheduled_task_runs`
+  history writes no longer reopen the scheduler after an empty due scan, while
+  due `next_run_at` time and real `scheduled_tasks` changes still do.
+- Done on 2026-06-27 for Business OS app-recovery broad-stamp removal:
+  `should_skip_idle_business_os_app_recovery` and
+  `mark_business_os_app_recovery_ran` now use a leased-app queue/artifact
+  source stamp instead of whole Core DB file stamps. Unrelated Core-DB writes,
+  Business OS runtime-store churn, and non-app queue work stay cold; leased app
+  queue work, app artifact changes, and stale-lease due time reopen recovery.
 - Done on 2026-06-25 for Ticket State idle churn: the background projection
   loop now computes the ticket store change stamp before taking the projection
   write lock or loading Business OS ticket projection documents. If the ticket
@@ -1050,7 +1212,13 @@ Implementation status:
   - `queue_chat_repair_idle_gate_skips_unchanged_sources`.
   - `communication_intake_source_stamp_uses_projection_clock`.
   - `find_queue_task_for_command_uses_business_os_command_metadata`.
+  - `queue_task_caches_ignore_sync_run_metadata_churn`.
+  - `queue_task_list_cache_reuses_idle_reads_until_store_changes`.
   - `queue_task_count_cache_reuses_idle_reads_until_store_changes`.
+  - `channel_router_preflight_gate_ignores_metadata_churn_and_reopens_on_queue_work`.
+  - `channel_router_idle_gate_ignores_business_os_store_churn`.
+  - `emit_due_scan_gate_skips_idle_until_schedule_db_changes_or_due_time_arrives`.
+  - `business_os_app_recovery_idle_gate_ignores_unrelated_churn_and_reopens_on_app_sources`.
   - `documents_report_completion_query_uses_partial_command_index`.
   - `business_command_idle_wait_wakes_on_rxdb_table_change`.
 - Still open: command completion/status lookups and channel/email loops need
@@ -1103,10 +1271,14 @@ Validation:
   metadata updates still advance the stamp.
 - `CARGO_TARGET_DIR=/tmp/ctox-business-users-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox sync_business_record_projections_idle_gate_skips_unchanged_source -- --nocapture`
   passed: 1 test, 0 failures after the projection-stamp query rewrite.
-- `CARGO_TARGET_DIR=/tmp/ctox-business-users-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox business_os_app_recovery_idle_gate_reopens_when_core_db_changes -- --nocapture`
-  passed: 1 test, 0 failures.
-- `CARGO_TARGET_DIR=/tmp/ctox-business-users-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox harness_audit_idle_gate_reopens_when_core_db_changes -- --nocapture`
-  passed: 1 test, 0 failures.
+- `CARGO_TARGET_DIR=/tmp/ctox-service-perf-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox business_os_app_recovery_idle_gate_ignores_unrelated_churn_and_reopens_on_app_sources -- --nocapture`
+  passed on 2026-06-27: 1 test, 0 failures.
+- `CARGO_TARGET_DIR=/tmp/ctox-service-perf-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox app_recovery -- --nocapture`
+  passed on 2026-06-27: 9 tests, 0 failures.
+- `CARGO_TARGET_DIR=/tmp/ctox-service-perf-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox harness_audit_idle_gate_ignores_unrelated_churn_and_reopens_on_audit_sources -- --nocapture`
+  passed on 2026-06-27: 1 test, 0 failures. This verifies unrelated Core-DB
+  churn and `ctox_hm_audit_runs` history do not reopen harness audit, while
+  process events and active findings do.
 - `CARGO_TARGET_DIR=/tmp/ctox-business-users-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox sync_module_catalog_idle_gate_skips_unchanged_projection -- --nocapture`
   passed: 1 test, 0 failures.
 - `CARGO_TARGET_DIR=/tmp/ctox-business-users-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox sync_module_catalog_projects_modules_and_templates -- --nocapture`
@@ -1159,6 +1331,10 @@ Validation:
   passed: 1 test, 0 failures.
 - `CARGO_TARGET_DIR=/tmp/ctox-business-users-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox queue_task_list_cache_reuses_idle_reads_until_store_changes -- --nocapture`
   passed: 1 test, 0 failures.
+- `CARGO_TARGET_DIR=/tmp/ctox-service-perf-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox channel_router -- --nocapture`
+  passed on 2026-06-27: 4 tests, 0 failures. This includes the router
+  source-clock regressions for sync-run metadata churn, unrelated Business OS
+  store churn, real queue work, and pending document-report commands.
 - `CARGO_TARGET_DIR=/tmp/ctox-business-users-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox documents_report_completion_query_uses_partial_command_index -- --nocapture`
   passed: 1 test, 0 failures.
 - `CARGO_TARGET_DIR=/tmp/ctox-business-users-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox sync_ticket_state_idle_gate_skips_unchanged_source -- --nocapture`
@@ -1318,17 +1494,27 @@ Implementation status:
 - Done on 2026-06-25 for the normal `command_id -> task_id` lookup:
   `find_queue_task_for_command` uses a partial SQLite expression index over
   queue message metadata before falling back to legacy prompt scanning.
-- Done on 2026-06-25 for channel queue counts: repeated
-  `channels::count_queue_tasks` calls are stamp-cached per normalized status
-  set.
+- Done on 2026-06-25 for channel queue counts, tightened on 2026-06-27:
+  repeated `channels::count_queue_tasks` and `channels::list_queue_tasks` calls
+  are cached per normalized status set and now use `communication_projection_clock`
+  instead of DB/WAL/journal file stamps, so sync-run metadata writes do not
+  invalidate the cache.
 - Done on 2026-06-25 for documents report command completion: the open
   `business_commands` lookup now uses a partial SQLite index, and an
   `EXPLAIN QUERY PLAN` test guards against regressing to a table scan.
-- Done on 2026-06-25 for durable queue empty probes: the strict-idle queue
-  dispatcher records the Core-DB file/WAL/SHM stamp for an empty lease probe.
-  Repeated unchanged idle ticks skip the empty durable-queue read for the idle
-  safety window, while a newly persisted queue task changes the source stamp and
-  reopens dispatch immediately.
+- Done on 2026-06-25 for durable queue empty probes, tightened on 2026-06-27:
+  the strict-idle queue dispatcher records a communication queue source stamp
+  for an empty lease probe instead of the Core-DB file/WAL/SHM stamp. Repeated
+  unchanged idle ticks skip the empty durable-queue read for the idle safety
+  window; `communication_sync_runs` metadata churn no longer reopens the probe,
+  while a newly persisted queue task changes the source stamp and reopens
+  dispatch immediately.
+- Done on 2026-06-27 for channel-router preflight/tick gates: the service
+  router no longer keys idle preflight/tick backoff on whole Core/Ticket DB file
+  stamps. It uses a composite router source stamp, so sync-run metadata writes
+  and unrelated Business OS store churn stay cold, while real queue work,
+  document-report command rows, ticket router sources, and due scheduled-task
+  time can reopen the router.
 - Still open: true queue/chat high-water/event-driven windows, non-channel
   status/count caches, any remaining unindexed command-completion scans, and
   removing the legacy prompt fallback after old queue entries age out. The
@@ -1393,6 +1579,35 @@ Implementation status:
   `skipped_unchanged_sessions` and no messages were ingested/stored. Active
   meetings with new or changed session files still reset the backoff, but an
   active unchanged session now increments the no-activity backoff.
+- Done on 2026-06-27 for unchanged channel pairing backoff:
+  `channel_sync_result_has_activity` no longer treats any non-null `pairing`
+  value as activity. Static WhatsApp-style `pairing_required` / `qr` artifacts
+  now behave like unchanged channel state and extend the no-activity backoff;
+  explicit change markers such as `changed`, `updated`, `started`,
+  `qr_updated`, or non-zero update counters still reset the interval.
+- Done on 2026-06-27 for channel-sync runtime visibility:
+  live service status now exposes `performance.channel_sync` counters per
+  adapter (`attempts`, `activity_runs`, `no_activity_runs`, `error_runs`), and
+  `ctox_perf_probe.py` can compare those counters across separate status
+  samples. Passive `--assert-idle --skip-status` remains status-free; status
+  poll load is measured separately.
+- Done on 2026-06-27 for service-level ticket-sync backoff:
+  `sync_configured_tickets` now uses a per-source due gate. Successful
+  configured ticket syncs with zero stored tickets, zero stored events, and zero
+  resolved clarifications extend a no-activity backoff up to 15 minutes instead
+  of running on every service router tick. Activity, errors, settings changes,
+  or a different root reset the gate; manual ticket sync remains direct.
+- Done on 2026-06-27 for progressed ticket-event idempotence:
+  `upsert_ticket_event_from_adapter` now treats an identical event payload with
+  an existing routing-state row as unchanged even after the route has progressed
+  to `leased`, `handled`, `blocked`, or `failed`. Missing routing-state rows are
+  still initialized. The translation-layer regression proves reapplying the
+  same sync batch keeps `stored_event_count = 0`, appends no `ticket_sync_runs`
+  row, and does not reset `route_status` or `updated_at`.
+- Done on 2026-06-27 for ticket-sync runtime visibility:
+  live service status now exposes `performance.ticket_sync` counters per source
+  (`attempts`, `activity_runs`, `no_activity_runs`, `error_runs`) alongside the
+  channel-sync counters.
 - Done on 2026-06-25 for IMAP send verification body overfetch:
   `verify_imap_inbox_delivery` now searches by `UID SEARCH HEADER Message-ID`
   and fetches only `BODY.PEEK[HEADER.FIELDS (MESSAGE-ID DATE)]` for candidate
@@ -1426,6 +1641,31 @@ Validation:
   passed on 2026-06-26: 4 tests, 0 failures. This includes
   `channel_sync_due_gate_backs_off_unchanged_active_meetings`, which proves an
   active unchanged Meeting result increments the no-activity due-gate backoff.
+- `CARGO_TARGET_DIR=/tmp/ctox-service-perf-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox channel_sync_due_gate -- --nocapture`
+  passed on 2026-06-27: 4 tests, 0 failures. This includes
+  `channel_sync_due_gate_backs_off_unchanged_pairing_payloads`, proving
+  repeated identical pairing artifacts extend the no-activity backoff instead
+  of resetting it to the base interval. The due-gate tests now serialize access
+  to their shared in-memory gate so parallel Cargo test execution is stable.
+- `CARGO_TARGET_DIR=/tmp/ctox-service-perf-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox channel_sync_activity_detection_covers_adapter_result_shapes -- --nocapture`
+  passed on 2026-06-27: 1 test, 0 failures. This covers static pairing
+  artifacts as no activity and explicit pairing change markers as activity.
+- `CARGO_TARGET_DIR=/tmp/ctox-service-perf-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox service_status_reports_channel_sync_runtime_metrics -- --nocapture`
+  passed on 2026-06-27: 1 test, 0 failures. This now asserts both
+  `performance.channel_sync` and `performance.ticket_sync`.
+- `CARGO_TARGET_DIR=/tmp/ctox-service-perf-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox ticket_sync -- --nocapture`
+  passed on 2026-06-27: 2 tests, 0 failures. This covers ticket-sync
+  activity classification and no-activity due-gate backoff.
+- `CARGO_TARGET_DIR=/tmp/ctox-service-perf-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox canonical_sync_batch_persists_through_translation_layer -- --nocapture`
+  passed on 2026-06-27: 1 test, 0 failures. This now also covers identical
+  ticket events whose routing state has progressed to `leased`, `handled`,
+  `blocked`, or `failed`.
+- `CARGO_TARGET_DIR=/tmp/ctox-service-perf-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox parse_service_status_accepts_missing_newer_fields -- --nocapture`
+  passed on 2026-06-27: 1 test, 0 failures.
+- `python3 -m py_compile src/tools/perf/ctox_perf_probe.py` passed on
+  2026-06-27, along with synthetic assertion checks proving service-status
+  channel-sync deltas fail over budget and passive `--assert-idle --skip-status`
+  does not require status samples.
 - `CARGO_TARGET_DIR=/tmp/ctox-business-users-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox sync_sends_first_mention_ack_once_and_marks_priority -- --nocapture`
   passed: 1 test, 0 failures. The second unchanged sync reports
   `skipped_unchanged_sessions=1` and `ingested=0`.
@@ -1448,13 +1688,20 @@ Extend the current SQL compiler to consume the prepared `queryPlan` where safe:
 - deterministic fallback to Rust matcher only after SQL narrows candidates;
 - use the normalized `prepared_query.queryPlan` where it gives a safe bounded
   candidate set; Memory storage already consumes this shape, while SQLite still
-  mostly relies on its local compiler;
+  uses its local compiler for fully supported selectors and now uses
+  `prepared_query.queryPlan` for fallback candidate bounds when the full
+  selector is not SQL-compilable;
 - cap and further narrow unsupported normal `query()` fallbacks:
-  non-stream `query()` may still use a read-only full-table matcher, but those
-  fallbacks now increment runtime counters for calls and rows visited, and
-  unsupported `count()` fallbacks are marked slow instead of fast;
-- require `EXPLAIN QUERY PLAN` guards for `json_extract` hotpaths such as
-  generic blob chunk lookups, not only desktop chunk cleanup.
+  non-stream `query()` may still use a read-only matcher for compatibility, but
+  planner-bounded candidates run first where possible, broad scans abort after
+  the fixed fallback scan limit, fallbacks increment runtime counters for calls,
+  rows visited, indexed-candidate usage, too-broad aborts, and
+  collection/operator attribution, and unsupported `count()` fallbacks are
+  marked slow instead of fast;
+- require `EXPLAIN QUERY PLAN` guards for remaining `json_extract` hotpaths.
+  Native generic blob chunk demand reads now use deterministic ID-prefix ranges
+  instead of JSON-expression filtering/sorting, but browser blob readers still
+  need indexed/streaming closure.
 
 Acceptance:
 
@@ -1463,9 +1710,12 @@ Acceptance:
 - `EXPLAIN QUERY PLAN` tests prove index use for representative Business OS
   collections.
 - Unsupported normal-storage fallbacks are visible through row-visit/decode
-  counters and cannot run silently on daemon idle or WebRTC hot paths.
-- Generic `document_blob_chunks` and `spreadsheet_blob_chunks` fetches use
-  guarded indexed/keyed plans or are explicitly marked as bounded slow paths.
+  counters and collection/operator attribution, cannot run silently on daemon
+  idle or WebRTC hot paths, and cannot scan beyond the fixed broad-fallback
+  limit without surfacing an error.
+- Generic native `document_blob_chunks` and `spreadsheet_blob_chunks` fetches
+  use guarded keyed ID-prefix plans. Browser blob reads still need indexed
+  cursor/streaming closure.
 
 ### 2.2 Schema Indexes For Hot Collections
 
@@ -1565,9 +1815,13 @@ Implementation status:
   batched `documents_by_ids(..., with_deleted=true)` call, preserving conflict
   detection while avoiding one `document_by_id` point lookup per written
   document.
-- Still open: broad Rust matcher fallbacks still need stronger candidate
-  narrowing through planner/index integration so they do not scan large
-  collections even though they no longer block the writer mutex.
+- Done on 2026-06-27 for normal SQLite fallback narrowing: unsupported normal
+  `query()` selectors now use `prepared_query.queryPlan` to build SQL candidate
+  bounds before the Rust matcher runs, and fallbacks without useful candidate
+  bounds abort after the fixed scan limit. Per-collection, per-operator, and
+  collection/operator fallback attribution is now exposed in SQLite runtime
+  counters. Remaining work is broader SQL compiler coverage and a hot-query
+  registry.
 
 Validation:
 
@@ -1579,6 +1833,15 @@ Validation:
   passed: 3 tests, 0 failures.
 - `cargo test --manifest-path src/core/rxdb/Cargo.toml query_fallback_does_not_wait_for_writer_mutex -- --nocapture`
   passed: 1 test, 0 failures.
+- `CARGO_TARGET_DIR=/tmp/ctox-rxdb-fallback-target cargo test --manifest-path src/core/rxdb/Cargo.toml query_fallback_ -- --nocapture`
+  passed on 2026-06-27: 3 unit tests, 0 failures. This verifies the normal SQLite
+  fallback still avoids the writer mutex, consumes `prepared_query.queryPlan`
+  to restrict an unsupported `age >= 990 AND id $regex` query to 10 indexed
+  candidates instead of 1000 rows, and aborts broad fallback scans without
+  candidate bounds after the fixed scan limit. It also verifies attribution by
+  collection, operator family, and collection/operator pair.
+- `CARGO_TARGET_DIR=/tmp/ctox-rxdb-fallback-target cargo test --manifest-path src/core/rxdb/Cargo.toml fallback -- --nocapture`
+  passed on 2026-06-27: 6 unit tests and 1 conformance test, 0 failures.
 - `CARGO_TARGET_DIR=/tmp/ctox-rxdb-target cargo test --manifest-path src/core/rxdb/Cargo.toml external_write_poll_uses_read_only_connection_while_writer_mutex_is_held -- --nocapture`
   passed: 1 test, 0 failures.
 - `CARGO_TARGET_DIR=/tmp/ctox-rxdb-target cargo test --manifest-path src/core/rxdb/Cargo.toml storage::sqlite::instance::tests::file_backed_external_poll_has_no_per_collection_idle_safety_drains -- --nocapture`
@@ -1587,8 +1850,8 @@ Validation:
   passed: 1 test, 0 failures.
 - `CARGO_TARGET_DIR=/tmp/ctox-rxdb-target cargo test --manifest-path src/core/rxdb/Cargo.toml change_stream_ -- --nocapture`
   passed: 11 tests, 0 failures.
-- `CARGO_TARGET_DIR=/tmp/ctox-rxdb-target cargo test --manifest-path src/core/rxdb/Cargo.toml storage::sqlite::instance -- --nocapture`
-  passed: 26 tests, 0 failures.
+- `CARGO_TARGET_DIR=/tmp/ctox-rxdb-fallback-target cargo test --manifest-path src/core/rxdb/Cargo.toml storage::sqlite::instance -- --nocapture`
+  passed on 2026-06-27: 30 tests, 0 failures.
 - `CARGO_TARGET_DIR=/tmp/ctox-rxdb-target cargo test --manifest-path src/core/rxdb/Cargo.toml -- --nocapture`
   passed on 2026-06-26: 265 unit tests and 30 conformance tests, 0 failures.
 
@@ -1936,9 +2199,42 @@ Implementation status:
   `pushToRemotePeers()` immediately for every write. A recovery smoke proves
   three local write triggers produce one push pass while the existing in-flight
   push re-run flag remains covered.
-- Still open: bulk browser chunk uploads. Sidecar eviction still uses
-  per-collection fixed timers; if idle profiles show the cached-stat wakeups
-  are still visible, move it to shared/write-triggered scheduling.
+- Done on 2026-06-27 for central chunk bridge ownership and first browser
+  chunk-write batches: Command Bus file-content dependencies, Business Chat
+  attachments, CV Print Builder parse/flush paths, and App Store ZIP uploads
+  now use scoped `leaseCollection()` ownership for `desktop_file_chunks` and
+  release the lease in `finally`. Literal direct
+  `startCollection('desktop_file_chunks')` calls were removed from the shared,
+  module, and desktop-app browser source. CV Print Builder and App Store ZIP
+  chunk uploads now use collection `bulkUpsert()` when available instead of a
+  per-chunk write loop. Contract smokes cover Command Bus, Chat attachment,
+  CV Print Builder, App Store ZIP upload, and demand-only module startup.
+- Done on 2026-06-27 for Browser demand stream abort lifecycle: the shared
+  demand transport now tracks the peer that owns each query/file collector and
+  rejects both collectors on peer close; file-demand fetches now retain their
+  request IDs, expose `abortAllInFlight()`, and send best-effort
+  `rxdb.file.cancel` through the transport. Shared peer close, collection peer
+  removal, and replication cancel paths all call the abort hooks so a peer loss
+  after request acceptance cannot leave demand collectors pending indefinitely.
+- Done on 2026-06-27 for the next browser chunk/blob write batching pass:
+  Explorer uploads no longer use `FileReader.readAsDataURL()` and write
+  `desktop_file_chunks` through one `bulkUpsert()` call; Documents and
+  Spreadsheets now write `document_blob_chunks` and `spreadsheet_blob_chunks`
+  through one `bulkUpsert()` call instead of per-chunk inserts.
+- Done on 2026-06-27 for browser file-demand range and persistence batching:
+  file-demand in-flight deduplication now keys by `fileId` plus canonical
+  range, so concurrent different ranges do not share the wrong promise while
+  equivalent ranges still deduplicate. Persisted file-demand chunks now write
+  through one `bulkWrite()` call per fetch instead of one transaction per
+  received chunk.
+- Still open: broader browser chunk-stream/range APIs and any remaining
+  non-central upload/import paths, blob/chunk read/range APIs, Research blob
+  reads, Universal Importer/file-integrity helpers, schema-aware file-demand
+  materializers/no-persist policy for incompatible non-desktop chunk
+  collections, native storage-source first-chunk metrics, and release
+  diagnostic export for pending query/file collector counts. Sidecar eviction
+  still uses per-collection fixed timers; if idle profiles show the cached-stat
+  wakeups are still visible, move it to shared/write-triggered scheduling.
 
 Validation:
 
@@ -1953,6 +2249,40 @@ Validation:
   49 tests, 0 failures, 0 skipped.
 - `node src/apps/business-os/rxdb/tests/query-meta-eviction-idle-smoke.mjs`
   passed.
+- `node src/apps/business-os/shared/command-bus.test.mjs`,
+  `node src/apps/business-os/shared/business-chat.test.mjs`,
+  `node src/apps/business-os/modules/cv-print-builder/tests/cv-print-builder.test.mjs`,
+  `node src/apps/business-os/modules/app-store/app-store.test.mjs`,
+  `node src/apps/business-os/rxdb/tests/module-demand-only-collections-smoke.mjs`,
+  and `node src/apps/business-os/rxdb/tests/command-bus-projection-smoke.mjs`
+  passed on 2026-06-27 after the scoped chunk-bridge patch.
+- `node src/apps/business-os/rxdb/tests/run-all.mjs` passed on 2026-06-27:
+  49 passed, 0 failed, 2 skipped (`cross-process-file-fetch-smoke.mjs` and
+  `cross-process-wire-smoke.mjs`, wire daemon not built).
+- `node src/apps/business-os/rxdb/tests/demand-loading-transport-smoke.mjs`,
+  `node src/apps/business-os/rxdb/tests/file-demand-loader-smoke.mjs`,
+  `node src/apps/business-os/rxdb/tests/replication-recovery-smoke.mjs`,
+  `node src/apps/business-os/rxdb/tests/bundle-reproducible-smoke.mjs`,
+  `node src/apps/business-os/scripts/assert-rxdb-only.mjs`, and
+  `node src/apps/business-os/rxdb/tests/run-all.mjs` passed on 2026-06-27 after
+  the peer-loss demand-stream abort patch. `run-all.mjs` again reported 49
+  passed, 0 failed, 2 skipped because the wire daemon was not built.
+- `node src/apps/business-os/desktop-apps/explorer/explorer.test.mjs`,
+  `node src/apps/business-os/modules/documents/documents.test.mjs`, and
+  `node src/apps/business-os/modules/spreadsheets/spreadsheets.test.mjs`
+  passed on 2026-06-27 after the Explorer/Documents/Spreadsheets bulk chunk
+  write patch.
+- `node src/apps/business-os/scripts/assert-rxdb-only.mjs` passed on
+  2026-06-27 after the Explorer upload contract was tightened to reject
+  DataURL materialization and require the direct byte-hash/bulk-write path.
+- `node src/apps/business-os/rxdb/tests/file-demand-loader-smoke.mjs`,
+  `node src/apps/business-os/rxdb/tests/demand-loading-transport-smoke.mjs`,
+  `node src/apps/business-os/rxdb/tests/replication-recovery-smoke.mjs`,
+  `node src/apps/business-os/rxdb/tests/bundle-reproducible-smoke.mjs`,
+  `node src/apps/business-os/scripts/assert-rxdb-only.mjs`, and
+  `node src/apps/business-os/rxdb/tests/run-all.mjs` passed on 2026-06-27 after
+  the file-demand range/batched-persistence patch. `run-all.mjs` reported 49
+  passed, 0 failed, 2 skipped because the wire daemon was not built.
 - `node src/apps/business-os/rxdb/tests/run-all.mjs` passed on 2026-06-26:
   49 tests, 0 failures, 0 skipped.
 
@@ -2310,6 +2640,10 @@ Mission/report:
 - Done on 2026-06-26: `emit_due_steps` reuses one opened plan DB connection
   across due goals, and the due-step idle gate is keyed by plan DB path instead
   of one global slot.
+- Done on 2026-06-27: `emit_due_tasks` no longer keys the scheduler idle gate
+  on whole Core DB/WAL/SHM file stamps. It records a `scheduled_tasks`
+  source stamp, ignores unrelated Core-DB and `scheduled_task_runs` history
+  churn, and still wakes when the next scheduled due time arrives.
 - Done on 2026-06-26: `list_queue_ticket_bridges` hydrates queue tasks and
   ticket self-work items in set-based batches using the already-open core DB
   connection instead of reopening channel/ticket DBs per bridge row.
@@ -2336,6 +2670,8 @@ Validation:
 - `CARGO_TARGET_DIR=/tmp/ctox-phase7-low-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox sqlite_authorizer_skips_read_events_by_default -- --nocapture`
 - `CARGO_TARGET_DIR=/tmp/ctox-phase7-low-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox work_hours_cache_key_reuses_absolute_root_resolution -- --nocapture`
 - `CARGO_TARGET_DIR=/tmp/ctox-phase7-low-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox emit_due -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/ctox-service-perf-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox emit_due_scan_gate_skips_idle_until_schedule_db_changes_or_due_time_arrives -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/ctox-service-perf-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox emit_due -- --nocapture`
 - `CARGO_TARGET_DIR=/tmp/ctox-phase7-low-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox spill_ -- --nocapture`
 - `CARGO_TARGET_DIR=/tmp/ctox-phase7-low-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox queue_ticket_bridge_list_batch_hydrates_tasks_and_tickets -- --nocapture`
 - `CARGO_TARGET_DIR=/tmp/ctox-phase7-low-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --bin ctox cleanup_scope_batches_metadata_reads_for_scanned_tasks -- --nocapture`
@@ -2365,9 +2701,9 @@ finding.
 
 | Severity | Rows tracked here | Fixed | Partial | Open | Deferred | Rejected/Missing |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| High named findings | 6 | 2 | 1 | 3 | 0 | 0 |
-| Medium | 31 | 10 | 7 | 14 | 0 | 0 |
-| Low | 35 | 21 | 4 | 10 | 0 | 0 |
+| High named findings | 6 | 3 | 1 | 2 | 0 | 0 |
+| Medium | 31 | 13 | 10 | 8 | 0 | 0 |
+| Low | 35 | 19 | 6 | 10 | 0 | 0 |
 
 ### High And Medium Coverage
 
@@ -2376,7 +2712,7 @@ finding.
 | H1 | partial | Simple/native SQL selectors, count, capped query-fetch windows, read-only reads, and native query-fetch fallback rejection are reduced; broader planner/index guards remain. | Phase 2, P0 |
 | H2 | fixed | Native WebRTC status is skinny and sync-layer diagnostics are coalesced. | Phase 3.3 |
 | H3 | fixed | Exact IMAP server FETCH/STORE full-body overfetch is fixed with summaries/body-on-demand. Broader mail sync work is tracked by M19. | Phase 1.5 |
-| H4 | partial | Browser `syncTrackedMessages` now batches command/task lookups and coalesces triggers; the scheduled-chat timer only arms while scheduled messages exist. Remaining Chat work is DOM reconciliation, layout batching, and listener cleanup. | Phase 6 |
+| H4 | fixed for exact finding | Browser `syncTrackedMessages` now batches command/task lookups, coalesces triggers, and only keeps command/queue subscriptions plus the fallback timer active while tracked messages exist. Remaining Chat work is tracked separately as M22 and shell/layout items. | Phase 6 |
 | H5 | open | Matching search/scoring still needs Maps, cached haystacks, debounce, and tests. | Phase 6 |
 | H6 | open | Outbound table still needs memoized pipeline and `pipelineByCompanyId`. | Phase 6 |
 | M1 | partial | Native expressible selector counts use SQL; browser non-indexed selector counts still cursor-scan. | Phase 2.1, Phase 3.1 |
@@ -2428,7 +2764,7 @@ finding.
 | L-rxdb-native-1 | Business command consumer status scan | fixed | Phase 1.4 |
 | L-rxdb-native-2 | `bulk_write` per-id current-state point query | fixed | Phase 2.3 |
 | L-browser-1 | `encodedSize()` allocates/encodes per frame | fixed | WebRTC `encodedSize()` now computes UTF-8 byte length without allocating `TextEncoder` buffers; frame-chunking smoke covers byte parity and bundle rebuild reproducibility. |
-| L-browser-2 | Local writes push immediately with scan multiplier | fixed for immediate-push burst path | Phase 3.2 |
+| L-browser-2 | Local writes push immediately with scan multiplier | partial | Immediate-push bursts are reduced, but the local push scan multiplier remains and still needs a local-origin dirty index or a strict row-scan budget. |
 | L-browser-3 | Chunk reassembly recomputes contiguous sequence O(n^2) | fixed | Incoming frame reassembly keeps incremental `contiguousSeq` ACK state per transfer instead of rescanning received chunks on every frame; final payload assembly is one pass at completion. |
 | L-infer-1 | Metal dispatch string key + locked linear PSO lookup | open | Phase 7 |
 | L-infer-2 | Host argmax over full vocab per slot | open | Phase 7 |
@@ -2437,7 +2773,7 @@ finding.
 | L-exec-2 | Tokenize preflight runs blocking HTTP twice | fixed | Turn-loop exact preflight counts are now reused by the direct-session main turn, and regression coverage proves a precomputed count bypasses the runtime/tokenizer path. |
 | L-exec-3 | Runtime-env entry points bypass cache | partial | Phase 1.2, Phase 7 |
 | L-exec-4 | Provider adapters clone/parse/re-serialize transcript | open | Phase 7 |
-| L-async-1 | `collection_checkpoints_payload` sequential checkpoint awaits | fixed | Multiplexed protocol handshakes collect per-collection schema/checkpoint maps with bounded parallelism; the new smoke proves slow checkpoint reads start concurrently. |
+| L-async-1 | `collection_checkpoints_payload` sequential checkpoint awaits | partial | Checkpoint payload reads are cached/reduced, but current checkpoint collection still has a sequential-await path; keep the bounded-parallelism claim out until the code path and smoke prove it. |
 | L-mission-1 | Spill-candidate scoring fresh DB/count per task | fixed | `queue spill-candidates` now batches bridge-state lookup and distinct failure-signature counts through one core DB connection, with a regression test asserting one bridge/core DB open for the candidate scan. |
 | L-mission-2 | `emit_due_steps` reopens plan DB per due goal | fixed | `emit_due_steps` now reuses one plan DB connection across due goals; the due-step scan gate is keyed per plan DB path and has regression coverage for multi-goal emission plus idle-gate isolation. |
 | L-mission-3 | `list_queue_ticket_bridges` reopens DBs per row | fixed | Bridge listing now uses the open core DB connection to batch-load queue tasks and ticket self-work items, with regression coverage proving no extra channel/ticket DB opens during list hydration. |
@@ -2473,10 +2809,12 @@ For each phase:
 2. run the narrow Rust/JS suites required by `AGENTS.md`;
 3. push `main`;
 4. run `ctox upgrade --dev`;
-5. verify the installed `current` symlink points at the new release;
-6. sample the actual installed `ctox-real` process after startup work has
+5. run `python3 src/tools/perf/ctox_installed_idle_gate.py --release` or the
+   equivalent scenario-specific artifact command;
+6. verify the installed `current` symlink points at the new release;
+7. sample the actual installed `ctox-real` process after startup work has
    finished;
-7. record idle CPU, status latency, wakeups, and DB-size evidence in this plan
+8. record idle CPU, status latency, wakeups, and DB-size evidence in this plan
    or a linked phase note.
 
 ## Completion Criteria
