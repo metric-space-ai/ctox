@@ -2535,23 +2535,24 @@ def evaluate_assertions(report: dict[str, Any], args: argparse.Namespace) -> dic
         else None
     )
     if isinstance(performance_deltas, dict):
+        before = heartbeat.get("before") if isinstance(heartbeat, dict) else None
+        after = heartbeat.get("after") if isinstance(heartbeat, dict) else None
+        before_payload = before.get("payload") if isinstance(before, dict) else None
+        after_payload = after.get("payload") if isinstance(after, dict) else None
+        before_perf = (
+            before_payload.get("performance") if isinstance(before_payload, dict) else {}
+        )
+        after_perf = after_payload.get("performance") if isinstance(after_payload, dict) else {}
+        before_numbers = flatten_numeric_values(before_perf)
+        after_numbers = flatten_numeric_values(after_perf)
+        all_numbers = set(before_numbers) | set(after_numbers) | set(performance_deltas)
         for pattern, limit in heartbeat_thresholds:
-            matches = [
-                (key, value)
-                for key, value in performance_deltas.items()
-                if fnmatch.fnmatchcase(key, pattern)
-            ]
-            if not matches:
+            candidate_keys = {key for key in all_numbers if fnmatch.fnmatchcase(key, pattern)}
+            if not candidate_keys:
                 warnings.append(f"heartbeat delta pattern matched no metrics: {pattern}")
-                add_threshold_failure(
-                    failures,
-                    metric=f"native_peer_heartbeat.delta.performance_numeric_deltas.{pattern}",
-                    actual=None,
-                    limit=limit,
-                    message="heartbeat delta pattern matched no metrics",
-                )
                 continue
-            for key, value in matches:
+            for key in sorted(candidate_keys):
+                value = performance_deltas.get(key, 0.0)
                 if isinstance(value, (int, float)) and not isinstance(value, bool) and value > limit:
                     add_threshold_failure(
                         failures,
