@@ -96,5 +96,10 @@ assert.match(source, /ensureParseSourceReady\(state,\s*item\)/);
 assert.match(source, /ensureCanonicalDesktopFileChunks/);
 assert.match(source, /flushFileCollectionsForDispatch/);
 assert.match(source, /pushToRemotePeers/);
+assert.match(source, /DEMAND_ONLY_SYNC_COLLECTIONS/);
+assert.match(source, /sync\.leaseCollection\(collection,\s*reason\)/);
+assert.match(source, /releaseSyncLeases/);
+assert.match(source, /bulkUpsert\(docs\)/);
+assert.doesNotMatch(source, /ctx\.sync\.startCollection\('desktop_file_chunks'\)/);
 
 console.log('cv-print-builder module contract OK');

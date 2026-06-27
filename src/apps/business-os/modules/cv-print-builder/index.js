@@ -6,6 +6,11 @@ const PROFILE_MIME = 'application/vnd.ctox.cv-print-profile+json';
 const CHUNK_SIZE = 16 * 1024;
 const CONTENT_HASH_SCHEME = 'sha256-bytes-v1';
 const CHUNK_HASH_SCHEME = 'sha256-base64-chunk-v1';
+const DEMAND_ONLY_SYNC_COLLECTIONS = new Set([
+  'desktop_file_chunks',
+  'document_blob_chunks',
+  'spreadsheet_blob_chunks',
+]);
 const REQUIRED_COLLECTIONS = [
   'documents',
   'document_versions',
@@ -221,13 +226,18 @@ async function waitForLocalCollections(ctx, collections, timeoutMs) {
 }
 
 function warmRequiredCollectionSync(ctx, collections, timeoutMs) {
-  if (!ctx.sync?.startCollection) return;
-  Promise.all(collections.map((collection) => ctx.sync.startCollection(collection).catch(() => null)))
-    .then((bridges) => Promise.race([
-      Promise.all(bridges.map((bridge) => waitForSyncBridgeReady(bridge, Math.min(timeoutMs, 30000)))).catch(() => {}),
-      delay(Math.min(timeoutMs, 30000)),
-    ]))
-    .catch(() => {});
+  if (!ctx.sync?.startCollection && !ctx.sync?.leaseCollection) return;
+  (async () => {
+    const syncHandles = await startScopedSyncCollections(ctx, collections, 'cv-print-builder-warm', { optional: true });
+    try {
+      await Promise.race([
+        Promise.all(syncHandles.handles.map((bridge) => waitForSyncBridgeReady(bridge, Math.min(timeoutMs, 30000)))).catch(() => {}),
+        delay(Math.min(timeoutMs, 30000)),
+      ]);
+    } finally {
+      await releaseSyncLeases(syncHandles.leases);
+    }
+  })().catch(() => {});
 }
 
 async function waitForBusinessOsCollectionsReady(collections, timeoutMs) {
@@ -1360,10 +1370,10 @@ async function saveDesktopFile(ctx, input) {
     updated_at_ms: input.now,
   });
   const total = Math.ceil(input.base64.length / CHUNK_SIZE) || 1;
-  for (let idx = 0; idx < total; idx += 1) {
+  const chunkRows = await Promise.all(Array.from({ length: total }, async (_, idx) => {
     const data = input.base64.slice(idx * CHUNK_SIZE, (idx + 1) * CHUNK_SIZE);
     const chunkHash = await sha256Hex(new TextEncoder().encode(data));
-    await getCollection(ctx, 'desktop_file_chunks').insert({
+    return {
       id: canonicalDesktopFileChunkId(input.fileId, input.generationId, idx),
       file_id: input.fileId,
       generation_id: input.generationId,
@@ -1377,8 +1387,9 @@ async function saveDesktopFile(ctx, input) {
       chunk_hash_scheme: CHUNK_HASH_SCHEME,
       size_bytes: data.length,
       created_at_ms: Date.now(),
-    });
-  }
+    };
+  }));
+  await writeChunkDocuments(getCollection(ctx, 'desktop_file_chunks'), chunkRows);
 }
 
 async function startParsing(state, item) {
@@ -1604,25 +1615,35 @@ function parserRecordSnapshot(item) {
 }
 
 async function syncFileCollections(ctx) {
-  if (!ctx.sync?.startCollection) return;
-  const bridges = await Promise.all([
-    ctx.sync.startCollection('desktop_files').catch(() => null),
-    ctx.sync.startCollection('desktop_file_chunks').catch(() => null),
-  ]);
-  await Promise.all(bridges.map((bridge) => waitForSyncBridgeReady(bridge, 15000, { allowPush: true })));
+  if (!ctx.sync?.startCollection && !ctx.sync?.leaseCollection) return;
+  const syncHandles = await startScopedSyncCollections(
+    ctx,
+    ['desktop_files', 'desktop_file_chunks'],
+    'cv-print-builder-file-sync',
+  );
+  try {
+    await Promise.all(syncHandles.handles.map((bridge) => waitForSyncBridgeReady(bridge, 15000, { allowPush: true })));
+  } finally {
+    await releaseSyncLeases(syncHandles.leases);
+  }
 }
 
 async function flushFileCollectionsForDispatch(ctx, timeoutMs = 30000) {
-  if (!ctx.sync?.startCollection) return;
-  const bridges = await Promise.all([
-    ctx.sync.startCollection('desktop_files').catch(() => null),
-    ctx.sync.startCollection('desktop_file_chunks').catch(() => null),
-  ]);
-  await Promise.all(bridges.map((bridge) => waitForSyncBridgeReady(bridge, timeoutMs, { allowPush: true })));
+  if (!ctx.sync?.startCollection && !ctx.sync?.leaseCollection) return;
+  const syncHandles = await startScopedSyncCollections(
+    ctx,
+    ['desktop_files', 'desktop_file_chunks'],
+    'cv-print-builder-dispatch-flush',
+  );
+  try {
+    await Promise.all(syncHandles.handles.map((bridge) => waitForSyncBridgeReady(bridge, timeoutMs, { allowPush: true })));
+  } finally {
+    await releaseSyncLeases(syncHandles.leases);
+  }
 }
 
 async function waitForSyncBridgeReady(bridge, timeoutMs = 10000, options = {}) {
-  const bridgeState = bridge?.state;
+  const bridgeState = syncBridgeFromHandle(bridge)?.state;
   if (!bridgeState) return;
   const runWithTimeout = (promise) => Promise.race([
     Promise.resolve(promise).catch(() => {}),
@@ -1639,6 +1660,43 @@ async function waitForSyncBridgeReady(bridge, timeoutMs = 10000, options = {}) {
   } else if (options.allowPush && typeof bridgeState.awaitInSync === 'function') {
     await runWithTimeout(bridgeState.awaitInSync());
   }
+}
+
+async function startScopedSyncCollections(ctx, collections, reason, options = {}) {
+  const leases = [];
+  const handles = [];
+  for (const collection of collections || []) {
+    try {
+      const handle = await startScopedSyncCollection(ctx.sync, collection, reason, leases);
+      if (handle) handles.push(handle);
+    } catch (error) {
+      if (!options.optional) throw error;
+    }
+  }
+  return {
+    handles,
+    leases,
+  };
+}
+
+async function startScopedSyncCollection(sync, collection, reason, leases) {
+  if (DEMAND_ONLY_SYNC_COLLECTIONS.has(collection)) {
+    if (typeof sync?.leaseCollection === 'function') {
+      const lease = await sync.leaseCollection(collection, reason);
+      leases.push(lease);
+      return lease;
+    }
+    throw new Error(`${collection} requires sync.leaseCollection().`);
+  }
+  return sync?.startCollection?.(collection);
+}
+
+async function releaseSyncLeases(leases) {
+  await Promise.all((leases || []).map((lease) => lease?.release?.().catch(() => null)));
+}
+
+function syncBridgeFromHandle(handle) {
+  return handle?.bridge || handle;
 }
 
 async function ensureCanonicalDesktopFileChunks(ctx, { fileId, generationId, sizeBytes = 0, contentHash = '' }) {
@@ -1658,13 +1716,14 @@ async function ensureCanonicalDesktopFileChunks(ctx, { fileId, generationId, siz
   if (!ordered.length) throw new Error(`PDF-Daten sind noch nicht lokal verfügbar: ${fileId}`);
 
   const total = ordered.length;
+  const chunkRows = [];
   for (const chunk of ordered) {
     const idx = Number(chunk.sequence || 0);
     const canonicalId = canonicalDesktopFileChunkId(fileId, generationId, idx);
     const existing = await chunksCol.findOne(canonicalId).exec().catch(() => null);
     if (existing) continue;
     const data = String(chunk.bytesBase64 ?? chunk.bytes_base64 ?? '');
-    await chunksCol.insert({
+    chunkRows.push({
       id: canonicalId,
       file_id: fileId,
       generation_id: generationId,
@@ -1679,6 +1738,19 @@ async function ensureCanonicalDesktopFileChunks(ctx, { fileId, generationId, siz
       size_bytes: data.length,
       created_at_ms: Date.now(),
     });
+  }
+  await writeChunkDocuments(chunksCol, chunkRows);
+}
+
+async function writeChunkDocuments(collection, rows) {
+  const docs = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  if (!docs.length) return;
+  if (typeof collection.bulkUpsert === 'function') {
+    await collection.bulkUpsert(docs);
+    return;
+  }
+  for (const doc of docs) {
+    await collection.insert(doc);
   }
 }
 

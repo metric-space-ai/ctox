@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { normalizeCommandClientContext } from './command-bus.js';
+
+const source = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), 'command-bus.js'), 'utf8');
 
 test('command client context normalizer preserves visible app scope and canonical aliases', () => {
   const actor = {
@@ -109,4 +114,12 @@ test('command client context normalizer does not overwrite caller actor', () => 
   assert.equal(context.target, 'external-agent');
   assert.equal(context.scope.app.module_id, 'coding-agents');
   assert.equal(context.scope.command.type, 'ctox.coding_agent.session.prompt');
+});
+
+test('command bus scopes demand-only desktop chunk dependencies with leases', () => {
+  assert.match(source, /const DEMAND_ONLY_SYNC_COLLECTIONS = new Set/);
+  assert.match(source, /'desktop_file_chunks'/);
+  assert.match(source, /sync\.leaseCollection\(collection,\s*reason\)/);
+  assert.match(source, /releaseSyncPlan\(syncPlan\)/);
+  assert.match(source, /cleanContextText\(payload\.source_kind\) === 'zip'/);
 });

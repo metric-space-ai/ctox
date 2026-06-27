@@ -229,7 +229,7 @@ test('business chat scheduler arms only while scheduled messages exist', () => {
   }
 });
 
-test('business chat attachment staging releases desktop chunk sync after flush', async () => {
+test('business chat attachment staging does not directly start desktop chunks without a lease API', async () => {
   const files = makeUpsertCollection();
   const chunks = makeUpsertCollection();
   const calls = [];
@@ -249,7 +249,77 @@ test('business chat attachment staging releases desktop chunk sync after flush',
     },
   };
 
-  const refs = await __businessChatTestInternals.stageChatAttachments({
+  await assert.rejects(
+    () => __businessChatTestInternals.stageChatAttachments({
+      db: {
+        collection(name) {
+          if (name === 'desktop_files') return files;
+          if (name === 'desktop_file_chunks') return chunks;
+          return null;
+        },
+      },
+      sync,
+      chat: { id: 'chat-attachment', owner_user_id: 'user-1' },
+      commandId: 'cmd-attachment',
+      messageId: 'msg-attachment',
+      attachments: [{
+        fileId: 'chat-file-1',
+        generationId: 'gen-test',
+        name: 'hello.txt',
+        mimeType: 'text/plain',
+        size: 2,
+        extension: 'txt',
+        contentHash: 'content-hash',
+        base64Data: 'data:text/plain;base64,SGk=',
+      }],
+    }),
+    /requires sync\.leaseCollection/,
+  );
+
+  assert.equal(calls.includes('start:desktop_files'), true);
+  assert.equal(calls.includes('start:desktop_file_chunks'), false);
+  assert.equal(calls.includes('stop:desktop_file_chunks'), false);
+});
+
+test('business chat attachment staging scopes desktop chunk sync with a lease when available', async () => {
+  const files = makeUpsertCollection();
+  const chunks = makeUpsertCollection();
+  const calls = [];
+  const sync = {
+    async startCollection(name) {
+      calls.push(`start:${name}`);
+      return {
+        collection: name,
+        state: {
+          async awaitInSync() {
+            calls.push(`in-sync:${name}`);
+          },
+        },
+      };
+    },
+    async leaseCollection(name, reason) {
+      calls.push(`lease:${name}:${reason}`);
+      return {
+        collection: name,
+        bridge: {
+          collection: name,
+          state: {
+            async awaitInSync() {
+              calls.push(`in-sync:${name}`);
+            },
+          },
+        },
+        async release() {
+          calls.push(`release:${name}`);
+        },
+      };
+    },
+    async stopCollection(name) {
+      calls.push(`stop:${name}`);
+    },
+  };
+
+  await __businessChatTestInternals.stageChatAttachments({
     db: {
       collection(name) {
         if (name === 'desktop_files') return files;
@@ -258,13 +328,13 @@ test('business chat attachment staging releases desktop chunk sync after flush',
       },
     },
     sync,
-    chat: { id: 'chat-attachment', owner_user_id: 'user-1' },
-    commandId: 'cmd-attachment',
-    messageId: 'msg-attachment',
+    chat: { id: 'chat-lease', owner_user_id: 'user-1' },
+    commandId: 'cmd-lease',
+    messageId: 'msg-lease',
     attachments: [{
-      fileId: 'chat-file-1',
-      generationId: 'gen-test',
-      name: 'hello.txt',
+      fileId: 'chat-file-lease',
+      generationId: 'gen-lease',
+      name: 'lease.txt',
       mimeType: 'text/plain',
       size: 2,
       extension: 'txt',
@@ -273,13 +343,10 @@ test('business chat attachment staging releases desktop chunk sync after flush',
     }],
   });
 
-  assert.equal(refs.length, 1);
-  assert.equal(refs[0].chunk_collection, 'desktop_file_chunks');
-  assert.equal(files.docs.some((doc) => doc.id === 'chat-file-1'), true);
-  assert.equal(chunks.docs.some((doc) => doc.file_id === 'chat-file-1'), true);
-  assert.equal(calls.includes('start:desktop_file_chunks'), true);
-  assert.equal(calls.includes('in-sync:desktop_file_chunks'), true);
-  assert.equal(calls.at(-1), 'stop:desktop_file_chunks');
+  assert.equal(calls.includes('lease:desktop_file_chunks:business-chat-attachment'), true);
+  assert.equal(calls.includes('start:desktop_file_chunks'), false);
+  assert.equal(calls.includes('stop:desktop_file_chunks'), false);
+  assert.equal(calls.at(-1), 'release:desktop_file_chunks');
 });
 
 function makeBatchCollection(rows) {

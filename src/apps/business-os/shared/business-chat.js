@@ -4998,7 +4998,7 @@ async function addAttachmentToChatState(chat, file) {
 async function stageChatAttachments({ db, sync, chat, commandId, messageId, attachments }) {
   const staged = Array.isArray(attachments) ? attachments.filter(Boolean) : [];
   if (!staged.length) return [];
-  await prepareAttachmentSync(sync);
+  const attachmentSync = await prepareAttachmentSync(sync);
   try {
     const files = db?.collection?.('desktop_files') || db?.raw?.desktop_files;
     const chunks = db?.collection?.('desktop_file_chunks') || db?.raw?.desktop_file_chunks;
@@ -5017,36 +5017,55 @@ async function stageChatAttachments({ db, sync, chat, commandId, messageId, atta
         attachment,
       }));
     }
-    await flushAttachmentSync(sync);
+    await flushAttachmentSync(sync, attachmentSync);
     return refs;
   } finally {
-    await releaseAttachmentChunkSync(sync);
+    await releaseAttachmentChunkSync(attachmentSync);
   }
 }
 
 async function prepareAttachmentSync(sync) {
-  if (!sync?.startCollection) return;
-  await Promise.all([
-    sync.startCollection('desktop_files').then((bridge) => waitForSyncBridgeReady(bridge, 10000)).catch(() => null),
-    sync.startCollection('desktop_file_chunks').then((bridge) => waitForSyncBridgeReady(bridge, 10000)).catch(() => null),
-  ]);
+  if (!sync?.startCollection && !sync?.leaseCollection) return { bridges: [], leases: [], sync: null };
+  const leases = [];
+  const fileBridge = await sync?.startCollection?.('desktop_files').catch(() => null);
+  const chunkBridge = await startAttachmentChunkSync(sync, leases);
+  const bridges = [fileBridge, chunkBridge].filter(Boolean);
+  await Promise.all(bridges.map((bridge) => waitForSyncBridgeReady(bridge, 10000)));
+  return { bridges, leases, sync };
 }
 
-async function flushAttachmentSync(sync) {
-  if (!sync?.startCollection) return;
-  await Promise.all([
-    sync.startCollection('desktop_file_chunks').then((bridge) => waitForSyncBridgeReady(bridge, 15000)).catch(() => null),
-    sync.startCollection('desktop_files').then((bridge) => waitForSyncBridgeReady(bridge, 15000)).catch(() => null),
-  ]);
+async function flushAttachmentSync(sync, attachmentSync = null) {
+  if (!sync?.startCollection && !attachmentSync?.bridges?.length) return;
+  const fileBridge = attachmentSync?.bridges?.find((bridge) => syncHandleCollection(bridge) === 'desktop_files')
+    || await sync?.startCollection?.('desktop_files').catch(() => null);
+  const chunkBridge = attachmentSync?.bridges?.find((bridge) => syncHandleCollection(bridge) === 'desktop_file_chunks');
+  const bridges = [chunkBridge, fileBridge].filter(Boolean);
+  await Promise.all(bridges.map((bridge) => waitForSyncBridgeReady(bridge, 15000)));
 }
 
-async function releaseAttachmentChunkSync(sync) {
-  if (typeof sync?.stopCollection !== 'function') return;
-  await sync.stopCollection('desktop_file_chunks').catch(() => null);
+async function startAttachmentChunkSync(sync, leases) {
+  if (typeof sync?.leaseCollection === 'function') {
+    const lease = await sync.leaseCollection('desktop_file_chunks', 'business-chat-attachment');
+    leases.push(lease);
+    return lease;
+  }
+  throw new Error('desktop_file_chunks requires sync.leaseCollection().');
+}
+
+async function releaseAttachmentChunkSync(attachmentSync) {
+  const leases = attachmentSync?.leases || [];
+  if (leases.length) {
+    await Promise.all(leases.map((lease) => lease?.release?.().catch(() => null)));
+    return;
+  }
+  const chunkBridge = attachmentSync?.bridges?.find((bridge) => syncHandleCollection(bridge) === 'desktop_file_chunks');
+  if (chunkBridge?.stop) {
+    await chunkBridge.stop().catch(() => null);
+  }
 }
 
 async function waitForSyncBridgeReady(bridge, timeoutMs = 10000) {
-  const state = bridge?.state;
+  const state = syncBridgeFromHandle(bridge)?.state;
   if (!state) return;
   let timer = null;
   try {
@@ -5062,6 +5081,14 @@ async function waitForSyncBridgeReady(bridge, timeoutMs = 10000) {
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+function syncBridgeFromHandle(handle) {
+  return handle?.bridge || handle;
+}
+
+function syncHandleCollection(handle) {
+  return handle?.collection || handle?.bridge?.collection || '';
 }
 
 async function ensureChatAttachmentRoot(files) {

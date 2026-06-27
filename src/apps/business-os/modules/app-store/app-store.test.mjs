@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { __appStoreTestHooks as hooks } from './index.js';
+
+const source = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), 'index.js'), 'utf8');
 
 const permissionState = ({ role = 'user', userId = 'user-1', governance = {} } = {}) => ({
   ctx: {
@@ -77,6 +82,15 @@ test('empty states distinguish sync loading from search misses', () => {
 test('external GitHub action exposes an explicit external-link marker', () => {
   assert.match(hooks.externalLinkIcon(), /external-link-icon/);
   assert.match(hooks.externalLinkIcon(), /aria-hidden="true"/);
+});
+
+test('zip upload keeps desktop chunks scoped and batched', () => {
+  assert.match(source, /const DEMAND_ONLY_SYNC_COLLECTIONS = new Set/);
+  assert.match(source, /'desktop_file_chunks'/);
+  assert.match(source, /sync\.leaseCollection\(collection,\s*reason\)/);
+  assert.match(source, /releaseSyncLeases\(syncHandles\.leases\)/);
+  assert.match(source, /bulkUpsert\(docs\)/);
+  assert.doesNotMatch(source, /startCollection\?\.\('desktop_file_chunks'\)/);
 });
 
 test('managed app actions do not expose fake upgrades', () => {

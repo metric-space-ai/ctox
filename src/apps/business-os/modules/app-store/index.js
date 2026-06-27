@@ -31,6 +31,11 @@ const CTOX_TREE_URL = `https://api.github.com/repos/${CTOX_REPO}/git/trees/${CTO
 const CTOX_RAW_ROOT = `https://raw.githubusercontent.com/${CTOX_REPO}/${CTOX_BRANCH}/${CTOX_APP_ROOT}`;
 const CTOX_DOWNLOAD_URL = `https://github.com/${CTOX_REPO}/archive/refs/heads/${CTOX_BRANCH}.zip`;
 const STORE_COMMAND_TIMEOUT_MS = 3 * 60 * 1000;
+const DEMAND_ONLY_SYNC_COLLECTIONS = new Set([
+  'desktop_file_chunks',
+  'document_blob_chunks',
+  'spreadsheet_blob_chunks',
+]);
 
 
 const state = {
@@ -974,64 +979,82 @@ function bytesToBase64(bytes) {
 async function uploadZipToChunkStore(file) {
   const db = state.ctx?.db;
   if (!db?.collection) throw new Error('Datenbank nicht verfügbar.');
-  await state.ctx.sync?.startCollection?.('desktop_files');
-  await state.ctx.sync?.startCollection?.('desktop_file_chunks');
+  const syncHandles = await startScopedSyncCollections(
+    ['desktop_files', 'desktop_file_chunks'],
+    'app-store-zip-upload',
+  );
   const filesColl = db.collection('desktop_files');
   const chunksColl = db.collection('desktop_file_chunks');
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const base64 = bytesToBase64(bytes);
-  const CHUNK = 16 * 1024;
-  const total = Math.max(1, Math.ceil(base64.length / CHUNK));
-  const now = Date.now();
-  const contentHash = await sha256Hex(base64ToBytes(base64));
-  const fileId = `appzip_${now}_${Math.random().toString(36).slice(2, 10)}`;
-  const generationId = `gen_${now}_${contentHash.slice(0, 12)}`;
-  for (let idx = 0; idx < total; idx += 1) {
-    const data = base64.slice(idx * CHUNK, (idx + 1) * CHUNK);
-    // eslint-disable-next-line no-await-in-loop
-    await chunksColl.upsert({
-      id: `${fileId}_${generationId}_${idx}`,
-      file_id: fileId,
-      generation_id: generationId,
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const base64 = bytesToBase64(bytes);
+    const CHUNK = 16 * 1024;
+    const total = Math.max(1, Math.ceil(base64.length / CHUNK));
+    const now = Date.now();
+    const contentHash = await sha256Hex(base64ToBytes(base64));
+    const fileId = `appzip_${now}_${Math.random().toString(36).slice(2, 10)}`;
+    const generationId = `gen_${now}_${contentHash.slice(0, 12)}`;
+    const chunkRows = await Promise.all(Array.from({ length: total }, async (_, idx) => {
+      const data = base64.slice(idx * CHUNK, (idx + 1) * CHUNK);
+      return {
+        id: `${fileId}_${generationId}_${idx}`,
+        file_id: fileId,
+        generation_id: generationId,
+        content_hash: contentHash,
+        content_hash_scheme: FILE_CONTENT_HASH_SCHEME,
+        idx,
+        total,
+        encoding: 'base64',
+        data,
+        chunk_hash: await sha256Hex(data),
+        chunk_hash_scheme: FILE_CHUNK_HASH_SCHEME,
+        size_bytes: data.length,
+        created_at_ms: now,
+      };
+    }));
+    await writeChunkDocuments(chunksColl, chunkRows);
+    const virtualPath = `/app-store-uploads/${file.name || 'app.zip'}`;
+    await filesColl.upsert({
+      id: fileId,
+      parent_id: '',
+      path: virtualPath,
+      local_path: '',
+      virtual_path: virtualPath,
+      name: file.name || 'app.zip',
+      kind: 'file',
+      mime_type: file.type || 'application/zip',
+      extension: 'zip',
+      size_bytes: bytes.length,
+      owner_id: '',
+      source: 'app-store-upload',
+      content_ref: fileId,
+      content_state: 'available',
       content_hash: contentHash,
       content_hash_scheme: FILE_CONTENT_HASH_SCHEME,
-      idx,
-      total,
-      encoding: 'base64',
-      data,
-      // eslint-disable-next-line no-await-in-loop
-      chunk_hash: await sha256Hex(data),
-      chunk_hash_scheme: FILE_CHUNK_HASH_SCHEME,
-      size_bytes: data.length,
+      content_generation_id: generationId,
+      content_synced_at_ms: now,
+      sort_index: now,
+      is_deleted: false,
       created_at_ms: now,
+      updated_at_ms: now,
     });
+    await flushScopedSyncCollections(syncHandles);
+    return fileId;
+  } finally {
+    await releaseSyncLeases(syncHandles.leases);
   }
-  const virtualPath = `/app-store-uploads/${file.name || 'app.zip'}`;
-  await filesColl.upsert({
-    id: fileId,
-    parent_id: '',
-    path: virtualPath,
-    local_path: '',
-    virtual_path: virtualPath,
-    name: file.name || 'app.zip',
-    kind: 'file',
-    mime_type: file.type || 'application/zip',
-    extension: 'zip',
-    size_bytes: bytes.length,
-    owner_id: '',
-    source: 'app-store-upload',
-    content_ref: fileId,
-    content_state: 'available',
-    content_hash: contentHash,
-    content_hash_scheme: FILE_CONTENT_HASH_SCHEME,
-    content_generation_id: generationId,
-    content_synced_at_ms: now,
-    sort_index: now,
-    is_deleted: false,
-    created_at_ms: now,
-    updated_at_ms: now,
-  });
-  return fileId;
+}
+
+async function writeChunkDocuments(collection, rows) {
+  const docs = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  if (!docs.length) return;
+  if (typeof collection.bulkUpsert === 'function') {
+    await collection.bulkUpsert(docs);
+    return;
+  }
+  for (const doc of docs) {
+    await collection.upsert(doc);
+  }
 }
 
 function pickZipFile() {
@@ -2020,6 +2043,66 @@ function sanitizeId(value) {
 function newId() {
   if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+async function startScopedSyncCollections(collections, reason) {
+  const sync = state.ctx?.sync;
+  if (!sync?.startCollection && !sync?.leaseCollection) return { handles: [], leases: [] };
+  const leases = [];
+  const handles = [];
+  for (const collection of collections || []) {
+    const handle = await startScopedSyncCollection(sync, collection, reason, leases);
+    if (handle) handles.push(handle);
+  }
+  return {
+    handles,
+    leases,
+  };
+}
+
+async function startScopedSyncCollection(sync, collection, reason, leases) {
+  if (DEMAND_ONLY_SYNC_COLLECTIONS.has(collection)) {
+    if (typeof sync?.leaseCollection === 'function') {
+      const lease = await sync.leaseCollection(collection, reason);
+      leases.push(lease);
+      return lease;
+    }
+    throw new Error(`${collection} requires sync.leaseCollection().`);
+  }
+  return sync?.startCollection?.(collection);
+}
+
+async function flushScopedSyncCollections(syncHandles) {
+  const handles = syncHandles?.handles || [];
+  await Promise.all(handles.map((handle) => waitForSyncBridgeReady(handle, 15000, { allowPush: true })));
+}
+
+async function releaseSyncLeases(leases) {
+  await Promise.all((leases || []).map((lease) => lease?.release?.().catch(() => null)));
+}
+
+async function waitForSyncBridgeReady(handle, timeoutMs = 10000, options = {}) {
+  const state = syncBridgeFromHandle(handle)?.state;
+  if (!state) return;
+  const runWithTimeout = (promise) => Promise.race([
+    Promise.resolve(promise).catch(() => {}),
+    delay(timeoutMs),
+  ]);
+  await Promise.race([
+    Promise.resolve()
+      .then(() => state.awaitInSync?.() || state.awaitInitialReplication?.())
+      .catch(() => {}),
+    delay(timeoutMs),
+  ]);
+  if (options.allowPush && typeof state.pushToRemotePeers === 'function') {
+    await runWithTimeout(state.pushToRemotePeers());
+  } else if (options.allowPush && typeof state.awaitInSync === 'function') {
+    await runWithTimeout(state.awaitInSync());
+  }
+}
+
+function syncBridgeFromHandle(handle) {
+  return handle?.bridge || handle;
 }
 
 function delay(ms) {

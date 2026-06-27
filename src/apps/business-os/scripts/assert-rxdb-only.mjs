@@ -598,10 +598,13 @@ function assertFileChunkIntegrityContract() {
       offenders.push(`src/apps/business-os/desktop-apps/file-viewer/app.js: file chunk integrity missing ${marker}`);
     }
   }
-  for (const marker of ['FILE_CONTENT_HASH_SCHEME', 'FILE_CHUNK_HASH_SCHEME', 'chunk_hash', 'base64ToBytes', 'readStoredFileFromDemandChunks']) {
+  for (const marker of ['FILE_CONTENT_HASH_SCHEME', 'FILE_CHUNK_HASH_SCHEME', 'chunk_hash', 'fileToUint8', 'uint8ToBase64', 'sha256Hex(bytes)', 'bulkUpsert', 'readStoredFileFromDemandChunks']) {
     if (!explorer.includes(marker)) {
       offenders.push(`src/apps/business-os/desktop-apps/explorer/app.js: uploaded file chunk contract missing ${marker}`);
     }
+  }
+  if (/readAsDataURL/.test(explorer)) {
+    offenders.push('src/apps/business-os/desktop-apps/explorer/app.js: uploaded files must not materialize through DataURL');
   }
   for (const marker of ['readStoredFileFromDemandChunks', 'fileDemandLoaderFor', 'contentHashScheme']) {
     if (!universalImporter.includes(marker)) {

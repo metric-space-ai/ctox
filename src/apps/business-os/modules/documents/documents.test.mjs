@@ -86,3 +86,33 @@ test('import validation requires a supported file', () => {
   assert.equal(hooks.validateImportInput({ file: new File(['x'], 'notes.txt', { type: 'text/plain' }) }).valid, false);
   assert.equal(hooks.validateImportInput({ file: new File(['x'], 'image.png', { type: 'image/png' }) }).valid, false);
 });
+
+test('document blob chunks are persisted with one bulk write', async () => {
+  const bulkWrites = [];
+  const blobChunks = {
+    bulkUpsert: async (docs) => { bulkWrites.push(docs); },
+    insert: async () => { throw new Error('document_blob_chunks insert must not run per chunk'); },
+  };
+  const ctx = {
+    db: {
+      collection(name) {
+        if (name === 'document_blob_chunks') return blobChunks;
+        if (name === 'documents' || name === 'document_versions') return {};
+        return null;
+      },
+    },
+  };
+
+  const bytes = new Uint8Array(260 * 1024);
+  bytes.fill(66);
+  await hooks.saveBlobChunks(ctx, {
+    blobId: 'blob_bulk',
+    documentId: 'doc_bulk',
+    versionId: 'version_bulk',
+    mimeType: 'application/octet-stream',
+    bytes,
+  });
+
+  assert.equal(bulkWrites.length, 1, 'blob chunks are written through one bulkUpsert call');
+  assert.ok(bulkWrites[0].length > 1, 'test payload spans multiple chunk documents');
+});
