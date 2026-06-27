@@ -3430,7 +3430,6 @@ function ensureCtoxSmokeBinary() {
             'business_commands',
             'ctox_queue_tasks',
             'desktop_files',
-            'desktop_file_chunks',
           ]
         : deferredFileCollectionStartupMode
         || largeFileMaterializeSmokeMode
@@ -3444,14 +3443,11 @@ function ensureCtoxSmokeBinary() {
             'business_commands',
             'ctox_queue_tasks',
             'desktop_files',
-            'desktop_file_chunks',
           ];
       const startupAdvancedStatusStartedAt = Date.now();
-      // waitForHealthy reports ok as soon as the SHELL is healthy; lazy
-      // collections (desktop_file_chunks since the lazy-file-sync change) may
-      // still be inside their first catch-up for a few hundred ms. The strict
-      // contract below requires COMPLETE initial sync, so poll the status
-      // until the lazy tail finishes (bounded) before asserting.
+      // Startup health excludes demand-only file chunk bodies. Modes that need
+      // chunk replication lease desktop_file_chunks explicitly after shell
+      // readiness, then assert that mode-specific evidence.
       const advancedStatus = await waitForHealthyCompleteStatus(page, {
         timeoutMs: smokeMode === 'business-os-app-release-ui' ? 240000 : 60000,
         requiredCollections: startupRequiredCollections,
