@@ -9,9 +9,10 @@
     />
     <meta
       name="description"
-      content="CTOX maintainer console for conservative issue, pull request, and Business OS app submission review."
+      content="CTOX owner/admin embed scaffold for conservative issue, pull request, and Business OS app submission review."
     />
-    <title>CTOX Maintainers</title>
+    <meta name="robots" content="noindex,nofollow" />
+    <title>CTOX Sweeper Admin</title>
     <link rel="icon" href="assets/ctox-app-icon.png" />
     <link rel="preload" href="assets/ctox-full-logo.png" as="image" />
     <style>
@@ -304,7 +305,6 @@
           <a href="docs.html">Docs</a>
           <a href="cli.html">CLI Reference</a>
           <a href="https://github.com/metric-space-ai/ctox">GitHub</a>
-          <a class="nav-cta" href="maintainers.html">Maintainers</a>
         </div>
       </div>
     </header>
@@ -312,16 +312,16 @@
     <main>
       <section class="hero" aria-labelledby="maintainer-title">
         <div class="section-inner">
-          <p class="eyebrow">Maintainer Console</p>
-          <h1 id="maintainer-title">CTOX Sweeper review cockpit.</h1>
+          <p class="eyebrow">Owner/Admin Console</p>
+          <h1 id="maintainer-title">CTOX Sweeper admin workspace.</h1>
           <p class="lead">
-            Conservative triage for CTOX issues, pull requests, and Business OS app submissions,
-            with agent execution kept outside the web control plane.
+            Private conservative triage for CTOX issues, pull requests, and Business OS app
+            submissions, with agent execution kept outside the web control plane.
           </p>
           <div class="status-strip" aria-label="Sweeper deployment boundaries">
             <div>
-              <b>UI host</b>
-              <span><code>sweeper.ctox.dev</code> on Vercel, embedded as an isolated maintainer surface.</span>
+              <b>Parent visibility</b>
+              <span>Deploy the final ctox.dev entry behind platform owner/admin access.</span>
             </div>
             <div>
               <b>Executor plane</b>
@@ -329,7 +329,7 @@
             </div>
             <div>
               <b>Pilot posture</b>
-              <span>Review and comment sync first; closes, generated PRs, repair, and automerge stay gated.</span>
+              <span>This static page validates iframe wiring; Sweeper access remains separately gated.</span>
             </div>
           </div>
         </div>
@@ -343,10 +343,10 @@
               <h2 id="sweeper-frame-title">Sweeper dashboard</h2>
             </div>
             <p>
-              The frame is limited to the Sweeper origin. Live dispatch controls remain server-side
-              and depend on the private CTOX Sweeper GitHub App configuration.
+              This scaffold does not grant access by itself. The Sweeper child requires the trusted
+              ctox.dev parent handshake and a server-side admin session before private reports or
+              dispatch controls load.
             </p>
-            <a class="open-sweeper" href="https://sweeper.ctox.dev/" rel="noopener">Open directly</a>
           </div>
           <div class="frame-shell">
             <iframe
