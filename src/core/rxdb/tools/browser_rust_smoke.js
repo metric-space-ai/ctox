@@ -1816,11 +1816,7 @@ async function waitForHealthyCompleteStatus(page, { timeoutMs = 60000, requiredC
       : [];
     const incomplete = Array.isArray(initialSync.entries)
       && initialSync.entries.some((entry) => entry?.state !== 'complete');
-    const streamingReady = status?.checks?.requiredCollectionsStreamingReady === true
-      && status?.checks?.requiredCollectionsCheckpointEpochAdvertised === true
-      && Array.isArray(initialSync.missingStreamingReady)
-      && initialSync.missingStreamingReady.length === 0;
-    if (status?.ok && ((missing.length === 0 && !incomplete) || streamingReady)) return status;
+    if (status?.ok && missing.length === 0 && !incomplete) return status;
     if (Date.now() > deadline) {
       if (status && typeof status === 'object' && lastError) {
         status.smokeWaitForHealthyError = lastError;
@@ -3449,7 +3445,7 @@ function ensureCtoxSmokeBinary() {
       // chunk replication lease desktop_file_chunks explicitly after shell
       // readiness, then assert that mode-specific evidence.
       const advancedStatus = await waitForHealthyCompleteStatus(page, {
-        timeoutMs: smokeMode === 'business-os-app-release-ui' ? 240000 : 60000,
+        timeoutMs: businessOsProductionSmokeModeSet.has(smokeMode) ? 240000 : 60000,
         requiredCollections: startupRequiredCollections,
       });
       outerPhaseTimings.startupAdvancedStatusMs = Date.now() - startupAdvancedStatusStartedAt;
