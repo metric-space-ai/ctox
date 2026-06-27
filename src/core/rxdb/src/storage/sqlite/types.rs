@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::Duration;
 
@@ -40,7 +40,7 @@ pub struct RxStorageSqlite {
     pub name: String,
     pub settings: RxStorageSqliteSettings,
     pub connection: Mutex<Option<SharedSqliteConnection>>,
-    external_poll_stop: Arc<AtomicBool>,
+    external_poll_key: Mutex<Option<String>>,
 }
 
 impl RxStorageSqlite {
@@ -49,7 +49,7 @@ impl RxStorageSqlite {
             name: "sqlite".to_string(),
             settings,
             connection: Mutex::new(None),
-            external_poll_stop: Arc::new(AtomicBool::new(false)),
+            external_poll_key: Mutex::new(None),
         })
     }
 
@@ -85,11 +85,11 @@ impl RxStorageSqlite {
         }
 
         let database_key = crate::storage::sqlite::instance::database_key_for_path(path);
-        start_external_database_poll(
-            path.clone(),
-            database_key.clone(),
-            Arc::clone(&self.external_poll_stop),
-        );
+        if let Some(external_poll_key) =
+            acquire_external_database_poll(path.clone(), database_key.clone())
+        {
+            *self.external_poll_key.lock() = Some(external_poll_key);
+        }
 
         // Register the update hook for immediate same-process reactivity.
         let hook_database_key = database_key.clone();
@@ -107,8 +107,68 @@ impl RxStorageSqlite {
 
 impl Drop for RxStorageSqlite {
     fn drop(&mut self) {
-        self.external_poll_stop.store(true, Ordering::SeqCst);
+        if let Some(database_key) = self.external_poll_key.lock().take() {
+            release_external_database_poll(&database_key);
+        }
     }
+}
+
+struct ExternalDatabasePollRegistration {
+    stop: Arc<AtomicBool>,
+    references: usize,
+}
+
+static EXTERNAL_DATABASE_POLLS: OnceLock<Mutex<HashMap<String, ExternalDatabasePollRegistration>>> =
+    OnceLock::new();
+
+fn acquire_external_database_poll(path: PathBuf, database_key: String) -> Option<String> {
+    if path.as_os_str() == SQLITE_IN_MEMORY_DB_NAME {
+        return None;
+    }
+    let mut polls = EXTERNAL_DATABASE_POLLS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock();
+    if let Some(existing) = polls.get_mut(&database_key) {
+        existing.references = existing.references.saturating_add(1);
+        return Some(database_key);
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    start_external_database_poll(path, database_key.clone(), Arc::clone(&stop));
+    polls.insert(
+        database_key.clone(),
+        ExternalDatabasePollRegistration {
+            stop,
+            references: 1,
+        },
+    );
+    Some(database_key)
+}
+
+fn release_external_database_poll(database_key: &str) {
+    let Some(registry) = EXTERNAL_DATABASE_POLLS.get() else {
+        return;
+    };
+    let mut polls = registry.lock();
+    let Some(existing) = polls.get_mut(database_key) else {
+        return;
+    };
+    if existing.references > 1 {
+        existing.references -= 1;
+        return;
+    }
+    if let Some(existing) = polls.remove(database_key) {
+        existing.stop.store(true, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+fn external_database_poll_reference_count(database_key: &str) -> Option<usize> {
+    EXTERNAL_DATABASE_POLLS.get().and_then(|registry| {
+        registry
+            .lock()
+            .get(database_key)
+            .map(|poll| poll.references)
+    })
 }
 
 fn start_external_database_poll(path: PathBuf, database_key: String, stop: Arc<AtomicBool>) {
@@ -355,6 +415,46 @@ mod tests {
             .get(name)
             .and_then(|value| value.as_u64())
             .unwrap_or(0)
+    }
+
+    #[test]
+    fn external_database_poll_registry_is_per_database_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ctox.sqlite3");
+        let database_key = crate::storage::sqlite::instance::database_key_for_path(&path);
+        assert_eq!(external_database_poll_reference_count(&database_key), None);
+
+        let first = RxStorageSqlite::new(RxStorageSqliteSettings {
+            database_path: path.clone(),
+        });
+        first.connection().unwrap();
+        assert_eq!(
+            external_database_poll_reference_count(&database_key),
+            Some(1)
+        );
+
+        let second = RxStorageSqlite::new(RxStorageSqliteSettings {
+            database_path: path,
+        });
+        second.connection().unwrap();
+        assert_eq!(
+            external_database_poll_reference_count(&database_key),
+            Some(2),
+            "one DB-wide external poller should be shared per SQLite path"
+        );
+
+        drop(first);
+        assert_eq!(
+            external_database_poll_reference_count(&database_key),
+            Some(1),
+            "dropping one storage factory must keep the shared poller alive"
+        );
+        drop(second);
+        assert_eq!(
+            external_database_poll_reference_count(&database_key),
+            None,
+            "dropping the last storage factory must stop and unregister the shared poller"
+        );
     }
 
     #[test]

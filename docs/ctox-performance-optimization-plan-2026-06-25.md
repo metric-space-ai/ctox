@@ -741,7 +741,8 @@ is no longer the original file-share/browser `allDocuments()` burn path.
    collections. Keep the new zero-drain regression as a release gate. The
    DB-wide changed-table watcher now exposes production counters that classify
    active wakeups, standby wakeups, standby entries, active resets, drain
-   batches, drain rows, and budget exhaustion; finish the central
+   batches, drain rows, and budget exhaustion. Watcher ownership is now
+   de-duplicated per SQLite database path; finish the remaining central
    dispatcher/backpressure design so future change-stream work cannot regress
    into per-collection idle scanning.
 2. Native SQLite query pushdown is still partial for normal storage queries.
@@ -1925,8 +1926,14 @@ Implementation status:
   and budget exhaustion, with per-table row/batch/exhaustion attribution. The
   default installed idle probe budgets these counters at zero so a standby
   drain after the system should be idle fails the probe directly.
-- Still open: central dispatcher/backpressure design. The dispatcher should
-  remain centralized around SQLite file-level change detection and must not
+- Done on 2026-06-27 for DB-wide watcher ownership: `RxStorageSqlite`
+  factories for the same SQLite path now share one external database poll
+  registration with refcounted shutdown. This prevents reopened databases or
+  parallel storage factories from starting duplicate file-level watcher
+  threads for the same Core DB.
+- Still open: remaining central dispatcher/backpressure design. The dispatcher
+  should remain centralized around SQLite file-level change detection, should
+  retain bounded catch-up semantics under file-share bursts, and must not
   re-add per-collection idle scans.
 
 Validation:
@@ -1935,6 +1942,10 @@ Validation:
   passed: 1 test, 0 failures.
 - `CARGO_TARGET_DIR=/tmp/ctox-rxdb-poll-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --manifest-path src/core/rxdb/Cargo.toml change_stream_drains_multiple_external_batches_per_wake -- --nocapture`
   passed: 1 test, 0 failures.
+- `CARGO_TARGET_DIR=/tmp/ctox-rxdb-poll-target CTOX_VOXTRAL_BUILD_GGML=0 cargo test --manifest-path src/core/rxdb/Cargo.toml external_database_poll_registry_is_per_database_path -- --nocapture`
+  passed on 2026-06-27: verifies multiple SQLite storage factories for one
+  database path share one DB-wide poll registration and unregister it only
+  after the last factory is dropped.
 - `CARGO_TARGET_DIR=/tmp/ctox-rxdb-target cargo test --manifest-path src/core/rxdb/Cargo.toml storage::sqlite::instance::tests::change_stream_drains_ -- --nocapture`
   passed: 2 tests, 0 failures.
 - `CARGO_TARGET_DIR=/tmp/ctox-rxdb-target cargo test --manifest-path src/core/rxdb/Cargo.toml storage::sqlite::instance::tests::file_backed_external_poll_has_no_per_collection_idle_safety_drains -- --nocapture`
