@@ -2871,7 +2871,6 @@ struct DesktopFileIndexScan {
 
 struct DesktopFileIndexWatch {
     _watcher: notify::RecommendedWatcher,
-    roots: Vec<PathBuf>,
     rx: mpsc::UnboundedReceiver<()>,
 }
 
@@ -2896,18 +2895,8 @@ impl DesktopFileIndexWatch {
         }
         Ok(Some(Self {
             _watcher: watcher,
-            roots,
             rx,
         }))
-    }
-
-    fn matches_roots(&self, scan_roots: &[DesktopFileScanRoot]) -> bool {
-        self.roots.len() == scan_roots.len()
-            && self
-                .roots
-                .iter()
-                .zip(scan_roots)
-                .all(|(left, right)| left == &right.path)
     }
 
     fn drain_pending(&mut self) -> bool {
@@ -2930,6 +2919,13 @@ impl DesktopFileIndexWatch {
             }
         }
     }
+}
+
+fn desktop_file_scan_root_paths(scan_roots: &[DesktopFileScanRoot]) -> Vec<PathBuf> {
+    scan_roots
+        .iter()
+        .map(|scan_root| scan_root.path.clone())
+        .collect()
 }
 
 async fn sync_notes_background_loop(root: PathBuf) {
@@ -3004,9 +3000,11 @@ async fn sync_desktop_file_index_background_loop(
     let mut last_full_scan_at: Option<SystemTime> = None;
     let mut dirty_scan_roots = true;
     let mut file_watch: Option<DesktopFileIndexWatch> = None;
+    let mut file_watch_roots: Option<Vec<PathBuf>> = None;
     let mut last_watch_error: Option<String> = None;
     loop {
         let started = Instant::now();
+        let mut has_scan_roots = false;
         let result: anyhow::Result<usize> = async {
             let run_maintenance = last_maintenance_at
                 .elapsed()
@@ -3015,14 +3013,13 @@ async fn sync_desktop_file_index_background_loop(
                 })
                 .unwrap_or(true);
             let scan_roots = desktop_file_scan_roots(&root);
-            if file_watch
-                .as_ref()
-                .map(|watch| !watch.matches_roots(&scan_roots))
-                .unwrap_or(true)
-            {
+            has_scan_roots = !scan_roots.is_empty();
+            let scan_root_paths = desktop_file_scan_root_paths(&scan_roots);
+            if file_watch_roots.as_ref() != Some(&scan_root_paths) {
                 match DesktopFileIndexWatch::new(&scan_roots) {
                     Ok(next_watch) => {
                         file_watch = next_watch;
+                        file_watch_roots = Some(scan_root_paths);
                         last_watch_error = None;
                         dirty_scan_roots = true;
                     }
@@ -3035,6 +3032,7 @@ async fn sync_desktop_file_index_background_loop(
                         }
                         last_watch_error = Some(message);
                         file_watch = None;
+                        file_watch_roots = None;
                     }
                 }
             }
@@ -3102,6 +3100,7 @@ async fn sync_desktop_file_index_background_loop(
             Duration::from_secs(DESKTOP_FILE_SCAN_INTERVAL_SECS)
         } else {
             desktop_file_index_sleep_interval(
+                has_scan_roots,
                 file_watch.is_some(),
                 last_maintenance_at,
                 last_full_scan_at,
@@ -10512,11 +10511,29 @@ fn desktop_file_index_should_collect_scan(
 }
 
 fn desktop_file_index_sleep_interval(
+    has_scan_roots: bool,
     watcher_available: bool,
     last_maintenance_at: SystemTime,
     last_full_scan_at: Option<SystemTime>,
     now: SystemTime,
 ) -> Duration {
+    if !has_scan_roots {
+        let discovery_due = last_full_scan_at
+            .map(|last_full_scan_at| {
+                duration_until_due(
+                    last_full_scan_at,
+                    Duration::from_secs(DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS),
+                    now,
+                )
+            })
+            .unwrap_or_else(|| Duration::from_secs(DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS));
+        let maintenance_due = duration_until_due(
+            last_maintenance_at,
+            Duration::from_secs(DESKTOP_FILE_INDEX_MAINTENANCE_INTERVAL_SECS),
+            now,
+        );
+        return discovery_due.min(maintenance_due);
+    }
     if !watcher_available {
         return Duration::from_secs(DESKTOP_FILE_SCAN_INTERVAL_SECS);
     }
@@ -16639,12 +16656,12 @@ mod tests {
         let first_scan_at = UNIX_EPOCH + Duration::from_secs(1_000);
         let now = first_scan_at + Duration::from_secs(DESKTOP_FILE_SCAN_INTERVAL_SECS);
         assert_eq!(
-            desktop_file_index_sleep_interval(false, first_scan_at, Some(first_scan_at), now),
+            desktop_file_index_sleep_interval(true, false, first_scan_at, Some(first_scan_at), now),
             Duration::from_secs(DESKTOP_FILE_SCAN_INTERVAL_SECS),
             "without a watcher the background loop must keep the cheap polling fallback"
         );
         assert_eq!(
-            desktop_file_index_sleep_interval(true, first_scan_at, Some(first_scan_at), now),
+            desktop_file_index_sleep_interval(true, true, first_scan_at, Some(first_scan_at), now),
             Duration::from_secs(
                 DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS - DESKTOP_FILE_SCAN_INTERVAL_SECS
             ),
@@ -16653,12 +16670,26 @@ mod tests {
         assert_eq!(
             desktop_file_index_sleep_interval(
                 true,
+                true,
                 first_scan_at,
                 Some(first_scan_at),
                 first_scan_at + Duration::from_secs(DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS)
             ),
             Duration::ZERO,
             "the fallback scan is due immediately at the fallback boundary"
+        );
+        assert_eq!(
+            desktop_file_index_sleep_interval(
+                false,
+                false,
+                first_scan_at,
+                Some(first_scan_at),
+                now
+            ),
+            Duration::from_secs(
+                DESKTOP_FILE_SCAN_FALLBACK_INTERVAL_SECS - DESKTOP_FILE_SCAN_INTERVAL_SECS
+            ),
+            "with no scan roots, the background loop must not poll every desktop scan interval"
         );
     }
 
