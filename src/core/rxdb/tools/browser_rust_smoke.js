@@ -1654,10 +1654,9 @@ function sqlite(statement, targetPath = sqlitePath) {
       '-cmd',
       '.timeout 10000',
       targetPath,
-      statement,
-    ], { encoding: 'utf8' });
+    ], { encoding: 'utf8', input: statement });
     if (result.status === 0) return result.stdout;
-    lastOutput = result.stderr || result.stdout || '';
+    lastOutput = result.error?.message || result.stderr || result.stdout || '';
     if (!/database is locked|SQLITE_BUSY/i.test(lastOutput)) {
       throw new Error(`sqlite failed: ${lastOutput}`);
     }
