@@ -2270,6 +2270,7 @@ impl App {
         let probe = service::StatusProbeOptions {
             reconcile_runtime_switch: false,
             systemd_cache_ttl: Some(TUI_SYSTEMD_CACHE_TTL),
+            manager_probe: lifecycle_due,
             status_ipc_timeout: Some(TUI_STATUS_IPC_TIMEOUT),
             lifecycle_alerts: lifecycle_due,
             include_business_os: business_os_due,

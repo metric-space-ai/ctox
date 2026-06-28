@@ -593,9 +593,19 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
             Ok(())
         }
         Some("status") => {
+            let probe = service::StatusProbeOptions {
+                reconcile_runtime_switch: false,
+                systemd_cache_ttl: Some(std::time::Duration::from_secs(5)),
+                manager_probe: false,
+                status_ipc_timeout: Some(std::time::Duration::from_secs(1)),
+                lifecycle_alerts: false,
+                include_business_os: false,
+            };
             println!(
                 "{}",
-                serde_json::to_string_pretty(&service::service_status_snapshot(root)?)?
+                serde_json::to_string_pretty(&service::service_status_snapshot_with(
+                    root, &probe
+                )?)?
             );
             Ok(())
         }
@@ -1476,6 +1486,7 @@ fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
         let wait_probe = service::StatusProbeOptions {
             reconcile_runtime_switch: false,
             systemd_cache_ttl: Some(std::time::Duration::from_secs(5)),
+            manager_probe: false,
             status_ipc_timeout: Some(std::time::Duration::from_secs(1)),
             lifecycle_alerts: false,
             include_business_os: false,

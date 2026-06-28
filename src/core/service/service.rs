@@ -2575,10 +2575,10 @@ pub fn submit_chat_prompt_with_intent(
 }
 
 /// Probe knobs for status polling. The CLI default runs the full probe;
-/// UI-cadence pollers (the TUI refreshes every 500–1200ms) skip the
+/// UI-cadence pollers (the TUI refreshes every 500-1200ms) skip the
 /// runtime-switch reconcile write path, reuse a recent systemd probe,
-/// bound the status IPC wait, and throttle the process-scanning lifecycle
-/// alerts — none of those inputs change at sub-second cadence.
+/// bound the status IPC wait, and throttle manager/lifecycle probes: none
+/// of those inputs change at sub-second cadence.
 #[derive(Debug, Clone)]
 pub struct StatusProbeOptions {
     /// Run `reconcile_runtime_switch_transaction` before probing. Needed at
@@ -2587,6 +2587,10 @@ pub struct StatusProbeOptions {
     /// Reuse a cached systemd unit probe younger than this TTL. `None`
     /// probes fresh (three systemctl spawns on Linux).
     pub systemd_cache_ttl: Option<Duration>,
+    /// Probe the service manager (systemd/launchd) around the live IPC status.
+    /// This can spawn `systemctl`/`launchctl` and is too expensive for
+    /// high-cadence health polling.
+    pub manager_probe: bool,
     /// Override the status IPC wait budget. `None` keeps the default.
     pub status_ipc_timeout: Option<Duration>,
     /// Compute lifecycle alerts (spawns `ps` for a duplicate-process scan).
@@ -2603,6 +2607,7 @@ impl Default for StatusProbeOptions {
         Self {
             reconcile_runtime_switch: true,
             systemd_cache_ttl: None,
+            manager_probe: true,
             status_ipc_timeout: None,
             lifecycle_alerts: true,
             include_business_os: true,
@@ -2621,11 +2626,19 @@ pub fn service_status_snapshot_with(
     if probe.reconcile_runtime_switch {
         let _ = runtime_control::reconcile_runtime_switch_transaction(root);
     }
-    let systemd = match probe.systemd_cache_ttl {
-        Some(ttl) => systemd_unit_status_cached(root, ttl)?,
-        None => systemd_unit_status(root)?,
+    let systemd = if probe.manager_probe {
+        match probe.systemd_cache_ttl {
+            Some(ttl) => systemd_unit_status_cached(root, ttl)?,
+            None => systemd_unit_status(root)?,
+        }
+    } else {
+        None
     };
-    let launchd = launchd_unit_status(root)?;
+    let launchd = if probe.manager_probe {
+        launchd_unit_status(root)?
+    } else {
+        None
+    };
     let lifecycle_alerts = |pid: Option<u32>, running: bool| -> Result<Vec<String>> {
         if probe.lifecycle_alerts {
             runtime_lifecycle_alerts(root, pid, running)
@@ -4260,7 +4273,11 @@ fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Res
         last_completed_at,
         last_reply_chars,
         monitor_last_check_at: None,
-        monitor_alerts: runtime_lifecycle_alerts(root, pid, true)?,
+        // The IPC status response is the daemon's hot read path. Lifecycle
+        // alerts perform PID checks and duplicate-process scans; callers that
+        // need them add them in `service_status_snapshot_with` according to
+        // their poll cadence.
+        monitor_alerts: Vec::new(),
         monitor_last_error: None,
         last_agent_outcome,
         worker_active_count,
@@ -25338,6 +25355,19 @@ Business OS command:
         let status = status_from_shared_state(&root, &state).expect("status should load");
 
         assert!(status.business_os.is_none());
+    }
+
+    #[test]
+    fn live_service_status_omits_lifecycle_process_scan() {
+        let root = temp_root("status-no-lifecycle-scan");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let pid_path = service_pid_path(&root);
+        std::fs::create_dir_all(pid_path.parent().unwrap()).unwrap();
+        std::fs::write(&pid_path, "999999\n").unwrap();
+
+        let status = status_from_shared_state(&root, &state).expect("status should load");
+
+        assert!(status.monitor_alerts.is_empty());
     }
 
     #[cfg(unix)]

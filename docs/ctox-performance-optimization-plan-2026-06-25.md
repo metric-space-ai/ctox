@@ -264,13 +264,18 @@ These old review findings are no longer accurate as written:
   - `src/core/business_os/store.rs`
   - `src/core/persistence.rs`
 
-- `M31` status path pressure: partially fixed. Durable status reads and process
-  scans are cached, and the normal status path no longer triggers Business OS
-  app recovery. The dedicated Business OS app recovery loop now uses a
+- `M31` status path pressure: fixed for the source hot path, installed release
+  proof still pending. Durable status reads are stamp-cached, the daemon IPC
+  status response no longer computes lifecycle/process-scan alerts, the normal
+  `ctox status` command uses a cheap probe that skips manager/lifecycle/Business
+  OS enrichment, and the normal status path no longer triggers Business OS app
+  recovery. The dedicated Business OS app recovery loop now uses a
   source-specific leased-app queue/artifact stamp before running its
   leased-queue scan.
   File:
   - `src/core/service/service.rs`
+  - `src/core/main.rs`
+  - `src/core/ui/tui/mod.rs`
 
 - Runtime env/state repeated SQLite reads: improved. The runtime env and
   runtime state loaders have stamp-backed caches.
@@ -983,6 +988,10 @@ Implementation status:
   Gate B failed: `ctox status --json` at 2 Hz reported p95 latency around
   2242 ms against the 100 ms budget. This keeps the release gate red even
   though passive daemon idle stayed below the CPU budget in that run.
+- Follow-up source fix on 2026-06-28 removes lifecycle/process scans from the
+  daemon IPC status hot path and makes default `ctox status` use a cheap probe.
+  Targeted Rust guard tests pass; the installed release Gate B rerun remains
+  pending until the change is pushed and deployed through `ctox upgrade --dev`.
 
 Validation:
 
@@ -2782,6 +2791,11 @@ Process/runtime utilities:
   status snapshot keyed by Core DB and ticket-store change stamps; unchanged
   status stores now reuse the cached queue/ticket/LCM outcome snapshot even
   after the short TTL instead of reopening SQLite on UI cadence.
+- Done on 2026-06-28 at source level: the daemon IPC status response no longer
+  computes lifecycle/process-scan alerts, default `ctox status` skips
+  manager/lifecycle/Business OS enrichment, and TUI manager/lifecycle probes are
+  throttled to the lifecycle interval. Installed release Gate B still needs the
+  post-`ctox upgrade --dev` proof.
 - track the orphaned `report/{scoring,claims,...}` module island as cleanup so
   dead code does not keep reappearing in performance audits.
 
@@ -2865,7 +2879,7 @@ finding.
 | M28 | open | Customers debounced center-only render/shared summaries remain. | Phase 6 |
 | M29 | partial | Cached projection writer covers repair/fanout paths; broader command-acceptance fanout paths and open/statement counters remain. | Phase 4, P1 |
 | M30 | fixed for checked central stores | `synchronous=NORMAL` is set in checked central stores; direct helper guard work remains. | Phase 0/1 |
-| M31 | fixed for status idle path | Normal status path process scans are cached; explicit lifecycle/probe scans remain intentional. | Phase 7 |
+| M31 | fixed in source, release proof pending | Daemon IPC status no longer computes process-scan alerts, default `ctox status` uses a cheap probe, and explicit lifecycle/probe scans remain intentional. Installed Gate B must still pass after `ctox upgrade --dev`. | Phase 7 |
 
 ### Low Coverage
 
