@@ -67,7 +67,7 @@ module.exports = {
   linux: {
     category: "Office",
     icon: "build/icon.png",
-    maintainer: "Metric Space AI <michael.welsch@metric-space.ai>",
+    maintainer: "CTOX <oss@ctox.dev>",
     target: ["AppImage", "deb"],
   },
 };

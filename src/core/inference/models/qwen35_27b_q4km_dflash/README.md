@@ -89,7 +89,7 @@ the same SM target.
 
 ```bash
 # dev box with lucebox reference build tree available:
-GGML_LIB_DIR=/home/metricspace/dflash-ref/dflash/build/deps/llama.cpp/ggml/src \
+GGML_LIB_DIR=/home/you/dflash-ref/dflash/build/deps/llama.cpp/ggml/src \
     cargo build --release --features=cuda
 
 # just the Rust surface, no CUDA toolchain required:
@@ -113,9 +113,9 @@ on the `out.bin` file.
 ## Verified A6000 Run
 
 Machine: NVIDIA RTX A6000, 49 GiB VRAM, driver 580.105.08.
-Prompt: `/home/metricspace/dflash-ref/dflash/tmp_prompt128.bin`
-Target: `/home/metricspace/dflash-ref/dflash/models/Qwen3.5-27B-Q4_K_M.gguf`
-Draft: `/home/metricspace/dflash-ref/dflash/models/draft/model.safetensors`
+Prompt: `/home/you/dflash-ref/dflash/tmp_prompt128.bin`
+Target: `/home/you/dflash-ref/dflash/models/Qwen3.5-27B-Q4_K_M.gguf`
+Draft: `/home/you/dflash-ref/dflash/models/draft/model.safetensors`
 Generation length: 128 new tokens.
 
 | Implementation | Mode | Prefill | Decode |

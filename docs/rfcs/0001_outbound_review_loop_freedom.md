@@ -18,7 +18,7 @@ review/rework cycle. A concrete production case (CTOX deployment "INF Yoda",
 
 1. The drafter composed a substantively correct outbound (subject:
    "Vorschlag Tag-System fuer Lead-Funnel in Salesforce", recipients
-   `j.kienzler@remcapital.de`, CC `j.cakmak@…`, `d.lottes@…`).
+   `j.kowalski@example.com`, CC `j.cakmak@…`, `d.lottes@…`).
 2. The body lived only as a CLI argument to `ctox chat … --to … --wait`.
    It was never persisted into `communication_messages`.
 3. The provider call exited `1` after ~32 minutes (provider auth failure

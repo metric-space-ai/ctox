@@ -12,7 +12,7 @@ const builderConfig = require(path.join(appRoot, "electron-builder.config.cjs"))
 function main() {
   assert.equal(packageJson.main, "src/main/main.cjs");
   assert.equal(packageJson.homepage, "https://ctox.dev");
-  assert.equal(packageJson.author, "Metric Space AI <michael.welsch@metric-space.ai>");
+  assert.equal(packageJson.author, "CTOX <oss@ctox.dev>");
   assert.match(packageJson.author, /<[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+>/, "package author must include an email");
   assert.equal(packageJson.dependencies?.["electron-updater"], "^6.8.3");
   assert.equal(packageJson.devDependencies?.electron, "^39.8.10");

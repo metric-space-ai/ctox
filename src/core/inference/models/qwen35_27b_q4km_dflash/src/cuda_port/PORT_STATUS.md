@@ -8,7 +8,7 @@ nach Rust, pro AGENTS.md Inference Model Rules.
 Der 27B-CUDA-Pfad ist **korrekt und schnell im Hybridbetrieb**, aber
 **noch keine fertige bare-metal CTOX-Engine**.
 
-Verifiziert auf `100.87.204.48` / NVIDIA RTX A6000:
+Verifiziert auf `203.0.113.20` / NVIDIA RTX A6000:
 
 | Run | Mode | Ergebnis |
 |---|---|---:|
@@ -19,9 +19,9 @@ Verifiziert auf `100.87.204.48` / NVIDIA RTX A6000:
 
 Prompt/Modelle:
 
-- `/home/metricspace/dflash-ref/dflash/tmp_prompt128.bin`
-- `/home/metricspace/dflash-ref/dflash/models/Qwen3.5-27B-Q4_K_M.gguf`
-- `/home/metricspace/dflash-ref/dflash/models/draft/model.safetensors`
+- `/home/you/dflash-ref/dflash/tmp_prompt128.bin`
+- `/home/you/dflash-ref/dflash/models/Qwen3.5-27B-Q4_K_M.gguf`
+- `/home/you/dflash-ref/dflash/models/draft/model.safetensors`
 
 Der CTOX-output für den DDTree-Run ist byte-identisch zur C++ Referenz
 (`cmp` ohne Diff). `ldd` zeigt aber weiterhin `libggml-base.so` und

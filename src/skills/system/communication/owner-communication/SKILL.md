@@ -195,7 +195,7 @@ The send is allowed only after the exact body, recipients, CC list, subject, and
 
 How to give a job the outbound-email intent (operator-side):
 
-- `ctox chat --to d.lottes@remcapital.de --cc j.kienzler@remcapital.de --subject "INF Yoda Update" "<prompt body>"`
+- `ctox chat --to d.berger@example.com --cc j.kowalski@example.com --subject "INF Yoda Update" "<prompt body>"`
 - Equivalent metadata when creating a queue task: populate `outbound_email` with `account_key`, `thread_key`, `subject`, `to`, `cc`.
 
 Agent responsibilities for such a job:

@@ -27,11 +27,11 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_DB = Path("/home/metricspace/ctox/runtime/ctox.sqlite3")
-DEFAULT_TASK_ROOT = Path("/home/metricspace/.cache/terminal-bench/terminal-bench-core/0.1.1")
-DEFAULT_OUTPUT_DIR = Path("/home/metricspace/ctox/runtime/terminal-bench-controller")
-DEFAULT_TB_BIN = Path("/home/metricspace/.local/bin/tb")
-DEFAULT_REPLAY_AGENT_DIR = Path("/home/metricspace/ctox/runtime")
+DEFAULT_DB = Path("/home/you/ctox/runtime/ctox.sqlite3")
+DEFAULT_TASK_ROOT = Path("/home/you/.cache/terminal-bench/terminal-bench-core/0.1.1")
+DEFAULT_OUTPUT_DIR = Path("/home/you/ctox/runtime/terminal-bench-controller")
+DEFAULT_TB_BIN = Path("/home/you/.local/bin/tb")
+DEFAULT_REPLAY_AGENT_DIR = Path("/home/you/ctox/runtime")
 DEFAULT_MIN_FREE_GB = 25.0
 
 
