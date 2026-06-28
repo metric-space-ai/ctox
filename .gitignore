@@ -47,3 +47,6 @@ tmp_intersolar_*.js
 /output-*.png
 /*.orig
 *.rej
+
+# Generated RxDB port dashboard (regenerate from PORTING.md via tools/build_dashboard.py)
+/src/core/rxdb/dashboard.html
