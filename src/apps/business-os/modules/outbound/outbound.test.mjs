@@ -140,8 +140,12 @@ test('outbound import validation requires source-specific input', () => {
   assert.equal(hooks.validateOutboundImportPayload({ title: 'Import', source_type: 'excel', source: { files: [{ name: 'companies.csv' }] } }).valid, true);
 });
 
-test('outbound import extracts company rows from uploaded Excel workbooks', async () => {
-  const workbookPath = '/Users/michaelwelsch/Downloads/Personalvermittler.xlsx';
+test('outbound import extracts company rows from uploaded Excel workbooks', async (t) => {
+  const workbookPath = process.env.OUTBOUND_XLSX_FIXTURE;
+  if (!workbookPath) {
+    t.skip('set OUTBOUND_XLSX_FIXTURE to a .xlsx workbook path to run this import test');
+    return;
+  }
   const buffer = await fs.readFile(workbookPath);
   const rows = await hooks.extractRowsFromPayload({
     source_type: 'excel',

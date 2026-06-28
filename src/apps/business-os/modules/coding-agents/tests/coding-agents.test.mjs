@@ -7,18 +7,18 @@ import { __codingAgentsTestHooks as hooks } from '../index.js';
 test('workspace path validation blocks empty and relative paths', () => {
   assert.equal(hooks.validateWorkspacePath('').valid, false);
   assert.equal(hooks.validateWorkspacePath('relative/project').valid, false);
-  assert.equal(hooks.validateWorkspacePath('/Users/michaelwelsch/Documents/ctox').valid, true);
+  assert.equal(hooks.validateWorkspacePath('/Users/you/Documents/ctox').valid, true);
   assert.equal(hooks.validateWorkspacePath('~/Documents/ctox').valid, true);
 });
 
 test('workspace grants parser preserves spaces in absolute paths', () => {
   const grants = hooks.parseGrantsStdout(`
     Grants
-      * /Users/michaelwelsch/Documents/Client Project
+      * /Users/you/Documents/Client Project
       * command(*)
   `);
 
-  assert.deepEqual(grants, ['/Users/michaelwelsch/Documents/Client Project', 'command(*)']);
+  assert.deepEqual(grants, ['/Users/you/Documents/Client Project', 'command(*)']);
 });
 
 test('new session validation requires a meaningful first instruction', () => {
@@ -75,22 +75,22 @@ test('typed agent commands carry provider and structured payloads', () => {
     }
   );
   assert.deepEqual(
-    hooks.buildCodingAgentCommand(['config', 'grant', '/Users/michaelwelsch/Documents/ctox'], 'claude'),
+    hooks.buildCodingAgentCommand(['config', 'grant', '/Users/you/Documents/ctox'], 'claude'),
     {
       commandType: 'ctox.coding_agent.workspace.grant',
-      payload: { provider: 'claude', path: '/Users/michaelwelsch/Documents/ctox' }
+      payload: { provider: 'claude', path: '/Users/you/Documents/ctox' }
     }
   );
   assert.deepEqual(
     hooks.buildCodingAgentCommand(
-      ['session', 'create', '-p', '/Users/michaelwelsch/Documents/ctox', 'Fix failing billing parser test'],
+      ['session', 'create', '-p', '/Users/you/Documents/ctox', 'Fix failing billing parser test'],
       'antigravity'
     ),
     {
       commandType: 'ctox.coding_agent.session.create',
       payload: {
         provider: 'antigravity',
-        workspace_root: '/Users/michaelwelsch/Documents/ctox',
+        workspace_root: '/Users/you/Documents/ctox',
         prompt: 'Fix failing billing parser test'
       }
     }

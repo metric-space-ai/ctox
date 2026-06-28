@@ -7,9 +7,9 @@ use ctox_desktop::{
 
 fn main() -> Result<()> {
     let launch = LaunchTarget {
-        program: "/Users/michaelwelsch/.local/lib/ctox/releases/v0.3.19/bin/ctox-real".to_owned(),
+        program: "/Users/you/.local/lib/ctox/releases/v0.3.19/bin/ctox-real".to_owned(),
         args: vec!["tui".to_owned()],
-        cwd: PathBuf::from("/Users/michaelwelsch/Documents/ctox.nosync"),
+        cwd: PathBuf::from("/Users/you/Documents/ctox.nosync"),
         env: BTreeMap::new(),
     };
     let terminal = TerminalSession::spawn(&SessionSpec::Local(launch), 40, 154)?;

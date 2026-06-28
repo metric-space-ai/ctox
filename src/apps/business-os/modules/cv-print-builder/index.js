@@ -1791,7 +1791,6 @@ function buildParserTaskInstruction(item) {
   return [
     'Skill: `ctox-cv-print-parser`.',
     'Strukturiere den CTOX-vorextrahierten Abschnitt "CV PDF extracted text" als Ninja-kompatibles Qualifikationsprofil.',
-    'Referenz: /Users/michaelwelsch/Documents/NinjaWorkflowTool/NinjaWorkflowTool_Extension/executions/find-job-for-candidate/view/printView.js und /Users/michaelwelsch/Documents/NinjaWorkflowTool/NinjaWorkflowTool_Extension/data/jobmatchSchema.js.',
     'Ausfuehrung nur ueber CTOX desktop_files/desktop_file_chunks, RxDB/WebRTC und CTOX PDF-Stack.',
     'Keine Tools, keine Shell, kein PDF erneut oeffnen, keine HTTP- oder Ninja-Services.',
     'Antwort exakt als ein minifiziertes JSON-Objekt, kein Markdown, keine Analyse.',
