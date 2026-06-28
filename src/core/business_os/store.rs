@@ -13957,8 +13957,10 @@ pub fn process_source_parse_command(
                 completed_at_ms,
                 command_payload.clone(),
             )?;
-            upsert_rxdb_collection_record(
+            let mut rxdb_writers = RxdbProjectionWriterCache::new(root);
+            upsert_rxdb_collection_record_cached(
                 root,
+                Some(&mut rxdb_writers),
                 "business_commands",
                 command_id,
                 completed_at_ms,
@@ -13967,6 +13969,7 @@ pub fn process_source_parse_command(
             refresh_queue_task_projection(
                 root,
                 &conn,
+                Some(&mut rxdb_writers),
                 command_id,
                 &command,
                 updated_queue_task.as_ref().or(queue_task.as_ref()),
@@ -14021,8 +14024,10 @@ pub fn process_source_parse_command(
                 failed_at_ms,
                 command_payload.clone(),
             )?;
-            upsert_rxdb_collection_record(
+            let mut rxdb_writers = RxdbProjectionWriterCache::new(root);
+            upsert_rxdb_collection_record_cached(
                 root,
+                Some(&mut rxdb_writers),
                 "business_commands",
                 command_id,
                 failed_at_ms,
@@ -14031,6 +14036,7 @@ pub fn process_source_parse_command(
             refresh_queue_task_projection(
                 root,
                 &conn,
+                Some(&mut rxdb_writers),
                 command_id,
                 &command,
                 updated_queue_task.as_ref().or(queue_task.as_ref()),
@@ -14248,8 +14254,10 @@ pub fn complete_business_command_from_app_validation_success(
         completed_at_ms,
         command_payload.clone(),
     )?;
-    upsert_rxdb_collection_record(
+    let mut rxdb_writers = RxdbProjectionWriterCache::new(root);
+    upsert_rxdb_collection_record_cached(
         root,
+        Some(&mut rxdb_writers),
         "business_commands",
         &command_id,
         completed_at_ms,
@@ -14258,6 +14266,7 @@ pub fn complete_business_command_from_app_validation_success(
     refresh_queue_task_projection(
         root,
         &conn,
+        Some(&mut rxdb_writers),
         &command_id,
         &command,
         terminal_queue_task.as_ref(),
@@ -14468,8 +14477,10 @@ fn process_business_chat_reply(
         completed_at_ms,
         chat_payload.clone(),
     )?;
-    upsert_rxdb_collection_record(
+    let mut rxdb_writers = RxdbProjectionWriterCache::new(root);
+    upsert_rxdb_collection_record_cached(
         root,
+        Some(&mut rxdb_writers),
         "business_chats",
         &chat_id,
         completed_at_ms,
@@ -14507,8 +14518,9 @@ fn process_business_chat_reply(
         completed_at_ms,
         command_payload.clone(),
     )?;
-    upsert_rxdb_collection_record(
+    upsert_rxdb_collection_record_cached(
         root,
+        Some(&mut rxdb_writers),
         "business_commands",
         command_id,
         completed_at_ms,
@@ -14517,6 +14529,7 @@ fn process_business_chat_reply(
     refresh_queue_task_projection(
         root,
         conn,
+        Some(&mut rxdb_writers),
         command_id,
         command,
         terminal_queue_task.as_ref(),
@@ -15329,6 +15342,21 @@ fn upsert_rxdb_collection_record(
         writer.upsert(record_id, updated_at_ms, payload)?;
     }
     Ok(())
+}
+
+fn upsert_rxdb_collection_record_cached(
+    root: &Path,
+    mut writers: Option<&mut RxdbProjectionWriterCache>,
+    collection: &str,
+    record_id: &str,
+    updated_at_ms: i64,
+    payload: Value,
+) -> anyhow::Result<()> {
+    if let Some(writers) = writers.as_deref_mut() {
+        writers.upsert(collection, record_id, updated_at_ms, payload)
+    } else {
+        upsert_rxdb_collection_record(root, collection, record_id, updated_at_ms, payload)
+    }
 }
 
 struct RxdbProjectionWriterCache {
@@ -16225,9 +16253,11 @@ pub fn refresh_business_command_queue_task_projection(
         updated_at_ms,
         command_projection.clone(),
     )?;
+    let mut rxdb_writers = RxdbProjectionWriterCache::new(root);
     if terminal_command_status.is_some() {
-        upsert_rxdb_collection_record(
+        upsert_rxdb_collection_record_cached(
             root,
+            Some(&mut rxdb_writers),
             "business_commands",
             &command_id,
             updated_at_ms,
@@ -16237,6 +16267,7 @@ pub fn refresh_business_command_queue_task_projection(
     refresh_queue_task_projection(
         root,
         &conn,
+        Some(&mut rxdb_writers),
         &command_id,
         &command,
         Some(&task),
@@ -16286,9 +16317,11 @@ pub fn fail_business_command_from_queue_error(
         payload.clone(),
     )?;
     if let Some(task) = task.as_ref() {
+        let mut rxdb_writers = RxdbProjectionWriterCache::new(root);
         refresh_queue_task_projection(
             root,
             &conn,
+            Some(&mut rxdb_writers),
             &command_id,
             &command,
             Some(task),
@@ -24558,6 +24591,7 @@ fn process_documents_report_command(
             refresh_queue_task_projection(
                 root,
                 conn,
+                None,
                 command_id,
                 command,
                 queue_task,
@@ -24612,6 +24646,7 @@ fn process_documents_report_command(
             refresh_queue_task_projection(
                 root,
                 conn,
+                None,
                 command_id,
                 command,
                 queue_task,
@@ -24677,6 +24712,7 @@ fn process_systematic_research_command(
         "task_queue_id": task_queue_id.clone(),
         "completed_at_ms": completed_at_ms
     });
+    let mut rxdb_writers = RxdbProjectionWriterCache::new(root);
 
     if !task_id.is_empty() {
         let mut task_payload = load_rxdb_collection_record(root, "research_tasks", &task_id)?
@@ -24711,8 +24747,9 @@ fn process_systematic_research_command(
             completed_at_ms,
             task_payload.clone(),
         )?;
-        upsert_rxdb_collection_record(
+        upsert_rxdb_collection_record_cached(
             root,
+            Some(&mut rxdb_writers),
             "research_tasks",
             &task_id,
             completed_at_ms,
@@ -24772,7 +24809,14 @@ fn process_systematic_research_command(
         completed_at_ms,
         run_payload.clone(),
     )?;
-    upsert_rxdb_collection_record(root, "research_runs", &run_id, completed_at_ms, run_payload)?;
+    upsert_rxdb_collection_record_cached(
+        root,
+        Some(&mut rxdb_writers),
+        "research_runs",
+        &run_id,
+        completed_at_ms,
+        run_payload,
+    )?;
 
     let command_payload = serde_json::json!({
         "id": command_id,
@@ -24796,8 +24840,9 @@ fn process_systematic_research_command(
         completed_at_ms,
         command_payload.clone(),
     )?;
-    upsert_rxdb_collection_record(
+    upsert_rxdb_collection_record_cached(
         root,
+        Some(&mut rxdb_writers),
         "business_commands",
         command_id,
         completed_at_ms,
@@ -24806,6 +24851,7 @@ fn process_systematic_research_command(
     refresh_queue_task_projection(
         root,
         conn,
+        Some(&mut rxdb_writers),
         command_id,
         command,
         terminal_queue_task.as_ref().or(queue_task),
@@ -25565,8 +25611,8 @@ struct CvPrintWritebackResult {
 }
 
 /// Apply a parsed CV profile: create a new `document_versions` version and patch
-/// the `documents` record. Writes the generic `business_records` store; the
-/// `rxdb_peer` projection loop replicates both collections to the browser.
+/// the `documents` record. Writes the generic `business_records` store and the
+/// browser RxDB projection in the same fanout session.
 fn writeback_cv_print_parse(
     root: &Path,
     conn: &Connection,
@@ -25684,6 +25730,7 @@ fn writeback_cv_print_parse(
     let index_text = cv_print_index_text(&model_json, &candidate_name);
 
     let now = now_ms() as i64;
+    let mut rxdb_writers = RxdbProjectionWriterCache::new(root);
     let next_version: i64 = conn
         .query_row(
             "SELECT COALESCE(MAX(CAST(json_extract(payload_json, '$.version') AS INTEGER)), 0) + 1
@@ -25729,7 +25776,14 @@ fn writeback_cv_print_parse(
         now,
         version_payload.clone(),
     )?;
-    upsert_rxdb_collection_record(root, "document_versions", &version_id, now, version_payload)?;
+    upsert_rxdb_collection_record_cached(
+        root,
+        Some(&mut rxdb_writers),
+        "document_versions",
+        &version_id,
+        now,
+        version_payload,
+    )?;
 
     // Patch the existing document, preserving fields the browser already set.
     let mut document_payload = conn
@@ -25768,7 +25822,14 @@ fn writeback_cv_print_parse(
         now,
         document_payload.clone(),
     )?;
-    upsert_rxdb_collection_record(root, "documents", &document_id, now, document_payload)?;
+    upsert_rxdb_collection_record_cached(
+        root,
+        Some(&mut rxdb_writers),
+        "documents",
+        &document_id,
+        now,
+        document_payload,
+    )?;
 
     Ok(CvPrintWritebackResult {
         document_id,
@@ -25836,6 +25897,7 @@ fn process_cv_print_parse_command(
             refresh_queue_task_projection(
                 root,
                 conn,
+                None,
                 command_id,
                 command,
                 queue_task,
@@ -25890,6 +25952,7 @@ fn process_cv_print_parse_command(
             refresh_queue_task_projection(
                 root,
                 conn,
+                None,
                 command_id,
                 command,
                 queue_task,
@@ -27814,6 +27877,7 @@ fn clip_text(value: &str, max_chars: usize) -> String {
 fn refresh_queue_task_projection(
     root: &Path,
     conn: &Connection,
+    rxdb_writers: Option<&mut RxdbProjectionWriterCache>,
     command_id: &str,
     command: &BusinessCommand,
     original_task: Option<&channels::QueueTaskView>,
@@ -27843,8 +27907,9 @@ fn refresh_queue_task_projection(
         updated_at_ms,
         payload.clone(),
     )?;
-    upsert_rxdb_collection_record(
+    upsert_rxdb_collection_record_cached(
         root,
+        rxdb_writers,
         "ctox_queue_tasks",
         &task.message_key,
         updated_at_ms,
@@ -28246,17 +28311,14 @@ fn upsert_command_projection_from_queue_status(
         updated_at_ms,
         payload.clone(),
     )?;
-    if let Some(writers) = rxdb_writers.as_deref_mut() {
-        writers.upsert("business_commands", command_id, updated_at_ms, payload)?;
-    } else {
-        upsert_rxdb_collection_record(
-            root,
-            "business_commands",
-            command_id,
-            updated_at_ms,
-            payload,
-        )?;
-    }
+    upsert_rxdb_collection_record_cached(
+        root,
+        rxdb_writers.as_deref_mut(),
+        "business_commands",
+        command_id,
+        updated_at_ms,
+        payload,
+    )?;
     Ok(())
 }
 
@@ -40935,6 +40997,83 @@ mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(last_write_time, 1_004.0);
+        Ok(())
+    }
+
+    #[test]
+    fn rxdb_projection_writer_cache_reuses_writers_across_command_fanout() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        let collections = [
+            (
+                "business_commands",
+                "ctox_business_os__business_commands__v1",
+            ),
+            ("ctox_queue_tasks", "ctox_business_os__ctox_queue_tasks__v0"),
+            ("business_chats", "ctox_business_os__business_chats__v0"),
+            ("research_runs", "ctox_business_os__research_runs__v0"),
+        ];
+        let sqlite_path = rxdb_store_path(root);
+        let conn = Connection::open(sqlite_path)?;
+        for (_, table) in collections {
+            conn.execute(
+                &format!(
+                    "CREATE TABLE {table} (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        revision TEXT,
+                        deleted INTEGER NOT NULL DEFAULT 0,
+                        lastWriteTime REAL NOT NULL DEFAULT 0,
+                        data TEXT NOT NULL
+                    )"
+                ),
+                [],
+            )?;
+        }
+        drop(conn);
+
+        for (collection, table) in collections {
+            reset_rxdb_table_column_load_count(root, table);
+            reset_rxdb_collection_writer_open_count(root, collection);
+        }
+        let mut writers = RxdbProjectionWriterCache::new(root);
+        for idx in 0..100 {
+            for (collection, _) in collections {
+                upsert_rxdb_collection_record_cached(
+                    root,
+                    Some(&mut writers),
+                    collection,
+                    &format!("{collection}-{idx}"),
+                    2_000 + idx,
+                    serde_json::json!({
+                        "id": format!("{collection}-{idx}"),
+                        "fanout_index": idx,
+                        "collection": collection
+                    }),
+                )?;
+            }
+        }
+
+        for (collection, table) in collections {
+            assert_eq!(
+                rxdb_table_column_load_count(root, table),
+                1,
+                "{collection} must not run PRAGMA table_info per fanout upsert"
+            );
+            assert_eq!(
+                rxdb_collection_writer_open_count(root, collection),
+                1,
+                "{collection} must not reopen SQLite per fanout upsert"
+            );
+        }
+        let conn = Connection::open(rxdb_store_path(root))?;
+        for (_, table) in collections {
+            let count: i64 =
+                conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })?;
+            assert_eq!(count, 100);
+        }
         Ok(())
     }
 
