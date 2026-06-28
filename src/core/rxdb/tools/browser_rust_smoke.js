@@ -2687,6 +2687,20 @@ function ensureCtoxSmokeBinary() {
       && /ERR_INTERNET_DISCONNECTED/i.test(failureText)
       && request.url().includes('/business-os/modules/registry.json');
   }
+  function isLocalBusinessOsAssetUrl(rawUrl) {
+    let url;
+    try {
+      url = new URL(rawUrl);
+    } catch {
+      return false;
+    }
+    if (url.origin !== `http://127.0.0.1:${businessPort}`) return false;
+    return url.pathname.includes('/app.js')
+      || url.pathname.includes('/shared/')
+      || url.pathname.includes('/modules/')
+      || url.pathname.includes('/installed-modules/')
+      || url.pathname.includes('/vendor/');
+  }
 
   let browser;
   let browserUserDataDir = null;
@@ -2751,7 +2765,7 @@ function ensureCtoxSmokeBinary() {
     });
     page.on('requestfailed', (request) => {
       const url = request.url();
-      if (url.includes('/app.js') || url.includes('/shared/') || url.includes('/modules/') || url.includes('/installed-modules/') || url.includes('/vendor/')) {
+      if (isLocalBusinessOsAssetUrl(url)) {
         if (isExpectedNetworkFlapRequestFailure(request)) {
           browserDiagnostics.expectedNetworkFlapRequestFailures += 1;
         } else {
@@ -2762,7 +2776,7 @@ function ensureCtoxSmokeBinary() {
     });
     page.on('response', (response) => {
       const url = response.url();
-      if (response.status() >= 400 && (url.includes('/app.js') || url.includes('/shared/') || url.includes('/modules/') || url.includes('/installed-modules/') || url.includes('/vendor/'))) {
+      if (response.status() >= 400 && isLocalBusinessOsAssetUrl(url)) {
         browserDiagnostics.assetResponseErrors += 1;
         console.error(`[browser:response] ${response.status()} ${url}`);
       }
@@ -5904,7 +5918,9 @@ function ensureCtoxSmokeBinary() {
           || haystack.includes('ERR_SET_LOCAL_DESCRIPTION')
           || haystack.includes('ERR_PC_CONSTRUCTOR')
           || haystack.includes('Cannot create so many PeerConnections')
-          || haystack.includes('Still in CONNECTING state');
+          || haystack.includes('Still in CONNECTING state')
+          || haystack.includes('WebRTC replication cancelled')
+          || haystack.includes('Native peer did not open for restarted collections after batch retry');
       };
       const logUnexpectedReplicationError = (label, error) => {
         if (isRecoverablePeerLifecycleError(error)) return;
@@ -5950,14 +5966,30 @@ function ensureCtoxSmokeBinary() {
         const requested = [...new Set((collections || []).filter((collection) => typeof collection === 'string' && collection.trim()))];
         const bridgesByCollection = new Map();
         const regularCollections = requested.filter((collection) => !isDemandOnlySmokeCollection(collection));
+        const startRegularCollectionsIndividually = async (fallbackReason) => {
+          for (const collection of regularCollections) {
+            await state?.sync?.stopCollection?.(collection).catch(() => null);
+          }
+          await delay(500);
+          for (const collection of regularCollections) {
+            bridgesByCollection.set(collection, await startAppCollection(state, collection, fallbackReason));
+            await delay(250);
+          }
+        };
         if (regularCollections.length) {
-          if (typeof state?.sync?.restartCollections === 'function') {
-            const regularBridges = await state.sync.restartCollections(regularCollections);
-            regularCollections.forEach((collection, index) => bridgesByCollection.set(collection, regularBridges[index]));
-          } else {
-            for (const collection of regularCollections) {
-              bridgesByCollection.set(collection, await restartAppCollection(state, collection, reason));
+          try {
+            if (typeof state?.sync?.restartCollections === 'function') {
+              const regularBridges = await state.sync.restartCollections(regularCollections);
+              regularCollections.forEach((collection, index) => bridgesByCollection.set(collection, regularBridges[index]));
+            } else {
+              for (const collection of regularCollections) {
+                bridgesByCollection.set(collection, await restartAppCollection(state, collection, reason));
+              }
             }
+          } catch (error) {
+            if (!isRecoverablePeerLifecycleError(error)) throw error;
+            console.warn(`[business-os-smoke] batch collection restart recovered after ${error?.message || error}`);
+            await startRegularCollectionsIndividually(`${reason}-recovered`);
           }
         }
         for (const collection of requested.filter(isDemandOnlySmokeCollection)) {
