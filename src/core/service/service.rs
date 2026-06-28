@@ -3579,7 +3579,7 @@ fn harness_audit_db_stamp(core_db_path: &Path) -> Result<HarnessAuditDbStamp> {
         (
             "ctox_hm_findings",
             Some("last_seen_at"),
-            Some("status NOT IN ('mitigated','verified','stale')"),
+            Some("status = 'detected'"),
         ),
     ];
     let mut tables = Vec::with_capacity(table_specs.len());
@@ -3638,7 +3638,7 @@ fn harness_audit_table_stamp(
     })
 }
 
-fn harness_audit_source_has_active_findings(source_stamp: &HarnessAuditSourceStamp) -> bool {
+fn harness_audit_source_has_detected_findings(source_stamp: &HarnessAuditSourceStamp) -> bool {
     let HarnessAuditSourceStamp::Source(stamp) = source_stamp else {
         return false;
     };
@@ -13157,7 +13157,7 @@ fn should_skip_idle_harness_audit_tick(root: &Path) -> bool {
         return false;
     };
     let elapsed = now.duration_since(previous.last_run);
-    if harness_audit_source_has_active_findings(&source_stamp)
+    if harness_audit_source_has_detected_findings(&source_stamp)
         && elapsed >= Duration::from_secs(HARNESS_AUDIT_TICK_SECS)
     {
         return false;
@@ -22400,7 +22400,20 @@ mod tests {
         }
         assert!(
             !should_skip_idle_harness_audit_tick(&root),
-            "active harness findings must reopen the harness audit gate for follow-up"
+            "detected harness findings must reopen the harness audit gate for confirmation"
+        );
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute(
+                "UPDATE ctox_hm_findings SET status = 'confirmed', last_seen_at = ?1 WHERE finding_id = 'finding-1'",
+                params!["2026-06-27T00:03:00Z"],
+            )
+            .unwrap();
+        }
+        mark_harness_audit_tick_ran(&root);
+        assert!(
+            should_skip_idle_harness_audit_tick(&root),
+            "confirmed harness findings must not force recurring idle audit ticks"
         );
 
         clear_harness_audit_idle_gate_for_tests();
