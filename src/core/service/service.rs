@@ -134,7 +134,8 @@ const BUSINESS_OS_APP_RECOVERY_ARTIFACT_STAMP_MAX_DEPTH: usize = 8;
 const IDLE_DURABLE_QUEUE_EMPTY_BACKOFF_MAX_SECS: u64 = 60;
 const IDLE_DURABLE_QUEUE_EMPTY_IDLE_SAFETY_SECS: u64 = 3600;
 const SERVICE_PROCESS_SCAN_STATUS_CACHE_TTL_SECS: u64 = 5;
-const SERVICE_STATUS_DURABLE_CACHE_TTL_SECS: u64 = 2;
+const SERVICE_STATUS_DURABLE_CACHE_TTL_SECS: u64 = 15;
+const SERVICE_PERFORMANCE_STATUS_ARTIFACT_WRITE_TTL_SECS: u64 = 15;
 const BUSINESS_OS_APP_UNSTARTED_REQUEUE_BLOCK_THRESHOLD: usize = 1;
 const BUSINESS_OS_APP_UNSTARTED_REQUEUE_COUNT_KEY: &str = "business_os_app_unstarted_requeue_count";
 const BUSINESS_OS_APP_UNSTARTED_REQUEUED_AT_KEY: &str = "business_os_app_unstarted_requeued_at";
@@ -418,6 +419,8 @@ static SERVICE_STATUS_HTTP_REQUESTS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 static SERVICE_PERFORMANCE_BOOT_ID: OnceLock<String> = OnceLock::new();
 static SERVICE_PERFORMANCE_STARTED_AT: OnceLock<String> = OnceLock::new();
+static SERVICE_PERFORMANCE_STATUS_ARTIFACT_WRITE_GATE: OnceLock<Mutex<Option<(PathBuf, Instant)>>> =
+    OnceLock::new();
 
 static CHANNEL_SYNC_EMAIL_METRICS: ChannelSyncAdapterRuntimeMetrics =
     ChannelSyncAdapterRuntimeMetrics::new();
@@ -19860,11 +19863,33 @@ fn record_service_status_request(root: &Path, source: &str) {
     } else if source == "http_status" {
         SERVICE_STATUS_HTTP_REQUESTS.fetch_add(1, Ordering::Relaxed);
     }
-    let _ = write_service_performance_status_artifact(root);
+    if should_write_service_performance_status_artifact(
+        root,
+        Duration::from_secs(SERVICE_PERFORMANCE_STATUS_ARTIFACT_WRITE_TTL_SECS),
+    ) {
+        let _ = write_service_performance_status_artifact(root);
+    }
 }
 
 fn service_performance_status_path(root: &Path) -> PathBuf {
     root.join("runtime").join("service-performance.status.json")
+}
+
+fn service_performance_status_artifact_write_gate() -> &'static Mutex<Option<(PathBuf, Instant)>> {
+    SERVICE_PERFORMANCE_STATUS_ARTIFACT_WRITE_GATE.get_or_init(|| Mutex::new(None))
+}
+
+fn should_write_service_performance_status_artifact(root: &Path, ttl: Duration) -> bool {
+    let mut guard = service_performance_status_artifact_write_gate()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((cached_root, written_at)) = guard.as_ref() {
+        if cached_root.as_path() == root && written_at.elapsed() < ttl {
+            return false;
+        }
+    }
+    *guard = Some((root.to_path_buf(), Instant::now()));
+    true
 }
 
 fn write_service_performance_status_artifact(root: &Path) -> Result<()> {
@@ -19879,7 +19904,7 @@ fn write_service_performance_status_artifact(root: &Path) -> Result<()> {
         "performance": service_performance_snapshot(),
     });
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(&payload)?)
+    std::fs::write(&tmp, serde_json::to_vec(&payload)?)
         .with_context(|| format!("failed to write `{}`", tmp.display()))?;
     std::fs::rename(&tmp, &path)
         .with_context(|| format!("failed to move `{}` to `{}`", tmp.display(), path.display()))?;
@@ -19893,6 +19918,9 @@ fn reset_service_status_request_metrics_for_tests() {
     SERVICE_STATUS_REQUESTS_TOTAL.store(0, Ordering::Relaxed);
     SERVICE_STATUS_IPC_REQUESTS.store(0, Ordering::Relaxed);
     SERVICE_STATUS_HTTP_REQUESTS.store(0, Ordering::Relaxed);
+    *service_performance_status_artifact_write_gate()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
 }
 
 fn record_ticket_sync_runtime_metric(source: &str, ok: bool, activity: bool) {
@@ -25119,6 +25147,35 @@ Business OS command:
         assert_eq!(
             payload
                 .pointer("/performance/status_requests/ipc_status_requests")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn service_status_request_artifact_write_is_throttled() {
+        let root = temp_root("service-status-request-artifact-throttle");
+        reset_service_status_request_metrics_for_tests();
+
+        record_service_status_request(&root, "ipc_status");
+        record_service_status_request(&root, "ipc_status");
+
+        let performance = service_performance_snapshot();
+        assert_eq!(
+            performance
+                .pointer("/status_requests/total_requests")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+
+        let payload: Value = serde_json::from_slice(
+            &std::fs::read(service_performance_status_path(&root))
+                .expect("read service performance status artifact"),
+        )
+        .expect("parse service performance status artifact");
+        assert_eq!(
+            payload
+                .pointer("/performance/status_requests/total_requests")
                 .and_then(Value::as_u64),
             Some(1)
         );
