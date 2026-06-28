@@ -37,7 +37,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260627-effective-initial-sync-v1';
+const APP_BUILD = '20260628-advanced-status-query-timeout-v1';
 
 ensureShellStylesheets();
 
@@ -54,6 +54,7 @@ const RXDB_BOOTSTRAP_VERSION = `${BUSINESS_DB_NAME}:storage-v1`;
 const CTOX_HEALTH_POLL_MS = 10000;
 const SYNC_RECOVERY_REPAIR_DELAY_MS = 15000;
 const SHELL_IMPORT_TIMEOUT_MS = 45000;
+const ADVANCED_STATUS_COLLECTION_QUERY_TIMEOUT_MS = 2500;
 const DEFAULT_TASKBAR_PIN_IDS = ['ctox', 'tickets', 'documents', 'spreadsheets', 'explorer', 'knowledge', 'app-store', 'research', 'calendar'];
 // Shell-critical collections this app eagerly warms at boot. This MUST stay a
 // subset of SHELL_CRITICAL_COLLECTIONS, the single source of truth exported by
@@ -2993,7 +2994,11 @@ async function collectAdvancedStatusRequiredEvidence(names) {
       return;
     }
     try {
-      const docs = await collection.find({ limit: 1 }).exec();
+      const docs = await runAdvancedStatusStepWithTimeout(
+        () => collection.find({ limit: 1 }).exec(),
+        ADVANCED_STATUS_COLLECTION_QUERY_TIMEOUT_MS,
+        `Business OS advanced status required evidence query for ${name}`,
+      );
       const hasData = docs
         .map((doc) => doc?.toJSON?.() || doc)
         .some((doc) => !doc?._deleted && !doc?.is_deleted);
@@ -3009,7 +3014,11 @@ async function countCollectionDocs(name) {
   const collection = state.db?.raw?.[name];
   if (!collection?.find) return null;
   try {
-    const docs = await collection.find({ limit: 20 }).exec();
+    const docs = await runAdvancedStatusStepWithTimeout(
+      () => collection.find({ limit: 20 }).exec(),
+      ADVANCED_STATUS_COLLECTION_QUERY_TIMEOUT_MS,
+      `Business OS advanced status count query for ${name}`,
+    );
     return docs
       .map((doc) => doc?.toJSON?.() || doc)
       .filter((doc) => !doc?._deleted && !doc?.is_deleted)
