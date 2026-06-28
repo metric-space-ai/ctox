@@ -196,6 +196,12 @@ static CHANNEL_ROUTER_PREFLIGHT_IDLE_GATE: OnceLock<
 > = OnceLock::new();
 static CHANNEL_ROUTER_IDLE_GATE: OnceLock<Mutex<Option<ChannelRouterIdleGateState>>> =
     OnceLock::new();
+static CHANNEL_ROUTER_SOURCE_STAMP_CACHE: OnceLock<
+    Mutex<Option<ChannelRouterSourceStampCacheEntry>>,
+> = OnceLock::new();
+static DURABLE_COMMUNICATION_SOURCE_STAMP_CACHE: OnceLock<
+    Mutex<Option<DurableCommunicationSourceStampCacheEntry>>,
+> = OnceLock::new();
 static HARNESS_AUDIT_IDLE_GATE: OnceLock<Mutex<Option<HarnessAuditIdleGateState>>> =
     OnceLock::new();
 static APPROVAL_NAG_IDLE_GATE: OnceLock<Mutex<Option<ApprovalNagIdleGateState>>> = OnceLock::new();
@@ -214,6 +220,9 @@ static TICKET_SYNC_DUE_GATE: OnceLock<Mutex<Option<TicketSyncDueGateState>>> = O
 static TICKET_SYNC_RUNTIME_METRICS: OnceLock<
     Mutex<BTreeMap<String, TicketSyncRuntimeMetricCounts>>,
 > = OnceLock::new();
+#[cfg(test)]
+static CHANNEL_ROUTER_SOURCE_STAMP_LOAD_COUNTS: OnceLock<Mutex<BTreeMap<PathBuf, usize>>> =
+    OnceLock::new();
 
 #[derive(Debug, Clone)]
 struct TicketReconcileGateState {
@@ -237,6 +246,24 @@ struct ChannelRouterIdleGateState {
     source_stamp: ChannelRouterSourceStamp,
     settings: BTreeMap<String, String>,
     last_idle_pass: Instant,
+}
+
+#[derive(Debug, Clone)]
+struct ChannelRouterSourceStampCacheEntry {
+    root: PathBuf,
+    core_db_path: PathBuf,
+    core_db_stamp: CoreDbChangeStamp,
+    business_os_db_path: PathBuf,
+    business_os_db_stamp: CoreDbChangeStamp,
+    source_stamp: ChannelRouterSourceStamp,
+}
+
+#[derive(Debug, Clone)]
+struct DurableCommunicationSourceStampCacheEntry {
+    root: PathBuf,
+    core_db_path: PathBuf,
+    core_db_stamp: CoreDbChangeStamp,
+    source_stamp: DurableCommunicationSourceStamp,
 }
 
 #[derive(Debug, Clone)]
@@ -3382,13 +3409,50 @@ fn durable_status_source_stamp(root: &Path) -> DurableStatusSourceStamp {
 }
 
 fn channel_router_source_stamp(root: &Path) -> ChannelRouterSourceStamp {
+    let root_path = root.to_path_buf();
     let core_db_path = crate::paths::core_db(root);
-    ChannelRouterSourceStamp {
+    let core_db_stamp = core_db_change_stamp(&core_db_path);
+    let business_os_db_path = router_document_report_db_path(root);
+    let business_os_db_stamp = core_db_change_stamp(&business_os_db_path);
+    let cache = CHANNEL_ROUTER_SOURCE_STAMP_CACHE.get_or_init(|| Mutex::new(None));
+    {
+        let guard = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(cached) = guard.as_ref() {
+            if cached.root == root_path
+                && cached.core_db_path == core_db_path
+                && cached.core_db_stamp == core_db_stamp
+                && cached.business_os_db_path == business_os_db_path
+                && cached.business_os_db_stamp == business_os_db_stamp
+            {
+                return cached.source_stamp.clone();
+            }
+        }
+    }
+
+    #[cfg(test)]
+    record_channel_router_source_stamp_load_for_tests(root);
+    let source_stamp = ChannelRouterSourceStamp {
         communication: durable_communication_source_stamp(root, &core_db_path),
         schedule: router_schedule_source_stamp(&core_db_path),
-        document_reports: router_document_report_source_stamp(root),
+        document_reports: router_document_report_source_stamp_for_path(&business_os_db_path),
         tickets: router_ticket_source_stamp(&core_db_path),
-    }
+    };
+    let cached_core_db_stamp = core_db_change_stamp(&core_db_path);
+    let cached_business_os_db_stamp = core_db_change_stamp(&business_os_db_path);
+    let mut guard = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = Some(ChannelRouterSourceStampCacheEntry {
+        root: root_path,
+        core_db_path,
+        core_db_stamp: cached_core_db_stamp,
+        business_os_db_path,
+        business_os_db_stamp: cached_business_os_db_stamp,
+        source_stamp: source_stamp.clone(),
+    });
+    source_stamp
 }
 
 fn channel_router_source_has_due_time(source_stamp: &ChannelRouterSourceStamp) -> bool {
@@ -3698,12 +3762,15 @@ fn router_schedule_table_stamp(core_db_path: &Path) -> Result<RouterScheduleTabl
     })
 }
 
-fn router_document_report_source_stamp(root: &Path) -> RouterDocumentReportSourceStamp {
-    let path = root.join("runtime").join("business-os.sqlite3");
-    match router_document_report_table_stamp(&path) {
+fn router_document_report_source_stamp_for_path(path: &Path) -> RouterDocumentReportSourceStamp {
+    match router_document_report_table_stamp(path) {
         Ok(stamp) => RouterDocumentReportSourceStamp::Source(stamp),
-        Err(_) => RouterDocumentReportSourceStamp::File(core_db_change_stamp(&path)),
+        Err(_) => RouterDocumentReportSourceStamp::File(core_db_change_stamp(path)),
     }
+}
+
+fn router_document_report_db_path(root: &Path) -> PathBuf {
+    root.join("runtime").join("business-os.sqlite3")
 }
 
 fn router_document_report_table_stamp(path: &Path) -> Result<RouterDocumentReportTableStamp> {
@@ -3830,10 +3897,39 @@ fn durable_communication_source_stamp(
     root: &Path,
     core_db_path: &Path,
 ) -> DurableCommunicationSourceStamp {
-    match channels::communication_intake_source_stamp(root) {
-        Ok(stamp) => DurableCommunicationSourceStamp::Source(stamp),
-        Err(_) => DurableCommunicationSourceStamp::File(core_db_change_stamp(core_db_path)),
+    let root_path = root.to_path_buf();
+    let core_db_path = core_db_path.to_path_buf();
+    let core_db_stamp = core_db_change_stamp(&core_db_path);
+    let cache = DURABLE_COMMUNICATION_SOURCE_STAMP_CACHE.get_or_init(|| Mutex::new(None));
+    {
+        let guard = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(cached) = guard.as_ref() {
+            if cached.root == root_path
+                && cached.core_db_path == core_db_path
+                && cached.core_db_stamp == core_db_stamp
+            {
+                return cached.source_stamp.clone();
+            }
+        }
     }
+
+    let source_stamp = match channels::communication_intake_source_stamp(root) {
+        Ok(stamp) => DurableCommunicationSourceStamp::Source(stamp),
+        Err(_) => DurableCommunicationSourceStamp::File(core_db_stamp.clone()),
+    };
+    let cached_core_db_stamp = core_db_change_stamp(&core_db_path);
+    let mut guard = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = Some(DurableCommunicationSourceStampCacheEntry {
+        root: root_path,
+        core_db_path,
+        core_db_stamp: cached_core_db_stamp,
+        source_stamp: source_stamp.clone(),
+    });
+    source_stamp
 }
 
 fn durable_ticket_case_source_stamp(root: &Path) -> DurableTicketCaseSourceStamp {
@@ -13276,6 +13372,55 @@ fn clear_channel_router_preflight_idle_gate_for_tests() {
     }
 }
 
+#[cfg(test)]
+fn clear_channel_router_source_stamp_cache_for_tests() {
+    if let Some(cache) = CHANNEL_ROUTER_SOURCE_STAMP_CACHE.get() {
+        let mut guard = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = None;
+    }
+    if let Some(cache) = DURABLE_COMMUNICATION_SOURCE_STAMP_CACHE.get() {
+        let mut guard = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = None;
+    }
+}
+
+#[cfg(test)]
+fn record_channel_router_source_stamp_load_for_tests(root: &Path) {
+    let counts =
+        CHANNEL_ROUTER_SOURCE_STAMP_LOAD_COUNTS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut counts = counts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *counts.entry(root.to_path_buf()).or_insert(0) += 1;
+}
+
+#[cfg(test)]
+fn reset_channel_router_source_stamp_load_count_for_tests(root: &Path) {
+    if let Some(counts) = CHANNEL_ROUTER_SOURCE_STAMP_LOAD_COUNTS.get() {
+        counts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(root);
+    }
+}
+
+#[cfg(test)]
+fn channel_router_source_stamp_load_count_for_tests(root: &Path) -> usize {
+    let Some(counts) = CHANNEL_ROUTER_SOURCE_STAMP_LOAD_COUNTS.get() else {
+        return 0;
+    };
+    counts
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(root)
+        .copied()
+        .unwrap_or(0)
+}
+
 fn should_skip_idle_channel_router_tick(root: &Path, settings: &BTreeMap<String, String>) -> bool {
     let root_path = root.to_path_buf();
     let source_stamp = channel_router_source_stamp(root);
@@ -22225,6 +22370,72 @@ mod tests {
             ),
             "a pending document report command must reopen the idle router gate"
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn channel_router_source_stamp_cache_reuses_unchanged_db_and_reopens_on_queue_work() {
+        clear_channel_router_source_stamp_cache_for_tests();
+        let root = temp_root("channel-router-source-stamp-cache");
+        std::fs::create_dir_all(root.join("runtime")).unwrap();
+        let db_path = crate::paths::core_db(&root);
+        {
+            let conn = channels::open_channel_db(&db_path).unwrap();
+            drop(conn);
+        }
+        crate::business_os::store::open_store(&root).expect("failed to create Business OS store");
+        reset_channel_router_source_stamp_load_count_for_tests(&root);
+
+        let first = channel_router_source_stamp(&root);
+        assert_eq!(
+            channel_router_source_stamp_load_count_for_tests(&root),
+            1,
+            "first source-stamp read must load from the backing stores"
+        );
+
+        let unchanged = channel_router_source_stamp(&root);
+        assert_eq!(unchanged, first);
+        assert_eq!(
+            channel_router_source_stamp_load_count_for_tests(&root),
+            1,
+            "unchanged DB file stamps must not reload SQLite source stamps"
+        );
+
+        channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Router cache invalidation".to_string(),
+                prompt: "Verify router source-stamp cache invalidates on real queue work."
+                    .to_string(),
+                thread_key: "router/source-stamp-cache".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+        let changed = channel_router_source_stamp(&root);
+        assert_ne!(
+            changed, first,
+            "real queue work must change the router source stamp"
+        );
+        assert_eq!(
+            channel_router_source_stamp_load_count_for_tests(&root),
+            2,
+            "core DB changes must invalidate the router source-stamp cache exactly once"
+        );
+
+        let repeated = channel_router_source_stamp(&root);
+        assert_eq!(repeated, changed);
+        assert_eq!(
+            channel_router_source_stamp_load_count_for_tests(&root),
+            2,
+            "unchanged post-work DB stamps must reuse the refreshed cache"
+        );
+
+        clear_channel_router_source_stamp_cache_for_tests();
         let _ = std::fs::remove_dir_all(root);
     }
 
