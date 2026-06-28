@@ -1788,7 +1788,7 @@ function quoteSqlIdentifier(identifier) {
 // be inside their first catch-up. The strict contract requires COMPLETE
 // initial sync, so poll until the lazy tail finishes (bounded) before
 // asserting. Returns the last observed status either way.
-async function waitForHealthyCompleteStatus(page, { timeoutMs = 60000, requiredCollections = null } = {}) {
+async function waitForHealthyCompleteStatus(page, { timeoutMs = 60000, requiredCollections = null, allowRestart = true } = {}) {
   const deadline = Date.now() + timeoutMs;
   let status = null;
   let lastError = null;
@@ -1799,8 +1799,9 @@ async function waitForHealthyCompleteStatus(page, { timeoutMs = 60000, requiredC
       status = await page.evaluate((options) => globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
         timeoutMs: options.probeTimeoutMs,
         intervalMs: 250,
+        allowRestart: options.allowRestart === true,
         ...(options.requiredCollections ? { requiredCollections: options.requiredCollections } : {}),
-      }), { probeTimeoutMs, requiredCollections });
+      }), { probeTimeoutMs, requiredCollections, allowRestart });
       lastError = null;
     } catch (error) {
       lastError = error?.message || String(error);
@@ -12543,6 +12544,7 @@ function ensureCtoxSmokeBinary() {
         const advancedStatusStartedAt = Date.now();
         const advancedStatus = await globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
           timeoutMs: 60000,
+          allowRestart: true,
           requiredCollections: [
             'business_module_catalog',
             'ctox_runtime_settings',
@@ -12979,6 +12981,7 @@ function ensureCtoxSmokeBinary() {
         const advancedStatus = smokeMode === 'workspace-large-file-viewer-restart-rust-to-browser'
           ? await globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
               timeoutMs: 90000,
+              allowRestart: true,
               requiredCollections: [
                 'business_module_catalog',
                 'ctox_runtime_settings',
@@ -13221,6 +13224,7 @@ function ensureCtoxSmokeBinary() {
         await waitForNativePeerOpen(appChunkReplicationState, 'desktop_file_chunks restore resync');
         const advancedStatusAfterRepair = await globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
           timeoutMs: 90000,
+          allowRestart: true,
           requiredCollections: [
             'business_module_catalog',
             'ctox_runtime_settings',
@@ -13332,6 +13336,7 @@ function ensureCtoxSmokeBinary() {
           await waitForNativePeerOpen(appChunkReplicationState, 'desktop_file_chunks after native peer restart');
           const advancedStatusAfterRepair = await globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
             timeoutMs: 60000,
+            allowRestart: true,
             requiredCollections: [
               'business_module_catalog',
               'ctox_runtime_settings',

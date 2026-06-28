@@ -41,6 +41,7 @@ assertFileChunkIntegrityContract();
 assertActiveNotesModuleDoesNotUseLegacyNotesnookBuild();
 assertSyncWarmupDoesNotBlockBoot();
 assertConnectionSmokeRequiresAdvancedStatusBootBudget();
+assertProductionSmokeAdvancedStatusRepairOptIn();
 assertLoginDoesNotDefaultToAdmin();
 assertCtoxDbBrandingContract();
 assertBusinessOsServerHttpDataApisAreGated();
@@ -698,6 +699,17 @@ function assertConnectionSmokeRequiresAdvancedStatusBootBudget() {
     if (!smokeContent.includes(marker)) {
       offenders.push(`src/core/rxdb/tools/business_os_connection_modes_smoke.js: startup smoke missing advanced-status boot budget marker ${marker}`);
     }
+  }
+}
+
+function assertProductionSmokeAdvancedStatusRepairOptIn() {
+  const smokePath = join(repoRoot, 'src/core/rxdb/tools/browser_rust_smoke.js');
+  const smokeContent = readFileSync(smokePath, 'utf8');
+  if (!/async function waitForHealthyCompleteStatus\([^)]*allowRestart\s*=\s*true/.test(smokeContent)) {
+    offenders.push('src/core/rxdb/tools/browser_rust_smoke.js: strict advanced-status smoke wait must opt into required-collection repair');
+  }
+  if (!/allowRestart:\s*options\.allowRestart === true/.test(smokeContent)) {
+    offenders.push('src/core/rxdb/tools/browser_rust_smoke.js: advanced-status smoke wait does not forward repair opt-in to Business OS status API');
   }
 }
 
