@@ -469,6 +469,12 @@ struct DurableStatusSourceStamp {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
+struct DurableStatusFileStamp {
+    core_db: CoreDbChangeStamp,
+    ticket_store: tickets::TicketStoreChangeStamp,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
 struct ChannelRouterSourceStamp {
     communication: DurableCommunicationSourceStamp,
     schedule: RouterScheduleSourceStamp,
@@ -604,6 +610,7 @@ struct LiveServiceSettingsCacheState {
 struct DurableServiceStatusCacheEntry {
     loaded_at: Instant,
     root: PathBuf,
+    file_stamp: DurableStatusFileStamp,
     source_stamp: DurableStatusSourceStamp,
     snapshot: DurableServiceStatusSnapshot,
 }
@@ -3385,11 +3392,14 @@ fn durable_status_snapshot_cache() -> &'static DurableServiceStatusCache {
 
 fn durable_status_snapshot_cached(root: &Path, ttl: Duration) -> DurableServiceStatusSnapshot {
     let root_path = root.to_path_buf();
+    let file_stamp = durable_status_file_stamp(root);
     let cache = durable_status_snapshot_cache();
     {
         let guard = cache.lock().unwrap_or_else(|err| err.into_inner());
         if let Some(cached) = guard.as_ref() {
-            if cached.root == root_path && cached.loaded_at.elapsed() < ttl {
+            if cached.root == root_path
+                && (cached.loaded_at.elapsed() < ttl || cached.file_stamp == file_stamp)
+            {
                 return cached.snapshot.clone();
             }
         }
@@ -3397,22 +3407,34 @@ fn durable_status_snapshot_cached(root: &Path, ttl: Duration) -> DurableServiceS
 
     let source_stamp = durable_status_source_stamp(root);
     {
-        let guard = cache.lock().unwrap_or_else(|err| err.into_inner());
-        if let Some(cached) = guard.as_ref() {
+        let mut guard = cache.lock().unwrap_or_else(|err| err.into_inner());
+        if let Some(cached) = guard.as_mut() {
             if cached.root == root_path && cached.source_stamp == source_stamp {
+                cached.loaded_at = Instant::now();
+                cached.file_stamp = durable_status_file_stamp(root);
                 return cached.snapshot.clone();
             }
         }
     }
 
     let snapshot = load_durable_status_snapshot(root);
+    let source_stamp = durable_status_source_stamp(root);
+    let file_stamp = durable_status_file_stamp(root);
     *cache.lock().unwrap_or_else(|err| err.into_inner()) = Some(DurableServiceStatusCacheEntry {
         loaded_at: Instant::now(),
         root: root_path,
-        source_stamp: durable_status_source_stamp(root),
+        file_stamp,
+        source_stamp,
         snapshot: snapshot.clone(),
     });
     snapshot
+}
+
+fn durable_status_file_stamp(root: &Path) -> DurableStatusFileStamp {
+    DurableStatusFileStamp {
+        core_db: core_db_change_stamp(&crate::paths::core_db(root)),
+        ticket_store: tickets::ticket_store_change_stamp(root),
+    }
 }
 
 fn durable_status_source_stamp(root: &Path) -> DurableStatusSourceStamp {
