@@ -68,7 +68,7 @@ test("source manager refreshes ctox.dev revocation without dropping unmanaged in
     source: "ssh_managed",
     displayName: "SSH VPS",
     connection: {
-      host: "57.129.123.108",
+      host: "203.0.113.11",
       user: "ubuntu",
       port: 22,
       managedBy: "desktop",

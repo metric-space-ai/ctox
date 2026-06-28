@@ -21,7 +21,7 @@ let instances = [{
   displayName: "Remote VPS",
   status: "offline",
   connection: {
-    host: "57.129.123.108",
+    host: "203.0.113.11",
     user: "ubuntu",
     port: 22,
   },

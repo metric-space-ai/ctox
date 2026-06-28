@@ -24,14 +24,14 @@ const EXPECTED_ED25519_FINGERPRINT = `SHA256:${crypto
   .replace(/=+$/, "")}`;
 
 test("ssh-keyscan args respect host and non-standard port", () => {
-  assert.deepEqual(buildSshKeyscanArgs({ host: "51.210.246.120", port: 2222 }), [
+  assert.deepEqual(buildSshKeyscanArgs({ host: "203.0.113.10", port: 2222 }), [
     "-p",
     "2222",
     "-T",
     "10",
     "-t",
     "ed25519,ecdsa,rsa",
-    "51.210.246.120",
+    "203.0.113.10",
   ]);
 });
 

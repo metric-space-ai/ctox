@@ -221,20 +221,20 @@ app.whenReady().then(async () => {
         && unmanagedSettings.name === "Remote VPS"
         && unmanagedSettings.actions.join("|") === "SSH-Passwort speichern|Sudo-Passwort speichern|Aus App entfernen"
         && unmanagedSettings.fields["Quelle"] === "ssh"
-        && unmanagedSettings.fields["Host"] === "57.129.123.108"
+        && unmanagedSettings.fields["Host"] === "203.0.113.11"
         && sshPasswordInputType === "password"
         && sshPasswordRequests.length === 1
-        && sshPasswordRequests[0].host === "57.129.123.108"
+        && sshPasswordRequests[0].host === "203.0.113.11"
         && sshPasswordRequests[0].user === "ubuntu"
         && sshPasswordRequests[0].passwordLength === 12
-        && unmanagedSettingsAfterSsh.fields["SSH Secret"] === "keychain://ctox-business-os-desktop/ssh-login/57.129.123.108"
+        && unmanagedSettingsAfterSsh.fields["SSH Secret"] === "keychain://ctox-business-os-desktop/ssh-login/203.0.113.11"
         && !JSON.stringify(unmanagedSettingsAfterSsh).includes("login-secret")
         && passwordInputType === "password"
         && sudoPasswordRequests.length === 1
-        && sudoPasswordRequests[0].host === "57.129.123.108"
+        && sudoPasswordRequests[0].host === "203.0.113.11"
         && sudoPasswordRequests[0].user === "ubuntu"
         && sudoPasswordRequests[0].passwordLength === 11
-        && unmanagedSettingsAfterSudo.fields["Sudo Secret"] === "keychain://ctox-business-os-desktop/ssh-sudo/57.129.123.108"
+        && unmanagedSettingsAfterSudo.fields["Sudo Secret"] === "keychain://ctox-business-os-desktop/ssh-sudo/203.0.113.11"
         && !JSON.stringify(unmanagedSettingsAfterSudo).includes("sudo-secret")
         && removeRequests.length === 1
         && removeRequests[0].id === "ssh:test"

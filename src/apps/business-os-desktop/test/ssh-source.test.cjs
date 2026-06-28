@@ -522,12 +522,12 @@ test("ssh-managed attach stores metadata only and builds webrtc launch", async (
     {
       shellUrl: "https://ctox.dev/business-os/",
       inspectHostKey: async () => ({
-        host: "51.210.246.120",
+        host: "203.0.113.10",
         port: 22,
         keyType: "ssh-ed25519",
         algorithm: "SHA256",
         fingerprint: "SHA256:testfingerprint",
-        knownHostsLine: "51.210.246.120 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC6Q",
+        knownHostsLine: "203.0.113.10 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC6Q",
         scannedAt: "2026-06-12T10:00:00.000Z",
       }),
       runEnsureCommand: async () => {
@@ -544,7 +544,7 @@ test("ssh-managed attach stores metadata only and builds webrtc launch", async (
   );
 
   const instance = await source.attachExisting({
-    host: "51.210.246.120",
+    host: "203.0.113.10",
     user: "ubuntu",
     port: 22,
     installRoot: "~/.local/lib/ctox/current",
@@ -552,7 +552,7 @@ test("ssh-managed attach stores metadata only and builds webrtc launch", async (
     trustedHostKeyFingerprint: "SHA256:testfingerprint",
   });
   assert.equal(instance.source, "ssh_managed");
-  assert.equal(instance.connection.host, "51.210.246.120");
+  assert.equal(instance.connection.host, "203.0.113.10");
   assert.equal(instance.connection.user, "ubuntu");
   assert.equal(instance.connection.hostKeyFingerprint, "SHA256:testfingerprint");
   assert.equal(ensureCalled, true);
