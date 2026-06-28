@@ -163,13 +163,12 @@ Audit konkretisiert werden.
 Aktueller Worktree zu Beginn von Welle 0:
 
 - `M src/apps/business-os/scripts/business-os-qa-baseline.mjs`
-- `?? docs/audits/business-os-live-forensic-inventory-2026-05-27.md`
 - `?? docs/business-os-customers-crm-implementation-plan.md`
 - `?? docs/rfcs/0009_business_os_customers_crm.md`
 
 Die vorhandene Aenderung an `src/apps/business-os/scripts/business-os-qa-baseline.mjs`
-und das untracked Audit-Dokument werden als fremde oder parallele Arbeiten
-behandelt und nicht ohne explizite Anforderung geaendert.
+wird als fremde oder parallele Arbeit behandelt und nicht ohne explizite
+Anforderung geaendert.
 
 Beim abschliessenden Welle-0-Statuscheck waren zusaetzlich diese nicht von
 dieser Welle erzeugten Aenderungen sichtbar:
@@ -228,7 +227,7 @@ Referenztests und Smokes:
 - `src/apps/business-os/modules/spreadsheets/spreadsheets.test.mjs`
 - `src/apps/business-os/modules/desktop/registry-launch-smoke.mjs`
 
-Der QA-Audit `docs/audits/business-os-app-qa-2026-05-27.md` bleibt eine
+Der QA-Audit aus Welle 0 bleibt eine
 verbindliche Warnung fuer Customers: Header, Toolbar, Filter, Icon Buttons,
 Tabs, Tabellenheader, Dialoge, Resizer und Empty/Error States duerfen nicht
 beliebig pro App neu erfunden werden. Wo noch keine shared Component existiert,

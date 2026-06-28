@@ -1,7 +1,5 @@
 # Business OS Roles and Permissions Plan
 
-Related Threads remediation: `docs/business-os-threads-roles-remediation-plan-2026-06-25.md`
-
 Status: Locally production-ready for the Phase 0-12 implemented core
 roles/permissions surfaces, dynamic-app lifecycle gates and native lifecycle
 catalog projection. Phase 10 is complete locally: App Store release publishes a

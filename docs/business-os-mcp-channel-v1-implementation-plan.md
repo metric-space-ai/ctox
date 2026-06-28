@@ -838,8 +838,6 @@ Artefakte:
   - GitHub install path fuer den externen Skill
 - Release notes
   - `docs/business-os-mcp-channel-v1-release-notes.md`
-- Live rollout report
-  - `docs/business-os-mcp-channel-v1-live-rollout-report.md`
 
 Tests:
 
