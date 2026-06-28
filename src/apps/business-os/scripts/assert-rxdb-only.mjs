@@ -403,6 +403,15 @@ function assertAdvancedStatusInterfaceExists() {
   if (!/business-os-advanced-status-v1/.test(appContent)) {
     offenders.push('src/apps/business-os/app.js: missing advanced status version marker');
   }
+  if (!/ADVANCED_STATUS_SNAPSHOT_TIMEOUT_MS\s*=\s*5000/.test(appContent)) {
+    offenders.push('src/apps/business-os/app.js: advanced status snapshot timeout must stay bounded');
+  }
+  if (!/async snapshot\(options = \{\}\)[\s\S]{0,260}runAdvancedStatusStepWithTimeout/.test(appContent)) {
+    offenders.push('src/apps/business-os/app.js: advanced status snapshot API must be timeout bounded');
+  }
+  if (!/Business OS advanced status health snapshot/.test(appContent)) {
+    offenders.push('src/apps/business-os/app.js: waitForHealthy must bound health snapshot probes');
+  }
   for (const requiredCheck of [
     'workspaceNotLoading',
     'dataPlaneWebrtc',

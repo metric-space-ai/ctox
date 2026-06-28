@@ -37,7 +37,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260628-sync-restart-cancel-v1';
+const APP_BUILD = '20260628-advanced-status-snapshot-timeout-v1';
 
 ensureShellStylesheets();
 
@@ -54,6 +54,7 @@ const RXDB_BOOTSTRAP_VERSION = `${BUSINESS_DB_NAME}:storage-v1`;
 const CTOX_HEALTH_POLL_MS = 10000;
 const SYNC_RECOVERY_REPAIR_DELAY_MS = 15000;
 const SHELL_IMPORT_TIMEOUT_MS = 45000;
+const ADVANCED_STATUS_SNAPSHOT_TIMEOUT_MS = 5000;
 const ADVANCED_STATUS_COLLECTION_QUERY_TIMEOUT_MS = 2500;
 const DEFAULT_TASKBAR_PIN_IDS = ['ctox', 'tickets', 'documents', 'spreadsheets', 'explorer', 'knowledge', 'app-store', 'research', 'calendar'];
 // Shell-critical collections this app eagerly warms at boot. This MUST stay a
@@ -261,7 +262,12 @@ function installAdvancedStatusInterface() {
   const api = {
     version: 'business-os-advanced-status-v1',
     async snapshot(options = {}) {
-      return buildAdvancedStatusSnapshot(options);
+      const timeoutMs = Math.max(250, Number(options.timeoutMs || ADVANCED_STATUS_SNAPSHOT_TIMEOUT_MS));
+      return runAdvancedStatusStepWithTimeout(
+        () => buildAdvancedStatusSnapshot(options),
+        timeoutMs,
+        'Business OS advanced status snapshot',
+      );
     },
     async waitForHealthy(options = {}) {
       const timeoutMs = Number(options.timeoutMs || 30000);
@@ -284,7 +290,12 @@ function installAdvancedStatusInterface() {
         } catch (error) {
           lastEnsureError = error;
         }
-        lastSnapshot = await buildAdvancedStatusSnapshot({ ...options, includeCounts: false });
+        const remainingSnapshotMs = Math.max(250, Math.min(ADVANCED_STATUS_SNAPSHOT_TIMEOUT_MS, Math.max(0, deadline - Date.now())));
+        lastSnapshot = await runAdvancedStatusStepWithTimeout(
+          () => buildAdvancedStatusSnapshot({ ...options, includeCounts: false }),
+          remainingSnapshotMs,
+          'Business OS advanced status health snapshot',
+        );
         if (lastSnapshot.ok) return lastSnapshot;
         await new Promise((resolve) => window.setTimeout(resolve, intervalMs));
       }
