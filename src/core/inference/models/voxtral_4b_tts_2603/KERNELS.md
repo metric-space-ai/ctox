@@ -1,6 +1,6 @@
 # Voxtral TTS Kernels
 
-Seed source: `/Users/michaelwelsch/Downloads/voxtral-rs-port-seed/kernels`.
+Seed source: `/Users/you/Downloads/voxtral-rs-port-seed/kernels`.
 
 - Metal: `vendor/metal/kernels/ctox_voxtral_tts_glue.metal`
 - CUDA: `vendor/cuda/kernels/ctox_voxtral_tts_glue.cu`

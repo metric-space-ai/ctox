@@ -2,7 +2,7 @@
 
 Bare-metal CTOX native port scaffold for `engineai/Voxtral-4B-TTS-2603`.
 
-This crate was seeded from `/Users/michaelwelsch/Downloads/voxtral-rs-port-seed`
+This crate was seeded from `/Users/you/Downloads/voxtral-rs-port-seed`
 and reshaped into CTOX's per-model layout:
 
 - no inference framework dependency;

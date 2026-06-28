@@ -29,7 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model",
         type=Path,
-        default=Path("/Users/michaelwelsch/.cache/huggingface/local/Qwen3.5-0.8B"),
+        default=Path("/Users/you/.cache/huggingface/local/Qwen3.5-0.8B"),
         help="Local HF model directory.",
     )
     return parser.parse_args()

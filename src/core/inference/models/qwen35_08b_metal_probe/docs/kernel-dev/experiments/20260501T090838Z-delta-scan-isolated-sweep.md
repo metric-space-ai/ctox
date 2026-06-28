@@ -11,7 +11,7 @@ layout, runtime, or autotuning change.
 
 ```text
 date: 20260501T090838Z
-owner: michaelwelsch
+owner: ctox
 subagents:
 model: Qwen3.5-0.8B
 metalpack: /tmp/ctox_qwen35_08b_real_fp16.metalpack
@@ -30,7 +30,7 @@ git_dirty_state: ?? ./
 device: Darwin MacBook-Pro-von-Michael.fritz.box 25.2.0 Darwin Kernel Version 25.2.0: Tue Nov 18 21:09:49 PST 2025; root:xnu-12377.61.12~1/RELEASE_ARM64_T8142 arm64
 macos_version: 26.2
 metal_device_name: Apple M5;Metal 4
-accepted_profile_path: /Users/michaelwelsch/Documents/ctox/src/inference/models/qwen35_08b_metal_probe/docs/kernel-dev/accepted_profile.env
+accepted_profile_path: /Users/you/Documents/ctox/src/inference/models/qwen35_08b_metal_probe/docs/kernel-dev/accepted_profile.env
 accepted_profile_hash: 9fbaabb2d5219904e92d5af877dc82aa8c9cabcc590a8f90ee2f1474c00ff8d4
 metalpack_path: /tmp/ctox_qwen35_08b_real_fp16.metalpack
 metalpack_manifest_hash: af0ae61f0b1eec332cd886fc49046f5371d36cf8393ded5747269533e9391897
@@ -38,7 +38,7 @@ weights_hash: e218ad6265b704de41b005711c0526078c2f78af815cbfba7c079a737aca0190
 binary_path: target/release/bench_metalpack_prefill_delta_scan
 build_profile: release
 full_env_dump: /tmp/ctox_qwen35_env_20260501T090838Z_delta-scan-isolated-sweep.txt
-baseline_env: /Users/michaelwelsch/Documents/ctox/src/inference/models/qwen35_08b_metal_probe/docs/kernel-dev/accepted_profile.env
+baseline_env: /Users/you/Documents/ctox/src/inference/models/qwen35_08b_metal_probe/docs/kernel-dev/accepted_profile.env
 candidate_env: plain; rowcache; rowcache_direct; rowcache_block64; rowcache_block32; rowcache_block_auto; lanes4_sharedqk_approx
 output_csv: /tmp/ctox_qwen35_scan_isolated_20260501T_continue/raw.tsv
 dump_paths: /tmp/ctox_qwen35_20260501T090838Z_delta-scan-isolated-sweep_*.bin

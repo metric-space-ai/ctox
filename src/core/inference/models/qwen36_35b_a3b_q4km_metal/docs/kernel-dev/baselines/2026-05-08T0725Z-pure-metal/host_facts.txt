@@ -4,4 +4,4 @@ ProductName:		macOS
 ProductVersion:		26.2
 BuildVersion:		25C56
 --- BLAS disabled (libggml-blas.so renamed to .DISABLED) ---
-6f5c72e2cde7fb0a1584cc009cdb4513f26733740369d3e2df0e7d7247112d05  /Users/michaelwelsch/Documents/ctox/runtime/models/qwen36_35b_a3b_gguf/Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf
+6f5c72e2cde7fb0a1584cc009cdb4513f26733740369d3e2df0e7d7247112d05  /Users/you/Documents/ctox/runtime/models/qwen36_35b_a3b_gguf/Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf

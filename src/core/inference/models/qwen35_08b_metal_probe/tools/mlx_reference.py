@@ -17,7 +17,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--model",
-        default="/Users/michaelwelsch/.cache/huggingface/local/Qwen3.5-0.8B",
+        default="/Users/you/.cache/huggingface/local/Qwen3.5-0.8B",
         help="Local Qwen3.5-0.8B model directory.",
     )
     parser.add_argument("--prompt-token", type=int, default=107)

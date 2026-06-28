@@ -4,7 +4,7 @@
 
 ```text
 date: 20260501T081544Z
-owner: michaelwelsch
+owner: ctox
 subagents: n/a
 model: Qwen3.5-0.8B
 metalpack: /tmp/ctox_qwen35_08b_real_fp16.metalpack
@@ -21,7 +21,7 @@ git_dirty_state: dirty - qwen35_08b_metal_probe untracked/modified plus unrelate
 device: Darwin MacBook-Pro-von-Michael.fritz.box 25.2.0 Darwin Kernel Version 25.2.0: Tue Nov 18 21:09:49 PST 2025; root:xnu-12377.61.12~1/RELEASE_ARM64_T8142 arm64
 macos_version: 26.2
 metal_device_name: Apple M5;Metal 4
-accepted_profile_path: /Users/michaelwelsch/Documents/ctox/src/inference/models/qwen35_08b_metal_probe/docs/kernel-dev/accepted_profile.env
+accepted_profile_path: /Users/you/Documents/ctox/src/inference/models/qwen35_08b_metal_probe/docs/kernel-dev/accepted_profile.env
 accepted_profile_hash: 7e53ef2b3926542ce63c73e6f5e5f43b1e49926c6f71f7c0fc3478a29dbfaa9e
 metalpack_path: /tmp/ctox_qwen35_08b_real_fp16.metalpack
 metalpack_manifest_hash: af0ae61f0b1eec332cd886fc49046f5371d36cf8393ded5747269533e9391897
