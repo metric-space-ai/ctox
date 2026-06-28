@@ -2930,6 +2930,66 @@ impl DesktopFileIndexWatch {
     }
 }
 
+struct NotesSyncWatch {
+    _watcher: notify::RecommendedWatcher,
+    rx: mpsc::UnboundedReceiver<()>,
+    notes_dir_exists: bool,
+}
+
+impl NotesSyncWatch {
+    fn new(root: &Path) -> anyhow::Result<Self> {
+        let business_os_dir = root.join("runtime/business-os");
+        std::fs::create_dir_all(&business_os_dir)
+            .with_context(|| format!("create notes watch parent {}", business_os_dir.display()))?;
+        let notes_dir = business_os_dir.join("notes");
+        let notes_dir_exists = notes_dir.is_dir();
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut watcher = notify::recommended_watcher(move |_event| {
+            let _ = tx.send(());
+        })
+        .context("create notes sync watcher")?;
+        watcher
+            .watch(&business_os_dir, notify::RecursiveMode::NonRecursive)
+            .with_context(|| {
+                format!(
+                    "watch Business OS notes parent {}",
+                    business_os_dir.display()
+                )
+            })?;
+        if notes_dir_exists {
+            watcher
+                .watch(&notes_dir, notify::RecursiveMode::Recursive)
+                .with_context(|| format!("watch notes directory {}", notes_dir.display()))?;
+        }
+        Ok(Self {
+            _watcher: watcher,
+            rx,
+            notes_dir_exists,
+        })
+    }
+
+    fn drain_pending(&mut self) -> bool {
+        let mut saw_event = false;
+        while self.rx.try_recv().is_ok() {
+            saw_event = true;
+        }
+        saw_event
+    }
+
+    async fn wait_for_event(&mut self, timeout: Duration) -> bool {
+        if timeout.is_zero() {
+            return self.drain_pending();
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(timeout) => self.drain_pending(),
+            event = self.rx.recv() => {
+                let saw_event = event.is_some();
+                self.drain_pending() || saw_event
+            }
+        }
+    }
+}
+
 fn desktop_file_scan_root_paths(scan_roots: &[DesktopFileScanRoot]) -> Vec<PathBuf> {
     scan_roots
         .iter()
@@ -2940,15 +3000,53 @@ fn desktop_file_scan_root_paths(scan_roots: &[DesktopFileScanRoot]) -> Vec<PathB
 async fn sync_notes_background_loop(root: PathBuf) {
     let mut last_source_stamp: Option<store::LocalMarkdownNotesSourceStamp> = None;
     let mut unchanged_ticks = 0u32;
+    let mut dirty_notes = true;
+    let mut notes_watch: Option<NotesSyncWatch> = None;
+    let mut last_watch_error: Option<String> = None;
     loop {
         let started = Instant::now();
         let result: anyhow::Result<bool> = async {
+            let notes_dir_exists = root.join("runtime/business-os/notes").is_dir();
+            let refresh_watch = notes_watch
+                .as_ref()
+                .map(|watch| watch.notes_dir_exists != notes_dir_exists)
+                .unwrap_or(true);
+            if refresh_watch {
+                match NotesSyncWatch::new(&root) {
+                    Ok(next_watch) => {
+                        notes_watch = Some(next_watch);
+                        last_watch_error = None;
+                        dirty_notes = true;
+                    }
+                    Err(err) => {
+                        let message = format!("{err:#}");
+                        if last_watch_error.as_deref() != Some(message.as_str()) {
+                            eprintln!("[business-os] notes sync watcher unavailable: {message}");
+                        }
+                        last_watch_error = Some(message);
+                        notes_watch = None;
+                        dirty_notes = true;
+                    }
+                }
+            }
+            if notes_watch
+                .as_mut()
+                .map(NotesSyncWatch::drain_pending)
+                .unwrap_or(false)
+            {
+                dirty_notes = true;
+            }
+            if !dirty_notes {
+                return Ok(false);
+            }
+
             let root_for_stamp = root.clone();
             let source_stamp = tokio::task::spawn_blocking(move || {
                 store::local_markdown_notes_source_stamp(&root_for_stamp)
             })
             .await
             .context("join native notes source stamp")??;
+            dirty_notes = false;
             if last_source_stamp.as_ref() == Some(&source_stamp) {
                 return Ok(false);
             }
@@ -2965,6 +3063,7 @@ async fn sync_notes_background_loop(root: PathBuf) {
                 .await
                 .context("join native notes source stamp after sync")??,
             );
+            dirty_notes = false;
             Ok(true)
         }
         .await;
@@ -2978,7 +3077,17 @@ async fn sync_notes_background_loop(root: PathBuf) {
                 eprintln!("[business-os] native rxdb notes sync failed: {err:#}");
             }
         }
-        tokio::time::sleep(notes_sync_sleep_interval(unchanged_ticks)).await;
+        let sleep_interval = notes_sync_sleep_interval(unchanged_ticks);
+        let event_driven = notes_watch.is_some();
+        let saw_event = if let Some(watch) = notes_watch.as_mut() {
+            watch.wait_for_event(sleep_interval).await
+        } else {
+            tokio::time::sleep(sleep_interval).await;
+            false
+        };
+        if saw_event || !event_driven || unchanged_ticks >= NOTES_SYNC_IDLE_BACKOFF_AFTER_TICKS {
+            dirty_notes = true;
+        }
     }
 }
 
@@ -11860,6 +11969,46 @@ mod tests {
             notes_sync_sleep_interval(unchanged_ticks),
             Duration::from_secs(NOTES_SYNC_ACTIVE_INTERVAL_SECS)
         );
+    }
+
+    #[tokio::test]
+    async fn notes_sync_watch_wakes_on_notes_dir_and_markdown_changes() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let notes_dir = root.path().join("runtime/business-os/notes");
+        let mut watch = NotesSyncWatch::new(root.path())?;
+        assert!(!watch.notes_dir_exists);
+
+        std::fs::create_dir_all(&notes_dir)?;
+        let mut saw_create_event = false;
+        for _ in 0..10 {
+            if watch.wait_for_event(Duration::from_millis(300)).await {
+                saw_create_event = true;
+                break;
+            }
+        }
+        assert!(
+            saw_create_event,
+            "creating the notes directory must wake the notes sync watcher"
+        );
+
+        let mut watch = NotesSyncWatch::new(root.path())?;
+        assert!(watch.notes_dir_exists);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        watch.drain_pending();
+
+        std::fs::write(notes_dir.join("watch.md"), "# Watch\n")?;
+        let mut saw_markdown_event = false;
+        for _ in 0..10 {
+            if watch.wait_for_event(Duration::from_millis(300)).await {
+                saw_markdown_event = true;
+                break;
+            }
+        }
+        assert!(
+            saw_markdown_event,
+            "markdown writes must wake the notes sync watcher before fallback polling"
+        );
+        Ok(())
     }
 
     #[test]

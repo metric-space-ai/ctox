@@ -765,6 +765,12 @@ is no longer the original file-share/browser `allDocuments()` burn path.
    file maintenance after sharing no longer holds the native RxDB write lock
    or scans all live `desktop_files` rows for unsafe paths, but watcher/dirty
    root triggering is still needed to make fallback scans exceptional.
+   Notes watcher triggering was added on 2026-06-28: the native notes loop now
+   watches `runtime/business-os` plus the notes directory when it exists, skips
+   the SQLite/file source stamp when no event is pending, and keeps the old
+   stamp as the slow fallback. `notes_sync_watch_wakes_on_notes_dir_and_markdown_changes`,
+   `notes_sync_sleep_backs_off_after_unchanged_round_and_resets_on_change`,
+   and the `local_markdown_notes_source_stamp_*` tests cover the new path.
 4. Projection writes are partially fixed. Repair/fanout paths now reuse a
    cached RxDB writer and cached table metadata per collection per pass, with a
    regression proving five upserts perform one `PRAGMA table_info` load. Finish
@@ -972,6 +978,11 @@ Implementation status:
   chunk/change-stream soak tests, browser perf smokes, file-access scenario
   automation, installed release proof that includes the service-performance
   status artifact, and installed 10 minute post-file-share idle evidence.
+- Installed gate on 2026-06-28 for release
+  `branch-main-20260628T043825Z` passed Gate A passive idle for 10 minutes, but
+  Gate B failed: `ctox status --json` at 2 Hz reported p95 latency around
+  2242 ms against the 100 ms budget. This keeps the release gate red even
+  though passive daemon idle stayed below the CPU budget in that run.
 
 Validation:
 
