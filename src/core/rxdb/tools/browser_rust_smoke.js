@@ -3556,7 +3556,10 @@ function ensureCtoxSmokeBinary() {
             }, null, 2)}`);
           }
           const status = await waitForHealthyCompleteStatus(page, {
-            timeoutMs: 120000,
+            // Auth reload can re-enter collection startup after the shell is
+            // visible; keep the same budget as production startup so
+            // business_commands gets a full reconnect/repair window.
+            timeoutMs: 240000,
             requiredCollections,
           });
           if (!status?.ok) {

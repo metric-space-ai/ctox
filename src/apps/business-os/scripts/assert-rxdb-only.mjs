@@ -720,6 +720,9 @@ function assertProductionSmokeAdvancedStatusRepairOptIn() {
   if (!/allowRestart:\s*options\.allowRestart === true/.test(smokeContent)) {
     offenders.push('src/core/rxdb/tools/browser_rust_smoke.js: advanced-status smoke wait does not forward repair opt-in to Business OS status API');
   }
+  if (!/Business OS auth smoke[\s\S]*timeoutMs:\s*240000[\s\S]*requiredCollections/.test(smokeContent)) {
+    offenders.push('src/core/rxdb/tools/browser_rust_smoke.js: auth-scope reload health wait must keep the production startup reconnect budget');
+  }
 }
 
 function expandFiles(paths) {
