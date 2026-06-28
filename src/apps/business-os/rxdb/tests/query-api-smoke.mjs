@@ -144,18 +144,43 @@ const complexSub = liveDb.live_items.find({ selector: { status: 'open' } }).$.su
   complexEmissions.push(value);
 });
 await waitFor(() => complexEmissions.length === 1);
+const complexInitialQueryCalls = liveStorage.stats.queryCalls;
 liveStorage.emitChange({
   c: { id: 'c', title: 'Gamma', status: 'open' },
 });
 await waitFor(() => complexEmissions.length === 2);
-const queryStats = liveDb.live_items.getQueryPerformanceStats();
 assert(
-  queryStats.liveQueries.complexLiveQueryReexecs === 1,
-  `complex live query re-exec counter mismatch: ${queryStats.liveQueries.complexLiveQueryReexecs}`,
+  liveStorage.stats.queryCalls === complexInitialQueryCalls,
+  'unbounded live query must apply matching changed docs without full query re-exec',
 );
 assert(
-  queryStats.liveQueries.lastComplexLiveQuery?.selectorFields?.join(',') === 'status',
-  'complex live query counter must retain selector fields for attribution',
+  complexEmissions.at(-1).map((doc) => doc.id).sort().join(',') === 'b,c',
+  'unbounded live query delta must include existing and newly matching docs',
+);
+liveStorage.emitChange({
+  b: { id: 'b', title: 'Beta closed', status: 'done' },
+});
+await waitFor(() => complexEmissions.length === 3);
+assert(
+  liveStorage.stats.queryCalls === complexInitialQueryCalls,
+  'unbounded live query must remove non-matching changed docs without full query re-exec',
+);
+assert(
+  complexEmissions.at(-1).map((doc) => doc.id).join(',') === 'c',
+  'unbounded live query delta must remove docs that no longer match',
+);
+const queryStats = liveDb.live_items.getQueryPerformanceStats();
+assert(
+  queryStats.liveQueries.complexLiveQueryReexecs === 0,
+  `unbounded live query must not re-exec after delta changes: ${queryStats.liveQueries.complexLiveQueryReexecs}`,
+);
+assert(
+  queryStats.liveQueries.deltaLiveQueryApplies === 2,
+  `delta live query apply counter mismatch: ${queryStats.liveQueries.deltaLiveQueryApplies}`,
+);
+assert(
+  queryStats.liveQueries.lastDeltaLiveQuery?.selectorFields?.join(',') === 'status',
+  'delta live query counter must retain selector fields for attribution',
 );
 complexSub.unsubscribe();
 await liveDb.close();

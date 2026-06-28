@@ -7284,7 +7284,9 @@ var CtoxRxCollection = class {
     this.demandLoader = null;
     this.liveQueryPerformanceStats = {
       complexLiveQueryReexecs: 0,
-      lastComplexLiveQuery: null
+      deltaLiveQueryApplies: 0,
+      lastComplexLiveQuery: null,
+      lastDeltaLiveQuery: null
     };
   }
   setDemandLoader(loader) {
@@ -7360,7 +7362,9 @@ var CtoxRxCollection = class {
     this.storageCollection.resetQueryPerformanceStats?.();
     this.liveQueryPerformanceStats = {
       complexLiveQueryReexecs: 0,
-      lastComplexLiveQuery: null
+      deltaLiveQueryApplies: 0,
+      lastComplexLiveQuery: null,
+      lastDeltaLiveQuery: null
     };
   }
   getQueryPerformanceStats() {
@@ -7373,6 +7377,17 @@ var CtoxRxCollection = class {
     this.liveQueryPerformanceStats.complexLiveQueryReexecs += 1;
     this.liveQueryPerformanceStats.lastComplexLiveQuery = {
       at: Date.now(),
+      selectorFields: Object.keys(query?.selector || {}).filter((field) => !field.startsWith("$")),
+      sortFields: normalizeSort2(query?.sort || []).map((entry) => Object.keys(entry || {})[0]).filter(Boolean),
+      limit: Number.isFinite(Number(query?.limit)) ? Number(query.limit) : null,
+      skip: Number.isFinite(Number(query?.skip)) ? Number(query.skip) : 0
+    };
+  }
+  recordDeltaLiveQueryApply(query = {}, changedCount = 0) {
+    this.liveQueryPerformanceStats.deltaLiveQueryApplies += 1;
+    this.liveQueryPerformanceStats.lastDeltaLiveQuery = {
+      at: Date.now(),
+      changedCount,
       selectorFields: Object.keys(query?.selector || {}).filter((field) => !field.startsWith("$")),
       sortFields: normalizeSort2(query?.sort || []).map((entry) => Object.keys(entry || {})[0]).filter(Boolean),
       limit: Number.isFinite(Number(query?.limit)) ? Number(query.limit) : null,
@@ -7483,10 +7498,27 @@ var CtoxRxQuery = class _CtoxRxQuery {
         let pendingPrimaryDoc = void 0;
         const primaryId = this.single ? singlePrimaryKeyCandidateId(this.query, this.collection.schema.primaryPath) : "";
         const canApplyPrimaryDelta = Boolean(primaryId);
+        const canApplyQueryDelta = !this.single && canApplyUnboundedQueryDelta(this.query);
+        let pendingSuccess = {};
+        const queryDocumentsById = /* @__PURE__ */ new Map();
+        const emitQueryDocuments = () => {
+          listener(sortDocuments(Array.from(queryDocumentsById.values()), this.query.sort));
+        };
+        const applyQuerySuccess = (success = {}) => {
+          for (const rawDoc of Object.values(success || {})) {
+            const id = documentIdFromDoc(rawDoc);
+            if (!id) continue;
+            if (rawDoc?._deleted || !matchesSelector(rawDoc, this.query.selector)) {
+              queryDocumentsById.delete(id);
+            } else {
+              queryDocumentsById.set(id, new CtoxRxDocument(this.collection, rawDoc));
+            }
+          }
+        };
         const flushEmit = () => {
           pendingTimer = null;
           if (!active) return;
-          if (initialized && !canApplyPrimaryDelta) {
+          if (initialized && !canApplyPrimaryDelta && !canApplyQueryDelta) {
             this.collection.recordComplexLiveQueryReexec(this.query);
           }
           this.exec().then((value) => {
@@ -7496,6 +7528,19 @@ var CtoxRxQuery = class _CtoxRxQuery {
               listener(wrapPrimaryDeltaDocument(this.collection, pendingPrimaryDoc));
               pendingPrimaryDoc = void 0;
               return;
+            }
+            if (canApplyQueryDelta && Array.isArray(value)) {
+              queryDocumentsById.clear();
+              for (const doc of value) {
+                const id = documentIdFromDoc(doc);
+                if (id) queryDocumentsById.set(id, doc);
+              }
+              if (Object.keys(pendingSuccess).length > 0) {
+                applyQuerySuccess(pendingSuccess);
+                pendingSuccess = {};
+                emitQueryDocuments();
+                return;
+              }
             }
             listener(value);
           }).catch(() => {
@@ -7508,6 +7553,15 @@ var CtoxRxQuery = class _CtoxRxQuery {
           pendingPrimaryDoc = void 0;
           listener(wrapPrimaryDeltaDocument(this.collection, next));
         };
+        const flushQueryDelta = () => {
+          pendingTimer = null;
+          if (!active || !initialized || !canApplyQueryDelta) return;
+          const success = pendingSuccess;
+          pendingSuccess = {};
+          applyQuerySuccess(success);
+          this.collection.recordDeltaLiveQueryApply(this.query, Object.keys(success).length);
+          emitQueryDocuments();
+        };
         const emit = (event) => {
           if (canApplyPrimaryDelta) {
             const success = successPayloadFromChangeEvent(event);
@@ -7516,6 +7570,16 @@ var CtoxRxQuery = class _CtoxRxQuery {
             if (!initialized) return;
             if (pendingTimer != null) return;
             pendingTimer = setTimeout(flushPrimaryDelta, 50);
+            return;
+          }
+          if (canApplyQueryDelta) {
+            pendingSuccess = {
+              ...pendingSuccess,
+              ...successPayloadFromChangeEvent(event)
+            };
+            if (!initialized) return;
+            if (pendingTimer != null) return;
+            pendingTimer = setTimeout(flushQueryDelta, 50);
             return;
           }
           if (pendingTimer != null) return;
@@ -7770,6 +7834,9 @@ function singlePrimaryKeyCandidateId(query = {}, primaryPath = "id") {
     return "";
   }
   return "";
+}
+function canApplyUnboundedQueryDelta(query = {}) {
+  return !Number.isFinite(Number(query?.limit)) && !(Number.isFinite(Number(query?.skip)) && Number(query.skip) > 0);
 }
 function wrapPrimaryDeltaDocument(collection, doc) {
   if (!doc || doc._deleted) return null;
