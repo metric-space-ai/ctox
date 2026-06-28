@@ -2878,7 +2878,7 @@ impl CtoxDesktopApp {
                                         }
                                         ui.label(RichText::new("User").color(Color32::from_gray(135)));
                                         if ui
-                                            .add(TextEdit::singleline(&mut installation.remote.ssh_user).hint_text("metricspace"))
+                                            .add(TextEdit::singleline(&mut installation.remote.ssh_user).hint_text("ubuntu"))
                                             .changed()
                                         {
                                             persist_registry = true;
@@ -2968,7 +2968,7 @@ impl CtoxDesktopApp {
                                         }
                                         ui.label(RichText::new("User").color(Color32::from_gray(135)));
                                         if ui
-                                            .add(TextEdit::singleline(&mut installation.remote.ssh_user).hint_text("metricspace"))
+                                            .add(TextEdit::singleline(&mut installation.remote.ssh_user).hint_text("ubuntu"))
                                             .changed()
                                         {
                                             remote_changed = true;

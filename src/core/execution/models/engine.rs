@@ -2578,7 +2578,7 @@ mod tests {
                     "type": "message",
                     "role": "user",
                     "content": [{
-                        "text": "Work only inside this workspace:\n/home/metricspace/ctox-e2e/workspace/cpp-chat-app\n\nCreate a bounded C++ verification project in this workspace.\n\nRequirements:\n- Use CMake.\n- Create at least these files: CMakeLists.txt, include/MessageQueue.h, src/MessageQueue.cpp, src/main.cpp.\n- Build it with: cmake -S . -B build && cmake --build build -j\n- Verify the binary with: ./build/ctox_cpp_smoke\n- On successful run, the program must print exactly CTOX_CPP_SMOKE_OK_1775581675\n- Do not answer before the files exist and the binary was executed successfully.\n- Keep the final answer extremely short and return exactly CTOX_CPP_SMOKE_OK_1775581675"
+                        "text": "Work only inside this workspace:\n/home/you/ctox-e2e/workspace/cpp-chat-app\n\nCreate a bounded C++ verification project in this workspace.\n\nRequirements:\n- Use CMake.\n- Create at least these files: CMakeLists.txt, include/MessageQueue.h, src/MessageQueue.cpp, src/main.cpp.\n- Build it with: cmake -S . -B build && cmake --build build -j\n- Verify the binary with: ./build/ctox_cpp_smoke\n- On successful run, the program must print exactly CTOX_CPP_SMOKE_OK_1775581675\n- Do not answer before the files exist and the binary was executed successfully.\n- Keep the final answer extremely short and return exactly CTOX_CPP_SMOKE_OK_1775581675"
                     }]
                 }
             ]
@@ -2617,7 +2617,7 @@ mod tests {
                     "type": "message",
                     "role": "user",
                     "content": [{
-                        "text": "Work only inside this workspace:\n/home/metricspace/ctox-e2e/workspace/cpp-chat-app\n\nCreate a bounded C++ verification project in this workspace.\n\nRequirements:\n- Use CMake.\n- Build it with: cmake -S . -B build && cmake --build build -j\n- Verify the binary with: ./build/ctox_cpp_smoke\n- On successful run, the program must print exactly CTOX_CPP_SMOKE_OK_1775581675\n- Do not answer before the files exist and the binary was executed successfully.\n- Keep the final answer extremely short and return exactly CTOX_CPP_SMOKE_OK_1775581675"
+                        "text": "Work only inside this workspace:\n/home/you/ctox-e2e/workspace/cpp-chat-app\n\nCreate a bounded C++ verification project in this workspace.\n\nRequirements:\n- Use CMake.\n- Build it with: cmake -S . -B build && cmake --build build -j\n- Verify the binary with: ./build/ctox_cpp_smoke\n- On successful run, the program must print exactly CTOX_CPP_SMOKE_OK_1775581675\n- Do not answer before the files exist and the binary was executed successfully.\n- Keep the final answer extremely short and return exactly CTOX_CPP_SMOKE_OK_1775581675"
                     }]
                 }
             ]

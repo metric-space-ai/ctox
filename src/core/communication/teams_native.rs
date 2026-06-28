@@ -1741,13 +1741,13 @@ mod tests {
 
     #[test]
     fn self_message_detection_uses_configured_bot_display_alias() {
-        let options = test_options("inf.yoda@remcapital.de", "INF.Yoda@remcapital.de", "");
+        let options = test_options("inf.demo@example.com", "INF.Demo@example.com", "");
         let identity = TeamsSelfIdentity::default();
         let self_msg = json!({
             "from": {"user": {"displayName": "Yoda", "id": "2cec2f2d-9b6d-4b36-9d47-ea3f7d7fb47e"}},
         });
         let other_msg = json!({
-            "from": {"user": {"displayName": "Cakmak, Jill", "id": "cfbba921-291c-42d3-8e30-3032f36b4601"}},
+            "from": {"user": {"displayName": "Lindner, Jill", "id": "cfbba921-291c-42d3-8e30-3032f36b4601"}},
         });
 
         assert!(is_self_teams_message(&self_msg, &identity, &options));

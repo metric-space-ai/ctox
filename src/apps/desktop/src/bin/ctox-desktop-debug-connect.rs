@@ -13,7 +13,7 @@ fn main() -> Result<()> {
             signaling_urls: vec!["wss://signaling.ctox.dev".to_owned()],
             auth_token: String::new(),
             password: "SuperDuper3GPU".to_owned(),
-            room_id: "ctox-metricspace-3gpu".to_owned(),
+            room_id: "ctox-example-3gpu".to_owned(),
             client_name: "desktop-debug".to_owned(),
             command_args: vec!["tui".to_owned()],
             title: "GPU3 debug".to_owned(),

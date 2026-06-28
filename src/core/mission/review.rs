@@ -2154,8 +2154,8 @@ mod tests {
             artifact_text: "Kurzstand: Ich liefere spaeter.".to_string(),
             artifact_action: Some("reply".to_string()),
             artifact_channel: "email".to_string(),
-            artifact_to: vec!["o.schaefers@gmx.net".to_string()],
-            artifact_cc: vec!["michael.welsch@metric-space.ai".to_string()],
+            artifact_to: vec!["s.mueller@example.com".to_string()],
+            artifact_cc: vec!["founder@example.com".to_string()],
             artifact_subject: "Jami Setup und QR-Code".to_string(),
             artifact_attachments: vec![
                 "/srv/runtime/communication/artifacts/jami/ctox-jami-setup.pdf".to_string(),
@@ -2176,8 +2176,8 @@ mod tests {
         assert!(rendered.contains("Artifact kind: reviewed_outbound_email_draft"));
         assert!(rendered.contains("judge the outbound draft itself as the artifact under review"));
         assert!(rendered.contains("Artifact action: reply"));
-        assert!(rendered.contains("Artifact to: o.schaefers@gmx.net"));
-        assert!(rendered.contains("Artifact cc: michael.welsch@metric-space.ai"));
+        assert!(rendered.contains("Artifact to: s.mueller@example.com"));
+        assert!(rendered.contains("Artifact cc: founder@example.com"));
         assert!(rendered.contains("Artifact subject: Jami Setup und QR-Code"));
         assert!(rendered.contains(
             "Artifact attachments: /srv/runtime/communication/artifacts/jami/ctox-jami-setup.pdf"

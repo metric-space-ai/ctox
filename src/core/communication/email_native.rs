@@ -3887,7 +3887,7 @@ mod tests {
     #[test]
     fn synced_message_direction_treats_self_authored_mail_as_outbound() {
         assert_eq!(
-            synced_message_direction("CTO1 <cto1@metric-space.ai>", "cto1@metric-space.ai"),
+            synced_message_direction("CTO1 <cto1@example.com>", "cto1@example.com"),
             "outbound"
         );
     }
@@ -3896,8 +3896,8 @@ mod tests {
     fn synced_message_direction_keeps_external_sender_as_inbound() {
         assert_eq!(
             synced_message_direction(
-                "Michael Welsch <michael.welsch@metric-space.ai>",
-                "cto1@metric-space.ai"
+                "Max Mustermann <founder@example.com>",
+                "cto1@example.com"
             ),
             "inbound"
         );
@@ -3906,8 +3906,8 @@ mod tests {
     #[test]
     fn extract_address_normalizes_wrapped_email() {
         assert_eq!(
-            extract_address("CTO1 <cto1@metric-space.ai>"),
-            "cto1@metric-space.ai"
+            extract_address("CTO1 <cto1@example.com>"),
+            "cto1@example.com"
         );
     }
 

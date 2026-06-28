@@ -11160,7 +11160,7 @@ mod tests {
         .unwrap();
 
         let action = FounderOutboundAction {
-            account_key: "email:cto1@metric-space.ai".to_string(),
+            account_key: "email:cto1@example.com".to_string(),
             thread_key: "<egress-3-thread@example.com>".to_string(),
             subject: "Re: budget".to_string(),
             to: vec!["founder@example.com".to_string()],
@@ -11886,15 +11886,15 @@ mod tests {
         let mut settings = BTreeMap::new();
         settings.insert(
             "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
-            "michael.welsch@metric-space.ai".to_string(),
+            "founder@example.com".to_string(),
         );
         settings.insert(
             "CTOX_FOUNDER_EMAIL_ADDRESSES".to_string(),
-            "michael.welsch@metric-space.ai,o.schaefers@gmx.net".to_string(),
+            "founder@example.com,s.mueller@example.com".to_string(),
         );
         settings.insert(
             "CTOX_FOUNDER_EMAIL_ROLES".to_string(),
-            "michael.welsch@metric-space.ai=CEO / Founder,o.schaefers@gmx.net=Sales Officer"
+            "founder@example.com=CEO / Founder,s.mueller@example.com=Sales Officer"
                 .to_string(),
         );
 
@@ -11905,7 +11905,7 @@ mod tests {
         let metadata_json: String = conn
             .query_row(
                 "SELECT metadata_json FROM owner_profiles WHERE owner_key = ?1",
-                ["o.schaefers@gmx.net"],
+                ["s.mueller@example.com"],
                 |row| row.get(0),
             )
             .expect("failed to load founder profile");
@@ -11939,10 +11939,10 @@ mod tests {
         let mut conn = open_channel_db(&db_path).expect("failed to open channel db");
         upsert_identity_profile(
             &mut conn,
-            "mp@iip-gmbh.de",
+            "mp@example.com",
             "Marco Pucciarelli",
             json!({
-                "email": "mp@iip-gmbh.de",
+                "email": "mp@example.com",
                 "role": "founder",
                 "role_title": "CFO / Founder",
                 "allow_admin_actions": true,
@@ -11955,17 +11955,17 @@ mod tests {
         let mut settings = BTreeMap::new();
         settings.insert(
             "CTOX_FOUNDER_EMAIL_ADDRESSES".to_string(),
-            "o.schaefers@gmx.net".to_string(),
+            "s.mueller@example.com".to_string(),
         );
 
         merge_owner_profile_settings(&root, &mut settings).expect("failed to merge owner profiles");
 
-        let policy = classify_email_sender(&settings, "mp@iip-gmbh.de");
+        let policy = classify_email_sender(&settings, "mp@example.com");
         assert!(policy.allowed);
         assert_eq!(policy.role, "founder");
         assert!(settings
             .get("CTOX_FOUNDER_EMAIL_ROLES")
-            .is_some_and(|roles| roles.contains("mp@iip-gmbh.de=CFO / Founder")));
+            .is_some_and(|roles| roles.contains("mp@example.com=CFO / Founder")));
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -11985,16 +11985,16 @@ mod tests {
         let mut conn = open_channel_db(&db_path).expect("failed to open channel db");
         upsert_identity_profile(
             &mut conn,
-            "mp@iip-gmbh.de",
+            "mp@example.com",
             "Marco Pucciarelli",
             json!({
-                "email": "mp@iip-gmbh.de",
+                "email": "mp@example.com",
                 "role": "founder",
                 "role_title": "CFO / Founder",
             }),
         )
         .expect("failed to insert founder profile");
-        let message_key = "email:cto1@metric-space.ai::INBOX::101";
+        let message_key = "email:cto1@example.com::INBOX::101";
         conn.execute(
             r#"INSERT INTO communication_messages (
                 message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
@@ -12003,9 +12003,9 @@ mod tests {
                 trust_level, status, seen, has_attachments, external_created_at, observed_at,
                 metadata_json
             ) VALUES (
-                ?1, 'email', 'email:cto1@metric-space.ai', 'crm-thread',
+                ?1, 'email', 'email:cto1@example.com', 'crm-thread',
                 '101', 'inbound', 'INBOX', 'Marco Pucciarelli',
-                'mp@iip-gmbh.de', '[]', '[]', '[]',
+                'mp@example.com', '[]', '[]', '[]',
                 'AW: Example CRM', 'CRM reply', 'Bitte beantworten.',
                 '', '', 'normal', 'received', 0, 0,
                 '2026-04-29T06:51:46Z', '2026-04-29T08:13:36Z', '{}'
@@ -12331,18 +12331,18 @@ mod tests {
         let mut settings = BTreeMap::new();
         settings.insert(
             "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
-            "michael.welsch@metric-space.ai".to_string(),
+            "founder@example.com".to_string(),
         );
 
         let error = validate_founder_outbound_email(
             &settings,
             &ChannelSendRequest {
                 channel: "email".to_string(),
-                account_key: "email:cto1@metric-space.ai".to_string(),
+                account_key: "email:cto1@example.com".to_string(),
                 thread_key: "mail-thread".to_string(),
                 body: "Short founder update.".to_string(),
                 subject: "Re: Test".to_string(),
-                to: vec!["michael.welsch@metric-space.ai".to_string()],
+                to: vec!["founder@example.com".to_string()],
                 cc: Vec::new(),
                 attachments: Vec::new(),
                 sender_display: None,
@@ -12366,7 +12366,7 @@ mod tests {
             &settings,
             &ChannelSendRequest {
                 channel: "email".to_string(),
-                account_key: "email:cto1@metric-space.ai".to_string(),
+                account_key: "email:cto1@example.com".to_string(),
                 thread_key: "mail-thread".to_string(),
                 body: "Short external update.".to_string(),
                 subject: "Re: Test".to_string(),
@@ -12494,7 +12494,7 @@ mod tests {
             &settings,
             &ChannelSendRequest {
                 channel: "email".to_string(),
-                account_key: "email:cto1@metric-space.ai".to_string(),
+                account_key: "email:cto1@example.com".to_string(),
                 thread_key: "mail-thread".to_string(),
                 body: "Die Dateien liegen unter /home/ubuntu/workspace/example/public/mockups/."
                     .to_string(),
@@ -12525,7 +12525,7 @@ mod tests {
     fn founder_outbound_body_rejects_address_headers_in_body() {
         let error = ensure_founder_outbound_body_clean(&ChannelSendRequest {
             channel: "email".to_string(),
-            account_key: "email:cto1@metric-space.ai".to_string(),
+            account_key: "email:cto1@example.com".to_string(),
             thread_key: "mail-thread".to_string(),
             body: "An: founder@example.com\nCc: owner@example.com\nBetreff: Re: Test\n\nHallo zusammen,\n\nsauberer Text.".to_string(),
             subject: "Re: Test".to_string(),
@@ -12551,9 +12551,9 @@ mod tests {
     fn founder_outbound_body_rejects_internal_send_status_report() {
         let error = ensure_founder_outbound_body_clean(&ChannelSendRequest {
             channel: "email".to_string(),
-            account_key: "email:cto1@metric-space.ai".to_string(),
+            account_key: "email:cto1@example.com".to_string(),
             thread_key: "mail-thread".to_string(),
-            body: "Die Founder-Mail ist als Reply raus. Review-Approval, Send-Proof, Outbound-Message-Row und Routing-State sind persistiert; Michaels Inbound `email:cto1@metric-space.ai::INBOX::105` steht jetzt auf `handled`."
+            body: "Die Founder-Mail ist als Reply raus. Review-Approval, Send-Proof, Outbound-Message-Row und Routing-State sind persistiert; Michaels Inbound `email:cto1@example.com::INBOX::105` steht jetzt auf `handled`."
                 .to_string(),
             subject: "Example CRM: ehrlicher Zwischenstand".to_string(),
             to: vec!["founder@example.com".to_string()],
@@ -12589,7 +12589,7 @@ mod tests {
             &settings,
             &ChannelSendRequest {
                 channel: "email".to_string(),
-                account_key: "email:cto1@metric-space.ai".to_string(),
+                account_key: "email:cto1@example.com".to_string(),
                 thread_key: "mail-thread".to_string(),
                 body: "Kurzes sauberes Update ohne internen Systemmuell.".to_string(),
                 subject: "Re: Test".to_string(),
@@ -12619,17 +12619,17 @@ mod tests {
         upsert_communication_message(
             &mut conn,
             UpsertMessage {
-                message_key: "email:cto1@metric-space.ai::INBOX::forward-1",
+                message_key: "email:cto1@example.com::INBOX::forward-1",
                 channel: "email",
-                account_key: "email:cto1@metric-space.ai",
+                account_key: "email:cto1@example.com",
                 thread_key: "<forward-thread@example.com>",
                 remote_id: "remote-forward-1",
                 direction: "inbound",
                 folder_hint: "INBOX",
-                sender_display: "Michael Welsch",
-                sender_address: "michael.welsch@metric-space.ai",
-                recipient_addresses_json: "[\"o.schaefers@gmx.net\"]",
-                cc_addresses_json: "[\"cto1@metric-space.ai\"]",
+                sender_display: "Max Mustermann",
+                sender_address: "founder@example.com",
+                recipient_addresses_json: "[\"s.mueller@example.com\"]",
+                cc_addresses_json: "[\"cto1@example.com\"]",
                 bcc_addresses_json: "[]",
                 subject: "Fwd: Visuelle Homepage",
                 preview: "Hi Olaf",
@@ -12647,19 +12647,19 @@ mod tests {
         )
         .expect("message upsert");
 
-        let inbound = load_message_from_conn(&conn, "email:cto1@metric-space.ai::INBOX::forward-1")
+        let inbound = load_message_from_conn(&conn, "email:cto1@example.com::INBOX::forward-1")
             .expect("load inbound")
             .expect("inbound missing");
         let addressing = load_message_addressing_from_conn(
             &conn,
-            "email:cto1@metric-space.ai::INBOX::forward-1",
+            "email:cto1@example.com::INBOX::forward-1",
         )
         .expect("load addressing")
         .expect("addressing missing");
 
         let (to, cc) = derive_founder_reply_recipients(&inbound, &addressing);
-        assert_eq!(to, vec!["o.schaefers@gmx.net".to_string()]);
-        assert_eq!(cc, vec!["michael.welsch@metric-space.ai".to_string()]);
+        assert_eq!(to, vec!["s.mueller@example.com".to_string()]);
+        assert_eq!(cc, vec!["founder@example.com".to_string()]);
 
         let _ = std::fs::remove_file(&db_path);
     }
@@ -12688,16 +12688,16 @@ mod tests {
         upsert_communication_message(
             &mut conn,
             UpsertMessage {
-                message_key: "email:cto1@metric-space.ai::INBOX::qr-1",
+                message_key: "email:cto1@example.com::INBOX::qr-1",
                 channel: "email",
-                account_key: "email:cto1@metric-space.ai",
+                account_key: "email:cto1@example.com",
                 thread_key: "<qr-thread@example.com>",
                 remote_id: "remote-qr-1",
                 direction: "inbound",
                 folder_hint: "INBOX",
-                sender_display: "Michael Welsch",
-                sender_address: "michael.welsch@metric-space.ai",
-                recipient_addresses_json: "[\"cto1@metric-space.ai\"]",
+                sender_display: "Max Mustermann",
+                sender_address: "founder@example.com",
+                recipient_addresses_json: "[\"cto1@example.com\"]",
                 cc_addresses_json: "[]",
                 bcc_addresses_json: "[]",
                 subject: "Jami zugang schicken.",
@@ -12718,7 +12718,7 @@ mod tests {
 
         let error = ensure_founder_reply_deliverables_present(
             &root,
-            "email:cto1@metric-space.ai::INBOX::qr-1",
+            "email:cto1@example.com::INBOX::qr-1",
             "Hi Michael,\n\nhier ist der direkte Jami-Zugang:\n\njami:abc123",
             &[],
         )
@@ -12932,7 +12932,7 @@ mod tests {
         let conn = open_channel_db(&db_path).expect("failed to open db");
         let action = ExternalChatAction {
             channel: "email".to_string(),
-            account_key: "email:cto1@metric-space.ai".to_string(),
+            account_key: "email:cto1@example.com".to_string(),
             thread_key: "email-thread".to_string(),
             subject: "Re: Customer".to_string(),
             to: vec!["customer@example.com".to_string()],
@@ -12943,7 +12943,7 @@ mod tests {
 
         record_external_chat_review_approval(
             &root,
-            "email:cto1@metric-space.ai::INBOX::customer-1",
+            "email:cto1@example.com::INBOX::customer-1",
             &action,
             body,
             "PASS",
@@ -13219,20 +13219,20 @@ mod tests {
         fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
         let db_path = crate::paths::core_db(&root);
         let mut conn = open_channel_db(&db_path).expect("failed to open db");
-        let inbound_key = "email:cto1@metric-space.ai::INBOX::exact-review-1";
+        let inbound_key = "email:cto1@example.com::INBOX::exact-review-1";
         upsert_communication_message(
             &mut conn,
             UpsertMessage {
                 message_key: inbound_key,
                 channel: "email",
-                account_key: "email:cto1@metric-space.ai",
+                account_key: "email:cto1@example.com",
                 thread_key: "<exact-review-thread@example.com>",
                 remote_id: "remote-exact-review-1",
                 direction: "inbound",
                 folder_hint: "INBOX",
-                sender_display: "Michael Welsch",
-                sender_address: "michael.welsch@metric-space.ai",
-                recipient_addresses_json: "[\"cto1@metric-space.ai\"]",
+                sender_display: "Max Mustermann",
+                sender_address: "founder@example.com",
+                recipient_addresses_json: "[\"cto1@example.com\"]",
                 cc_addresses_json: "[]",
                 bcc_addresses_json: "[]",
                 subject: "Status",
@@ -13282,12 +13282,12 @@ mod tests {
         let conn = open_channel_db(&db_path).expect("failed to open db");
         let request = ChannelSendRequest {
             channel: "email".to_string(),
-            account_key: "email:cto1@metric-space.ai".to_string(),
+            account_key: "email:cto1@example.com".to_string(),
             thread_key: "mail-thread".to_string(),
             body: "Hi Michael,\n\nDer Status ist belegt.".to_string(),
             subject: "Re: Status".to_string(),
-            to: vec!["michael.welsch@metric-space.ai".to_string()],
-            cc: vec!["o.schaefers@gmx.net".to_string()],
+            to: vec!["founder@example.com".to_string()],
+            cc: vec!["s.mueller@example.com".to_string()],
             attachments: Vec::new(),
             sender_display: None,
             sender_address: None,
@@ -13297,7 +13297,7 @@ mod tests {
 
         enforce_reviewed_founder_send_core_transition(
             &conn,
-            "founder-reply:email:cto1@metric-space.ai::INBOX::proof",
+            "founder-reply:email:cto1@example.com::INBOX::proof",
             "founder-review:proof",
             &request,
         )
@@ -13326,19 +13326,19 @@ mod tests {
         let conn = open_channel_db(&db_path).expect("failed to open db");
         let request = ChannelSendRequest {
             channel: "email".to_string(),
-            account_key: "email:cto1@metric-space.ai".to_string(),
+            account_key: "email:cto1@example.com".to_string(),
             thread_key: "mail-thread".to_string(),
             body: "Hi Michael,\n\nDer Status ist belegt.".to_string(),
             subject: "Re: Status".to_string(),
-            to: vec!["michael.welsch@metric-space.ai".to_string()],
-            cc: vec!["o.schaefers@gmx.net".to_string()],
+            to: vec!["founder@example.com".to_string()],
+            cc: vec!["s.mueller@example.com".to_string()],
             attachments: Vec::new(),
             sender_display: None,
             sender_address: None,
             send_voice: false,
             reviewed_founder_send: true,
         };
-        let entity_id = "founder-reply:email:cto1@metric-space.ai::INBOX::sent";
+        let entity_id = "founder-reply:email:cto1@example.com::INBOX::sent";
         let approval_key = "founder-review:sent";
 
         // Drive Approved -> Sending exactly as the production review path does.
@@ -13389,26 +13389,26 @@ mod tests {
         let mut runtime_settings = BTreeMap::new();
         runtime_settings.insert(
             "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
-            "michael.welsch@metric-space.ai".to_string(),
+            "founder@example.com".to_string(),
         );
         crate::inference::runtime_env::save_runtime_env_map(&root, &runtime_settings)
             .expect("failed to persist owner setting");
         let db_path = crate::paths::core_db(&root);
         let mut conn = open_channel_db(&db_path).expect("failed to open db");
-        let inbound_key = "email:cto1@metric-space.ai::INBOX::handled-guard-1";
+        let inbound_key = "email:cto1@example.com::INBOX::handled-guard-1";
         upsert_communication_message(
             &mut conn,
             UpsertMessage {
                 message_key: inbound_key,
                 channel: "email",
-                account_key: "email:cto1@metric-space.ai",
+                account_key: "email:cto1@example.com",
                 thread_key: "<handled-guard-thread@example.com>",
                 remote_id: "remote-handled-guard-1",
                 direction: "inbound",
                 folder_hint: "INBOX",
-                sender_display: "Michael Welsch",
-                sender_address: "michael.welsch@metric-space.ai",
-                recipient_addresses_json: "[\"cto1@metric-space.ai\"]",
+                sender_display: "Max Mustermann",
+                sender_address: "founder@example.com",
+                recipient_addresses_json: "[\"cto1@example.com\"]",
                 cc_addresses_json: "[]",
                 bcc_addresses_json: "[]",
                 subject: "Bitte antworten",
@@ -13446,14 +13446,14 @@ mod tests {
             UpsertMessage {
                 message_key: "pending-stale-owner-1",
                 channel: "email",
-                account_key: "email:cto1@metric-space.ai",
+                account_key: "email:cto1@example.com",
                 thread_key: "<pending-stale-owner@example.com>",
                 remote_id: "remote-pending-stale-owner-1",
                 direction: "inbound",
                 folder_hint: "INBOX",
-                sender_display: "Michael Welsch",
-                sender_address: "michael.welsch@metric-space.ai",
-                recipient_addresses_json: "[\"cto1@metric-space.ai\"]",
+                sender_display: "Max Mustermann",
+                sender_address: "founder@example.com",
+                recipient_addresses_json: "[\"cto1@example.com\"]",
                 cc_addresses_json: "[]",
                 bcc_addresses_json: "[]",
                 subject: "Re: Visuelle Homepage",
@@ -13495,14 +13495,14 @@ mod tests {
             UpsertMessage {
                 message_key: "lease-cas-1",
                 channel: "email",
-                account_key: "email:cto1@metric-space.ai",
+                account_key: "email:cto1@example.com",
                 thread_key: "<lease-cas@example.com>",
                 remote_id: "remote-lease-cas-1",
                 direction: "inbound",
                 folder_hint: "INBOX",
-                sender_display: "Michael Welsch",
-                sender_address: "michael.welsch@metric-space.ai",
-                recipient_addresses_json: "[\"cto1@metric-space.ai\"]",
+                sender_display: "Max Mustermann",
+                sender_address: "founder@example.com",
+                recipient_addresses_json: "[\"cto1@example.com\"]",
                 cc_addresses_json: "[]",
                 bcc_addresses_json: "[]",
                 subject: "Re: Lease race",
@@ -13598,14 +13598,14 @@ mod tests {
             UpsertMessage {
                 message_key: "pending-release-1",
                 channel: "email",
-                account_key: "email:cto1@metric-space.ai",
+                account_key: "email:cto1@example.com",
                 thread_key: "<pending-release@example.com>",
                 remote_id: "remote-pending-release-1",
                 direction: "inbound",
                 folder_hint: "INBOX",
                 sender_display: "Customer",
                 sender_address: "customer@example.com",
-                recipient_addresses_json: "[\"cto1@metric-space.ai\"]",
+                recipient_addresses_json: "[\"cto1@example.com\"]",
                 cc_addresses_json: "[]",
                 bcc_addresses_json: "[]",
                 subject: "Needs rework",
@@ -13673,14 +13673,14 @@ mod tests {
             UpsertMessage {
                 message_key: "acked-failed-founder-1",
                 channel: "email",
-                account_key: "email:cto1@metric-space.ai",
+                account_key: "email:cto1@example.com",
                 thread_key: "<acked-failed-founder@example.com>",
                 remote_id: "remote-acked-failed-founder-1",
                 direction: "inbound",
                 folder_hint: "INBOX",
                 sender_display: "Founder",
                 sender_address: "founder@example.com",
-                recipient_addresses_json: "[\"cto1@metric-space.ai\"]",
+                recipient_addresses_json: "[\"cto1@example.com\"]",
                 cc_addresses_json: "[]",
                 bcc_addresses_json: "[]",
                 subject: "Affiliate follow-up",
@@ -13741,14 +13741,14 @@ mod tests {
                 UpsertMessage {
                     message_key,
                     channel: "email",
-                    account_key: "email:cto1@metric-space.ai",
+                    account_key: "email:cto1@example.com",
                     thread_key: "<latest-thread@example.com>",
                     remote_id: message_key,
                     direction: "inbound",
                     folder_hint: "INBOX",
-                    sender_display: "Michael Welsch",
-                    sender_address: "michael.welsch@metric-space.ai",
-                    recipient_addresses_json: "[\"cto1@metric-space.ai\"]",
+                    sender_display: "Max Mustermann",
+                    sender_address: "founder@example.com",
+                    recipient_addresses_json: "[\"cto1@example.com\"]",
                     cc_addresses_json: "[]",
                     bcc_addresses_json: "[]",
                     subject: "Re: Visuelle Homepage",
@@ -14353,13 +14353,13 @@ mod tests {
             UpsertMessage {
                 message_key,
                 channel: "email",
-                account_key: "email:cto1@metric-space.ai",
+                account_key: "email:cto1@example.com",
                 thread_key: "email/test-thread",
                 remote_id: message_key,
                 direction: "inbound",
                 folder_hint: "INBOX",
                 sender_display: "Jill",
-                sender_address: "j.cakmak@remcapital.de",
+                sender_address: "a.lindner@example.com",
                 recipient_addresses_json: "[]",
                 cc_addresses_json: "[]",
                 bcc_addresses_json: "[]",
@@ -14424,7 +14424,7 @@ mod tests {
         fs::create_dir_all(root.join("runtime"))?;
         let db_path = resolve_db_path(&root, None);
         let mut conn = open_channel_db(&db_path)?;
-        let key = "email:cto1@metric-space.ai::ooo-1";
+        let key = "email:cto1@example.com::ooo-1";
         upsert_test_inbound(
             &mut conn,
             key,
@@ -14442,7 +14442,7 @@ mod tests {
         // A different inbound key has no verdict.
         assert!(!inbound_message_has_terminal_no_send(
             &root,
-            "email:cto1@metric-space.ai::other"
+            "email:cto1@example.com::other"
         )?);
 
         let _ = fs::remove_dir_all(&root);
@@ -14455,8 +14455,8 @@ mod tests {
         fs::create_dir_all(root.join("runtime"))?;
         let db_path = resolve_db_path(&root, None);
         let mut conn = open_channel_db(&db_path)?;
-        let auto_key = "email:cto1@metric-space.ai::ooo-2";
-        let human_key = "email:cto1@metric-space.ai::human-1";
+        let auto_key = "email:cto1@example.com::ooo-2";
+        let human_key = "email:cto1@example.com::human-1";
         upsert_test_inbound(
             &mut conn,
             auto_key,
@@ -14483,8 +14483,8 @@ mod tests {
         fs::create_dir_all(root.join("runtime"))?;
         let db_path = resolve_db_path(&root, None);
         let mut conn = open_channel_db(&db_path)?;
-        let auto_key = "email:cto1@metric-space.ai::ooo-low";
-        let human_key = "email:cto1@metric-space.ai::human-low";
+        let auto_key = "email:cto1@example.com::ooo-low";
+        let human_key = "email:cto1@example.com::human-low";
         upsert_test_inbound(&mut conn, auto_key, json!({"autoSubmitted": true}))?;
         upsert_test_inbound(&mut conn, human_key, json!({}))?;
         assert!(message_metadata_marks_auto_submitted(&conn, auto_key)?);
@@ -14518,14 +14518,14 @@ mod tests {
     fn phase1_test_request(body: &str) -> ChannelSendRequest {
         ChannelSendRequest {
             channel: "email".to_string(),
-            account_key: "email:cto1@metric-space.ai".to_string(),
+            account_key: "email:cto1@example.com".to_string(),
             thread_key: "<phase1-thread@example.com>".to_string(),
             body: body.to_string(),
             subject: "Vorschlag Tag-System fuer Lead-Funnel".to_string(),
-            to: vec!["j.kienzler@remcapital.de".to_string()],
+            to: vec!["j.kowalski@example.com".to_string()],
             cc: vec![
-                "j.cakmak@remcapital.de".to_string(),
-                "d.lottes@remcapital.de".to_string(),
+                "a.lindner@example.com".to_string(),
+                "d.berger@example.com".to_string(),
             ],
             attachments: Vec::new(),
             sender_display: None,
@@ -14567,7 +14567,7 @@ mod tests {
         assert_eq!(direction, "outbound");
         assert_eq!(body_text, request.body);
         assert_eq!(subject, request.subject);
-        assert!(recipients_json.contains("j.kienzler@remcapital.de"));
+        assert!(recipients_json.contains("j.kowalski@example.com"));
         let metadata: Value = serde_json::from_str(&metadata_json).expect("valid json");
         assert_eq!(
             metadata.get("approval_key").and_then(Value::as_str),
@@ -14591,11 +14591,11 @@ mod tests {
         fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
         let body = "Hallo Julia,\n\nhier ist der freigegebene Vorschlag.\n\nViele Gruesse";
         let action = FounderOutboundAction {
-            account_key: "email:cto1@metric-space.ai".to_string(),
+            account_key: "email:cto1@example.com".to_string(),
             thread_key: "salesforce-tags".to_string(),
             subject: "Vorschlag Tag-System fuer Lead-Funnel".to_string(),
-            to: vec!["j.kienzler@remcapital.de".to_string()],
-            cc: vec!["j.cakmak@remcapital.de".to_string()],
+            to: vec!["j.kowalski@example.com".to_string()],
+            cc: vec!["a.lindner@example.com".to_string()],
             attachments: Vec::new(),
         };
 
