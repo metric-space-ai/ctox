@@ -26,13 +26,13 @@ MCP endpoint:
 - managed endpoint through `https://mcp.ctox.dev/mcp/<instance-id>`
 - self-hosted customer endpoint
 
-For the Kunstmen instance in Codex:
+For the Example instance in Codex:
 
 ```bash
 cp -R skills/ctox-business-os-mcp ~/.codex/skills/ctox-business-os-mcp
 
-codex mcp add cto1-kunstmen-business-os \
-  --url https://mcp.ctox.dev/mcp/cto1.kunstmen.com \
+codex mcp add cto1-example-business-os \
+  --url https://mcp.ctox.dev/mcp/cto1.example.com \
   --bearer-token-env-var CTOX_BUSINESS_OS_MCP_TOKEN
 ```
 

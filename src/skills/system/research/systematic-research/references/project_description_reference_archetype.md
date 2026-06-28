@@ -1,7 +1,7 @@
 # Project Description Reference Archetype
 
 This archetype is derived from the project-description references in
-`/Users/michaelwelsch/Downloads/OneDrive_1_9/`. It is mandatory for
+`/Users/you/Downloads/OneDrive_1_9/`. It is mandatory for
 `report_type_id=project_description`.
 
 The references are not research reports. They are applicant-side funding

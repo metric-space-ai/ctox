@@ -1,7 +1,7 @@
 # Thesen-Nachrecherche — Quellenmatrix
 
 Diese Datei übersetzt die Quellenmatrix aus
-`/Users/michaelwelsch/Downloads/Thesen_Nachrecherche/Abstimmung 12.05.2026 - Nach- und Neurecherche - final.xlsx`
+`/Users/you/Downloads/Thesen_Nachrecherche/Abstimmung 12.05.2026 - Nach- und Neurecherche - final.xlsx`
 in eine maschinenlesbare Form. Jede Quelle im CTOX-Webstack-Source-Registry
 (`tools/web-stack/src/sources/<id>.rs`) leitet ihre `authoritative_for()`-,
 `countries()`- und (für `person-research`) Prioritätsentscheidungen aus

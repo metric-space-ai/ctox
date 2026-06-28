@@ -121,7 +121,7 @@ context:
     "tenant_id": "<tenant-id-or-domain>",
     "role": "owner",
     "client_id": "codex-local",
-    "allowed_instances": ["cto1.kunstmen.com"]
+    "allowed_instances": ["cto1.example.com"]
   }
 }
 ```

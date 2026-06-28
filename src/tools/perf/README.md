@@ -9,7 +9,7 @@ Typical idle evidence run:
 
 ```sh
 python3 src/tools/perf/ctox_perf_probe.py \
-  --root /Users/michaelwelsch/Documents/ctox.nosync \
+  --root /Users/you/Documents/ctox.nosync \
   --cpu-samples 300 \
   --cpu-interval 1 \
   --status-samples 20 \
@@ -20,7 +20,7 @@ Release-gate idle run with hard budgets:
 
 ```sh
 python3 src/tools/perf/ctox_perf_probe.py \
-  --root /Users/michaelwelsch/Documents/ctox.nosync \
+  --root /Users/you/Documents/ctox.nosync \
   --assert-idle \
   --cpu-samples 600 \
   --cpu-interval 1 \
@@ -33,7 +33,7 @@ Installed daemon Gate A/B/C workflow:
 
 ```sh
 python3 src/tools/perf/ctox_installed_idle_gate.py \
-  --root /Users/michaelwelsch/Documents/ctox.nosync \
+  --root /Users/you/Documents/ctox.nosync \
   --ctox-command ctox \
   --release
 ```

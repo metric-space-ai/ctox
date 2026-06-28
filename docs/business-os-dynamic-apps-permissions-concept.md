@@ -230,7 +230,7 @@ live Settings Browser/Rust proof:
 - `node --check src/core/rxdb/tools/browser_rust_smoke.js`
 - `node --check src/core/rxdb/tools/browser_rust_smoke_matrix.js`
 - `SMOKE_MATRIX_SELF_TEST=1 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
-- `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-dynamic-apps-ui SMOKE_MATRIX_ATTEMPTS=2 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=60851 SIGNALING_PORT=60852 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+- `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-dynamic-apps-ui SMOKE_MATRIX_ATTEMPTS=2 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=60851 SIGNALING_PORT=60852 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
   - matrix OK with `business_os_dynamic_lifecycle_why_diagnostics_visible=1`,
     `business_os_dynamic_lifecycle_why_diagnostics_rows=1`,
     `business_os_dynamic_lifecycle_why_diagnostics_data=1`, browser
@@ -245,7 +245,7 @@ live Settings Browser/Rust proof:
 - `node --check src/apps/business-os/modules/desktop/index.js`
 - `cargo build --bin ctox --no-default-features --target-dir runtime/build/core-rxdb-integration-target`
   - completed with existing warnings.
-- `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-roles-permissions-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=60961 SIGNALING_PORT=60962 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+- `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-roles-permissions-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=60961 SIGNALING_PORT=60962 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
   - matrix OK with
     `business_os_roles_permissions_settings_why_diagnostics_visible=1`,
     `business_os_roles_permissions_settings_why_diagnostics_rows=1`,
@@ -952,14 +952,14 @@ Passed locally on 2026-06-17:
 - `node src/apps/business-os/modules/app-store/app-store.test.mjs`
 - `node src/apps/business-os/scripts/assert-module-conformance.mjs`
 - `CARGO_TARGET_DIR=runtime/build/core-rxdb-integration-target cargo build --bin ctox`
-- `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-dynamic-apps-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=240000 BUSINESS_PORT=18989 SIGNALING_PORT=28989 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+- `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-dynamic-apps-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=240000 BUSINESS_PORT=18989 SIGNALING_PORT=28989 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
 - `rustfmt --edition 2021 src/core/business_os/rxdb_peer.rs src/core/business_os/store.rs --check`
 - `node --test src/apps/business-os/shared/app-lifecycle.test.mjs`
 - `cargo test --bin ctox business_app_semver_major_matches_browser_plain_semver_contract`
 - `cargo test --bin ctox module_catalog`
 - `cargo test --bin ctox business_os`
 - `cargo build --bin ctox`
-- `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright CTOX_BIN=runtime/build/cargo-target/debug/ctox SMOKE_MODE=business-os-dynamic-apps-ui SMOKE_PAGE_PATH=/index.html /Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node src/core/rxdb/tools/browser_rust_smoke.js`
+- `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright CTOX_BIN=runtime/build/cargo-target/debug/ctox SMOKE_MODE=business-os-dynamic-apps-ui SMOKE_PAGE_PATH=/index.html /Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node src/core/rxdb/tools/browser_rust_smoke.js`
 
 The dynamic-app smoke asserts hard Evidence for private `0.x`, Team-default
 `1.0.0`, restricted released apps, invalid versions, lifecycle badge/drawer
@@ -1014,7 +1014,7 @@ Additional Phase 13C packaged-module migration evidence passed locally on
 - `SMOKE_MATRIX_SELF_TEST=1 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
 - `node src/apps/business-os/scripts/assert-db-isolation-inventory.mjs`
 - `node src/apps/business-os/scripts/assert-module-conformance.mjs`
-- `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-dynamic-apps-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=60651 SIGNALING_PORT=60652 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+- `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-dynamic-apps-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=60651 SIGNALING_PORT=60652 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
   with `business_os_dynamic_packaged_guard_modules=conversations,cv-print-builder,documents,spreadsheets`,
   `business_os_dynamic_packaged_guard_count=4`,
   `business_os_dynamic_packaged_guard_batch_coverage=1`,
@@ -1047,7 +1047,7 @@ Additional Phase 13C Support guarded-module evidence passed locally on
 - `node src/apps/business-os/scripts/assert-db-isolation-inventory.mjs`
 - `node src/apps/business-os/scripts/assert-module-conformance.mjs`
 - `SMOKE_MATRIX_SELF_TEST=1 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
-- `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-dynamic-apps-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=60781 SIGNALING_PORT=60782 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+- `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-dynamic-apps-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=60781 SIGNALING_PORT=60782 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
   with `business_os_dynamic_packaged_guard_modules=conversations,cv-print-builder,documents,spreadsheets,support`,
   `business_os_dynamic_packaged_guard_count=5`,
   `business_os_dynamic_packaged_guard_shell_locked_state=1`,
@@ -1142,7 +1142,7 @@ Additional Phase 13C Customers/Coding Agents/Calendar/Invoices/IoT/Notes/Outboun
 - `cargo build --bin ctox --no-default-features --target-dir runtime/build/core-rxdb-integration-target`
   completed with existing warnings.
 - Accepted Browser/Rust smoke:
-  `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-dynamic-apps-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=61191 SIGNALING_PORT=61192 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+  `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-dynamic-apps-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=61191 SIGNALING_PORT=61192 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
   with `business_os_dynamic_packaged_guard_module=coding-agents`,
   `business_os_dynamic_packaged_guard_collection=coding_agent_sessions`,
   `business_os_dynamic_packaged_guard_modules=coding-agents,calendar,conversations,customers,cv-print-builder,documents,invoices,iot,notes,outbound,research,spreadsheets,support`,
@@ -1189,7 +1189,7 @@ Additional Phase 13C Shiftflow guarded-module evidence passed locally on
   completed with existing warnings after the first 14er smoke attempt correctly
   failed fast because the smoke binary did not exist yet.
 - Accepted Browser/Rust smoke:
-  `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-dynamic-apps-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=61201 SIGNALING_PORT=61202 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+  `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-dynamic-apps-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=61201 SIGNALING_PORT=61202 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
   with `business_os_dynamic_packaged_guard_module=coding-agents`,
   `business_os_dynamic_packaged_guard_collection=coding_agent_sessions`,
   `business_os_dynamic_packaged_guard_modules=coding-agents,calendar,conversations,customers,cv-print-builder,documents,invoices,iot,notes,outbound,research,shiftflow,spreadsheets,support`,
@@ -1233,7 +1233,7 @@ Additional Phase 13C Buchhaltung guarded-module evidence passed locally on
 - First 15er Browser/Rust attempt passed all feature keys but was not accepted
   because `browser_warning_count=1`; two later attempts were not accepted
   because they hit startup hook reload/budget. Accepted Browser/Rust smoke:
-  `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-dynamic-apps-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=61251 SIGNALING_PORT=61252 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+  `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-dynamic-apps-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=61251 SIGNALING_PORT=61252 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
   with `business_os_dynamic_packaged_guard_module=coding-agents`,
   `business_os_dynamic_packaged_guard_collection=coding_agent_sessions`,
   `business_os_dynamic_packaged_guard_modules=coding-agents,calendar,buchhaltung,conversations,customers,cv-print-builder,documents,invoices,iot,notes,outbound,research,shiftflow,spreadsheets,support`,
@@ -1275,7 +1275,7 @@ Additional Phase 13C Matching guarded-module evidence passed locally on
 - `node src/apps/business-os/scripts/assert-module-conformance.mjs`
 - `SMOKE_MATRIX_SELF_TEST=1 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
 - Accepted Browser/Rust smoke:
-  `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-dynamic-apps-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=61271 SIGNALING_PORT=61272 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+  `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-dynamic-apps-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=61271 SIGNALING_PORT=61272 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
   with `business_os_dynamic_packaged_guard_module=coding-agents`,
   `business_os_dynamic_packaged_guard_collection=coding_agent_sessions`,
   `business_os_dynamic_packaged_guard_modules=coding-agents,calendar,buchhaltung,conversations,customers,cv-print-builder,documents,invoices,iot,notes,outbound,research,matching,shiftflow,spreadsheets,support`,
@@ -1314,7 +1314,7 @@ Additional Phase 13 system raw-cleanup checkpoint passed locally on
   attempted but blocked before executing because this checkout cannot resolve
   the bare `esbuild` package.
 - Browser/Rust `business-os-ui-regression`:
-  `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-ui-regression SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=61281 SIGNALING_PORT=61282 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+  `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-ui-regression SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=61281 SIGNALING_PORT=61282 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
   passed with Knowledge primary interactions
   `knowledge-tab-runbooks,knowledge-tab-data,knowledge-tab-skill`, Tickets
   secondary interaction `tickets-search-status-filter`, Reports secondary
@@ -1355,7 +1355,7 @@ Additional Phase 13 Browser/CTOX/Creator DB-cleanup evidence passed locally on
 - `node src/apps/business-os/scripts/assert-db-isolation-inventory.mjs`
 - `node src/apps/business-os/scripts/assert-module-conformance.mjs`
 - Browser/Rust `business-os-ui-regression`:
-  `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-ui-regression SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=61301 SIGNALING_PORT=61302 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+  `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-ui-regression SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=61301 SIGNALING_PORT=61302 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
   passed with primary opened modules `ctox,documents,knowledge,research`,
   primary interactions
   `ctox-zoom,documents-new-drawer,knowledge-tab-runbooks,knowledge-tab-data,knowledge-tab-skill,research-new-task-modal`,
@@ -1373,7 +1373,7 @@ Additional Phase 13B evidence passed locally on 2026-06-17:
 - `node --check src/core/rxdb/tools/browser_rust_smoke.js`
 - `node --check src/core/rxdb/tools/browser_rust_smoke_matrix.js`
 - `cargo build --bin ctox --no-default-features --target-dir runtime/build/core-rxdb-integration-target`
-- `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-dynamic-apps-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=240000 BUSINESS_PORT=18989 SIGNALING_PORT=28989 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+- `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-dynamic-apps-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=240000 BUSINESS_PORT=18989 SIGNALING_PORT=28989 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
 
 This smoke now asserts the real Shell context helper path:
 `business_os_dynamic_real_context_collection_denied=1`,
@@ -1411,17 +1411,17 @@ Additional Phase 13F browser-storage-scope evidence passed locally on
 - `node src/apps/business-os/scripts/validate-app-module.test.mjs`
 - `cargo build --bin ctox --no-default-features --target-dir runtime/build/core-rxdb-integration-target`
 - Dynamic Apps Browser/Rust final rerun:
-  `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-dynamic-apps-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=60463 SIGNALING_PORT=60464 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+  `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-dynamic-apps-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=60463 SIGNALING_PORT=60464 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
   with `business_os_dynamic_storage_keys_scoped=1`,
   `business_os_dynamic_storage_scope_contract=1`, browser warnings/errors/404/
   request failures 0 and `startup_smoke_hook_reload_count=0`. A prior dynamic
   run passed feature keys but failed only the startup budget after one smoke
   hook reload.
 - Audience Browser/Rust:
-  `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-app-audience-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=60471 SIGNALING_PORT=60472 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+  `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-app-audience-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=60471 SIGNALING_PORT=60472 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
   with `business_os_app_audience_storage_boundary_checked=1`.
 - Release Browser/Rust:
-  `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-app-release-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=60481 SIGNALING_PORT=60482 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+  `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-app-release-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=60481 SIGNALING_PORT=60482 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
   with `business_os_app_release_storage_boundary_checked=1`.
 
 Additional Phase 13 scoped system/internal exception evidence passed locally on
@@ -1452,7 +1452,7 @@ Additional Phase 13 scoped system/internal exception evidence passed locally on
 - `cargo build --bin ctox --no-default-features --target-dir runtime/build/core-rxdb-integration-target`
   completed with existing warnings.
 - Browser/Rust Dynamic Apps:
-  `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-dynamic-apps-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 SMOKE_MATRIX_RESULT_PATH=runtime/build/business-os-dynamic-apps-system-scope-smoke.json BUSINESS_PORT=61731 SIGNALING_PORT=61732 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+  `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-dynamic-apps-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 SMOKE_MATRIX_RESULT_PATH=runtime/build/business-os-dynamic-apps-system-scope-smoke.json BUSINESS_PORT=61731 SIGNALING_PORT=61732 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
   passed with `business_os_dynamic_system_scope_modules=app-store,browser,creator,ctox,desktop,knowledge,reports,tickets`,
   `business_os_dynamic_system_scope_count=8`,
   `business_os_dynamic_system_scope_allowed=1`,
@@ -1470,7 +1470,7 @@ Additional Phase 14A smoke-registry evidence passed locally on 2026-06-17:
 - `node --check src/core/rxdb/tools/browser_rust_smoke.js`
 - `node --check src/core/rxdb/tools/browser_rust_smoke_matrix.js`
 - `SMOKE_MATRIX_SELF_TEST=1 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
-- `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-app-release-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=60075 SIGNALING_PORT=60076 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+- `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-app-release-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=60075 SIGNALING_PORT=60076 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
   passes the implemented release mode.
 
 This closes the production smoke-mode/evidence registry and the real release
@@ -1485,7 +1485,7 @@ Additional Phase 14B auth-scope evidence passed locally on 2026-06-18:
 - `node --check src/core/rxdb/tools/browser_rust_smoke_matrix.js`
 - `node --check src/core/rxdb/tools/business_os_production_smoke_registry.js`
 - `SMOKE_MATRIX_SELF_TEST=1 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
-- `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-auth-scope-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=60721 SIGNALING_PORT=60722 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+- `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-auth-scope-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=60721 SIGNALING_PORT=60722 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
   passes with all `business_os_auth_*` evidence keys true, final state
   `logged_out`, browser warnings/errors/404/request failures 0 and
   `startup_smoke_hook_reload_count=0`.
@@ -1496,7 +1496,7 @@ Additional Phase 14F tenant-boundary evidence passed locally on 2026-06-18:
 - `node --check src/core/rxdb/tools/browser_rust_smoke_matrix.js`
 - `node --check src/core/rxdb/tools/business_os_production_smoke_registry.js`
 - `SMOKE_MATRIX_SELF_TEST=1 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
-- `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-auth-scope-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 SMOKE_MATRIX_RESULT_PATH=runtime/build/business-os-auth-tenant-boundary-smoke.json BUSINESS_PORT=61741 SIGNALING_PORT=61742 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+- `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-auth-scope-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 SMOKE_MATRIX_RESULT_PATH=runtime/build/business-os-auth-tenant-boundary-smoke.json BUSINESS_PORT=61741 SIGNALING_PORT=61742 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
   passes with `business_os_auth_cross_scope_storage_denied=1`,
   `business_os_auth_tenant_scope_claim=local-workspace-only`, final state
   `logged_out`, browser warnings/errors/404/request failures 0 and
@@ -1508,7 +1508,7 @@ Additional Phase 14D/14E fresh-profile evidence passed locally on 2026-06-18:
 - `node --check src/core/rxdb/tools/browser_rust_smoke_matrix.js`
 - `node --check src/core/rxdb/tools/business_os_production_smoke_registry.js`
 - `SMOKE_MATRIX_SELF_TEST=1 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
-- `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-fresh-profile-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=60751 SIGNALING_PORT=60752 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+- `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-fresh-profile-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=60751 SIGNALING_PORT=60752 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
   passes with all `business_os_fresh_profile_*` evidence keys true, browser
   warnings/errors/404/request failures 0 and
   `startup_smoke_hook_reload_count=0`.
@@ -1520,7 +1520,7 @@ Additional Phase 14F fresh-profile scale evidence passed locally on
 - `node --check src/core/rxdb/tools/browser_rust_smoke_matrix.js`
 - `node --check src/core/rxdb/tools/business_os_production_smoke_registry.js`
 - `SMOKE_MATRIX_SELF_TEST=1 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
-- `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-fresh-profile-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 SMOKE_MATRIX_RESULT_PATH=runtime/build/business-os-fresh-profile-scale-smoke.json BUSINESS_PORT=61751 SIGNALING_PORT=61752 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+- `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-fresh-profile-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 SMOKE_MATRIX_RESULT_PATH=runtime/build/business-os-fresh-profile-scale-smoke.json BUSINESS_PORT=61751 SIGNALING_PORT=61752 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
   passes with `business_os_fresh_profile_scale_fixture_modules=32`,
   `business_os_fresh_profile_scale_catalog_modules=57`,
   `business_os_fresh_profile_scale_explicit_grants=64`,
@@ -1530,7 +1530,7 @@ Additional Phase 14F fresh-profile scale evidence passed locally on
   start menu 10 ms, App Store 116 ms, browser warnings/errors/404/request
   failures 0 and `startup_smoke_hook_wait_ms=36`.
 - Full production Browser/Rust matrix
-  `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES="$(node -e "const { businessOsProductionSmokeModes } = require('./src/core/rxdb/tools/business_os_production_smoke_registry'); process.stdout.write(businessOsProductionSmokeModes.join(','));")" SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 SMOKE_BROWSER_WARNING_BUDGET=0 SMOKE_BROWSER_REQUEST_FAILURE_BUDGET=0 SMOKE_MATRIX_RESULT_PATH=runtime/build/business-os-production-smoke-phase14-scale-summary.json BUSINESS_PORT=61761 SIGNALING_PORT=61762 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+  `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES="$(node -e "const { businessOsProductionSmokeModes } = require('./src/core/rxdb/tools/business_os_production_smoke_registry'); process.stdout.write(businessOsProductionSmokeModes.join(','));")" SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 SMOKE_BROWSER_WARNING_BUDGET=0 SMOKE_BROWSER_REQUEST_FAILURE_BUDGET=0 SMOKE_MATRIX_RESULT_PATH=runtime/build/business-os-production-smoke-phase14-scale-summary.json BUSINESS_PORT=61761 SIGNALING_PORT=61762 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
   passes Release, Audience, Agent Scope, Auth Scope and Fresh Profile with
   browser warnings/request failures/startup reloads 0.
 
@@ -1544,8 +1544,8 @@ Additional Phase 10F/10H release evidence passed locally on 2026-06-17:
 - `node src/apps/business-os/scripts/assert-db-isolation-inventory.mjs`
 - `node src/apps/business-os/scripts/assert-db-isolation-inventory.mjs --self-test`
 - `cargo fmt --check`
-- `CARGO_TARGET_DIR=/Users/michaelwelsch/Documents/ctox.nosync/runtime/build/core-rxdb-integration-target cargo build --bin ctox`
-- `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-app-release-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=60075 SIGNALING_PORT=60076 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+- `CARGO_TARGET_DIR=/Users/you/Documents/ctox.nosync/runtime/build/core-rxdb-integration-target cargo build --bin ctox`
+- `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-app-release-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=60075 SIGNALING_PORT=60076 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
 
 The release smoke asserts `business_os_app_release_private_before_release=1`,
 `business_os_app_release_publish_succeeded=1`,
@@ -1629,7 +1629,7 @@ Passed locally on 2026-06-17 for Phase 10G Settings fallback Browser/Rust
 proof:
 
 - `cargo build --bin ctox --no-default-features --target-dir runtime/build/core-rxdb-integration-target`
-- `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-roles-permissions-ui SMOKE_MATRIX_ATTEMPTS=2 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=240000 BUSINESS_PORT=18988 SIGNALING_PORT=28988 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+- `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-roles-permissions-ui SMOKE_MATRIX_ATTEMPTS=2 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=240000 BUSINESS_PORT=18988 SIGNALING_PORT=28988 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
 - Matrix evidence: `business_os_roles_permissions_settings_release_fallback_readonly=1`,
   `startup_smoke_hook_reload_count=0`, `startup_smoke_hook_wait_ms=79`,
   `browser_error_count=0`, `browser_resource_404_count=0` and
@@ -1660,7 +1660,7 @@ permission UX:
 - `node --check src/core/rxdb/tools/browser_rust_smoke.js`
 - `node --test src/apps/business-os/shared/shell-permissions-ui.test.mjs`
 - `node --test src/apps/business-os/shared/app-lifecycle.test.mjs`
-- `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODE=business-os-dynamic-apps-ui SMOKE_PAGE_PATH=/index.html /Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node src/core/rxdb/tools/browser_rust_smoke.js`
+- `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODE=business-os-dynamic-apps-ui SMOKE_PAGE_PATH=/index.html /Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node src/core/rxdb/tools/browser_rust_smoke.js`
 - Smoke evidence: `business_os_dynamic_launcher_badges_visible=1`,
   `business_os_dynamic_lifecycle_drawer_manager_state=1`,
   `business_os_dynamic_lifecycle_drawer_readonly_state=1`,
@@ -1704,7 +1704,7 @@ scope:
 - `node --test src/apps/business-os/shared/business-chat.test.mjs` - 3 passed
 - `node --test src/apps/business-os/shared/shell-permissions-ui.test.mjs` - 7 passed
 - `node --test src/apps/business-os/shared/command-bus.test.mjs` - 2 passed
-- `PLAYWRIGHT_MODULE_PATH=/Users/michaelwelsch/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-agent-scope-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=60241 SIGNALING_PORT=60242 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
+- `PLAYWRIGHT_MODULE_PATH=/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.60.0/node_modules/playwright/index.js SMOKE_MODES=business-os-agent-scope-ui SMOKE_MATRIX_ATTEMPTS=1 SMOKE_PAGE_PATH=/index.html SMOKE_MODE_TIMEOUT_MS=300000 BUSINESS_PORT=60241 SIGNALING_PORT=60242 node src/core/rxdb/tools/browser_rust_smoke_matrix.js`
 - Smoke evidence: `business_os_agent_scope_panel_visible=1`,
   `business_os_agent_scope_client_context_matches_ui=1`,
   `business_os_agent_scope_app_store_panel_visible=1`,

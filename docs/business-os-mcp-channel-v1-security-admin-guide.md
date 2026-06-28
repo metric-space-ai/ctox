@@ -89,22 +89,22 @@ Recommended `INSTANCE_CONNECT_TOKENS` format:
 desk_123=secret-a,org:desk.1=secret-b
 ```
 
-For the Kunstmen managed instance, the instance id is:
+For the Example managed instance, the instance id is:
 
 ```text
-cto1.kunstmen.com
+cto1.example.com
 ```
 
 The gateway allowlist must include it:
 
 ```text
-ALLOWED_INSTANCE_IDS=desk_123,cto1.kunstmen.com
+ALLOWED_INSTANCE_IDS=desk_123,cto1.example.com
 ```
 
 The matching connect secret must be scoped to that id:
 
 ```text
-INSTANCE_CONNECT_TOKENS=desk_123=secret-a,cto1.kunstmen.com=secret-b
+INSTANCE_CONNECT_TOKENS=desk_123=secret-a,cto1.example.com=secret-b
 ```
 
 Do not commit real token values. Store local operator copies outside the repo,
@@ -118,11 +118,11 @@ Install the external agent skill into Codex:
 cp -R skills/ctox-business-os-mcp ~/.codex/skills/ctox-business-os-mcp
 ```
 
-Configure the managed MCP server for the Kunstmen instance:
+Configure the managed MCP server for the Example instance:
 
 ```bash
-codex mcp add cto1-kunstmen-business-os \
-  --url https://mcp.ctox.dev/mcp/cto1.kunstmen.com \
+codex mcp add cto1-example-business-os \
+  --url https://mcp.ctox.dev/mcp/cto1.example.com \
   --bearer-token-env-var CTOX_BUSINESS_OS_MCP_TOKEN
 ```
 
@@ -143,7 +143,7 @@ outbound:
 ```bash
 export CTOX_BUSINESS_OS_MCP_CONNECT_TOKEN=<cto1-instance-connect-token>
 ctox business-os mcp connect \
-  --url wss://mcp.ctox.dev/connect/cto1.kunstmen.com
+  --url wss://mcp.ctox.dev/connect/cto1.example.com
 ```
 
 ## Privacy Notice

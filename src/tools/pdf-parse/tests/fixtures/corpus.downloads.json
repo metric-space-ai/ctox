@@ -1,6 +1,6 @@
 {
   "name": "downloads-regression",
-  "description": "Local regression corpus backed by PDFs in ~/Downloads. Run with --pdf-root /Users/michaelwelsch/Downloads.",
+  "description": "Local regression corpus backed by PDFs in ~/Downloads. Run with --pdf-root /Users/you/Downloads.",
   "fixtures": [
     "pages/mk_08_2015_p12.json",
     "pages/mk_10_2015_p14.json",

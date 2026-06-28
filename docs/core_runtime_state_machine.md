@@ -1,6 +1,6 @@
 # CTOX Core Runtime State Machine
 
-This document defines the exact, executable state machine implemented in [core_state_machine.rs](file:///Users/michaelwelsch/Documents/ctox.nosync/src/core/service/core_state_machine.rs). It represents the true architectural constraints guarding CTOX daemon execution.
+This document defines the exact, executable state machine implemented in [core_state_machine.rs](file:///Users/you/Documents/ctox.nosync/src/core/service/core_state_machine.rs). It represents the true architectural constraints guarding CTOX daemon execution.
 
 All state transitions, entity types, allowed state mappings, and terminal proofs are enforced programmatically by the transition kernel.
 

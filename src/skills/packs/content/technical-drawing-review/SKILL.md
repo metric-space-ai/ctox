@@ -88,7 +88,7 @@ skills/packs/content/technical-drawing-review/scripts/ingest_review_feedback.py 
   --publish \
   --case-id <case-id> \
   --ctox-bin target/debug/ctox \
-  --workspace-root /Users/michaelwelsch/Documents/ctox
+  --workspace-root /Users/you/Documents/ctox
 ```
 
 If the feedback is not attached to a case, `--publish` creates CTOX self-work of kind `runbook-learning-candidate` for later owner review. Add `--remote-publish-self-work` only when the ticket adapter should also publish that work item externally. Only after approval, promote it into the source-skill bundle and re-import it:

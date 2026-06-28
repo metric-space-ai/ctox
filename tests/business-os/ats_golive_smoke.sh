@@ -43,7 +43,7 @@
 set -u
 set -o pipefail
 
-REPO="/Users/michaelwelsch/Documents/ctox.nosync"
+REPO="/Users/you/Documents/ctox.nosync"
 TARGET_DIR="/tmp/ctox-ats-target"
 BIN="${TARGET_DIR}/debug/ctox"
 

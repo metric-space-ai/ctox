@@ -121,7 +121,7 @@ compatibility shim in Core. The Business OS app emits typed commands.
 | Provider | CLI | App bundle | Auth probe | Execution mode |
 | --- | --- | --- | --- | --- |
 | Codex | `/opt/homebrew/bin/codex`, `codex-cli 0.139.0` | `/Applications/Codex.app` | `codex login status` | `codex-cli` |
-| Antigravity | `/Users/michaelwelsch/.local/bin/agy`, `1.0.8` | `/Applications/Antigravity.app` | `agy models` | `antigravity-cli` |
+| Antigravity | `/Users/you/.local/bin/agy`, `1.0.8` | `/Applications/Antigravity.app` | `agy models` | `antigravity-cli` |
 | Claude | `/opt/homebrew/bin/claude`, `2.1.163 (Claude Code)` | `/Applications/Claude.app` | `claude auth status` | `claude-code-cli` |
 
 Codex task create:

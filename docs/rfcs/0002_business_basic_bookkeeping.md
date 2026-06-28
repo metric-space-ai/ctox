@@ -1,7 +1,7 @@
 # RFC 0002: Business Basic — Double-Entry Bookkeeping, Invoices, Receipts
 
 **Status:** Draft
-**Author:** michaelwelsch
+**Author:** CTOX
 **Discussion:** see PR
 **Historical note:** This RFC describes the retired Business Basic template
 shape. It is not the current CTOX Business OS app-creation contract. New

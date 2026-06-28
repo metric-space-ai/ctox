@@ -38,7 +38,7 @@ Validate the generated skill against these questions:
 Run:
 
 ```bash
-python3 /Users/michaelwelsch/.codex/skills/.system/skill-creator/scripts/quick_validate.py <generated-skill-dir>
+python3 /Users/you/.codex/skills/.system/skill-creator/scripts/quick_validate.py <generated-skill-dir>
 ```
 
 If the environment lacks validator dependencies, at least confirm:

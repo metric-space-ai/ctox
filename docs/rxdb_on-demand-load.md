@@ -740,7 +740,7 @@ Rollback-Plan:
 Abschlusskriterien:
 
 - Alle Gates gruen.
-- cto1.kunstmen.com E2E im Browser validiert.
+- cto1.example.com E2E im Browser validiert.
 - Lokales Business-OS validiert.
 - Dashboard/Readiness-Dokumentation aktualisiert.
 - Main-Push erst nach lauffaehigem Stand.

@@ -102,4 +102,4 @@ Changes:
 - Rollback: keep per-collection path behind the protocol version for one release; flip via the RxDB layer, not per-app.
 
 ## 6. Definition of done
-- A1–A4 met, all of E1–E4 + B1–B4 green in CI, B0 regression reproduced, soak clean, and a clean-incognito walkthrough of all ~20 apps verified by screenshot on a live instance (skf first, then cto1.kunstmen once its shell deploy lands).
+- A1–A4 met, all of E1–E4 + B1–B4 green in CI, B0 regression reproduced, soak clean, and a clean-incognito walkthrough of all ~20 apps verified by screenshot on a live instance (skf first, then cto1.example once its shell deploy lands).

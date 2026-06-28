@@ -2091,7 +2091,7 @@ Artifact:
 
 ```text
 model_dir:
-  /Users/michaelwelsch/.cache/huggingface/local/Qwen3.5-0.8B
+  /Users/you/.cache/huggingface/local/Qwen3.5-0.8B
 
 metalpack:
   /tmp/ctox_qwen35_08b_real_fp16.metalpack
@@ -2101,7 +2101,7 @@ Inspection:
 
 ```text
 cargo run --release --bin inspect_artifacts -- \
-  /Users/michaelwelsch/.cache/huggingface/local/Qwen3.5-0.8B
+  /Users/you/.cache/huggingface/local/Qwen3.5-0.8B
 
 shape_compatible: yes
 safetensor_shards: 1
@@ -2114,7 +2114,7 @@ Pack:
 
 ```text
 cargo run --release --bin pack_weights -- \
-  /Users/michaelwelsch/.cache/huggingface/local/Qwen3.5-0.8B \
+  /Users/you/.cache/huggingface/local/Qwen3.5-0.8B \
   /tmp/ctox_qwen35_08b_real_fp16.metalpack
 
 entries: 488
@@ -2265,7 +2265,7 @@ Real metalpack:
 ```text
 rm -rf /tmp/ctox_qwen35_08b_real_fp16.metalpack
 cargo run --release --bin pack_weights -- \
-  /Users/michaelwelsch/.cache/huggingface/local/Qwen3.5-0.8B \
+  /Users/you/.cache/huggingface/local/Qwen3.5-0.8B \
   /tmp/ctox_qwen35_08b_real_fp16.metalpack
 
 entries: 488
@@ -3142,7 +3142,7 @@ llama.cpp commit:
   15fa3c4
 
 binary:
-  /Users/michaelwelsch/Downloads/llama.cpp/build/bin/llama-bench
+  /Users/you/Downloads/llama.cpp/build/bin/llama-bench
 
 device:
   Apple M5, Metal backend
@@ -4974,7 +4974,7 @@ Row4 comparison:
 
 ```text
 CTOX_QWEN35_PACK_ROW_TILE=4 cargo run --release --bin pack_weights -- \
-  /Users/michaelwelsch/.cache/huggingface/local/Qwen3.5-0.8B \
+  /Users/you/.cache/huggingface/local/Qwen3.5-0.8B \
   /tmp/ctox_qwen35_08b_real_fp16_row4.metalpack
 
 cargo run --release --bin bench_metalpack_prefill_delta3_ffn_superblock -- \
@@ -8809,7 +8809,7 @@ Decision: add a separate NPU baseline plan before claiming heterogeneous CPU/GPU
 
 ## 2026-04-30 15:48 CEST - Why llama.cpp Is Faster Than Current CTOX Probe
 
-Local reference source checked: `/Users/michaelwelsch/Downloads/llama.cpp`, commit `15fa3c4`.
+Local reference source checked: `/Users/you/Downloads/llama.cpp`, commit `15fa3c4`.
 
 Fundamental differences found:
 

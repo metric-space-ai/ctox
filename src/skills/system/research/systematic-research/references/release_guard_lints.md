@@ -9,7 +9,7 @@ be released.
 
 The structural template for this catalogue is the `buildReleaseGuardPayload()`
 function in
-`/Users/michaelwelsch/Documents/Hypoport/Fördervorhaben-Agent/Foerdervorhaben-Agent.html`
+`/Users/you/Documents/Hypoport/Fördervorhaben-Agent/Foerdervorhaben-Agent.html`
 (approx. lines 5745–5984). The substance examples are anchored against the
 RASCON Machbarkeitsstudie (see `rascon_archetype.md`) and against the
 `style_guidance` asset block (lines 2403–2581 of the same HTML).

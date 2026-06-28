@@ -120,12 +120,12 @@ Codex / ChatGPT / Agent
 ```
 
 The external agent skill lives at `skills/ctox-business-os-mcp/`. Install it in
-an agent runtime together with an MCP server entry. For the Kunstmen instance,
+an agent runtime together with an MCP server entry. For the Example instance,
 Codex is configured as:
 
 ```text
-name: cto1-kunstmen-business-os
-url:  https://mcp.ctox.dev/mcp/cto1.kunstmen.com
+name: cto1-example-business-os
+url:  https://mcp.ctox.dev/mcp/cto1.example.com
 auth: bearer token from CTOX_BUSINESS_OS_MCP_TOKEN
 ```
 
@@ -135,7 +135,7 @@ connect outbound before the agent can read or delegate work:
 ```sh
 export CTOX_BUSINESS_OS_MCP_CONNECT_TOKEN=<instance-connect-token>
 ctox business-os mcp connect \
-  --url wss://mcp.ctox.dev/connect/cto1.kunstmen.com
+  --url wss://mcp.ctox.dev/connect/cto1.example.com
 ```
 
 Local MCP and managed MCP are separate. Local agents on the same host can use

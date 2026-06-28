@@ -174,7 +174,7 @@ read those for block scaffolding and writing rubrics:
   and its company -> project -> problem -> goal -> measures -> cost/period
   sequence.
 - `references/foerdervorhaben_agent_asset_pack.json` — imported asset pack
-  from `/Users/michaelwelsch/Documents/Hypoport/Fördervorhaben-Agent/Foerdervorhaben-Agent.html`.
+  from `/Users/you/Documents/Hypoport/Fördervorhaben-Agent/Foerdervorhaben-Agent.html`.
   For `project_description`, the bridge tool
   `ctox report project-description-agent-brief --run-id RUN_ID` turns this
   into the active block contract, app-style dossier arc and release checklist.

@@ -76,7 +76,7 @@ skills/packs/content/technical-drawing-review/scripts/ingest_review_feedback.py 
   --publish \
   --case-id <case-id> \
   --ctox-bin target/debug/ctox \
-  --workspace-root /Users/michaelwelsch/Documents/ctox
+  --workspace-root /Users/you/Documents/ctox
 ```
 
 `ctox ticket learn-candidate-create` is intentionally used only with a real case because CTOX requires a case and dry-run. When no case exists, use the same script with `--publish` and no `--case-id`; it creates CTOX self-work. Add `--remote-publish-self-work` only when the configured ticket adapter should publish the work item externally:

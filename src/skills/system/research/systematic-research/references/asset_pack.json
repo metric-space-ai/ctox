@@ -276,7 +276,7 @@
     {
       "id": "rascon_archetype",
       "report_type_id": "feasibility_study",
-      "source_doc": "/Users/michaelwelsch/Downloads/Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "source_doc": "/Users/you/Downloads/Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
       "domain_profile_id": "ndt_aerospace",
       "structural_summary": "16-chapter feasibility study on contactless inspection of LSP grid in CFRP composites.",
       "uses_resource_ids": [

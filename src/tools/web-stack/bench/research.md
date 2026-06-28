@@ -87,7 +87,7 @@ The benchmark scan highlights four concrete gaps in the current CTOX web stack:
 2. `ctox_web_scrape` has deterministic wrapper coverage, but no seeded semantic
    regression corpus for ranking quality.
 3. The existing ignored Rust benchmark in
-   `/Users/michaelwelsch/Dokumente - MacBook Air von Michael/Dokumente - MacBook Air von Michael/CTOX/tools/web-stack/src/web_search.rs`
+   `/Users/you/Dokumente - MacBook Air von Michael/Dokumente - MacBook Air von Michael/CTOX/tools/web-stack/src/web_search.rs`
    is useful for compatibility work, but too narrow to act as the primary web
    regression harness.
 4. Browser automation still lacks deterministic bench coverage even after its

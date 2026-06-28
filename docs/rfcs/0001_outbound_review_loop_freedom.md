@@ -1,7 +1,7 @@
 # RFC 0001: Outbound Review Pipeline — Loop-Freedom by Construction
 
 **Status:** Draft
-**Author:** michaelwelsch
+**Author:** CTOX
 **Discussion:** see PR
 **Affects:** `src/service/core_state_machine.rs`,
 `src/service/core_transition_guard.rs`, `src/mission/channels.rs`,

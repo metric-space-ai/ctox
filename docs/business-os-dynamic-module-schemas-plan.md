@@ -383,7 +383,7 @@ Exit criteria:
   instance and native peer, not that separate web deployment. The static shell
   host must be deployed through its own pipeline.
 - Remote validation on managed instances completed:
-  - `kunstmen`: `ctox upgrade --dev` completed and activated
+  - `example`: `ctox upgrade --dev` completed and activated
     `branch-main-20260611T213221Z`; backup:
     `/home/ubuntu/.local/state/ctox/backups/update-20260611T213225Z`.
     Postcheck: `ctox.service=active`, Business OS ok, WebRTC transport,
@@ -441,4 +441,4 @@ Recommended PR order:
 | 2026-06-11 | Browser schema registration and Matching's standalone data source no longer import `schema.js`; declarative migrations now live in `collections.schema.json`. |
 | 2026-06-11 | CI now validates declarative migrations alongside module conformance and App Creator generated output. |
 | 2026-06-11 | Deployment double-check added: `ctox upgrade --dev` deploys committed GitHub `main` per instance and restarts the Business OS web shell, but does not globally fan out or update separate ctox.dev WebDeploy shells. |
-| 2026-06-11 | Remote `ctox upgrade --dev` validation completed on `kunstmen` and `SKF`; both activated `branch-main-20260611T213221Z` and passed Business OS/WebRTC/RxDB peer postchecks. |
+| 2026-06-11 | Remote `ctox upgrade --dev` validation completed on `example` and `SKF`; both activated `branch-main-20260611T213221Z` and passed Business OS/WebRTC/RxDB peer postchecks. |

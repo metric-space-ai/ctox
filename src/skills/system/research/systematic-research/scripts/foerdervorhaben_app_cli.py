@@ -415,7 +415,7 @@ def reference_dirs(root: Path, explicit: list[str] | None = None) -> list[Path]:
     for candidate in [
         root / "reference_inputs",
         Path("/home/ubuntu/reference_inputs"),
-        Path("/Users/michaelwelsch/Downloads/OneDrive_1_9"),
+        Path("/Users/you/Downloads/OneDrive_1_9"),
     ]:
         if candidate.exists():
             dirs.append(candidate)

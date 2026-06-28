@@ -133,11 +133,11 @@ Managed channel shape:
 Agent -> https://mcp.ctox.dev/mcp/<instance-id> -> connected CTOX daemon -> Business OS policy/store
 ```
 
-For `cto1.kunstmen.com`, Codex uses this MCP server entry:
+For `cto1.example.com`, Codex uses this MCP server entry:
 
 ```text
-cto1-kunstmen-business-os
-https://mcp.ctox.dev/mcp/cto1.kunstmen.com
+cto1-example-business-os
+https://mcp.ctox.dev/mcp/cto1.example.com
 ```
 
 The companion external-agent skill is stored at:
@@ -167,10 +167,10 @@ The managed gateway requires the CTOX daemon to hold an outbound WebSocket:
 ```sh
 export CTOX_BUSINESS_OS_MCP_CONNECT_TOKEN=<instance-connect-token>
 ctox business-os mcp connect \
-  --url wss://mcp.ctox.dev/connect/cto1.kunstmen.com
+  --url wss://mcp.ctox.dev/connect/cto1.example.com
 ```
 
-If the instance is not connected, `/mcp/cto1.kunstmen.com` returns `runtime_unavailable` and agents must report that CTOX MCP is not connected.
+If the instance is not connected, `/mcp/cto1.example.com` returns `runtime_unavailable` and agents must report that CTOX MCP is not connected.
 
 For Business OS app development, MCP exposes typed app actions rather than raw
 filesystem or SQL access. `business_os.create_app` and `business_os.modify_app`

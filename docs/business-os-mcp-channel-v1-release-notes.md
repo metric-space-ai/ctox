@@ -70,9 +70,9 @@ Action tools:
 - Tool responses are summary/bounded responses; dense inspection should happen
   through Business OS deep links.
 - The managed gateway is live for `desk_123` and allowlisted for
-  `cto1.kunstmen.com`. Codex has a `cto1-kunstmen-business-os` MCP entry using
-  `https://mcp.ctox.dev/mcp/cto1.kunstmen.com`.
-- `cto1.kunstmen.com` still requires a supervised outbound connector on the
+  `cto1.example.com`. Codex has a `cto1-example-business-os` MCP entry using
+  `https://mcp.ctox.dev/mcp/cto1.example.com`.
+- `cto1.example.com` still requires a supervised outbound connector on the
   actual CTOX instance before Codex can read data or delegate actions through
   MCP.
 - Broad production actor/workspace/module/collection allowlists must be chosen

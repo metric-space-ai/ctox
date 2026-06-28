@@ -29,7 +29,7 @@ archetypes (placeholders)` apply until full archetypes are supplied.
 
 ## Source
 
-- File: `/Users/michaelwelsch/Downloads/Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx`
+- File: `/Users/you/Downloads/Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx`
 - Title: `Machbarkeitsstudie`
 - Subtitle: `Kontaktlose Prüfung des Blitzschutz-Kupfergitters (LSP) in CFK-Strukturen– Technologiebewertung und Vorschlag für ein Forschungs- und Versuchsdesign`
 - Document version line (verbatim): `Arbeitsfassung | Stand: 26.02.2026`
