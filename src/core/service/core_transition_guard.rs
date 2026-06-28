@@ -1785,7 +1785,7 @@ mod tests {
     #[test]
     fn core_spawn_allows_strategy_direction_pass_for_normal_thread() -> Result<()> {
         let conn = Connection::open_in_memory()?;
-        let mut request = self_work_spawn_request("kunstmen-supervisor", "b");
+        let mut request = self_work_spawn_request("example-supervisor", "b");
         request.parent_entity_type = "Thread".to_string();
         request.spawn_kind = "self-work:strategic-direction-pass".to_string();
         request

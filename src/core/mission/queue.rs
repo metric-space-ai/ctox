@@ -3121,7 +3121,7 @@ mod tests {
             plan::PlanIngestRequest {
                 title: "Repair stale queue route".to_string(),
                 prompt: "- inspect runtime\n- verify route".to_string(),
-                thread_key: Some("kunstmen-supervisor".to_string()),
+                thread_key: Some("example-supervisor".to_string()),
                 skill: Some("follow-up-orchestrator".to_string()),
                 auto_advance: true,
                 emit_now: true,
@@ -3173,7 +3173,7 @@ mod tests {
             channels::QueueTaskCreateRequest {
                 title: "Stale review rework".to_string(),
                 prompt: "Cancel me".to_string(),
-                thread_key: "kunstmen-supervisor".to_string(),
+                thread_key: "example-supervisor".to_string(),
                 workspace_root: None,
                 priority: "normal".to_string(),
                 suggested_skill: Some("queue-orchestrator".to_string()),

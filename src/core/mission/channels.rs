@@ -11835,7 +11835,7 @@ mod tests {
             &mut conn,
             TuiIngestRequest {
                 account_key: "local".to_string(),
-                thread_key: "kunstmen-supervisor".to_string(),
+                thread_key: "example-supervisor".to_string(),
                 body: format!(
                     "MiniMax API key fuer MiniMax M2.7: {fake_key}. Bitte mit Secret-Skill ablegen."
                 ),
@@ -12006,7 +12006,7 @@ mod tests {
                 ?1, 'email', 'email:cto1@metric-space.ai', 'crm-thread',
                 '101', 'inbound', 'INBOX', 'Marco Pucciarelli',
                 'mp@iip-gmbh.de', '[]', '[]', '[]',
-                'AW: Kunstmen CRM', 'CRM reply', 'Bitte beantworten.',
+                'AW: Example CRM', 'CRM reply', 'Bitte beantworten.',
                 '', '', 'normal', 'received', 0, 0,
                 '2026-04-29T06:51:46Z', '2026-04-29T08:13:36Z', '{}'
             )"#,
@@ -12496,7 +12496,7 @@ mod tests {
                 channel: "email".to_string(),
                 account_key: "email:cto1@metric-space.ai".to_string(),
                 thread_key: "mail-thread".to_string(),
-                body: "Die Dateien liegen unter /home/ubuntu/workspace/kunstmen/public/mockups/."
+                body: "Die Dateien liegen unter /home/ubuntu/workspace/example/public/mockups/."
                     .to_string(),
                 subject: "Re: Test".to_string(),
                 to: vec!["founder@example.com".to_string()],
@@ -12555,7 +12555,7 @@ mod tests {
             thread_key: "mail-thread".to_string(),
             body: "Die Founder-Mail ist als Reply raus. Review-Approval, Send-Proof, Outbound-Message-Row und Routing-State sind persistiert; Michaels Inbound `email:cto1@metric-space.ai::INBOX::105` steht jetzt auf `handled`."
                 .to_string(),
-            subject: "Kunstmen CRM: ehrlicher Zwischenstand".to_string(),
+            subject: "Example CRM: ehrlicher Zwischenstand".to_string(),
             to: vec!["founder@example.com".to_string()],
             cc: Vec::new(),
             attachments: Vec::new(),

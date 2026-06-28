@@ -1472,7 +1472,7 @@ Neon Postgres zugriff:
 postgresql://user:pw@example.neon.tech/db?sslmode=require
 
 Vercel login über:
-metricspace.ai@gmail.com
+owner@example.com
 vercel-password-123
 ";
 
@@ -1506,7 +1506,7 @@ vercel-password-123
         );
         assert_eq!(
             get_secret_value(&root, "captured-input", "VERCEL_LOGIN_EMAIL")?,
-            "metricspace.ai@gmail.com"
+            "owner@example.com"
         );
         assert_eq!(
             get_secret_value(&root, "captured-input", "VERCEL_LOGIN_PASSWORD")?,
@@ -1522,7 +1522,7 @@ vercel-password-123
         let root = temp_root("prompt-auto-intake-workspace-path");
         fs::create_dir_all(&root)?;
         let workspace =
-            "/home/metricspace/ctox/runtime/model-smoke/20260506T195937-hy3-responses-id-smoke";
+            "/home/you/ctox/runtime/model-smoke/20260506T195937-hy3-responses-id-smoke";
         let prompt = format!(
             "Work only inside this workspace: {workspace}\nCreate smoke.txt in that workspace."
         );

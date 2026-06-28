@@ -36427,11 +36427,11 @@ mod tests {
 
         env_map.insert(
             crate::inference::runtime_state::CTOX_LLM_PROXY_BASE_URL_ENV.to_owned(),
-            "https://kunstmen.ctox.dev/api/fallback-llm".to_owned(),
+            "https://example.ctox.dev/api/fallback-llm".to_owned(),
         );
         assert_eq!(
             runtime_settings_api_upstream_base_url("minimax", &env_map),
-            "https://kunstmen.ctox.dev/api/fallback-llm"
+            "https://example.ctox.dev/api/fallback-llm"
         );
     }
 

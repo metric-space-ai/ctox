@@ -6492,7 +6492,7 @@ mod tests {
                 "context": {
                     "actor": "ctox-dev:user:user_1",
                     "workspace": "tenant:tenant_1",
-                    "instance_id": "cto1.kunstmen.com"
+                    "instance_id": "cto1.example.com"
                 },
                 "body": serde_json::json!({
                     "jsonrpc": "2.0",

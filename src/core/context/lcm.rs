@@ -6913,7 +6913,7 @@ mod tests {
         let engine = LcmEngine::open(&db_path, LcmConfig::default())?;
         let active = engine.create_strategic_directive(
             99,
-            Some("kunstmen-supervisor"),
+            Some("example-supervisor"),
             "mission",
             "Launch the platform",
             "Build a credible marketplace for hiring AI employees.",
@@ -6923,7 +6923,7 @@ mod tests {
         )?;
         let proposed = engine.create_strategic_directive(
             99,
-            Some("kunstmen-supervisor"),
+            Some("example-supervisor"),
             "mission",
             "Tighten the launch scope",
             "Start with three hireable roles and a clear interview-to-hire path.",
@@ -6936,7 +6936,7 @@ mod tests {
             "founder",
             Some("approved refinement"),
         )?;
-        let snapshot = engine.active_strategy_snapshot(99, Some("kunstmen-supervisor"))?;
+        let snapshot = engine.active_strategy_snapshot(99, Some("example-supervisor"))?;
         assert_eq!(
             snapshot
                 .active_mission
@@ -6946,7 +6946,7 @@ mod tests {
         );
         let history = engine.list_strategic_directives(
             99,
-            Some("kunstmen-supervisor"),
+            Some("example-supervisor"),
             Some("mission"),
             10,
         )?;

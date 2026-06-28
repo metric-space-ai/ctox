@@ -2174,8 +2174,8 @@ mod tests {
         let created = ingest_goal(
             &root,
             PlanIngestRequest {
-                title: "Wait for Vercel approval for kunstmen.com".to_string(),
-                prompt: "Monitor the Jami thread jami:abc123 for explicit Vercel access approval. Keep the deployment blocked until approval is confirmed. After confirmation, deploy production and verify kunstmen.com live.".to_string(),
+                title: "Wait for Vercel approval for example.com".to_string(),
+                prompt: "Monitor the Jami thread jami:abc123 for explicit Vercel access approval. Keep the deployment blocked until approval is confirmed. After confirmation, deploy production and verify example.com live.".to_string(),
                 thread_key: Some("jami:abc123".to_string()),
                 skill: Some("follow-up-orchestrator".to_string()),
                 auto_advance: true,
@@ -2234,7 +2234,7 @@ mod tests {
             PlanIngestRequest {
                 title: "Repair stale plan route".to_string(),
                 prompt: "- inspect platform issue\n- redesign homepage".to_string(),
-                thread_key: Some("kunstmen-supervisor".to_string()),
+                thread_key: Some("example-supervisor".to_string()),
                 skill: Some("follow-up-orchestrator".to_string()),
                 auto_advance: true,
                 emit_now: true,
@@ -2412,7 +2412,7 @@ mod tests {
             PlanIngestRequest {
                 title: "Historical stale route".to_string(),
                 prompt: "- inspect runtime\n- verify route".to_string(),
-                thread_key: Some("kunstmen-supervisor".to_string()),
+                thread_key: Some("example-supervisor".to_string()),
                 skill: Some("follow-up-orchestrator".to_string()),
                 auto_advance: true,
                 emit_now: true,

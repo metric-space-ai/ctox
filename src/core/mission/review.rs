@@ -2008,7 +2008,7 @@ mod tests {
             preview: "Unternehmensdaten recherchieren: AESOLAR Energy GmbH".to_string(),
             source_label: "queue".to_string(),
             owner_visible: false,
-            workspace_root: "/Users/michaelwelsch/Documents/ctox.nosync".to_string(),
+            workspace_root: "/Users/you/Documents/ctox.nosync".to_string(),
             ..CompletionReviewRequest::default()
         };
         let (required, score, reasons) = assess_review_requirement(
@@ -2068,8 +2068,8 @@ mod tests {
             source_label: "queue".to_string(),
             owner_visible: true,
             conversation_id: 42,
-            thread_key: "kunstmen-bootstrap".to_string(),
-            workspace_root: "/srv/kunstmen".to_string(),
+            thread_key: "example-bootstrap".to_string(),
+            workspace_root: "/srv/example".to_string(),
             runtime_db_path: "/srv/runtime/ctox.sqlite3".to_string(),
             review_skill_path: "/srv/skills/system/review/external-review/SKILL.md".to_string(),
             artifact_text: "Patched rollout artifact".to_string(),
@@ -2148,7 +2148,7 @@ mod tests {
             conversation_id: 77,
             bound_skill: None,
             thread_key: "email-review:owner:abc".to_string(),
-            workspace_root: "/srv/kunstmen".to_string(),
+            workspace_root: "/srv/example".to_string(),
             runtime_db_path: "/srv/runtime/ctox.sqlite3".to_string(),
             review_skill_path: "/srv/skills/system/review/external-review/SKILL.md".to_string(),
             artifact_text: "Kurzstand: Ich liefere spaeter.".to_string(),
@@ -2165,7 +2165,7 @@ mod tests {
                 "Today, 24.04.2026, send an update by 20:00 UTC.".to_string()
             ],
             commitment_backing: vec![
-                "kunstmen founder update 20utc @ 2026-04-24T20:00:00+00:00".to_string()
+                "example founder update 20utc @ 2026-04-24T20:00:00+00:00".to_string()
             ],
             deterministic_evidence: vec![
                 "Recent same-thread email: inbound founder requested QR code".to_string(),
@@ -2186,7 +2186,7 @@ mod tests {
         assert!(rendered
             .contains("Artifact commitments: Today, 24.04.2026, send an update by 20:00 UTC."));
         assert!(rendered.contains(
-            "Commitment backing: kunstmen founder update 20utc @ 2026-04-24T20:00:00+00:00"
+            "Commitment backing: example founder update 20utc @ 2026-04-24T20:00:00+00:00"
         ));
         assert!(rendered.contains("Recent same-thread email: inbound founder requested QR code"));
         assert!(rendered.contains("judge the full mail action, not just the prose"));
