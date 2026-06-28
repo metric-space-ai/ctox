@@ -41,3 +41,9 @@ old-legacy-for-transplation-only/
 bench_compaction_host_run.sh
 tmp_intersolar/
 tmp_intersolar_*.js
+
+# Stray dev artifacts at repo root (root-scoped so vendored files aren't shadowed)
+/*.diff
+/output-*.png
+/*.orig
+*.rej
