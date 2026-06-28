@@ -2172,11 +2172,11 @@ fn handle_mailserver_command(root: &Path, args: &[String]) -> anyhow::Result<()>
             println!("\n  \x1b[36mA Record:\x1b[0m");
             println!("    Name/Host:  mail.{}", domain);
             println!("    Typ:        A");
-            println!("    Wert:       51.210.246.120");
+            println!("    Wert:       203.0.113.10");
             println!("\n  \x1b[36mTXT SPF Record:\x1b[0m");
             println!("    Name/Host:  @");
             println!("    Typ:        TXT");
-            println!("    Wert:       v=spf1 mx a ip4:51.210.246.120 ~all");
+            println!("    Wert:       v=spf1 mx a ip4:203.0.113.10 ~all");
             println!("\n  \x1b[36mTXT DMARC Record:\x1b[0m");
             println!("    Name/Host:  _dmarc.{}", domain);
             println!("    Typ:        TXT");

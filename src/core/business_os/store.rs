@@ -17978,7 +17978,7 @@ pub fn accept_rxdb_business_command_with_origin(
                 dkim_private_key_opt
             };
 
-            let spf_record = format!("v=spf1 mx a ip4:51.210.246.120 ~all");
+            let spf_record = format!("v=spf1 mx a ip4:203.0.113.10 ~all");
             let dmarc_record = format!("v=DMARC1; p=none; rua=mailto:dmarc@{}", domain_name);
 
             let conn = open_mailserver_store_connection(root)?;

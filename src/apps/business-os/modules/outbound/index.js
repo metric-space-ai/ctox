@@ -4367,8 +4367,8 @@ function renderResearchSettingsDrawer(campaign) {
                       <strong style="font-size: 11px; color: #94a3b8;">2. SPF (TXT Record)</strong>
                       <span style="font-size: 10px; color: #64748b; font-family: monospace;">Host: @</span>
                     </div>
-                    <code class="code-font" style="display: block; word-break: break-all; font-size: 11px; background: #000; padding: 6px; border-radius: 4px; color: #10b981;">${escapeHtml(dom.spf_record || 'v=spf1 mx a ip4:51.210.246.120 ~all')}</code>
-                    <button class="outbound-button mini-copy" type="button" data-copy-text="${escapeHtml(dom.spf_record || 'v=spf1 mx a ip4:51.210.246.120 ~all')}" style="margin-top: 6px; font-size: 11px; padding: 2px 8px; height: auto; line-height: 1.2;">
+                    <code class="code-font" style="display: block; word-break: break-all; font-size: 11px; background: #000; padding: 6px; border-radius: 4px; color: #10b981;">${escapeHtml(dom.spf_record || 'v=spf1 mx a ip4:203.0.113.10 ~all')}</code>
+                    <button class="outbound-button mini-copy" type="button" data-copy-text="${escapeHtml(dom.spf_record || 'v=spf1 mx a ip4:203.0.113.10 ~all')}" style="margin-top: 6px; font-size: 11px; padding: 2px 8px; height: auto; line-height: 1.2;">
                       ${escapeHtml(t('copy', 'Kopieren'))}
                     </button>
                   </div>

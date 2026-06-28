@@ -776,7 +776,7 @@ impl CtoxDesktopApp {
                     .map(|discovery| discovery.root.clone())
                     .unwrap_or_else(|| {
                         PathBuf::from(shellexpand_tilde(
-                            "/Users/michaelwelsch/.local/lib/ctox/current",
+                            "~/.local/lib/ctox/current",
                         ))
                     })
             } else {
@@ -952,7 +952,7 @@ impl CtoxDesktopApp {
         if self.new_draft.local {
             let root = non_empty_or(
                 self.new_draft.install_root.trim(),
-                "/Users/michaelwelsch/.local/lib/ctox/current",
+                "~/.local/lib/ctox/current",
             );
             let installation = Installation {
                 id: Uuid::new_v4().to_string(),
@@ -2127,7 +2127,7 @@ impl CtoxDesktopApp {
                                 );
                                 ui.label(
                                     RichText::new(
-                                        "/Users/michaelwelsch/.local/lib/ctox/current",
+                                        "~/.local/lib/ctox/current",
                                     )
                                     .size(12.0)
                                     .color(UI_MUTED),
@@ -4763,7 +4763,7 @@ impl CtoxDesktopApp {
                     "Pfad".to_owned(),
                     non_empty_or(
                         self.connect_draft.install_root.trim(),
-                        "/Users/michaelwelsch/.local/lib/ctox/current",
+                        "~/.local/lib/ctox/current",
                     )
                     .to_owned(),
                 ),
@@ -4821,7 +4821,7 @@ impl CtoxDesktopApp {
                     "Pfad".to_owned(),
                     non_empty_or(
                         self.new_draft.install_root.trim(),
-                        "/Users/michaelwelsch/.local/lib/ctox/current",
+                        "~/.local/lib/ctox/current",
                     )
                     .to_owned(),
                 ),
