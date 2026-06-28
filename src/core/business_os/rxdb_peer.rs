@@ -193,7 +193,10 @@ const BUSINESS_RECORD_PROJECTION_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 const BUSINESS_RECORD_PROJECTION_SYNC_LIMIT: usize = 2_000;
 const QUEUE_CHAT_REPAIR_ORPHAN_EPOCH_MS: i64 = 10 * 60 * 1_000;
 const BUSINESS_COMMAND_ACTIVE_POLL_SECS: u64 = 1;
-const BUSINESS_COMMAND_IDLE_POLL_SECS: u64 = BUSINESS_OS_STANDBY_RECONCILE_INTERVAL_SECS;
+// Browser-issued commands are user-visible control messages. The table
+// notifier is the fast path, but WebRTC/import writes can miss that wake in CI;
+// keep the fallback poll short so a pending command never waits minutes.
+const BUSINESS_COMMAND_IDLE_POLL_SECS: u64 = 3;
 const BUSINESS_COMMAND_IDLE_BACKOFF_AFTER_TICKS: u32 = 1;
 const SUPPORT_COMMUNICATION_INTAKE_SINCE_KEY: &str = "__support_communication_intake";
 const THREADS_CTOX_RELEVANCE_COMMANDS_SINCE_KEY: &str =
@@ -11783,6 +11786,30 @@ mod tests {
 
     static TEST_RXDB_DATABASE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+    fn issue_test_capability_token(root: &Path, user_id: &str, role: &str) -> String {
+        let (token, _) = store::issue_business_os_capability_token_for_managed_user(
+            root,
+            user_id,
+            user_id,
+            role,
+            now_ms() as i64,
+        )
+        .expect("issue test capability token");
+        token
+    }
+
+    fn replicated_peer_client_context(user_id: &str, role: &str, token: &str) -> Value {
+        json!({
+            "actor": {
+                "id": user_id,
+                "display_name": user_id,
+                "role": role,
+                "is_admin": role == "admin"
+            },
+            "capability_token": token
+        })
+    }
+
     #[test]
     fn business_record_projection_skips_transient_payload_collections() {
         let collections = business_record_projection_collections();
@@ -18035,6 +18062,7 @@ mod tests {
     #[test]
     fn native_peer_consumes_pending_business_command() {
         let root = tempfile::tempdir().expect("temp root");
+        let capability_token = issue_test_capability_token(root.path(), "rxdb-native-chef", "chef");
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -18060,7 +18088,11 @@ mod tests {
                 "status": "pending_sync",
                 "inbound_channel": "ctox",
                 "payload": { "title": "Native consumer test", "instruction": "test only" },
-                "client_context": {},
+                "client_context": replicated_peer_client_context(
+                    "rxdb-native-chef",
+                    "chef",
+                    &capability_token
+                ),
                 "updated_at_ms": now_ms() as u64
             });
             commands
@@ -18497,6 +18529,7 @@ mod tests {
     #[test]
     fn native_peer_consumes_pending_ctox_task_update_command() {
         let root = tempfile::tempdir().expect("temp root");
+        let capability_token = issue_test_capability_token(root.path(), "rxdb-task-chef", "chef");
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -18523,7 +18556,11 @@ mod tests {
                     "status": "pending_sync",
                     "inbound_channel": "ctox",
                     "payload": { "title": "Task seed", "instruction": "test only" },
-                    "client_context": {},
+                    "client_context": replicated_peer_client_context(
+                        "rxdb-task-chef",
+                        "chef",
+                        &capability_token
+                    ),
                     "updated_at_ms": now_ms() as u64
                 }))
                 .await
@@ -18565,11 +18602,12 @@ mod tests {
                     },
                     "client_context": {
                         "actor": {
-                            "id": "chef",
-                            "display_name": "Chef",
+                            "id": "rxdb-task-chef",
+                            "display_name": "rxdb-task-chef",
                             "role": "chef",
                             "is_admin": false
-                        }
+                        },
+                        "capability_token": capability_token
                     },
                     "updated_at_ms": now_ms() as u64
                 }))

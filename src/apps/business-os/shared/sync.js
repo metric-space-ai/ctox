@@ -30,7 +30,7 @@ const CTOX_BROWSER_CAPABILITIES = [
   'ctox-checkpoint-epoch-v1',
 ];
 const NATIVE_PEER_OPEN_WATCHDOG_MS = 30000;
-const NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS = 30000;
+const NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS = 60000;
 const NATIVE_PEER_RESTART_STABLE_MS = 1000;
 const SYNC_DIAGNOSTIC_EMIT_MIN_INTERVAL_MS = 250;
 const DEMAND_ONLY_COLLECTION_START_ERROR = 'DEMAND_ONLY_COLLECTION_REQUIRES_LEASE';
@@ -530,12 +530,21 @@ async function waitForNativePeerOpenState(state, collection, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (hasOpenNativePeerState(state)) return true;
-    await withTimeout(state?.awaitInitialReplication?.(), 2000);
-    await withTimeout(state?.awaitInSync?.(), 3000);
+    await waitForReplicationAwaiter(() => state?.awaitInitialReplication?.(), 2000);
+    await waitForReplicationAwaiter(() => state?.awaitInSync?.(), 3000);
     if (hasOpenNativePeerState(state)) return true;
     await delay(500);
   }
   throw createNativePeerOpenTimeoutEvent(collection, timeoutMs);
+}
+
+async function waitForReplicationAwaiter(awaiter, ms) {
+  try {
+    const value = typeof awaiter === 'function' ? awaiter() : awaiter;
+    await withTimeout(value, ms);
+  } catch (error) {
+    if (!classifyControlledReplicationCancellation(error)) throw error;
+  }
 }
 
 async function waitForStableNativePeerOpenState(state, collection, timeoutMs, stableMs) {
@@ -1064,6 +1073,20 @@ function watchInitialReplication({
     .catch((error) => {
       if (stallTimer) clearTimeout(stallTimer);
       if (isStopped?.()) return;
+      const cancellationEvent = classifyControlledReplicationCancellation(error);
+      if (cancellationEvent) {
+        recordCollection?.(collection, {
+          status: 'reconnecting',
+          connectionStatus: 'reconnecting',
+          initialReplicationState: 'reconnecting',
+          initialReplicationSource: awaitInitialReplication.source,
+          lastError: null,
+          lastLifecycleEvent: cancellationEvent,
+          reconnectingSince: new Date().toISOString(),
+        });
+        scheduleRestart?.(collection, 1000);
+        return;
+      }
       recordCollection?.(collection, {
         status: 'error',
         connectionStatus: 'error',
@@ -1756,6 +1779,7 @@ function extractReplicationErrorDetails(error) {
 
 export const __ctoxSyncTestHooks = {
   classifySignalingControlPlaneError,
+  classifyControlledReplicationCancellation,
   classifyPeerLifecycleEvent,
   classifySchemaProtocolError,
   classifyReplicationIoError,
@@ -1774,7 +1798,35 @@ function replicationIoMessageFor(code) {
   return 'RxDB WebRTC replication I/O failed.';
 }
 
+function classifyControlledReplicationCancellation(error) {
+  const message = [
+    error?.name,
+    error?.code,
+    error?.message,
+    (() => {
+      try { return JSON.stringify(error?.parameters || null); } catch { return ''; }
+    })(),
+  ].filter(Boolean).join('\n');
+  if (
+    !message.includes('WebRTC replication cancelled')
+    && !message.includes('replication-cancel')
+  ) {
+    return null;
+  }
+  return {
+    name: 'CtoxWebRtcPeerLifecycleEvent',
+    code: 'replication_cancelled',
+    phase: 'peer-reconnect',
+    severity: 'recoverable',
+    retryable: true,
+    lifecycle: true,
+    message: 'WebRTC replication was cancelled during controlled restart; reconnect repair is scheduled.',
+  };
+}
+
 function classifyPeerLifecycleEvent(error) {
+  const controlledCancellation = classifyControlledReplicationCancellation(error);
+  if (controlledCancellation) return controlledCancellation;
   const code = String(error?.code || error?.parameters?.error?.code || '');
   const message = [
     error?.message,

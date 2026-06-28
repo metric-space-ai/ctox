@@ -1,9 +1,11 @@
 import {
   FILE_CHUNK_HASH_SCHEME,
+  FILE_CHUNK_ERROR_CODES,
   FILE_CONTENT_HASH_SCHEME,
   readStoredFileFromDemandChunks,
   sha256Hex,
 } from '../../shared/file-integrity.js?v=20260624-demand-file-fetch1';
+import { readStoredFileFromChunks } from '../../shared/file-integrity.js?v=20260603-active-chunk-query2';
 
 export const manifest = {
   id: 'explorer',
@@ -717,10 +719,29 @@ async function storeFile(db, parentId, parentPath, name, file) {
 async function readStoredFile(ctx, fileId, mimeType = 'application/octet-stream', options = {}) {
   const loader = await fileDemandLoaderFor(ctx).catch(() => null);
   if (loader?.fetchFile) {
-    const chunks = await loader.fetchFile(fileId);
-    return readStoredFileFromDemandChunks(chunks, mimeType, options);
+    try {
+      const chunks = await loader.fetchFile(fileId);
+      return await readStoredFileFromDemandChunks(chunks, mimeType, options);
+    } catch (error) {
+      if (!canFallbackToStoredChunks(error)) throw error;
+    }
   }
-  throw new Error('Dateiinhalt ist noch nicht über den Sync-Demand-Pfad verfügbar.');
+  return readStoredFileFromStoredChunks(ctx, fileId, mimeType, options);
+}
+
+function canFallbackToStoredChunks(error) {
+  return error?.code === FILE_CHUNK_ERROR_CODES.MISSING
+    || String(error?.message || error || '').includes('Dateiinhalt fehlt');
+}
+
+async function readStoredFileFromStoredChunks(ctx, fileId, mimeType, options) {
+  const bridge = await ctx?.sync?.startCollection?.('desktop_file_chunks').catch(() => null);
+  if (bridge) await waitForReplicationBridge(bridge, 'desktop_file_chunks');
+  const collection = ctx.db?.collection?.('desktop_file_chunks');
+  if (!collection) throw new Error('desktop_file_chunks collection is required for file reads');
+  const docs = await collection.find({ selector: { file_id: fileId } }).exec();
+  const chunks = docs.map((doc) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc));
+  return readStoredFileFromChunks(chunks, fileId, mimeType, options);
 }
 
 async function fileDemandLoaderFor(ctx) {

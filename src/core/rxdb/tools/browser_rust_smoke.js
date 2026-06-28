@@ -811,6 +811,11 @@ function writeBusinessOsReleaseModuleFixture(installedModulesRoot, id, module) {
 <script type="module" src="./index.js"></script>
 `);
   fs.writeFileSync(path.join(moduleRoot, 'index.css'), '.phase10-release-app { display: grid; gap: 0.5rem; padding: 1rem; }\n');
+  fs.writeFileSync(path.join(moduleRoot, 'icon.svg'), `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Phase 10 Release App">
+  <rect width="64" height="64" rx="12" fill="#0f172a"/>
+  <path d="M18 34l9 9 19-22" fill="none" stroke="#f8fafc" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+`);
   fs.writeFileSync(path.join(moduleRoot, 'schema.js'), 'export const collections = {};\n');
   fs.writeFileSync(path.join(moduleRoot, 'index.js'), `export async function mount(ctx) {
   const host = ctx.host || document.body;
@@ -1649,10 +1654,9 @@ function sqlite(statement, targetPath = sqlitePath) {
       '-cmd',
       '.timeout 10000',
       targetPath,
-      statement,
-    ], { encoding: 'utf8' });
+    ], { encoding: 'utf8', input: statement });
     if (result.status === 0) return result.stdout;
-    lastOutput = result.stderr || result.stdout || '';
+    lastOutput = result.error?.message || result.stderr || result.stdout || '';
     if (!/database is locked|SQLITE_BUSY/i.test(lastOutput)) {
       throw new Error(`sqlite failed: ${lastOutput}`);
     }
@@ -1784,14 +1788,28 @@ function quoteSqlIdentifier(identifier) {
 // be inside their first catch-up. The strict contract requires COMPLETE
 // initial sync, so poll until the lazy tail finishes (bounded) before
 // asserting. Returns the last observed status either way.
-async function waitForHealthyCompleteStatus(page, { timeoutMs = 60000, requiredCollections = null } = {}) {
+async function waitForHealthyCompleteStatus(page, { timeoutMs = 60000, requiredCollections = null, allowRestart = true } = {}) {
   const deadline = Date.now() + timeoutMs;
   let status = null;
+  let lastError = null;
   for (;;) {
-    status = await page.evaluate((options) => globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
-      timeoutMs: options.timeoutMs,
-      ...(options.requiredCollections ? { requiredCollections: options.requiredCollections } : {}),
-    }), { timeoutMs, requiredCollections });
+    const remainingMs = Math.max(250, deadline - Date.now());
+    const probeTimeoutMs = Math.min(5000, remainingMs);
+    try {
+      status = await page.evaluate((options) => globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
+        timeoutMs: options.probeTimeoutMs,
+        intervalMs: 250,
+        allowRestart: options.allowRestart === true,
+        ...(options.requiredCollections ? { requiredCollections: options.requiredCollections } : {}),
+      }), { probeTimeoutMs, requiredCollections, allowRestart });
+      lastError = null;
+    } catch (error) {
+      lastError = error?.message || String(error);
+      status = await page.evaluate((options) => globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({
+        includeCounts: false,
+        ...(options.requiredCollections ? { requiredCollections: options.requiredCollections } : {}),
+      }), { requiredCollections }).catch(() => null);
+    }
     const initialSync = status?.sync?.initialSync || {};
     const missing = Array.isArray(initialSync.missingInitialReplication)
       ? initialSync.missingInitialReplication
@@ -1799,7 +1817,12 @@ async function waitForHealthyCompleteStatus(page, { timeoutMs = 60000, requiredC
     const incomplete = Array.isArray(initialSync.entries)
       && initialSync.entries.some((entry) => entry?.state !== 'complete');
     if (status?.ok && missing.length === 0 && !incomplete) return status;
-    if (Date.now() > deadline) return status;
+    if (Date.now() > deadline) {
+      if (status && typeof status === 'object' && lastError) {
+        status.smokeWaitForHealthyError = lastError;
+      }
+      return status;
+    }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
 }
@@ -2618,8 +2641,18 @@ function ensureCtoxSmokeBinary() {
     expectedNetworkFlapWarnings: 0,
     expectedNetworkFlapErrors: 0,
     expectedNetworkFlapRequestFailures: 0,
+    warningSamples: [],
   };
   let browserDiagnosticsEmitted = false;
+  function addBrowserDiagnosticSample(samples, text) {
+    if (!Array.isArray(samples) || samples.length >= 8) return;
+    const normalized = String(text || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 500);
+    if (!normalized || samples.includes(normalized)) return;
+    samples.push(normalized);
+  }
   function emitBrowserDiagnostics() {
     if (browserDiagnosticsEmitted) return;
     browserDiagnosticsEmitted = true;
@@ -2635,6 +2668,9 @@ function ensureCtoxSmokeBinary() {
     console.log(`expected_network_flap_request_failure_count=${browserDiagnostics.expectedNetworkFlapRequestFailures}`);
     console.log(`startup_smoke_hook_reload_count=${browserDiagnostics.smokeHookReloads}`);
     console.log(`startup_smoke_hook_wait_ms=${browserDiagnostics.smokeHookWaitMs}`);
+    if (browserDiagnostics.warningSamples.length > 0) {
+      console.log(`browser_warning_samples=${JSON.stringify(browserDiagnostics.warningSamples)}`);
+    }
     if (browserDiagnostics.cacheRepairs > 0) {
       throw new Error(`Business OS local RxDB cache repair was triggered during smoke: ${browserDiagnostics.cacheRepairs}`);
     }
@@ -2651,6 +2687,20 @@ function ensureCtoxSmokeBinary() {
     return smokeMode === 'network-flap-browser-to-rust'
       && /ERR_INTERNET_DISCONNECTED/i.test(failureText)
       && request.url().includes('/business-os/modules/registry.json');
+  }
+  function isLocalBusinessOsAssetUrl(rawUrl) {
+    let url;
+    try {
+      url = new URL(rawUrl);
+    } catch {
+      return false;
+    }
+    if (url.origin !== `http://127.0.0.1:${businessPort}`) return false;
+    return url.pathname.includes('/app.js')
+      || url.pathname.includes('/shared/')
+      || url.pathname.includes('/modules/')
+      || url.pathname.includes('/installed-modules/')
+      || url.pathname.includes('/vendor/');
   }
 
   let browser;
@@ -2697,6 +2747,7 @@ function ensureCtoxSmokeBinary() {
         } else {
           browserDiagnostics.warnings += 1;
           if (/websocket/i.test(text)) browserDiagnostics.websocketWarnings += 1;
+          addBrowserDiagnosticSample(browserDiagnostics.warningSamples, text);
         }
       } else if (type === 'error') {
         if (/failed to load resource/i.test(text) && /status of 404/i.test(text)) {
@@ -2715,7 +2766,7 @@ function ensureCtoxSmokeBinary() {
     });
     page.on('requestfailed', (request) => {
       const url = request.url();
-      if (url.includes('/app.js') || url.includes('/shared/') || url.includes('/modules/') || url.includes('/installed-modules/') || url.includes('/vendor/')) {
+      if (isLocalBusinessOsAssetUrl(url)) {
         if (isExpectedNetworkFlapRequestFailure(request)) {
           browserDiagnostics.expectedNetworkFlapRequestFailures += 1;
         } else {
@@ -2726,7 +2777,7 @@ function ensureCtoxSmokeBinary() {
     });
     page.on('response', (response) => {
       const url = response.url();
-      if (response.status() >= 400 && (url.includes('/app.js') || url.includes('/shared/') || url.includes('/modules/') || url.includes('/installed-modules/') || url.includes('/vendor/'))) {
+      if (response.status() >= 400 && isLocalBusinessOsAssetUrl(url)) {
         browserDiagnostics.assetResponseErrors += 1;
         console.error(`[browser:response] ${response.status()} ${url}`);
       }
@@ -3403,7 +3454,6 @@ function ensureCtoxSmokeBinary() {
             'business_commands',
             'ctox_queue_tasks',
             'desktop_files',
-            'desktop_file_chunks',
           ]
         : deferredFileCollectionStartupMode
         || largeFileMaterializeSmokeMode
@@ -3417,16 +3467,13 @@ function ensureCtoxSmokeBinary() {
             'business_commands',
             'ctox_queue_tasks',
             'desktop_files',
-            'desktop_file_chunks',
           ];
       const startupAdvancedStatusStartedAt = Date.now();
-      // waitForHealthy reports ok as soon as the SHELL is healthy; lazy
-      // collections (desktop_file_chunks since the lazy-file-sync change) may
-      // still be inside their first catch-up for a few hundred ms. The strict
-      // contract below requires COMPLETE initial sync, so poll the status
-      // until the lazy tail finishes (bounded) before asserting.
+      // Startup health excludes demand-only file chunk bodies. Modes that need
+      // chunk replication lease desktop_file_chunks explicitly after shell
+      // readiness, then assert that mode-specific evidence.
       const advancedStatus = await waitForHealthyCompleteStatus(page, {
-        timeoutMs: smokeMode === 'business-os-app-release-ui' ? 240000 : 60000,
+        timeoutMs: businessOsProductionSmokeModeSet.has(smokeMode) ? 240000 : 60000,
         requiredCollections: startupRequiredCollections,
       });
       outerPhaseTimings.startupAdvancedStatusMs = Date.now() - startupAdvancedStatusStartedAt;
@@ -3445,7 +3492,6 @@ function ensureCtoxSmokeBinary() {
           'business_commands',
           'ctox_queue_tasks',
           'desktop_files',
-          'desktop_file_chunks',
         ];
         const authSnapshot = async () => page.evaluate(async () => {
           const smoke = globalThis.ctoxBusinessOsSmoke;
@@ -3480,20 +3526,40 @@ function ensureCtoxSmokeBinary() {
           };
         });
         const waitForAuthenticatedShell = async (label) => {
-          await page.waitForFunction(() => {
-            const smoke = globalThis.ctoxBusinessOsSmoke;
-            const state = smoke?.state || globalThis.CTOX_BUSINESS_OS_APP;
-            const modulesLoaded = Array.isArray(state?.modules) && state.modules.length > 0;
-            const shellOpened = Boolean(document.body?.dataset?.moduleShell);
-            const loading = Boolean(document.body?.dataset?.moduleLoading);
-            return Boolean(smoke)
-              && Boolean(state?.session?.authenticated)
-              && modulesLoaded
-              && shellOpened
-              && !loading;
-          }, null, { timeout: 60000 });
+          try {
+            await page.waitForFunction(() => {
+              const smoke = globalThis.ctoxBusinessOsSmoke;
+              const state = smoke?.state || globalThis.CTOX_BUSINESS_OS_APP;
+              const modulesLoaded = Array.isArray(state?.modules) && state.modules.length > 0;
+              const shellOpened = Boolean(document.body?.dataset?.moduleShell);
+              const loading = Boolean(document.body?.dataset?.moduleLoading);
+              return Boolean(smoke)
+                && Boolean(state?.session?.authenticated)
+                && modulesLoaded
+                && shellOpened
+                && !loading;
+            }, null, { timeout: 60000 });
+          } catch (error) {
+            const snapshot = await authSnapshot().catch((snapshotError) => ({
+              snapshotError: snapshotError?.message || String(snapshotError),
+            }));
+            const status = await page.evaluate((collections) => globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({
+              includeCounts: false,
+              requiredCollections: collections,
+            }), requiredCollections).catch((statusError) => ({
+              statusError: statusError?.message || String(statusError),
+            }));
+            throw new Error(`Business OS auth smoke ${label} did not reach authenticated shell: ${JSON.stringify({
+              error: error?.message || String(error),
+              snapshot,
+              status,
+            }, null, 2)}`);
+          }
           const status = await waitForHealthyCompleteStatus(page, {
-            timeoutMs: 60000,
+            // Auth reload can re-enter collection startup after the shell is
+            // visible; keep the same budget as production startup so
+            // business_commands gets a full reconnect/repair window.
+            timeoutMs: 240000,
             requiredCollections,
           });
           if (!status?.ok) {
@@ -3617,10 +3683,26 @@ function ensureCtoxSmokeBinary() {
           && !tampered.activeModule;
         await page.locator('[data-login-gate-form] input[name="user"]').fill('admin', { timeout: 10000 });
         await page.locator('[data-login-gate-form] input[name="password"]').fill('admin', { timeout: 10000 });
-        await Promise.all([
-          page.waitForURL((url) => url.pathname === '/' || url.pathname.endsWith('/index.html'), { timeout: 15000 }).catch(() => {}),
-          page.locator('[data-login-gate-form] [data-gate-submit]').click({ timeout: 10000 }),
-        ]);
+        const loginResponsePromise = page.waitForResponse((response) => {
+          try {
+            const url = new URL(response.url());
+            return url.origin === `http://127.0.0.1:${businessPort}`
+              && url.pathname === '/login'
+              && response.request().method() === 'POST';
+          } catch {
+            return false;
+          }
+        }, { timeout: 15000 });
+        await page.locator('[data-login-gate-form] [data-gate-submit]').click({ timeout: 10000 });
+        const loginResponse = await loginResponsePromise;
+        const loginPayload = await loginResponse.json().catch(() => null);
+        if (!loginResponse.ok() || loginPayload?.authenticated !== true) {
+          throw new Error(`Business OS auth smoke login request failed: ${JSON.stringify({
+            status: loginResponse.status(),
+            payload: loginPayload,
+          }, null, 2)}`);
+        }
+        await page.waitForURL((url) => url.pathname === '/' || url.pathname.endsWith('/index.html'), { timeout: 15000 }).catch(() => {});
         await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
         await gotoInstrumentedSmokeUrl('login');
         const afterLogin = await waitForAuthenticatedShell('login');
@@ -3732,7 +3814,7 @@ function ensureCtoxSmokeBinary() {
             title: 'Phase 14 Fresh Private App',
             glyph: 'F14P',
             version: '0.5.0',
-            source: 'installed',
+            source: 'business-os-shell',
             install_scope: 'installed',
             entry: 'installed-modules/phase14-fresh-private-app/index.js',
             collections: ['business_commands'],
@@ -3744,19 +3826,41 @@ function ensureCtoxSmokeBinary() {
             title: 'Phase 14 Fresh Team App',
             glyph: 'F14T',
             version: '1.0.0',
-            source: 'installed',
+            source: 'business-os-shell',
             install_scope: 'installed',
             entry: 'installed-modules/phase14-fresh-team-app/index.js',
             collections: ['business_commands'],
             editable: true,
             deletable: true,
+            lifecycle: {
+              runtime_installed: true,
+              visibility_state: 'team',
+              audience: 'team',
+              current_semver: '1.0.0',
+              release_status: 'unreleased',
+              release_state: {
+                status: 'unreleased',
+                history_count: 1,
+              },
+              data_access: {
+                status: 'reviewed',
+                completed: true,
+                areas: [
+                  { collection: 'business_commands', read: 'locked', write: 'not_requested' },
+                ],
+                granted_collection_ids: [],
+                locked_collection_ids: ['business_commands'],
+                review_is_evidence_only: true,
+                grants_implied: false,
+              },
+            },
           };
           const restrictedModule = {
             id: 'phase14-fresh-restricted-app',
             title: 'Phase 14 Fresh Restricted App',
             glyph: 'F14R',
             version: '1.2.0',
-            source: 'installed',
+            source: 'business-os-shell',
             install_scope: 'installed',
             entry: 'installed-modules/phase14-fresh-restricted-app/index.js',
             collections: ['business_commands'],
@@ -3789,7 +3893,7 @@ function ensureCtoxSmokeBinary() {
               title: `Phase 14 Scale App ${String(seq).padStart(2, '0')}`,
               glyph: 'S14',
               version,
-              source: 'installed',
+              source: 'business-os-shell',
               install_scope: 'installed',
               entry: `installed-modules/${moduleId}/index.js`,
               collections: ['business_commands'],
@@ -3912,6 +4016,9 @@ function ensureCtoxSmokeBinary() {
                     BusinessOsPermissions.AppsSourceView,
                     BusinessOsPermissions.AppsRelease,
                   ],
+                  fresh_team_member: [
+                    BusinessOsPermissions.AppsView,
+                  ],
                 },
                 [restrictedModule.id]: {
                   fresh_builder: [
@@ -3984,14 +4091,46 @@ function ensureCtoxSmokeBinary() {
             smoke.renderTabs();
             return Math.round(performance.now() - renderStartedAt);
           };
+          const appStoreCardEvidence = (targetId) => {
+            const root = document.querySelector('[data-app-store-root]');
+            const cards = [...document.querySelectorAll('[data-app-id]')].slice(0, 40).map((card) => ({
+              id: card.getAttribute('data-app-id') || '',
+              text: (card.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 220),
+              disabledReason: card.querySelector('[data-disabled-reason]')?.getAttribute('data-disabled-reason') || '',
+              lifecycle: card.querySelector('.app-lifecycle-badge')?.textContent?.trim() || '',
+            }));
+            const activeScope = [...document.querySelectorAll('[data-app-store-root] [data-scope]')]
+              .find((button) => button.classList?.contains('active') || button.getAttribute('aria-pressed') === 'true')
+              ?.getAttribute('data-scope') || '';
+            return {
+              root: Boolean(root),
+              activeScope,
+              targetPresent: cards.some((card) => card.id === targetId),
+              cardCount: document.querySelectorAll('[data-app-id]').length,
+              cards,
+              title: document.querySelector('[data-visible-category-title]')?.textContent?.trim() || '',
+              count: document.querySelector('[data-apps-count]')?.textContent?.trim() || '',
+              empty: document.querySelector('.store-empty-state')?.innerText?.replace(/\s+/g, ' ').trim() || '',
+              activeModule: state.activeModule?.id || '',
+              shellModuleCount: Array.isArray(state.modules) ? state.modules.length : 0,
+              targetInShellModules: Array.isArray(state.modules)
+                ? state.modules.some((mod) => mod?.id === targetId)
+                : false,
+              actor: state.session?.user?.id || '',
+              role: state.session?.user?.role || '',
+            };
+          };
           globalThis.__ctoxFreshProfileNarrowSetup = async () => {
             installModules(teamSession);
+            window.dispatchEvent(new Event('resize'));
             await state.openModule('app-store', { force: true, asModule: true });
+            await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
             await waitFor(() => ({
               ok: Boolean(document.querySelector('[data-app-store-root]')),
               text: document.querySelector('[data-app-store-root]')?.innerText?.slice(0, 500) || '',
             }), 10000, 'fresh-profile narrow app store root');
             document.querySelector('[data-app-store-root] [data-scope="installed"]')?.click();
+            await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
             return waitFor(() => {
               const card = document.querySelector(`[data-app-id="${css(teamModule.id)}"]`);
               const disabled = card?.querySelector('[data-disabled-reason]');
@@ -4001,6 +4140,7 @@ function ensureCtoxSmokeBinary() {
                 cardText: card?.innerText || '',
                 disabledReason: disabled?.getAttribute('data-disabled-reason') || '',
                 lifecycleText: lifecycle?.textContent?.trim() || '',
+                appStore: appStoreCardEvidence(teamModule.id),
               };
             }, 10000, 'fresh-profile narrow app-store disabled reason');
           };
@@ -5645,7 +5785,7 @@ function ensureCtoxSmokeBinary() {
       }
     }
     const pageEvaluateStartedAt = Date.now();
-    const result = await page.evaluate(async ({ signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified }) => {
+    const result = await page.evaluate(async ({ signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, agentScopeTargetModule }) => {
       if (!globalThis.process) globalThis.process = {};
       if (typeof globalThis.process.nextTick !== 'function') {
         globalThis.process.nextTick = (callback, ...args) => Promise.resolve().then(() => callback(...args));
@@ -5668,21 +5808,68 @@ function ensureCtoxSmokeBinary() {
       const waitForNativePeerOpen = async (state, label, timeoutMs = 60000) => {
         const deadline = Date.now() + timeoutMs;
         let lastSnapshot = null;
-        while (Date.now() < deadline) {
-          await bounded(state?.awaitInitialReplication?.(), 5000);
-          await bounded(state?.awaitInSync?.(), 5000);
+        const collectionName = String(label || '').split(/\s+/)[0] || String(state?.collection?.name || '');
+        const collectionDiagnostics = () => {
+          const diagnostics = globalThis.ctoxBusinessOsSmoke?.state?.syncDiagnostics
+            || globalThis.CTOX_BUSINESS_OS_APP?.syncDiagnostics
+            || null;
+          const entry = diagnostics?.collections?.[collectionName] || null;
+          if (!entry) return null;
+          const transport = entry.frameTransport || {};
+          return {
+            status: entry.status || '',
+            connectionStatus: entry.connectionStatus || '',
+            initialReplicationState: entry.initialReplicationState || '',
+            initialReplicationAt: entry.initialReplicationAt || null,
+            connectedAt: entry.connectedAt || null,
+            remoteCheckpointEpoch: entry.remoteCheckpoint?.epoch || '',
+            remotePeerRole: entry.remotePeerSession?.role || '',
+            activePeerCount: Number(transport.activePeerCount || 0),
+            openPeerCount: Number(transport.openPeerCount || 0),
+            lastLifecycleCode: entry.lastLifecycleEvent?.code || '',
+            lastErrorCode: entry.lastError?.code || '',
+          };
+        };
+        const describeOpenNativePeer = () => {
           const peerStates = state?.peerStates$?.getValue?.();
           const entries = peerStates && typeof peerStates.entries === 'function'
             ? Array.from(peerStates.entries())
             : [];
-          const nativeEntry = entries.find(([, entry]) => entry?.remoteProtocol?.peerSession?.role === 'ctox_instance');
-          const nativePeerId = nativeEntry?.[0] || '';
+          const openPeerIds = typeof state?.openPeerIds === 'function'
+            ? state.openPeerIds()
+            : [];
+          const negotiated = state?.shared?.negotiated || null;
+          const candidates = [
+            ...entries
+              .filter(([, entry]) => entry?.remoteProtocol?.peerSession?.role === 'ctox_instance')
+              .map(([peerId, entry]) => ({ peerId, role: entry?.remoteProtocol?.peerSession?.role || '', sessionId: entry?.remoteProtocol?.peerSession?.sessionId || '' })),
+            ...openPeerIds.map((peerId) => ({
+              peerId,
+              role: negotiated?.peerId === peerId ? negotiated?.remoteProtocol?.peerSession?.role || '' : '',
+              sessionId: negotiated?.peerId === peerId ? negotiated?.remoteProtocol?.peerSession?.sessionId || '' : '',
+            })),
+          ];
+          const seen = new Set();
+          const uniqueCandidates = candidates.filter((candidate) => {
+            if (!candidate.peerId || seen.has(candidate.peerId)) return false;
+            seen.add(candidate.peerId);
+            return true;
+          });
+          const nativeCandidate = uniqueCandidates.find((candidate) => candidate.role === 'ctox_instance')
+            || uniqueCandidates.find((candidate) => openPeerIds.includes(candidate.peerId))
+            || null;
+          const nativePeerId = nativeCandidate?.peerId || '';
           const connection = nativePeerId ? state?.peer?.connections?.get?.(nativePeerId) : null;
           const channelState = connection?.channel?.readyState || '';
           const pcState = connection?.peer?.connectionState || '';
-          lastSnapshot = {
+          const transportStatus = typeof state?.getTransportStatus === 'function'
+            ? state.getTransportStatus()
+            : null;
+          return {
             label,
             peerCount: entries.length,
+            openPeerIds,
+            activePeerCount: Number(transportStatus?.activePeerCount || 0),
             nativePeerId,
             channelState,
             pcState,
@@ -5691,8 +5878,30 @@ function ensureCtoxSmokeBinary() {
               role: entry?.remoteProtocol?.peerSession?.role || '',
               sessionId: entry?.remoteProtocol?.peerSession?.sessionId || '',
             })),
+            negotiatedRole: negotiated?.remoteProtocol?.peerSession?.role || '',
+            negotiatedPeerId: negotiated?.peerId || '',
+            collectionName,
+            collectionDiagnostics: collectionDiagnostics(),
           };
-          if (nativePeerId && channelState === 'open' && !['closed', 'failed', 'disconnected'].includes(pcState)) {
+        };
+        while (Date.now() < deadline) {
+          await bounded(state?.awaitInitialReplication?.(), 5000);
+          await bounded(state?.awaitInSync?.(), 5000);
+          lastSnapshot = describeOpenNativePeer();
+          const diagnostic = lastSnapshot.collectionDiagnostics;
+          const diagnosticStatus = diagnostic?.connectionStatus || diagnostic?.status || '';
+          const diagnosticReady = diagnostic
+            && !['error', 'failed', 'stopped', 'reconnecting'].includes(diagnosticStatus)
+            && (
+              diagnosticStatus === 'connected'
+              || Boolean(diagnostic.connectedAt)
+              || Boolean(diagnostic.initialReplicationAt)
+              || (diagnostic.initialReplicationState === 'complete' && Boolean(diagnostic.remoteCheckpointEpoch))
+            );
+          if (diagnosticReady) return lastSnapshot;
+          if (lastSnapshot.nativePeerId
+            && lastSnapshot.channelState === 'open'
+            && !['closed', 'failed', 'disconnected'].includes(lastSnapshot.pcState)) {
             return lastSnapshot;
           }
           await delay(500);
@@ -5713,11 +5922,111 @@ function ensureCtoxSmokeBinary() {
           || haystack.includes('ERR_SET_LOCAL_DESCRIPTION')
           || haystack.includes('ERR_PC_CONSTRUCTOR')
           || haystack.includes('Cannot create so many PeerConnections')
-          || haystack.includes('Still in CONNECTING state');
+          || haystack.includes('Still in CONNECTING state')
+          || haystack.includes('WebRTC replication cancelled')
+          || haystack.includes('Native peer did not open for restarted collections after batch retry');
       };
       const logUnexpectedReplicationError = (label, error) => {
         if (isRecoverablePeerLifecycleError(error)) return;
         console.error(label, error);
+      };
+      const demandOnlySmokeCollections = new Set(['desktop_file_chunks']);
+      const isDemandOnlyStartError = (error) => {
+        const haystack = [
+          error?.code,
+          error?.parameters?.error?.code,
+          error?.message,
+        ].filter(Boolean).join('\n');
+        return haystack.includes('DEMAND_ONLY_COLLECTION_START_ERROR')
+          || haystack.includes('demand-only');
+      };
+      const isDemandOnlySmokeCollection = (collection) => demandOnlySmokeCollections.has(collection);
+      const demandOnlyLeaseReason = (reason) => reason || 'browser-rust-smoke-demand-only';
+      const leaseAppCollection = async (state, collection, reason) => {
+        if (!isDemandOnlySmokeCollection(collection) || typeof state?.sync?.leaseCollection !== 'function') return null;
+        const lease = await state.sync.leaseCollection(collection, demandOnlyLeaseReason(reason));
+        return lease?.bridge || null;
+      };
+      const startAppCollection = async (state, collection, reason = 'browser-rust-smoke') => {
+        const leasedBridge = await leaseAppCollection(state, collection, reason);
+        if (leasedBridge) return leasedBridge;
+        if (typeof state?.sync?.startCollection !== 'function') {
+          throw new Error(`Business OS sync runtime cannot start ${collection}`);
+        }
+        return state.sync.startCollection(collection);
+      };
+      const restartAppCollection = async (state, collection, reason = 'browser-rust-smoke-restart') => {
+        if (isDemandOnlySmokeCollection(collection)) {
+          await state?.sync?.stopCollection?.(collection).catch(() => null);
+        }
+        const leasedBridge = await leaseAppCollection(state, collection, reason);
+        if (leasedBridge) return leasedBridge;
+        if (typeof state?.sync?.restartCollection === 'function') {
+          return state.sync.restartCollection(collection);
+        }
+        return startAppCollection(state, collection, reason);
+      };
+      const restartAppCollections = async (state, collections, reason = 'browser-rust-smoke-restart') => {
+        const requested = [...new Set((collections || []).filter((collection) => typeof collection === 'string' && collection.trim()))];
+        const bridgesByCollection = new Map();
+        const regularCollections = requested.filter((collection) => !isDemandOnlySmokeCollection(collection));
+        const startRegularCollectionsIndividually = async (fallbackReason) => {
+          for (const collection of regularCollections) {
+            await state?.sync?.stopCollection?.(collection).catch(() => null);
+          }
+          await delay(500);
+          for (const collection of regularCollections) {
+            bridgesByCollection.set(collection, await startAppCollection(state, collection, fallbackReason));
+            await delay(250);
+          }
+        };
+        if (regularCollections.length) {
+          try {
+            if (typeof state?.sync?.restartCollections === 'function') {
+              const regularBridges = await state.sync.restartCollections(regularCollections);
+              regularCollections.forEach((collection, index) => bridgesByCollection.set(collection, regularBridges[index]));
+            } else {
+              for (const collection of regularCollections) {
+                bridgesByCollection.set(collection, await restartAppCollection(state, collection, reason));
+              }
+            }
+          } catch (error) {
+            if (!isRecoverablePeerLifecycleError(error)) throw error;
+            console.warn(`[business-os-smoke] batch collection restart recovered after ${error?.message || error}`);
+            await startRegularCollectionsIndividually(`${reason}-recovered`);
+          }
+        }
+        for (const collection of requested.filter(isDemandOnlySmokeCollection)) {
+          bridgesByCollection.set(collection, await restartAppCollection(state, collection, reason));
+        }
+        return requested.map((collection) => bridgesByCollection.get(collection) || null);
+      };
+      const resumeAppCollections = async (state, collections, reason = 'browser-rust-smoke-resume') => {
+        const requested = [...new Set((collections || []).filter((collection) => typeof collection === 'string' && collection.trim()))];
+        const bridgesByCollection = new Map();
+        const regularCollections = requested.filter((collection) => !isDemandOnlySmokeCollection(collection));
+        if (regularCollections.length) {
+          if (typeof state?.sync?.resumeCollections === 'function') {
+            const regularBridges = await state.sync.resumeCollections(regularCollections);
+            regularCollections.forEach((collection, index) => bridgesByCollection.set(collection, regularBridges[index]));
+          } else {
+            const regularBridges = await restartAppCollections(state, regularCollections, reason);
+            regularCollections.forEach((collection, index) => bridgesByCollection.set(collection, regularBridges[index]));
+          }
+        }
+        for (const collection of requested.filter(isDemandOnlySmokeCollection)) {
+          if (typeof state?.sync?.resumeCollections === 'function') {
+            try {
+              const [bridge] = await state.sync.resumeCollections([collection]);
+              bridgesByCollection.set(collection, bridge);
+              continue;
+            } catch (error) {
+              if (!isDemandOnlyStartError(error)) throw error;
+            }
+          }
+          bridgesByCollection.set(collection, await restartAppCollection(state, collection, reason));
+        }
+        return requested.map((collection) => bridgesByCollection.get(collection) || null);
       };
 
       let db;
@@ -5826,8 +6135,16 @@ function ensureCtoxSmokeBinary() {
         }
         if (needsCommandCollections) {
           const commandCollectionsStartedAt = Date.now();
-          const commandBridge = await appState.sync.startCollection('business_commands');
-          const queueBridge = await appState.sync.startCollection('ctox_queue_tasks');
+          const [commandBridge, queueBridge] = businessOsAppReleaseUiSmokeMode
+            ? await restartAppCollections(
+              appState,
+              ['business_commands', 'ctox_queue_tasks'],
+              'browser-rust-smoke-app-release-commands',
+            )
+            : [
+              await appState.sync.startCollection('business_commands'),
+              await appState.sync.startCollection('ctox_queue_tasks'),
+            ];
           commandBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app business_commands replication error', error));
           queueBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app ctox_queue_tasks replication error', error));
           appCommandReplicationState = commandBridge?.state || null;
@@ -5863,8 +6180,8 @@ function ensureCtoxSmokeBinary() {
         }
         if (needsFileCollections) {
           const fileCollectionsStartedAt = Date.now();
-          const fileBridge = await appState.sync.startCollection('desktop_files');
-          const chunkBridge = await appState.sync.startCollection('desktop_file_chunks');
+          const fileBridge = await startAppCollection(appState, 'desktop_files', 'browser-rust-smoke-files');
+          const chunkBridge = await startAppCollection(appState, 'desktop_file_chunks', 'browser-rust-smoke-files');
           fileBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app desktop_files replication error', error));
           chunkBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app desktop_file_chunks replication error', error));
           appFileReplicationState = fileBridge?.state || null;
@@ -7461,9 +7778,11 @@ function ensureCtoxSmokeBinary() {
 
         const { BusinessOsPermissions } = await import('/shared/permissions.js');
         const targetModule = {
-          id: 'ctox',
-          title: 'CTOX',
+          ...(agentScopeTargetModule || {}),
         };
+        if (!targetModule.id) {
+          throw new Error('Business OS agent scope target module fixture is unavailable');
+        }
         const hiddenModule = {
           id: 'phase12-hidden-agent-scope-app',
           title: 'Phase 12 Hidden Agent Scope App',
@@ -7626,12 +7945,22 @@ function ensureCtoxSmokeBinary() {
           const form = menu?.querySelector('form');
           const textarea = menu?.querySelector('textarea');
           if (!form || !textarea) throw new Error('agent scope context form is missing');
+          const askInput = menu.querySelector('input[name="contextMode"][value="ask"]');
+          if (askInput) {
+            askInput.closest('label')?.dispatchEvent(new MouseEvent('click', {
+              bubbles: true,
+              cancelable: true,
+            }));
+            askInput.checked = true;
+          }
           textarea.value = 'Bitte prüfe den sichtbaren Agent Scope.';
           form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
           try {
             return await waitFor(() => ({
               ok: Boolean(submittedDetail),
               detail: submittedDetail,
+              mode: new FormData(form).get('contextMode') || '',
+              status: menu.querySelector('.ctox-context-status')?.textContent?.trim() || '',
             }), 5000, 'agent scope context submit detail');
           } finally {
             window.removeEventListener('ctox-business-os-chat-submit', listener, { capture: true });
@@ -10557,6 +10886,7 @@ function ensureCtoxSmokeBinary() {
         document.body.dataset.authState = 'authenticated';
         await syncBusinessCollections(5000);
         await smoke.openSettingsDrawer({ initialTab: 'activity' });
+        let lastActivityRefreshAt = 0;
         const activityAudit = await waitFor(async () => {
           await syncBusinessCollections(5000);
           const drawer = document.querySelector('.settings-drawer');
@@ -10571,6 +10901,13 @@ function ensureCtoxSmokeBinary() {
             && /Team/.test(row));
           const rollbackRow = rows.find((row) => /App-Rollback angewendet/.test(row));
           const rawLeak = /business_os\.module|ctox\.module|data_access_review|locked_collection_ids|Browser\/Rust release smoke/i.test(text);
+          if (!(releaseRow && rollbackRow) && Date.now() - lastActivityRefreshAt > 2500) {
+            const refresh = drawer?.querySelector?.('[data-activity-refresh]');
+            if (refresh && !refresh.disabled) {
+              refresh.click();
+              lastActivityRefreshAt = Date.now();
+            }
+          }
           return {
             ok: Boolean(releaseRow && rollbackRow && !rawLeak),
             releaseVisible: Boolean(releaseRow),
@@ -10581,7 +10918,7 @@ function ensureCtoxSmokeBinary() {
             rowCount: rows.length,
             text: text.slice(0, 1400),
           };
-        }, 30000, 'settings activity release and rollback audit');
+        }, 120000, 'settings activity release and rollback audit');
 
         const status = await globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({
           includeCounts: false,
@@ -11065,11 +11402,11 @@ function ensureCtoxSmokeBinary() {
 
       async function startDeferredAppFileCollections(label = 'desktop_files') {
         const state = appState || globalThis.ctoxBusinessOsSmoke?.state;
-        if (!state?.sync?.startCollection) {
+        if (!state?.sync) {
           throw new Error(`Business OS sync runtime is not available for deferred ${label} replication`);
         }
-        const fileBridge = await state.sync.startCollection('desktop_files');
-        const chunkBridge = await state.sync.startCollection('desktop_file_chunks');
+        const fileBridge = await startAppCollection(state, 'desktop_files', `deferred-${label}`);
+        const chunkBridge = await startAppCollection(state, 'desktop_file_chunks', `deferred-${label}`);
         fileBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app desktop_files replication error', error));
         chunkBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app desktop_file_chunks replication error', error));
         appFileReplicationState = fileBridge?.state || null;
@@ -11222,7 +11559,7 @@ function ensureCtoxSmokeBinary() {
         }
         db = repairedState.db.raw;
         if (typeof repairedState.sync?.resumeCollections === 'function' && usedSuspend) {
-          const repairedBridges = await repairedState.sync.resumeCollections(criticalCollections);
+          const repairedBridges = await resumeAppCollections(repairedState, criticalCollections, 'native-peer-controlled-restart');
           const bridgeByCollection = Object.fromEntries(criticalCollections.map((collection, index) => [collection, repairedBridges[index]]));
           appCommandReplicationState = bridgeByCollection.business_commands?.state || appCommandReplicationState;
           appQueueReplicationState = bridgeByCollection.ctox_queue_tasks?.state || appQueueReplicationState;
@@ -11242,7 +11579,7 @@ function ensureCtoxSmokeBinary() {
           return repairedState;
         }
         if (typeof repairedState.sync?.restartCollections === 'function') {
-          const repairedBridges = await repairedState.sync.restartCollections(criticalCollections);
+          const repairedBridges = await restartAppCollections(repairedState, criticalCollections, 'native-peer-controlled-restart');
           const bridgeByCollection = Object.fromEntries(criticalCollections.map((collection, index) => [collection, repairedBridges[index]]));
           appCommandReplicationState = bridgeByCollection.business_commands?.state || appCommandReplicationState;
           appQueueReplicationState = bridgeByCollection.ctox_queue_tasks?.state || appQueueReplicationState;
@@ -11262,10 +11599,7 @@ function ensureCtoxSmokeBinary() {
           return repairedState;
         }
         const startFresh = async (collection) => {
-          if (typeof repairedState.sync?.restartCollection === 'function') {
-            return repairedState.sync.restartCollection(collection);
-          }
-          return repairedState.sync?.startCollection?.(collection);
+          return restartAppCollection(repairedState, collection, 'native-peer-controlled-restart');
         };
         const repairedModuleBridge = await startFresh('business_module_catalog');
         const repairedRuntimeBridge = await startFresh('ctox_runtime_settings');
@@ -12213,6 +12547,7 @@ function ensureCtoxSmokeBinary() {
         const advancedStatusStartedAt = Date.now();
         const advancedStatus = await globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
           timeoutMs: 60000,
+          allowRestart: true,
           requiredCollections: [
             'business_module_catalog',
             'ctox_runtime_settings',
@@ -12649,6 +12984,7 @@ function ensureCtoxSmokeBinary() {
         const advancedStatus = smokeMode === 'workspace-large-file-viewer-restart-rust-to-browser'
           ? await globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
               timeoutMs: 90000,
+              allowRestart: true,
               requiredCollections: [
                 'business_module_catalog',
                 'ctox_runtime_settings',
@@ -12874,12 +13210,11 @@ function ensureCtoxSmokeBinary() {
           throw new Error('Business OS app DB was not available after restore resync peer restart');
         }
         db = repairedDb;
-        const repairedBridges = typeof repairedState.sync.restartCollections === 'function'
-          ? await repairedState.sync.restartCollections(['desktop_files', 'desktop_file_chunks'])
-          : [
-              await repairedState.sync.restartCollection('desktop_files'),
-              await repairedState.sync.restartCollection('desktop_file_chunks'),
-            ];
+        const repairedBridges = await restartAppCollections(
+          repairedState,
+          ['desktop_files', 'desktop_file_chunks'],
+          'restore-resync-smoke',
+        );
         appFileReplicationState = repairedBridges[0]?.state || null;
         appChunkReplicationState = repairedBridges[1]?.state || null;
         if (typeof appFileReplicationState?.reSync === 'function') appFileReplicationState.reSync();
@@ -12892,6 +13227,7 @@ function ensureCtoxSmokeBinary() {
         await waitForNativePeerOpen(appChunkReplicationState, 'desktop_file_chunks restore resync');
         const advancedStatusAfterRepair = await globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
           timeoutMs: 90000,
+          allowRestart: true,
           requiredCollections: [
             'business_module_catalog',
             'ctox_runtime_settings',
@@ -12986,12 +13322,11 @@ function ensureCtoxSmokeBinary() {
             throw new Error('Business OS app DB was not available after reconnect repair');
           }
           db = repairedDb;
-          const repairedBridges = typeof repairedState.sync.restartCollections === 'function'
-            ? await repairedState.sync.restartCollections(['desktop_files', 'desktop_file_chunks'])
-            : [
-                await repairedState.sync.restartCollection('desktop_files'),
-                await repairedState.sync.restartCollection('desktop_file_chunks'),
-              ];
+          const repairedBridges = await restartAppCollections(
+            repairedState,
+            ['desktop_files', 'desktop_file_chunks'],
+            `${smokeMode}-repair`,
+          );
           const repairedFileBridge = repairedBridges[0];
           const repairedChunkBridge = repairedBridges[1];
           appFileReplicationState = repairedFileBridge?.state || null;
@@ -13004,6 +13339,7 @@ function ensureCtoxSmokeBinary() {
           await waitForNativePeerOpen(appChunkReplicationState, 'desktop_file_chunks after native peer restart');
           const advancedStatusAfterRepair = await globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
             timeoutMs: 60000,
+            allowRestart: true,
             requiredCollections: [
               'business_module_catalog',
               'ctox_runtime_settings',
@@ -13053,12 +13389,11 @@ function ensureCtoxSmokeBinary() {
           };
           advancedStatusVersion = advancedStatusAfterRepair?.version || advancedStatusVersion;
           advancedStatusRuntime = advancedStatusAfterRepair?.rxdbRuntime || advancedStatusRuntime;
-          const stableFileBridges = typeof repairedState.sync.restartCollections === 'function'
-            ? await repairedState.sync.restartCollections(['desktop_files', 'desktop_file_chunks'])
-            : [
-                await repairedState.sync.restartCollection('desktop_files'),
-                await repairedState.sync.restartCollection('desktop_file_chunks'),
-              ];
+          const stableFileBridges = await restartAppCollections(
+            repairedState,
+            ['desktop_files', 'desktop_file_chunks'],
+            `${smokeMode}-stable-repair`,
+          );
           appFileReplicationState = stableFileBridges[0]?.state || appFileReplicationState;
           appChunkReplicationState = stableFileBridges[1]?.state || appChunkReplicationState;
           await bounded(appFileReplicationState?.awaitInitialReplication?.(), 20000);
@@ -13123,7 +13458,7 @@ function ensureCtoxSmokeBinary() {
           desktop_file_chunks: describeReplicationPool(appChunkReplicationState),
         },
       };
-    }, { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified });
+    }, { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, agentScopeTargetModule: agentScopeModuleFixture.module });
     outerPhaseTimings.pageEvaluateMs = Date.now() - pageEvaluateStartedAt;
 
     if (result.mode === 'business-os-ui-regression') {

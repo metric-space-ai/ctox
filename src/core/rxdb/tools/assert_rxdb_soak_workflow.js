@@ -4,6 +4,9 @@
  */
 const fs = require('fs');
 const path = require('path');
+const {
+  businessOsProductionSmokeModes,
+} = require('./business_os_production_smoke_registry');
 
 const root = path.resolve(__dirname, '../../../..');
 const runnerPath = path.join(__dirname, 'browser_rust_soak.js');
@@ -85,9 +88,12 @@ function extractMatrixEvidenceModes(source) {
 }
 
 function extractSmokeModes(source) {
-  const match = source.match(/if \(!\[([\s\S]*?)\]\.includes\(smokeMode\)\)/);
-  if (!match) fail('supported SMOKE_MODE list not found in browser_rust_smoke.js');
+  const match = source.match(/const supportedSmokeModes = \[([\s\S]*?)\];/);
+  if (!match) fail('supportedSmokeModes list not found in browser_rust_smoke.js');
   const modes = [...match[1].matchAll(/'([^']+)'/g)].map((entry) => entry[1]);
+  if (match[1].includes('...businessOsProductionSmokeModes')) {
+    modes.push(...businessOsProductionSmokeModes);
+  }
   if (!modes.length) fail('supported SMOKE_MODE list is empty');
   return modes;
 }

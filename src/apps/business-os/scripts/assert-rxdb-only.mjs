@@ -41,6 +41,7 @@ assertFileChunkIntegrityContract();
 assertActiveNotesModuleDoesNotUseLegacyNotesnookBuild();
 assertSyncWarmupDoesNotBlockBoot();
 assertConnectionSmokeRequiresAdvancedStatusBootBudget();
+assertProductionSmokeAdvancedStatusRepairOptIn();
 assertLoginDoesNotDefaultToAdmin();
 assertCtoxDbBrandingContract();
 assertBusinessOsServerHttpDataApisAreGated();
@@ -402,6 +403,15 @@ function assertAdvancedStatusInterfaceExists() {
   if (!/business-os-advanced-status-v1/.test(appContent)) {
     offenders.push('src/apps/business-os/app.js: missing advanced status version marker');
   }
+  if (!/ADVANCED_STATUS_SNAPSHOT_TIMEOUT_MS\s*=\s*5000/.test(appContent)) {
+    offenders.push('src/apps/business-os/app.js: advanced status snapshot timeout must stay bounded');
+  }
+  if (!/async snapshot\(options = \{\}\)[\s\S]{0,260}runAdvancedStatusStepWithTimeout/.test(appContent)) {
+    offenders.push('src/apps/business-os/app.js: advanced status snapshot API must be timeout bounded');
+  }
+  if (!/Business OS advanced status health snapshot/.test(appContent)) {
+    offenders.push('src/apps/business-os/app.js: waitForHealthy must bound health snapshot probes');
+  }
   for (const requiredCheck of [
     'workspaceNotLoading',
     'dataPlaneWebrtc',
@@ -698,6 +708,20 @@ function assertConnectionSmokeRequiresAdvancedStatusBootBudget() {
     if (!smokeContent.includes(marker)) {
       offenders.push(`src/core/rxdb/tools/business_os_connection_modes_smoke.js: startup smoke missing advanced-status boot budget marker ${marker}`);
     }
+  }
+}
+
+function assertProductionSmokeAdvancedStatusRepairOptIn() {
+  const smokePath = join(repoRoot, 'src/core/rxdb/tools/browser_rust_smoke.js');
+  const smokeContent = readFileSync(smokePath, 'utf8');
+  if (!/async function waitForHealthyCompleteStatus\([^)]*allowRestart\s*=\s*true/.test(smokeContent)) {
+    offenders.push('src/core/rxdb/tools/browser_rust_smoke.js: strict advanced-status smoke wait must opt into required-collection repair');
+  }
+  if (!/allowRestart:\s*options\.allowRestart === true/.test(smokeContent)) {
+    offenders.push('src/core/rxdb/tools/browser_rust_smoke.js: advanced-status smoke wait does not forward repair opt-in to Business OS status API');
+  }
+  if (!/Business OS auth smoke[\s\S]*timeoutMs:\s*240000[\s\S]*requiredCollections/.test(smokeContent)) {
+    offenders.push('src/core/rxdb/tools/browser_rust_smoke.js: auth-scope reload health wait must keep the production startup reconnect budget');
   }
 }
 

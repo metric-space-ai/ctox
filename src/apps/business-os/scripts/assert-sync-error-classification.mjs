@@ -2,6 +2,7 @@ import { __ctoxSyncTestHooks } from '../shared/sync.js';
 
 const {
   classifySignalingControlPlaneError,
+  classifyControlledReplicationCancellation,
   classifyPeerLifecycleEvent,
   classifyReplicationIoError,
   extractReplicationErrorDetails,
@@ -186,6 +187,11 @@ const lifecycleCases = [
     error: { message: 'Cannot create so many PeerConnections' },
     expected: 'peer_connection_limit',
   },
+  {
+    name: 'controlled replication cancellation during restart',
+    error: new Error('WebRTC replication cancelled'),
+    expected: 'replication_cancelled',
+  },
 ];
 
 for (const item of lifecycleCases) {
@@ -206,6 +212,11 @@ for (const item of lifecycleCases) {
   if (classified.severity !== 'recoverable' || classified.retryable !== true || classified.lifecycle !== true) {
     failures.push(`${item.name}: lifecycle event is not recoverable/retryable`);
   }
+}
+
+const controlledCancellation = classifyControlledReplicationCancellation(new Error('WebRTC replication cancelled'));
+if (!controlledCancellation || controlledCancellation.code !== 'replication_cancelled') {
+  failures.push('controlled replication cancellation: direct classifier did not return replication_cancelled');
 }
 
 if (failures.length) {

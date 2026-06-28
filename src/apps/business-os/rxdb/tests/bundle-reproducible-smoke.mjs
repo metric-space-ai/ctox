@@ -17,8 +17,8 @@
 //     --outfile=src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs \
 //     "--banner:js=// CTOX DB app-local bundle. Generated from src/apps/business-os/rxdb/src/index.mjs."
 //
-// and bump the cache-buster (`ctox-rxdb-js.mjs?v=...`) in shared/db.js,
-// shared/sync.js and modules/matching/ui/businessOsDataSource.js.
+// and bump the cache-buster (`ctox-rxdb-js.mjs?v=...`) in shared/db.js
+// and shared/sync.js.
 
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';

@@ -13,7 +13,7 @@ async function main() {
   const userDataPath = path.join(tempRoot, "userData");
   const fixture = path.join(__dirname, "fixtures/session-isolation-main.cjs");
   const result = await runElectron(electronPath, [fixture, outputPath, userDataPath], outputPath);
-  assert.equal(result.code, 0, result.stderr || result.stdout);
+  assert.equal(result.code, 0, result.payload || result.stderr || result.stdout);
   const payload = JSON.parse(fs.readFileSync(outputPath, "utf8"));
   assert.equal(payload.ok, true, JSON.stringify(payload, null, 2));
   assert.notEqual(payload.partitions[0], payload.partitions[1]);
@@ -42,7 +42,7 @@ function runElectron(command, args, resultPath) {
       child.stderr.destroy();
       child.kill("SIGKILL");
       child.unref();
-      resolve({ code, stdout, stderr });
+      resolve({ code, stdout, stderr, payload: formatResultPayload(resultPath) });
     }
     const timeout = setTimeout(() => {
       if (settled) return;
@@ -75,7 +75,12 @@ function runElectron(command, args, resultPath) {
       settled = true;
       clearTimeout(timeout);
       clearInterval(resultPoll);
-      resolve({ code: observedCode === null ? code : observedCode, stdout, stderr });
+      resolve({
+        code: observedCode === null ? code : observedCode,
+        stdout,
+        stderr,
+        payload: formatResultPayload(resultPath),
+      });
     });
   });
 }
@@ -86,6 +91,11 @@ function readResultFile(filePath) {
   } catch (_error) {
     return null;
   }
+}
+
+function formatResultPayload(filePath) {
+  const payload = readResultFile(filePath);
+  return payload ? JSON.stringify(payload, null, 2) : "";
 }
 
 main().catch((error) => {

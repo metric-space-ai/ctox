@@ -24,7 +24,7 @@ import {
   renderGlobalCtoxAgentScopeHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260626-skf-dialog-knowledge-v2';
+} from './shared/shell-permissions-ui.js?v=20260627-peer-restart-timeout-v1';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -37,7 +37,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260626-skf-dialog-knowledge-v2';
+const APP_BUILD = '20260628-advanced-status-snapshot-timeout-v1';
 
 ensureShellStylesheets();
 
@@ -54,6 +54,8 @@ const RXDB_BOOTSTRAP_VERSION = `${BUSINESS_DB_NAME}:storage-v1`;
 const CTOX_HEALTH_POLL_MS = 10000;
 const SYNC_RECOVERY_REPAIR_DELAY_MS = 15000;
 const SHELL_IMPORT_TIMEOUT_MS = 45000;
+const ADVANCED_STATUS_SNAPSHOT_TIMEOUT_MS = 5000;
+const ADVANCED_STATUS_COLLECTION_QUERY_TIMEOUT_MS = 2500;
 const DEFAULT_TASKBAR_PIN_IDS = ['ctox', 'tickets', 'documents', 'spreadsheets', 'explorer', 'knowledge', 'app-store', 'research', 'calendar'];
 // Shell-critical collections this app eagerly warms at boot. This MUST stay a
 // subset of SHELL_CRITICAL_COLLECTIONS, the single source of truth exported by
@@ -260,22 +262,47 @@ function installAdvancedStatusInterface() {
   const api = {
     version: 'business-os-advanced-status-v1',
     async snapshot(options = {}) {
-      return buildAdvancedStatusSnapshot(options);
+      const timeoutMs = Math.max(250, Number(options.timeoutMs || ADVANCED_STATUS_SNAPSHOT_TIMEOUT_MS));
+      return runAdvancedStatusStepWithTimeout(
+        () => buildAdvancedStatusSnapshot(options),
+        timeoutMs,
+        'Business OS advanced status snapshot',
+      );
     },
     async waitForHealthy(options = {}) {
       const timeoutMs = Number(options.timeoutMs || 30000);
       const intervalMs = Number(options.intervalMs || 500);
       const deadline = Date.now() + timeoutMs;
       let lastSnapshot = null;
+      let lastEnsureError = null;
       while (Date.now() < deadline) {
-        await ensureAdvancedStatusRequiredCollections(options.requiredCollections, {
-          allowRestart: options.allowRestart === true,
-        });
-        lastSnapshot = await buildAdvancedStatusSnapshot({ ...options, includeCounts: false });
+        const remainingMs = Math.max(0, deadline - Date.now());
+        const ensureTimeoutMs = Math.max(250, Math.min(5000, remainingMs));
+        try {
+          await runAdvancedStatusStepWithTimeout(
+            () => ensureAdvancedStatusRequiredCollections(options.requiredCollections, {
+              allowRestart: options.allowRestart === true,
+            }),
+            ensureTimeoutMs,
+            'Business OS advanced status required collection startup',
+          );
+          lastEnsureError = null;
+        } catch (error) {
+          lastEnsureError = error;
+        }
+        const remainingSnapshotMs = Math.max(250, Math.min(ADVANCED_STATUS_SNAPSHOT_TIMEOUT_MS, Math.max(0, deadline - Date.now())));
+        lastSnapshot = await runAdvancedStatusStepWithTimeout(
+          () => buildAdvancedStatusSnapshot({ ...options, includeCounts: false }),
+          remainingSnapshotMs,
+          'Business OS advanced status health snapshot',
+        );
         if (lastSnapshot.ok) return lastSnapshot;
         await new Promise((resolve) => window.setTimeout(resolve, intervalMs));
       }
-      const error = new Error(`Business OS advanced status did not become healthy: ${JSON.stringify(lastSnapshot)}`);
+      const ensureMessage = lastEnsureError
+        ? `; last required-collection startup error: ${lastEnsureError.message || String(lastEnsureError)}`
+        : '';
+      const error = new Error(`Business OS advanced status did not become healthy${ensureMessage}: ${JSON.stringify(lastSnapshot)}`);
       error.status = lastSnapshot;
       throw error;
     },
@@ -283,6 +310,24 @@ function installAdvancedStatusInterface() {
   window.CTOX_BUSINESS_OS_STATUS = api;
   window.CTOX_BUSINESS_OS_APP = state;
   state.openModule = (moduleId, options = {}) => openModule(moduleId, options);
+}
+
+function runAdvancedStatusStepWithTimeout(step, timeoutMs, label) {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs} ms`));
+    }, timeoutMs);
+    Promise.resolve()
+      .then(step)
+      .then((value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      });
+  });
 }
 
 async function ensureAdvancedStatusRequiredCollections(requiredCollections, options = {}) {
@@ -2320,7 +2365,7 @@ async function buildAdvancedStatusSnapshot(options = {}) {
   const bodyDataset = { ...document.body?.dataset };
   const counts = options.includeCounts === false ? null : await collectAdvancedStatusCounts();
   const requiredCollectionEvidence = await collectAdvancedStatusRequiredEvidence(requiredCollections);
-  const initialSync = buildAdvancedStatusInitialSync(requiredCollections, collections);
+  const initialSync = buildAdvancedStatusInitialSync(requiredCollections, collections, requiredCollectionEvidence);
   const missingRequiredCollections = requiredCollections.filter((collection) => !isRequiredCollectionReady({
     collection,
     diagnostics: collections[collection] || null,
@@ -2810,25 +2855,35 @@ function sanitizeRxdbRuntime(value) {
   };
 }
 
-function buildAdvancedStatusInitialSync(requiredCollections, collections) {
+function buildAdvancedStatusInitialSync(requiredCollections, collections, requiredCollectionEvidence = {}) {
   const now = Date.now();
   const stallAfterMs = 45000;
   const entries = requiredCollections.map((collection) => {
     const diagnostics = collections?.[collection] || null;
+    const evidence = requiredCollectionEvidence?.[collection] || null;
     const httpBridgeReady = isHttpBridgeReady(diagnostics);
     const initialReplicationAt = diagnostics?.initialReplicationAt || (httpBridgeReady ? diagnostics?.httpBridgePulledAt : null) || null;
     const startedAt = diagnostics?.initialReplicationStartedAt || null;
     const startedMs = startedAt ? Date.parse(startedAt) : NaN;
-    const state = initialReplicationAt
-      ? 'complete'
-      : (diagnostics?.initialReplicationState || (diagnostics ? 'pending' : 'missing-diagnostics'));
     const remoteCapabilities = Array.isArray(diagnostics?.remoteCapabilities)
       ? diagnostics.remoteCapabilities
       : [];
     const checkpoint = sanitizeAdvancedStatusRemoteCheckpoint(diagnostics?.remoteCheckpoint || null);
     const checkpointEpochAdvertised = httpBridgeReady || hasAdvertisedCheckpointEpoch(diagnostics);
     const streamingReady = isRequiredCollectionStreamingReady(diagnostics, checkpointEpochAdvertised);
-    const stalledForMs = !initialReplicationAt && Number.isFinite(startedMs)
+    const effectiveReplicationComplete = Boolean(initialReplicationAt)
+      || (
+        streamingReady
+        && isRequiredCollectionReady({ collection, diagnostics, evidence })
+      );
+    const effectiveInitialReplicationAt = initialReplicationAt
+      || (effectiveReplicationComplete
+        ? (diagnostics?.connectedAt || diagnostics?.peerSessionSeenAt || startedAt || null)
+        : null);
+    const state = effectiveInitialReplicationAt
+      ? 'complete'
+      : (diagnostics?.initialReplicationState || (diagnostics ? 'pending' : 'missing-diagnostics'));
+    const stalledForMs = !effectiveInitialReplicationAt && Number.isFinite(startedMs)
       ? Math.max(0, now - startedMs)
       : 0;
     return {
@@ -2838,13 +2893,18 @@ function buildAdvancedStatusInitialSync(requiredCollections, collections) {
       connectionStatus: diagnostics?.connectionStatus || null,
       source: httpBridgeReady ? 'http-bridge' : (diagnostics?.initialReplicationSource || null),
       initialReplicationStartedAt: startedAt,
-      initialReplicationAt,
+      initialReplicationAt: effectiveInitialReplicationAt,
+      initialReplicationCompletion: initialReplicationAt
+        ? 'initial-replication'
+        : effectiveReplicationComplete
+          ? 'streaming-ready'
+          : null,
       checkpointState: checkpoint?.state || null,
       checkpointEpoch: checkpoint?.epoch || null,
       checkpointEpochAdvertised,
       streamingReady,
       checkpointCapabilityAdvertised: remoteCapabilities.includes('ctox-checkpoint-epoch-v1'),
-      stalled: !initialReplicationAt && stalledForMs >= stallAfterMs,
+      stalled: !effectiveInitialReplicationAt && stalledForMs >= stallAfterMs,
       stalledForMs,
     };
   });
@@ -2945,7 +3005,11 @@ async function collectAdvancedStatusRequiredEvidence(names) {
       return;
     }
     try {
-      const docs = await collection.find({ limit: 1 }).exec();
+      const docs = await runAdvancedStatusStepWithTimeout(
+        () => collection.find({ limit: 1 }).exec(),
+        ADVANCED_STATUS_COLLECTION_QUERY_TIMEOUT_MS,
+        `Business OS advanced status required evidence query for ${name}`,
+      );
       const hasData = docs
         .map((doc) => doc?.toJSON?.() || doc)
         .some((doc) => !doc?._deleted && !doc?.is_deleted);
@@ -2961,7 +3025,11 @@ async function countCollectionDocs(name) {
   const collection = state.db?.raw?.[name];
   if (!collection?.find) return null;
   try {
-    const docs = await collection.find({ limit: 20 }).exec();
+    const docs = await runAdvancedStatusStepWithTimeout(
+      () => collection.find({ limit: 20 }).exec(),
+      ADVANCED_STATUS_COLLECTION_QUERY_TIMEOUT_MS,
+      `Business OS advanced status count query for ${name}`,
+    );
     return docs
       .map((doc) => doc?.toJSON?.() || doc)
       .filter((doc) => !doc?._deleted && !doc?.is_deleted)
