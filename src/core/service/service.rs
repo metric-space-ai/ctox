@@ -13152,9 +13152,17 @@ fn should_skip_idle_harness_audit_tick(root: &Path) -> bool {
     let source_stamp = harness_audit_source_stamp(root);
     let now = Instant::now();
     let gate = HARNESS_AUDIT_IDLE_GATE.get_or_init(|| Mutex::new(None));
-    let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let Some(previous) = guard.as_ref() else {
-        return false;
+        if harness_audit_source_has_detected_findings(&source_stamp) {
+            return false;
+        }
+        *guard = Some(HarnessAuditIdleGateState {
+            root: root_path,
+            source_stamp,
+            last_run: now,
+        });
+        return true;
     };
     let elapsed = now.duration_since(previous.last_run);
     if harness_audit_source_has_detected_findings(&source_stamp)
@@ -22317,13 +22325,12 @@ mod tests {
         }
 
         assert!(
-            !should_skip_idle_harness_audit_tick(&root),
-            "first harness audit tick must run"
+            should_skip_idle_harness_audit_tick(&root),
+            "first idle harness audit check without detected findings must seed the gate without running"
         );
-        mark_harness_audit_tick_ran(&root);
         assert!(
             should_skip_idle_harness_audit_tick(&root),
-            "unchanged core DB should skip harness audit inside the idle safety window"
+            "unchanged seeded core DB should skip harness audit inside the idle safety window"
         );
 
         {
@@ -22398,9 +22405,10 @@ mod tests {
             )
             .unwrap();
         }
+        clear_harness_audit_idle_gate_for_tests();
         assert!(
             !should_skip_idle_harness_audit_tick(&root),
-            "detected harness findings must reopen the harness audit gate for confirmation"
+            "detected harness findings must run even when the idle gate is first seeded"
         );
         {
             let conn = Connection::open(&db_path).unwrap();
