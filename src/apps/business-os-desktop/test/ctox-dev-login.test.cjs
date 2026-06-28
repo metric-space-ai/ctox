@@ -59,7 +59,7 @@ test("builds ctox.dev management URLs without embedding launch secrets", () => {
     buildCtoxDevManagedInstanceUrl("https://ctox.dev/", {
       id: "managed:tenant_skf",
       tenantId: "tenant_skf",
-      launchUrl: "https://skf.ctox.dev/?ctox_config=secret",
+      launchUrl: "https://acme.ctox.dev/?ctox_config=secret",
     }),
     "https://ctox.dev/dashboard?tenant=tenant_skf",
   );

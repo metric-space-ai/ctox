@@ -52,7 +52,7 @@ test("mergeInstances keeps all source kinds in one sorted list", () => {
   const merged = mergeInstances([
     [{ id: "paired-a", source: "pairing_invite", displayName: "Kunde X" }],
     [{ id: "ssh-a", source: "ssh_managed", displayName: "VPS Demo" }],
-    [{ id: "managed-a", source: "ctox_dev", displayName: "Kunstmen" }],
+    [{ id: "managed-a", source: "ctox_dev", displayName: "Example" }],
   ]);
   assert.deepEqual(merged.map((instance) => instance.source).sort(), [
     "ctox_dev",

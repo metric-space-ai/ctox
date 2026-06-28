@@ -6,7 +6,7 @@ let instances = [{
   id: "managed:tenant_skf",
   source: "ctox_dev",
   displayName: "SKF",
-  domain: "skf.ctox.dev",
+  domain: "acme.ctox.dev",
   role: "owner",
   status: "available",
   healthSummary: {

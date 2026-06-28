@@ -147,8 +147,8 @@ test('failed source commands surface policy denials as hard errors', () => {
 
 test('monaco asset path resolves under the Business OS app bundle', () => {
   assert.equal(
-    resolveMonacoBaseUrl('https://cto1.kunstmen.com/business-os/desktop-apps/code-editor/app.js?v=1'),
-    'https://cto1.kunstmen.com/business-os/vendor/monaco/',
+    resolveMonacoBaseUrl('https://cto1.example.com/business-os/desktop-apps/code-editor/app.js?v=1'),
+    'https://cto1.example.com/business-os/vendor/monaco/',
   );
   assert.equal(isJavaScriptMime('text/html; charset=utf-8'), false);
   assert.equal(isJavaScriptMime('application/javascript; charset=utf-8'), true);

@@ -14,7 +14,7 @@ test("normalizes ctox.dev session package into managed instances", () => {
         {
           id: "tenant_skf",
           slug: "skf",
-          domain: "skf.ctox.dev",
+          domain: "acme.ctox.dev",
           businessName: "SKF",
           status: "active",
           healthStatus: "ok",
@@ -69,7 +69,7 @@ test("ctox.dev source consumes launch token and launch config endpoints", async 
       if (url === "https://ctox.dev/api/desktop/launch/token_1") {
         assert.equal(options.method, "POST");
         return jsonResponse({
-          launchUrl: "https://skf.ctox.dev/",
+          launchUrl: "https://acme.ctox.dev/",
           pairingConfig: {
             transport: "webrtc",
             http_bridge_available: false,
@@ -83,7 +83,7 @@ test("ctox.dev source consumes launch token and launch config endpoints", async 
   const launch = await source.getLaunchConfig("managed:tenant_skf");
   assert.equal(launch.source, "ctox_dev");
   const launchUrl = new URL(launch.launchUrl);
-  assert.equal(launchUrl.origin, "https://skf.ctox.dev");
+  assert.equal(launchUrl.origin, "https://acme.ctox.dev");
   assert.equal(launchUrl.searchParams.has("ctox_config"), true);
   assert.deepEqual(decodeCtoxConfig(launchUrl), {
     transport: "webrtc",
@@ -109,7 +109,7 @@ test("ctox.dev source preserves server-packed launch URL when pairing metadata i
         return jsonResponse({ launchConfigUrl: "https://ctox.dev/api/desktop/launch/token_1" });
       }
       return jsonResponse({
-        launchUrl: `https://skf.ctox.dev/?ctox_config=${Buffer.from(JSON.stringify(packedConfig), "utf8").toString("base64url")}`,
+        launchUrl: `https://acme.ctox.dev/?ctox_config=${Buffer.from(JSON.stringify(packedConfig), "utf8").toString("base64url")}`,
         pairingConfig: {
           transport: "webrtc",
           http_bridge_available: false,
@@ -134,7 +134,7 @@ test("ctox.dev source rejects redacted pairing metadata without a packed launch 
         return jsonResponse({ launchConfigUrl: "https://ctox.dev/api/desktop/launch/token_1" });
       }
       return jsonResponse({
-        launchUrl: "https://skf.ctox.dev/",
+        launchUrl: "https://acme.ctox.dev/",
         pairingConfig: {
           transport: "webrtc",
           sync_room: "<redacted>",
@@ -160,10 +160,10 @@ test("ctox.dev source refreshes managed tenants after server-side revocation", a
         account: {
           tenants: [
             {
-              id: "tenant_kunstmen",
-              slug: "kunstmen",
-              domain: "kunstmen.ctox.dev",
-              businessName: "Kunstmen",
+              id: "tenant_example",
+              slug: "example",
+              domain: "example.ctox.dev",
+              businessName: "Example",
               status: "active",
               healthStatus: "ok",
               tenantRole: "admin",
@@ -172,7 +172,7 @@ test("ctox.dev source refreshes managed tenants after server-side revocation", a
             ...(revoked ? [] : [{
               id: "tenant_skf",
               slug: "skf",
-              domain: "skf.ctox.dev",
+              domain: "acme.ctox.dev",
               businessName: "SKF",
               status: "active",
               healthStatus: "ok",
@@ -187,12 +187,12 @@ test("ctox.dev source refreshes managed tenants after server-side revocation", a
 
   assert.deepEqual(
     (await source.listInstances()).map((instance) => instance.id),
-    ["managed:tenant_kunstmen", "managed:tenant_skf"],
+    ["managed:tenant_example", "managed:tenant_skf"],
   );
   revoked = true;
   assert.deepEqual(
     (await source.listInstances()).map((instance) => instance.id),
-    ["managed:tenant_kunstmen"],
+    ["managed:tenant_example"],
   );
 });
 
@@ -211,7 +211,7 @@ test("ctox.dev source requests a fresh launch token for each activation", async 
       }
       launchUrls.push([url, options.method]);
       return jsonResponse({
-        launchUrl: "https://skf.ctox.dev/",
+        launchUrl: "https://acme.ctox.dev/",
         pairingConfig: {
           transport: "webrtc",
           http_bridge_available: false,
@@ -259,7 +259,7 @@ test("ctox.dev source rejects a launch config that tries to enable the HTTP brid
         return jsonResponse({ launchConfigUrl: "https://ctox.dev/api/desktop/launch/token_1" });
       }
       return jsonResponse({
-        launchUrl: "https://skf.ctox.dev/",
+        launchUrl: "https://acme.ctox.dev/",
         pairingConfig: { transport: "webrtc", http_bridge_available: true, sync_room: "ctox-business-os:skf" },
       });
     },

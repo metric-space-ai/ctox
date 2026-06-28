@@ -94,10 +94,10 @@ test("source manager refreshes ctox.dev revocation without dropping unmanaged in
           account: {
             tenants: [
               {
-                id: "tenant_kunstmen",
-                slug: "kunstmen",
-                domain: "kunstmen.ctox.dev",
-                businessName: "Kunstmen",
+                id: "tenant_example",
+                slug: "example",
+                domain: "example.ctox.dev",
+                businessName: "Example",
                 status: "active",
                 healthStatus: "ok",
                 tenantRole: "admin",
@@ -106,7 +106,7 @@ test("source manager refreshes ctox.dev revocation without dropping unmanaged in
               ...(revoked ? [] : [{
                 id: "tenant_skf",
                 slug: "skf",
-                domain: "skf.ctox.dev",
+                domain: "acme.ctox.dev",
                 businessName: "SKF",
                 status: "active",
                 healthStatus: "ok",
@@ -123,7 +123,7 @@ test("source manager refreshes ctox.dev revocation without dropping unmanaged in
   assert.deepEqual(
     (await manager.listInstances()).map((instance) => [instance.id, instance.source]),
     [
-      ["managed:tenant_kunstmen", "ctox_dev"],
+      ["managed:tenant_example", "ctox_dev"],
       ["paired-a", "pairing_invite"],
       ["managed:tenant_skf", "ctox_dev"],
       ["ssh-a", "ssh_managed"],
@@ -133,7 +133,7 @@ test("source manager refreshes ctox.dev revocation without dropping unmanaged in
   assert.deepEqual(
     (await manager.listInstances()).map((instance) => [instance.id, instance.source]),
     [
-      ["managed:tenant_kunstmen", "ctox_dev"],
+      ["managed:tenant_example", "ctox_dev"],
       ["paired-a", "pairing_invite"],
       ["ssh-a", "ssh_managed"],
     ],

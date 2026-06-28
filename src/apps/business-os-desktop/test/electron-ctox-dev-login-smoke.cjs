@@ -16,21 +16,21 @@ async function main() {
   assert.equal(result.code, 0, result.stderr || result.stdout);
   const payload = JSON.parse(fs.readFileSync(outputPath, "utf8"));
   assert.equal(payload.ok, true, JSON.stringify(payload, null, 2));
-  assert.deepEqual(payload.managedInstanceNames, ["Kunstmen", "SKF"]);
-  assert.deepEqual(payload.instanceNames, ["Kunstmen", "Local Lab", "SKF"]);
-  assert.deepEqual(payload.managedInstanceNamesAfterRevocation, ["Kunstmen"]);
-  assert.deepEqual(payload.instanceNamesAfterRevocation, ["Kunstmen", "Local Lab"]);
+  assert.deepEqual(payload.managedInstanceNames, ["Example", "SKF"]);
+  assert.deepEqual(payload.instanceNames, ["Example", "Local Lab", "SKF"]);
+  assert.deepEqual(payload.managedInstanceNamesAfterRevocation, ["Example"]);
+  assert.deepEqual(payload.instanceNamesAfterRevocation, ["Example", "Local Lab"]);
   assert.deepEqual(payload.instanceNamesAfterLogout, ["Local Lab"]);
   assert.equal(payload.logout.ok, true);
   assert.equal(payload.evidence.sessionPackageSawCookie, true);
   assert.deepEqual(payload.evidence.sessionPackageCookieObservations, [true, true, false]);
   assert.equal(payload.evidence.sessionPackageLastSawCookie, false);
   assert.equal(payload.evidence.launchTokenSawCookie, true);
-  assert.deepEqual(payload.evidence.launchTokenTenantIds, ["tenant_kunstmen", "tenant_kunstmen"]);
+  assert.deepEqual(payload.evidence.launchTokenTenantIds, ["tenant_example", "tenant_example"]);
   assert.equal(payload.evidence.launchConfigSawCookie, true);
   assert.deepEqual(payload.evidence.launchConfigUrls, [
-    "/api/desktop/launch/tenant_kunstmen/1",
-    "/api/desktop/launch/tenant_kunstmen/2",
+    "/api/desktop/launch/tenant_example/1",
+    "/api/desktop/launch/tenant_example/2",
   ]);
   assert.equal(payload.launch.ctoxConfig.http_bridge_available, false);
   assert.equal(payload.rotatedLaunch.ctoxConfig.launchEpoch, 2);

@@ -81,14 +81,14 @@ app.whenReady().then(async () => {
     const result = {
       ok: login.ok === true
         && login.completed === true
-        && managedInstances.map((instance) => instance.displayName).join("|") === "Kunstmen|SKF"
+        && managedInstances.map((instance) => instance.displayName).join("|") === "Example|SKF"
         && launch.source === "ctox_dev"
         && launch.ctoxConfig.transport === "webrtc"
         && launch.ctoxConfig.http_bridge_available === false
         && rotatedLaunch.expiresAt !== launch.expiresAt
         && rotatedLaunch.ctoxConfig.launchEpoch === 2
-        && managedInstancesAfterRevocation.map((instance) => instance.displayName).join("|") === "Kunstmen"
-        && instancesAfterRevocation.map((instance) => instance.displayName).join("|") === "Kunstmen|Local Lab"
+        && managedInstancesAfterRevocation.map((instance) => instance.displayName).join("|") === "Example"
+        && instancesAfterRevocation.map((instance) => instance.displayName).join("|") === "Example|Local Lab"
         && logout.ok === true
         && instancesAfterLogout.map((instance) => instance.displayName).join("|") === "Local Lab"
         && server.evidence.sessionPackageSawCookie === true
@@ -166,10 +166,10 @@ function startCtoxDevMockServer() {
       evidence.sessionPackageLastSawCookie = sawCookie;
       evidence.sessionPackageCookieObservations.push(sawCookie);
       const tenants = [{
-        id: "tenant_kunstmen",
-        slug: "kunstmen",
-        domain: "kunstmen.ctox.dev",
-        businessName: "Kunstmen",
+        id: "tenant_example",
+        slug: "example",
+        domain: "example.ctox.dev",
+        businessName: "Example",
         status: "active",
         healthStatus: "ok",
         tenantRole: "admin",
@@ -177,7 +177,7 @@ function startCtoxDevMockServer() {
       }, {
         id: "tenant_skf",
         slug: "skf",
-        domain: "skf.ctox.dev",
+        domain: "acme.ctox.dev",
         businessName: "SKF",
         status: "active",
         healthStatus: "ok",
