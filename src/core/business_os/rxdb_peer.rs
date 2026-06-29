@@ -3789,23 +3789,9 @@ async fn consume_pending_business_commands(
     database: &Arc<RxDatabase>,
     accept_failures: &mut HashMap<String, u32>,
 ) -> anyhow::Result<usize> {
-    let commands = database
-        .collection("business_commands")
-        .context("business_commands collection is not registered")?;
-    let pending = commands
-        .find(Some(MangoQuery {
-            selector: Some(json!({ "status": { "$eq": "pending_sync" } })),
-            limit: Some(25),
-            ..Default::default()
-        }))
-        .map_err(|err| anyhow::anyhow!("query pending business_commands: {err}"))?
-        .exec(false)
+    let rows = pending_business_command_documents(root, 25)
         .await
-        .map_err(|err| anyhow::anyhow!("exec pending business_commands query: {err}"))?;
-
-    let Some(rows) = pending.as_array() else {
-        return Ok(0);
-    };
+        .context("load pending business_commands from RxDB SQLite")?;
     let pending_count = rows.len();
     for document in rows {
         // Isolate failures per command: one broken document must not stall
@@ -3844,7 +3830,13 @@ async fn consume_pending_business_commands(
                         "updated_at_ms": now_ms() as u64,
                     });
                     if let Some(commands) = database.collection("business_commands") {
-                        if let Err(write_err) = commands.incremental_upsert(failed_patch).await {
+                        if let Err(write_err) = incremental_upsert_document_with_repair(
+                            &commands,
+                            failed_patch,
+                            "failed business_command",
+                        )
+                        .await
+                        {
                             eprintln!(
                                 "[business-os] marking command `{command_id}` failed did not stick: {write_err}"
                             );
@@ -3855,6 +3847,94 @@ async fn consume_pending_business_commands(
         }
     }
     Ok(pending_count)
+}
+
+async fn pending_business_command_documents(
+    root: &Path,
+    limit: usize,
+) -> anyhow::Result<Vec<Value>> {
+    let root = root.to_path_buf();
+    tokio::task::spawn_blocking(move || pending_business_command_documents_sync(&root, limit))
+        .await
+        .context("join pending business_commands SQLite load")?
+}
+
+fn pending_business_command_documents_sync(
+    root: &Path,
+    limit: usize,
+) -> anyhow::Result<Vec<Value>> {
+    let path = store::rxdb_store_path(root);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let conn = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| {
+        format!(
+            "open Business OS RxDB store for pending commands {}",
+            path.display()
+        )
+    })?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .context("configure pending business command busy_timeout")?;
+    let Some(table) = latest_rxdb_collection_table(&conn, "business_commands")? else {
+        return Ok(Vec::new());
+    };
+    let quoted = sqlite_quote_identifier(&table);
+    let deleted_expr = if sqlite_table_has_column(&conn, &table, "deleted")? {
+        "deleted"
+    } else {
+        "0"
+    };
+    let lwt_expr = if sqlite_table_has_column(&conn, &table, "lastWriteTime")? {
+        "COALESCE(lastWriteTime, 0)"
+    } else {
+        "CAST(COALESCE(json_extract(data, '$._meta.lwt'), json_extract(data, '$.updated_at_ms'), 0) AS REAL)"
+    };
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT data
+             FROM {quoted}
+             WHERE {deleted_expr} = 0
+               AND json_extract(data, '$.status') = 'pending_sync'
+             ORDER BY {lwt_expr} ASC
+             LIMIT ?1"
+        ))
+        .with_context(|| format!("prepare pending business_commands scan in {table}"))?;
+    let rows = stmt
+        .query_map([limit as i64], |row| row.get::<_, String>(0))
+        .with_context(|| format!("query pending business_commands in {table}"))?;
+    let mut documents = Vec::new();
+    for row in rows {
+        let raw = row.context("read pending business_command row")?;
+        let document = serde_json::from_str::<Value>(&raw)
+            .with_context(|| format!("parse pending business_command JSON in {table}"))?;
+        documents.push(document);
+    }
+    Ok(documents)
+}
+
+async fn incremental_upsert_document_with_repair(
+    collection: &Arc<RxCollection>,
+    document: Value,
+    label: &str,
+) -> anyhow::Result<()> {
+    match collection.incremental_upsert(document.clone()).await {
+        Ok(_) => Ok(()),
+        Err(err) if is_recoverable_projection_write_error(&err) => {
+            let original_error = err.to_string();
+            repair_projection_document_envelope_and_upsert(collection, document)
+                .await
+                .map_err(|fallback_err| {
+                    anyhow::anyhow!(
+                        "repair {label} after recoverable RxDB write error ({original_error}): {fallback_err}"
+                    )
+                })
+        }
+        Err(err) => Err(anyhow::anyhow!("{err}")),
+    }
 }
 
 async fn accept_pending_business_command(
@@ -3922,17 +4002,8 @@ async fn accept_pending_business_command(
                 let commands = database
                     .collection("business_commands")
                     .context("business_commands collection is not registered")?;
-                let existing = commands
-                    .find_one(Some(MangoQuery {
-                        selector: Some(json!({ "id": { "$eq": command_id } })),
-                        ..Default::default()
-                    }))
-                    .map_err(|err| anyhow::anyhow!("query failed business_command: {err}"))?
-                    .exec(false)
-                    .await
-                    .map_err(|err| anyhow::anyhow!("exec failed business_command query: {err}"))?;
-                let mut next = if existing.is_object() {
-                    existing
+                let mut next = if document.is_object() {
+                    document.clone()
                 } else {
                     json!({ "id": command_id, "command_id": command_id })
                 };
@@ -3941,7 +4012,13 @@ async fn accept_pending_business_command(
                     obj.insert("error".to_string(), Value::String(err.to_string()));
                     obj.insert("updated_at_ms".to_string(), Value::from(now_ms() as u64));
                 }
-                commands.incremental_upsert(next).await.map_err(|err| {
+                incremental_upsert_document_with_repair(
+                    &commands,
+                    next,
+                    "failed business_command",
+                )
+                .await
+                .map_err(|err| {
                     anyhow::anyhow!("upsert failed business_command {command_id}: {err}")
                 })?;
             }
@@ -3962,28 +4039,19 @@ async fn accept_pending_business_command(
     let commands = database
         .collection("business_commands")
         .context("business_commands collection is not registered")?;
-    let existing = commands
-        .find_one(Some(MangoQuery {
-            selector: Some(json!({ "id": { "$eq": command_id } })),
-            ..Default::default()
-        }))
-        .map_err(|err| anyhow::anyhow!("query accepted business_command: {err}"))?
-        .exec(false)
-        .await
-        .map_err(|err| anyhow::anyhow!("exec accepted business_command query: {err}"))?;
     let accepted_status = accepted
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("accepted");
-    let existing_status = existing.get("status").and_then(Value::as_str).unwrap_or("");
+    let existing_status = document.get("status").and_then(Value::as_str).unwrap_or("");
     if accepted_status == "already_accepted"
         && !existing_status.is_empty()
         && existing_status != "pending_sync"
     {
         return Ok(());
     }
-    let mut next = if existing.is_object() {
-        existing
+    let mut next = if document.is_object() {
+        document.clone()
     } else {
         json!({ "id": command_id, "command_id": command_id })
     };
@@ -4019,8 +4087,7 @@ async fn accept_pending_business_command(
         }
         obj.insert("updated_at_ms".to_string(), Value::from(now_ms() as u64));
     }
-    commands
-        .incremental_upsert(next)
+    incremental_upsert_document_with_repair(&commands, next, "accepted business_command")
         .await
         .map_err(|err| anyhow::anyhow!("upsert accepted business_command {command_id}: {err}"))?;
 
@@ -18192,6 +18259,14 @@ mod tests {
                 .add_collections(collection_creators())
                 .await
                 .expect("register collections");
+            let (capability_token, _) = store::issue_business_os_capability_token_for_managed_user(
+                root.path(),
+                "tester",
+                "Tester",
+                "owner",
+                now_ms() as i64,
+            )
+            .expect("issue test capability token");
             let commands = database
                 .collection("business_commands")
                 .expect("business_commands collection");
@@ -18204,7 +18279,10 @@ mod tests {
                 "status": "pending_sync",
                 "inbound_channel": "ctox",
                 "payload": { "title": "Native consumer test", "instruction": "test only" },
-                "client_context": {},
+                "client_context": {
+                    "actor": { "id": "tester", "display_name": "Tester" },
+                    "capability_token": capability_token,
+                },
                 "updated_at_ms": now_ms() as u64
             });
             commands
@@ -18319,6 +18397,124 @@ mod tests {
             assert_eq!(
                 replayed.get("task_id").and_then(Value::as_str),
                 Some(task_id)
+            );
+        });
+    }
+
+    #[test]
+    fn native_peer_consumes_pending_business_command_written_directly_to_sqlite() {
+        let root = tempfile::tempdir().expect("temp root");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let database = open_test_database(store::rxdb_store_path(root.path()))
+                .await
+                .expect("open rxdb sqlite");
+            database
+                .add_collections(collection_creators())
+                .await
+                .expect("register collections");
+            let (capability_token, _) = store::issue_business_os_capability_token_for_managed_user(
+                root.path(),
+                "tester",
+                "Tester",
+                "owner",
+                now_ms() as i64,
+            )
+            .expect("issue test capability token");
+            let command = json!({
+                "id": "cmd_native_consumer_sqlite",
+                "command_id": "cmd_native_consumer_sqlite",
+                "module": "ctox",
+                "command_type": "business_os.test",
+                "record_id": "",
+                "status": "pending_sync",
+                "inbound_channel": "ctox",
+                "payload": { "title": "Native consumer SQLite test", "instruction": "test only" },
+                "client_context": {
+                    "actor": { "id": "tester", "display_name": "Tester" },
+                    "capability_token": capability_token,
+                },
+                "updated_at_ms": now_ms() as u64
+            });
+
+            {
+                let path = store::rxdb_store_path(root.path());
+                let conn = Connection::open(&path).expect("open rxdb sqlite directly");
+                let table = latest_rxdb_collection_table(&conn, "business_commands")
+                    .expect("lookup business_commands table")
+                    .expect("business_commands table");
+                conn.execute(
+                    &format!(
+                        "INSERT INTO {} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, ?3, ?4)",
+                        sqlite_quote_identifier(&table)
+                    ),
+                    params![
+                        "cmd_native_consumer_sqlite",
+                        "1-sqlite",
+                        now_ms() as f64,
+                        command.to_string()
+                    ],
+                )
+                .expect("insert pending command directly into sqlite");
+            }
+
+            let pending = pending_business_command_documents_sync(root.path(), 25)
+                .expect("load direct sqlite pending command");
+            assert!(
+                pending
+                    .iter()
+                    .any(|doc| doc.get("id").and_then(Value::as_str)
+                        == Some("cmd_native_consumer_sqlite")),
+                "direct sqlite command not found: {pending:?}"
+            );
+
+            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
+                .await
+                .expect("consume direct sqlite pending command");
+
+            let commands = database
+                .collection("business_commands")
+                .expect("business_commands collection");
+            let accepted = commands
+                .find_one(Some(MangoQuery {
+                    selector: Some(json!({ "id": { "$eq": "cmd_native_consumer_sqlite" } })),
+                    ..Default::default()
+                }))
+                .expect("accepted query")
+                .exec(false)
+                .await
+                .expect("accepted document");
+            assert_eq!(
+                accepted.get("status").and_then(Value::as_str),
+                Some("accepted"),
+                "accepted={accepted}"
+            );
+            let task_id = accepted
+                .get("task_id")
+                .and_then(Value::as_str)
+                .expect("task_id");
+            assert!(!task_id.is_empty());
+
+            let queue = database
+                .collection("ctox_queue_tasks")
+                .expect("ctox_queue_tasks collection");
+            let task_doc = queue
+                .find_one(Some(MangoQuery {
+                    selector: Some(json!({ "id": { "$eq": task_id } })),
+                    ..Default::default()
+                }))
+                .expect("task query")
+                .exec(false)
+                .await
+                .expect("task document");
+            assert_eq!(
+                task_doc.get("command_id").and_then(Value::as_str),
+                Some("cmd_native_consumer_sqlite"),
+                "task_doc={task_doc}"
             );
         });
     }
