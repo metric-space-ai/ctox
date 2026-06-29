@@ -23,6 +23,7 @@ const CHAT_ATTACHMENT_ROOT_PATH = '/Business OS Chat';
 const CHAT_DELETE_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const ACTIVE_TRACKING_SYNC_INTERVAL_MS = 4000;
 const CHAT_REMOTE_PERSIST_TIMEOUT_MS = 1500;
+const CHAT_REMOTE_PERSIST_DEFER_MS = 0;
 
 export function initBusinessChat({
   session,
@@ -168,7 +169,7 @@ export function initBusinessChat({
       getActiveModule,
       meta: detail,
       onPending: async () => {
-        await persistChatState({ state, db });
+        await persistChatState({ state, db, remote: false });
         renderChatRoot({ root, state, commandBus, db, getActiveModule });
       },
     });
@@ -1151,7 +1152,7 @@ async function submitChatForm({ root, state, chat, node, commandBus, db, sync, g
       meta: chat.contextMeta || {},
       attachments,
       onPending: async () => {
-        await persistChatState({ state, db });
+        await persistChatState({ state, db, remote: false });
         renderChatRoot({ root, state, commandBus, db, getActiveModule });
         trackingWatch?.refresh?.();
       },
@@ -2709,7 +2710,7 @@ function isChatLocallyDeleted(state, chat) {
   return !remoteUpdatedAt || deletedAt >= remoteUpdatedAt;
 }
 
-async function persistChatState({ state, db }) {
+async function persistChatState({ state, db, remote = true }) {
   const now = Date.now();
   const ownedChats = state.chats.filter((item) => isOwnedChat(item, state.ownerUserId));
   for (const chat of ownedChats) {
@@ -2719,22 +2720,41 @@ async function persistChatState({ state, db }) {
   }
   writeChatState(state);
   const collection = db?.raw?.[CHAT_COLLECTION];
-  if (!collection) return;
-  for (const chat of ownedChats) {
-    const doc = applyChatTrackingSummary({
-      ...chat,
-      messages: Array.isArray(chat.messages) ? chat.messages.slice(-40) : [],
-      draft: chat.draft || '',
-      contextMeta: chat.contextMeta && typeof chat.contextMeta === 'object' ? chat.contextMeta : {},
-      updated_at_ms: chat.updated_at_ms,
-      showFollowUp: Boolean(chat.showFollowUp),
-      attachments: Array.isArray(chat.attachments) ? chat.attachments : [],
-      scheduledAttachmentsByCommand: chat.scheduledAttachmentsByCommand && typeof chat.scheduledAttachmentsByCommand === 'object'
-        ? chat.scheduledAttachmentsByCommand
-        : {},
+  if (!remote || !collection || !ownedChats.length) return;
+  const docs = ownedChats.map((chat) => applyChatTrackingSummary({
+    ...chat,
+    messages: Array.isArray(chat.messages) ? chat.messages.slice(-40) : [],
+    draft: chat.draft || '',
+    contextMeta: chat.contextMeta && typeof chat.contextMeta === 'object' ? chat.contextMeta : {},
+    updated_at_ms: chat.updated_at_ms,
+    showFollowUp: Boolean(chat.showFollowUp),
+    attachments: Array.isArray(chat.attachments) ? chat.attachments : [],
+    scheduledAttachmentsByCommand: chat.scheduledAttachmentsByCommand && typeof chat.scheduledAttachmentsByCommand === 'object'
+      ? chat.scheduledAttachmentsByCommand
+      : {},
+  }));
+  scheduleChatRemotePersistence(collection, docs);
+}
+
+function scheduleChatRemotePersistence(collection, docs) {
+  const timerApi = typeof window !== 'undefined' ? window : globalThis;
+  const run = () => {
+    persistChatDocsRemote(collection, docs).catch((error) => {
+      if (isVolatileChatPersistenceError(error)) return;
+      console.warn?.('[business-chat] chat persistence failed', error);
     });
+  };
+  if (typeof timerApi.setTimeout === 'function') {
+    timerApi.setTimeout(run, CHAT_REMOTE_PERSIST_DEFER_MS);
+  } else {
+    Promise.resolve().then(run);
+  }
+}
+
+async function persistChatDocsRemote(collection, docs) {
+  for (const doc of docs) {
     try {
-      const existing = await withChatPersistenceTimeout(collection.findOne(chat.id).exec());
+      const existing = await withChatPersistenceTimeout(collection.findOne(doc.id).exec());
       if (existing) await withChatPersistenceTimeout(existing.incrementalPatch(doc));
       else await withChatPersistenceTimeout(collection.insert(doc));
     } catch (error) {
