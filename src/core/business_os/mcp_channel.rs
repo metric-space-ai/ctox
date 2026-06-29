@@ -4268,8 +4268,7 @@ mod tests {
     }
 
     #[test]
-    fn create_app_tool_enqueues_agent_led_app_command_without_writing_files() -> anyhow::Result<()>
-    {
+    fn create_app_tool_completes_runtime_starter_without_source_validator() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_default_mcp_admin(root)?;
@@ -4288,6 +4287,14 @@ mod tests {
         )?;
 
         assert_eq!(result.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            result.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            result.get("task_status").and_then(Value::as_str),
+            Some("completed")
+        );
         assert_eq!(
             result.get("command_type").and_then(Value::as_str),
             Some("ctox.business_os.app.create")
@@ -4315,12 +4322,9 @@ mod tests {
             .iter()
             .any(|path| path.as_str()
                 == Some("runtime/business-os/installed-modules/mcp-inventory/module.json")));
-        assert!(
-            !root
-                .join("runtime/business-os/installed-modules/mcp-inventory")
-                .exists(),
-            "MCP create_app must not write app artifacts"
-        );
+        assert!(root
+            .join("runtime/business-os/installed-modules/mcp-inventory/module.json")
+            .is_file());
         let task_id = result
             .get("task_id")
             .and_then(Value::as_str)
@@ -4331,6 +4335,7 @@ mod tests {
             task.suggested_skill.as_deref(),
             Some("business-os-app-module-development")
         );
+        assert_eq!(task.route_status, "handled");
         assert!(task.prompt.contains("ctox.business_os.app.create"));
         assert!(task.prompt.contains(
             "ctox business-os app references --query \"<workflow data keywords>\" --json --limit 8"

@@ -4820,8 +4820,9 @@ fn update_module_catalog_stamp_hash(hasher: &mut Sha256, value: &str) {
 }
 
 pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
-    let app_root = resolve_business_os_app_root(root)?;
     let installed_app_root = resolve_business_os_installed_app_root(root);
+    let app_root =
+        resolve_business_os_app_root(root).unwrap_or_else(|_| installed_app_root.clone());
     let modules = load_module_manifests(&app_root, &installed_app_root)?;
     backfill_manifest_preview_audience_grants(root, &modules)?;
     backfill_starter_module_data_grants(root, &modules)?;
@@ -10601,11 +10602,9 @@ fn runtime_app_starter_is_owned(module_dir: &Path) -> bool {
 
 fn validate_runtime_app_starter_artifacts(root: &Path, module_id: &str) -> anyhow::Result<()> {
     let script = root.join("src/apps/business-os/scripts/validate-app-module.mjs");
-    anyhow::ensure!(
-        script.is_file(),
-        "Business OS app validator is not available at {}",
-        script.display()
-    );
+    if !script.is_file() {
+        return validate_embedded_runtime_app_starter_artifacts(root, module_id);
+    }
     let output = std::process::Command::new(
         crate::service::business_os::resolve_business_os_validator_node(root),
     )
@@ -10624,6 +10623,95 @@ fn validate_runtime_app_starter_artifacts(root: &Path, module_id: &str) -> anyho
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let report = if !stderr.is_empty() { stderr } else { stdout };
     anyhow::bail!("{}", report)
+}
+
+fn validate_embedded_runtime_app_starter_artifacts(
+    root: &Path,
+    module_id: &str,
+) -> anyhow::Result<()> {
+    let module_dir = runtime_app_starter_module_dir(root, module_id);
+    anyhow::ensure!(
+        module_dir.is_dir(),
+        "runtime app starter directory is not available at {}",
+        module_dir.display()
+    );
+    for relative_path in [
+        "module.json",
+        "collections.schema.json",
+        "schema.js",
+        "index.html",
+        "index.css",
+        "index.js",
+        "icon.svg",
+        "locales/en.json",
+        "locales/de.json",
+        "core/records.mjs",
+        "core/automation.mjs",
+        "core/request.mjs",
+        "tests/records.test.mjs",
+    ] {
+        let path = module_dir.join(relative_path);
+        anyhow::ensure!(
+            path.is_file(),
+            "runtime app starter is missing {}",
+            path.display()
+        );
+    }
+
+    let manifest_text = fs::read_to_string(module_dir.join("module.json"))
+        .with_context(|| format!("failed to read runtime app manifest for `{module_id}`"))?;
+    let manifest: Value = serde_json::from_str(&manifest_text)
+        .with_context(|| format!("failed to parse runtime app manifest for `{module_id}`"))?;
+    anyhow::ensure!(
+        manifest.get("id").and_then(Value::as_str) == Some(module_id),
+        "runtime app starter manifest id does not match `{module_id}`"
+    );
+    anyhow::ensure!(
+        manifest.get("install_scope").and_then(Value::as_str) == Some("installed"),
+        "runtime app starter manifest must declare install_scope=installed"
+    );
+    anyhow::ensure!(
+        manifest.pointer("/store/generator").and_then(Value::as_str)
+            == Some("ctox-runtime-app-starter-v1"),
+        "runtime app starter manifest is missing the CTOX starter generator marker"
+    );
+    let expected_entry = format!("installed-modules/{module_id}/index.html");
+    anyhow::ensure!(
+        manifest.get("entry").and_then(Value::as_str) == Some(expected_entry.as_str()),
+        "runtime app starter manifest entry does not target the installed module path"
+    );
+    let collections = manifest
+        .get("collections")
+        .and_then(Value::as_array)
+        .context("runtime app starter manifest is missing collections")?;
+    anyhow::ensure!(
+        !collections.is_empty(),
+        "runtime app starter manifest must declare at least one collection"
+    );
+
+    let schema_text =
+        fs::read_to_string(module_dir.join("collections.schema.json")).with_context(|| {
+            format!("failed to read runtime app collection schema for `{module_id}`")
+        })?;
+    let schema: Value = serde_json::from_str(&schema_text).with_context(|| {
+        format!("failed to parse runtime app collection schema for `{module_id}`")
+    })?;
+    anyhow::ensure!(
+        schema.get("schema_format").and_then(Value::as_str)
+            == Some("ctox-business-os-module-collections-v1"),
+        "runtime app starter collection schema has an unexpected schema format"
+    );
+    let schema_collections = schema
+        .get("collections")
+        .and_then(Value::as_object)
+        .context("runtime app starter collection schema is missing collections")?;
+    for collection in collections.iter().filter_map(Value::as_str) {
+        anyhow::ensure!(
+            schema_collections.contains_key(collection),
+            "runtime app starter collection schema is missing `{collection}`"
+        );
+    }
+    Ok(())
 }
 
 fn runtime_app_starter_title(
@@ -15166,7 +15254,8 @@ fn ensure_app_create_actor_lifecycle_assignment(
         true,
         observed_at_ms,
     )?;
-    let app_root = resolve_business_os_app_root(root)?;
+    let installed_app_root = resolve_business_os_installed_app_root(root);
+    let app_root = resolve_business_os_app_root(root).unwrap_or(installed_app_root);
     let manifest_path = module_manifest_path(root, &app_root, module_id)?;
     let version_app_root = app_root_for_module_manifest(&app_root, &manifest_path);
     record_module_version_with_conn(
