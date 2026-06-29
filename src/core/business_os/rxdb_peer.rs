@@ -9066,43 +9066,37 @@ fn desktop_file_chunk_rows_by_id_from_sqlite(
     stats: &mut DemandFileFetchRequestStats,
 ) -> rxdb::rx_error::RxResult<Vec<Value>> {
     let expected_total = expected_desktop_file_chunk_total(size_bytes);
-    let start_idx = usize::try_from(index_window.0).map_err(|err| {
-        rxdb::rx_error::new_rx_error(
-            "RC_WEBRTC_PEER",
-            Some(json!({
-                "message": format!("desktop file chunk start overflow for {file_id}: {err}"),
-            })),
-        )
+    let start_idx = i64::try_from(index_window.0).map_err(|err| {
+        demand_file_source_error(format!("desktop file chunk start overflow for {file_id}: {err}"))
     })?;
-    let end_idx = usize::try_from(index_window.1).map_err(|err| {
-        rxdb::rx_error::new_rx_error(
-            "RC_WEBRTC_PEER",
-            Some(json!({
-                "message": format!("desktop file chunk end overflow for {file_id}: {err}"),
-            })),
-        )
+    let end_idx = i64::try_from(index_window.1).map_err(|err| {
+        demand_file_source_error(format!("desktop file chunk end overflow for {file_id}: {err}"))
     })?;
     let mut stmt = conn
         .prepare(
             "SELECT data FROM ctox_business_os__desktop_file_chunks__v0 \
-             WHERE id = ?1 AND COALESCE(deleted, 0) = 0",
+             WHERE deleted = 0 \
+               AND json_extract(data, '$.file_id') = ?1 \
+               AND json_extract(data, '$.generation_id') = ?2 \
+               AND json_extract(data, '$.idx') >= ?3 \
+               AND json_extract(data, '$.idx') < ?4 \
+             ORDER BY json_extract(data, '$.idx') ASC",
         )
         .map_err(|err| demand_file_source_error(format!("prepare chunk lookup: {err}")))?;
-    let mut rows = Vec::with_capacity(end_idx.saturating_sub(start_idx));
-    for idx in start_idx..end_idx {
-        let chunk_id = format!("{file_id}_{generation_id}_{idx}");
-        let Some(raw) = stmt
-            .query_row([chunk_id.as_str()], |row| row.get::<_, String>(0))
-            .optional()
-            .map_err(|err| {
-                demand_file_source_error(format!("load desktop file chunk {chunk_id}: {err}"))
-            })?
-        else {
-            continue;
-        };
+    let query_rows = stmt
+        .query_map(params![file_id, generation_id, start_idx, end_idx], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|err| demand_file_source_error(format!("query desktop file chunks: {err}")))?;
+    let mut rows = Vec::with_capacity(
+        usize::try_from(index_window.1.saturating_sub(index_window.0)).unwrap_or(0),
+    );
+    for row in query_rows {
+        let raw =
+            row.map_err(|err| demand_file_source_error(format!("load desktop file chunk: {err}")))?;
         stats.rows_loaded = stats.rows_loaded.saturating_add(1);
         let value = serde_json::from_str::<Value>(&raw).map_err(|err| {
-            demand_file_source_error(format!("decode desktop file chunk {chunk_id}: {err}"))
+            demand_file_source_error(format!("decode desktop file chunk for {file_id}: {err}"))
         })?;
         rows.push(value);
     }
@@ -13002,12 +12996,13 @@ mod tests {
             WHERE deleted = 0
               AND json_extract(data, '$.file_id') = ?
               AND json_extract(data, '$.generation_id') = ?
+              AND json_extract(data, '$.idx') >= ?
+              AND json_extract(data, '$.idx') < ?
             ORDER BY json_extract(data, '$.idx') ASC
-            LIMIT 100
             "#,
                 quote_sqlite_identifier(&desktop_file_chunks_table)
             ),
-            &[&"file_1", &"gen_1"],
+            &[&"file_1", &"gen_1", &0_i64, &100_i64],
             &format!(
                 "{desktop_file_chunks_table}_json__deleted__file_id__generation_id__idx__id_idx"
             ),
