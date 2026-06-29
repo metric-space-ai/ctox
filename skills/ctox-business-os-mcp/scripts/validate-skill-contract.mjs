@@ -7,9 +7,40 @@ import { fileURLToPath } from "node:url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const skillPath = path.resolve(scriptDir, "../SKILL.md");
-const repoRoot = path.resolve(scriptDir, "../../..");
+const repoRoot = resolveRepoRoot(scriptDir);
 const rustPath = path.join(repoRoot, "src/core/business_os/mcp_channel.rs");
 const planPath = path.join(repoRoot, "docs/business-os-mcp-channel-v1-implementation-plan.md");
+
+function resolveRepoRoot(startDir) {
+  for (const candidate of [
+    process.env.CTOX_REPO_ROOT,
+    path.resolve(startDir, "../../.."),
+    process.cwd()
+  ].filter(Boolean)) {
+    const resolved = findRepoRoot(path.resolve(candidate));
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return path.resolve(startDir, "../../..");
+}
+
+function findRepoRoot(candidate) {
+  let current = candidate;
+  while (true) {
+    if (
+      fs.existsSync(path.join(current, "src/core/business_os/mcp_channel.rs"))
+      && fs.existsSync(path.join(current, "docs/business-os-mcp-channel-v1-implementation-plan.md"))
+    ) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
+  }
+}
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const result = validateSkillContract({
@@ -82,6 +113,15 @@ export function validateSkillContract({ skillText, rustText, planText }) {
     "Neuer Token",
     "business_os.create_app",
     "business_os.modify_app",
+    "business_os.prepare_app_source",
+    "business_os.list_app_files",
+    "business_os.read_app_file",
+    "business_os.search_app_source",
+    "business_os.write_app_file",
+    "business_os.validate_app",
+    "business_os.smoke_app",
+    "business_os.e2e_app",
+    "vendor/<name>.mjs",
     "development_contract",
     "runtime/business-os/installed-modules/<module_id>",
     "business-os-app-module-development",

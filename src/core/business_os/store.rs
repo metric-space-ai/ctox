@@ -596,6 +596,21 @@ pub struct ModuleSourceRollbackSnapshotRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct RuntimeAppSourceWorkspaceRequest {
+    pub module_id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub instruction: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct AppStoreInstallRequest {
     pub module_id: String,
     #[serde(default)]
@@ -4820,9 +4835,8 @@ fn update_module_catalog_stamp_hash(hasher: &mut Sha256, value: &str) {
 }
 
 pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
+    let app_root = resolve_business_os_app_root(root)?;
     let installed_app_root = resolve_business_os_installed_app_root(root);
-    let app_root =
-        resolve_business_os_app_root(root).unwrap_or_else(|_| installed_app_root.clone());
     let modules = load_module_manifests(&app_root, &installed_app_root)?;
     backfill_manifest_preview_audience_grants(root, &modules)?;
     backfill_starter_module_data_grants(root, &modules)?;
@@ -7685,6 +7699,7 @@ pub fn save_module_source_record(
         "source file type is not editable: {}",
         rel.display()
     );
+    ensure_source_path_has_no_symlink_components(&module_root, &rel)?;
     let target = module_root.join(&rel);
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)
@@ -8611,6 +8626,28 @@ fn normalize_source_relative_path(path: &str) -> anyhow::Result<PathBuf> {
         anyhow::bail!("source path is required");
     }
     Ok(out)
+}
+
+fn ensure_source_path_has_no_symlink_components(
+    module_root: &Path,
+    rel: &Path,
+) -> anyhow::Result<()> {
+    let mut current = module_root.to_path_buf();
+    for component in rel.components() {
+        let std::path::Component::Normal(segment) = component else {
+            anyhow::bail!("unsafe source path");
+        };
+        current.push(segment);
+        let Ok(metadata) = fs::symlink_metadata(&current) else {
+            continue;
+        };
+        anyhow::ensure!(
+            !metadata.file_type().is_symlink(),
+            "source path crosses a symlink: {}",
+            rel.display()
+        );
+    }
+    Ok(())
 }
 
 fn is_allowed_source_path(path: &Path) -> bool {
@@ -10387,6 +10424,9 @@ fn maybe_materialize_and_complete_runtime_app_starter(
     command: &BusinessCommand,
     queue_task: Option<&channels::QueueTaskView>,
 ) -> anyhow::Result<Option<CommandAccepted>> {
+    if command.client_context.get("source").and_then(Value::as_str) == Some("business-os-mcp") {
+        return Ok(None);
+    }
     let Some(queue_task) = queue_task else {
         return Ok(None);
     };
@@ -10562,6 +10602,78 @@ fn materialize_runtime_app_starter_artifacts(
     })
 }
 
+pub fn prepare_runtime_app_source_workspace(
+    root: &Path,
+    request: RuntimeAppSourceWorkspaceRequest,
+) -> anyhow::Result<Value> {
+    let module_id = source_sanitize_slug(&request.module_id);
+    anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+    let version = request
+        .version
+        .trim()
+        .is_empty()
+        .then_some("0.1.0")
+        .unwrap_or(request.version.trim());
+    let instruction = request.instruction.trim();
+    let command = BusinessCommand {
+        origin: CommandOrigin::TrustedLocal,
+        id: None,
+        module: "creator".to_string(),
+        command_type: "ctox.business_os.app.create".to_string(),
+        record_id: Some(module_id.clone()),
+        payload: serde_json::json!({
+            "title": request.title.trim(),
+            "app_title": request.title.trim(),
+            "description": request.description.trim(),
+            "category": request.category.trim(),
+            "desired_version": version,
+            "version": version,
+            "instruction": if instruction.is_empty() {
+                "Prepare a Business OS app source workspace for direct MCP coding."
+            } else {
+                instruction
+            },
+            "module_id": module_id.as_str(),
+            "app_id": module_id.as_str(),
+            "install_target": "runtime-installed-module",
+            "target": "app",
+            "mode": "app",
+            "required_skills": ["business-os-app-module-development"]
+        }),
+        client_context: serde_json::json!({
+            "source": "business-os-mcp",
+            "target": "app",
+            "mode": "app",
+            "module_id": module_id.as_str(),
+            "app_id": module_id.as_str(),
+            "install_target": "runtime-installed-module"
+        }),
+    };
+    let materialized = materialize_runtime_app_starter_artifacts(
+        root,
+        &command,
+        &module_id,
+        RuntimeAppStarterAction::Create,
+    )?;
+    anyhow::ensure!(
+        materialized.should_validate,
+        "runtime app source workspace already exists and is not managed by the CTOX runtime app starter"
+    );
+    let source = load_module_source_records(
+        root,
+        &ModuleSourceLoadMutation {
+            module_id: module_id.clone(),
+        },
+    )?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "module_id": module_id.as_str(),
+        "install_target": "runtime-installed-module",
+        "app_directory": format!("runtime/business-os/installed-modules/{module_id}"),
+        "source": source
+    }))
+}
+
 fn runtime_app_starter_module_dir(root: &Path, module_id: &str) -> PathBuf {
     resolve_business_os_installed_app_root(root)
         .join("installed-modules")
@@ -10602,9 +10714,11 @@ fn runtime_app_starter_is_owned(module_dir: &Path) -> bool {
 
 fn validate_runtime_app_starter_artifacts(root: &Path, module_id: &str) -> anyhow::Result<()> {
     let script = root.join("src/apps/business-os/scripts/validate-app-module.mjs");
-    if !script.is_file() {
-        return validate_embedded_runtime_app_starter_artifacts(root, module_id);
-    }
+    anyhow::ensure!(
+        script.is_file(),
+        "Business OS app validator is not available at {}",
+        script.display()
+    );
     let output = std::process::Command::new(
         crate::service::business_os::resolve_business_os_validator_node(root),
     )
@@ -10623,95 +10737,6 @@ fn validate_runtime_app_starter_artifacts(root: &Path, module_id: &str) -> anyho
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let report = if !stderr.is_empty() { stderr } else { stdout };
     anyhow::bail!("{}", report)
-}
-
-fn validate_embedded_runtime_app_starter_artifacts(
-    root: &Path,
-    module_id: &str,
-) -> anyhow::Result<()> {
-    let module_dir = runtime_app_starter_module_dir(root, module_id);
-    anyhow::ensure!(
-        module_dir.is_dir(),
-        "runtime app starter directory is not available at {}",
-        module_dir.display()
-    );
-    for relative_path in [
-        "module.json",
-        "collections.schema.json",
-        "schema.js",
-        "index.html",
-        "index.css",
-        "index.js",
-        "icon.svg",
-        "locales/en.json",
-        "locales/de.json",
-        "core/records.mjs",
-        "core/automation.mjs",
-        "core/request.mjs",
-        "tests/records.test.mjs",
-    ] {
-        let path = module_dir.join(relative_path);
-        anyhow::ensure!(
-            path.is_file(),
-            "runtime app starter is missing {}",
-            path.display()
-        );
-    }
-
-    let manifest_text = fs::read_to_string(module_dir.join("module.json"))
-        .with_context(|| format!("failed to read runtime app manifest for `{module_id}`"))?;
-    let manifest: Value = serde_json::from_str(&manifest_text)
-        .with_context(|| format!("failed to parse runtime app manifest for `{module_id}`"))?;
-    anyhow::ensure!(
-        manifest.get("id").and_then(Value::as_str) == Some(module_id),
-        "runtime app starter manifest id does not match `{module_id}`"
-    );
-    anyhow::ensure!(
-        manifest.get("install_scope").and_then(Value::as_str) == Some("installed"),
-        "runtime app starter manifest must declare install_scope=installed"
-    );
-    anyhow::ensure!(
-        manifest.pointer("/store/generator").and_then(Value::as_str)
-            == Some("ctox-runtime-app-starter-v1"),
-        "runtime app starter manifest is missing the CTOX starter generator marker"
-    );
-    let expected_entry = format!("installed-modules/{module_id}/index.html");
-    anyhow::ensure!(
-        manifest.get("entry").and_then(Value::as_str) == Some(expected_entry.as_str()),
-        "runtime app starter manifest entry does not target the installed module path"
-    );
-    let collections = manifest
-        .get("collections")
-        .and_then(Value::as_array)
-        .context("runtime app starter manifest is missing collections")?;
-    anyhow::ensure!(
-        !collections.is_empty(),
-        "runtime app starter manifest must declare at least one collection"
-    );
-
-    let schema_text =
-        fs::read_to_string(module_dir.join("collections.schema.json")).with_context(|| {
-            format!("failed to read runtime app collection schema for `{module_id}`")
-        })?;
-    let schema: Value = serde_json::from_str(&schema_text).with_context(|| {
-        format!("failed to parse runtime app collection schema for `{module_id}`")
-    })?;
-    anyhow::ensure!(
-        schema.get("schema_format").and_then(Value::as_str)
-            == Some("ctox-business-os-module-collections-v1"),
-        "runtime app starter collection schema has an unexpected schema format"
-    );
-    let schema_collections = schema
-        .get("collections")
-        .and_then(Value::as_object)
-        .context("runtime app starter collection schema is missing collections")?;
-    for collection in collections.iter().filter_map(Value::as_str) {
-        anyhow::ensure!(
-            schema_collections.contains_key(collection),
-            "runtime app starter collection schema is missing `{collection}`"
-        );
-    }
-    Ok(())
 }
 
 fn runtime_app_starter_title(
@@ -15254,8 +15279,7 @@ fn ensure_app_create_actor_lifecycle_assignment(
         true,
         observed_at_ms,
     )?;
-    let installed_app_root = resolve_business_os_installed_app_root(root);
-    let app_root = resolve_business_os_app_root(root).unwrap_or(installed_app_root);
+    let app_root = resolve_business_os_app_root(root)?;
     let manifest_path = module_manifest_path(root, &app_root, module_id)?;
     let version_app_root = app_root_for_module_manifest(&app_root, &manifest_path);
     record_module_version_with_conn(

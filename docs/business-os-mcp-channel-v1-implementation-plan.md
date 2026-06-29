@@ -140,6 +140,14 @@ MCP v1 bildet Business OS ueber diese stabilen Objekte ab:
 | `business_os.propose_action` | write-prep | Command vorbereiten, noch nicht ausfuehren |
 | `business_os.create_app` | write | Runtime-installierte Business-OS-App erstellen |
 | `business_os.modify_app` | write | Bestehende Business-OS-App aendern |
+| `business_os.prepare_app_source` | write | App-Source-Workspace fuer direkte Coding-Agent-Arbeit anlegen |
+| `business_os.list_app_files` | read | App-scoped Source-Dateien listen |
+| `business_os.read_app_file` | read | App-scoped Source-Datei lesen |
+| `business_os.search_app_source` | read | App-scoped Source-Dateien durchsuchen |
+| `business_os.write_app_file` | write | Vollstaendige App-scoped Source-Datei schreiben, inklusive relativer ESM-Module |
+| `business_os.validate_app` | write | Runtime-App statisch validieren |
+| `business_os.smoke_app` | write | Runtime-App Smoke-Test ausfuehren |
+| `business_os.e2e_app` | write | Runtime-App E2E-Test ausfuehren |
 | `business_os.execute_action` | write | Validierten Command erzeugen oder starten |
 | `business_os.get_command_status` | read | Command-Status und Ergebnisreferenzen abrufen |
 | `business_os.list_runs` | read | Laufende/abgeschlossene/blockierte Runs listen |

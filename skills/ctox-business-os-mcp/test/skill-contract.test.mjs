@@ -11,7 +11,38 @@ import {
 } from "../scripts/validate-skill-contract.mjs";
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(testDir, "../../..");
+const repoRoot = resolveRepoRoot(testDir);
+
+function resolveRepoRoot(startDir) {
+  for (const candidate of [
+    process.env.CTOX_REPO_ROOT,
+    path.resolve(startDir, "../../.."),
+    process.cwd()
+  ].filter(Boolean)) {
+    const resolved = findRepoRoot(path.resolve(candidate));
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return path.resolve(startDir, "../../..");
+}
+
+function findRepoRoot(candidate) {
+  let current = candidate;
+  while (true) {
+    if (
+      fs.existsSync(path.join(current, "src/core/business_os/mcp_channel.rs"))
+      && fs.existsSync(path.join(current, "docs/business-os-mcp-channel-v1-implementation-plan.md"))
+    ) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
+  }
+}
 
 test("skill contract covers exactly the Rust MCP tool descriptors", () => {
   const skillText = fs.readFileSync(
@@ -28,7 +59,7 @@ test("skill contract covers exactly the Rust MCP tool descriptors", () => {
   assert.deepEqual(result, {
     ok: true,
     errors: [],
-    toolCount: 25
+    toolCount: 32
   });
 });
 

@@ -63,13 +63,22 @@ roles and app/data grants: `Owner`/`chef`, `Admin`/`admin`,
 `0.x.y` apps require app visibility grants, `1.0.0+` apps are team-visible by
 default unless restricted, and data reads/writes remain explicit.
 
-App development goes through typed tools. Use `business_os.create_app` and
-`business_os.modify_app`; their response includes `command_id`, `task_id`,
-`app_directory`, and a `development_contract` with the runtime-installed app
-source root, required files, `business-os-app-module-development` resources,
-and validation/smoke/E2E commands. Agents must poll
-`business_os.get_command_status` rather than inventing raw shell, SQL, or RxDB
-write paths.
+App development goes through typed tools. For direct coding-agent work, use
+`business_os.prepare_app_source`, then inspect and edit app-scoped files with
+`business_os.list_app_files`, `business_os.read_app_file`,
+`business_os.search_app_source`, and `business_os.write_app_file`. Validate
+with `business_os.validate_app`, plus `business_os.smoke_app` /
+`business_os.e2e_app` when browser behavior matters. Browser ESM dependencies
+must be committed as relative `.mjs` files such as `vendor/<name>.mjs` or
+`lib/<name>.mjs`; do not create npm/shell/SQL/RxDB fallback paths.
+
+Use `business_os.create_app` and `business_os.modify_app` when CTOX should
+enqueue app work for a worker instead of the connected agent editing source
+directly. Their response includes `command_id`, `task_id`, `app_directory`,
+and a `development_contract` with the runtime-installed app source root,
+required files, `business-os-app-module-development` resources, and
+validation/smoke/E2E commands. Agents must poll
+`business_os.get_command_status` for delegated work.
 
 ## Validation
 

@@ -179,15 +179,21 @@ ctox business-os mcp connect \
 If the instance is not connected, `/mcp/cto1.example.com` returns `runtime_unavailable` and agents must report that CTOX MCP is not connected.
 
 For Business OS app development, MCP exposes typed app actions rather than raw
-filesystem or SQL access. `business_os.create_app` and `business_os.modify_app`
-first try to materialize a validated runtime-installed starter app under
-`runtime/business-os/installed-modules/<module_id>`. When that starter validates,
-the command can return `completed` immediately with a visible app and the normal
-module-version/projection side effects. If the target already contains
-non-starter user artifacts or validation is red, CTOX falls back to queued app
-work and returns `command_id`, `task_id`, `app_directory`, and a
-`development_contract` containing the source root, required files, the
-`business-os-app-module-development` resources, and validation/smoke/E2E
+filesystem or SQL access. A coding agent that should edit source itself uses
+`business_os.prepare_app_source`, `business_os.list_app_files`,
+`business_os.read_app_file`, `business_os.search_app_source`, and
+`business_os.write_app_file` inside the app-scoped
+`runtime/business-os/installed-modules/<module_id>` source root. Browser ESM
+dependencies are checked in as relative `.mjs` files such as `vendor/<name>.mjs`
+or `lib/<name>.mjs`; MCP does not expose npm, shell, SQL, or raw RxDB fallback
+paths. The agent validates with `business_os.validate_app` and can run
+`business_os.smoke_app` / `business_os.e2e_app` for browser behavior.
+
+`business_os.create_app` and `business_os.modify_app` remain delegated app-work
+actions. They enqueue CTOX app work and return `command_id`, `task_id`,
+`app_directory`, and a `development_contract` containing the source root,
+required files, the `business-os-app-module-development` resources, and
+validation/smoke/E2E
 commands. Agents should still poll `business_os.get_command_status` whenever the
 initial status is not terminal.
 

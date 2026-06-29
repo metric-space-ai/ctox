@@ -5,6 +5,7 @@ use anyhow::Context;
 use futures_util::SinkExt;
 use futures_util::StreamExt;
 use rusqlite::params;
+use rusqlite::OptionalExtension;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -38,6 +39,8 @@ const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const DEFAULT_GATEWAY_RECONNECT_MAX_DELAY_MS: u64 = 30_000;
 const DEFAULT_GATEWAY_HEARTBEAT_INTERVAL_MS: u64 = 30_000;
 const DEFAULT_GATEWAY_MAX_CONNECTION_AGE_MS: u64 = 15 * 60 * 1000;
+const MAX_APP_SOURCE_WRITE_BYTES: usize = 1024 * 1024;
+const MAX_APP_RUN_OUTPUT_CHARS: usize = 24_000;
 
 #[derive(Debug, Clone)]
 pub struct BusinessOsMcpServeOptions {
@@ -268,6 +271,7 @@ pub struct BusinessOsAppDevelopmentContract {
     pub required_skill: String,
     pub skill_resources: Vec<String>,
     pub source_files: Vec<String>,
+    pub source_tools: Vec<String>,
     pub reference_catalog_command: String,
     pub validation_command: String,
     pub smoke_command: String,
@@ -275,6 +279,68 @@ pub struct BusinessOsAppDevelopmentContract {
     pub command_status_tool: String,
     pub lifecycle: Vec<String>,
     pub data_boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BusinessOsAppSourceFileSummary {
+    pub module_id: String,
+    pub path: String,
+    pub language: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub source_file_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modified_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BusinessOsAppSourceFile {
+    pub ok: bool,
+    pub module_id: String,
+    pub path: String,
+    pub language: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub source_file_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modified_at_ms: Option<i64>,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BusinessOsAppSourceSearchMatch {
+    pub module_id: String,
+    pub path: String,
+    pub line: usize,
+    pub preview: String,
+    pub source_file_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BusinessOsAppSourceWrite {
+    pub ok: bool,
+    pub module_id: String,
+    pub path: String,
+    pub source_file_id: String,
+    pub source_file_ids: Vec<String>,
+    pub size_bytes: u64,
+    pub sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<String>,
+    pub changed: bool,
+    pub validation_tool: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BusinessOsAppRunResult {
+    pub ok: bool,
+    pub module_id: String,
+    pub command: String,
+    pub exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -647,7 +713,8 @@ pub fn gateway_hello_message() -> String {
             "managed_gateway_connector",
             "typed_tools",
             "audit_events",
-            "approval_gated_actions"
+            "approval_gated_actions",
+            "app_source_tools"
         ],
         "connected_at_ms": now_ms()
     })
@@ -915,6 +982,77 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
                 required_string("module_id"),
                 required_string("instruction"),
                 optional_string("title"),
+            ]),
+        ),
+        write_tool(
+            "business_os.prepare_app_source",
+            "Use this when a coding agent needs a runtime-installed Business OS app source workspace it can edit directly through MCP.",
+            object_schema(vec![
+                required_string("module_id"),
+                optional_string("title"),
+                optional_string("description"),
+                optional_string("category"),
+                optional_string("version"),
+                optional_string("instruction"),
+            ]),
+        ),
+        read_tool(
+            "business_os.list_app_files",
+            "Use this when a coding agent needs the app-scoped source file list for a Business OS module.",
+            object_schema(vec![required_string("module_id")]),
+        ),
+        read_tool(
+            "business_os.read_app_file",
+            "Use this when a coding agent needs one source file from a Business OS app module.",
+            object_schema(vec![
+                required_string("module_id"),
+                required_string("path"),
+            ]),
+        ),
+        read_tool(
+            "business_os.search_app_source",
+            "Use this when a coding agent needs to search app-scoped Business OS source files.",
+            object_schema(vec![
+                required_string("module_id"),
+                required_string("query"),
+                optional_integer("limit", 1, MAX_LIMIT),
+            ]),
+        ),
+        write_tool(
+            "business_os.write_app_file",
+            "Use this when a coding agent needs to create or replace an app-scoped source file, including relative browser ESM modules such as vendor/<name>.mjs.",
+            object_schema(vec![
+                required_string("module_id"),
+                required_string("path"),
+                required_string("content"),
+            ]),
+        ),
+        write_tool(
+            "business_os.validate_app",
+            "Use this when a coding agent needs to run the bounded Business OS app validator for a module.",
+            object_schema(vec![
+                required_string("module_id"),
+                optional_boolean("skip_tests"),
+                optional_boolean("skip_node_check"),
+            ]),
+        ),
+        write_tool(
+            "business_os.smoke_app",
+            "Use this when a coding agent needs a bounded browser smoke test for a Business OS app module.",
+            object_schema(vec![
+                required_string("module_id"),
+                optional_string("url"),
+                optional_integer("timeout_ms", 1_000, 300_000),
+            ]),
+        ),
+        write_tool(
+            "business_os.e2e_app",
+            "Use this when a coding agent needs the bounded Business OS app E2E test for save/reload/command-bus behavior.",
+            object_schema(vec![
+                required_string("module_id"),
+                optional_string("url"),
+                optional_integer("timeout_ms", 1_000, 300_000),
+                optional_string("marker"),
             ]),
         ),
         read_tool(
@@ -1195,6 +1333,7 @@ pub fn modify_app(
     let instruction = required_arg(arguments, "instruction")?;
     enforce_module_policy(root, &module_id)?;
     enforce_business_os_mcp_policy(root, context, "business_os.modify_app", arguments)?;
+    let _module = get_module(root, context, &module_id)?;
     let title = optional_string_arg(arguments, "title")
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| format!("Modify {}", title_from_module_id(&module_id)));
@@ -1270,6 +1409,8 @@ fn app_development_contract(
         "icon.svg",
         "core/records.mjs",
         "core/automation.mjs",
+        "lib/*.mjs",
+        "vendor/*.mjs",
         "locales/en.json",
         "locales/de.json",
         "tests/*.test.mjs",
@@ -1293,6 +1434,16 @@ fn app_development_contract(
                 .to_string(),
         ],
         source_files,
+        source_tools: vec![
+            "business_os.prepare_app_source".to_string(),
+            "business_os.list_app_files".to_string(),
+            "business_os.read_app_file".to_string(),
+            "business_os.search_app_source".to_string(),
+            "business_os.write_app_file".to_string(),
+            "business_os.validate_app".to_string(),
+            "business_os.smoke_app".to_string(),
+            "business_os.e2e_app".to_string(),
+        ],
         reference_catalog_command:
             "ctox business-os app references --query \"<workflow data keywords>\" --json --limit 8"
                 .to_string(),
@@ -1313,9 +1464,13 @@ fn app_development_contract(
         lifecycle: vec![
             "MCP accepts a typed command and returns command_id/task_id; it does not expose shell, SQL, or raw RxDB writes."
                 .to_string(),
+            "A coding agent can alternatively use business_os.prepare_app_source, then read/write app-scoped source files directly through MCP."
+                .to_string(),
             format!(
                 "The CTOX worker edits or creates the app under `{source_root}` with the required Business OS app skill."
             ),
+            "Browser ESM dependencies must be checked in as relative .mjs files under the app source root, for example vendor/<name>.mjs or lib/<name>.mjs."
+                .to_string(),
             "Validation must pass before the app task can finalize a runtime-installed module version."
                 .to_string(),
             "Schema changes refresh the native Business OS RxDB peer so new collections replicate over WebRTC."
@@ -1335,6 +1490,477 @@ fn app_validation_mode_flag(install_target: &str) -> &'static str {
     } else {
         "--source"
     }
+}
+
+pub fn prepare_app_source(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    context.validate()?;
+    let module_id = sanitize_app_module_id(&required_arg(arguments, "module_id")?)?;
+    enforce_module_policy(root, &module_id)?;
+    enforce_business_os_mcp_policy(root, context, "business_os.prepare_app_source", arguments)?;
+    let version = normalize_app_semver(
+        optional_string_arg(arguments, "version")
+            .as_deref()
+            .unwrap_or("0.1.0"),
+    )?;
+    let mut result = store::prepare_runtime_app_source_workspace(
+        root,
+        store::RuntimeAppSourceWorkspaceRequest {
+            module_id: module_id.clone(),
+            title: optional_string_arg(arguments, "title")
+                .unwrap_or_else(|| title_from_module_id(&module_id)),
+            description: optional_string_arg(arguments, "description").unwrap_or_default(),
+            category: optional_string_arg(arguments, "category")
+                .unwrap_or_else(|| "Agent Apps".to_string()),
+            version,
+            instruction: optional_string_arg(arguments, "instruction").unwrap_or_default(),
+        },
+    )?;
+    if let Some(object) = result.as_object_mut() {
+        object.insert(
+            "development_contract".to_string(),
+            serde_json::to_value(app_development_contract(
+                &module_id,
+                "runtime-installed-module",
+            ))?,
+        );
+    }
+    Ok(result)
+}
+
+pub fn list_app_files(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    module_id: &str,
+) -> anyhow::Result<BusinessOsMcpList<BusinessOsAppSourceFileSummary>> {
+    let module_id = sanitize_app_module_id(module_id)?;
+    let files = load_app_source_documents(root, context, &module_id, "business_os.list_app_files")?
+        .into_iter()
+        .map(app_source_summary_from_value)
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(BusinessOsMcpList {
+        ok: true,
+        count: files.len(),
+        limit: files.len(),
+        items: files,
+    })
+}
+
+pub fn read_app_file(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    module_id: &str,
+    path: &str,
+) -> anyhow::Result<BusinessOsAppSourceFile> {
+    let module_id = sanitize_app_module_id(module_id)?;
+    let path = normalize_mcp_source_path(path)?;
+    let files = load_app_source_documents(root, context, &module_id, "business_os.read_app_file")?;
+    let file = files
+        .into_iter()
+        .find(|file| string_field(file, "path").as_deref() == Some(path.as_str()))
+        .ok_or_else(|| {
+            anyhow::Error::new(BusinessOsMcpError::not_found(
+                BusinessOsMcpErrorCode::RecordNotFound,
+                format!("Business OS app file `{path}` was not found in module `{module_id}`"),
+            ))
+        })?;
+    let summary = app_source_summary_from_value(file.clone())?;
+    Ok(BusinessOsAppSourceFile {
+        ok: true,
+        module_id: summary.module_id,
+        path: summary.path,
+        language: summary.language,
+        size_bytes: summary.size_bytes,
+        sha256: summary.sha256,
+        source_file_id: summary.source_file_id,
+        modified_at_ms: summary.modified_at_ms,
+        content: file
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    })
+}
+
+pub fn search_app_source(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    module_id: &str,
+    query: &str,
+    limit: Option<usize>,
+) -> anyhow::Result<BusinessOsMcpList<BusinessOsAppSourceSearchMatch>> {
+    ensure_non_empty("query", query)?;
+    let module_id = sanitize_app_module_id(module_id)?;
+    let query_lc = query.trim().to_lowercase();
+    let limit = bounded_limit(limit);
+    let mut matches = Vec::new();
+    for file in
+        load_app_source_documents(root, context, &module_id, "business_os.search_app_source")?
+    {
+        let path = string_field(&file, "path").unwrap_or_default();
+        let source_file_id = string_field(&file, "id").unwrap_or_default();
+        let content = file
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        for (line_index, line) in content.lines().enumerate() {
+            if !line.to_lowercase().contains(&query_lc) {
+                continue;
+            }
+            matches.push(BusinessOsAppSourceSearchMatch {
+                module_id: module_id.clone(),
+                path: path.clone(),
+                line: line_index + 1,
+                preview: mcp_audit_truncate(line.trim(), 240),
+                source_file_id: source_file_id.clone(),
+            });
+            if matches.len() >= limit {
+                return Ok(BusinessOsMcpList {
+                    ok: true,
+                    count: matches.len(),
+                    limit,
+                    items: matches,
+                });
+            }
+        }
+    }
+    Ok(BusinessOsMcpList {
+        ok: true,
+        count: matches.len(),
+        limit,
+        items: matches,
+    })
+}
+
+pub fn write_app_file(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<BusinessOsAppSourceWrite> {
+    context.validate()?;
+    let module_id = sanitize_app_module_id(&required_arg(arguments, "module_id")?)?;
+    let path = normalize_mcp_source_path(&required_arg(arguments, "path")?)?;
+    let content = required_raw_string_arg(arguments, "content")?;
+    if content.len() > MAX_APP_SOURCE_WRITE_BYTES {
+        return Err(anyhow::Error::new(BusinessOsMcpError {
+            code: BusinessOsMcpErrorCode::ValidationFailed,
+            message: format!(
+                "app source file is too large: {} bytes exceeds {} bytes",
+                content.len(),
+                MAX_APP_SOURCE_WRITE_BYTES
+            ),
+            field: Some("content".to_string()),
+        }));
+    }
+    enforce_module_policy(root, &module_id)?;
+    enforce_business_os_mcp_policy(root, context, "business_os.write_app_file", arguments)?;
+    let _module = get_module(root, context, &module_id)?;
+    let outcome = store::save_module_source_record(
+        root,
+        store::ModuleSourceSaveMutation {
+            module_id: module_id.clone(),
+            path: path.clone(),
+            content,
+        },
+    )?;
+    Ok(BusinessOsAppSourceWrite {
+        ok: outcome.get("ok").and_then(Value::as_bool).unwrap_or(false),
+        module_id,
+        path,
+        source_file_id: string_field(&outcome, "source_file_id").unwrap_or_default(),
+        source_file_ids: outcome
+            .get("source_file_ids")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+        size_bytes: outcome
+            .get("size_bytes")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        sha256: string_field(&outcome, "sha256").unwrap_or_default(),
+        previous_sha256: optional_non_empty_string_field(&outcome, "previous_sha256"),
+        snapshot_id: optional_non_empty_string_field(&outcome, "snapshot_id"),
+        changed: outcome
+            .get("changed")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        validation_tool: "business_os.validate_app".to_string(),
+    })
+}
+
+pub fn validate_app(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<BusinessOsAppRunResult> {
+    let module_id = sanitize_app_module_id(&required_arg(arguments, "module_id")?)?;
+    let mut args = vec![
+        "--installed".to_string(),
+        "--json".to_string(),
+        "--workspace".to_string(),
+        root.display().to_string(),
+    ];
+    if optional_bool_arg(arguments, "skip_tests") {
+        args.push("--skip-tests".to_string());
+    }
+    if optional_bool_arg(arguments, "skip_node_check") {
+        args.push("--skip-node-check".to_string());
+    }
+    run_app_check_tool(
+        root,
+        context,
+        "business_os.validate_app",
+        &module_id,
+        "validate-app-module.mjs",
+        args,
+    )
+}
+
+pub fn smoke_app(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<BusinessOsAppRunResult> {
+    let module_id = sanitize_app_module_id(&required_arg(arguments, "module_id")?)?;
+    let mut args = vec!["--installed".to_string(), "--json".to_string()];
+    if let Some(url) = optional_string_arg(arguments, "url") {
+        args.push("--url".to_string());
+        args.push(url);
+    }
+    if let Some(timeout_ms) = optional_usize_arg(arguments, "timeout_ms") {
+        args.push("--timeout-ms".to_string());
+        args.push(timeout_ms.to_string());
+    }
+    run_app_check_tool(
+        root,
+        context,
+        "business_os.smoke_app",
+        &module_id,
+        "smoke-app-module.mjs",
+        args,
+    )
+}
+
+pub fn e2e_app(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<BusinessOsAppRunResult> {
+    let module_id = sanitize_app_module_id(&required_arg(arguments, "module_id")?)?;
+    let mut args = vec!["--installed".to_string(), "--json".to_string()];
+    if let Some(url) = optional_string_arg(arguments, "url") {
+        args.push("--url".to_string());
+        args.push(url);
+    }
+    if let Some(timeout_ms) = optional_usize_arg(arguments, "timeout_ms") {
+        args.push("--timeout-ms".to_string());
+        args.push(timeout_ms.to_string());
+    }
+    if let Some(marker) = optional_string_arg(arguments, "marker") {
+        args.push("--marker".to_string());
+        args.push(marker);
+    }
+    run_app_check_tool(
+        root,
+        context,
+        "business_os.e2e_app",
+        &module_id,
+        "e2e-app-module.mjs",
+        args,
+    )
+}
+
+fn load_app_source_documents(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    module_id: &str,
+    tool_name: &str,
+) -> anyhow::Result<Vec<Value>> {
+    context.validate()?;
+    enforce_module_policy(root, module_id)?;
+    enforce_business_os_mcp_policy(
+        root,
+        context,
+        tool_name,
+        &serde_json::json!({ "module_id": module_id }),
+    )?;
+    let _module = get_module(root, context, module_id)?;
+    let loaded = store::load_module_source_records(
+        root,
+        &store::ModuleSourceLoadMutation {
+            module_id: module_id.to_string(),
+        },
+    )?;
+    let source_file_ids = loaded
+        .get("source_file_ids")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let conn = store::open_store(root)?;
+    let mut files = Vec::new();
+    for source_file_id in source_file_ids.iter().filter_map(Value::as_str) {
+        let payload_json: Option<String> = conn
+            .query_row(
+                "SELECT payload_json
+                 FROM business_records
+                 WHERE collection = 'business_module_source_files'
+                   AND record_id = ?1
+                   AND deleted = 0",
+                params![source_file_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(payload_json) = payload_json {
+            let value: Value = serde_json::from_str(&payload_json).with_context(|| {
+                format!("invalid Business OS source file projection `{source_file_id}`")
+            })?;
+            if string_field(&value, "module_id").as_deref() == Some(module_id) {
+                files.push(value);
+            }
+        }
+    }
+    files.sort_by(|left, right| {
+        string_field(left, "path")
+            .unwrap_or_default()
+            .cmp(&string_field(right, "path").unwrap_or_default())
+    });
+    Ok(files)
+}
+
+fn app_source_summary_from_value(value: Value) -> anyhow::Result<BusinessOsAppSourceFileSummary> {
+    Ok(BusinessOsAppSourceFileSummary {
+        module_id: string_field(&value, "module_id").context("source module_id missing")?,
+        path: string_field(&value, "path").context("source path missing")?,
+        language: string_field(&value, "language").unwrap_or_else(|| "text".to_string()),
+        size_bytes: value
+            .get("size_bytes")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        sha256: string_field(&value, "sha256").unwrap_or_default(),
+        source_file_id: string_field(&value, "id").context("source file id missing")?,
+        modified_at_ms: value.get("updated_at_ms").and_then(Value::as_i64),
+    })
+}
+
+fn run_app_check_tool(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    tool_name: &str,
+    module_id: &str,
+    script_name: &str,
+    args: Vec<String>,
+) -> anyhow::Result<BusinessOsAppRunResult> {
+    context.validate()?;
+    enforce_module_policy(root, module_id)?;
+    enforce_business_os_mcp_policy(
+        root,
+        context,
+        tool_name,
+        &serde_json::json!({ "module_id": module_id }),
+    )?;
+    let _module = get_module(root, context, module_id)?;
+    let script = root
+        .join("src")
+        .join("apps")
+        .join("business-os")
+        .join("scripts")
+        .join(script_name);
+    if !script.is_file() {
+        return Err(anyhow::Error::new(BusinessOsMcpError {
+            code: BusinessOsMcpErrorCode::RuntimeUnavailable,
+            message: format!(
+                "Business OS app check script is not available at {}",
+                script.display()
+            ),
+            field: Some("script".to_string()),
+        }));
+    }
+    let mut command = std::process::Command::new(
+        crate::service::business_os::resolve_business_os_validator_node(root),
+    );
+    command.current_dir(root).arg(&script).arg(module_id);
+    for arg in &args {
+        command.arg(arg);
+    }
+    let output = command
+        .output()
+        .with_context(|| format!("failed to run Business OS app check `{script_name}`"))?;
+    let mut command_parts = vec![
+        "node".to_string(),
+        script.display().to_string(),
+        module_id.to_string(),
+    ];
+    command_parts.extend(args);
+    Ok(BusinessOsAppRunResult {
+        ok: output.status.success(),
+        module_id: module_id.to_string(),
+        command: command_parts.join(" "),
+        exit_code: output.status.code(),
+        stdout: bounded_output_text(&output.stdout),
+        stderr: bounded_output_text(&output.stderr),
+    })
+}
+
+fn normalize_mcp_source_path(path: &str) -> anyhow::Result<String> {
+    let trimmed = path.trim().replace('\\', "/");
+    if trimmed.is_empty()
+        || trimmed.starts_with('/')
+        || trimmed
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == ".." || part.starts_with('.'))
+    {
+        return Err(anyhow::Error::new(BusinessOsMcpError::validation(
+            "path",
+            "source path must be a relative non-hidden path inside the app module",
+        )));
+    }
+    Ok(trimmed)
+}
+
+fn required_raw_string_arg(arguments: &Value, field: &str) -> anyhow::Result<String> {
+    arguments
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow::Error::new(BusinessOsMcpError::validation(field, "required")))
+}
+
+fn optional_bool_arg(arguments: &Value, field: &str) -> bool {
+    arguments
+        .get(field)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn optional_non_empty_string_field(value: &Value, field: &str) -> Option<String> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn bounded_output_text(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes).to_string();
+    let char_count = text.chars().count();
+    if char_count <= MAX_APP_RUN_OUTPUT_CHARS {
+        return text;
+    }
+    let tail = text
+        .chars()
+        .skip(char_count.saturating_sub(MAX_APP_RUN_OUTPUT_CHARS))
+        .collect::<String>();
+    format!("[truncated to last {MAX_APP_RUN_OUTPUT_CHARS} chars]\n{tail}")
 }
 
 pub fn call_tool(root: &Path, tool_name: &str, arguments: Value) -> anyhow::Result<Value> {
@@ -1448,6 +2074,34 @@ pub fn call_tool(root: &Path, tool_name: &str, arguments: Value) -> anyhow::Resu
         }
         "business_os.create_app" => serde_json::to_value(create_app(root, &context, &arguments)?)?,
         "business_os.modify_app" => serde_json::to_value(modify_app(root, &context, &arguments)?)?,
+        "business_os.prepare_app_source" => {
+            serde_json::to_value(prepare_app_source(root, &context, &arguments)?)?
+        }
+        "business_os.list_app_files" => {
+            let module_id = required_arg(&arguments, "module_id")?;
+            serde_json::to_value(list_app_files(root, &context, &module_id)?)?
+        }
+        "business_os.read_app_file" => {
+            let module_id = required_arg(&arguments, "module_id")?;
+            let path = required_arg(&arguments, "path")?;
+            serde_json::to_value(read_app_file(root, &context, &module_id, &path)?)?
+        }
+        "business_os.search_app_source" => {
+            let module_id = required_arg(&arguments, "module_id")?;
+            let query = required_arg(&arguments, "query")?;
+            let limit = optional_usize_arg(&arguments, "limit");
+            serde_json::to_value(search_app_source(
+                root, &context, &module_id, &query, limit,
+            )?)?
+        }
+        "business_os.write_app_file" => {
+            serde_json::to_value(write_app_file(root, &context, &arguments)?)?
+        }
+        "business_os.validate_app" => {
+            serde_json::to_value(validate_app(root, &context, &arguments)?)?
+        }
+        "business_os.smoke_app" => serde_json::to_value(smoke_app(root, &context, &arguments)?)?,
+        "business_os.e2e_app" => serde_json::to_value(e2e_app(root, &context, &arguments)?)?,
         "business_os.list_module_actions" => {
             let module_id = required_arg(&arguments, "module_id")?;
             serde_json::to_value(list_module_actions(root, &context, &module_id)?)?
@@ -2795,7 +3449,45 @@ fn business_os_mcp_policy_decision(
                 Some(module_id.as_str()),
             )?))
         }
+        "business_os.prepare_app_source" => {
+            let module_id = sanitize_app_module_id(&required_arg(arguments, "module_id")?)?;
+            Ok(Some(store::trusted_mcp_actor_policy_decision(
+                root,
+                &context.actor,
+                &context.actor,
+                BusinessOsPermission::AppsInstall,
+                BusinessOsScopeType::Module,
+                Some(module_id.as_str()),
+            )?))
+        }
         "business_os.modify_app" => {
+            let module_id = sanitize_app_module_id(&required_arg(arguments, "module_id")?)?;
+            Ok(Some(store::trusted_mcp_actor_policy_decision(
+                root,
+                &context.actor,
+                &context.actor,
+                BusinessOsPermission::AppsModify,
+                BusinessOsScopeType::Module,
+                Some(module_id.as_str()),
+            )?))
+        }
+        "business_os.list_app_files"
+        | "business_os.read_app_file"
+        | "business_os.search_app_source" => {
+            let module_id = sanitize_app_module_id(&required_arg(arguments, "module_id")?)?;
+            Ok(Some(store::trusted_mcp_actor_policy_decision(
+                root,
+                &context.actor,
+                &context.actor,
+                BusinessOsPermission::AppsSourceView,
+                BusinessOsScopeType::Module,
+                Some(module_id.as_str()),
+            )?))
+        }
+        "business_os.write_app_file"
+        | "business_os.validate_app"
+        | "business_os.smoke_app"
+        | "business_os.e2e_app" => {
             let module_id = sanitize_app_module_id(&required_arg(arguments, "module_id")?)?;
             Ok(Some(store::trusted_mcp_actor_policy_decision(
                 root,
@@ -3116,7 +3808,15 @@ fn enforce_argument_scope_policy(
         | "business_os.list_module_actions"
         | "business_os.propose_action"
         | "business_os.execute_action"
-        | "business_os.modify_app" => {
+        | "business_os.modify_app"
+        | "business_os.prepare_app_source"
+        | "business_os.list_app_files"
+        | "business_os.read_app_file"
+        | "business_os.search_app_source"
+        | "business_os.write_app_file"
+        | "business_os.validate_app"
+        | "business_os.smoke_app"
+        | "business_os.e2e_app" => {
             if let Some(module_id) = string_field(arguments, "module_id") {
                 enforce_module_policy(root, &module_id)?;
             }
@@ -3233,9 +3933,14 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
     match tool_name {
         "business_os.approve" => McpToolPolicyClass::ExternalEffect,
         "business_os.reject" | "business_os.request_changes" => McpToolPolicyClass::Approval,
-        "business_os.execute_action" | "business_os.create_app" | "business_os.modify_app" => {
-            McpToolPolicyClass::Write
-        }
+        "business_os.execute_action"
+        | "business_os.create_app"
+        | "business_os.modify_app"
+        | "business_os.prepare_app_source"
+        | "business_os.write_app_file"
+        | "business_os.validate_app"
+        | "business_os.smoke_app"
+        | "business_os.e2e_app" => McpToolPolicyClass::Write,
         _ => McpToolPolicyClass::Read,
     }
 }
@@ -3361,6 +4066,9 @@ fn argument_business_scope_metadata(tool_name: &str, arguments: &Value) -> Value
             "artifact_id",
             "approval_id",
             "limit",
+            "path",
+            "query",
+            "timeout_ms",
         ] {
             if let Some(value) = object.get(key).and_then(mcp_audit_safe_scalar) {
                 scope.insert(key.to_string(), value);
@@ -3764,6 +4472,10 @@ fn optional_integer(
         }),
         false,
     )
+}
+
+fn optional_boolean(name: &'static str) -> (&'static str, Value, bool) {
+    (name, serde_json::json!({ "type": "boolean" }), false)
 }
 
 fn optional_object(name: &'static str) -> (&'static str, Value, bool) {
@@ -4237,6 +4949,28 @@ mod tests {
             .any(|tool| tool.name == "business_os.modify_app"));
         assert!(tools
             .iter()
+            .any(|tool| tool.name == "business_os.prepare_app_source"));
+        assert!(tools
+            .iter()
+            .any(|tool| tool.name == "business_os.list_app_files"));
+        assert!(tools
+            .iter()
+            .any(|tool| tool.name == "business_os.read_app_file"));
+        assert!(tools
+            .iter()
+            .any(|tool| tool.name == "business_os.search_app_source"));
+        assert!(tools
+            .iter()
+            .any(|tool| tool.name == "business_os.write_app_file"));
+        assert!(tools
+            .iter()
+            .any(|tool| tool.name == "business_os.validate_app"));
+        assert!(tools
+            .iter()
+            .any(|tool| tool.name == "business_os.smoke_app"));
+        assert!(tools.iter().any(|tool| tool.name == "business_os.e2e_app"));
+        assert!(tools
+            .iter()
             .any(|tool| tool.name == "business_os.get_command_status"));
         assert!(tools
             .iter()
@@ -4268,7 +5002,8 @@ mod tests {
     }
 
     #[test]
-    fn create_app_tool_completes_runtime_starter_without_source_validator() -> anyhow::Result<()> {
+    fn create_app_tool_enqueues_agent_led_app_command_without_writing_files() -> anyhow::Result<()>
+    {
         let temp = tempdir()?;
         let root = temp.path();
         seed_default_mcp_admin(root)?;
@@ -4287,14 +5022,6 @@ mod tests {
         )?;
 
         assert_eq!(result.get("ok").and_then(Value::as_bool), Some(true));
-        assert_eq!(
-            result.get("status").and_then(Value::as_str),
-            Some("completed")
-        );
-        assert_eq!(
-            result.get("task_status").and_then(Value::as_str),
-            Some("completed")
-        );
         assert_eq!(
             result.get("command_type").and_then(Value::as_str),
             Some("ctox.business_os.app.create")
@@ -4322,9 +5049,12 @@ mod tests {
             .iter()
             .any(|path| path.as_str()
                 == Some("runtime/business-os/installed-modules/mcp-inventory/module.json")));
-        assert!(root
-            .join("runtime/business-os/installed-modules/mcp-inventory/module.json")
-            .is_file());
+        assert!(
+            !root
+                .join("runtime/business-os/installed-modules/mcp-inventory")
+                .exists(),
+            "MCP create_app must not write app artifacts"
+        );
         let task_id = result
             .get("task_id")
             .and_then(Value::as_str)
@@ -4335,7 +5065,6 @@ mod tests {
             task.suggested_skill.as_deref(),
             Some("business-os-app-module-development")
         );
-        assert_eq!(task.route_status, "handled");
         assert!(task.prompt.contains("ctox.business_os.app.create"));
         assert!(task.prompt.contains(
             "ctox business-os app references --query \"<workflow data keywords>\" --json --limit 8"
@@ -4344,10 +5073,219 @@ mod tests {
     }
 
     #[test]
+    fn prepare_app_source_creates_runtime_workspace_for_direct_mcp_coding() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_default_mcp_admin(root)?;
+        std::fs::create_dir_all(root.join("src/apps/business-os"))?;
+        std::fs::write(root.join("src/apps/business-os/index.html"), "")?;
+
+        let result = call_tool(
+            root,
+            "business_os.prepare_app_source",
+            serde_json::json!({
+                "module_id": "mcp-direct-app",
+                "title": "MCP Direct App",
+                "description": "Direct MCP coded app",
+                "instruction": "Prepare a workspace Claude can edit directly.",
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+
+        assert_eq!(result.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            result.get("app_directory").and_then(Value::as_str),
+            Some("runtime/business-os/installed-modules/mcp-direct-app")
+        );
+        assert!(root
+            .join("runtime/business-os/installed-modules/mcp-direct-app/module.json")
+            .is_file());
+        assert!(result
+            .pointer("/development_contract/source_tools")
+            .and_then(Value::as_array)
+            .context("expected source tools")?
+            .iter()
+            .any(|tool| tool.as_str() == Some("business_os.write_app_file")));
+        Ok(())
+    }
+
+    #[test]
+    fn app_source_tools_write_read_and_search_runtime_files() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_default_mcp_admin(root)?;
+        write_installed_module(root, "mcp-source", "MCP Source", "1.0.0", &[], None)?;
+
+        let write = call_tool(
+            root,
+            "business_os.write_app_file",
+            serde_json::json!({
+                "module_id": "mcp-source",
+                "path": "lib/math.mjs",
+                "content": "export const answer = 42;\n",
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+        assert_eq!(write.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            write.get("path").and_then(Value::as_str),
+            Some("lib/math.mjs")
+        );
+
+        let read = call_tool(
+            root,
+            "business_os.read_app_file",
+            serde_json::json!({
+                "module_id": "mcp-source",
+                "path": "lib/math.mjs",
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+        assert_eq!(
+            read.get("content").and_then(Value::as_str),
+            Some("export const answer = 42;\n")
+        );
+
+        let search = call_tool(
+            root,
+            "business_os.search_app_source",
+            serde_json::json!({
+                "module_id": "mcp-source",
+                "query": "answer",
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+        assert_eq!(search.get("count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            search.pointer("/items/0/path").and_then(Value::as_str),
+            Some("lib/math.mjs")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn app_source_write_rejects_path_traversal() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_default_mcp_admin(root)?;
+        write_installed_module(root, "mcp-source", "MCP Source", "1.0.0", &[], None)?;
+
+        let error = call_tool(
+            root,
+            "business_os.write_app_file",
+            serde_json::json!({
+                "module_id": "mcp-source",
+                "path": "../escape.js",
+                "content": "export const bad = true;\n",
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )
+        .expect_err("path traversal must be rejected");
+        let typed = error
+            .downcast_ref::<BusinessOsMcpError>()
+            .context("expected typed Business OS MCP error")?;
+        assert_eq!(typed.code, BusinessOsMcpErrorCode::ValidationFailed);
+        assert_eq!(typed.field.as_deref(), Some("path"));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn app_source_write_rejects_symlink_escape() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_default_mcp_admin(root)?;
+        write_installed_module(root, "mcp-source", "MCP Source", "1.0.0", &[], None)?;
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&outside)?;
+        std::os::unix::fs::symlink(
+            &outside,
+            root.join("runtime/business-os/installed-modules/mcp-source/linked"),
+        )?;
+
+        let error = call_tool(
+            root,
+            "business_os.write_app_file",
+            serde_json::json!({
+                "module_id": "mcp-source",
+                "path": "linked/escape.js",
+                "content": "export const bad = true;\n",
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )
+        .expect_err("symlink escape must be rejected");
+
+        assert!(
+            error.to_string().contains("symlink"),
+            "expected symlink rejection, got {error:#}"
+        );
+        assert!(!outside.join("escape.js").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn validate_app_returns_structured_result_without_shell_tool() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_default_mcp_admin(root)?;
+        write_installed_module(root, "mcp-source", "MCP Source", "1.0.0", &[], None)?;
+        let script_dir = root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir)?;
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "console.log(JSON.stringify({ ok: true, module_id: process.argv[2] }));\n",
+        )?;
+
+        let result = call_tool(
+            root,
+            "business_os.validate_app",
+            serde_json::json!({
+                "module_id": "mcp-source",
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )?;
+
+        assert_eq!(result.get("ok").and_then(Value::as_bool), Some(true));
+        assert!(result
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("validate-app-module.mjs"));
+        assert!(result
+            .get("stdout")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("\"module_id\":\"mcp-source\""));
+        Ok(())
+    }
+
+    #[test]
     fn modify_app_tool_enqueues_app_modify_skill_task() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         seed_default_mcp_admin(root)?;
+        write_module(root, "mcp-inventory", "MCP Inventory", &["inventory_items"])?;
 
         let result = call_tool(
             root,
@@ -4393,6 +5331,42 @@ mod tests {
         assert!(task
             .prompt
             .contains("runtime/business-os/installed-modules/mcp-inventory"));
+        Ok(())
+    }
+
+    #[test]
+    fn modify_app_tool_rejects_unknown_module_without_recording_command() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_default_mcp_admin(root)?;
+        std::fs::create_dir_all(root.join("src/apps/business-os"))?;
+        std::fs::write(root.join("src/apps/business-os/index.html"), "")?;
+
+        let error = call_tool(
+            root,
+            "business_os.modify_app",
+            serde_json::json!({
+                "module_id": "missing-inventory",
+                "instruction": "Add a reorder review action and keep existing data.",
+                "_context": {
+                    "actor": "chatgpt:test-user",
+                    "workspace": "test"
+                }
+            }),
+        )
+        .expect_err("modify_app must reject unknown modules before queueing work");
+        let typed = error
+            .downcast_ref::<BusinessOsMcpError>()
+            .context("expected typed Business OS MCP error")?;
+
+        assert_eq!(typed.code, BusinessOsMcpErrorCode::ModuleNotFound);
+        let conn = store::open_store(root)?;
+        let command_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_commands WHERE record_id = 'missing-inventory'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(command_count, 0);
         Ok(())
     }
 

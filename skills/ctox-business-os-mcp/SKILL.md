@@ -160,6 +160,9 @@ business_os.get_artifact
 business_os.list_approvals
 business_os.open_link
 business_os.list_mcp_activity
+business_os.list_app_files
+business_os.read_app_file
+business_os.search_app_source
 ```
 
 Action tools:
@@ -169,6 +172,11 @@ business_os.list_module_actions
 business_os.propose_action
 business_os.create_app
 business_os.modify_app
+business_os.prepare_app_source
+business_os.write_app_file
+business_os.validate_app
+business_os.smoke_app
+business_os.e2e_app
 business_os.execute_action
 business_os.approve
 business_os.reject
@@ -180,50 +188,41 @@ If the server exposes fewer tools, use only the advertised tools.
 
 ## Business OS App Development Via MCP
 
-Use `business_os.create_app` and `business_os.modify_app` for app development
-and deployment requests. These are typed, policy-gated Business OS actions:
-they enqueue CTOX app work and return the canonical app development contract.
-They do not expose raw file writes, shell commands, SQL, or RxDB replication.
+Use the app-source tools when the connected coding agent should build or edit
+the app itself. These are typed, policy-gated, app-scoped source tools; they do
+not expose generic shell commands, SQL, raw RxDB writes, browser remote control,
+or arbitrary filesystem access.
 
-Create flow:
+Direct coding flow:
 
 1. Call `business_os.status` and confirm the expected actor, workspace, and
    policy.
 2. Call `business_os.list_modules` so you know the current app catalog.
-3. Call `business_os.create_app` with `instruction` and, when known,
-   `module_id`, `title`, `description`, `category`, and `version`.
-4. Read the response fields:
-   - `command_id` and `task_id`
-   - `install_target`
-   - `app_directory`
-   - `development_contract.source_root`
-   - `development_contract.source_files`
-   - `development_contract.required_skill`
-   - `development_contract.skill_resources`
-   - `development_contract.validation_command`
-   - `development_contract.smoke_command`
-   - `development_contract.e2e_command`
-5. Poll `business_os.get_command_status` with the returned `command_id`.
-6. Use `business_os.open_link` for a Business OS deep link after the app is
+3. For a new runtime-installed app source workspace, call
+   `business_os.prepare_app_source` with `module_id`, `title`, `description`,
+   `category`, and `instruction`. For an existing app, call
+   `business_os.get_module`.
+4. Call `business_os.list_app_files`, `business_os.read_app_file`, and
+   `business_os.search_app_source` to inspect the current source.
+5. Write complete source files with `business_os.write_app_file`. Browser ESM
+   dependencies must be checked in as relative `.mjs` files under the app
+   source root, for example `vendor/<name>.mjs` or `lib/<name>.mjs`, then
+   imported relatively. Do not run npm, fetch packages through shell, or add a
+   package-manager bridge.
+6. Run `business_os.validate_app`. For UI-critical changes, run
+   `business_os.smoke_app` and, when persistence/command-bus behavior matters,
+   `business_os.e2e_app`.
+7. Use `business_os.open_link` for a Business OS deep link after the app is
    visible in the catalog.
 
-Modify flow:
+Delegated app-work flow:
 
-1. Discover the module with `business_os.get_module`.
-2. Call `business_os.modify_app` with `module_id` and a precise `instruction`.
-3. Use the returned `development_contract` exactly as above.
-4. Poll `business_os.get_command_status` until the command reaches a terminal
-   state.
-
-Create/modify status contract:
-
-- `completed`: CTOX synchronously wrote a runtime-installed starter app,
-  validated it, recorded module lifecycle state, and projected it to Business
-  OS. You can inspect the app immediately and do not need to wait for a queue
-  worker for the starter artifact.
-- `accepted`: CTOX queued the app work because the target was non-empty,
-  non-starter-owned, or could not validate synchronously. Poll
-  `business_os.get_command_status` until the task is terminal.
+Use `business_os.create_app` and `business_os.modify_app` when the user wants
+CTOX to enqueue app work for a CTOX worker instead of having the connected
+agent edit files directly. Those tools return `command_id`, `task_id`, and the
+same `development_contract`; poll `business_os.get_command_status` until the
+command reaches a terminal state. Do not claim the app is changed until the
+command is terminal or the source tools have written and validated the app.
 
 The canonical runtime-installed app source root is:
 
@@ -243,14 +242,17 @@ index.js
 icon.svg
 core/records.mjs
 core/automation.mjs
+lib/*.mjs
+vendor/*.mjs
 locales/en.json
 locales/de.json
 tests/*.test.mjs
 ```
 
-The CTOX app worker must use the `business-os-app-module-development` skill and
+The coding agent must use the `business-os-app-module-development` skill and
 the resource files listed in `development_contract.skill_resources`. It must
-validate with the returned validation command, normally:
+validate with `business_os.validate_app` or the returned validation command,
+normally:
 
 ```text
 ctox business-os app validate <module_id> --installed
