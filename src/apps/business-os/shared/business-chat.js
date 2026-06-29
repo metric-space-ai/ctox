@@ -1154,13 +1154,13 @@ async function submitChatForm({ root, state, chat, node, commandBus, db, sync, g
       onPending: () => {
         persistChatState({ state, db, remote: false }).catch(() => {});
         renderChatRoot({ root, state, commandBus, db, getActiveModule });
-        trackingWatch?.refresh?.();
+        root.__ctoxChatOnTrackingStateChanged?.();
       },
     });
     if (delivered) chat.attachments = [];
     await persistChatState({ state, db });
     renderChatRoot({ root, state, commandBus, db, getActiveModule });
-    syncAfterSubmit();
+    root.__ctoxChatOnTrackingStateChanged?.();
   } finally {
     delete chat.__submitting;
   }
