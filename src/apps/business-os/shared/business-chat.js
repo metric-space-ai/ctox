@@ -168,8 +168,8 @@ export function initBusinessChat({
       sync: syncFacade,
       getActiveModule,
       meta: detail,
-      onPending: async () => {
-        await persistChatState({ state, db, remote: false });
+      onPending: () => {
+        persistChatState({ state, db, remote: false }).catch(() => {});
         renderChatRoot({ root, state, commandBus, db, getActiveModule });
       },
     });
@@ -1151,8 +1151,8 @@ async function submitChatForm({ root, state, chat, node, commandBus, db, sync, g
       getActiveModule,
       meta: chat.contextMeta || {},
       attachments,
-      onPending: async () => {
-        await persistChatState({ state, db, remote: false });
+      onPending: () => {
+        persistChatState({ state, db, remote: false }).catch(() => {});
         renderChatRoot({ root, state, commandBus, db, getActiveModule });
         trackingWatch?.refresh?.();
       },
@@ -2142,7 +2142,11 @@ async function submitChatMessage({
   chat.lastTrackingId = commandId;
   touchChats(state, [chat]);
   if (typeof onPending === 'function') {
-    await onPending();
+    try {
+      onPending();
+    } catch (error) {
+      console.warn('[business-chat] pending render failed', error);
+    }
   }
   let delivered = false;
   try {
