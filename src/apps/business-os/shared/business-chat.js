@@ -22,6 +22,7 @@ const CHAT_ATTACHMENT_ROOT_ID = 'fs_business_os_chat_attachments';
 const CHAT_ATTACHMENT_ROOT_PATH = '/Business OS Chat';
 const CHAT_DELETE_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const ACTIVE_TRACKING_SYNC_INTERVAL_MS = 4000;
+const CHAT_REMOTE_PERSIST_TIMEOUT_MS = 1500;
 
 export function initBusinessChat({
   session,
@@ -2733,9 +2734,9 @@ async function persistChatState({ state, db }) {
         : {},
     });
     try {
-      const existing = await collection.findOne(chat.id).exec();
-      if (existing) await existing.incrementalPatch(doc);
-      else await collection.insert(doc);
+      const existing = await withChatPersistenceTimeout(collection.findOne(chat.id).exec());
+      if (existing) await withChatPersistenceTimeout(existing.incrementalPatch(doc));
+      else await withChatPersistenceTimeout(collection.insert(doc));
     } catch (error) {
       if (isVolatileChatPersistenceError(error)) return;
       throw error;
@@ -2743,9 +2744,29 @@ async function persistChatState({ state, db }) {
   }
 }
 
+async function withChatPersistenceTimeout(operation, timeoutMs = CHAT_REMOTE_PERSIST_TIMEOUT_MS) {
+  const timerApi = typeof window !== 'undefined' ? window : globalThis;
+  let timer = null;
+  try {
+    return await Promise.race([
+      Promise.resolve(operation),
+      new Promise((_, reject) => {
+        timer = timerApi.setTimeout?.(() => {
+          const error = new Error('Business chat persistence timed out locally.');
+          error.transient = true;
+          reject(error);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) timerApi.clearTimeout?.(timer);
+  }
+}
+
 function isVolatileChatPersistenceError(error) {
   const text = String(error?.message || error || '');
-  return /QUERY_CANCELLED|replication-cancel|WebRTC replication cancelled|Timed out waiting for WebRTC response|rxdb\.query\.fetch|masterWrite|masterChangesSince|IDBDatabase.*closing|database connection is closing|collection is closed|closed collection|RxDB Error-Code: COL21/i.test(text);
+  return Boolean(error?.transient)
+    || /Business chat persistence timed out locally|QUERY_CANCELLED|replication-cancel|WebRTC replication cancelled|Timed out waiting for WebRTC response|rxdb\.query\.fetch|masterWrite|masterChangesSince|IDBDatabase.*closing|database connection is closing|collection is closed|closed collection|RxDB Error-Code: COL21/i.test(text);
 }
 
 async function hydrateChatsFromRxDb({ state, db, session }) {
@@ -5520,7 +5541,9 @@ export const __businessChatTestInternals = Object.freeze({
   findDocsByIds,
   hasActiveTrackedMessages,
   initSchedulerLoop,
+  persistChatState,
   schedulerDelayMs,
   stageChatAttachments,
   syncTrackedMessages,
+  withChatPersistenceTimeout,
 });

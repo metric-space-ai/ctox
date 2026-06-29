@@ -102,6 +102,68 @@ test('business chat tracking sync batches command and queue lookups', async () =
   assert.equal(state.chats.every((chat) => chat.messages[0].status === 'completed'), true);
 });
 
+test('business chat persistence timeout is treated as volatile', async () => {
+  const startedAt = Date.now();
+  await assert.rejects(
+    () => __businessChatTestInternals.withChatPersistenceTimeout(new Promise(() => {}), 5),
+    /Business chat persistence timed out locally/,
+  );
+  assert.ok(Date.now() - startedAt < 1000);
+});
+
+test('business chat keeps local state when remote chat persistence is volatile', async () => {
+  const previousLocalStorage = globalThis.localStorage;
+  const store = new Map();
+  globalThis.localStorage = {
+    getItem(key) {
+      return store.has(key) ? store.get(key) : null;
+    },
+    setItem(key, value) {
+      store.set(key, String(value));
+    },
+    removeItem(key) {
+      store.delete(key);
+    },
+  };
+  try {
+    const state = {
+      ownerUserId: 'user-1',
+      selectedDate: '2026-06-29',
+      activeChatId: 'chat-stalled',
+      chats: [{
+        id: 'chat-stalled',
+        owner_user_id: 'user-1',
+        messages: [],
+        createdAt: Date.now(),
+      }],
+    };
+    await __businessChatTestInternals.persistChatState({
+      state,
+      db: {
+        raw: {
+          business_chats: {
+            findOne() {
+              return {
+                async exec() {
+                  throw new Error('Timed out waiting for WebRTC response');
+                },
+              };
+            },
+          },
+        },
+      },
+    });
+
+    assert.match(store.get('ctox.businessOs.chat.v1'), /chat-stalled/);
+  } finally {
+    if (previousLocalStorage === undefined) {
+      delete globalThis.localStorage;
+    } else {
+      globalThis.localStorage = previousLocalStorage;
+    }
+  }
+});
+
 test('business chat tracking watch only pins command and queue collections while active tracking exists', () => {
   const timers = [];
   const commands = makeSubscriptionCollection();
