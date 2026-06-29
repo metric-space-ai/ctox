@@ -63,7 +63,8 @@ export function validateWranglerConfig(config) {
     "MCP_CLIENT_TOKENS",
     "INSTANCE_CONNECT_TOKEN",
     "INSTANCE_CONNECT_TOKENS",
-    "UPSTREAM_AUTHORIZATION"
+    "UPSTREAM_AUTHORIZATION",
+    "CTOX_MANAGED_MCP_AUTH_TOKEN"
   ]) {
     if (Object.prototype.hasOwnProperty.call(vars, secretKey)) {
       errors.push(`${secretKey} must be a Worker secret, not a wrangler vars entry`);
@@ -76,6 +77,10 @@ export function validateWranglerConfig(config) {
 
   if (String(vars.MCP_REQUIRE_CLIENT_IDENTITY || "").toLowerCase() !== "true") {
     errors.push("MCP_REQUIRE_CLIENT_IDENTITY must default to true");
+  }
+
+  if (!String(vars.CTOX_MANAGED_MCP_AUTH_URL || "").startsWith("https://ctox.dev/")) {
+    errors.push("CTOX_MANAGED_MCP_AUTH_URL must point at the ctox.dev managed MCP auth route");
   }
 
   for (const numericKey of [

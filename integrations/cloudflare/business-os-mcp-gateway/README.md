@@ -109,9 +109,16 @@ If unset, valid instance id syntax is accepted and access is controlled only by
 the configured bearer tokens.
 
 For production, set `MCP_REQUIRE_CLIENT_IDENTITY=true` and configure
-`MCP_CLIENT_TOKENS` as a Worker secret. This turns bearer tokens into registered
-agent identities and lets the gateway inject an authoritative Business OS MCP
-context:
+`CTOX_MANAGED_MCP_AUTH_URL=https://ctox.dev/api/managed-mcp/client-auth`.
+Tokens minted in the ctox.dev tenant dashboard are then validated by ctox.dev,
+and the gateway receives the authoritative Business OS MCP context plus the
+token policy. If a shared secret is configured on ctox.dev, set
+`CTOX_MANAGED_MCP_AUTH_TOKEN` as a Worker secret; do not put it in
+`wrangler.jsonc`.
+
+Static/legacy deployments may configure `MCP_CLIENT_TOKENS` as a Worker secret.
+This turns bearer tokens into registered agent identities and lets the gateway
+inject an authoritative Business OS MCP context:
 
 ```json
 {

@@ -7,6 +7,7 @@ import {
   authorizeMcpClient,
   authorizeInstanceConnect,
   authorizeInstanceId,
+  authorizeMcpClientForRequest,
   gatewayMode,
   authorize,
   connectTokenForInstance,
@@ -121,6 +122,56 @@ test("mcp client token registry binds bearer tokens to actor context", () => {
   assert.equal(denied.ok, false);
 });
 
+test("ctox.dev managed MCP tokens are authorized through introspection", async () => {
+  let authRequest = null;
+  globalThis.fetch = async (url, init) => {
+    authRequest = { url: String(url), init };
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        context: {
+          channel: "ctox_dev_managed_mcp",
+          surface: "business_os_mcp",
+          actor: "ctox-dev:user:user_1",
+          workspace: "tenant:tenant_1",
+          client_id: "ctox-dev:mcp-token:token_1",
+          tenant_id: "tenant_1",
+          instance_id: "ninja.ctox.dev",
+          auth_source: "ctox_dev_managed_mcp_token"
+        },
+        policy: {
+          allowReads: true,
+          allowWrites: false,
+          allowApprovals: false,
+          allowExternalEffects: false,
+          allowedTools: [],
+          deniedTools: []
+        }
+      }),
+      { headers: { "content-type": "application/json" } }
+    );
+  };
+
+  const authorized = await authorizeMcpClientForRequest(
+    new Request("https://mcp.ctox.dev/mcp/ninja.ctox.dev", {
+      headers: { authorization: "Bearer ctox_mcp_live_token" }
+    }),
+    {
+      CTOX_MANAGED_MCP_AUTH_URL: "https://ctox.dev/api/managed-mcp/client-auth",
+      CTOX_MANAGED_MCP_AUTH_TOKEN: "gateway-secret",
+      MCP_REQUIRE_CLIENT_IDENTITY: "true"
+    },
+    "ninja.ctox.dev"
+  );
+
+  assert.equal(authorized.ok, true);
+  assert.equal(authorized.context.actor, "ctox-dev:user:user_1");
+  assert.equal(authorized.policy.allowWrites, false);
+  assert.equal(authRequest.url, "https://ctox.dev/api/managed-mcp/client-auth");
+  assert.equal(authRequest.init.headers.get("x-ctox-managed-mcp-auth"), "gateway-secret");
+  assert.equal(JSON.parse(authRequest.init.body).instanceId, "ninja.ctox.dev");
+});
+
 test("managed mcp forwards server-authenticated context to session object", async () => {
   let forwardedContext = null;
   const response = await handleRequest(
@@ -160,6 +211,62 @@ test("managed mcp forwards server-authenticated context to session object", asyn
   assert.equal(forwardedContext.actor, "ctox-dev:user:user_1");
   assert.equal(forwardedContext.workspace, "tenant:tenant_1");
   assert.equal(forwardedContext.instance_id, "desk_123");
+});
+
+test("managed ctox.dev read-only token blocks write tools at the gateway", async () => {
+  let routed = false;
+  globalThis.fetch = async () => new Response(
+    JSON.stringify({
+      ok: true,
+      context: {
+        channel: "ctox_dev_managed_mcp",
+        surface: "business_os_mcp",
+        actor: "ctox-dev:user:user_1",
+        workspace: "tenant:tenant_1",
+        client_id: "ctox-dev:mcp-token:token_1",
+        instance_id: "ninja.ctox.dev",
+        auth_source: "ctox_dev_managed_mcp_token"
+      },
+      policy: {
+        allowReads: true,
+        allowWrites: false,
+        allowApprovals: false,
+        allowExternalEffects: false,
+        allowedTools: [],
+        deniedTools: []
+      }
+    }),
+    { headers: { "content-type": "application/json" } }
+  );
+
+  const response = await handleRequest(
+    new Request("https://mcp.ctox.dev/mcp/ninja.ctox.dev", {
+      method: "POST",
+      headers: { authorization: "Bearer ctox_mcp_live_token" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 9,
+        method: "tools/call",
+        params: {
+          name: "business_os.execute_action",
+          arguments: { module_id: "customers", action_id: "create" }
+        }
+      })
+    }),
+    {
+      CTOX_MANAGED_MCP_AUTH_URL: "https://ctox.dev/api/managed-mcp/client-auth",
+      MCP_REQUIRE_CLIENT_IDENTITY: "true",
+      BUSINESS_OS_MCP_SESSIONS: fakeSessionsBinding(async () => {
+        routed = true;
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 9, result: { ok: true } }));
+      })
+    }
+  );
+  const body = await response.json();
+
+  assert.equal(response.status, 403);
+  assert.equal(body.error.data.field, "allowWrites");
+  assert.equal(routed, false);
 });
 
 test("instance connect auth is optional unless INSTANCE_CONNECT_TOKEN is configured", () => {

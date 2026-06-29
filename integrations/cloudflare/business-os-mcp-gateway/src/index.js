@@ -361,7 +361,7 @@ export async function handleManagedMcp(request, env = {}, instanceId) {
       code: "instance_not_allowed"
     });
   }
-  const auth = authorizeMcpClient(request, env, instanceId);
+  const auth = await authorizeMcpClientForRequest(request, env, instanceId);
   if (!auth.ok) {
     return jsonRpcError(null, -32001, auth.message, 401);
   }
@@ -371,6 +371,16 @@ export async function handleManagedMcp(request, env = {}, instanceId) {
       code: "request_too_large",
       limit_bytes: bodyCheck.limit
     });
+  }
+  const policy = await enforceMcpClientPolicy(request.clone(), auth.policy);
+  if (!policy.ok) {
+    return jsonRpcError(
+      requestIdFromBody(await safeJson(request.clone())),
+      -32004,
+      policy.message,
+      403,
+      { code: "permission_denied", field: policy.field || "managed_mcp_policy" }
+    );
   }
   const stub = sessionStub(env, instanceId);
   if (!stub) {
@@ -441,9 +451,12 @@ export async function handleManagedStatus(request, env = {}, instanceId) {
       403
     );
   }
-  const auth = authorizeMcpClient(request, env, instanceId);
+  const auth = await authorizeMcpClientForRequest(request, env, instanceId);
   if (!auth.ok) {
     return jsonResponse({ ok: false, error: "not_authorized", message: auth.message }, 401);
+  }
+  if (auth.policy && auth.policy.allowReads === false) {
+    return jsonResponse({ ok: false, error: "permission_denied", message: "Managed MCP token does not allow reads" }, 403);
   }
   const stub = sessionStub(env, instanceId);
   if (!stub) {
@@ -464,7 +477,7 @@ export async function handleMcpRelay(request, env = {}) {
     return jsonRpcError(null, -32000, "MCP endpoint requires POST", 405);
   }
 
-  const auth = authorizeMcpClient(request, env, null);
+  const auth = await authorizeMcpClientForRequest(request, env, null);
   if (!auth.ok) {
     return jsonRpcError(null, -32001, auth.message, 401);
   }
@@ -581,6 +594,66 @@ export function authorizeMcpClient(request, env = {}, instanceId = null) {
       client_id: stringOr(env.MCP_DEFAULT_CLIENT_ID, "legacy_gateway_token"),
       auth_source: "gateway_legacy_token"
     }
+  };
+}
+
+export async function authorizeMcpClientForRequest(request, env = {}, instanceId = null) {
+  const managed = await authorizeCtoxDevManagedMcpClient(request, env, instanceId);
+  if (managed) {
+    return managed;
+  }
+  return authorizeMcpClient(request, env, instanceId);
+}
+
+export async function authorizeCtoxDevManagedMcpClient(request, env = {}, instanceId = null) {
+  const authUrl = managedMcpAuthUrl(env);
+  const authorization = request.headers.get("authorization") || "";
+  const token = bearerToken(authorization);
+  if (!authUrl || !instanceId || !token || !token.startsWith("ctox_mcp_")) {
+    return null;
+  }
+  const headers = new Headers({
+    accept: "application/json",
+    authorization: `Bearer ${token}`,
+    "content-type": "application/json"
+  });
+  const gatewaySecret = (env.CTOX_MANAGED_MCP_AUTH_TOKEN || "").trim();
+  if (gatewaySecret) {
+    headers.set("x-ctox-managed-mcp-auth", gatewaySecret);
+  }
+  let response;
+  let payload = null;
+  try {
+    response = await fetch(authUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ instanceId })
+    });
+    payload = await response.json().catch(() => null);
+  } catch {
+    return {
+      ok: false,
+      message: "Managed MCP token validation is unavailable"
+    };
+  }
+  if (!response.ok || !payload?.ok) {
+    return {
+      ok: false,
+      message: "Invalid or inactive managed MCP client authorization"
+    };
+  }
+  const context = sanitizeGatewayContext(payload.context);
+  if (!context) {
+    return {
+      ok: false,
+      message: "Managed MCP token validation returned invalid context"
+    };
+  }
+  context.instance_id = instanceId;
+  return {
+    ok: true,
+    context,
+    policy: normalizeManagedMcpPolicy(payload.policy)
   };
 }
 
@@ -772,6 +845,115 @@ function bearerToken(authorization) {
   return match ? match[1].trim() : "";
 }
 
+function managedMcpAuthUrl(env = {}) {
+  const value = (env.CTOX_MANAGED_MCP_AUTH_URL || "").trim();
+  if (!value) {
+    return "";
+  }
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" && url.hostname !== "localhost" && url.hostname !== "127.0.0.1") {
+      return "";
+    }
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
+async function enforceMcpClientPolicy(request, policy) {
+  if (!policy) {
+    return { ok: true };
+  }
+  const body = await safeJson(request);
+  const tools = mcpToolNamesFromBody(body);
+  for (const tool of tools) {
+    const decision = managedToolPolicyDecision(tool, policy);
+    if (!decision.ok) {
+      return decision;
+    }
+  }
+  return { ok: true };
+}
+
+function mcpToolNamesFromBody(body) {
+  const values = Array.isArray(body) ? body : [body];
+  return values
+    .filter((value) => value && typeof value === "object")
+    .filter((value) => value.method === "tools/call")
+    .map((value) => value.params && typeof value.params.name === "string" ? value.params.name.trim() : "")
+    .filter(Boolean);
+}
+
+function managedToolPolicyDecision(tool, policy) {
+  if (policy.deniedTools.includes(tool)) {
+    return { ok: false, message: `Managed MCP token denies ${tool}`, field: "deniedTools" };
+  }
+  if (policy.allowedTools.length > 0 && !policy.allowedTools.includes(tool)) {
+    return { ok: false, message: `Managed MCP token does not allow ${tool}`, field: "allowedTools" };
+  }
+  if (APPROVAL_TOOLS.has(tool) && !policy.allowApprovals) {
+    return { ok: false, message: `Managed MCP token does not allow approval tool ${tool}`, field: "allowApprovals" };
+  }
+  if (WRITE_TOOLS.has(tool) && !policy.allowWrites) {
+    return { ok: false, message: `Managed MCP token does not allow write tool ${tool}`, field: "allowWrites" };
+  }
+  if (READ_TOOLS.has(tool) && !policy.allowReads) {
+    return { ok: false, message: `Managed MCP token does not allow read tool ${tool}`, field: "allowReads" };
+  }
+  return { ok: true };
+}
+
+const READ_TOOLS = new Set([
+  "business_os.status",
+  "business_os.list_modules",
+  "business_os.get_module",
+  "business_os.list_entities",
+  "business_os.search_records",
+  "business_os.query_records",
+  "business_os.get_record",
+  "business_os.get_record_context",
+  "business_os.list_record_activity",
+  "business_os.list_runs",
+  "business_os.get_run",
+  "business_os.list_artifacts",
+  "business_os.get_artifact",
+  "business_os.list_approvals",
+  "business_os.open_link",
+  "business_os.list_mcp_activity",
+  "business_os.list_module_actions",
+  "business_os.get_command_status"
+]);
+
+const WRITE_TOOLS = new Set([
+  "business_os.propose_action",
+  "business_os.create_app",
+  "business_os.modify_app",
+  "business_os.execute_action"
+]);
+
+const APPROVAL_TOOLS = new Set([
+  "business_os.approve",
+  "business_os.reject",
+  "business_os.request_changes"
+]);
+
+function normalizeManagedMcpPolicy(value) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return {
+    allowReads: booleanOr(source.allowReads, true),
+    allowWrites: booleanOr(source.allowWrites, false),
+    allowApprovals: booleanOr(source.allowApprovals, false),
+    allowExternalEffects: booleanOr(source.allowExternalEffects, false),
+    allowedTools: stringList(source.allowedTools).slice(0, 50),
+    deniedTools: stringList(source.deniedTools).slice(0, 50)
+  };
+}
+
+function booleanOr(value, fallback) {
+  return typeof value === "boolean" ? value : fallback;
+}
+
 function stringOr(value, fallback) {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
 }
@@ -953,6 +1135,7 @@ export function publicGatewayConfig(env = {}) {
     mcp_gateway_auth_required: Boolean((env.MCP_GATEWAY_TOKEN || "").trim()),
     mcp_client_identity_required: truthyEnv(env.MCP_REQUIRE_CLIENT_IDENTITY),
     mcp_client_registry_configured: Boolean((env.MCP_CLIENT_TOKENS || "").trim()),
+    managed_mcp_auth_configured: Boolean(managedMcpAuthUrl(env)),
     instance_connect_auth_required: Boolean(
       (env.INSTANCE_CONNECT_TOKEN || "").trim() || (env.INSTANCE_CONNECT_TOKENS || "").trim()
     ),
