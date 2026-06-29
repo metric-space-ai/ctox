@@ -355,15 +355,14 @@ export async function handleManagedMcp(request, env = {}, instanceId) {
   if (request.method !== "POST") {
     return jsonRpcError(null, -32000, "MCP endpoint requires POST", 405);
   }
-  const instanceAccess = authorizeInstanceId(instanceId, env);
-  if (!instanceAccess.ok) {
-    return jsonRpcError(null, -32007, instanceAccess.message, 403, {
-      code: "instance_not_allowed"
-    });
-  }
-  const auth = await authorizeMcpClientForRequest(request, env, instanceId);
+  const auth = await authorizeManagedMcpClientForInstance(request, env, instanceId);
   if (!auth.ok) {
-    return jsonRpcError(null, -32001, auth.message, 401);
+    if (auth.code === "instance_not_allowed") {
+      return jsonRpcError(null, -32007, auth.message, 403, {
+        code: "instance_not_allowed"
+      });
+    }
+    return jsonRpcError(null, -32001, auth.message, auth.status || 401);
   }
   const bodyCheck = checkContentLength(request, maxMcpBodyBytes(env));
   if (!bodyCheck.ok) {
@@ -440,19 +439,18 @@ export async function handleManagedStatus(request, env = {}, instanceId) {
   if (request.method !== "GET") {
     return jsonResponse({ ok: false, error: "method_not_allowed" }, 405);
   }
-  const instanceAccess = authorizeInstanceId(instanceId, env);
-  if (!instanceAccess.ok) {
-    return jsonResponse(
-      {
-        ok: false,
-        error: "instance_not_allowed",
-        message: instanceAccess.message
-      },
-      403
-    );
-  }
-  const auth = await authorizeMcpClientForRequest(request, env, instanceId);
+  const auth = await authorizeManagedMcpClientForInstance(request, env, instanceId);
   if (!auth.ok) {
+    if (auth.code === "instance_not_allowed") {
+      return jsonResponse(
+        {
+          ok: false,
+          error: "instance_not_allowed",
+          message: auth.message
+        },
+        403
+      );
+    }
     return jsonResponse({ ok: false, error: "not_authorized", message: auth.message }, 401);
   }
   if (auth.policy && auth.policy.allowReads === false) {
@@ -603,6 +601,49 @@ export async function authorizeMcpClientForRequest(request, env = {}, instanceId
     return managed;
   }
   return authorizeMcpClient(request, env, instanceId);
+}
+
+async function authorizeManagedMcpClientForInstance(request, env = {}, instanceId = null) {
+  const dynamicManagedToken = canUseCtoxDevManagedMcpClient(request, env, instanceId);
+  if (!dynamicManagedToken) {
+    const instanceAccess = authorizeInstanceId(instanceId, env);
+    if (!instanceAccess.ok) {
+      return {
+        ok: false,
+        status: 403,
+        code: "instance_not_allowed",
+        message: instanceAccess.message
+      };
+    }
+  }
+
+  const auth = await authorizeMcpClientForRequest(request, env, instanceId);
+  if (!auth.ok) {
+    return { ...auth, status: 401 };
+  }
+
+  if (auth.context?.auth_source === "ctox_dev_managed_mcp_token") {
+    return auth;
+  }
+
+  const instanceAccess = authorizeInstanceId(instanceId, env);
+  if (!instanceAccess.ok) {
+    return {
+      ok: false,
+      status: 403,
+      code: "instance_not_allowed",
+      message: instanceAccess.message
+    };
+  }
+  return auth;
+}
+
+function canUseCtoxDevManagedMcpClient(request, env = {}, instanceId = null) {
+  if (!managedMcpAuthUrl(env) || !instanceId) {
+    return false;
+  }
+  const token = bearerToken(request.headers.get("authorization") || "");
+  return token.startsWith("ctox_mcp_");
 }
 
 export async function authorizeCtoxDevManagedMcpClient(request, env = {}, instanceId = null) {

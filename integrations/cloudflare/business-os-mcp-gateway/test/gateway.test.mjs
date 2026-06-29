@@ -256,6 +256,7 @@ test("managed ctox.dev read-only token blocks write tools at the gateway", async
     {
       CTOX_MANAGED_MCP_AUTH_URL: "https://ctox.dev/api/managed-mcp/client-auth",
       MCP_REQUIRE_CLIENT_IDENTITY: "true",
+      ALLOWED_INSTANCE_IDS: "desk_123",
       BUSINESS_OS_MCP_SESSIONS: fakeSessionsBinding(async () => {
         routed = true;
         return new Response(JSON.stringify({ jsonrpc: "2.0", id: 9, result: { ok: true } }));
