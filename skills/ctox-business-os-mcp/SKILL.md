@@ -99,6 +99,35 @@ If the managed endpoint returns `runtime_unavailable`, the agent is configured
 but the CTOX instance is not currently connected. Report that state instead of
 trying shell, SQL, browser-control, or raw HTTP fallbacks.
 
+## Web-Login Bootstrap
+
+If the user supplies a Business OS or ctox.dev host plus email/password and
+asks to connect an agent, do not stop at "need a bearer token". Treat those
+credentials as transient web-login credentials for MCP setup, not as the MCP
+credential itself.
+
+Rules:
+
+- Never repeat, log, store, or put the password in command arguments.
+- Prefer the `/ctox` deploy skill bootstrap script when it is available:
+  `ctox/scripts/connect-business-os-mcp.mjs --password-stdin`.
+- For ctox.dev managed tenants, authenticate to `https://ctox.dev`, read
+  `/api/desktop/session-package`, select the matching tenant, then use
+  `/api/instances/<tenant-id>/managed-mcp` to enable Managed MCP and rotate a
+  one-time Agent Token when the authenticated actor is Owner/Admin.
+- For direct Business OS hosts, authenticate with `/login`, then call the
+  admin-only `/api/business-os/mcp/connect-info` route.
+- If the actor lacks rights or the endpoint is not present, open the exact
+  dashboard MCP location instead of sending the user hunting:
+  `https://ctox.dev/dashboard?tenant=<tenant-id>#mcp`. In that panel the user
+  must open **MCP**, enable Managed MCP, press **Token rotieren**, and copy the
+  one-time token shown under **Neuer Token**.
+
+Email/password can therefore start the connection flow. The final configured
+agent still uses the supported MCP bearer token and typed MCP endpoint. Do not
+drive the Browser Business OS shell as an API, and do not create an HTTP data
+path for Business OS records.
+
 ## Safe Workflow
 
 1. Call status and module discovery first.
@@ -185,6 +214,16 @@ Modify flow:
 3. Use the returned `development_contract` exactly as above.
 4. Poll `business_os.get_command_status` until the command reaches a terminal
    state.
+
+Create/modify status contract:
+
+- `completed`: CTOX synchronously wrote a runtime-installed starter app,
+  validated it, recorded module lifecycle state, and projected it to Business
+  OS. You can inspect the app immediately and do not need to wait for a queue
+  worker for the starter artifact.
+- `accepted`: CTOX queued the app work because the target was non-empty,
+  non-starter-owned, or could not validate synchronously. Poll
+  `business_os.get_command_status` until the task is terminal.
 
 The canonical runtime-installed app source root is:
 

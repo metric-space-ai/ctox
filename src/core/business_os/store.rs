@@ -10352,6 +10352,14 @@ pub fn record_command(
             ),
         )?;
     }
+    if let Some(completed) = maybe_materialize_and_complete_runtime_app_starter(
+        root,
+        &command_id,
+        &command,
+        queue_task.as_ref(),
+    )? {
+        return Ok(completed);
+    }
     Ok(CommandAccepted {
         ok: true,
         command_id,
@@ -10359,6 +10367,831 @@ pub fn record_command(
         task_id: queue_task.as_ref().map(|task| task.message_key.clone()),
         task_status: queue_task.map(|task| normalize_queue_status(&task.route_status).to_string()),
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeAppStarterAction {
+    Create,
+    Modify,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuntimeAppStarterMaterialization {
+    should_validate: bool,
+}
+
+fn maybe_materialize_and_complete_runtime_app_starter(
+    root: &Path,
+    command_id: &str,
+    command: &BusinessCommand,
+    queue_task: Option<&channels::QueueTaskView>,
+) -> anyhow::Result<Option<CommandAccepted>> {
+    let Some(queue_task) = queue_task else {
+        return Ok(None);
+    };
+    let Some((module_id, install_target, _artifact_directory)) =
+        business_os_app_command_target_metadata(command)
+    else {
+        return Ok(None);
+    };
+    if install_target != "runtime-installed-module" {
+        return Ok(None);
+    }
+    let action = match command.command_type.as_str() {
+        "ctox.business_os.app.create" => RuntimeAppStarterAction::Create,
+        "ctox.business_os.app.modify" => RuntimeAppStarterAction::Modify,
+        _ => return Ok(None),
+    };
+    let materialized =
+        materialize_runtime_app_starter_artifacts(root, command, &module_id, action)?;
+    if !materialized.should_validate {
+        return Ok(None);
+    }
+    match validate_runtime_app_starter_artifacts(root, &module_id) {
+        Ok(()) => {}
+        Err(err) => {
+            eprintln!(
+                "[business-os] runtime app starter for `{module_id}` stayed in queue because validation failed: {err:#}"
+            );
+            return Ok(None);
+        }
+    }
+    let Some(result) = complete_business_command_from_app_validation_success(
+        root,
+        &queue_task.message_key,
+        Some(&module_id),
+        "Business OS runtime app starter materialized and validated synchronously",
+    )?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(CommandAccepted {
+        ok: result.get("status").and_then(Value::as_str) == Some("completed"),
+        command_id: command_id.to_string(),
+        status: "completed",
+        task_id: Some(queue_task.message_key.clone()),
+        task_status: result
+            .get("task_status")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| Some("completed".to_string())),
+    }))
+}
+
+fn materialize_runtime_app_starter_artifacts(
+    root: &Path,
+    command: &BusinessCommand,
+    module_id: &str,
+    action: RuntimeAppStarterAction,
+) -> anyhow::Result<RuntimeAppStarterMaterialization> {
+    let module_dir = runtime_app_starter_module_dir(root, module_id);
+    let marker_path = module_dir.join("core/request.mjs");
+    match action {
+        RuntimeAppStarterAction::Create => {
+            if !runtime_app_starter_target_is_empty_or_owned(&module_dir)? {
+                return Ok(RuntimeAppStarterMaterialization {
+                    should_validate: false,
+                });
+            }
+        }
+        RuntimeAppStarterAction::Modify => {
+            if !runtime_app_starter_is_owned(&module_dir) {
+                return Ok(RuntimeAppStarterMaterialization {
+                    should_validate: false,
+                });
+            }
+        }
+    }
+
+    let title = runtime_app_starter_title(command, module_id, action);
+    let description = runtime_app_starter_description(command, action);
+    let category = runtime_app_starter_category(command);
+    let version = runtime_app_starter_version(command, action, &module_dir)?;
+    let request_note = runtime_app_starter_request_note(command, action);
+    let collection = runtime_app_starter_collection_name(module_id);
+    let updated_at_ms = now_ms() as i64;
+
+    fs::create_dir_all(module_dir.join("core"))
+        .with_context(|| format!("failed to create {}", module_dir.join("core").display()))?;
+    fs::create_dir_all(module_dir.join("locales"))
+        .with_context(|| format!("failed to create {}", module_dir.join("locales").display()))?;
+    fs::create_dir_all(module_dir.join("tests"))
+        .with_context(|| format!("failed to create {}", module_dir.join("tests").display()))?;
+
+    write_json_pretty(
+        &module_dir.join("module.json"),
+        &serde_json::json!({
+            "id": module_id,
+            "title": title,
+            "description": description,
+            "entry": format!("installed-modules/{module_id}/index.html"),
+            "icon": "icon.svg",
+            "install_scope": "installed",
+            "version": version,
+            "collections": [collection],
+            "category": category,
+            "developer": "CTOX",
+            "license": "AGPL-3.0-only",
+            "store": {
+                "summary": description,
+                "distribution": "ctox-runtime-installed-module",
+                "source_path": format!("installed-modules/{module_id}"),
+                "generator": "ctox-runtime-app-starter-v1",
+                "last_request": request_note,
+                "updated_at_ms": updated_at_ms
+            }
+        }),
+    )?;
+    write_json_pretty(
+        &module_dir.join("collections.schema.json"),
+        &runtime_app_starter_collections_schema(&collection),
+    )?;
+    write_text(
+        &module_dir.join("schema.js"),
+        &runtime_app_starter_schema_js(&collection),
+    )?;
+    write_text(
+        &module_dir.join("index.html"),
+        runtime_app_starter_index_html(),
+    )?;
+    write_text(
+        &module_dir.join("index.css"),
+        runtime_app_starter_index_css(),
+    )?;
+    write_text(
+        &module_dir.join("index.js"),
+        &runtime_app_starter_index_js(module_id),
+    )?;
+    write_text(&module_dir.join("icon.svg"), runtime_app_starter_icon_svg())?;
+    write_json_pretty(
+        &module_dir.join("locales/en.json"),
+        &serde_json::json!({
+            "title": title,
+            "empty": "No records yet",
+            "create": "Create record"
+        }),
+    )?;
+    write_json_pretty(
+        &module_dir.join("locales/de.json"),
+        &serde_json::json!({
+            "title": title,
+            "empty": "Noch keine Eintraege",
+            "create": "Eintrag erstellen"
+        }),
+    )?;
+    write_text(
+        &module_dir.join("core/records.mjs"),
+        &runtime_app_starter_records_js(&collection),
+    )?;
+    write_text(
+        &module_dir.join("core/automation.mjs"),
+        runtime_app_starter_automation_js(),
+    )?;
+    write_text(
+        &marker_path,
+        &runtime_app_starter_request_js(&request_note, updated_at_ms),
+    )?;
+    write_text(
+        &module_dir.join("tests/records.test.mjs"),
+        runtime_app_starter_test_js(),
+    )?;
+
+    Ok(RuntimeAppStarterMaterialization {
+        should_validate: true,
+    })
+}
+
+fn runtime_app_starter_module_dir(root: &Path, module_id: &str) -> PathBuf {
+    resolve_business_os_installed_app_root(root)
+        .join("installed-modules")
+        .join(module_id)
+}
+
+fn runtime_app_starter_target_is_empty_or_owned(module_dir: &Path) -> anyhow::Result<bool> {
+    if !module_dir.exists() {
+        return Ok(true);
+    }
+    if runtime_app_starter_is_owned(module_dir) {
+        return Ok(true);
+    }
+    let mut entries = fs::read_dir(module_dir)
+        .with_context(|| format!("failed to inspect {}", module_dir.display()))?;
+    Ok(entries.next().is_none())
+}
+
+fn runtime_app_starter_is_owned(module_dir: &Path) -> bool {
+    let request_marker = module_dir.join("core/request.mjs");
+    if request_marker.is_file() {
+        return true;
+    }
+    let manifest_path = module_dir.join("module.json");
+    let Ok(text) = fs::read_to_string(&manifest_path) else {
+        return false;
+    };
+    serde_json::from_str::<Value>(&text)
+        .ok()
+        .and_then(|value| {
+            value
+                .pointer("/store/generator")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .is_some_and(|generator| generator == "ctox-runtime-app-starter-v1")
+}
+
+fn validate_runtime_app_starter_artifacts(root: &Path, module_id: &str) -> anyhow::Result<()> {
+    let script = root.join("src/apps/business-os/scripts/validate-app-module.mjs");
+    anyhow::ensure!(
+        script.is_file(),
+        "Business OS app validator is not available at {}",
+        script.display()
+    );
+    let output = std::process::Command::new(
+        crate::service::business_os::resolve_business_os_validator_node(root),
+    )
+    .current_dir(root)
+    .arg(&script)
+    .arg(module_id)
+    .arg("--installed")
+    .arg("--workspace")
+    .arg(root)
+    .output()
+    .context("failed to run Business OS app validator for runtime app starter")?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let report = if !stderr.is_empty() { stderr } else { stdout };
+    anyhow::bail!("{}", report)
+}
+
+fn runtime_app_starter_title(
+    command: &BusinessCommand,
+    module_id: &str,
+    action: RuntimeAppStarterAction,
+) -> String {
+    let value = match action {
+        RuntimeAppStarterAction::Create => first_non_empty_json_string(&[
+            command.payload.get("app_title"),
+            command.payload.get("title"),
+            command.client_context.get("app_title"),
+            command.client_context.get("title"),
+        ]),
+        RuntimeAppStarterAction::Modify => first_non_empty_json_string(&[
+            command.payload.get("app_title"),
+            command.client_context.get("app_title"),
+            command.payload.get("title"),
+            command.client_context.get("title"),
+        ]),
+    };
+    value
+        .map(clean_runtime_app_starter_title)
+        .filter(|item| !item.is_empty())
+        .unwrap_or_else(|| runtime_app_starter_title_from_module_id(module_id))
+}
+
+fn runtime_app_starter_title_from_module_id(module_id: &str) -> String {
+    let title = module_id
+        .split(|ch: char| ch == '-' || ch == '_')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    if title.is_empty() {
+        "Agent App".to_string()
+    } else {
+        title
+    }
+}
+
+fn runtime_app_starter_description(
+    command: &BusinessCommand,
+    action: RuntimeAppStarterAction,
+) -> String {
+    first_non_empty_json_string(&[
+        command.payload.get("description"),
+        command.client_context.get("description"),
+        command.payload.get("instruction"),
+        command.payload.get("prompt"),
+    ])
+    .map(str::trim)
+    .filter(|item| !item.is_empty())
+    .map(|item| item.chars().take(260).collect::<String>())
+    .unwrap_or_else(|| match action {
+        RuntimeAppStarterAction::Create => {
+            "Runtime-installed Business OS app created from an external agent request.".to_string()
+        }
+        RuntimeAppStarterAction::Modify => {
+            "Runtime-installed Business OS app updated from an external agent request.".to_string()
+        }
+    })
+}
+
+fn runtime_app_starter_category(command: &BusinessCommand) -> String {
+    first_non_empty_json_string(&[
+        command.payload.get("category"),
+        command.client_context.get("category"),
+    ])
+    .map(str::trim)
+    .filter(|item| !item.is_empty())
+    .unwrap_or("Agent Apps")
+    .to_string()
+}
+
+fn runtime_app_starter_request_note(
+    command: &BusinessCommand,
+    action: RuntimeAppStarterAction,
+) -> String {
+    let prefix = match action {
+        RuntimeAppStarterAction::Create => "Create request",
+        RuntimeAppStarterAction::Modify => "Modify request",
+    };
+    let body = first_non_empty_json_string(&[
+        command.payload.get("instruction"),
+        command.payload.get("prompt"),
+        command.payload.get("description"),
+    ])
+    .map(str::trim)
+    .filter(|item| !item.is_empty())
+    .unwrap_or("No request text provided.");
+    format!("{prefix}: {}", body.chars().take(700).collect::<String>())
+}
+
+fn runtime_app_starter_version(
+    command: &BusinessCommand,
+    action: RuntimeAppStarterAction,
+    module_dir: &Path,
+) -> anyhow::Result<String> {
+    if action == RuntimeAppStarterAction::Create {
+        return Ok(first_non_empty_json_string(&[
+            command.payload.get("desired_version"),
+            command.payload.get("version"),
+        ])
+        .unwrap_or("0.1.0")
+        .to_string());
+    }
+    let manifest_path = module_dir.join("module.json");
+    let version = fs::read_to_string(&manifest_path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|value| {
+            value
+                .get("version")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "0.1.0".to_string());
+    Ok(increment_semver_patch(&version).unwrap_or_else(|| "0.1.1".to_string()))
+}
+
+fn increment_semver_patch(version: &str) -> Option<String> {
+    let mut parts = version.split('.');
+    let major = parts.next()?.parse::<u64>().ok()?;
+    let minor = parts.next()?.parse::<u64>().ok()?;
+    let patch = parts.next()?.parse::<u64>().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(format!("{major}.{minor}.{}", patch.saturating_add(1)))
+}
+
+fn clean_runtime_app_starter_title(value: &str) -> String {
+    let trimmed = value.trim();
+    let without_create = trimmed.strip_prefix("Create ").unwrap_or(trimmed);
+    without_create
+        .strip_prefix("Modify ")
+        .unwrap_or(without_create)
+        .trim()
+        .to_string()
+}
+
+fn runtime_app_starter_collection_name(module_id: &str) -> String {
+    let mut out = String::new();
+    let mut last_underscore = false;
+    for ch in module_id.trim().to_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            last_underscore = false;
+        } else if !last_underscore {
+            out.push('_');
+            last_underscore = true;
+        }
+    }
+    let prefix = out.trim_matches('_');
+    if prefix.is_empty() {
+        "agent_app_records".to_string()
+    } else {
+        format!("{prefix}_records")
+    }
+}
+
+fn runtime_app_starter_collections_schema(collection: &str) -> Value {
+    serde_json::json!({
+        "schema_format": "ctox-business-os-module-collections-v1",
+        "collections": {
+            collection: {
+                "version": 1,
+                "primaryKey": "id",
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "maxLength": 180 },
+                    "title": { "type": "string" },
+                    "status": { "type": "string" },
+                    "notes": { "type": "string" },
+                    "is_deleted": { "type": "boolean" },
+                    "created_at_ms": { "type": "number" },
+                    "updated_at_ms": { "type": "number" }
+                },
+                "required": [
+                    "id",
+                    "title",
+                    "status",
+                    "notes",
+                    "is_deleted",
+                    "created_at_ms",
+                    "updated_at_ms"
+                ],
+                "additionalProperties": true
+            }
+        }
+    })
+}
+
+fn runtime_app_starter_schema_js(collection: &str) -> String {
+    format!(
+        r#"const recordSchema = {{
+  version: 1,
+  primaryKey: 'id',
+  type: 'object',
+  properties: {{
+    id: {{ type: 'string', maxLength: 180 }},
+    title: {{ type: 'string' }},
+    status: {{ type: 'string' }},
+    notes: {{ type: 'string' }},
+    is_deleted: {{ type: 'boolean' }},
+    created_at_ms: {{ type: 'number' }},
+    updated_at_ms: {{ type: 'number' }},
+  }},
+  required: ['id', 'title', 'status', 'notes', 'is_deleted', 'created_at_ms', 'updated_at_ms'],
+  additionalProperties: true,
+}};
+
+export const collections = {{
+  '{collection}': recordSchema,
+}};
+
+export const migrationStrategies = {{}};
+"#
+    )
+}
+
+fn runtime_app_starter_index_html() -> &'static str {
+    r#"<section class="agent-app" data-agent-app-root>
+  <header class="agent-app__header">
+    <div>
+      <p class="agent-app__eyebrow">Business OS App</p>
+      <h2 data-agent-title>Agent app</h2>
+    </div>
+    <button type="button" class="agent-app__primary" data-action="create-record">Create record</button>
+  </header>
+  <p class="agent-app__request" data-agent-request></p>
+  <form class="agent-app__form" data-agent-form>
+    <label>
+      <span>Title</span>
+      <input name="title" required autocomplete="off" />
+    </label>
+    <label>
+      <span>Notes</span>
+      <textarea name="notes" rows="3"></textarea>
+    </label>
+    <button type="submit" data-action="save-record">Save</button>
+  </form>
+  <div class="agent-app__stats" data-agent-stats></div>
+  <div class="agent-app__list" data-agent-list></div>
+</section>
+"#
+}
+
+fn runtime_app_starter_index_css() -> &'static str {
+    r#".agent-app {
+  display: grid;
+  gap: 16px;
+  color: #172026;
+}
+
+.agent-app__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start;
+}
+
+.agent-app__eyebrow {
+  margin: 0 0 4px;
+  color: #5b6b73;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+
+.agent-app h2 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.agent-app__primary,
+.agent-app button {
+  border: 1px solid #0d6b57;
+  background: #0d6b57;
+  color: white;
+  border-radius: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.agent-app__request,
+.agent-app__stats {
+  margin: 0;
+  color: #45545c;
+}
+
+.agent-app__form {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #d7dee2;
+  border-radius: 8px;
+}
+
+.agent-app label {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+  color: #45545c;
+}
+
+.agent-app input,
+.agent-app textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #c8d1d6;
+  border-radius: 6px;
+  padding: 8px;
+  font: inherit;
+}
+
+.agent-app__list {
+  display: grid;
+  gap: 8px;
+}
+
+.agent-app__record {
+  display: grid;
+  gap: 6px;
+  border: 1px solid #d7dee2;
+  border-radius: 8px;
+  padding: 12px;
+  background: #fff;
+}
+
+.agent-app__record-title {
+  font-weight: 700;
+}
+
+.agent-app__record-meta {
+  color: #6a7981;
+  font-size: 12px;
+}
+"#
+}
+
+fn runtime_app_starter_index_js(module_id: &str) -> String {
+    format!(
+        r#"import {{ COLLECTION, normalizeRecord, summarizeRecords }} from './core/records.mjs';
+import {{ buildReviewCommand }} from './core/automation.mjs';
+import {{ REQUEST_NOTE, UPDATED_AT_MS }} from './core/request.mjs';
+
+const MODULE_ID = '{module_id}';
+
+export async function mount(ctx) {{
+  if (!ctx?.host) throw new Error(`[${{MODULE_ID}}] mount(ctx) requires ctx.host`);
+  await ensureStyles();
+  ctx.host.innerHTML = await loadMarkup();
+  const state = {{ records: [] }};
+  const titleEl = ctx.host.querySelector('[data-agent-title]');
+  const requestEl = ctx.host.querySelector('[data-agent-request]');
+  const statsEl = ctx.host.querySelector('[data-agent-stats]');
+  const listEl = ctx.host.querySelector('[data-agent-list]');
+  const formEl = ctx.host.querySelector('[data-agent-form]');
+  if (titleEl) titleEl.textContent = ctx.manifest?.title || MODULE_ID;
+  if (requestEl) requestEl.textContent = `${{REQUEST_NOTE}} (updated ${{new Date(UPDATED_AT_MS).toLocaleString()}})`;
+
+  async function readRecords() {{
+    const collection = getCollection(ctx);
+    if (!collection?.find) {{
+      state.records = [];
+      render();
+      return;
+    }}
+    const docs = await collection.find().exec();
+    state.records = docs.map((doc) => normalizeRecord(typeof doc.toJSON === 'function' ? doc.toJSON() : doc));
+    render();
+  }}
+
+  async function saveRecord(input) {{
+    const collection = getCollection(ctx);
+    const record = normalizeRecord(input, {{ nowMs: Date.now() }});
+    if (collection?.upsert) await collection.upsert(record);
+    else if (collection?.insert) await collection.insert(record);
+    state.records = [record, ...state.records.filter((item) => item.id !== record.id)];
+    render();
+  }}
+
+  async function queueReview(record) {{
+    await ctx?.commandBus?.dispatch?.(buildReviewCommand(record));
+  }}
+
+  ctx.host.addEventListener('click', async (event) => {{
+    const button = event.target?.closest?.('[data-action]');
+    if (!button) return;
+    const action = button.dataset.action;
+    if (action === 'create-record') {{
+      formEl?.querySelector('[name="title"]')?.focus();
+    }}
+    if (action === 'queue-review') {{
+      const record = state.records.find((item) => item.id === button.dataset.id);
+      if (record) await queueReview(record);
+    }}
+  }});
+
+  formEl?.addEventListener('submit', async (event) => {{
+    event.preventDefault();
+    const data = new FormData(formEl);
+    await saveRecord({{
+      title: data.get('title'),
+      notes: data.get('notes'),
+      status: 'open',
+    }});
+    formEl.reset();
+  }});
+
+  function render() {{
+    const active = state.records.filter((record) => !record.is_deleted);
+    if (statsEl) statsEl.textContent = summarizeRecords(active);
+    if (!listEl) return;
+    listEl.replaceChildren();
+    if (active.length === 0) {{
+      const empty = document.createElement('p');
+      empty.className = 'agent-app__record-meta';
+      empty.textContent = 'No records yet.';
+      listEl.append(empty);
+      return;
+    }}
+    for (const record of active) {{
+      const row = document.createElement('article');
+      row.className = 'agent-app__record';
+      const title = document.createElement('div');
+      title.className = 'agent-app__record-title';
+      title.textContent = record.title;
+      const notes = document.createElement('div');
+      notes.textContent = record.notes || 'No notes';
+      const meta = document.createElement('div');
+      meta.className = 'agent-app__record-meta';
+      meta.textContent = `Status: ${{record.status}}`;
+      const review = document.createElement('button');
+      review.type = 'button';
+      review.dataset.action = 'queue-review';
+      review.dataset.id = record.id;
+      review.textContent = 'Ask CTOX to review';
+      row.append(title, notes, meta, review);
+      listEl.append(row);
+    }}
+  }}
+
+  await readRecords();
+}}
+
+function getCollection(ctx) {{
+  try {{
+    return ctx?.db?.collection?.(COLLECTION) || null;
+  }} catch {{
+    return null;
+  }}
+}}
+
+async function loadMarkup() {{
+  const response = await fetch(new URL('./index.html', import.meta.url));
+  return response.text();
+}}
+
+async function ensureStyles() {{
+  if (document.querySelector(`link[data-agent-app-style="${{MODULE_ID}}"]`)) return;
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = new URL('./index.css', import.meta.url).href;
+  link.dataset.agentAppStyle = MODULE_ID;
+  document.head.append(link);
+}}
+"#
+    )
+}
+
+fn runtime_app_starter_records_js(collection: &str) -> String {
+    format!(
+        r#"export const COLLECTION = '{collection}';
+
+export function normalizeRecord(input = {{}}, options = {{}}) {{
+  const nowMs = Number(options.nowMs || Date.now());
+  const idSource = String(input.id || input.title || `record-${{nowMs}}`);
+  return {{
+    id: idSource.slice(0, 180),
+    title: String(input.title || 'Untitled record'),
+    status: String(input.status || 'open'),
+    notes: String(input.notes || ''),
+    is_deleted: Boolean(input.is_deleted),
+    created_at_ms: Number(input.created_at_ms || nowMs),
+    updated_at_ms: Number(input.updated_at_ms || nowMs),
+  }};
+}}
+
+export function summarizeRecords(records = []) {{
+  const active = records.filter((record) => !record.is_deleted);
+  return `${{active.length}} active record${{active.length === 1 ? '' : 's'}}`;
+}}
+"#
+    )
+}
+
+fn runtime_app_starter_automation_js() -> &'static str {
+    r#"export function buildReviewCommand(record) {
+  return {
+    command_type: 'business_os.chat.task',
+    title: `Review ${record.title || record.id}`,
+    payload: {
+      instruction: `Review this Business OS app record: ${record.title || record.id}`,
+      record_snapshot: record,
+    },
+  };
+}
+"#
+}
+
+fn runtime_app_starter_request_js(request_note: &str, updated_at_ms: i64) -> String {
+    format!(
+        "export const REQUEST_NOTE = {};\nexport const UPDATED_AT_MS = {};\n",
+        serde_json::to_string(request_note).unwrap_or_else(|_| "\"Agent request\"".to_string()),
+        updated_at_ms
+    )
+}
+
+fn runtime_app_starter_test_js() -> &'static str {
+    r#"import assert from 'node:assert/strict';
+import { normalizeRecord, summarizeRecords } from '../core/records.mjs';
+import { buildReviewCommand } from '../core/automation.mjs';
+
+const record = normalizeRecord({ id: 'one', title: 'One', notes: 'Visible' }, { nowMs: 1781990000000 });
+assert.equal(record.id, 'one');
+assert.equal(record.title, 'One');
+assert.equal(record.notes, 'Visible');
+assert.equal(record.is_deleted, false);
+assert.equal(summarizeRecords([record]), '1 active record');
+const command = buildReviewCommand(record);
+assert.equal(command.command_type, 'business_os.chat.task');
+assert.deepEqual(command.payload.record_snapshot, record);
+"#
+}
+
+fn runtime_app_starter_icon_svg() -> &'static str {
+    r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="App icon">
+  <rect width="64" height="64" rx="14" fill="#0d6b57"/>
+  <path d="M18 19h28v6H18zM18 30h28v6H18zM18 41h18v6H18z" fill="#ffffff"/>
+</svg>
+"##
+}
+
+fn write_json_pretty(path: &Path, value: &Value) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let mut bytes = serde_json::to_vec_pretty(value)?;
+    bytes.push(b'\n');
+    fs::write(path, bytes).with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn write_text(path: &Path, value: &str) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(path, value).with_context(|| format!("failed to write {}", path.display()))
 }
 
 fn reject_app_build_command_if_denied(
@@ -16254,16 +17087,14 @@ pub fn refresh_business_command_queue_task_projection(
         command_projection.clone(),
     )?;
     let mut rxdb_writers = RxdbProjectionWriterCache::new(root);
-    if terminal_command_status.is_some() {
-        upsert_rxdb_collection_record_cached(
-            root,
-            Some(&mut rxdb_writers),
-            "business_commands",
-            &command_id,
-            updated_at_ms,
-            command_projection.clone(),
-        )?;
-    }
+    upsert_rxdb_collection_record_cached(
+        root,
+        Some(&mut rxdb_writers),
+        "business_commands",
+        &command_id,
+        updated_at_ms,
+        command_projection.clone(),
+    )?;
     refresh_queue_task_projection(
         root,
         &conn,
@@ -17224,6 +18055,56 @@ pub fn accept_rxdb_business_command_with_origin(
                 Some("completed"),
                 outcome,
             );
+        }
+        command_type if super::project_ops::is_project_command(command_type) => {
+            let session = rxdb_authenticated_session(root, &command)?;
+            let permission =
+                if super::project_ops::project_command_requires_data_write(command_type) {
+                    BusinessOsPermission::DataWrite
+                } else {
+                    BusinessOsPermission::DataRead
+                };
+            let decision = module_policy_decision(root, &session, permission, "projects")?;
+            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
+                return Ok(outcome);
+            }
+            let policy_payload = policy_decision_payload(&decision);
+            match super::project_ops::handle_business_command(
+                root,
+                &session,
+                &command,
+                policy_payload,
+            ) {
+                Ok(outcome) => {
+                    let status = if outcome.get("ok").and_then(Value::as_bool) == Some(false) {
+                        "failed"
+                    } else {
+                        "completed"
+                    };
+                    return write_rxdb_control_command_outcome(
+                        root,
+                        &command,
+                        status,
+                        command.record_id.as_deref(),
+                        Some(status),
+                        outcome,
+                    );
+                }
+                Err(error) => {
+                    let _ = write_rxdb_control_command_outcome(
+                        root,
+                        &command,
+                        "failed",
+                        command.record_id.as_deref(),
+                        Some("failed"),
+                        serde_json::json!({
+                            "ok": false,
+                            "error": error.to_string(),
+                        }),
+                    );
+                    return Err(error);
+                }
+            }
         }
         command_type if super::support::is_support_command(command_type) => {
             let session = rxdb_authenticated_session(root, &command)?;
@@ -39564,6 +40445,91 @@ mod tests {
         assert_eq!(
             rxdb_command.get("task_status").and_then(Value::as_str),
             Some("blocked")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_queue_task_projection_updates_active_rxdb_business_command() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_active_queue_chat",
+                "command_id": "cmd_active_queue_chat",
+                "module": "research",
+                "command_type": "business_os.chat.task",
+                "record_id": "research",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Kontext-Aufgabe",
+                    "instruction": "teste active projection",
+                    "prompt": "teste active projection"
+                },
+                "client_context": {
+                    "source": "business-os-chat",
+                    "module": "research"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?
+            .to_string();
+
+        channels::lease_queue_task(root, &task_id, "ctox-service")?;
+        let rxdb_conn = create_repair_rxdb_tables(root)?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__business_commands__v1",
+            "cmd_active_queue_chat",
+            serde_json::json!({
+                "id": "cmd_active_queue_chat",
+                "command_id": "cmd_active_queue_chat",
+                "status": "accepted",
+                "route_status": "pending",
+                "task_id": task_id.clone(),
+                "task_status": "queued",
+                "updated_at_ms": 1
+            }),
+        )?;
+        drop(rxdb_conn);
+
+        let projected = refresh_business_command_queue_task_projection(root, &task_id)?
+            .context("expected active command projection")?;
+        assert_eq!(
+            projected.get("status").and_then(Value::as_str),
+            Some("accepted")
+        );
+        assert_eq!(
+            projected.get("route_status").and_then(Value::as_str),
+            Some("leased")
+        );
+        assert_eq!(
+            projected.get("task_status").and_then(Value::as_str),
+            Some("running")
+        );
+
+        let rxdb_command =
+            load_rxdb_collection_record(root, "business_commands", "cmd_active_queue_chat")?
+                .context("expected active rxdb command row")?;
+        assert_eq!(
+            rxdb_command.get("status").and_then(Value::as_str),
+            Some("accepted")
+        );
+        assert_eq!(
+            rxdb_command.get("route_status").and_then(Value::as_str),
+            Some("leased")
+        );
+        assert_eq!(
+            rxdb_command.get("task_status").and_then(Value::as_str),
+            Some("running")
+        );
+        assert_eq!(
+            rxdb_command.get("task_id").and_then(Value::as_str),
+            Some(task_id.as_str())
         );
         Ok(())
     }

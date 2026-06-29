@@ -160,7 +160,13 @@ through the no-store control-plane route `/api/business-os/mcp/connect-info`.
 That payload includes the local endpoint, the local inbound bearer token, and
 ready-to-copy MCP server snippets for agent clients. Managed `mcp.ctox.dev`
 clients use a separate managed MCP client token from ctox.dev/Web Auth; the
-local bearer token must not be reused as a managed gateway token.
+local bearer token must not be reused as a managed gateway token. The same
+payload includes a managed dashboard URL when the instance is not yet connected;
+open `https://ctox.dev/dashboard?tenant=<instance-id>#mcp`, switch to **MCP**,
+press **Token rotieren**, and copy the one-time token shown under **Neuer
+Token**. If an operator provides ctox.dev email/password credentials, use those
+only to authenticate to the control plane and rotate the MCP token; the agent
+still connects with the resulting bearer token.
 
 The managed gateway requires the CTOX daemon to hold an outbound WebSocket:
 
@@ -174,12 +180,16 @@ If the instance is not connected, `/mcp/cto1.example.com` returns `runtime_unava
 
 For Business OS app development, MCP exposes typed app actions rather than raw
 filesystem or SQL access. `business_os.create_app` and `business_os.modify_app`
-enqueue CTOX app work and return `command_id`, `task_id`, `app_directory`, and
-a `development_contract` containing the runtime-installed app source root
-(`runtime/business-os/installed-modules/<module_id>`), required files, the
+first try to materialize a validated runtime-installed starter app under
+`runtime/business-os/installed-modules/<module_id>`. When that starter validates,
+the command can return `completed` immediately with a visible app and the normal
+module-version/projection side effects. If the target already contains
+non-starter user artifacts or validation is red, CTOX falls back to queued app
+work and returns `command_id`, `task_id`, `app_directory`, and a
+`development_contract` containing the source root, required files, the
 `business-os-app-module-development` resources, and validation/smoke/E2E
-commands. Agents poll `business_os.get_command_status` until the app task is
-terminal.
+commands. Agents should still poll `business_os.get_command_status` whenever the
+initial status is not terminal.
 
 ---
 
@@ -312,6 +322,10 @@ CTOX_BUSINESS_OS_MCP_CONNECT_TOKEN=<token> \
 ctox business-os app create --instruction "<request>" [--module-id <id>]
 ctox business-os app modify <module-id> --instruction "<request>"
 ctox business-os app validate <module-id> --installed
+
+# Synchronous starter completion is valid
+# status=completed means CTOX already wrote, validated, and projected the app
+# status=accepted means the durable queue worker owns the remaining app work
 
 # List and manage optional skill-app modules
 ctox business-os modules list

@@ -47,6 +47,16 @@ Codex/Claude config snippets. Managed `mcp.ctox.dev` clients need a separate
 managed MCP client token from ctox.dev/Web Auth; the local bearer token is not a
 managed gateway token.
 
+If a user provides a Business OS or ctox.dev host plus email/password, use those
+credentials only as transient web-login credentials for setup. The `/ctox`
+deploy skill can run `ctox/scripts/connect-business-os-mcp.mjs
+--password-stdin` to authenticate, discover the tenant through
+`/api/desktop/session-package`, call `/api/instances/<tenant-id>/managed-mcp`,
+and rotate a one-time Agent Token. Without that bootstrap helper, open
+`https://ctox.dev/dashboard?tenant=<tenant-id>#mcp`, then use **MCP**,
+**Token rotieren**, and **Neuer Token** to copy the token. Direct Business OS
+hosts use `/login` plus `/api/business-os/mcp/connect-info`.
+
 MCP policy is only the channel gate. Remote agents still follow Business OS
 roles and app/data grants: `Owner`/`chef`, `Admin`/`admin`,
 `App-Verantwortliche:r`/`founder`, and `Teammitglied`/`user`; private

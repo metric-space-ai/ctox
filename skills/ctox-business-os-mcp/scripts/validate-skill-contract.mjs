@@ -73,6 +73,13 @@ export function validateSkillContract({ skillText, rustText, planText }) {
   for (const phrase of [
     "/api/business-os/mcp/connect-info",
     "managed MCP client token",
+    "Web-Login Bootstrap",
+    "connect-business-os-mcp.mjs --password-stdin",
+    "/api/desktop/session-package",
+    "/api/instances/<tenant-id>/managed-mcp",
+    "https://ctox.dev/dashboard?tenant=<tenant-id>#mcp",
+    "Token rotieren",
+    "Neuer Token",
     "business_os.create_app",
     "business_os.modify_app",
     "development_contract",

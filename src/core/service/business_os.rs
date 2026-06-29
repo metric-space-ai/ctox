@@ -932,7 +932,11 @@ fn submit_business_os_app_command_document(
 ) -> anyhow::Result<()> {
     let accepted = crate::business_os::store::accept_rxdb_business_command(root, document)?;
     print_json(&accepted)?;
-    if accepted.get("status").and_then(serde_json::Value::as_str) != Some("accepted") {
+    let status = accepted
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if !matches!(status, "accepted" | "completed") {
         anyhow::bail!("Business OS app command was not accepted");
     }
     Ok(())
