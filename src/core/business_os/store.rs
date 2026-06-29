@@ -18056,56 +18056,6 @@ pub fn accept_rxdb_business_command_with_origin(
                 outcome,
             );
         }
-        command_type if super::project_ops::is_project_command(command_type) => {
-            let session = rxdb_authenticated_session(root, &command)?;
-            let permission =
-                if super::project_ops::project_command_requires_data_write(command_type) {
-                    BusinessOsPermission::DataWrite
-                } else {
-                    BusinessOsPermission::DataRead
-                };
-            let decision = module_policy_decision(root, &session, permission, "projects")?;
-            if let Some(outcome) = reject_command_if_policy_denied(root, &command, &decision)? {
-                return Ok(outcome);
-            }
-            let policy_payload = policy_decision_payload(&decision);
-            match super::project_ops::handle_business_command(
-                root,
-                &session,
-                &command,
-                policy_payload,
-            ) {
-                Ok(outcome) => {
-                    let status = if outcome.get("ok").and_then(Value::as_bool) == Some(false) {
-                        "failed"
-                    } else {
-                        "completed"
-                    };
-                    return write_rxdb_control_command_outcome(
-                        root,
-                        &command,
-                        status,
-                        command.record_id.as_deref(),
-                        Some(status),
-                        outcome,
-                    );
-                }
-                Err(error) => {
-                    let _ = write_rxdb_control_command_outcome(
-                        root,
-                        &command,
-                        "failed",
-                        command.record_id.as_deref(),
-                        Some("failed"),
-                        serde_json::json!({
-                            "ok": false,
-                            "error": error.to_string(),
-                        }),
-                    );
-                    return Err(error);
-                }
-            }
-        }
         command_type if super::support::is_support_command(command_type) => {
             let session = rxdb_authenticated_session(root, &command)?;
             let permission = super::support::command_permission(command_type);
