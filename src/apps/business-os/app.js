@@ -37,7 +37,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260629-chat-dispatch-unblocked-v3';
+const APP_BUILD = '20260629-runtime-app-allowlist-v1';
 
 ensureShellStylesheets();
 
@@ -6673,7 +6673,13 @@ function applyModuleAllowlist(modules, catalogAllowlist) {
   const allow = resolveModuleAllowlist(catalogAllowlist);
   if (allow.size === 0) return modules; // no restriction configured
   return normalizeModuleList(modules)
-    .filter((mod) => allow.has(String(mod?.id || '').trim()));
+    .filter((mod) => allow.has(String(mod?.id || '').trim()) || moduleBypassesInstanceAllowlist(mod));
+}
+
+function moduleBypassesInstanceAllowlist(mod) {
+  // Tenant allowlists scope packaged apps; native runtime-installed apps still
+  // need lifecycle/policy filtering so freshly created apps can open.
+  return mod?.instance_visible === true && isRuntimeInstalledModule(mod);
 }
 
 function filterModulesForAppVersionVisibility(modules, governance = state.governance) {

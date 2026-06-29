@@ -51,6 +51,14 @@ for (const requiredId of ['explorer', 'conversations', 'outbound']) {
 assert.ok(appSource.includes('uncategorized'), 'Start menu must render uncategorized launch targets');
 assert.ok(appSource.includes('!moduleIds.has(app.id)'), 'Desktop app launcher must skip module id collisions');
 assert.ok(
+  appSource.includes('moduleBypassesInstanceAllowlist(mod)'),
+  'Tenant allowlist must not hide native-visible runtime-installed apps before lifecycle policy filtering'
+);
+assert.ok(
+  appSource.includes('isRuntimeInstalledModule(mod)'),
+  'Runtime app allowlist bypass must use the shared Business OS app lifecycle helper'
+);
+assert.ok(
   desktopSource.includes('Array.isArray(ctx.modules) ? ctx.modules : await loadModuleRegistry()'),
   'Desktop launcher must use shell-filtered ctx.modules before falling back to registry.json'
 );
