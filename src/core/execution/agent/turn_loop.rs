@@ -1426,6 +1426,8 @@ pub fn hard_runtime_blocker_retry_cooldown_secs(content: &str) -> Option<u64> {
         || lower.contains("context_preflight_heuristic_overflow")
         || lower.contains("mid-task compaction failed")
         || lower.contains("failed to parse structured compaction response")
+        || lower.contains("max_output_tokens")
+        || lower.contains("incomplete response returned")
     {
         return Some(60);
     }
@@ -1722,6 +1724,13 @@ mod tests {
         let large = lcm::estimate_tokens(&"x".repeat(8_000));
         assert!(large > small);
         assert!(large >= 2_000); // ~8000 chars / 4
+    }
+
+    #[test]
+    fn max_output_tokens_disconnect_gets_retry_cooldown() {
+        let error = "direct session error: stream disconnected before completion: Incomplete response returned, reason: max_output_tokens";
+
+        assert_eq!(hard_runtime_blocker_retry_cooldown_secs(error), Some(60));
     }
 
     fn test_message(message_id: i64, seq: i64, role: &str, content: &str) -> lcm::MessageRecord {

@@ -683,6 +683,24 @@ function assertSyncWarmupDoesNotBlockBoot() {
   if (!/loadModules\(\{\s*timeoutMs:\s*20000,\s*allowShellSeed:\s*false\s*\}\)/.test(appContent)) {
     offenders.push('src/apps/business-os/app.js: background module refresh must wait for the RxDB projection instead of reusing the shell seed');
   }
+  const seedPolicyBody = appContent.match(/function allowsPackagedModuleCatalogSeed\(\) \{([\s\S]*?)\n\}\n\nfunction moduleCatalogFingerprint/)?.[1] || '';
+  if (!seedPolicyBody) {
+    offenders.push('src/apps/business-os/app.js: missing packaged module catalog seed hosting policy');
+  } else {
+    for (const hosting of ['web_deploy', 'ctox_dev_web_deploy', 'desktop_web_deploy']) {
+      if (!seedPolicyBody.includes(`hosting === '${hosting}'`)) {
+        offenders.push(`src/apps/business-os/app.js: packaged module catalog seed must be disabled for ${hosting}`);
+      }
+    }
+    for (const hosting of ['ctox_instance_webserver', 'ctox_instance']) {
+      if (!seedPolicyBody.includes(`hosting === '${hosting}'`)) {
+        offenders.push(`src/apps/business-os/app.js: packaged module catalog seed must be allowed for ${hosting}`);
+      }
+    }
+    if (!/return\s+isLocalBusinessOsSurface\(\);/.test(seedPolicyBody)) {
+      offenders.push('src/apps/business-os/app.js: packaged module catalog seed fallback must stay local-surface only');
+    }
+  }
 }
 
 function assertConnectionSmokeRequiresAdvancedStatusBootBudget() {

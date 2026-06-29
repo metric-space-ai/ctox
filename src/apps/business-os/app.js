@@ -37,7 +37,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260626-skf-dialog-knowledge-v2';
+const APP_BUILD = '20260629-managed-mcp-token-v1';
 
 ensureShellStylesheets();
 
@@ -6687,8 +6687,9 @@ function allowsPackagedModuleCatalogSeed() {
   // Public web deployments must render the server-projected RxDB catalog. The
   // packaged registry is code metadata only there; inserting it locally widens
   // tenant-scoped shells before the real projection arrives.
-  if (hosting === 'web_deploy' || !isLocalBusinessOsSurface()) return false;
-  return true;
+  if (hosting === 'web_deploy' || hosting === 'ctox_dev_web_deploy' || hosting === 'desktop_web_deploy') return false;
+  if (hosting === 'ctox_instance_webserver' || hosting === 'ctox_instance') return true;
+  return isLocalBusinessOsSurface();
 }
 
 function moduleCatalogFingerprint(catalog) {

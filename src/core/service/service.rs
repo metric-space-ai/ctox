@@ -17255,6 +17255,8 @@ fn runtime_error_is_transient_api_failure(error: &str) -> bool {
         || normalized.contains("no context evidence rendered")
         || normalized.contains("mid-task compaction failed")
         || normalized.contains("failed to parse structured compaction response")
+        || normalized.contains("max_output_tokens")
+        || normalized.contains("incomplete response returned")
         || normalized.contains("too many requests")
         || normalized.contains("rate limit")
         || normalized.contains("rate_limit")
@@ -32582,6 +32584,7 @@ Use shell tools to create or update these files."
             "turn completed without assistant message",
             "context_selection_empty_critical: refusing model invocation because context health is critical and no context evidence rendered",
             "mid-task compaction failed: failed to parse structured compaction response",
+            "direct session error: stream disconnected before completion: Incomplete response returned, reason: max_output_tokens",
             "HTTP status 429 Too Many Requests",
             "HTTP status 503 Service Unavailable",
         ];
