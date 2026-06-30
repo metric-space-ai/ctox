@@ -783,8 +783,20 @@
         line-height: 1.55;
       }
 
+      .install-path ul {
+        margin: 18px 0 0;
+        padding-left: 20px;
+        color: rgba(249, 251, 255, 0.78);
+        line-height: 1.55;
+      }
+
       .install-path li + li {
         margin-top: 8px;
+      }
+
+      .install-path a {
+        color: #d9eef6;
+        text-underline-offset: 3px;
       }
 
       .command-block {
@@ -2000,6 +2012,22 @@ ctox status</code>
                   hosts, connect to remote WebRTC hosts, and keep multiple
                   local or remote instances in one registry, but it should be treated as a test build until the production gates are closed.
                 </p>
+              </div>
+              <div class="install-path">
+                <h3>Agent skill for Codex, Claude, and MCP clients</h3>
+                <p>
+                  Install the CTOX Business OS deploy skill when you want a coding agent to install CTOX, connect
+                  Business OS MCP, or interact with a CTOX instance through supported typed tools.
+                </p>
+                <div class="command-block" aria-label="CTOX agent skill repository">
+                  <code>https://github.com/metric-space-ai/ctox-business-os-deploy-skill/tree/main/ctox</code>
+                </div>
+                <ul>
+                  <li>Install CTOX on the local machine or an SSH host with the official installer, then verify <code>ctox doctor</code>, <code>ctox status</code>, and Business OS readiness.</li>
+                  <li>Connect local, managed <code>mcp.ctox.dev</code>, or self-hosted Business OS MCP endpoints with the right bearer-token flow.</li>
+                  <li>Use typed MCP tools to inspect modules, records, runs, artifacts, approvals, and to create or modify runtime-installed Business OS apps with validation, smoke, and E2E checks.</li>
+                  <li>Keep Business OS data on RxDB/WebRTC; the skill explicitly avoids raw SQL, browser remote control, and HTTP data proxy fallbacks.</li>
+                </ul>
               </div>
             </div>
             <div class="download-heading">Current release</div>

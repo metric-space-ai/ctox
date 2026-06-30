@@ -210,8 +210,18 @@ PATH and whether the installation looks healthy. Do not pass installer flags
 unless this machine needs an explicit backend override.
 ```
 
-If you want a coding agent to install the CTOX agent skill from GitHub, copy
-this prompt into your coding agent:
+### Agent Skill For Install And Business OS MCP
+
+If you want a coding agent to install, connect, or operate CTOX for you, install
+the CTOX Business OS deploy skill in that agent runtime first. The skill is
+published separately so Codex, Claude Code, ChatGPT, or another MCP-capable
+agent can learn the supported CTOX setup paths without guessing:
+
+```text
+https://github.com/metric-space-ai/ctox-business-os-deploy-skill/tree/main/ctox
+```
+
+Copy this prompt into the coding agent:
 
 ```text
 Install the CTOX agent skill from GitHub so this agent can set up, connect,
@@ -229,9 +239,29 @@ Do not configure CTOX, tokens, ctox.dev coupling, or MCP endpoints yet unless I
 explicitly ask for deployment setup.
 ```
 
-The linked skill repository documents the Business OS MCP channel, the
-ctox.dev/local/self-hosted deployment choices, MCP policy setup, gateway
-connection routines, audit export, and end-to-end verification checks.
+With the skill installed, an agent can follow CTOX's supported paths instead of
+inventing an unsafe shortcut:
+
+- install CTOX locally or on an SSH-accessible host with the official installer,
+  then run `ctox doctor`, `ctox status`, and Business OS readiness checks;
+- connect a local agent to `http://127.0.0.1:8788/mcp` using the admin-only
+  Business OS MCP connect-info route;
+- bootstrap a managed `*.ctox.dev` instance by using a human web login only to
+  enable Managed MCP and mint a one-time agent bearer token;
+- configure `https://mcp.ctox.dev/mcp/<instance-id>` for remote agents after the
+  CTOX instance connects outbound to the managed gateway;
+- inspect Business OS status, modules, entities, records, runs, artifacts,
+  approvals, and audit activity through typed MCP tools;
+- let a coding agent create or modify runtime-installed Business OS apps with
+  app-scoped source tools, including relative browser ESM dependencies under
+  `lib/` or `vendor/`, then validate, smoke-test, and E2E-test the app;
+- hand back Business OS deep links and command IDs instead of pretending an
+  HTTP page load or a browser automation session proves connectivity.
+
+The skill does not grant access by itself. It tells the agent how to obtain or
+use the right CTOX credential path. Business OS data still stays on the
+RxDB/WebRTC data plane; the MCP channel is a typed control channel and must not
+be replaced with raw SQL, browser remote control, or HTTP data proxying.
 
 The installer creates a managed layout by default:
 
