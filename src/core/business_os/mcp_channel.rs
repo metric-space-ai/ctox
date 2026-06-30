@@ -25,7 +25,8 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
 
 use super::policy::{
-    allow_decision, BusinessOsPermission, BusinessOsScope, BusinessOsScopeType, PolicyDecision,
+    allow_decision, normalize_role, BusinessOsPermission, BusinessOsScope, BusinessOsScopeType,
+    PolicyDecision,
 };
 use super::store;
 
@@ -84,6 +85,10 @@ pub struct McpChannelRequestContext {
     pub tool: String,
     pub request_id: String,
     pub confirmation_state: McpConfirmationState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trusted_role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trusted_role_source: Option<String>,
 }
 
 impl McpChannelRequestContext {
@@ -783,7 +788,7 @@ fn handle_gateway_envelope(root: &Path, envelope: Value) -> Value {
         });
     }
     let id = parsed.get("id").cloned().unwrap_or(Value::Null);
-    let response = handle_json_rpc(root, parsed);
+    let response = handle_json_rpc_with_gateway_context(root, parsed, envelope.get("context"));
     serde_json::json!({
         "type": "mcp_response",
         "request_id": request_id,
@@ -1964,7 +1969,29 @@ fn bounded_output_text(bytes: &[u8]) -> String {
 }
 
 pub fn call_tool(root: &Path, tool_name: &str, arguments: Value) -> anyhow::Result<Value> {
-    let context = context_from_arguments(tool_name, &arguments)?;
+    call_tool_inner(root, tool_name, arguments, None)
+}
+
+fn call_tool_with_trusted_gateway_context(
+    root: &Path,
+    tool_name: &str,
+    arguments: Value,
+    trusted_gateway_context: Option<&Value>,
+) -> anyhow::Result<Value> {
+    call_tool_inner(root, tool_name, arguments, trusted_gateway_context)
+}
+
+fn call_tool_inner(
+    root: &Path,
+    tool_name: &str,
+    arguments: Value,
+    trusted_gateway_context: Option<&Value>,
+) -> anyhow::Result<Value> {
+    let context = context_from_arguments_with_trusted_gateway_context(
+        tool_name,
+        &arguments,
+        trusted_gateway_context,
+    )?;
     enforce_tool_policy(root, tool_name)?;
     enforce_context_policy(root, &context)?;
     enforce_argument_scope_policy(root, &context, tool_name, &arguments)?;
@@ -2148,8 +2175,35 @@ pub fn call_tool(root: &Path, tool_name: &str, arguments: Value) -> anyhow::Resu
 }
 
 pub fn call_tool_audited(root: &Path, tool_name: &str, arguments: Value) -> anyhow::Result<Value> {
-    let context = context_from_arguments(tool_name, &arguments)?;
-    let result = call_tool(root, tool_name, arguments.clone());
+    call_tool_audited_inner(root, tool_name, arguments, None)
+}
+
+fn call_tool_audited_with_trusted_gateway_context(
+    root: &Path,
+    tool_name: &str,
+    arguments: Value,
+    trusted_gateway_context: Option<&Value>,
+) -> anyhow::Result<Value> {
+    call_tool_audited_inner(root, tool_name, arguments, trusted_gateway_context)
+}
+
+fn call_tool_audited_inner(
+    root: &Path,
+    tool_name: &str,
+    arguments: Value,
+    trusted_gateway_context: Option<&Value>,
+) -> anyhow::Result<Value> {
+    let context = context_from_arguments_with_trusted_gateway_context(
+        tool_name,
+        &arguments,
+        trusted_gateway_context,
+    )?;
+    let result = call_tool_with_trusted_gateway_context(
+        root,
+        tool_name,
+        arguments.clone(),
+        trusted_gateway_context,
+    );
     if let Err(error) = &result {
         let _ = record_tool_event(
             root,
@@ -2946,6 +3000,14 @@ fn handle_mcp_http_request(root: &Path, mut request: Request) -> anyhow::Result<
 }
 
 fn handle_json_rpc(root: &Path, body: Value) -> Value {
+    handle_json_rpc_with_gateway_context(root, body, None)
+}
+
+fn handle_json_rpc_with_gateway_context(
+    root: &Path,
+    body: Value,
+    trusted_gateway_context: Option<&Value>,
+) -> Value {
     let id = body.get("id").cloned().unwrap_or(Value::Null);
     let method = body.get("method").and_then(Value::as_str).unwrap_or("");
     let result = match method {
@@ -2972,7 +3034,13 @@ fn handle_json_rpc(root: &Path, body: Value) -> Value {
                 .get("arguments")
                 .cloned()
                 .unwrap_or_else(|| serde_json::json!({}));
-            call_tool_audited(root, name, arguments).and_then(mcp_tool_result)
+            call_tool_audited_with_trusted_gateway_context(
+                root,
+                name,
+                arguments,
+                trusted_gateway_context,
+            )
+            .and_then(mcp_tool_result)
         }
         _ => Err(anyhow::anyhow!("unsupported JSON-RPC method `{method}`")),
     };
@@ -3352,6 +3420,33 @@ fn enforce_business_os_mcp_policy(
     }))
 }
 
+fn trusted_mcp_actor_policy_decision(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    permission: BusinessOsPermission,
+    scope_type: BusinessOsScopeType,
+    scope_id: Option<&str>,
+) -> anyhow::Result<PolicyDecision> {
+    if let Some(role) = context.trusted_role.as_deref() {
+        return store::trusted_mcp_actor_policy_decision_with_role(
+            root,
+            &context.actor,
+            role,
+            permission,
+            scope_type,
+            scope_id,
+        );
+    }
+    store::trusted_mcp_actor_policy_decision(
+        root,
+        &context.actor,
+        &context.actor,
+        permission,
+        scope_type,
+        scope_id,
+    )
+}
+
 fn business_os_mcp_policy_decision(
     root: &Path,
     context: &McpChannelRequestContext,
@@ -3360,10 +3455,9 @@ fn business_os_mcp_policy_decision(
 ) -> anyhow::Result<Option<PolicyDecision>> {
     match tool_name {
         "business_os.status" | "business_os.list_mcp_activity" => {
-            Ok(Some(store::trusted_mcp_actor_policy_decision(
+            Ok(Some(trusted_mcp_actor_policy_decision(
                 root,
-                &context.actor,
-                &context.actor,
+                context,
                 BusinessOsPermission::McpManage,
                 BusinessOsScopeType::Mcp,
                 Some("business_os_mcp"),
@@ -3413,10 +3507,9 @@ fn business_os_mcp_policy_decision(
                     &collection,
                 )?))
             } else {
-                Ok(Some(store::trusted_mcp_actor_policy_decision(
+                Ok(Some(trusted_mcp_actor_policy_decision(
                     root,
-                    &context.actor,
-                    &context.actor,
+                    context,
                     BusinessOsPermission::DataRead,
                     BusinessOsScopeType::Workspace,
                     None,
@@ -3440,10 +3533,9 @@ fn business_os_mcp_policy_decision(
         "business_os.create_app" => {
             let instruction = required_arg(arguments, "instruction")?;
             let module_id = app_module_id_from_arguments(arguments, &instruction)?;
-            Ok(Some(store::trusted_mcp_actor_policy_decision(
+            Ok(Some(trusted_mcp_actor_policy_decision(
                 root,
-                &context.actor,
-                &context.actor,
+                context,
                 BusinessOsPermission::AppsInstall,
                 BusinessOsScopeType::Module,
                 Some(module_id.as_str()),
@@ -3451,10 +3543,9 @@ fn business_os_mcp_policy_decision(
         }
         "business_os.prepare_app_source" => {
             let module_id = sanitize_app_module_id(&required_arg(arguments, "module_id")?)?;
-            Ok(Some(store::trusted_mcp_actor_policy_decision(
+            Ok(Some(trusted_mcp_actor_policy_decision(
                 root,
-                &context.actor,
-                &context.actor,
+                context,
                 BusinessOsPermission::AppsInstall,
                 BusinessOsScopeType::Module,
                 Some(module_id.as_str()),
@@ -3462,10 +3553,9 @@ fn business_os_mcp_policy_decision(
         }
         "business_os.modify_app" => {
             let module_id = sanitize_app_module_id(&required_arg(arguments, "module_id")?)?;
-            Ok(Some(store::trusted_mcp_actor_policy_decision(
+            Ok(Some(trusted_mcp_actor_policy_decision(
                 root,
-                &context.actor,
-                &context.actor,
+                context,
                 BusinessOsPermission::AppsModify,
                 BusinessOsScopeType::Module,
                 Some(module_id.as_str()),
@@ -3475,10 +3565,9 @@ fn business_os_mcp_policy_decision(
         | "business_os.read_app_file"
         | "business_os.search_app_source" => {
             let module_id = sanitize_app_module_id(&required_arg(arguments, "module_id")?)?;
-            Ok(Some(store::trusted_mcp_actor_policy_decision(
+            Ok(Some(trusted_mcp_actor_policy_decision(
                 root,
-                &context.actor,
-                &context.actor,
+                context,
                 BusinessOsPermission::AppsSourceView,
                 BusinessOsScopeType::Module,
                 Some(module_id.as_str()),
@@ -3489,10 +3578,9 @@ fn business_os_mcp_policy_decision(
         | "business_os.smoke_app"
         | "business_os.e2e_app" => {
             let module_id = sanitize_app_module_id(&required_arg(arguments, "module_id")?)?;
-            Ok(Some(store::trusted_mcp_actor_policy_decision(
+            Ok(Some(trusted_mcp_actor_policy_decision(
                 root,
-                &context.actor,
-                &context.actor,
+                context,
                 BusinessOsPermission::AppsModify,
                 BusinessOsScopeType::Module,
                 Some(module_id.as_str()),
@@ -3532,10 +3620,9 @@ fn business_os_mcp_module_data_decision(
     if !visibility_decision.allowed {
         return Ok(visibility_decision);
     }
-    store::trusted_mcp_actor_policy_decision(
+    trusted_mcp_actor_policy_decision(
         root,
-        &context.actor,
-        &context.actor,
+        context,
         permission,
         BusinessOsScopeType::Module,
         Some(module_id),
@@ -3551,10 +3638,9 @@ fn business_os_mcp_module_visibility_decision(
         let scope = BusinessOsScope::module(module_id.trim(), false);
         return Ok(allow_decision(BusinessOsPermission::AppsView, &scope));
     }
-    store::trusted_mcp_actor_policy_decision(
+    trusted_mcp_actor_policy_decision(
         root,
-        &context.actor,
-        &context.actor,
+        context,
         BusinessOsPermission::AppsView,
         BusinessOsScopeType::Module,
         Some(module_id),
@@ -3586,10 +3672,9 @@ fn module_value_visible_to_mcp_actor(
     if module_value_is_public_for_mcp(module) {
         return true;
     }
-    store::trusted_mcp_actor_policy_decision(
+    trusted_mcp_actor_policy_decision(
         root,
-        &context.actor,
-        &context.actor,
+        context,
         BusinessOsPermission::AppsView,
         BusinessOsScopeType::Module,
         Some(module_id.as_str()),
@@ -3617,10 +3702,9 @@ fn business_os_mcp_collection_read_decision(
     context: &McpChannelRequestContext,
     collection: &str,
 ) -> anyhow::Result<PolicyDecision> {
-    let collection_decision = store::trusted_mcp_actor_policy_decision(
+    let collection_decision = trusted_mcp_actor_policy_decision(
         root,
-        &context.actor,
-        &context.actor,
+        context,
         BusinessOsPermission::DataRead,
         BusinessOsScopeType::Collection,
         Some(collection),
@@ -3630,10 +3714,9 @@ fn business_os_mcp_collection_read_decision(
     }
 
     for module_id in module_ids_for_collection(root, collection)? {
-        let module_decision = store::trusted_mcp_actor_policy_decision(
+        let module_decision = trusted_mcp_actor_policy_decision(
             root,
-            &context.actor,
-            &context.actor,
+            context,
             BusinessOsPermission::DataRead,
             BusinessOsScopeType::Module,
             Some(module_id.as_str()),
@@ -3653,10 +3736,9 @@ fn business_os_mcp_record_read_decision(
     record_id: &str,
 ) -> anyhow::Result<PolicyDecision> {
     let scope_id = record_scope_id(collection, record_id);
-    let record_decision = store::trusted_mcp_actor_policy_decision(
+    let record_decision = trusted_mcp_actor_policy_decision(
         root,
-        &context.actor,
-        &context.actor,
+        context,
         BusinessOsPermission::DataRead,
         BusinessOsScopeType::Record,
         Some(scope_id.as_str()),
@@ -3679,10 +3761,9 @@ fn business_os_mcp_approval_decision(
     arguments: &Value,
 ) -> anyhow::Result<PolicyDecision> {
     if let Some(approval_id) = optional_string_arg(arguments, "approval_id") {
-        let approval_decision = store::trusted_mcp_actor_policy_decision(
+        let approval_decision = trusted_mcp_actor_policy_decision(
             root,
-            &context.actor,
-            &context.actor,
+            context,
             BusinessOsPermission::ExternalApprove,
             BusinessOsScopeType::Approval,
             Some(approval_id.as_str()),
@@ -3705,10 +3786,9 @@ fn outbound_module_approval_decision(
     root: &Path,
     context: &McpChannelRequestContext,
 ) -> anyhow::Result<PolicyDecision> {
-    store::trusted_mcp_actor_policy_decision(
+    trusted_mcp_actor_policy_decision(
         root,
-        &context.actor,
-        &context.actor,
+        context,
         BusinessOsPermission::ExternalApprove,
         BusinessOsScopeType::Module,
         Some("outbound"),
@@ -3766,6 +3846,17 @@ fn resolved_mcp_actor_context(
     root: &Path,
     context: &McpChannelRequestContext,
 ) -> anyhow::Result<Value> {
+    if let Some(role) = context.trusted_role.as_deref() {
+        return Ok(serde_json::json!({
+            "id": &context.actor,
+            "display_name": &context.actor,
+            "role": role,
+            "active": true,
+            "persisted": false,
+            "raw_actor": &context.actor,
+            "role_source": context.trusted_role_source.as_deref().unwrap_or("trusted_gateway_context")
+        }));
+    }
     let actor = store::trusted_mcp_actor(root, &context.actor, &context.actor)?;
     Ok(serde_json::json!({
         "id": actor.id,
@@ -4118,11 +4209,13 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-fn context_from_arguments(
+fn context_from_arguments_with_trusted_gateway_context(
     tool_name: &str,
     arguments: &Value,
+    trusted_gateway_context: Option<&Value>,
 ) -> anyhow::Result<McpChannelRequestContext> {
     let context = arguments.get("_context").unwrap_or(&Value::Null);
+    let trusted_role = trusted_managed_gateway_role(trusted_gateway_context);
     let request_context = McpChannelRequestContext {
         channel: string_field(context, "channel").unwrap_or_else(|| "chatgpt_mcp".to_string()),
         surface: string_field(context, "surface").unwrap_or_else(|| "business_os_mcp".to_string()),
@@ -4140,9 +4233,28 @@ fn context_from_arguments(
             "rejected" => McpConfirmationState::Rejected,
             _ => McpConfirmationState::NotRequired,
         },
+        trusted_role,
+        trusted_role_source: trusted_gateway_context
+            .and_then(|context| string_field(context, "auth_source")),
     };
     request_context.validate()?;
     Ok(request_context)
+}
+
+fn trusted_managed_gateway_role(context: Option<&Value>) -> Option<String> {
+    let context = context?;
+    let auth_source = string_field(context, "auth_source")?;
+    if auth_source != "ctox_dev_managed_mcp_token" {
+        return None;
+    }
+    if string_field(context, "channel").as_deref() != Some("ctox_dev_managed_mcp") {
+        return None;
+    }
+    let role = normalize_role(&string_field(context, "role")?);
+    match role.as_str() {
+        "chef" | "admin" => Some(role),
+        _ => None,
+    }
 }
 
 fn confirmation_state_as_str(state: &McpConfirmationState) -> &'static str {
@@ -4682,6 +4794,8 @@ mod tests {
             tool: tool.to_string(),
             request_id: format!("req-{tool}"),
             confirmation_state: McpConfirmationState::NotRequired,
+            trusted_role: None,
+            trusted_role_source: None,
         }
     }
 
@@ -6881,6 +6995,35 @@ mod tests {
     }
 
     #[test]
+    fn mcp_ignores_spoofed_context_role_without_gateway_trust() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+
+        let error = call_tool(
+            root,
+            "business_os.status",
+            serde_json::json!({
+                "_context": {
+                    "channel": "ctox_dev_managed_mcp",
+                    "surface": "business_os_mcp",
+                    "actor": "ctox-dev:user:owner_1",
+                    "workspace": "tenant:tenant_1",
+                    "auth_source": "ctox_dev_managed_mcp_token",
+                    "role": "chef"
+                }
+            }),
+        )
+        .expect_err("plain tool arguments must not be able to self-assign chef");
+        let typed = error
+            .downcast_ref::<BusinessOsMcpError>()
+            .expect("typed error");
+
+        assert_eq!(typed.code, BusinessOsMcpErrorCode::PermissionDenied);
+        assert_eq!(typed.field.as_deref(), Some("business_os_policy"));
+        Ok(())
+    }
+
+    #[test]
     fn mcp_business_os_policy_denies_ungranted_open_link() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
@@ -7503,6 +7646,59 @@ mod tests {
                 .and_then(|value| value.get("actor"))
                 .and_then(Value::as_str),
             Some("ctox-dev:user:user_1")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn gateway_managed_owner_role_allows_status_without_local_user() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+
+        let response = handle_gateway_message(
+            temp.path(),
+            &serde_json::json!({
+                "type": "mcp_request",
+                "request_id": "gw_req_owner_role",
+                "context": {
+                    "channel": "ctox_dev_managed_mcp",
+                    "surface": "business_os_mcp",
+                    "actor": "ctox-dev:user:owner_1",
+                    "workspace": "tenant:tenant_1",
+                    "auth_source": "ctox_dev_managed_mcp_token",
+                    "role": "chef"
+                },
+                "body": serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "business_os.status",
+                        "arguments": {
+                            "_context": {
+                                "actor": "spoofed",
+                                "workspace": "spoofed",
+                                "role": "user"
+                            }
+                        }
+                    }
+                }).to_string()
+            })
+            .to_string(),
+        );
+        let envelope: Value = serde_json::from_str(&response)?;
+        let body: Value =
+            serde_json::from_str(envelope.get("body").and_then(Value::as_str).unwrap())?;
+        let result = body
+            .pointer("/result/content/0/text")
+            .and_then(Value::as_str)
+            .and_then(|text| serde_json::from_str::<Value>(text).ok())
+            .expect("tool result JSON");
+
+        assert_eq!(envelope.get("status").and_then(Value::as_u64), Some(200));
+        assert_eq!(result.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            result.get("actor").and_then(Value::as_str),
+            Some("ctox-dev:user:owner_1")
         );
         Ok(())
     }

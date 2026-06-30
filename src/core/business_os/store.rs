@@ -2166,6 +2166,32 @@ pub fn trusted_mcp_actor_policy_decision(
     )
 }
 
+pub fn trusted_mcp_actor_policy_decision_with_role(
+    root: &Path,
+    actor_id: &str,
+    actor_role: &str,
+    permission: BusinessOsPermission,
+    scope_type: BusinessOsScopeType,
+    scope_id: Option<&str>,
+) -> anyhow::Result<PolicyDecision> {
+    let conn = open_store(root)?;
+    seed_configured_business_users(&conn)?;
+    let actor_id = actor_id.trim();
+    let actor_id = if actor_id.is_empty() {
+        "mcp:local"
+    } else {
+        actor_id
+    };
+    trusted_actor_policy_decision_with_conn(
+        &conn,
+        actor_id,
+        &normalize_business_role(actor_role),
+        permission,
+        scope_type,
+        scope_id,
+    )
+}
+
 pub fn trusted_mcp_actor(
     root: &Path,
     actor_id: &str,

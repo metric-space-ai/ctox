@@ -2353,6 +2353,8 @@ fn handle_business_os_mcp(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 request_id: format!("cli-{}", Uuid::new_v4()),
                 confirmation_state:
                     crate::business_os::mcp_channel::McpConfirmationState::NotRequired,
+                trusted_role: None,
+                trusted_role_source: None,
             };
             let export = crate::business_os::mcp_channel::export_mcp_activity(
                 root, &context, limit, format,
@@ -2379,6 +2381,8 @@ fn handle_business_os_mcp(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 request_id: format!("cli-{}", Uuid::new_v4()),
                 confirmation_state:
                     crate::business_os::mcp_channel::McpConfirmationState::NotRequired,
+                trusted_role: None,
+                trusted_role_source: None,
             };
             print_json(&crate::business_os::mcp_channel::mcp_status(
                 root, &context,
