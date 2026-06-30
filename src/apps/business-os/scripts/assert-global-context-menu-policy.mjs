@@ -57,4 +57,15 @@ assert.doesNotMatch(
   'global CTOX context mode buttons must not repeat their label with an impact subtitle'
 );
 
+const contextModeBuilderMatch = readFileSync(resolve(appRoot, 'shared/shell-permissions-ui.js'), 'utf8')
+  .match(/export function buildGlobalCtoxContextModes[\s\S]*?\n}\n\nexport function renderGlobalCtoxContextModeHtml/);
+assert.ok(contextModeBuilderMatch, 'global CTOX context mode builder must exist');
+for (const mode of ['note', 'mention', 'approval']) {
+  assert.doesNotMatch(
+    contextModeBuilderMatch[0],
+    new RegExp(`value:\\s*['"]${mode}['"]`),
+    `${mode} must not be a primary global CTOX context mode`
+  );
+}
+
 console.log('Business OS global context menu policy OK');

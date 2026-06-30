@@ -29,11 +29,8 @@ const labels = {
   unpinFromTaskbar: 'Von Bar lösen',
   openSource: 'Source öffnen',
   modifyApp: 'App ändern',
-  workData: 'Mit Daten arbeiten',
-  answer: 'Frage beantworten',
-  note: 'Notiz an User',
-  mention: 'User erwähnen',
-  approval: 'Freigabe anfragen',
+  workData: 'Daten ändern',
+  answer: 'Frage stellen',
 };
 
 const governance = {
@@ -313,68 +310,67 @@ test('module why diagnostics html uses stable rows and does not leak raw grant j
 
 test('global CTOX context modes render app mode only when app modification is allowed', () => {
   const deniedModes = buildGlobalCtoxContextModes({ canModify: false, labels });
-  assert.deepEqual(deniedModes.map((mode) => mode.value), ['data', 'ask', 'note', 'mention', 'approval']);
+  assert.deepEqual(deniedModes.map((mode) => mode.value), ['data', 'ask', 'app']);
+  assert.equal(deniedModes.find((mode) => mode.value === 'app')?.approvalRequired, true);
 
   const allowedModes = buildGlobalCtoxContextModes({ canModify: true, labels });
-  assert.deepEqual(allowedModes.map((mode) => mode.value), ['data', 'ask', 'app', 'note', 'mention', 'approval']);
+  assert.deepEqual(allowedModes.map((mode) => mode.value), ['data', 'ask', 'app']);
   assert.equal(allowedModes.find((mode) => mode.value === 'app')?.label, 'App ändern');
-  assert.equal(deniedModes.find((mode) => mode.value === 'approval')?.label, 'Freigabe anfragen');
+  assert.equal(allowedModes.find((mode) => mode.value === 'app')?.approvalRequired, false);
 
   const deniedHtml = renderGlobalCtoxContextModeHtml({ canModify: false, labels });
-  assert.doesNotMatch(deniedHtml, /value="app"/);
-  assert.doesNotMatch(deniedHtml, /App ändern/);
+  assert.match(deniedHtml, /value="app"/);
+  assert.match(deniedHtml, /App ändern/);
+  assert.match(deniedHtml, /data-approval-required="true"/);
   assert.doesNotMatch(deniedHtml, /App modifizieren|Modul bearbeiten/);
-  assert.match(deniedHtml, /value="note"/);
-  assert.match(deniedHtml, /value="mention"/);
-  assert.match(deniedHtml, /value="approval"/);
+  assert.doesNotMatch(deniedHtml, /value="note"|value="mention"|value="approval"/);
 
   const allowedHtml = renderGlobalCtoxContextModeHtml({ canModify: true, labels });
   assert.match(allowedHtml, /value="data" checked/);
   assert.match(allowedHtml, /value="app"/);
   assert.match(allowedHtml, /App ändern/);
-  assert.match(allowedHtml, /Freigabe anfragen/);
+  assert.doesNotMatch(allowedHtml, /Freigabe anfragen|Freigabe einholen/);
   assert.doesNotMatch(allowedHtml, /App modifizieren|Modul bearbeiten/);
   assert.doesNotMatch(allowedHtml, /<small>/);
   assert.doesNotMatch(allowedHtml, /Datenarbeit|App-Aenderung|App Änderung/);
 });
 
-test('global CTOX context modes default to human-in-the-loop actions', () => {
+test('global CTOX context modes expose only the three primary actions', () => {
   const modes = buildGlobalCtoxContextModes({ canModify: false });
-  assert.deepEqual(modes.map((mode) => mode.value), ['data', 'ask', 'note', 'mention', 'approval']);
-  assert.equal(modes.find((mode) => mode.value === 'note')?.label, 'Notiz an User');
-  assert.equal(modes.find((mode) => mode.value === 'mention')?.label, 'User erwähnen');
-  assert.equal(modes.find((mode) => mode.value === 'approval')?.label, 'Freigabe anfragen');
+  assert.deepEqual(modes.map((mode) => mode.value), ['data', 'ask', 'app']);
+  assert.equal(modes.find((mode) => mode.value === 'data')?.label, 'Daten ändern');
+  assert.equal(modes.find((mode) => mode.value === 'ask')?.label, 'Frage stellen');
+  assert.equal(modes.find((mode) => mode.value === 'app')?.label, 'App ändern');
   assert.deepEqual(
     modes.map((mode) => mode.impact),
-    ['data_mutation', 'read_only', 'human_note', 'human_mention', 'approval_required']
+    ['data_mutation', 'read_only', 'approval_required']
   );
 
   const html = renderGlobalCtoxContextModeHtml({ canModify: false });
   assert.match(html, /data-impact="read_only"/);
   assert.match(html, /data-impact="approval_required"/);
+  assert.doesNotMatch(html, /Notiz|Person einbinden|User erwähnen|Freigabe einholen/);
   assert.doesNotMatch(html, /Nur lesend|Datenarbeit|Freigabe<\/small>/);
 });
 
-test('global CTOX context modes steer restricted actors to delegate via approval', () => {
-  // No data.write -> cannot self-execute: hide data/app, pre-select approval as
-  // the delegation path so the menu opens straight into "ask a reviewer".
+test('global CTOX context modes mark restricted changes as approval-required features', () => {
   const restricted = buildGlobalCtoxContextModes({ canModify: true, canSelfExecute: false });
   const values = restricted.map((mode) => mode.value);
-  assert.equal(values.includes('data'), false, 'self-execute data mode must be hidden');
-  assert.equal(values.includes('app'), false, 'self-execute app mode must be hidden');
-  assert.deepEqual(values, ['ask', 'note', 'mention', 'approval']);
-  const approval = restricted.find((mode) => mode.value === 'approval');
-  assert.equal(approval?.selected, true, 'approval is the pre-selected delegation path');
-  assert.match(approval?.description || '', /Reviewer|ausfuehren/i);
+  assert.deepEqual(values, ['data', 'ask', 'app']);
+  assert.equal(restricted.find((mode) => mode.value === 'data')?.approvalRequired, true);
+  assert.equal(restricted.find((mode) => mode.value === 'ask')?.approvalRequired, false);
+  assert.equal(restricted.find((mode) => mode.value === 'app')?.approvalRequired, false);
+  assert.equal(restricted.find((mode) => mode.value === 'data')?.selected, true);
 
   // With data.write the actor can self-execute: data is present and selected.
   const allowed = buildGlobalCtoxContextModes({ canModify: true, canSelfExecute: true });
   assert.equal(allowed.find((mode) => mode.value === 'data')?.selected, true);
-  assert.equal(allowed.find((mode) => mode.value === 'approval')?.selected, false);
+  assert.equal(allowed.find((mode) => mode.value === 'data')?.approvalRequired, false);
 
   const restrictedHtml = renderGlobalCtoxContextModeHtml({ canSelfExecute: false });
-  assert.doesNotMatch(restrictedHtml, /Mit Daten arbeiten/);
-  assert.match(restrictedHtml, /Freigabe anfragen/);
+  assert.match(restrictedHtml, /Daten ändern/);
+  assert.match(restrictedHtml, /data-approval-required="true"/);
+  assert.doesNotMatch(restrictedHtml, /value="approval"|Freigabe anfragen|Freigabe einholen/);
 });
 
 test('global CTOX user picker keeps active users and escapes datalist labels', () => {

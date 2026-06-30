@@ -4592,6 +4592,15 @@ body[data-auth-state="locked"] .topbar {
   opacity: 1;
 }
 
+.ctox-context-mode-help {
+  margin: -2px 0 0;
+  color: var(--text-muted, var(--muted));
+  font-size: 11.5px;
+  font-weight: 650;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
 .ctox-agent-scope {
   border: 1px solid var(--line);
   border-radius: 8px;

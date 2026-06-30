@@ -283,80 +283,44 @@ export function buildGlobalCtoxContextModes({
   canSelfExecute = true,
   labels = {},
 } = {}) {
-  // When the actor lacks data.write for this scope they cannot run a change
-  // themselves: hide the self-execute modes (data/app) and steer them to delegate
-  // the change to a reviewer via an approval request. Native policy stays
-  // authoritative; this is the matching UI guardrail.
-  const restricted = !canSelfExecute;
-  const modes = [];
-  if (!restricted) {
-    modes.push({
+  const dataNeedsApproval = !canSelfExecute;
+  const appNeedsApproval = !canModify;
+  return [
+    {
       value: 'data',
-      label: labels.workData || 'Mit Daten arbeiten',
-      impact: 'data_mutation',
-      impactLabel: labels.impactData || 'Datenarbeit',
-      description: labels.impactDataDescription || 'Kann Daten lesen oder eine Aenderung anstoßen.',
+      label: labels.workData || 'Daten ändern',
+      impact: dataNeedsApproval ? 'approval_required' : 'data_mutation',
+      approvalRequired: dataNeedsApproval,
+      description: dataNeedsApproval
+        ? (labels.dataApprovalDescription || 'Braucht Freigabe: Daten werden erst nach Review geändert.')
+        : (labels.impactDataDescription || 'Ändert den ausgewählten Datensatz oder das Feld.'),
       selected: true,
-    });
-  }
-  modes.push({
-    value: 'ask',
-    label: labels.answer || 'Frage beantworten',
-    impact: 'read_only',
-    impactLabel: labels.impactAsk || 'Nur lesend',
-    description: labels.impactAskDescription || 'Beantwortet eine Frage ohne Daten oder Apps zu veraendern.',
-    selected: false,
-  });
-  if (canModify && !restricted) {
-    modes.push({
+    },
+    {
+      value: 'ask',
+      label: labels.answer || 'Frage stellen',
+      impact: 'read_only',
+      approvalRequired: false,
+      description: labels.impactAskDescription || 'Liest den Kontext und antwortet, ohne etwas zu ändern.',
+      selected: false,
+    },
+    {
       value: 'app',
       label: labels.modifyApp || 'App ändern',
-      impact: 'privileged_app_change',
-      impactLabel: labels.impactApp || 'App-Aenderung',
-      description: labels.impactAppDescription || 'Kann App-Verhalten oder Source aendern.',
-      selected: false,
-    });
-  }
-  modes.push(
-    {
-      value: 'note',
-      label: labels.note || 'Notiz an User',
-      impact: 'human_note',
-      impactLabel: labels.impactNote || 'Notiz',
-      description: labels.impactNoteDescription || 'Hinterlegt eine Kontextnotiz fuer andere Nutzer.',
+      impact: appNeedsApproval ? 'approval_required' : 'privileged_app_change',
+      approvalRequired: appNeedsApproval,
+      description: appNeedsApproval
+        ? (labels.appApprovalDescription || 'Braucht Freigabe: Die App wird erst nach Review geändert.')
+        : (labels.impactAppDescription || 'Ändert Layout, Logik oder Verhalten dieser App.'),
       selected: false,
     },
-    {
-      value: 'mention',
-      label: labels.mention || 'User erwähnen',
-      impact: 'human_mention',
-      impactLabel: labels.impactMention || 'Mention',
-      description: labels.impactMentionDescription || 'Holt andere Nutzer in diesen Kontext.',
-      selected: false,
-    },
-    {
-      value: 'approval',
-      label: labels.approval || 'Freigabe anfragen',
-      impact: 'approval_required',
-      impactLabel: restricted
-        ? (labels.impactApprovalRequired || 'Erforderlich')
-        : (labels.impactApproval || 'Freigabe'),
-      description: restricted
-        ? (labels.impactApprovalRestrictedDescription
-          || 'Du darfst diese Aenderung nicht selbst ausfuehren - delegiere sie einem Reviewer zur Freigabe.')
-        : (labels.impactApprovalDescription || 'Erstellt einen CTOX-Auftrag, der erst nach Review laeuft.'),
-      // When the user cannot self-execute, approval is the primary path and is
-      // pre-selected so the menu opens straight into the delegation flow.
-      selected: restricted,
-    },
-  );
-  return modes;
+  ];
 }
 
 export function renderGlobalCtoxContextModeHtml(options = {}) {
   return buildGlobalCtoxContextModes(options)
     .map((mode) => (
-      `<label${mode.selected ? ' class="is-selected"' : ''} data-impact="${escapeAttr(mode.impact || '')}" title="${escapeAttr(mode.description || '')}">`
+      `<label${mode.selected ? ' class="is-selected"' : ''} data-impact="${escapeAttr(mode.impact || '')}" data-approval-required="${mode.approvalRequired ? 'true' : 'false'}" data-description="${escapeAttr(mode.description || '')}" title="${escapeAttr(mode.description || '')}">`
         + `<input type="radio" name="contextMode" value="${escapeAttr(mode.value)}"${mode.selected ? ' checked' : ''} style="display:none;" />`
         + '<span class="ctox-context-mode-copy">'
           + `<span>${escapeHtml(mode.label)}</span>`

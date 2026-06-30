@@ -23,7 +23,7 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260630-context-menu-v3';
+} from './shared/shell-permissions-ui.js?v=20260630-context-menu-v4';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -36,7 +36,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260630-context-menu-v3';
+const APP_BUILD = '20260630-context-menu-v4';
 
 ensureShellStylesheets();
 
@@ -614,8 +614,8 @@ const shellMessages = {
     running: 'Läuft',
     openApp: 'Öffnen',
     chatToCtox: 'Mit CTOX chatten',
-    chatWorkDataLabel: 'Mit Daten arbeiten',
-    chatAnswerLabel: 'Frage beantworten',
+    chatWorkDataLabel: 'Daten ändern',
+    chatAnswerLabel: 'Frage stellen',
     chatModifyAppLabel: 'App ändern',
     chatPlaceholder: 'Was soll CTOX hier tun oder prüfen?',
     chatOpening: 'Öffne Chat...',
@@ -724,8 +724,8 @@ const shellMessages = {
     running: 'Running',
     openApp: 'Open',
     chatToCtox: 'Chat to CTOX',
-    chatWorkDataLabel: 'Work with data',
-    chatAnswerLabel: 'Answer question',
+    chatWorkDataLabel: 'Change data',
+    chatAnswerLabel: 'Ask question',
     chatModifyAppLabel: 'Change app',
     chatPlaceholder: 'What should CTOX do or check here?',
     chatOpening: 'Opening Chat...',
@@ -8585,25 +8585,23 @@ function showGlobalCtoxContextMenu(context, x, y) {
   const lang = shellLang();
 
   const titleText = shellText('chatToCtox') || (lang === 'de' ? 'Mit CTOX chatten' : 'Chat to CTOX');
-  const workDataLabel = shellText('chatWorkDataLabel') || (lang === 'de' ? 'Mit Daten arbeiten' : 'Work with data');
-  const answerLabel = shellText('chatAnswerLabel') || (lang === 'de' ? 'Frage beantworten' : 'Answer question');
+  const workDataLabel = shellText('chatWorkDataLabel') || (lang === 'de' ? 'Daten ändern' : 'Change data');
+  const answerLabel = shellText('chatAnswerLabel') || (lang === 'de' ? 'Frage stellen' : 'Ask question');
   const modifyAppLabel = shellText('chatModifyAppLabel') || (lang === 'de' ? 'App ändern' : 'Change app');
-  const noteLabel = lang === 'de' ? 'Notiz an User' : 'Note to user';
-  const mentionLabel = lang === 'de' ? 'User erwähnen' : 'Mention user';
-  const approvalLabel = lang === 'de' ? 'Freigabe anfragen' : 'Request approval';
+  const approvalLabel = lang === 'de' ? 'Freigabe einholen' : 'Request approval';
   const placeholderText = shellText('chatPlaceholder') || (lang === 'de' ? 'Was soll CTOX hier tun oder prüfen?' : 'What should CTOX do or check here?');
-  const notePlaceholderText = lang === 'de' ? 'Welche Notiz soll am Kontext hängen?' : 'What note should stay attached to this context?';
-  const mentionPlaceholderText = lang === 'de' ? 'Warum soll dieser User hier eingebunden werden?' : 'Why should this user be pulled into this context?';
-  const approvalPlaceholderText = lang === 'de' ? 'Was soll CTOX nach Freigabe tun?' : 'What should CTOX do after approval?';
+  const dataPlaceholderText = lang === 'de' ? 'Welche Daten sollen geändert werden?' : 'What data should change?';
+  const askPlaceholderText = lang === 'de' ? 'Welche Frage soll beantwortet werden?' : 'What question should be answered?';
+  const appPlaceholderText = lang === 'de' ? 'Was soll an der App geändert werden?' : 'What should change in the app?';
+  const approvalPlaceholderText = lang === 'de' ? 'Was soll nach Freigabe passieren?' : 'What should happen after approval?';
   const sendLabel = shellText('send') || (lang === 'de' ? 'Senden' : 'Send');
   const closeLabel = lang === 'de' ? 'Schließen' : 'Close';
   const missingMsgLabel = lang === 'de' ? 'Nachricht fehlt.' : 'Message is missing.';
-  const missingUserLabel = lang === 'de' ? 'User fehlt.' : 'User is missing.';
+  const missingReviewerLabel = lang === 'de' ? 'Reviewer fehlt.' : 'Reviewer is missing.';
   const chatNotReadyLabel = lang === 'de' ? 'Chat ist noch nicht bereit.' : 'Chat is not ready.';
   const chatOpeningLabel = shellText('chatOpening') || (lang === 'de' ? 'Öffne Chat...' : 'Opening Chat...');
   const commandOpeningLabel = lang === 'de' ? 'Sende an Threads...' : 'Sending to Threads...';
-  const userInputLabel = lang === 'de' ? 'User' : 'User';
-  const noteUserPlaceholder = lang === 'de' ? 'user-id, mehrere mit Komma' : 'user-id, comma separated';
+  const reviewerLabel = lang === 'de' ? 'Reviewer' : 'Reviewer';
   const reviewerPlaceholder = lang === 'de' ? 'reviewer-user-id' : 'reviewer-user-id';
   const initialUserOptions = renderBusinessUserDatalistOptions([], { session: state.session });
 
@@ -8626,19 +8624,19 @@ function showGlobalCtoxContextMenu(context, x, y) {
             workData: workDataLabel,
             answer: answerLabel,
             modifyApp: modifyAppLabel,
-            note: noteLabel,
-            mention: mentionLabel,
-            approval: approvalLabel,
-            impactApprovalRequired: lang === 'de' ? 'Erforderlich' : 'Required',
-            impactApprovalRestrictedDescription: lang === 'de'
-              ? 'Du darfst diese Änderung hier nicht selbst ausführen – delegiere sie einem Reviewer zur Freigabe.'
-              : 'You cannot run this change here yourself — delegate it to a reviewer for approval.',
+            dataApprovalDescription: lang === 'de'
+              ? 'Braucht Freigabe: Daten werden erst nach Review geändert.'
+              : 'Data changes require approval. Pick a reviewer.',
+            appApprovalDescription: lang === 'de'
+              ? 'Braucht Freigabe: Die App wird erst nach Review geändert.'
+              : 'App changes require approval. Pick a reviewer.',
           },
         })}
       </div>
+      <p class="ctox-context-mode-help" data-ctox-context-mode-help></p>
       <label class="ctox-context-user-row" hidden>
-        <span class="ctox-context-user-label">${escapeHtml(userInputLabel)}</span>
-        <input class="ctox-context-user-input" type="text" autocomplete="off" list="ctox-context-user-options" placeholder="${escapeHtml(noteUserPlaceholder)}">
+        <span class="ctox-context-user-label">${escapeHtml(reviewerLabel)}</span>
+        <input class="ctox-context-user-input" type="text" autocomplete="off" list="ctox-context-user-options" placeholder="${escapeHtml(reviewerPlaceholder)}">
         <datalist id="ctox-context-user-options" data-ctox-context-user-options>${initialUserOptions}</datalist>
       </label>
       <textarea class="ctox-context-textarea" placeholder="${escapeHtml(placeholderText)}"></textarea>
@@ -8666,6 +8664,7 @@ function showGlobalCtoxContextMenu(context, x, y) {
   const userInput = globalCtoxContextMenuEl.querySelector('.ctox-context-user-input');
   const userOptionsEl = globalCtoxContextMenuEl.querySelector('[data-ctox-context-user-options]');
   const userLabel = globalCtoxContextMenuEl.querySelector('.ctox-context-user-label');
+  const modeHelp = globalCtoxContextMenuEl.querySelector('[data-ctox-context-mode-help]');
   const statusEl = globalCtoxContextMenuEl.querySelector('.ctox-context-status');
   const closeBtn = globalCtoxContextMenuEl.querySelector('.ctox-context-close-btn');
 
@@ -8676,29 +8675,37 @@ function showGlobalCtoxContextMenu(context, x, y) {
   const modeLabels = globalCtoxContextMenuEl.querySelectorAll('.ctox-context-mode label');
   const syncModeInputs = () => {
     const mode = new FormData(form).get('contextMode') || 'data';
-    const needsUser = mode === 'note' || mode === 'mention' || mode === 'approval';
+    const selectedModeLabel = globalCtoxContextMenuEl.querySelector('.ctox-context-mode label.is-selected')
+      || Array.from(modeLabels).find((label) => label.querySelector('input')?.checked);
+    const needsApproval = selectedModeLabel?.dataset.approvalRequired === 'true';
     if (userRow) {
-      userRow.hidden = !needsUser;
-      userRow.style.display = needsUser ? 'grid' : 'none';
+      userRow.hidden = !needsApproval;
+      userRow.style.display = needsApproval ? 'grid' : 'none';
     }
     if (userInput) {
-      userInput.placeholder = mode === 'approval' ? reviewerPlaceholder : noteUserPlaceholder;
-      userInput.value = needsUser ? userInput.value : '';
+      userInput.placeholder = reviewerPlaceholder;
+      userInput.value = needsApproval ? userInput.value : '';
     }
     if (userLabel) {
-      userLabel.textContent = mode === 'approval'
-        ? (lang === 'de' ? 'Reviewer' : 'Reviewer')
-        : mode === 'mention'
-          ? (lang === 'de' ? 'Erwähnte User' : 'Mentioned users')
-          : userInputLabel;
+      userLabel.textContent = reviewerLabel;
     }
-    textarea.placeholder = mode === 'approval'
+    if (modeHelp) {
+      modeHelp.textContent = selectedModeLabel?.dataset.description || '';
+    }
+    if (statusEl) {
+      statusEl.textContent = needsApproval
+        ? (lang === 'de' ? 'Freigabe nötig.' : 'Approval required.')
+        : '';
+    }
+    textarea.placeholder = needsApproval
       ? approvalPlaceholderText
-      : mode === 'mention'
-        ? mentionPlaceholderText
-      : mode === 'note'
-        ? notePlaceholderText
-        : placeholderText;
+      : mode === 'ask'
+        ? askPlaceholderText
+        : mode === 'app'
+          ? appPlaceholderText
+          : mode === 'data'
+            ? dataPlaceholderText
+            : placeholderText;
   };
   modeLabels.forEach(label => {
     label.addEventListener('click', () => {
@@ -8710,11 +8717,6 @@ function showGlobalCtoxContextMenu(context, x, y) {
     });
   });
   syncModeInputs();
-  if (!canSelfExecute && statusEl) {
-    statusEl.textContent = lang === 'de'
-      ? 'Nur Freigabe möglich – wähle einen Reviewer.'
-      : 'Approval only — pick a reviewer.';
-  }
   populateGlobalCtoxUserOptions(userOptionsEl).catch((error) => {
     console.warn('[business-os] failed to populate context user picker:', error);
   });
@@ -8741,17 +8743,13 @@ function showGlobalCtoxContextMenu(context, x, y) {
       return;
     }
 
-    let mode = new FormData(form).get('contextMode') || 'data';
-    if (mode === 'app' && !canModify) mode = 'data';
-    // Restricted actors cannot self-execute: any self-execute choice is forced to
-    // the delegation (approval) path. The UI already hides data/app for them; this
-    // is the defensive backstop (native policy remains authoritative regardless).
-    if (!canSelfExecute && (mode === 'data' || mode === 'app')) mode = 'approval';
+    const mode = new FormData(form).get('contextMode') || 'data';
+    const needsApproval = (mode === 'data' && !canSelfExecute) || (mode === 'app' && !canModify);
 
-    if (mode === 'note' || mode === 'mention' || mode === 'approval') {
-      const rawUserValue = String(userInput?.value || '').trim();
-      if (!rawUserValue) {
-        if (statusEl) statusEl.textContent = missingUserLabel;
+    if (needsApproval) {
+      const reviewerUserId = String(userInput?.value || '').trim();
+      if (!reviewerUserId) {
+        if (statusEl) statusEl.textContent = missingReviewerLabel;
         userInput?.focus?.();
         return;
       }
@@ -8771,49 +8769,40 @@ function showGlobalCtoxContextMenu(context, x, y) {
         clicked_text: context.clicked_text,
       };
       const recordId = context.record_id || mod.id;
-      const title = `${mode === 'approval' ? approvalLabel : mode === 'mention' ? mentionLabel : noteLabel} · ${subtitle}`;
-      const payload = mode === 'approval'
-        ? {
-            prompt,
-            instruction: prompt,
-            reviewer_user_id: rawUserValue,
-            title,
-            target_command_type: 'business_os.chat.task',
-            target_module: mod.id,
-            target_record_id: recordId,
-            source_context: sourceContext,
-            target_payload: {
-              title,
-              instruction: prompt,
-              prompt,
-              user_message: prompt,
-              mode: 'data',
-              target: 'data',
-              context: sourceContext,
-              thread_key: `business-os/${mod.id}/${recordId || 'module'}`,
-            },
-          }
-        : {
-            body: prompt,
-            kind: mode === 'mention' ? 'mention' : 'note',
-            target_user_ids: splitShellUserIds(rawUserValue),
-            title,
-            source_context: sourceContext,
-          };
+      const modeLabel = mode === 'app' ? modifyAppLabel : workDataLabel;
+      const title = `${approvalLabel}: ${modeLabel} · ${subtitle}`;
+      const targetCommandType = mode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task';
+      const targetPayload = {
+        title,
+        instruction: prompt,
+        prompt,
+        user_message: prompt,
+        mode,
+        target: mode === 'app' ? 'app' : 'data',
+        context: sourceContext,
+        thread_key: `business-os/${mod.id}/${recordId || 'module'}`,
+      };
+      const payload = {
+        prompt,
+        instruction: prompt,
+        reviewer_user_id: reviewerUserId,
+        title,
+        target_command_type: targetCommandType,
+        target_module: mod.id,
+        target_record_id: mode === 'app' ? mod.id : recordId,
+        source_context: sourceContext,
+        target_payload: targetPayload,
+      };
       try {
         await state.commandBus.dispatch({
           id: `cmd_${crypto.randomUUID()}`,
           module: 'threads',
-          command_type: mode === 'approval' ? 'threads.ctox_approval.request' : 'threads.note.create',
+          command_type: 'threads.ctox_approval.request',
           record_id: recordId,
           inbound_channel: mod.id,
           payload,
           client_context: {
-            action: mode === 'approval'
-              ? 'context-approval-request'
-              : mode === 'mention'
-                ? 'context-mention'
-                : 'context-note',
+            action: 'context-approval-request',
             mode,
             module: 'threads',
             module_id: 'threads',
@@ -8936,12 +8925,4 @@ async function loadGlobalCtoxContextUsers() {
     console.warn('[business-os] business_users picker fallback:', error);
     return sessionUser;
   }
-}
-
-function splitShellUserIds(value) {
-  return String(value || '')
-    .split(/[,\s]+/)
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .filter((item, index, list) => list.indexOf(item) === index);
 }
