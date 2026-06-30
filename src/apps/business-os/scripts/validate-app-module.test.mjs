@@ -23,6 +23,7 @@ function makeWorkspace() {
   const root = mkdtempSync(join(tmpdir(), 'ctox-app-validator-'));
   mkdirSync(join(root, 'src/apps/business-os/modules'), { recursive: true });
   mkdirSync(join(root, 'runtime/business-os/installed-modules'), { recursive: true });
+  writeJson(join(root, 'package.json'), { type: 'module' });
   writeJson(join(root, 'src/apps/business-os/modules/registry.json'), { modules: [] });
   return root;
 }
