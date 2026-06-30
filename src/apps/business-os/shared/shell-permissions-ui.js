@@ -360,7 +360,6 @@ export function renderGlobalCtoxContextModeHtml(options = {}) {
         + `<input type="radio" name="contextMode" value="${escapeAttr(mode.value)}"${mode.selected ? ' checked' : ''} style="display:none;" />`
         + '<span class="ctox-context-mode-copy">'
           + `<span>${escapeHtml(mode.label)}</span>`
-          + `<small>${escapeHtml(mode.impactLabel || '')}</small>`
         + '</span>'
       + '</label>'
     ))

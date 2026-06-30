@@ -39,4 +39,22 @@ assert.doesNotMatch(
   'global CTOX context menu must not be limited to full-workspace modules'
 );
 
+const menuMarkupMatch = appSource.match(/globalCtoxContextMenuEl\.innerHTML\s*=\s*`([\s\S]*?)`;\n\n\s*globalCtoxContextMenuEl\.hidden = false;/);
+assert.ok(menuMarkupMatch, 'global CTOX context menu markup must be inspectable');
+assert.doesNotMatch(
+  menuMarkupMatch[1],
+  /renderGlobalCtoxAgentScopeHtml/,
+  'global CTOX context menu must not render the verbose CTOX access block by default'
+);
+
+const contextModeRenderMatch = appSource.includes('renderGlobalCtoxContextModeHtml')
+  ? readFileSync(resolve(appRoot, 'shared/shell-permissions-ui.js'), 'utf8').match(/export function renderGlobalCtoxContextModeHtml[\s\S]*?\.join\(''\);\n}/)
+  : null;
+assert.ok(contextModeRenderMatch, 'global CTOX context mode renderer must exist');
+assert.doesNotMatch(
+  contextModeRenderMatch[0],
+  /<small>/,
+  'global CTOX context mode buttons must not repeat their label with an impact subtitle'
+);
+
 console.log('Business OS global context menu policy OK');

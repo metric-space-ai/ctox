@@ -21,10 +21,9 @@ import {
   buildModuleTargetContextItems,
   renderBusinessUserDatalistOptions,
   renderModuleWhyDiagnosticsHtml,
-  renderGlobalCtoxAgentScopeHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260626-skf-dialog-knowledge-v2';
+} from './shared/shell-permissions-ui.js?v=20260630-context-menu-v3';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -37,7 +36,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260630-context-menu-v2';
+const APP_BUILD = '20260630-context-menu-v3';
 
 ensureShellStylesheets();
 
@@ -8637,7 +8636,6 @@ function showGlobalCtoxContextMenu(context, x, y) {
           },
         })}
       </div>
-      ${renderGlobalCtoxAgentScopeHtml({ view: agentScope })}
       <label class="ctox-context-user-row" hidden>
         <span class="ctox-context-user-label">${escapeHtml(userInputLabel)}</span>
         <input class="ctox-context-user-input" type="text" autocomplete="off" list="ctox-context-user-options" placeholder="${escapeHtml(noteUserPlaceholder)}">

@@ -334,6 +334,8 @@ test('global CTOX context modes render app mode only when app modification is al
   assert.match(allowedHtml, /App ändern/);
   assert.match(allowedHtml, /Freigabe anfragen/);
   assert.doesNotMatch(allowedHtml, /App modifizieren|Modul bearbeiten/);
+  assert.doesNotMatch(allowedHtml, /<small>/);
+  assert.doesNotMatch(allowedHtml, /Datenarbeit|App-Aenderung|App Änderung/);
 });
 
 test('global CTOX context modes default to human-in-the-loop actions', () => {
@@ -349,8 +351,8 @@ test('global CTOX context modes default to human-in-the-loop actions', () => {
 
   const html = renderGlobalCtoxContextModeHtml({ canModify: false });
   assert.match(html, /data-impact="read_only"/);
-  assert.match(html, /Nur lesend/);
   assert.match(html, /data-impact="approval_required"/);
+  assert.doesNotMatch(html, /Nur lesend|Datenarbeit|Freigabe<\/small>/);
 });
 
 test('global CTOX context modes steer restricted actors to delegate via approval', () => {

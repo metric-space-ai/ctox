@@ -4537,10 +4537,10 @@ body[data-auth-state="locked"] .topbar {
 
 .ctox-context-mode label {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 7px;
   min-width: 0;
-  min-height: 40px;
+  min-height: 34px;
   box-sizing: border-box;
   padding: 6px 8px;
   border: 1px solid var(--line);
@@ -4558,7 +4558,6 @@ body[data-auth-state="locked"] .topbar {
   flex: 0 0 auto;
   width: 10px;
   height: 10px;
-  margin-top: 4px;
   border: 1px solid currentColor;
   border-radius: 999px;
   opacity: 0.72;
@@ -4578,14 +4577,7 @@ body[data-auth-state="locked"] .topbar {
 }
 
 .ctox-context-mode-copy span {
-  line-height: 1.15;
-}
-
-.ctox-context-mode-copy small {
-  color: var(--muted);
-  font-size: 9.5px;
-  font-weight: 680;
-  line-height: 1.15;
+  line-height: 1.2;
 }
 
 .ctox-context-mode label.is-selected {
