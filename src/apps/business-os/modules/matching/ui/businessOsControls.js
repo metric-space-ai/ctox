@@ -614,7 +614,6 @@ initTheme();
 initLanguage();
 initColumnLabels();
 initColumnDrawers();
-initContextMenu();
 renderImportStatuses();
 
 function getMatchingRoot() {

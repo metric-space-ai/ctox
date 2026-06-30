@@ -37,7 +37,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260629-runtime-app-allowlist-v1';
+const APP_BUILD = '20260630-context-menu-v2';
 
 ensureShellStylesheets();
 
@@ -8354,8 +8354,7 @@ function initGlobalCtoxContextMenu() {
 }
 
 function handleGlobalContextMenu(event) {
-  // Check if a full-screen module is active
-  if (!state.activeModule || !moduleUsesFullWorkspace(state.activeModule)) {
+  if (!state.activeModule) {
     return;
   }
 
@@ -8363,7 +8362,7 @@ function handleGlobalContextMenu(event) {
     ? event.target
     : event.target?.parentElement;
 
-  if (!target || !isGlobalCtoxContextSurface(target) || isNativeContextMenuTarget(target)) {
+  if (!target || !isGlobalCtoxContextSurface(target) || isCtoxContextMenuBypassTarget(target)) {
     return;
   }
 
@@ -8373,6 +8372,7 @@ function handleGlobalContextMenu(event) {
   event.stopImmediatePropagation?.();
 
   state.contextMenu?.hide?.();
+  removeLegacyCtoxContextMenus();
 
   const mod = state.activeModule;
   const context = extractGlobalCtoxContext(mod, target);
@@ -8407,12 +8407,9 @@ function isGlobalCtoxContextSurface(target) {
   ].join(', ')));
 }
 
-function isNativeContextMenuTarget(target) {
+function isCtoxContextMenuBypassTarget(target) {
   if (!target?.closest) return false;
   return Boolean(target.closest([
-    'input',
-    'textarea',
-    'select',
     '[contenteditable="true"]',
     '.monaco-editor',
     '.no-ctox-context'
@@ -8561,6 +8558,7 @@ function deriveLabelFromElement(el) {
 
 function showGlobalCtoxContextMenu(context, x, y) {
   if (!globalCtoxContextMenuEl) return;
+  removeLegacyCtoxContextMenus();
 
   const mod = state.activeModule || { id: 'ctox', title: 'CTOX' };
   const canModify = canModifyModule(mod);
@@ -8614,14 +8612,14 @@ function showGlobalCtoxContextMenu(context, x, y) {
 
   globalCtoxContextMenuEl.innerHTML = `
     <form class="ctox-context-chat-form" novalidate>
-      <header style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 2px;">
-        <div style="min-width: 0; flex: 1;">
-          <strong style="display: block; color: var(--text-strong, var(--text, #18222d)); font-size: 13px; font-weight: 800; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(titleText)}</strong>
-          <span style="display: block; color: var(--text-muted, var(--muted, #64747c)); font-size: 11px; font-weight: 600; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(subtitle)}</span>
+      <header class="ctox-context-header">
+        <div class="ctox-context-heading">
+          <strong>${escapeHtml(titleText)}</strong>
+          <span>${escapeHtml(subtitle)}</span>
         </div>
-        <button type="button" class="ctox-context-close-btn" aria-label="${escapeHtml(closeLabel)}" style="width: 28px; height: 28px; line-height: 24px; text-align: center; font-size: 20px; border: none; background: none; color: var(--text-muted, var(--muted, #64747c)); cursor: pointer; transition: color 0.2s ease; padding: 0;">×</button>
+        <button type="button" class="ctox-context-close-btn" aria-label="${escapeHtml(closeLabel)}">×</button>
       </header>
-      <div class="ctox-context-mode" role="radiogroup" aria-label="Aktion" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px;">
+      <div class="ctox-context-mode" role="radiogroup" aria-label="Aktion">
         ${renderGlobalCtoxContextModeHtml({
           canModify,
           canSelfExecute,
@@ -8640,15 +8638,15 @@ function showGlobalCtoxContextMenu(context, x, y) {
         })}
       </div>
       ${renderGlobalCtoxAgentScopeHtml({ view: agentScope })}
-      <label class="ctox-context-user-row" hidden style="display: grid; gap: 5px; color: var(--text-muted, var(--muted, #64747c)); font-size: 11.5px; font-weight: 700;">
+      <label class="ctox-context-user-row" hidden>
         <span class="ctox-context-user-label">${escapeHtml(userInputLabel)}</span>
-        <input class="ctox-context-user-input" type="text" autocomplete="off" list="ctox-context-user-options" placeholder="${escapeHtml(noteUserPlaceholder)}" style="width: 100%; box-sizing: border-box; height: 32px; border: 1px solid var(--line, #d8e1e5); border-radius: 8px; background: var(--surface-2, #eef3f7); color: var(--text, #18222d); font-family: inherit; font-size: 12.5px; padding: 0 10px; outline: none;">
+        <input class="ctox-context-user-input" type="text" autocomplete="off" list="ctox-context-user-options" placeholder="${escapeHtml(noteUserPlaceholder)}">
         <datalist id="ctox-context-user-options" data-ctox-context-user-options>${initialUserOptions}</datalist>
       </label>
-      <textarea class="ctox-context-textarea" placeholder="${escapeHtml(placeholderText)}" style="width: 100%; box-sizing: border-box; min-height: 96px; max-height: 180px; border: 1px solid var(--line, #d8e1e5); border-radius: 8px; background: var(--surface-2, #eef3f7); color: var(--text, #18222d); font-family: inherit; font-size: 12.5px; line-height: 1.4; padding: 10px; resize: vertical; outline: none; transition: border-color 0.2s ease;"></textarea>
-      <footer style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
-        <span class="ctox-context-status" style="font-size: 11px; color: var(--text-muted, var(--muted, #64747c)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></span>
-        <button type="submit" class="ctox-context-submit-btn" style="flex: 0 0 auto; height: 32px; border: 1px solid var(--accent, #23665f); border-radius: 8px; background: color-mix(in srgb, var(--accent, #23665f) 10%, var(--surface, #fff)); color: var(--accent, #23665f); font-size: 12px; font-weight: 700; cursor: pointer; padding: 0 16px; transition: all 0.2s ease;">${escapeHtml(sendLabel)}</button>
+      <textarea class="ctox-context-textarea" placeholder="${escapeHtml(placeholderText)}"></textarea>
+      <footer class="ctox-context-footer">
+        <span class="ctox-context-status"></span>
+        <button type="submit" class="ctox-context-submit-btn">${escapeHtml(sendLabel)}</button>
       </footer>
     </form>
   `;
@@ -8913,6 +8911,13 @@ function hideGlobalCtoxContextMenu() {
   if (globalCtoxContextMenuEl) {
     globalCtoxContextMenuEl.hidden = true;
   }
+  removeLegacyCtoxContextMenus();
+}
+
+function removeLegacyCtoxContextMenus() {
+  document.querySelectorAll('.ctox-context-menu:not(.ctox-global-context-menu)').forEach((menu) => {
+    menu.remove();
+  });
 }
 
 async function populateGlobalCtoxUserOptions(datalistEl) {

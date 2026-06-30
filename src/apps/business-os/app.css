@@ -4452,13 +4452,16 @@ body[data-auth-state="locked"] .topbar {
   z-index: 1200;
   width: min(430px, calc(100vw - 16px));
   max-width: calc(100vw - 16px);
+  max-height: min(560px, calc(100vh - 16px));
   box-sizing: border-box;
-  padding: 14px;
+  padding: 12px;
   border: 1px solid var(--line);
   border-radius: var(--control-radius, 12px);
   background: var(--surface);
   color: var(--text);
   box-shadow: var(--panel-shadow);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .ctox-global-context-menu[hidden] {
@@ -4467,22 +4470,84 @@ body[data-auth-state="locked"] .topbar {
 
 .ctox-context-chat-form {
   display: grid;
-  gap: 12px;
+  gap: 9px;
+}
+
+.ctox-context-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ctox-context-heading {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.ctox-context-heading strong,
+.ctox-context-heading span {
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.ctox-context-heading strong {
+  color: var(--text-strong, var(--text));
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.25;
+  -webkit-line-clamp: 2;
+}
+
+.ctox-context-heading span {
+  color: var(--text-muted, var(--muted));
+  font-size: 11px;
+  font-weight: 640;
+  line-height: 1.25;
+  -webkit-line-clamp: 2;
+}
+
+.ctox-context-close-btn {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted, var(--muted));
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.ctox-context-mode {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
 }
 
 .ctox-context-mode label {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: 7px;
   min-width: 0;
-  min-height: 46px;
+  min-height: 40px;
   box-sizing: border-box;
-  padding: 6px 10px;
+  padding: 6px 8px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-2);
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 720;
   cursor: pointer;
   user-select: none;
@@ -4501,22 +4566,26 @@ body[data-auth-state="locked"] .topbar {
 
 .ctox-context-mode-copy {
   display: grid;
-  gap: 1px;
+  gap: 0;
   min-width: 0;
 }
 
 .ctox-context-mode-copy span,
 .ctox-context-mode-copy small {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.ctox-context-mode-copy span {
+  line-height: 1.15;
 }
 
 .ctox-context-mode-copy small {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: 680;
+  line-height: 1.15;
 }
 
 .ctox-context-mode label.is-selected {
@@ -4535,7 +4604,7 @@ body[data-auth-state="locked"] .topbar {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: color-mix(in srgb, var(--surface-2) 82%, var(--surface));
-  padding: 9px 10px 10px;
+  padding: 8px 9px;
 }
 
 .ctox-agent-scope-title {
@@ -4548,7 +4617,7 @@ body[data-auth-state="locked"] .topbar {
 
 .ctox-agent-scope dl {
   display: grid;
-  gap: 6px;
+  gap: 5px;
   margin: 0;
 }
 
@@ -4571,21 +4640,87 @@ body[data-auth-state="locked"] .topbar {
   color: var(--text);
   font-size: 11px;
   font-weight: 640;
-  line-height: 1.3;
+  line-height: 1.25;
   margin: 0;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .ctox-context-close-btn:hover {
+  border-color: var(--line);
+  background: var(--surface-2);
   color: var(--text) !important;
+}
+
+.ctox-context-user-row {
+  display: grid;
+  gap: 5px;
+  color: var(--text-muted, var(--muted));
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.ctox-context-user-input,
+.ctox-context-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.ctox-context-user-input {
+  height: 31px;
+  font-size: 12px;
+  padding: 0 9px;
+}
+
+.ctox-context-textarea {
+  min-height: 78px;
+  max-height: 150px;
+  padding: 9px;
+  font-size: 12.25px;
+  line-height: 1.35;
+  resize: vertical;
 }
 
 .ctox-context-textarea:focus {
   border-color: var(--accent) !important;
   box-shadow: var(--shell-focus-ring);
+}
+
+.ctox-context-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ctox-context-status {
+  min-width: 0;
+  color: var(--text-muted, var(--muted));
+  font-size: 11px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.ctox-context-submit-btn {
+  flex: 0 0 auto;
+  height: 31px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 740;
+  cursor: pointer;
+  padding: 0 15px;
+  transition: background-color 0.16s ease, color 0.16s ease, border-color 0.16s ease;
 }
 
 .ctox-context-submit-btn:hover {
