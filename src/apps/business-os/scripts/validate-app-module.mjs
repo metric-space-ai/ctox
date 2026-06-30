@@ -166,8 +166,10 @@ const INSTALLED_MODULE_ROOT_FILES = new Set([
 
 const INSTALLED_MODULE_ROOT_DIRS = new Set([
   'core',
+  'lib',
   'locales',
   'tests',
+  'vendor',
 ]);
 
 function collectInstalledModuleRootEntryFailures(workspace, moduleDir) {

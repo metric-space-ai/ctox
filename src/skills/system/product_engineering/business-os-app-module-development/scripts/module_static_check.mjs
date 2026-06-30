@@ -50,7 +50,7 @@ const allowedInstalledRootFiles = new Set([
   'index.js',
   'icon.svg',
 ]);
-const allowedInstalledRootDirs = new Set(['core', 'locales', 'tests']);
+const allowedInstalledRootDirs = new Set(['core', 'lib', 'locales', 'tests', 'vendor']);
 const semverPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
 function fail(message) {

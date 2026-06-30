@@ -26,6 +26,9 @@ tests/*.test.mjs
 ```
 
 Keep extra files rare. Use extra local ESM helpers only when the app would otherwise become harder to read.
+Place local browser ESM helpers under `lib/*.mjs` and vendored browser ESM
+helpers under `vendor/*.mjs`; import them with relative paths. Do not add
+package-manager manifests, lockfiles, or dependency directories.
 
 ## Runtime Shape
 

@@ -1009,6 +1009,13 @@ function writeSourceModule(root, moduleId, overrides = {}) {
 {
   const root = makeWorkspace();
   writeInstalledModule(root, 'moduledependencies');
+  mkdirSync(join(root, 'runtime/business-os/installed-modules/moduledependencies/lib'), { recursive: true });
+  mkdirSync(join(root, 'runtime/business-os/installed-modules/moduledependencies/vendor'), { recursive: true });
+  writeFileSync(join(root, 'runtime/business-os/installed-modules/moduledependencies/lib/math.mjs'), 'export const one = 1;\n');
+  writeFileSync(join(root, 'runtime/business-os/installed-modules/moduledependencies/vendor/chart-lite.mjs'), 'export function chart() { return null; }\n');
+  const localHelpersRun = runValidator(root, 'moduledependencies', '--installed');
+  assert.equal(localHelpersRun.status, 0, `${localHelpersRun.stderr}\n${localHelpersRun.stdout}`);
+
   writeFileSync(join(root, 'runtime/business-os/installed-modules/moduledependencies/package.json'), '{"type":"module"}\n');
   mkdirSync(join(root, 'runtime/business-os/installed-modules/moduledependencies/node_modules'), { recursive: true });
   const run = runValidator(root, 'moduledependencies', '--installed');
