@@ -26,6 +26,8 @@ function findRuntimeChromiumExecutable(root) {
     const candidates = [
       join(base, 'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing'),
       join(base, 'chrome-linux/chrome'),
+      join(base, 'chrome-linux64/chrome'),
+      join(base, 'chrome-headless-shell-linux64/chrome-headless-shell'),
       join(base, 'chrome-win/chrome.exe'),
     ];
     const executable = candidates.find((candidate) => existsSync(candidate));
