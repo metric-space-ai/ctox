@@ -681,6 +681,21 @@ function hasCtoxTicketCommandType(text) {
   return /(?:command_type\s*:\s*['"]ctox\.ticket\.[^'"]+['"]|["']command_type["']\s*:\s*["']ctox\.ticket\.[^'"]+["'])/.test(text);
 }
 
+function collectThemeTokenFailures(indexCss) {
+  const css = stripJsComments(indexCss);
+  const messages = [];
+  if (/\bcolor-scheme\s*:/.test(css)) {
+    messages.push('index.css must not force color-scheme; inherit the Business OS light/dark theme from the shell');
+  }
+  if (!/\bvar\s*\(\s*--(?:bg|surface|surface-2)\b/.test(css)) {
+    messages.push('index.css must use Business OS surface tokens such as var(--bg), var(--surface), or var(--surface-2) so light and dark themes render correctly');
+  }
+  if (!/\bvar\s*\(\s*--(?:text|text-strong|muted)\b/.test(css)) {
+    messages.push('index.css must use Business OS text tokens such as var(--text), var(--text-strong), or var(--muted) so light and dark themes render correctly');
+  }
+  return messages;
+}
+
 if (!existsSync(moduleDir)) {
   fail(`${rel(moduleDir)} does not exist`);
 }
@@ -736,6 +751,9 @@ if (manifest) {
     }
   }
   if (installedMode) {
+    if (manifest.layout?.shell !== 'full-workspace') {
+      fail('module.json layout.shell must be full-workspace for runtime-installed apps; do not leave users in generic Kontext/Themen shell side panes');
+    }
     const version = String(manifest.version || '');
     const parsed = semverPattern.exec(version);
     if (!parsed) fail('module.json version must be SemVer x.y.z without a v prefix');
@@ -902,6 +920,7 @@ if (!/\bctx\.host\b|\bhost\.innerHTML\b|\bhost\.append/.test(indexJs)) {
 }
 
 if (installedMode) {
+  for (const message of collectThemeTokenFailures(indexCss)) fail(message);
   if (!/\bctx\??\.db\b|\bstate\.ctx\??\.db\b/.test(runtimeText)) {
     fail('installed module must persist records through the shell-provided ctx.db collection handle');
   }

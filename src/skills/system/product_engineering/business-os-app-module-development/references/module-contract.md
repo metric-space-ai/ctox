@@ -47,6 +47,25 @@ package-manager manifests, lockfiles, or dependency directories.
   them from `ctx.host`, not from the inner root section.
 - Use only local relative ESM imports or shipped browser ESM files. Do not add package-manager dependencies.
 
+## Shell Layout And Theme
+
+- Runtime-installed business apps must set `module.json` `layout.shell` to
+  `"full-workspace"`. The generic shell `Kontext` and `Themen` panes are for
+  shell diagnostics, not for normal generated business-app UX.
+- Build the app's own information architecture inside `ctx.host`. Use a focused
+  single workspace, a two-pane workbench when the left pane contains real
+  navigable business records, and modals/drawers for occasional details. Do not
+  leave empty, decorative, or duplicate side columns.
+- The app must inherit light/dark theme from the Business OS shell. Use shell
+  tokens such as `var(--bg)`, `var(--surface)`, `var(--surface-2)`,
+  `var(--text)`, `var(--text-strong)`, `var(--muted)`, `var(--line)`,
+  `var(--accent)`, and `var(--accent-soft)` for backgrounds, borders, text, and
+  controls.
+- Do not set `color-scheme` in app CSS, do not hard-code a dark-only or
+  light-only palette for the root work surface, and do not rely on white text on
+  fixed dark backgrounds. Status colors may use domain-specific accents only
+  when normal surfaces/text still come from Business OS tokens.
+
 ## Data
 
 - Module records persist through shell-provided collection handles from
@@ -158,7 +177,8 @@ For a runtime-installed app, `module.json` normally uses:
   "install_scope": "installed",
   "icon": "icon.svg",
   "version": "0.1.0",
-  "collections": ["<module_collection>"]
+  "collections": ["<module_collection>"],
+  "layout": { "shell": "full-workspace", "center": "module workspace" }
 }
 ```
 

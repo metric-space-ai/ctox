@@ -40,6 +40,8 @@ HTTP can serve static shell and module files. HTTP is not the app data bridge.
 | npm package | only use local browser ESM already shipped with the app |
 | build step | none; files must run directly in the browser |
 | dashboard route tree | one focused workbench, usually one or two panes plus modal/drawer |
+| framework sidebar/sidebar shell | runtime app sets `layout.shell: "full-workspace"` and owns its own focused workspace inside `ctx.host` |
+| dark mode CSS file or fixed palette | Business OS theme tokens inherited from the shell, not forced `color-scheme` or hard-coded dark/light surfaces |
 | component/unit smoke | `ctox business-os app smoke <module-id> --installed` against the real shell |
 
 ## Reference Apps
@@ -79,6 +81,11 @@ The app should feel like a Business OS work surface, not a generic SaaS landing 
 
 Before claiming done, click the primary Create/New/Add workflow in the real
 Business OS shell. A static test that only sees the button is not enough.
+
+Also inspect the mounted app in the real shell at desktop and narrow viewport
+sizes, in light and dark theme. Runtime business apps must open as a
+full-workspace module without the generic `Kontext`/`Themen` shell side panes
+unless the user explicitly requested a shell/developer control surface.
 
 ## Data Plane Discipline
 

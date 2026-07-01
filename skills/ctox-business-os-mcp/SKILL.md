@@ -258,6 +258,23 @@ normally:
 ctox business-os app validate <module_id> --installed
 ```
 
+If the MCP response does not include the `development_contract`, or the
+`business-os-app-module-development` skill/resources are unavailable, stop and
+report the missing contract. Do not improvise a raw web app, copy a reference
+app shell, or treat browser automation as an app-authoring substitute.
+
+For normal business applications, default to the standard Business OS app
+shape unless the user explicitly asks for a shell/developer control surface:
+
+- `module.json` must set `layout.shell` to `full-workspace`.
+- Do not leave the app framed by generic shell side panes such as `Kontext` and
+  `Themen`, and do not duplicate empty left/right columns inside the app.
+- Use Business OS theme tokens for surfaces, text, borders, and controls so the
+  app works in light and dark theme. Do not force `color-scheme` or hard-code a
+  dark-only/light-only root palette.
+- Browser ESM dependencies must be checked in as relative `.mjs` files under
+  the app source root and imported relatively.
+
 When the app finalizes, CTOX records a runtime module version and refreshes the
 native Business OS RxDB peer when schemas changed. Module records and app data
 still replicate through CTOX DB/WebRTC; MCP remains the control channel only.

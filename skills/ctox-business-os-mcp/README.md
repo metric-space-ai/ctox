@@ -72,6 +72,13 @@ with `business_os.validate_app`, plus `business_os.smoke_app` /
 must be committed as relative `.mjs` files such as `vendor/<name>.mjs` or
 `lib/<name>.mjs`; do not create npm/shell/SQL/RxDB fallback paths.
 
+Normal generated Business OS apps must use the standard app shape unless the
+user explicitly asks for a shell/developer control surface: set
+`module.json` `layout.shell` to `full-workspace`, do not leave the app framed
+by generic `Kontext`/`Themen` shell side panes, and style surfaces/text with
+Business OS theme tokens instead of forcing `color-scheme` or hard-coded
+dark/light palettes.
+
 Use `business_os.create_app` and `business_os.modify_app` when CTOX should
 enqueue app work for a worker instead of the connected agent editing source
 directly. Their response includes `command_id`, `task_id`, `app_directory`,

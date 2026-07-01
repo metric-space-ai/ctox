@@ -137,6 +137,20 @@ then injects that context into the CTOX gateway envelope. The CTOX daemon treats
 that envelope context as authoritative and overwrites any `_context` an agent
 tries to send inside `tools/call` arguments.
 
+For ctox.dev managed tenants, the operator token UI is the tenant dashboard MCP
+section:
+
+```text
+https://ctox.dev/dashboard?tenant=<tenant-id-or-domain>#mcp
+```
+
+Open **MCP**, enable Managed MCP, press **Token rotieren**, and copy the
+one-time token shown under **Neuer Token**. If an agent is given ctox.dev
+email/password credentials for setup, it may use them only to authenticate to
+the web control plane, discover tenants through `/api/desktop/session-package`,
+call `/api/instances/<tenant-id>/managed-mcp`, and rotate the supported MCP
+client token. The web password is never the MCP bearer token.
+
 The MCP server entry is useful only after the CTOX instance has connected
 outbound:
 

@@ -142,7 +142,21 @@ function writeInstalledModule(root, moduleId, overrides = {}) {
     '</main>',
     '',
   ].join('\n'));
-  writeFileSync(join(dir, 'index.css'), overrides.indexCss || '.validator-module { display: grid; gap: 12px; }\n');
+  writeFileSync(join(dir, 'index.css'), overrides.indexCss || [
+    '.validator-module {',
+    '  display: grid;',
+    '  gap: 12px;',
+    '  min-height: 100%;',
+    '  background: var(--surface);',
+    '  color: var(--text);',
+    '}',
+    '.validator-module button {',
+    '  border: 1px solid var(--line);',
+    '  background: var(--surface-2);',
+    '  color: var(--text);',
+    '}',
+    '',
+  ].join('\n'));
   writeFileSync(join(dir, 'index.js'), overrides.indexJs || installedIndexJs(moduleId, collectionName));
   writeFileSync(join(dir, 'icon.svg'), '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"></svg>\n');
   writeJson(join(dir, 'locales/de.json'), { title: moduleId });
@@ -224,6 +238,37 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   const run = runValidator(root, 'good', '--installed');
   assert.equal(run.status, 0, `${run.stderr}\n${run.stdout}`);
   assert.match(run.stdout, /validation OK: good \(installed mode\)/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'paneshell', {
+    manifest: { layout: { shell: 'pane', left: 'Kontext', center: 'Workbench', right: 'Themen' } },
+  });
+  const run = runValidator(root, 'paneshell', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /layout\.shell must be full-workspace/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'nothemetokens', {
+    indexCss: '.validator-module { display: grid; gap: 12px; background: #101820; color: #ffffff; }\n',
+  });
+  const run = runValidator(root, 'nothemetokens', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /must use Business OS surface tokens/);
+  assert.match(run.stderr, /must use Business OS text tokens/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'forcedscheme', {
+    indexCss: '.validator-module { color-scheme: dark; background: var(--surface); color: var(--text); }\n',
+  });
+  const run = runValidator(root, 'forcedscheme', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /must not force color-scheme/);
 }
 
 {
@@ -729,7 +774,7 @@ function writeSourceModule(root, moduleId, overrides = {}) {
       '</main>',
       '',
     ].join('\n'),
-    indexCss: '.validator-module { display: grid; }\n.hiddenmodalok-modal { position: fixed; inset: 0; display: flex; }\n.hiddenmodalok-modal[hidden] { display: none; }\n',
+    indexCss: '.validator-module { display: grid; background: var(--surface); color: var(--text); }\n.hiddenmodalok-modal { position: fixed; inset: 0; display: flex; background: var(--surface-2); color: var(--text); }\n.hiddenmodalok-modal[hidden] { display: none; }\n',
   });
   const run = runValidator(root, 'hiddenmodalok', '--installed');
   assert.equal(run.status, 0, `${run.stderr}\n${run.stdout}`);

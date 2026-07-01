@@ -60,12 +60,25 @@ records so the agent knows what was clicked.
 - Use `ctox business-os app references --query "<workflow data keywords>" --json --limit 8` when a local reference catalog is needed.
 - Runtime-created apps live in `runtime/business-os/installed-modules/<module-id>/`.
 - Source apps live in `src/apps/business-os/modules/<module-id>/` only when the task explicitly targets checked-in source.
+- Runtime-created business apps must own the visible workspace inside
+  `ctx.host`: set `module.json` `layout.shell` to `full-workspace`, do not rely
+  on the generic shell `Kontext`/`Themen` side panes, and do not duplicate those
+  panes inside the app.
+- Use the Business OS shell tokens for colors and controls. App CSS must inherit
+  light/dark theme state from the shell through tokens such as `--bg`,
+  `--surface`, `--surface-2`, `--text`, `--muted`, `--line`, and `--accent`.
+  Do not force `color-scheme`, hard-code a dark-only palette, or declare an app
+  finished before checking both light and dark themes.
 
 ## Validation
 
 - Runtime app: `ctox business-os app validate <module-id> --installed`
 - Source app: `ctox business-os app validate <module-id> --source`
 - Browser proof: `ctox business-os app smoke <module-id> --installed`
+- Visual proof: inspect the mounted app in the real Business OS shell at a
+  desktop viewport and a narrow viewport, in light and dark theme. The app must
+  use the central workspace, avoid useless side columns, keep text readable, and
+  complete the primary workflow without clipped controls.
 
 Validation failures are app defects or contract defects. Fix the app or the contract; do not hide failures by weakening validation.
 

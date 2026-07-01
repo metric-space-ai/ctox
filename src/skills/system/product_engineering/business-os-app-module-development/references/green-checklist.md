@@ -7,6 +7,8 @@ Use this before claiming a Business OS app is done.
 - The app is vanilla HTML/CSS/browser ESM with no build step.
 - Runtime `module.json` sets `"icon": "icon.svg"` and the module directory
   contains a local `icon.svg`.
+- Runtime `module.json` sets `layout.shell` to `full-workspace`, so the app
+  opens without the generic shell `Kontext`/`Themen` side panes.
 - `index.js` exports `mount(ctx)`.
 - `mount(ctx)` loads `index.html` into `ctx.host` or renders an equivalent
   primary UI into `ctx.host`; it does not assume the shell preloaded the
@@ -28,6 +30,13 @@ Use this before claiming a Business OS app is done.
   clickable from the originating record, opening the CTOX Flow/Queue focus via
   `ctox.businessOs.focusTask` and `#ctox?...`.
 - The UI has no decorative panes or dead controls.
+- Any left/right column inside the app contains real workflow content and is not
+  an empty copy of shell context/topics.
+- `index.css` uses Business OS light/dark theme tokens for surfaces, borders,
+  and text, and does not force `color-scheme`.
+- The app was visually checked in light and dark theme at desktop and narrow
+  viewport sizes; text, buttons, cards, dialogs, and bottom actions remain
+  readable and do not overlap.
 - Every record row/card/tree node exposes `data-context-record-id`/`-record-type`/`-label` (or at least a `data-*-id`) so a right-click hands the agent the record.
 - Browser proof right-clicks a record and confirms the "Chat to CTOX" popover opens showing that record (its label/id), proving the agent receives the click target.
 - The empty state lets the user create at least one primary business record.

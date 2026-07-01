@@ -28,7 +28,13 @@
   Business Chat.
 - Use `ctox.ticket.local.create/comment/transition` only for real local ticket lifecycle actions.
 - Keep the first version small, focused, and fully working.
-- Prefer one or two panes; use modals for occasional detail work.
+- For runtime-installed business apps, set `module.json` `layout.shell` to
+  `full-workspace` so the app owns the visible central Business OS work area.
+- Prefer one or two panes inside the app only when both panes contain real
+  business workflow content; use modals for occasional detail work.
+- Style the app with Business OS theme tokens such as `--bg`, `--surface`,
+  `--surface-2`, `--text`, `--muted`, `--line`, and `--accent`, and verify the
+  result in both light and dark theme.
 - Use unique function names in `index.js`; do not shadow a top-level render or
   helper function with a nested function of the same name.
 - Include a visible create flow for the primary record type, especially in the
@@ -73,6 +79,12 @@
 - Do not assume `index.html` is already present in `ctx.host` when `mount(ctx)`
   starts.
 - Do not add decorative third panes, fake buttons, or controls without handlers.
+- Do not leave runtime-installed apps in the generic shell side-pane layout
+  where users see only `Kontext` and `Themen` columns around the app.
+- Do not create empty left/right app columns just because reference apps have
+  them. Every pane must have a real repeated workflow use.
+- Do not hard-code a dark-only app surface, force `color-scheme`, or ship CSS
+  that becomes unreadable when the shell switches between light and dark theme.
 - Do not claim a visible Create/New/Add button works until it has been clicked
   in the real Business OS shell.
 - Do not copy `layout.icon_svg`, inline SVG, `store.installable`, or

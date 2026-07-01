@@ -126,7 +126,12 @@ export function validateSkillContract({ skillText, rustText, planText }) {
     "runtime/business-os/installed-modules/<module_id>",
     "business-os-app-module-development",
     "ctox business-os app validate <module_id> --installed",
-    "business_os.get_command_status"
+    "business_os.get_command_status",
+    "full-workspace",
+    "Kontext",
+    "Themen",
+    "Business OS theme tokens",
+    "color-scheme"
   ]) {
     if (!skillText.includes(phrase)) {
       errors.push(`skill must document MCP app development phrase: ${phrase}`);

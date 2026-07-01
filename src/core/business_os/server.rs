@@ -861,6 +861,7 @@ fn mcp_connect_info_payload(root: &Path, request: &Request) -> anyhow::Result<Va
     let local_endpoint = "http://127.0.0.1:8788/mcp".to_string();
     let managed_endpoint = format!("https://mcp.ctox.dev/mcp/{managed_alias}");
     let managed_connect_url = format!("wss://mcp.ctox.dev/connect/{managed_alias}");
+    let managed_dashboard_url = format!("https://ctox.dev/dashboard?tenant={managed_alias}#mcp");
     let token = super::mcp_channel::mcp_operator_auth_token(root)?;
     let server_name = format!("{}-business-os-local", managed_alias.replace('.', "-"));
     let authorization_header = format!("Bearer {token}");
@@ -913,6 +914,7 @@ fn mcp_connect_info_payload(root: &Path, request: &Request) -> anyhow::Result<Va
             "status": "not_connected",
             "endpoint": managed_endpoint,
             "connect_url": managed_connect_url,
+            "dashboard_url": managed_dashboard_url,
             "instance_alias": managed_alias,
             "native_instance_id": sync.instance_id,
             "requires": [
@@ -924,6 +926,7 @@ fn mcp_connect_info_payload(root: &Path, request: &Request) -> anyhow::Result<Va
         "notes": [
             "Local MCP is ready on 127.0.0.1 for agents running on the same machine or through an operator-managed tunnel.",
             "Managed Web Auth is not connected yet. Do not use the local bearer token as a mcp.ctox.dev client token.",
+            "For managed setup, open the managed.dashboard_url, switch to MCP, press Token rotieren, and copy Neuer Token.",
             "MCP clients must be configured on the client side; a running chat cannot safely install this server by tool call."
         ]
     }))
