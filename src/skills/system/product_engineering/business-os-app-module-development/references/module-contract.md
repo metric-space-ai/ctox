@@ -56,6 +56,12 @@ package-manager manifests, lockfiles, or dependency directories.
   single workspace, a two-pane workbench when the left pane contains real
   navigable business records, and modals/drawers for occasional details. Do not
   leave empty, decorative, or duplicate side columns.
+- The shell already supplies the global header, app switcher, active app
+  identity, version/source controls, account controls, and chat. The module may
+  add at most one compact app-level command/header row for local filters and
+  primary actions. Do not stack multiple app headers such as category/title
+  hero, version bar, date strip, metrics strip, and filter row before the real
+  work surface.
 - The app must inherit light/dark theme from the Business OS shell. Use shell
   tokens such as `var(--bg)`, `var(--surface)`, `var(--surface-2)`,
   `var(--text)`, `var(--text-strong)`, `var(--muted)`, `var(--line)`,
@@ -73,6 +79,10 @@ package-manager manifests, lockfiles, or dependency directories.
   other date/slot domains, include a calendar or date-strip view. The visible
   slot card/row should provide one-click claim/release/book actions for the
   normal case.
+- For physical resources and time slots, enforce the real-world invariant in
+  the click path. A person, vehicle, room, desk, device, or other constrained
+  asset must not be claimable into two overlapping slots just because two
+  buttons are visible.
 - Use forms, modals, or drawers for optional details, setup, admin changes, and
   exceptional edits. Do not make a normal user open a modal just to claim or
   release a visible slot.

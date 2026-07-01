@@ -87,6 +87,16 @@
 - Do not add decorative third panes, fake buttons, or controls without handlers.
 - Do not make users open a form or modal for a frequent one-click action such as
   claiming, releasing, booking, or marking availability on a visible slot.
+- Do not build stacked app chrome. The Business OS shell already has the global
+  header and app/version controls; a module gets at most one compact commandbar
+  before the actual work surface.
+- Do not put category/title hero blocks, duplicate app names, version bars,
+  metrics strips, date strips, and filters into separate header rows. Fold the
+  minimum controls into one compact commandbar or make the calendar/work grid
+  the first real surface.
+- Do not allow physically impossible duplicate claims. Resource apps must block
+  overlaps such as one vehicle/person/asset being booked into two slots at the
+  same time.
 - Do not leave runtime-installed apps in the generic shell side-pane layout
   where users see only `Kontext` and `Themen` columns around the app.
 - Do not create empty left/right app columns just because reference apps have

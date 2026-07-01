@@ -64,10 +64,19 @@ records so the agent knows what was clicked.
   `ctx.host`: set `module.json` `layout.shell` to `full-workspace`, do not rely
   on the generic shell `Kontext`/`Themen` side panes, and do not duplicate those
   panes inside the app.
+- The Business OS shell already shows app identity, navigation, version/source
+  controls, account state, and global chat. A normal business app may have at
+  most one compact app-level command/header row for its own filters and primary
+  actions. Do not stack a hero/title block, version bar, day strip, metrics row,
+  and filter bar before the work surface.
 - Design the primary workflow around the user's common action. For booking,
   scheduling, shift, parking, availability, or other date/slot domains, provide
   a calendar/date-strip view and one-click actions for claim/release/book flows;
   do not force a modal or form unless the user must supply extra data.
+- Encode the domain invariant behind the one-click path. For physical-resource
+  apps such as parking, rooms, desks, devices, or shifts, prevent impossible
+  duplicate claims such as the same person, vehicle, or asset being booked into
+  two slots at the same time.
 - Do not add generic "Report to CTOX", "An CTOX melden", queue, AI, or
   command-bus buttons by default. Add visible automation only when the user asks
   for it or the workflow clearly needs it, and only when it dispatches a real

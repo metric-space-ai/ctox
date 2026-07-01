@@ -78,6 +78,10 @@ When adapting a known app idea:
 5. Leave future dashboards, exports, AI buttons, and bulk operations out unless they are fully implemented.
 
 The app should feel like a Business OS work surface, not a generic SaaS landing page or a React demo.
+The shell already owns global app identity, version/source controls, account
+state, and chat. Default generated business apps should therefore start with
+the real work surface plus, at most, one compact commandbar for local filters
+and primary actions.
 
 Before claiming done, click the primary Create/New/Add workflow in the real
 Business OS shell. A static test that only sees the button is not enough.

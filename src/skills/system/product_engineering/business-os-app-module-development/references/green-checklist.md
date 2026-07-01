@@ -9,6 +9,9 @@ Use this before claiming a Business OS app is done.
   contains a local `icon.svg`.
 - Runtime `module.json` sets `layout.shell` to `full-workspace`, so the app
   opens without the generic shell `Kontext`/`Themen` side panes.
+- The app has at most one compact app-level command/header row. It does not
+  repeat shell-owned app identity/version/source chrome or stack hero, metrics,
+  date-strip, and filter headers before the work surface.
 - `index.js` exports `mount(ctx)`.
 - `mount(ctx)` loads `index.html` into `ctx.host` or renders an equivalent
   primary UI into `ctx.host`; it does not assume the shell preloaded the
@@ -50,6 +53,8 @@ Use this before claiming a Business OS app is done.
 - For booking, parking, scheduling, shift, availability, or date/slot domains,
   the common claim/release/book path works in one click from the visible
   calendar/date/slot view.
+- Resource/date apps enforce domain conflicts in that one-click path, for
+  example one vehicle/person/asset cannot be booked into two overlapping slots.
 - Tests cover record helper behavior and automation payloads.
 - `ctox business-os app validate <module-id> --installed` or `--source` passes.
 - `ctox business-os app smoke <module-id> --installed` passes.

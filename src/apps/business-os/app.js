@@ -36,7 +36,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260701-account-edit-v2';
+const APP_BUILD = '20260701-account-edit-v3';
 
 ensureShellStylesheets();
 
@@ -6397,6 +6397,8 @@ function moduleIconAssetPath(mod) {
 }
 
 async function refreshModules() {
+  const activeModuleId = state.activeModule?.id || '';
+  const activeModuleRevisionBefore = activeModuleId ? moduleRevisionQuery(state.activeModule) : '';
   const modules = await loadModules();
   const nextModules = modules.modules || [];
   const currentIds = state.modules.map(m => m.id).join(',');
@@ -6433,6 +6435,17 @@ async function refreshModules() {
     if (matched) {
       console.log(`[business-os] URL hash #${hashId} is now available after catalog refresh. Opening module.`);
       await openModule(hashId);
+    }
+  } else if (activeModuleId) {
+    const refreshedActiveModule = state.modules.find((m) => m.id === activeModuleId);
+    const activeModuleRevisionAfter = refreshedActiveModule ? moduleRevisionQuery(refreshedActiveModule) : '';
+    if (refreshedActiveModule && activeModuleRevisionAfter !== activeModuleRevisionBefore) {
+      console.info('[business-os] active module revision changed; remounting module', {
+        module_id: activeModuleId,
+        before: activeModuleRevisionBefore,
+        after: activeModuleRevisionAfter,
+      });
+      await openModule(activeModuleId, { force: true });
     }
   }
 }
