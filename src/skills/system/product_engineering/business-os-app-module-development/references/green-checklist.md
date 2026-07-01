@@ -55,6 +55,9 @@ Use this before claiming a Business OS app is done.
   calendar/date/slot view.
 - Resource/date apps enforce domain conflicts in that one-click path, for
   example one vehicle/person/asset cannot be booked into two overlapping slots.
+- Any changed local ESM helper export is loaded through a fresh helper URL
+  (for example a versioned helper filename), and a browser reload proves the
+  module does not fail on stale helper imports.
 - Tests cover record helper behavior and automation payloads.
 - `ctox business-os app validate <module-id> --installed` or `--source` passes.
 - `ctox business-os app smoke <module-id> --installed` passes.

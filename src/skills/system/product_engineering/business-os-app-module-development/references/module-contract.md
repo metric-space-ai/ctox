@@ -29,6 +29,10 @@ Keep extra files rare. Use extra local ESM helpers only when the app would other
 Place local browser ESM helpers under `lib/*.mjs` and vendored browser ESM
 helpers under `vendor/*.mjs`; import them with relative paths. Do not add
 package-manager manifests, lockfiles, or dependency directories.
+When a helper's export surface changes, change the imported helper URL too
+(for example with a versioned helper filename such as `lib/records-v2.mjs`) so
+an already-open browser cannot keep an old ESM module in cache while loading a
+new `index.js`.
 
 ## Runtime Shape
 
@@ -46,6 +50,9 @@ package-manager manifests, lockfiles, or dependency directories.
   elements. If dialogs or forms are siblings of the module root section, query
   them from `ctx.host`, not from the inner root section.
 - Use only local relative ESM imports or shipped browser ESM files. Do not add package-manager dependencies.
+- Keep local ESM helper imports cache-safe. If `index.js` starts importing a
+  new export from a helper, bump the helper filename/import path or otherwise
+  force a fresh module URL, then validate in a real browser reload.
 
 ## Shell Layout And Theme
 

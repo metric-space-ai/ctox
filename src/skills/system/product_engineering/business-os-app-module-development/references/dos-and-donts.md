@@ -97,6 +97,9 @@
 - Do not allow physically impossible duplicate claims. Resource apps must block
   overlaps such as one vehicle/person/asset being booked into two slots at the
   same time.
+- Do not change an ESM helper's exports while leaving the import URL unchanged.
+  Browsers cache modules by URL; use a versioned helper filename/import path
+  when `index.js` depends on new helper exports.
 - Do not leave runtime-installed apps in the generic shell side-pane layout
   where users see only `Kontext` and `Themen` columns around the app.
 - Do not create empty left/right app columns just because reference apps have
