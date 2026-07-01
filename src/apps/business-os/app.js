@@ -42,7 +42,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260701-branding-v2-0c50394c';
+const APP_BUILD = '20260701-branding-v3-sync-apply';
 
 ensureShellStylesheets();
 
@@ -6544,16 +6544,27 @@ function startWorkspaceBrandingMonitor() {
   state.workspaceBranding = applyWorkspaceBranding(null);
   const coll = state.db?.collection?.(WORKSPACE_BRANDING_COLLECTION);
   if (!coll?.findOne) return;
-  state.sync?.startCollection?.(WORKSPACE_BRANDING_COLLECTION)?.catch?.((error) => {
-    console.debug('[business-os] workspace branding sync start skipped:', error?.message || error);
-  });
+  const applyBrandingDocument = (doc) => {
+    state.workspaceBranding = applyWorkspaceBranding(doc?.toJSON?.() || null);
+    postCurrentPreferencesToModule();
+  };
+  const loadCurrentBrandingDocument = () => coll
+    .findOne(WORKSPACE_BRANDING_DOCUMENT_ID)
+    .exec()
+    .then(applyBrandingDocument)
+    .catch((error) => {
+      console.debug('[business-os] workspace branding read skipped:', error?.message || error);
+    });
+  loadCurrentBrandingDocument();
+  state.sync?.startCollection?.(WORKSPACE_BRANDING_COLLECTION)
+    ?.then?.(loadCurrentBrandingDocument)
+    ?.catch?.((error) => {
+      console.debug('[business-os] workspace branding sync start skipped:', error?.message || error);
+    });
   state.workspaceBrandingSubscription = coll
     .findOne(WORKSPACE_BRANDING_DOCUMENT_ID)
     .$
-    .subscribe((doc) => {
-      state.workspaceBranding = applyWorkspaceBranding(doc?.toJSON?.() || null);
-      postCurrentPreferencesToModule();
-    });
+    .subscribe(applyBrandingDocument);
 }
 
 async function refreshShellCtoxHealth() {
