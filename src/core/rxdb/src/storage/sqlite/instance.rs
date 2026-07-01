@@ -1556,7 +1556,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 fn changed_documents_since(
     conn: &rusqlite::Connection,
     table_name: &str,
-    primary_path: &str,
+    _primary_path: &str,
     limit: u64,
     checkpoint: Option<&Value>,
 ) -> Result<RxStorageChangedDocumentsSinceResult, RxError> {
@@ -1583,35 +1583,32 @@ fn changed_documents_since(
     let _statement_timer = timed_sqlite_statement();
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT data FROM {} WHERE lastWriteTime > ? OR (lastWriteTime = ? AND id > ?) ORDER BY lastWriteTime ASC, id ASC LIMIT ?",
+            "SELECT data, id, lastWriteTime FROM {} WHERE lastWriteTime > ? OR (lastWriteTime = ? AND id > ?) ORDER BY lastWriteTime ASC, id ASC LIMIT ?",
             quote_identifier(table_name)
         ))
         .map_err(sqlite_error)?;
     let rows = stmt
         .query_map(
             params![since_lwt, since_lwt, since_id, limit as i64],
-            |row| row.get::<_, String>(0),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, f64>(2)?,
+                ))
+            },
         )
         .map_err(sqlite_error)?;
     let mut documents = Vec::new();
+    let mut latest_checkpoint: Option<Value> = None;
     for row in rows {
-        let data = row.map_err(sqlite_error)?;
+        let (data, id, lwt) = row.map_err(sqlite_error)?;
         documents.push(serde_json::from_str::<Value>(&data).map_err(|err| {
             new_rx_error("SQLITE_JSON", Some(json!({ "message": err.to_string() })))
         })?);
+        latest_checkpoint = Some(json!({ "id": id, "lwt": lwt }));
     }
-    let checkpoint = documents
-        .last()
-        .map(|doc| {
-            json!({
-                "id": doc.get(primary_path).cloned().unwrap_or(Value::Null),
-                "lwt": doc
-                    .get("_meta")
-                    .and_then(|meta| meta.get("lwt"))
-                    .cloned()
-                    .unwrap_or(json!(0)),
-            })
-        })
+    let checkpoint = latest_checkpoint
         .or_else(|| checkpoint.cloned())
         .unwrap_or_else(|| json!({ "id": "", "lwt": 0 }));
     SQLITE_CHANGED_DOCUMENTS_SINCE_RESULTS.fetch_add(documents.len() as u64, Ordering::Relaxed);
@@ -3727,6 +3724,62 @@ mod tests {
             .collect();
         assert_eq!(ids, vec!["b", "c"]);
         assert_eq!(changed.checkpoint, json!({ "id": "c", "lwt": 2.0 }));
+    }
+
+    #[tokio::test]
+    async fn changed_documents_since_checkpoint_uses_sqlite_lwt_when_document_meta_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("ctox.sqlite3"),
+        });
+        let instance = create_storage_instance(&storage, params(test_schema()))
+            .await
+            .unwrap();
+        let table = quote_identifier(&instance.table_name);
+        let document = json!({
+            "id": "catalog",
+            "age": 1,
+            "_rev": "1-catalog",
+            "_deleted": false,
+            "_attachments": {}
+        });
+        {
+            let connection = storage.connection().unwrap();
+            let conn = connection.lock();
+            conn.execute(
+                &format!(
+                    "INSERT INTO {table} (id, revision, deleted, lastWriteTime, data)
+                     VALUES (?1, ?2, 0, ?3, ?4)"
+                ),
+                params![
+                    "catalog",
+                    "1-catalog",
+                    1782904408877.0_f64,
+                    serde_json::to_string(&document).unwrap()
+                ],
+            )
+            .unwrap();
+        }
+
+        let first = instance
+            .get_changed_documents_since(10, None)
+            .await
+            .unwrap();
+        assert_eq!(first.documents.len(), 1);
+        assert_eq!(
+            first.checkpoint,
+            json!({ "id": "catalog", "lwt": 1782904408877.0_f64 })
+        );
+
+        let second = instance
+            .get_changed_documents_since(10, Some(&first.checkpoint))
+            .await
+            .unwrap();
+        assert!(
+            second.documents.is_empty(),
+            "second poll must not replay the row when document _meta.lwt is missing"
+        );
+        assert_eq!(second.checkpoint, first.checkpoint);
     }
 
     #[tokio::test]
