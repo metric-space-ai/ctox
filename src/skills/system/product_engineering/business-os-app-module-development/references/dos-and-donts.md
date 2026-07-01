@@ -30,6 +30,9 @@
 - Keep the first version small, focused, and fully working.
 - For runtime-installed business apps, set `module.json` `layout.shell` to
   `full-workspace` so the app owns the visible central Business OS work area.
+- Optimize the primary user path for direct action. Booking, parking,
+  scheduling, shift, and availability apps should expose a calendar/date-strip
+  or equivalent slot view with one-click claim/release/book actions.
 - Prefer one or two panes inside the app only when both panes contain real
   business workflow content; use modals for occasional detail work.
 - Style the app with Business OS theme tokens such as `--bg`, `--surface`,
@@ -72,6 +75,9 @@
   Python file writers, or Node file writers when a structured file-edit tool is
   available.
 - Do not write directly to `business_commands`; use `ctx.commandBus.dispatch(...)`.
+- Do not add generic "Report to CTOX", "An CTOX melden", queue, AI, or
+  command-bus buttons unless the user asked for that workflow or the app
+  dispatches a real command and shows a trackable result.
 - Do not write directly to `ctox_ticket_*` projection collections.
 - Do not render queue, command, or task ids as inert text when the user needs
   to track the run in CTOX.
@@ -79,6 +85,8 @@
 - Do not assume `index.html` is already present in `ctx.host` when `mount(ctx)`
   starts.
 - Do not add decorative third panes, fake buttons, or controls without handlers.
+- Do not make users open a form or modal for a frequent one-click action such as
+  claiming, releasing, booking, or marking availability on a visible slot.
 - Do not leave runtime-installed apps in the generic shell side-pane layout
   where users see only `Kontext` and `Themen` columns around the app.
 - Do not create empty left/right app columns just because reference apps have

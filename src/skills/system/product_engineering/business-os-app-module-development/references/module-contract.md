@@ -66,6 +66,23 @@ package-manager manifests, lockfiles, or dependency directories.
   fixed dark backgrounds. Status colors may use domain-specific accents only
   when normal surfaces/text still come from Business OS tokens.
 
+## Workflow Ergonomics
+
+- Build the common path as the shortest interaction, not as a generic CRUD form.
+- For booking, scheduling, shift, parking, availability, capacity planning, or
+  other date/slot domains, include a calendar or date-strip view. The visible
+  slot card/row should provide one-click claim/release/book actions for the
+  normal case.
+- Use forms, modals, or drawers for optional details, setup, admin changes, and
+  exceptional edits. Do not make a normal user open a modal just to claim or
+  release a visible slot.
+- Do not add a generic "Report to CTOX", "An CTOX melden", queue, AI, or
+  command-bus button as a default app affordance. Add visible automation only
+  when the user requested it or the domain workflow clearly needs it.
+- If an automation action is visible, it must dispatch a real command, show
+  failure/success honestly, and expose a trackable `task_id`/`command_id` result
+  when the command creates one.
+
 ## Data
 
 - Module records persist through shell-provided collection handles from

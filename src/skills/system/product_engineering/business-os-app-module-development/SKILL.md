@@ -64,6 +64,14 @@ records so the agent knows what was clicked.
   `ctx.host`: set `module.json` `layout.shell` to `full-workspace`, do not rely
   on the generic shell `Kontext`/`Themen` side panes, and do not duplicate those
   panes inside the app.
+- Design the primary workflow around the user's common action. For booking,
+  scheduling, shift, parking, availability, or other date/slot domains, provide
+  a calendar/date-strip view and one-click actions for claim/release/book flows;
+  do not force a modal or form unless the user must supply extra data.
+- Do not add generic "Report to CTOX", "An CTOX melden", queue, AI, or
+  command-bus buttons by default. Add visible automation only when the user asks
+  for it or the workflow clearly needs it, and only when it dispatches a real
+  command and shows a trackable result.
 - Use the Business OS shell tokens for colors and controls. App CSS must inherit
   light/dark theme state from the shell through tokens such as `--bg`,
   `--surface`, `--surface-2`, `--text`, `--muted`, `--line`, and `--accent`.

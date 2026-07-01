@@ -29,6 +29,9 @@ Use this before claiming a Business OS app is done.
 - Automation results that return `task_id` or `command_id` are visible and
   clickable from the originating record, opening the CTOX Flow/Queue focus via
   `ctox.businessOs.focusTask` and `#ctox?...`.
+- The app does not include a generic "Report to CTOX" / "An CTOX melden" /
+  queue / AI / command-bus button unless that automation was requested or is a
+  real workflow with a trackable result.
 - The UI has no decorative panes or dead controls.
 - Any left/right column inside the app contains real workflow content and is not
   an empty copy of shell context/topics.
@@ -44,6 +47,9 @@ Use this before claiming a Business OS app is done.
   reveal a usable dialog, form, or save flow.
 - Hidden modals, drawers, and overlays really stop intercepting clicks when hidden.
 - Core workflows implemented in the UI actually work.
+- For booking, parking, scheduling, shift, availability, or date/slot domains,
+  the common claim/release/book path works in one click from the visible
+  calendar/date/slot view.
 - Tests cover record helper behavior and automation payloads.
 - `ctox business-os app validate <module-id> --installed` or `--source` passes.
 - `ctox business-os app smoke <module-id> --installed` passes.
