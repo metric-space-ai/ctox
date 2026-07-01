@@ -23,7 +23,7 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260630-context-menu-v4';
+} from './shared/shell-permissions-ui.js?v=20260701-runtime-module-rev1';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -36,7 +36,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260630-context-menu-v4';
+const APP_BUILD = '20260701-runtime-module-rev1';
 
 ensureShellStylesheets();
 
@@ -3785,7 +3785,7 @@ async function openModule(moduleId, options = {}) {
   // independent until mount() runs (mount needs the collections, the import
   // only needs the network/module cache).
   const moduleScriptPromise = importBusinessOsModule(
-    `./${moduleBasePath(mod)}/index.js?v=${APP_BUILD}${moduleRevisionQuery(mod.id)}`,
+    `./${moduleBasePath(mod)}/index.js?v=${APP_BUILD}${moduleRevisionQuery(mod)}`,
     `${mod.id} module`,
   );
   let moduleSyncStart = null;
@@ -3891,7 +3891,7 @@ async function registerModuleSchemas(mod) {
     const retry = Number(state.schemaImportRetries.get(mod.id) || 0);
     const retryQuery = retry > 0 ? `_schemaRetry${retry}` : '';
     const schemaModule = await importBusinessOsModule(
-      `./${moduleBasePath(mod)}/schema.js?v=${APP_BUILD}${moduleRevisionQuery(mod.id)}${retryQuery}`,
+      `./${moduleBasePath(mod)}/schema.js?v=${APP_BUILD}${moduleRevisionQuery(mod)}${retryQuery}`,
       `${mod.id} schema`,
     );
     if (isStaleDataPlaneGeneration(generation)) return;
@@ -4036,7 +4036,7 @@ function isRxDbOpenTimeoutError(error) {
 function preloadModuleScripts() {
   const modules = state.modules.filter((mod) => mod.id !== state.activeModule?.id);
   for (const [index, mod] of modules.entries()) {
-    const href = `./${moduleBasePath(mod)}/index.js?v=${APP_BUILD}${moduleRevisionQuery(mod.id)}`;
+    const href = `./${moduleBasePath(mod)}/index.js?v=${APP_BUILD}${moduleRevisionQuery(mod)}`;
     if (document.head.querySelector(`link[rel="modulepreload"][href="${href}"]`)) continue;
     window.setTimeout(() => {
       if (document.head.querySelector(`link[rel="modulepreload"][href="${href}"]`)) return;
@@ -4818,9 +4818,35 @@ function renderModuleFrame(mod) {
   return root;
 }
 
-function moduleRevisionQuery(moduleId) {
-  const rev = state.moduleRevisions?.[moduleId];
-  return rev ? `_${rev}` : '';
+function moduleRevisionQuery(moduleLike) {
+  const moduleId = typeof moduleLike === 'string'
+    ? moduleLike
+    : String(moduleLike?.id || moduleLike?.module_id || '').trim();
+  const mod = typeof moduleLike === 'object' && moduleLike ? moduleLike : null;
+  const lifecycle = mod?.lifecycle && typeof mod.lifecycle === 'object' ? mod.lifecycle : {};
+  const candidates = [
+    state.moduleRevisions?.[moduleId],
+    mod?.asset_revision,
+    mod?.assetRevision,
+    mod?.source_revision,
+    mod?.sourceRevision,
+    mod?.source_sha256,
+    mod?.sourceSha256,
+    mod?.manifest_sha256,
+    mod?.manifestSha256,
+    mod?.updated_at_ms,
+    mod?.updatedAtMs,
+    mod?.modified_at_ms,
+    mod?.modifiedAtMs,
+    mod?.version,
+    lifecycle.last_released_at_ms,
+    lifecycle.last_reviewed_at_ms,
+    lifecycle.last_release_id,
+  ];
+  const rev = candidates
+    .map((value) => String(value || '').trim())
+    .find(Boolean);
+  return rev ? `_${encodeURIComponent(rev).replace(/%/g, '')}` : '';
 }
 
 function moduleVersionOriginLabel(origin) {
@@ -4988,7 +5014,7 @@ async function applyLoadingShadow(mod, token) {
   let markup = '';
   try {
     const res = await fetch(
-      `./${base}/index.html?v=${APP_BUILD}${moduleRevisionQuery(mod.id)}`,
+      `./${base}/index.html?v=${APP_BUILD}${moduleRevisionQuery(mod)}`,
       // Versioned URL: the server marks it immutable; revisits must not refetch.
       { cache: 'force-cache' },
     );
@@ -6328,7 +6354,7 @@ async function resolveModuleIconSvg(mod) {
   const assetPath = moduleIconAssetPath(mod);
   if (!assetPath) return '';
   try {
-    const response = await fetch(`./${assetPath}?v=${APP_BUILD}${moduleRevisionQuery(mod.id)}`, { cache: 'force-cache' });
+    const response = await fetch(`./${assetPath}?v=${APP_BUILD}${moduleRevisionQuery(mod)}`, { cache: 'force-cache' });
     if (!response.ok) {
       state.moduleIconSvgCache.set(mod.id, '');
       return '';
